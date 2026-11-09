@@ -5218,6 +5218,42 @@ fn arrange_bounds_resizes_and_moves_objects() {
     assert_eq!(box_area(&mut s).rect, n);
 }
 
+/// A frame anchored to a page and moved in WordCraft is placed by its paragraph from then on: the
+/// file's page number goes, or the save would put it back. Only resized, it stays on that page.
+#[test]
+fn an_odt_frame_moved_from_its_page_loses_the_page_number() {
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><draw:frame text:anchor-type="page" text:anchor-page-number="3" svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame><text:p>One</text:p><text:p>Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let odt = z.finish().unwrap().into_inner();
+    let frame_tag = |s: &Session| {
+        let mut a = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+        let mut c = String::new();
+        std::io::Read::read_to_string(&mut a.by_name("content.xml").unwrap(), &mut c).unwrap();
+        c.split("<draw:frame").nth(1).and_then(|t| t.split('>').next()).unwrap_or_default().to_string()
+    };
+    let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"width": 150, "height": 80}));
+    assert!(frame_tag(&s).contains(r#"text:anchor-page-number="3""#), "resized: {}", frame_tag(&s));
+    let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 200, "y": 300}));
+    let tag = frame_tag(&s);
+    assert!(!tag.contains("anchor-page-number") && !tag.contains(r#"text:anchor-type="page""#), "moved: {tag}");
+    // Moved, then placed by the margins: the file's page number is gone, not only hidden.
+    run(&mut s, "arrange.position", json!({"preset": "topLeft"}));
+    let tag = frame_tag(&s);
+    assert!(!tag.contains("anchor-page-number"), "moved, then placed: {tag}");
+}
+
 /// An object dropped near the bottom of a page lands there, though at the top of the paragraph
 /// it anchors to it would push that paragraph onto the next page (#3169).
 #[test]
@@ -12709,6 +12745,35 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     let mut content = String::new();
     std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// Numbering or a new style makes the styles be written from the model on save: a document in
+/// German stays in German, rather than taking the default language of what opens it next.
+#[test]
+fn an_odts_language_survives_a_save_after_numbering_or_a_new_style() {
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="de" fo:country="DE"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Hallo</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str()), ("styles.xml", styles.as_str())]
+    {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let odt = z.finish().unwrap().into_inner();
+    for (command, params) in [("para.numbering", json!({})), ("styles.create", json!({"name": "Notiz"}))] {
+        let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+        assert_eq!(cmd::default_lang(&s).as_deref(), Some("de-DE"), "the document's, not English");
+        run(&mut s, command, params);
+        let saved = wordcraft_formats::odt::export(&s.doc).unwrap();
+        let back = crate::io::open_bytes("t.odt", &saved).unwrap();
+        assert_eq!(back.styles.default_chr.lang.as_deref(), Some("de-DE"), "after {command}");
+    }
 }
 
 /// A Word package whose body holds `body` and, as `rIdC`, the chunk part `word/afchunk.{ext}`.

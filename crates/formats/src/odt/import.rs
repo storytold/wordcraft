@@ -655,6 +655,8 @@ struct Parsed {
     widows: Option<bool>,
     /// The document's default Asian and complex-script fonts and languages.
     scripts: wordcraft_doc::props::CharProps,
+    /// The document's default language, if it states one.
+    default_lang: Option<String>,
     /// The default tab interval, points.
     default_tab: Option<f32>,
     /// Tab stops are measured from the indent (LibreOffice's `TabsRelativeToIndent`).
@@ -850,6 +852,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         kern: styles.default_kern,
         widows: styles.stated_widows(),
         scripts: styles.default_scripts.clone(),
+        default_lang: styles.document_lang(),
         default_tab: styles.default_tab,
         tabs_from_indent: styles.tabs_from_indent,
         page_doc: pages.doc.clone(),
@@ -895,6 +898,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         kern,
         widows,
         scripts,
+        default_lang,
         default_tab,
         tabs_from_indent,
         page_doc,
@@ -932,6 +936,9 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     Arc::make_mut(&mut doc.styles).default_chr.kern = kern.then_some(1.0);
     Arc::make_mut(&mut doc.styles).default_chr.overlay(&scripts);
+    // The file's own, or none when it states none (each application then uses its own default):
+    // not the English of WordCraft's new documents.
+    Arc::make_mut(&mut doc.styles).default_chr.lang = default_lang;
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
     }
