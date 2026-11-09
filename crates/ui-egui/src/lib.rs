@@ -111,7 +111,7 @@ mod services;
 mod state;
 
 use app::control_click_as_secondary;
-pub(crate) use app::{discards_document, works_without_document};
+pub(crate) use app::works_without_document;
 pub use clock::now_ms;
 pub use services::{HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
@@ -178,6 +178,47 @@ impl DisplayServer {
     }
 }
 
+/// What the status bar's live count shows (#2797): words (the default, as Word's status bar
+/// counts), characters with spaces, or characters without spaces — the same three the Word Count
+/// dialog reports, worded the same way. Right-click the count in the status bar, or File ›
+/// Options › Display, to choose; kept between runs in `ui.json`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum StatusCount {
+    #[default]
+    Words,
+    Characters,
+    CharactersNoSpaces,
+}
+
+impl StatusCount {
+    /// In menu order.
+    pub const ALL: [StatusCount; 3] = [StatusCount::Words, StatusCount::Characters, StatusCount::CharactersNoSpaces];
+
+    /// The value used in `ui.json` and by the `ui.statusCount` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            StatusCount::Words => "words",
+            StatusCount::Characters => "characters",
+            StatusCount::CharactersNoSpaces => "charactersNoSpaces",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<StatusCount> {
+        StatusCount::ALL.into_iter().find(|c| c.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label (translated with `tl!` where shown): the Word Count dialog's own words
+    /// for these counts.
+    pub fn label(self) -> &'static str {
+        match self {
+            StatusCount::Words => "Words",
+            StatusCount::Characters => "Characters (with spaces)",
+            StatusCount::CharactersNoSpaces => "Characters (no spaces)",
+        }
+    }
+}
+
 impl From<String> for DisplayServer {
     fn from(s: String) -> Self {
         DisplayServer::from_code(&s).unwrap_or_default()
@@ -187,6 +228,49 @@ impl From<String> for DisplayServer {
 impl From<DisplayServer> for String {
     fn from(d: DisplayServer) -> Self {
         d.code().to_string()
+    }
+}
+
+/// An unknown saved value reads as the default rather than discarding the whole `ui.json`.
+impl From<String> for StatusCount {
+    fn from(s: String) -> Self {
+        StatusCount::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<StatusCount> for String {
+    fn from(c: StatusCount) -> Self {
+        c.code().to_string()
+    }
+}
+
+/// Whole-document counts the status bar shows (#2797), computed together whenever the document
+/// changes: words ([`wordcraft_engine::Session::word_count`]), characters and characters without
+/// spaces (the Word Count dialog's [`wordcraft_doc::count_chars`] and [`wordcraft_doc::count_chars_no_spaces`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatusCounts {
+    pub words: usize,
+    pub chars: usize,
+    pub chars_no_spaces: usize,
+}
+
+impl StatusCounts {
+    /// The total in the unit the status bar is showing.
+    pub fn in_unit(self, unit: StatusCount) -> usize {
+        match unit {
+            StatusCount::Words => self.words,
+            StatusCount::Characters => self.chars,
+            StatusCount::CharactersNoSpaces => self.chars_no_spaces,
+        }
+    }
+}
+
+/// `s` (a selection, say) counted in the unit the status bar is showing.
+pub fn count_in_unit(s: &str, unit: StatusCount) -> usize {
+    match unit {
+        StatusCount::Words => wordcraft_doc::count_words(s),
+        StatusCount::Characters => wordcraft_doc::count_chars(s),
+        StatusCount::CharactersNoSpaces => wordcraft_doc::count_chars_no_spaces(s),
     }
 }
 
@@ -338,6 +422,10 @@ pub struct UiState {
     /// File › Options › Advanced › Linux display server (#2184): read by the desktop app before
     /// the window opens.
     pub display_server: DisplayServer,
+    /// What the status bar's live count shows (#2797): words (the default), characters with
+    /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
+    /// Options › Display. Junk saved values read as words.
+    pub status_count: StatusCount,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -414,6 +502,7 @@ impl Default for UiState {
             update_fields_before_print: false,
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
+            status_count: StatusCount::default(),
         }
     }
 }
@@ -643,7 +732,8 @@ pub struct WordApp {
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.
     pub missing_fonts: crate::chrome::MissingFontsMemo,
-    pub word_count: (u64, usize),
+    /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
+    pub status_counts: (u64, StatusCounts),
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
@@ -677,7 +767,8 @@ pub struct WordApp {
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The files waiting their turn to open ([`WordApp::open_in_turn`]).
-    open_queue: std::collections::VecDeque<String>,
+    /// Each with whether the platform handed it over ([`WordApp::open_from_platform_in_turn`]).
+    open_queue: std::collections::VecDeque<(String, bool)>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -724,6 +815,9 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests_dialog_tabs;
 
 #[cfg(test)]
 mod tests;

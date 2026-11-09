@@ -1190,6 +1190,8 @@ fn decorative_pictures_are_artifacts_not_figures() {
     let cases = [
         ("inline", Float::default()),
         ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        // Turned with no room kept for it: drawn cut at its line (a clip), still tagged.
+        ("bare turned inline", Float { rot: 45.0, bare_turn: true, ..Default::default() }),
         ("floating", floating.clone()),
         ("rotated floating", Float { rot: 30.0, ..floating }),
     ];
@@ -1200,6 +1202,43 @@ fn decorative_pictures_are_artifacts_not_figures() {
         assert!(!raw.contains("/Alt("), "{name}: a decorative picture has no Figure and no alt text");
         assert!(raw.contains("1 0 0 rg"), "{name}: the decorative picture is still drawn");
     }
+}
+
+/// A row of exact height cuts its cell's lines (one clip around them): text and a picture in
+/// it are tagged as they are in a row that fits, the text as the paragraph's, the picture as a
+/// Figure with its alt text.
+#[test]
+fn a_clipped_cell_tags_its_text_and_picture() {
+    let raw = |exact: bool| {
+        let mut d = Document::new();
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let mut p = Paragraph::with_text("Cell text ", CharProps::default());
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: "A red square".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+        let mut t = Table::new(1, 1, 300.0);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        if exact {
+            t.rows[0].props.height = Some(30.0);
+            t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        }
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Below", CharProps::default()))];
+        String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+    };
+    let (fits, cut) = (raw(false), raw(true));
+    assert!(cut.contains("/Alt(A red square)"), "the picture in the cut cell is a Figure with its alt text");
+    // The same marked content either way: the cut cell's text is not dropped as an artifact.
+    assert_eq!(cut.matches("/MCID").count(), fits.matches("/MCID").count());
+    assert_eq!(cut.matches("/S/P").count(), fits.matches("/S/P").count());
 }
 
 /// In a rotated group, each picture is tagged on its own: the decorative one is an artifact, the
@@ -2861,4 +2900,15 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+#[test]
+fn the_author_is_left_out_when_personal_information_is_removed() {
+    let mut d = Document::from_text("Private");
+    d.core.creator = "Ada Writer".into();
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = |d: &Document| String::from_utf8_lossy(&export(d, &opts).unwrap()).to_string();
+    assert!(raw(&d).contains("Ada Writer"));
+    d.settings.remove_personal_info = true;
+    assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
 }

@@ -25,16 +25,24 @@ impl WordApp {
     /// Open `paths` in order, each after the dialog the one before it left open (a password box,
     /// which the next open would replace, or drop by replacing the window's document) has closed.
     pub fn open_in_turn(&mut self, paths: impl IntoIterator<Item = String>) {
-        self.open_queue.extend(paths);
+        self.open_queue.extend(paths.into_iter().map(|p| (p, false)));
+        self.open_next_in_turn();
+    }
+
+    /// [`WordApp::open_in_turn`] for files the platform hands the app, each opened as
+    /// [`WordApp::open_from_platform`] opens it: a Word template starts a new document.
+    pub fn open_from_platform_in_turn(&mut self, paths: impl IntoIterator<Item = String>) {
+        self.open_queue.extend(paths.into_iter().map(|p| (p, true)));
         self.open_next_in_turn();
     }
 
     /// Open the waiting files until one leaves a dialog open.
     pub(crate) fn open_next_in_turn(&mut self) {
         while self.dialog.is_none()
-            && let Some(path) = self.open_queue.pop_front()
+            && let Some((path, from_platform)) = self.open_queue.pop_front()
         {
-            if let Err(e) = self.run("file.open", json!({"path": path})) {
+            let opened = if from_platform { self.open_from_platform(&path, None) } else { self.run("file.open", json!({"path": path})) };
+            if let Err(e) = opened {
                 self.report_open_failure(&path, &e);
             }
         }
@@ -93,7 +101,7 @@ impl WordApp {
         self.read_aloud_at = None;
         self.info_editing = None;
         // Caches keyed by the revision alone: another document's revision can be the same number.
-        self.word_count = crate::window_ui::NOT_COUNTED;
+        self.status_counts = crate::window_ui::NOT_COUNTED;
         self.find_fonts_for = None;
         self.previews.document_changed();
         // The Start screen's placeholder (#1129) goes once a document is open beside it.
@@ -148,11 +156,51 @@ impl WordApp {
         self.run("file.open", json!({"path": path}))
     }
 
+    /// Open a file the platform hands the app: one named on the command line (a double-click in
+    /// the file manager, the shell's Open verb) or sent by the Finder. A Word template (`.dotx`,
+    /// `.dotm`, `.dot`) starts a new, untitled document based on it, as Word's default verb for a
+    /// template does (#3433): saving it asks where to write, and the template is never written
+    /// over. File › Open still opens a template itself, to edit it, as in Word. Anything else
+    /// opens as [`WordApp::open_file`] opens it. `data` holds the file's bytes (base64) when its
+    /// name can't be passed as text (#1440); `path` then only names it.
+    pub fn open_from_platform(&mut self, path: &str, data: Option<&str>) -> Result<Value, String> {
+        let mut params = json!({"path": path});
+        if let Some(data) = data {
+            params["data"] = json!(data);
+        }
+        if is_word_template(path) {
+            params["replaceBlank"] = json!(true);
+            return self.run("file.newFromTemplate", params);
+        }
+        match data {
+            Some(_) => self.run("file.open", params),
+            None => self.open_file(path, None),
+        }
+    }
+
     /// Show open document `id` in the window (View › Window › Switch Windows, quitting).
     pub(crate) fn show_document(&mut self, id: u64) -> Result<(), String> {
         self.session.activate(id).map_err(|e| e.to_string())?;
         self.sync_document();
         Ok(())
+    }
+
+    /// Whether the open document `id` has changes that aren't written to a file yet, or a save
+    /// the browser hasn't confirmed. The Save Changes prompt asks about the same work, so the
+    /// prompt and a programmatic refusal cannot drift apart (#1268, #3274).
+    pub(crate) fn document_unsaved_by_id(&self, id: u64) -> bool {
+        let dirty = self.session.document_dirty(id);
+        let unconfirmed = self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == id);
+        dirty || unconfirmed
+    }
+
+    /// Whether the open document `id` has comment or reply text typed but not yet written to
+    /// it (#1348): closing the document would drop that text.
+    pub(crate) fn document_has_comment_drafts(&self, id: u64) -> bool {
+        if id == self.session.document_id() {
+            return panes::has_comment_drafts(self);
+        }
+        self.parked.get(&id).is_some_and(|p| !p.comment_drafts.is_empty())
     }
 
     /// The open documents with work that would be lost on quitting: the shown one first, then
@@ -162,13 +210,11 @@ impl WordApp {
     fn unsaved_documents(&self) -> Vec<u64> {
         let active = self.session.document_id();
         let mut out = Vec::new();
-        if self.has_document() && (self.session.dirty || self.save_unconfirmed() || panes::has_comment_drafts(self)) {
+        if self.has_document() && (self.document_unsaved_by_id(active) || self.document_has_comment_drafts(active)) {
             out.push(active);
         }
         for d in self.session.documents() {
-            let unconfirmed = || self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == d.id);
-            let drafts = || self.parked.get(&d.id).is_some_and(|p| !p.comment_drafts.is_empty());
-            if d.id != active && Some(d.id) != self.no_document && (d.dirty || unconfirmed() || drafts()) {
+            if d.id != active && Some(d.id) != self.no_document && (self.document_unsaved_by_id(d.id) || self.document_has_comment_drafts(d.id)) {
                 out.push(d.id);
             }
         }
@@ -197,6 +243,15 @@ impl WordApp {
         self.ui.backstage = false;
         self.run("file.close", json!({"quit": true})).unwrap_or_else(|e| json!({"quit": false, "error": e}))
     }
+}
+
+/// Is `path` a Word template by its extension (`.dotx`, `.dotm`, `.dot`, in any case)? These are
+/// the template types WordCraft registers with the platform.
+pub fn is_word_template(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|e| ["dotx", "dotm", "dot"].iter().any(|t| e.eq_ignore_ascii_case(t)))
 }
 
 /// The name an open document goes by in the window: the engine's title, with an untitled
