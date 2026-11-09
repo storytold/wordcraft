@@ -969,6 +969,7 @@ fn turned_cell_text_exports_as_text() {
     }
 }
 
+/// Authored freeform ink retains its historical stroke-width clamp in PDF output.
 #[test]
 fn legacy_freeform_ink_keeps_its_pdf_width_clamp() {
     use wordcraft_doc::{

@@ -629,9 +629,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
         Draw::Art { .. } => draw_art(ctx, &fr, it),
         Draw::Ink { .. } | Draw::NativeInk { .. } => draw_ink(ctx, &fr, it),
         Draw::MaskInk { segs, color: c, alpha } => {
-            if *c == Rgb::WHITE {
-                return;
-            }
+            // White is neutral only on an opaque backdrop; it still contributes source alpha.
             let path = wordcraft_layout::display::seg_path(segs);
             if path.elements().is_empty() || !path_extent_ok(view, &path) {
                 return;

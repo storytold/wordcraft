@@ -13,6 +13,7 @@ fn image(item: Draw) -> Rendered {
     render_items(&Document::new(), &items, Rect::new(0.0, 0.0, 40.0, 40.0), 4.0, &RenderOptions::default())
 }
 
+/// Legacy freeform widths keep their clamp while invalid imported widths are rejected.
 #[test]
 fn legacy_ink_keeps_its_width_clamp_and_native_ink_refuses_invalid_widths() {
     for (width, expected) in [(0.01, 0.25), (400.0, 200.0)] {
@@ -30,6 +31,7 @@ fn legacy_ink_keeps_its_width_clamp_and_native_ink_refuses_invalid_widths() {
     }
 }
 
+/// Mask-aware clipping must not change isolated compositing for ordinary clip contents.
 #[test]
 fn ordinary_clips_keep_isolated_compositing() {
     let rect = Rect::new(4.0, 4.0, 24.0, 24.0);
@@ -45,6 +47,7 @@ fn ordinary_clips_keep_isolated_compositing() {
     }
 }
 
+/// Valid very thin and wide native strokes retain their requested width when rasterized.
 #[test]
 fn ink_extreme_widths_are_not_clamped() {
     for (width, area, scale, points, column, min_rows, max_rows) in [
@@ -58,6 +61,7 @@ fn ink_extreme_widths_are_not_clamped() {
     }
 }
 
+/// Stationary and repeated native samples render as the same round nib as a short stroke.
 #[test]
 fn native_stationary_strokes_paint_their_round_nib() {
     for (width, area, scale) in [
@@ -104,6 +108,7 @@ fn native_stationary_strokes_paint_their_round_nib() {
     assert!(render(vec![(5.0, 5.0), (5.0, 5.0), (15.0, 5.0)]).pixels == control.pixels, "moving strokes keep their full path");
 }
 
+/// Mask outlines obey the same transformed-path size guard as other rendered paths.
 #[test]
 fn mask_ink_obeys_the_shared_path_extent_guard() {
     let draw = |extent: f32| Draw::MaskInk {
@@ -119,6 +124,32 @@ fn mask_ink_obeys_the_shared_path_extent_guard() {
     assert!(rendered.pixel(4, 4)[3] > 0);
 }
 
+/// White masks retain source opacity on transparent backdrops while remaining neutral on opaque ones.
+#[test]
+fn white_mask_composites_over_transparent_and_translucent_backdrops() {
+    let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+    let segs = vec![PathSeg::Move(2.0, 2.0), PathSeg::Line(18.0, 2.0), PathSeg::Line(18.0, 18.0), PathSeg::Line(2.0, 18.0), PathSeg::Close];
+    let mask = Draw::MaskInk { segs, color: Rgb::WHITE, alpha: 0.5 };
+    for (dark, clear, partial, opaque) in
+        [(false, [255, 255, 255, 127], [255, 85, 85, 191], [255, 0, 0, 255]), (true, [0, 0, 0, 127], [170, 34, 34, 191], [255, 51, 51, 255])]
+    {
+        let opts = RenderOptions { dark, ..Default::default() };
+        for (background, expected) in [(None, clear), (Some(0.5), partial), (Some(1.0), opaque)] {
+            let mut items = Vec::new();
+            if let Some(alpha) = background {
+                items.push(Draw::Fill { rect: area, color: RED, alpha, text_bg: false });
+            }
+            items.push(mask.clone());
+            let pixel = render_items(&Document::new(), &items, area, 1.0, &opts).pixel(10, 10);
+            assert!(
+                pixel.into_iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= PIXEL_TOLERANCE),
+                "dark={dark}, background={background:?}: {pixel:?} != {expected:?}"
+            );
+        }
+    }
+}
+
+/// Dark-page binary masks invert the composited result rather than only the pen color.
 #[test]
 fn binary_mask_dark_mode_inverts_the_composite_not_just_the_pen() {
     let bounds = Rect::new(0.0, 0.0, 20.0, 20.0);
@@ -145,6 +176,7 @@ fn binary_mask_dark_mode_inverts_the_composite_not_just_the_pen() {
     }
 }
 
+/// Nested mask clips blend against the actual backdrop without painting outside their bounds.
 #[test]
 fn nested_clips_blend_masks_against_the_actual_backdrop() {
     let area = Rect::new(0.0, 0.0, 20.0, 20.0);
@@ -178,6 +210,7 @@ fn nested_clips_blend_masks_against_the_actual_backdrop() {
     }
 }
 
+/// Rotated clips preserve mask backdrop blending and the transformed clip boundary.
 #[test]
 fn rotated_clips_preserve_backdrop_blending_and_clip_boundaries() {
     let area = Rect::new(0.0, 0.0, 20.0, 20.0);
@@ -195,6 +228,53 @@ fn rotated_clips_preserve_backdrop_blending_and_clip_boundaries() {
         assert_eq!(image.pixel(10, 6), [painted, painted, painted, 255]);
         assert_eq!(image.pixel(5, 10), [baseline, baseline, baseline, 255]);
         assert_eq!(image.pixel(10, 16), [baseline, baseline, baseline, 255]);
+    }
+}
+
+/// A clip that carries mask ink must not disturb the source-over siblings around it: their
+/// overlap composites exactly as it would in the same clip with no mask present, in both
+/// light and dark pages.
+#[test]
+fn mixed_mask_clips_preserve_unmasked_siblings() {
+    let area = Rect::new(0.0, 0.0, 40.0, 40.0);
+    // Two overlapping semi-transparent fills, away from the mask region: the siblings under test.
+    let red = Draw::Fill { rect: Rect::new(6.0, 6.0, 20.0, 20.0), color: RED, alpha: 0.5, text_bg: false };
+    let green = Draw::Fill { rect: Rect::new(18.0, 6.0, 20.0, 20.0), color: GREEN, alpha: 0.5, text_bg: false };
+    // A binary mask confined to the lower-left corner, not touching the red/green overlap.
+    let mask = Draw::MaskInk {
+        segs: vec![PathSeg::Move(2.0, 30.0), PathSeg::Line(16.0, 30.0), PathSeg::Line(16.0, 38.0), PathSeg::Line(2.0, 38.0), PathSeg::Close],
+        color: Rgb::BLACK,
+        alpha: 1.0,
+    };
+    let clip_rect = Rect::new(2.0, 2.0, 36.0, 36.0);
+    for dark in [false, true] {
+        let opts = RenderOptions { dark, ..Default::default() };
+        let background = Draw::Fill { rect: area, color: Rgb::WHITE, alpha: 1.0, text_bg: false };
+        let control = render_items(
+            &Document::new(),
+            &[background.clone(), Draw::Clip { rect: clip_rect, items: vec![red.clone(), green.clone()] }],
+            area,
+            1.0,
+            &opts,
+        );
+        let mixed = render_items(
+            &Document::new(),
+            &[background, Draw::Clip { rect: clip_rect, items: vec![red.clone(), green.clone(), mask.clone()] }],
+            area,
+            1.0,
+            &opts,
+        );
+        for (x, y) in [(18.0, 16.0), (20.0, 12.0), (24.0, 20.0)] {
+            assert_eq!(mixed.pixel(x as u32, y as u32), control.pixel(x as u32, y as u32), "dark={dark} sibling at ({x},{y})");
+        }
+        // The mask must still paint: Multiply black darkens a light page, while its dark-page
+        // Screen complement (white) lightens the dark paper.
+        let (masked, base) = (mixed.pixel(8, 34), control.pixel(8, 34));
+        if dark {
+            assert!(masked[0] > base[0], "dark={dark} mask did not lighten: {masked:?} vs {base:?}");
+        } else {
+            assert!(masked[0] < base[0], "dark={dark} mask did not darken: {masked:?} vs {base:?}");
+        }
     }
 }
 
