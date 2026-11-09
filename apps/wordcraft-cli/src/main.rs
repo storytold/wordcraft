@@ -350,7 +350,7 @@ enum Failure {
     /// A real error, reported on stderr with a failing exit status.
     Error(String),
     /// Whoever read stdout closed it (`wordcraft-cli commands --json | head`): there is nobody left
-    /// to write to, so stop quietly and exit 0 like other command-line tools.
+    /// to write to. Most commands exit 0; validation retains its verdict status.
     StdoutClosed,
     /// The subcommand has already written its output and decided its own exit status (`validate`).
     Status(u8),
@@ -799,11 +799,19 @@ fn run_validate(file: Option<&Path>, rest: &[String]) -> Result<(), Failure> {
             return Err(Failure::Status(3));
         }
     };
-    if rest.iter().any(|a| a == "--json") {
+    let written = if rest.iter().any(|a| a == "--json") {
         let json = serde_json::to_string_pretty(&report).unwrap_or_default();
-        write_stdout(|o| writeln!(o, "{json}"))?;
+        write_stdout(|o| writeln!(o, "{json}"))
     } else {
-        write_stdout(|o| write_validate_report(o, &report))?;
+        write_stdout(|o| write_validate_report(o, &report))
+    };
+    match written {
+        // A reader closing early must not turn a FAIL or INCOMPLETE verdict into PASS.
+        Ok(()) | Err(Failure::StdoutClosed) => {}
+        Err(error) => {
+            eprintln!("wordcraft-cli: {error}");
+            return Err(Failure::Status(3));
+        }
     }
     match report.verdict {
         wordcraft_validate::Verdict::Pass => Ok(()),
