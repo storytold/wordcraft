@@ -474,7 +474,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let password = password_from(&rest)?;
             let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let info = serde_json::to_string_pretty(&s.run("file.info", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
-            write_stdout(|o| writeln!(o, "{info}"))
+            write_stdout(|o| writeln!(o, "{}", json_terminal_safe(&info)))
         }
         "text" => {
             validate_options("text", &rest, PASSWORD_OPTIONS)?;
@@ -490,7 +490,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let password = password_from(&rest)?;
             let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let tree = serde_json::to_string_pretty(&s.run("document.inspect", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
-            write_stdout(|o| writeln!(o, "{tree}"))
+            write_stdout(|o| writeln!(o, "{}", json_terminal_safe(&tree)))
         }
         "render" => {
             validate_options("render", &rest, RENDER_OPTIONS)?;
@@ -534,7 +534,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             for (n, (id, params)) in script.iter().flat_map(|c| c.commands.iter()).enumerate() {
                 let r = s.run(id, params).map_err(|e| format!("command {} ({id}): {e}", n + 1))?;
                 if print {
-                    write_stdout(|o| writeln!(o, "{id}: {r}"))?;
+                    write_stdout(|o| writeln!(o, "{}", json_terminal_safe(&format!("{id}: {r}"))))?;
                 }
             }
             let mut i = 0;
@@ -547,7 +547,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     };
                     let r = s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
                     if print {
-                        write_stdout(|o| writeln!(o, "{id}: {r}"))?;
+                        write_stdout(|o| writeln!(o, "{}", json_terminal_safe(&format!("{id}: {r}"))))?;
                     }
                     i += 2;
                 } else {
@@ -725,6 +725,12 @@ fn clip(s: &str) -> String {
     }
 }
 
+/// Whether a terminal could act on `c` or show text out of its byte order: control characters
+/// (C0, DEL, C1), line and paragraph separators, and the bidi marks and overrides.
+fn terminal_unsafe(c: char) -> bool {
+    c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+}
+
 /// Text from another program (Zotero, or whatever answered on its port) for one diagnostic
 /// line: backslashes, control characters (newline, escape, C1…), line separators and bidi
 /// overrides are shown as escapes (`\\`, `\n`, `\u{1b}`), so it can't end its line, drive the
@@ -737,10 +743,25 @@ fn escape_peer(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') => {
-                out.extend(c.escape_unicode())
-            }
+            c if terminal_unsafe(c) => out.extend(c.escape_unicode()),
             c => out.push(c),
+        }
+    }
+    out
+}
+
+/// JSON text (from `serde_json`) with what a terminal could act on written as `\uXXXX`, for
+/// output that carries text from a file: `serde_json` escapes only C0 controls, so DEL, C1
+/// controls and the bidi marks would reach the terminal as they are (#6055). Those characters can
+/// only be inside a string, and all are in the Basic Multilingual Plane, so the result is the same
+/// JSON value, and every other character stays as it is. The line breaks of pretty printing stay.
+fn json_terminal_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if terminal_unsafe(c) && c != '\n' {
+            out.push_str(&format!("\\u{:04x}", u32::from(c)));
+        } else {
+            out.push(c);
         }
     }
     out
