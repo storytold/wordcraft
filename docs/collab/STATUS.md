@@ -4,11 +4,12 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `9e48ab02` plus this status commit — 63 commits over
+- HEAD at this writing: `79ecdc34` plus this status commit — 64 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
-  `host-bridge.md`.
+  `host-bridge.md`; operator view and the callback contract:
+  `production.md`.
 
 This page records what is implemented, how it was verified, what is known to be
 missing, and where the next session should start.
@@ -205,9 +206,13 @@ missing, and where the next session should start.
   sent; `edit.undo`/`edit.redo` go to the room instead of the local snapshot
   history, and the accepted answer's inverse is applied at the author exactly
   once (§5.9).
-- Participants window: status, role, participants, commit button (owner) and the
-  commit result/warnings. Remote carets **and selection shading** are drawn on the
-  canvas in the participant's colour.
+- Participants window: status, role, participants, commit button (owner), the
+  commit result/warnings and — when the room published the file — the cabinet's
+  version and etag (§5.18). Remote carets **and selection shading** are drawn on
+  the canvas in the participant's colour.
+- The Commit button commits through the room when a session is live (the room
+  publishes the file, §5.18); the host-owned `wordcraft:commit` path is the
+  fallback for an app without a session to commit through.
 - `collab.disable` drops the session; with the flag off nothing opens a socket.
 - Saved preferences plus a token in the environment resume the session on start.
 
@@ -231,11 +236,12 @@ missing, and where the next session should start.
   changes (join, leave, reconnect); `presence` is coalesced to 10 Hz (ADR-0006).
   Without `wordcraft:session` the app makes no network call and the `collab`
   flag stays off: the web build is single-user until the cabinet opens a session.
-- When the host owns the file (a session came through the bridge), the Commit
-  button sends `wordcraft:commit` (no `bytes`: the cabinet fetches the assembled
-  file itself, as the contract's `bytes?` allows) and the panel shows the
-  `wordcraft:committed` answer; otherwise the sync server commits and its
-  sha256/warnings show in the panel.
+- Commit goes through the room when the session is live: the server builds the
+  `.docx` and posts it to the cabinet (M87, §5.18), and every peer's panel shows
+  the cabinet's version/etag from `committed`. `wordcraft:commit` (no `bytes`:
+  the contract's `bytes?` allows a host that assembles the file itself) is the
+  fallback when the app has no live session, and `wordcraft:committed` from the
+  host is still recorded.
 
 ### Server (`apps/collab-server`)
 
@@ -248,6 +254,11 @@ missing, and where the next session should start.
   may send it. Presence is not echoed to its author.
 - Commit is owner-only, checks `expectedVersion`, writes the `.docx` in memory,
   returns SHA-256 and warnings, and stores the source bytes for the next snapshot.
+- With `COLLAB_CABINET_URL`, the commit is also published to the cabinet
+  (`cabinet.rs`, §5.18): `{fileId, bytes, sha256, version, expectedVersion?}` →
+  `{version, etag}`; the etag is stored with the snapshot, every peer receives
+  `committed{cabinet:{version, etag}}`, `409` resyncs the room, `401`/`413` are
+  one refusal, a transient failure is retried with the same body.
 - Limits: 8 participants, 200 operations/s per room, 1 MiB frame, 64 MiB document;
   bounded per-peer queues (512).
 - `GET /healthz`, `GET /metrics`; logs contain no document content, payloads or
@@ -265,7 +276,7 @@ missing, and where the next session should start.
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
-| Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
+| Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
 | PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
@@ -281,7 +292,7 @@ Run from `upstream/`:
 cargo test -p wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine \
   -p wordcraft-collab-client -p wordcraft-collab-ws -p wordcraft-collab-app \
   -p wordcraft-collab-web -p wordcraft-web \
-  -p wordcraft-collab-server          # 113 unit + 1 socket test, 1 ignored (LibreOffice gate)
+  -p wordcraft-collab-server          # 329 tests, 1 ignored (LibreOffice gate)
 cargo test -p wordcraft-collab-server -- --ignored   # commit → LibreOffice
 cargo test -p wordcraft-engine collab::              # 5 flag/remote tests
 cargo test -p wordcraft-ui-egui --lib                # 1137 tests
@@ -291,10 +302,19 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
-- 139 protocol/adapter/client/server tests (138 unit + 1 socket reconnect), all
-  green; the LibreOffice commit gate stays the one ignored test. §5.6 added 19:
-  4 in `collab`, 13 in `collab-doc` and 2 in `collab-engine` (per-crate counts
-  are in §5.6).
+- 329 protocol/adapter/client/server tests, all green; the LibreOffice commit
+  gate stays the one ignored test. The nine crates at this writing:
+  `collab` 51, `collab-doc` 113, `collab-engine` 56, `collab-app` 33,
+  `collab-client` 14, `collab-web` 5, `collab-ws` 1, `wordcraft-web` 9,
+  `collab-server` 47 (their socket scenarios included). §5.18 added 19: 13 unit
+  tests of the callback client (`cabinet.rs`), 1 store round-trip of the cabinet
+  etag, 4 server scenarios with a fake cabinet on loopback and 1 wire test that
+  an older `committed` still parses.
+- Full gate on the same tree (`cargo xtask ci`, build host `agents`, with
+  `CRAFT_I18N_DIR` and `CRAFT_FONTS_DIR` from the host): all 9 steps passed —
+  fmt, clippy (`--workspace --all-targets -D warnings`), test (5969 passed, 0
+  failed, 11 ignored), i18n-report, language, doctest, assets (48 files),
+  layers (27 crates) and wasm (22 crates).
 - 5 engine collaboration tests, all green.
 - 1137 UI tests, green (3 ignored).
 - 5 web-session tests (`wordcraft-collab-web`: session/token redaction, commit
@@ -419,6 +439,15 @@ Results at this writing:
   `gone` and the client resyncs, and a snapshot rebuilds the map from scratch.
   The author's map stays correct for live nodes (§5.17 fixed one way it did
   not).
+- The cabinet callback (`production.md`) is `http://` only: the room sits behind
+  the ingress, which terminates TLS. A URL that is not `http://` or that has no
+  `{sessionId}` stops the server at startup with a message that says so.
+- A callback whose `200` is lost is retried with the same `expectedVersion`, so a
+  cabinet that did store the first attempt answers `409`; the room reports the
+  conflict rather than creating a second version (§5.18). Callback idempotency
+  is the cabinet's next step (mail-frontend M87). The first commit of a room (or
+  after its snapshot was removed) sends no `expectedVersion`, so an external
+  edit in that window is overwritten.
 - The token is read from the environment on desktop; the cabinet must push a fresh
   token through the host bridge when it arrives.
 - No two-machine manual GUI test; the UI tests are headless.
@@ -490,7 +519,9 @@ and `apps/wordcraft-web/src/web.rs` (web); test
 1. The `craft-libs` git pin is in place (ADR-0016 §3, `7666e2b1`) and the web
    app builds with trunk on it; the same revision still has to be used by the
    other four apps. The two-client host run is done (§5.1); the manual parts are
-   listed there.
+   listed there. The room-side cabinet callback is done (§5.18); what remains for
+   it is operational: the cabinet's ticket must carry the numeric `fileId` in
+   `doc`, and the shared service token must be in both `.env`s.
 2. Force-push the rebased branch (§5.4), then mark PR #5834 ready once CI has run
    and the pin is acceptable to the maintainers (GitHub reports
    `action_required` for fork PRs until a maintainer approves, and the PR shows
@@ -1888,6 +1919,108 @@ wordcraft-collab-app` — 51, 113, 56 and 33 passed; `cargo clippy` on those fou
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
+### 5.18 Commit callback to the cabinet (run 2026-11-09)
+
+The last piece between the room and `CRAFT_COLLAB_ENABLED=true`: the cabinet's
+M87 contract (`mail-frontend docs/CUTOVER.md` §M87) says the room builds the
+final document and posts it, because the cabinet owns versions, audit and
+antivirus. Until this slice the server built the `.docx` and returned only its
+digest; the web path posted `wordcraft:commit` to the host page. Now the room
+itself is a client of `POST /api/v1/internal/office/sessions/{sessionId}/commit`.
+
+**Who calls.** The sync server, not the app, holds the authoritative document
+and the bytes; the desktop and the web build get the same answer over the
+same socket. `fileId` and `sessionId` come from the JWT claims the cabinet
+minted (`doc` and `sid`), so no new host message and no new field on the wire
+were needed. `version` is the room's document version; `expectedVersion` is the
+cabinet etag of the previous accepted commit, stored with the snapshot
+(`meta`: `cabinet_version`, `cabinet_etag`) so a restart does not lose the
+conflict check.
+
+**Configuration.** `COLLAB_CABINET_URL` (with `{sessionId}`, `http://` only —
+the ingress terminates TLS), `COLLAB_CABINET_TOKEN` (secret, redacted in
+`Debug`, never logged), `COLLAB_CABINET_TIMEOUT_MS` and
+`COLLAB_CABINET_ATTEMPTS`. Without a URL nothing changes: the commit stays
+server-side and the host owns the storage. The operator view, the contract and
+the rollout are in `production.md`.
+
+**What each answer does.**
+
+- `200 {version, etag}`: the etag is recorded and the snapshot rewritten; every
+  peer (not only the author, as before) receives
+  `committed {version, sha256, warnings, cabinet:{version, etag}}`; the panel
+  shows the cabinet's version and etag next to the digest.
+- `409`: the file changed outside the session. The room does not overwrite it
+  and does not advance the etag; a retryable `error {code:"cabinetConflict"}`
+  goes to every peer, so both replicas resync and the panel says the commit was
+  refused.
+- `401`/`403`: one `rejected {code:"forbidden"}` to the author, no retry — a
+  wrong `COLLAB_CABINET_TOKEN` cannot be fixed by sending it again.
+- `413`: one `rejected {code:"tooLarge"}`, no retry.
+- `408`/`425`/`429`/`5xx`/network: the same body is sent again (2 more attempts
+  by default, 200 ms then 800 ms); a success is reported like any other. When
+  every attempt fails, the author gets `rejected {code:"invalid"}` with the
+  reason and the room keeps the old expectation; the next Commit retries.
+- Any other `4xx`: one `rejected {code:"invalid"}`.
+
+**Client side.** `ServerMsg::Committed` grew an optional `cabinet` field (the
+serde default keeps an older server's frame parseable), `Event::Committed`
+carries it, and `collab-app`/`collab-web` expose the result as a `Commit`
+struct instead of a tuple, so the panel draws the cabinet version/etag. The
+Commit button now commits through the live session first; the host-owned
+`wordcraft:commit` path remains the fallback for an app with no session, and the
+host's `wordcraft:committed` is still recorded (`host-bridge.md`).
+
+**Tests.**
+
+- `apps/collab-server/src/cabinet.rs` (13 unit, no real cabinet):
+  `the_contract_codes_are_classified` (200/2xx, 401/403, 409, 413, 408/425/429,
+  5xx, 400/422/418),
+  `only_plain_http_urls_with_a_host_parse` (https refused, credentials and IPv6
+  handled), `the_body_carries_the_contract_fields` (base64 bytes, digest,
+  room version, optional `expectedVersion`),
+  `the_config_never_prints_the_token`,
+  `an_accepted_commit_names_the_cabinet_version_and_etag` (path, method,
+  bearer header, body),
+  `a_conflict_is_not_retried`, `a_bad_token_is_not_retried`,
+  `a_too_large_body_is_not_retried` (one request each),
+  `a_lost_answer_is_retried_with_the_same_body` (equal bodies, so the retry
+  cannot become a second version), `an_unreachable_cabinet_gives_up_after_the_attempts`,
+  `a_cabinet_that_refuses_the_body_is_reported_without_a_retry`,
+  `a_chunked_answer_is_decoded`,
+  `an_accepted_answer_without_the_contract_fields_is_refused`.
+- `apps/collab-server/src/store.rs`: `the_cabinet_etag_survives_a_restart`.
+- `apps/collab-server/src/tests.rs` (two real WebSocket clients and a fake
+  cabinet on loopback):
+  `a_commit_is_published_to_the_cabinet_and_every_client_sees_its_version`
+  (both peers get the cabinet copy; the second commit sends the first etag as
+  `expectedVersion`; `fileId`/`sessionId` come from the claims),
+  `a_cabinet_conflict_resyncs_every_client` (retryable error to both, one
+  request, no etag advance),
+  `a_refused_cabinet_token_is_reported_once_without_a_retry` (forbidden to the
+  author, token not in the URL),
+  `a_lost_cabinet_answer_is_retried_with_the_same_body` (both peers get the
+  stored copy; two equal bodies).
+- `crates/collab-client/src/tests.rs`:
+  `a_commit_answer_carries_the_cabinet_copy_when_the_room_published_it` (the
+  new frame parses, an older one without `cabinet` still parses as `None`).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test` on the
+nine crates above — `collab` 51, `collab-doc` 113, `collab-engine` 56,
+`collab-app` 33, `collab-client` 14, `collab-web` 5, `collab-ws` 1,
+`wordcraft-web` 9, `collab-server` 47 (+1 ignored LibreOffice); `cargo clippy`
+on `collab`, `collab-client`, `collab-app`, `collab-web`, `collab-server`,
+`ui-egui` and `wordcraft-web` with `--all-targets -- -D warnings` clean;
+`cargo fmt --all -- --check` clean; `cargo xtask wasm` ok (22 crates; the two
+pre-existing `ui-egui` wasm warnings only); the full `cargo xtask ci` on this
+tree passed all 9 steps (5969 workspace tests, 0 failed, 11 ignored).
+
+**What is left for this path.** The cabinet's ticket must carry the numeric
+`fileId` in `doc` (the dev room key `doc-1` is not a file id), the same service
+token must be in the cabinet's `CRAFT_CALLBACK_TOKEN` and the room's
+`COLLAB_CABINET_TOKEN`, and the value of a lost `200` is a `409` until the
+cabinet implements callback idempotency. No push was made and CI is unchanged.
+
 ## 6. Where things live
 
 | Concern | File |
@@ -1902,4 +2035,6 @@ clean. No push was made and CI is unchanged.
 | Desktop session | `crates/collab-app/src/lib.rs` |
 | UI wiring, panel, carets | `crates/ui-egui/src/collab.rs`, `app/commands.rs` |
 | Server | `apps/collab-server/src/{lib,main,store}.rs` |
+| Cabinet commit callback | `apps/collab-server/src/cabinet.rs` |
 | Run book | `docs/collab/README.md` |
+| Operator view, callback contract, rollout | `docs/collab/production.md` |

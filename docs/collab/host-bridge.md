@@ -46,10 +46,14 @@ single-user mode (the rule from `INTEGRATION.md` §6).
    `localStorage` or preferences (`HostSession`'s `Debug` redacts it).
 2. `post_session_state` on join/leave/reconnect/status change; `post_presence`
    coalesced to the same 5–10 Hz as the WebSocket presence (ADR-0006).
-3. When the cabinet owns commit, `post_commit` carries no `bytes` (the contract's
-   `bytes?` is optional; the cabinet assembles/fetches the file itself) and
-   `Message::Committed` shows the result. Otherwise the server commits and the
-   panel shows its sha256/warnings.
+3. Commit goes through the room. With `COLLAB_CABINET_URL` set, the server
+   builds the `.docx` and posts it to the cabinet itself (M87,
+   `production.md`); every peer receives `committed` with the cabinet's
+   `version`/`etag` and the panel shows them. `wordcraft:commit` (no `bytes`:
+   the host may assemble or fetch the file itself) is used only when the app has
+   no live session to commit through, and `Message::Committed` from the host
+   remains a result the app records. The server's own commit path reports its
+   digest and warnings when no callback is configured.
 4. Without `Message::Session` no network call is made: the feature flag `collab`
    stays off (TASK.md §1).
 

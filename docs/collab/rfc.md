@@ -597,8 +597,17 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
 
 - `commit{op_id, expected_version, etag}` → сервер собирает `.docx` из авторитетной модели
   `io::save_bytes` (`engine/src/io.rs:441`) и отдаёт кабинету байты + `sha256` + `version`.
-- `expected_version`/`etag` не совпал с текущим файлом → `409`; предложение «сохранить
-  копию».
+- С включённым колбэком (`COLLAB_CABINET_URL`) комнате не нужен ни браузер, ни host-page:
+  сервер сам делает `POST /api/v1/internal/office/sessions/{sessionId}/commit`, где
+  `sessionId`/`fileId` — claims `sid`/`doc`, тело `{fileId, bytes(base64), sha256,
+  version, expectedVersion?}`. Ответ `200 {version, etag}` уходит всем подписчикам
+  в `committed.cabinet`, а `etag` хранится со снапшотом и становится
+  `expectedVersion` следующего коммита (в т.ч. после рестарта). `409` — файл изменён
+  вне сессии: перезаписи нет, комната шлёт retryable `error{code:"cabinetConflict"}`;
+  `401`/`413` — один отказ без повтора; сетевой сбой/`5xx` — повтор тем же телом.
+  Кабинет остаётся владельцем версии, аудита и антивируса (`production.md`).
+- `expected_version` коммита не совпал с головой комнаты → `rejected{conflict}`; `etag`
+  на проводе остаётся клиентским полем, конфликт с кабинетом решает его etag.
 - Ответ несёт `warnings[]`: что именно не сохранится (правленые абзацы, чей `kept`
   выброшен; неизвестные части, если `passthrough` не было). Пустой `warnings[]` —
   round-trip без потерь по модели.

@@ -18,6 +18,12 @@ cargo run -p wordcraft-collab-server
 | `COLLAB_BIND` | address to listen on | `127.0.0.1:8087` |
 | `COLLAB_JWT_SECRET` | HS256 shared secret (local development only) | — |
 | `COLLAB_JWT_PEM` | ES256 public key PEM (production, ADR-0008) | — |
+| `COLLAB_DATA_DIR` | snapshots (model, source `.docx`, `opId` window, cabinet etag) | `collab-data` |
+| `COLLAB_LEASE_TTL_SECS` | silence before another cabinet session may take the lease | `120` |
+| `COLLAB_CABINET_URL` | commit callback, `{sessionId}` substituted; unset keeps the commit server-side | — |
+| `COLLAB_CABINET_TOKEN` | service token of the callback (secret; never logged) | — |
+| `COLLAB_CABINET_TIMEOUT_MS` | deadline for one callback request | `10000` |
+| `COLLAB_CABINET_ATTEMPTS` | attempts for a transient callback failure | `3` |
 
 At least one of the two token keys is required; the server refuses to start
 without one. The token is never logged.
@@ -101,6 +107,19 @@ Only `owner` may commit. The server writes `.docx` from the authoritative model
 `expected_version` must match the head, otherwise the client gets
 `rejected{code:"conflict"}` (the cabinet stores the new version and keeps the
 previous one, ADR-0009).
+
+With `COLLAB_CABINET_URL` set, the room also becomes an HTTP client of the
+cabinet (`cabinet.rs`, mail-frontend M87): it posts
+`{fileId, name?, bytes(base64), sha256, version, expectedVersion?}` — `fileId`
+and `sessionId` come from the JWT's `doc` and `sid` claims — and the cabinet
+answers `{version, etag}`. `committed` then carries that copy
+(`cabinet:{version, etag}`) to every peer, and the etag is stored with the
+snapshot so the next commit sends it as `expectedVersion` even after a restart.
+`409` (the file changed outside the session) becomes a retryable
+`error{code:"cabinetConflict"}` to every peer so the replicas resync; `401`/`403`
+and `413` are one refusal to the author with no retry; a network failure or a
+`5xx`/`408`/`429` is retried with the same body. The callback accepts `http://`
+only: TLS is terminated by the ingress (`production.md`).
 
 Known limitation, ADR-0005: `Document::kept` is not serialized, so unmodelled
 paragraph markup is preserved only for paragraphs unchanged since open. The

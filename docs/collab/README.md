@@ -22,6 +22,12 @@ cargo run -p wordcraft-collab-server
 - `COLLAB_DATA_DIR` — snapshots (`model.json`, `source.docx`, `meta`, one previous pair).
 - `COLLAB_LEASE_TTL_SECS` — how long a cabinet session may be silent before another
   session may take the lease (default 120).
+- `COLLAB_CABINET_URL` — the cabinet's commit endpoint, with `{sessionId}`
+  substituted (e.g. `http://backend:8080/api/v1/internal/office/sessions/{sessionId}/commit`);
+  unset keeps the commit server-side.
+- `COLLAB_CABINET_TOKEN` — the service token the callback is authenticated with
+  (secret; never logged). `COLLAB_CABINET_TIMEOUT_MS` (10000) and
+  `COLLAB_CABINET_ATTEMPTS` (3) tune one publication.
 - `GET /healthz`, `GET /metrics`, WebSocket at `/ws`. No token is logged. `exp` is
   checked on every frame, not only at the handshake; a running session therefore
   gets `tokenExpired` and must reconnect with a fresh token. SIGTERM/SIGINT writes
@@ -67,6 +73,11 @@ The same session can be driven headlessly through the control channel or MCP:
 - Per-user undo/redo (one version per undo, conflicts refused), presence and
   participants, owner-only commit, snapshots every 500 operations (model JSON
   plus the source `.docx`, ADR-0011).
+- A commit is a cabinet version when `COLLAB_CABINET_URL` is set: the room posts
+  the built `.docx` to `POST /api/v1/internal/office/sessions/{sessionId}/commit`
+  and every peer is told the cabinet's `version`/`etag`; a `409` resyncs the
+  replicas, a `401`/`413` is one refusal, a network failure is retried with the
+  same body (`production.md`).
 - A viewer's document commands are refused by the client before the engine and
   again by the server.
 
