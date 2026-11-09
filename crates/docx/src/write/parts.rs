@@ -113,6 +113,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     // When the privacy settings ask for changes, its kept parts are written without the names and
     // dates of its tracked changes and comments (#3692), or from the model if they can't be.
     let (names, dates) = (doc.settings.remove_personal_info, doc.settings.remove_date_time);
+    wr.embeds.drop_personal = names;
     if glossary::edited(doc)
         || (!doc.glossary.is_empty() && !wr.embeds.kept_glossary())
         || ((names || dates) && !wr.embeds.scrub_glossary(names, dates))

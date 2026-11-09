@@ -75,6 +75,52 @@ fn pos(s: &str, needle: &str) -> usize {
 
 const CT: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="jpeg" ContentType="image/jpeg"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/webSettings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.webSettings+xml"/><Override PartName="/word/stylesWithEffects.xml" ContentType="application/vnd.ms-word.stylesWithEffects+xml"/><Override PartName="/word/people.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.people+xml"/><Override PartName="/word/webextensions/taskpanes.xml" ContentType="application/vnd.ms-office.webextensiontaskpanes+xml"/><Override PartName="/word/webextensions/webextension1.xml" ContentType="application/vnd.ms-office.webextension+xml"/><Override PartName="/word/unknownPart.xml" ContentType="application/x-unknown+xml"/></Types>"#;
 
+/// #3627: "Remove personal information" also leaves out the parts that name people or show the
+/// page as last saved: `word/people.xml` (comment and revision authors with their account ids)
+/// and the package thumbnail. Without the setting they are carried, as before; other kept
+/// parts are carried either way.
+#[test]
+fn remove_personal_information_leaves_out_the_people_part_and_the_thumbnail() {
+    let web = r#"<w:webSettings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:optimizeForBrowser/></w:webSettings>"#;
+    let people = r#"<w15:people xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:person w15:author="Ann Example"><w15:presenceInfo w15:providerId="AD" w15:userId="S-1-5-21-1"/></w15:person></w15:people>"#;
+    let bytes = package(
+        r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p>"#,
+        &[
+            ("rId1", &format!("{REL}/webSettings"), "webSettings.xml"),
+            ("rId3", "http://schemas.microsoft.com/office/2011/relationships/people", "people.xml"),
+        ],
+        &[("rIdT", "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail", "docProps/thumbnail.jpeg")],
+        &[
+            ("[Content_Types].xml", CT),
+            ("word/webSettings.xml", web),
+            ("word/people.xml", people),
+            ("docProps/thumbnail.jpeg", "\u{ff}\u{d8}\u{ff}JPEG"),
+        ],
+    );
+    let mut doc = wordcraft_docx::read(&bytes).unwrap();
+    let kept = save(&doc);
+    for part in ["word/people.xml", "docProps/thumbnail.jpeg", "word/webSettings.xml"] {
+        assert!(kept.contains_key(part), "{part} is carried while the setting is off");
+    }
+
+    doc.settings.remove_personal_info = true;
+    let files = save(&doc);
+    assert!(!files.contains_key("word/people.xml"), "{:?}", files.keys());
+    assert!(!files.contains_key("docProps/thumbnail.jpeg"), "{:?}", files.keys());
+    assert!(files.contains_key("word/webSettings.xml"), "other kept parts stay");
+    assert!(!text(&files, "word/_rels/document.xml.rels").contains("/people\""));
+    assert!(!text(&files, "_rels/.rels").contains("thumbnail"));
+    let ct = text(&files, "[Content_Types].xml");
+    assert!(!ct.contains("people") && !ct.contains("thumbnail"), "{ct}");
+    for (name, bytes) in &files {
+        let part = String::from_utf8_lossy(bytes);
+        assert!(!part.contains("Ann Example") && !part.contains("S-1-5-21-1"), "{name} still names the author");
+    }
+    // The result opens, and a second save is the same.
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    assert_eq!(again.plain_text(wordcraft_doc::StoryRef::Body), "Body");
+}
+
 #[test]
 fn unmodelled_parts_are_carried_with_relationships_and_content_types() {
     let web = r#"<w:webSettings xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:optimizeForBrowser/><w:allowPNG/></w:webSettings>"#;

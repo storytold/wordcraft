@@ -48,6 +48,10 @@ pub mod rt {
     pub const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
     pub const GLOSSARY: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument";
     pub const AF_CHUNK: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk";
+    /// The people part (`word/people.xml`): comment and revision authors with their account ids.
+    pub const PEOPLE: &str = "http://schemas.microsoft.com/office/2011/relationships/people";
+    /// The package thumbnail (`docProps/thumbnail.*`): the first page as last saved.
+    pub const THUMBNAIL: &str = "http://schemas.openxmlformats.org/package/2006/relationships/metadata/thumbnail";
 }
 
 /// Content type of a glossary document part (ECMA-376 Part 1 §11.3.8).

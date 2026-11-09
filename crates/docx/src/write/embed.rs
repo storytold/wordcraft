@@ -47,6 +47,9 @@ pub(crate) struct EmbedWriter<'d> {
     pub parts: Vec<(String, Vec<u8>, String, PartRels)>,
     /// Leave out the main document's kept glossary (it's written from the model instead).
     pub drop_glossary: bool,
+    /// Leave out the kept parts that name people or show the page as last saved (the people part
+    /// and the thumbnail): "Remove personal information on save" is on (#3627).
+    pub drop_personal: bool,
     /// Kept parts written with these bytes instead of their own (see [`Self::scrub_glossary`]).
     scrubbed: HashMap<String, Vec<u8>>,
     /// A chart past the chart limits has been written (and the loss logged, once per save).
@@ -96,6 +99,7 @@ impl<'d> EmbedWriter<'d> {
             markup_bytes: MAX_MARKUP_BYTES,
             parts: Vec::new(),
             drop_glossary: false,
+            drop_personal: false,
             scrubbed: HashMap::new(),
             chart_cut: false,
         }
@@ -217,6 +221,10 @@ impl<'d> EmbedWriter<'d> {
             let fields: Vec<&str> = line.split('\t').collect();
             let [source, kind, target] = fields.as_slice() else { continue };
             if *source != owner || (self.drop_glossary && owner == "D" && rel_is(kind, rt::GLOSSARY)) {
+                continue;
+            }
+            // Authors with their account ids, and an image of a page that may since have been edited.
+            if self.drop_personal && (rel_is(kind, rt::PEOPLE) || rel_is(kind, rt::THUMBNAIL)) {
                 continue;
             }
             if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
