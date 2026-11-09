@@ -1,20 +1,35 @@
 //! Field types another application acts on when it opens the document or updates its fields
-//! (#3628): DDE and DDEAUTO start a program, INCLUDETEXT, INCLUDEPICTURE, LINK, IMPORT and
-//! INCLUDE fetch their target, over the network for a UNC path. WordCraft never evaluates them,
-//! but the people a document goes to open it in Word.
+//! (#3628): DDE and DDEAUTO start a program; INCLUDETEXT, INCLUDEPICTURE, LINK, IMPORT, INCLUDE,
+//! DATABASE (its data source) and RD (the document a table of contents or index takes entries
+//! from) fetch their target, over the network for a UNC path. WordCraft never evaluates them, but
+//! the people a document goes to open it in Word.
 //!
 //! An agent can be steered by text in the very document it edits, so a command run for
-//! automation (MCP, the control channel: inside [`from_automation`]) can't put one in a document.
+//! automation (MCP, the control channel: inside [`from_automation`]) can't put one in a document:
+//!
+//! - not by its code ([`check`]: `insert.field`, `fields.setCode`, mail merge fields);
+//! - not with content it brings in from elsewhere ([`check_incoming`]: a paste, another file's
+//!   text, a building block, a compared or combined document), unless the document already has
+//!   a field with that very code, so moving or copying the document's own fields still works;
+//! - not in a document whose bytes it supplies ([`check_supplied`]: `file.open` and
+//!   `file.newFromTemplate` with `data`). A document it opens from a file keeps its fields: the
+//!   file already holds them.
+//!
 //! The person at the keyboard still can, and so can automation on a computer whose host sets
 //! `WORDCRAFT_ALLOW_ACTIVE_FIELDS=1`: a setting of the host, never a command parameter, so a
 //! prompt can't turn it on.
 
 use std::cell::Cell;
+use std::collections::HashSet;
+
+use wordcraft_doc::edit::Fragment;
+use wordcraft_doc::kept::KeptXml;
+use wordcraft_doc::{Block, Document, InlineObject, Paragraph};
 
 use crate::CmdError;
 
 /// The field types refused from automation, upper case.
-pub const ACTIVE_FIELDS: &[&str] = &["DDE", "DDEAUTO", "INCLUDETEXT", "INCLUDEPICTURE", "LINK", "IMPORT", "INCLUDE"];
+pub const ACTIVE_FIELDS: &[&str] = &["DDE", "DDEAUTO", "INCLUDETEXT", "INCLUDEPICTURE", "LINK", "IMPORT", "INCLUDE", "DATABASE", "RD"];
 
 /// The environment variable a host sets to `1` to let automation insert them anyway.
 pub const ALLOW_ENV: &str = "WORDCRAFT_ALLOW_ACTIVE_FIELDS";
@@ -40,25 +55,127 @@ pub fn from_automation<T>(f: impl FnOnce() -> T) -> T {
 }
 
 /// The first of `instr`'s field types, its own and those of the fields nested in it (`{ … }`),
-/// that is in [`ACTIVE_FIELDS`].
+/// that is in [`ACTIVE_FIELDS`]. A type ends where a word of the code does for the repo's field
+/// parser (`FieldCode::parse`): at a space, a quote, a switch or the end of a nested field, so
+/// `DDEAUTO"cmd"` is a DDEAUTO field. A quote or `=` before it is skipped, erring towards
+/// finding one.
 pub fn active_field(instr: &str) -> Option<&'static str> {
     std::iter::once(instr).chain(instr.split('{').skip(1)).find_map(|code| {
-        let name = code.trim_start().split(|c: char| c.is_whitespace() || c == '}' || c == '\\').next().unwrap_or("");
+        let code = code.trim_start_matches(|c: char| c.is_whitespace() || c == '"' || c == '=');
+        let name = code.split(|c: char| c.is_whitespace() || matches!(c, '}' | '\\' | '"')).next().unwrap_or("");
         ACTIVE_FIELDS.iter().copied().find(|f| f.eq_ignore_ascii_case(name))
     })
+}
+
+/// Whether this thread runs a command for automation and the host doesn't allow active fields.
+fn enforced() -> bool {
+    AUTOMATION.with(Cell::get) && !std::env::var_os(ALLOW_ENV).is_some_and(|v| v == "1")
+}
+
+/// The error for an active field `name` that can't `how` from automation.
+fn refused(name: &str, how: &str) -> CmdError {
+    CmdError::Disabled(format!("{name} fields can't {how} from automation (the host can allow them with {ALLOW_ENV}=1)"))
 }
 
 /// Refuse `instr` when it is or holds an active field and this thread runs a command for
 /// automation, unless the host allows them.
 pub fn check(instr: &str) -> Result<(), CmdError> {
-    if !AUTOMATION.with(Cell::get) || std::env::var_os(ALLOW_ENV).is_some_and(|v| v == "1") {
+    match active_field(instr).filter(|_| enforced()) {
+        Some(name) => Err(refused(name, "be inserted")),
+        None => Ok(()),
+    }
+}
+
+/// Refuse content coming into `target` from automation (`incoming`: a paste, another file's text,
+/// a building block, a compared or combined document) when it holds an active field whose code
+/// `target` doesn't already hold, unless the host allows them.
+pub fn check_incoming<'a>(incoming: impl IntoIterator<Item = &'a Block>, target: &Document) -> Result<(), CmdError> {
+    if !enforced() {
         return Ok(());
     }
-    match active_field(instr) {
-        Some(name) => {
-            Err(CmdError::Disabled(format!("{name} fields can't be inserted from automation (the host can allow them with {ALLOW_ENV}=1)")))
-        }
+    let active: Vec<(&str, &'static str)> = field_codes(incoming).into_iter().filter_map(|c| Some((c.trim(), active_field(c)?))).collect();
+    if active.is_empty() {
+        return Ok(());
+    }
+    // Not its building blocks: Word acts on none of their fields until one is inserted.
+    let held: HashSet<&str> = field_codes(content(target)).into_iter().map(str::trim).collect();
+    match active.into_iter().find(|(code, _)| !held.contains(code)) {
+        Some((_, name)) => Err(refused(name, "come into a document with pasted or imported content")),
         None => Ok(()),
+    }
+}
+
+/// Refuse a document whose bytes automation supplied (`file.open` with `data`) when it holds an
+/// active field, unless the host allows them. Markup kept as read that holds a field is dropped:
+/// it is written back as it was while its paragraph is unchanged, so a field the reader didn't
+/// make an object of (nested too deep, inside an element it skips) would go out unchecked. Those
+/// paragraphs are written from what was read instead.
+pub fn check_supplied(doc: &mut Document) -> Result<(), CmdError> {
+    if !enforced() {
+        return Ok(());
+    }
+    if let Some(name) = field_codes(stories(doc)).into_iter().find_map(active_field) {
+        return Err(refused(name, "be opened from `data`"));
+    }
+    if doc.kept.get().is_some_and(kept_fields) {
+        doc.kept.clear();
+    }
+    Ok(())
+}
+
+/// Whether markup kept as read has a field, by its field markup: `instr` (Word's `w:instrText`
+/// and `w:fldSimple w:instr`) or `dde` (OpenDocument's `text:dde-connection`), in any case.
+fn kept_fields(k: &KeptXml) -> bool {
+    let fields = |xml: &str| {
+        let xml = xml.to_ascii_lowercase();
+        xml.contains("instr") || xml.contains("dde")
+    };
+    k.paras.values().chain(k.tables.values()).chain(k.pending.values()).chain(k.indexes.values().map(|(_, _, xml)| xml)).any(|xml| fields(xml))
+}
+
+/// The blocks of `doc`'s body and of its other stories: headers, footers, notes, comments and
+/// text boxes.
+pub fn content(doc: &Document) -> impl Iterator<Item = &Block> {
+    doc.body.iter().chain(doc.parts.values().flat_map(|p| p.blocks.iter())).map(|b| &**b)
+}
+
+/// The blocks of `frag` and of the text boxes it brings.
+pub fn fragment_content(frag: &Fragment) -> impl Iterator<Item = &Block> {
+    frag.blocks.iter().chain(frag.parts.values().flat_map(|p| p.blocks.iter().map(|b| &**b)))
+}
+
+/// [`content`] and `doc`'s building blocks.
+fn stories(doc: &Document) -> impl Iterator<Item = &Block> {
+    content(doc).chain(doc.glossary.iter().flat_map(|e| e.blocks.iter().map(|b| &**b)))
+}
+
+/// The codes of the fields in `blocks`, tables included.
+fn field_codes<'a>(blocks: impl IntoIterator<Item = &'a Block>) -> Vec<&'a str> {
+    let mut codes = Vec::new();
+    for b in blocks {
+        paragraphs(b, &mut |p| {
+            for o in &p.objects {
+                if let InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } = o {
+                    codes.push(instr.as_str());
+                }
+            }
+        });
+    }
+    codes
+}
+
+/// Every paragraph of `b`, in tables at any depth (a document read from a file has its depth
+/// bounded by the reader).
+fn paragraphs<'a>(b: &'a Block, f: &mut dyn FnMut(&'a Paragraph)) {
+    match b {
+        Block::Para(p) => f(p),
+        Block::Table(t) => {
+            for cell in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                for cb in &cell.blocks {
+                    paragraphs(cb, f);
+                }
+            }
+        }
     }
 }
 
@@ -83,7 +200,17 @@ mod tests {
         assert_eq!(active_field(r#"includepicture "\\host\share\a.png" \d"#), Some("INCLUDEPICTURE"));
         assert_eq!(active_field(r#"IF { MERGEFIELD A } = "1" "{ INCLUDETEXT \\h\s\t.docx }" "no""#), Some("INCLUDETEXT"));
         assert_eq!(active_field("{LINK Excel.Sheet.8 x.xls}"), Some("LINK"));
-        for passive in ["PAGE", r#"DATE \@ "d MMMM""#, "MERGEFIELD Linkage", r"REF Include_note \h", "DOCPROPERTY DDE"] {
+        // A quote ends the type, as a word of a field code ends there (`FieldCode::parse`).
+        assert_eq!(active_field(r#"DDEAUTO"cmd" "/c calc""#), Some("DDEAUTO"));
+        assert_eq!(active_field(r#"INCLUDETEXT"\\h\s\t.docx""#), Some("INCLUDETEXT"));
+        assert_eq!(active_field(r#"IF 1 = 1 "{INCLUDEPICTURE"\\h\s\x.png"}" """#), Some("INCLUDEPICTURE"));
+        assert_eq!(active_field(r#""DDE" excel x"#), Some("DDE"));
+        // A data source and a referenced document are fetched when the fields update.
+        assert_eq!(active_field(r#"DATABASE \d "\\h\s\x.mdb" \s "SELECT * FROM t""#), Some("DATABASE"));
+        assert_eq!(active_field(r#"RD "\\h\s\x.docx" \f"#), Some("RD"));
+        for passive in
+            ["PAGE", r#"DATE \@ "d MMMM""#, "MERGEFIELD Linkage", r"REF Include_note \h", "DOCPROPERTY DDE", "REF RDate", r#"QUOTE "INCLUDE""#]
+        {
             assert_eq!(active_field(passive), None, "{passive}");
         }
     }
@@ -96,6 +223,8 @@ mod tests {
             let r = from_automation(|| s.run("insert.field", &json!({"instr": instr})));
             assert!(matches!(r, Err(CmdError::Disabled(_))), "{instr}: {r:?}");
         }
+        let quoted = r#"INCLUDEPICTURE"\\attacker\s\x.png""#;
+        assert!(matches!(from_automation(|| s.run("insert.field", &json!({"instr": quoted}))), Err(CmdError::Disabled(_))));
         let nested = r#"IF 1 = 1 "{ DDEAUTO cmd "/c calc" }" """#;
         assert!(matches!(from_automation(|| s.run("insert.field", &json!({"instr": nested}))), Err(CmdError::Disabled(_))));
         assert!(codes(&s).is_empty());
@@ -125,5 +254,129 @@ mod tests {
         assert!(from_automation(|| s.run("insert.field", &json!({"instr": "LINK x"}))).is_err());
         s.run("insert.field", &json!({"instr": "LINK x"})).unwrap();
         assert_eq!(codes(&s), ["INCLUDEPICTURE \"pic.png\"", "LINK x"]);
+    }
+
+    const DDE: &str = r#"DDEAUTO cmd "/c calc""#;
+
+    /// A session whose document has a DDEAUTO field the person at the keyboard inserted, and a
+    /// copy of it on the clipboard.
+    fn with_active_field_copied() -> Session {
+        let mut s = session();
+        s.run("text.insert", &json!({"text": "Report "})).unwrap();
+        s.run("insert.field", &json!({"instr": DDE})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("edit.copy", &json!({})).unwrap();
+        s
+    }
+
+    /// Whether `r` is automation's refusal of the DDEAUTO field.
+    fn refused(r: &Result<serde_json::Value, CmdError>) -> bool {
+        matches!(r, Err(CmdError::Disabled(m)) if m.contains("DDEAUTO"))
+    }
+
+    /// A file holding `doc`, in a folder of its own for the test `name`.
+    fn saved(name: &str, doc: &wordcraft_doc::Document) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("wc-active-fields-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("other.docx");
+        std::fs::write(&path, crate::io::save_bytes("other.docx", doc).unwrap()).unwrap();
+        path
+    }
+
+    #[test]
+    fn automation_cannot_paste_an_active_field_into_a_document_without_it() {
+        // #3628 review: copied from one document, pasted into the user's other one.
+        let mut s = with_active_field_copied();
+        s.run("file.new", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Mine"})).unwrap();
+        let r = from_automation(|| s.run("edit.paste", &json!({})));
+        assert!(refused(&r), "{r:?}");
+        assert!(codes(&s).is_empty());
+        assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Mine");
+        // Content without one still pastes.
+        s.run("select.all", &json!({})).unwrap();
+        s.run("edit.copy", &json!({})).unwrap();
+        from_automation(|| s.run("edit.paste", &json!({}))).unwrap();
+    }
+
+    #[test]
+    fn automation_can_paste_a_field_the_document_already_has() {
+        // Copying the document's own field elsewhere in it brings nothing new.
+        let mut s = with_active_field_copied();
+        s.sel = crate::Selection::caret(s.doc.end_of(wordcraft_doc::StoryRef::Body));
+        from_automation(|| s.run("edit.paste", &json!({}))).unwrap();
+        assert_eq!(codes(&s), [DDE, DDE]);
+    }
+
+    #[test]
+    fn automation_cannot_bring_an_active_field_in_from_another_file() {
+        let path = saved("text-from-file", &with_active_field_copied().doc);
+        let path = path.to_string_lossy().to_string();
+        let mut s = session();
+        let r = from_automation(|| s.run("insert.textFromFile", &json!({"path": path})));
+        assert!(refused(&r), "{r:?}");
+        assert!(codes(&s).is_empty());
+        // Nor by comparing or combining with it: its text would come in as insertions.
+        for cmd in ["review.compare", "review.combine"] {
+            let r = from_automation(|| s.run(cmd, &json!({"path": path})));
+            assert!(refused(&r), "{cmd}: {r:?}");
+            assert!(codes(&s).is_empty(), "{cmd}");
+        }
+        // The person at the keyboard still can.
+        s.run("insert.textFromFile", &json!({"path": path})).unwrap();
+        assert_eq!(codes(&s), [DDE]);
+        let _ = std::fs::remove_dir_all(std::path::Path::new(&path).parent().unwrap());
+    }
+
+    #[test]
+    fn automation_cannot_insert_a_building_block_holding_an_active_field() {
+        // The document's own Quick Part: Word acts on none of its fields until one is inserted.
+        let mut s = with_active_field_copied();
+        s.run("insert.quickParts", &json!({"save": "Header", "in": "document"})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        assert!(codes(&s).is_empty());
+        let r = from_automation(|| s.run("insert.quickParts", &json!({"insert": "Header", "in": "document"})));
+        assert!(refused(&r), "{r:?}");
+        assert!(codes(&s).is_empty());
+    }
+
+    #[test]
+    fn automation_cannot_open_bytes_holding_an_active_field() {
+        // #3628 review: a document written by the agent, opened from `data`, then saved for the
+        // user to send.
+        let bytes = crate::io::save_bytes("a.xml", &with_active_field_copied().doc).unwrap();
+        let data = crate::cmd::insert::base64_encode(&bytes);
+        let mut s = session();
+        let before = s.document_id();
+        let r = from_automation(|| s.run("file.open", &json!({"path": "a.xml", "data": data})));
+        assert!(refused(&r), "{r:?}");
+        assert_eq!(s.document_id(), before);
+        let r = from_automation(|| s.run("file.newFromTemplate", &json!({"path": "a.dotx", "data": data})));
+        assert!(refused(&r), "{r:?}");
+        assert_eq!(s.document_id(), before);
+        // A file it opens by its path keeps its fields: the file already holds them.
+        let path = saved("open", &with_active_field_copied().doc);
+        from_automation(|| s.run("file.open", &json!({"path": path.to_string_lossy()}))).unwrap();
+        assert_eq!(codes(&s), [DDE]);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_field_kept_only_as_read_from_supplied_bytes_is_not_written_back() {
+        // A field inside an element the reader skips is no field object, but the paragraph's
+        // markup, kept as read, would be written back as it was.
+        let mut s = session();
+        s.run("text.insert", &json!({"text": "Hello"})).unwrap();
+        let xml = String::from_utf8(crate::io::save_bytes("a.xml", &s.doc).unwrap()).unwrap();
+        let run_end = "Hello</w:t></w:r>";
+        let at = xml.find(run_end).unwrap_or_else(|| panic!("{xml}")) + run_end.len();
+        let hidden = r#"<w:unknownWrapper><w:fldSimple w:instr="DDEAUTO cmd x"><w:r><w:t>x</w:t></w:r></w:fldSimple></w:unknownWrapper>"#;
+        let xml = format!("{}{hidden}{}", &xml[..at], &xml[at..]);
+        let data = crate::cmd::insert::base64_encode(xml.as_bytes());
+        let mut s = session();
+        from_automation(|| s.run("file.open", &json!({"path": "a.xml", "data": data}))).unwrap();
+        assert!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("Hello"), "{:?}", s.doc.plain_text(wordcraft_doc::StoryRef::Body));
+        let out = String::from_utf8_lossy(&crate::io::save_bytes("a.xml", &s.doc).unwrap()).to_string();
+        assert!(out.contains("Hello") && !out.contains("DDEAUTO"), "{out}");
     }
 }

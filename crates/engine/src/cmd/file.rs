@@ -287,7 +287,10 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
         if bytes.is_empty() {
             (normal_document(s), false)
         } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+            let (mut doc, encrypted) = crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?;
+            // Bytes automation supplied can't hold fields Word acts on (#3628).
+            crate::active_fields::check_supplied(&mut doc)?;
+            (doc, encrypted)
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
         (normal_document(s), false)

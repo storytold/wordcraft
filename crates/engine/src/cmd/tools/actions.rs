@@ -134,6 +134,8 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
                 wordcraft_doc::edit::Fragment { blocks: e.blocks.iter().map(|b| (**b).clone()).collect(), parts: Default::default() }
             }
         };
+        // Nor from a building block, the document's own included (#3628).
+        crate::active_fields::check_incoming(crate::active_fields::fragment_content(&frag), &s.doc)?;
         let at = delete_selection(s)?;
         let end = s.doc.insert_fragment(&at, &frag)?;
         s.sel = Selection::caret(end);

@@ -47,8 +47,14 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     if !matches!(show_in, "original" | "revised" | "new") {
         return Err(CmdError::Params("`showIn` is \"original\", \"revised\" or \"new\"".into()));
     }
-    if let Some(path) = p::str(v, "original") {
-        let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+    let original = match p::str(v, "original") {
+        Some(path) => Some(crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?),
+        None => None,
+    };
+    // The revised document's text comes in as insertions: automation can't bring in fields Word
+    // acts on that the original doesn't have (#3628).
+    crate::active_fields::check_incoming(crate::active_fields::content(&revised), original.as_ref().unwrap_or(&s.doc))?;
+    if let Some(doc) = original {
         s.doc = doc;
         s.doc.ensure_nonempty();
         s.note_body_replaced();
