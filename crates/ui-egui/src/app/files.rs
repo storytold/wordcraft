@@ -470,7 +470,7 @@ impl WordApp {
                     _ => (false, 0.0),
                 };
                 if bytes.len() as u64 > crate::paste_picture::MAX_FILE_BYTES {
-                    self.status("The picture is larger than 200 MB.".to_string());
+                    self.status(tl!("The picture is larger than 200 MB."));
                     Err("the picture is larger than 200 MB".to_string())
                 } else {
                     // Hash the picture once, when the picker hands it over, not on every repaint.
