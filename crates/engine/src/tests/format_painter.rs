@@ -2,6 +2,7 @@
 
 use super::*;
 
+/// Copy Formatting and the brush distinguish partial and whole paragraph sources and targets.
 #[test]
 fn format_painter_paragraph_selection_matrix() {
     use wordcraft_doc::props::Align;
@@ -30,6 +31,7 @@ fn format_painter_paragraph_selection_matrix() {
     }
 }
 
+/// Paste Formatting applies captured paragraph properties at carets and across touched paragraphs.
 #[test]
 fn paste_format_paragraph_carets_and_cross_paragraph_targets() {
     use wordcraft_doc::props::Align;
