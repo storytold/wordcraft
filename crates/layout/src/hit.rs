@@ -467,7 +467,7 @@ impl DocLayout {
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
         // A group's text boxes count as text boxes too (#6027).
-        // Topmost first, a text box on its own or one in a group alike.
+        // Topmost first, a text box on its own or one in a group alike (a group's last member is painted on top).
         let text_box = |behind: bool| {
             p.items.iter().rev().find_map(|it| {
                 let Placed::Object { rect, spin, text_box, wrap, group_boxes, .. } = it else { return None };
@@ -477,7 +477,11 @@ impl DocLayout {
                 let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
                 let (ux, uy) = spin.unapply(centre.x, centre.y, x, y);
                 text_box.filter(|_| rect.contains(Point::new(ux, uy))).or_else(|| {
-                    group_boxes.iter().find(|(r, _)| Rect::new(rect.x + r.x, rect.y + r.y, r.w, r.h).contains(Point::new(x, y))).map(|(_, id)| *id)
+                    group_boxes
+                        .iter()
+                        .rev()
+                        .find(|(r, _)| Rect::new(rect.x + r.x, rect.y + r.y, r.w, r.h).contains(Point::new(x, y)))
+                        .map(|(_, id)| *id)
                 })
             })
         };

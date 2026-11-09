@@ -3992,6 +3992,36 @@ fn grouped_text_box_areas_turn_with_the_group_and_work_in_headers() {
     assert_eq!(l.header_footer_text_box_at(0, 150.0, 40.0), None, "the group's bar is not text");
 }
 
+/// #6027: where two text boxes of one group overlap, a click enters the one painted on top (the
+/// last member), in the body and in a header alike.
+#[test]
+fn click_in_overlapping_grouped_text_boxes_enters_the_top_one() {
+    let (low, top) = (3, 4);
+    let group = |rect| Placed::Object {
+        rect,
+        spin: Default::default(),
+        story: StoryRef::Part(1),
+        path: Path::top(0),
+        off: 0,
+        text_box: None,
+        wrap: Default::default(),
+        origin: Default::default(),
+        group_boxes: vec![(wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 100.0), low), (wordcraft_geom::Rect::new(50.0, 50.0, 100.0, 100.0), top)],
+    };
+    let page = Page {
+        items: vec![group(wordcraft_geom::Rect::new(100.0, 100.0, 150.0, 150.0))],
+        header: vec![group(wordcraft_geom::Rect::new(100.0, 100.0, 150.0, 150.0))],
+        ..Default::default()
+    };
+    let l = DocLayout { pages: vec![page], ..Default::default() };
+    // Overlap (page 175, 175 is inside both boxes): the top box takes the click, and typing.
+    assert_eq!(l.story_at(0, 175.0, 175.0), Some(StoryRef::Part(top)));
+    assert_eq!(l.header_footer_text_box_at(0, 175.0, 175.0), Some(top));
+    // Outside the overlap each box still answers for itself.
+    assert_eq!(l.story_at(0, 110.0, 110.0), Some(StoryRef::Part(low)));
+    assert_eq!(l.story_at(0, 240.0, 240.0), Some(StoryRef::Part(top)));
+}
+
 #[test]
 fn deleted_float_leaves_no_wrap_area_without_markup() {
     crate::test_fonts();
