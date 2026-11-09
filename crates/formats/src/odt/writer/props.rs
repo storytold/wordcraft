@@ -58,14 +58,7 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
     }
     p.push_str(&script_attrs(x));
     if let Some(l) = x.lang.as_deref() {
-        let mut parts = l.split(['-', '_']);
-        let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
-        if let Some(lang) = parts.next().filter(ok) {
-            p.push_str(&format!(" fo:language=\"{lang}\""));
-            if let Some(country) = parts.next().filter(ok) {
-                p.push_str(&format!(" fo:country=\"{country}\""));
-            }
-        }
+        p.push_str(&lang_attrs(l, ""));
     }
     p
 }
@@ -103,8 +96,8 @@ pub(in crate::odt) fn align_attr(a: Option<Align>) -> &'static str {
     }
 }
 
-/// `fo:language`/`fo:country` (with `suffix`: `-asian`, `-complex` on `style:`) for BCP 47 tag
-/// `tag`.
+/// `fo:language`, `fo:script` and `fo:country` (with `suffix`: `-asian`, `-complex` on `style:`)
+/// for BCP 47 tag `tag`. A script is the four-letter subtag after the language.
 pub(in crate::odt) fn lang_attrs(tag: &str, suffix: &str) -> String {
     let mut parts = tag.split(['-', '_']);
     let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
@@ -112,11 +105,21 @@ pub(in crate::odt) fn lang_attrs(tag: &str, suffix: &str) -> String {
     let mut p = String::new();
     if let Some(lang) = parts.next().filter(ok) {
         p.push_str(&format!(" {ns}:language{suffix}=\"{lang}\""));
-        if let Some(country) = parts.next().filter(ok) {
+        let mut next = parts.next().filter(ok);
+        if let Some(script) = next.filter(|s| is_script(s)) {
+            p.push_str(&format!(" {ns}:script{suffix}=\"{script}\""));
+            next = parts.next().filter(ok);
+        }
+        if let Some(country) = next {
             p.push_str(&format!(" {ns}:country{suffix}=\"{country}\""));
         }
     }
     p
+}
+
+/// Whether a language tag's subtag is a script (BCP 47: four letters).
+pub(in crate::odt) fn is_script(subtag: &str) -> bool {
+    subtag.len() == 4 && subtag.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 /// The Asian and complex-script attributes of `x`: fonts, complex size, weight, posture and the
