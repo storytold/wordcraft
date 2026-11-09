@@ -107,19 +107,19 @@ pub struct ParaLayout {
 
 /// How much one line may take from its compressible marks in all, measured in WPS Office on
 /// 20-character lines (sweeps of 1–8 marks, isolated, mixed, in pairs, opening and closing, with
-/// marks in the last unit and without). The line has a pool: the base below, plus an amount for
-/// each compressible mark in its last unit (what can't be broken off the line's end, `《瑞` or
-/// `中。`): a closing mark's free blank half at the line end comes out of the pool, and the marks
-/// share the rest equally, each at most its blank half. In mode 14 and older an automatic space
+/// marks, digits or letters in the last unit and without). The line has a pool: the base below,
+/// plus what its last unit (what can't be broken off the line's end: `《瑞`, `中。`, `120`) is
+/// wider than an em (in mode 15 half that): a closing mark's free blank half at the line end
+/// comes out of the pool, and the marks share the rest equally, each at most its blank half. In mode 14 and older an automatic space
 /// between Asian text and digits or Latin text shares the pool too, giving up at most half itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SqueezeRule {
-    /// Compatibility mode 14 and older (any alignment): half an em, however many marks, and a
-    /// whole em more for each mark in the last unit.
+    /// Compatibility mode 14 and older (any alignment): half an em, however many marks, plus
+    /// what the last unit is wider than an em.
     #[default]
     HalfEm,
     /// Mode 15, justified lines only: 1 − 1/(2k) em for k marks (½ em for one mark, ¾ for two,
-    /// approaching a whole em), and half an em more for each mark in the last unit.
+    /// approaching a whole em), plus half what the last unit is wider than an em.
     Justified,
 }
 
@@ -137,7 +137,7 @@ pub struct Squeeze {
     /// the Asian text's.
     pub em: f32,
     /// An automatic space between Asian text and Latin text or digits ([`auto_space`]), not a
-    /// mark: it shares the pool but adds nothing to it in the last unit.
+    /// mark.
     pub gap: bool,
 }
 
@@ -192,16 +192,20 @@ impl ParaLayout {
         let k = marks.len() as f32;
         let rooms: f32 = marks.iter().map(|s| s.room).sum();
         let em = marks.iter().map(|s| s.em).sum::<f32>() / k;
-        let (base, per_mark) = match self.squeeze_rule {
+        let (base, per_em) = match self.squeeze_rule {
             SqueezeRule::HalfEm => (0.5, 1.0),
             SqueezeRule::Justified => (1.0 - 0.5 / k, 0.5),
         };
-        // The last unit: the clusters after the line's last break opportunity before its end.
+        // The last unit: the clusters after the line's last break opportunity before its end. The
+        // pool grows by what it is wider than an em (`《瑞` and `瑞。` an em, `120` half an em).
         let unit = (c0..c1.saturating_sub(1)).rev().find(|&j| self.clusters.get(j).is_some_and(|c| c.break_after)).map_or(c0, |j| j + 1);
-        let in_unit = self.squeeze.iter().filter(|s| !s.gap && s.k >= unit && s.k < c1).count() as f32;
+        let unit_w: f32 = self.clusters.get(unit..c1).unwrap_or_default().iter().map(|c| c.adv).sum();
+        // Less the automatic space after its last character, which the line doesn't take.
+        let last_space = if c1 > 0 && !self.ends_in_free_mark(c0, c1) { self.auto_space_after(c1 - 1) } else { 0.0 };
+        let wider = if unit_w.is_finite() && em > 0.0 { ((unit_w - last_space) / em - 1.0).clamp(0.0, 100.0) } else { 0.0 };
         // A closing mark ending the line takes its blank half out of the pool.
         let free = if self.ends_in_free_mark(c0, c1) { 0.5 } else { 0.0 };
-        ((base + per_mark * in_unit - free).max(0.0) * em).min(rooms)
+        ((base + per_em * wider - free).max(0.0) * em).min(rooms)
     }
     fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)

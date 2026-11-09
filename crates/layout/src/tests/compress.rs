@@ -263,3 +263,36 @@ fn automatic_spaces_beside_digits_share_the_pool_giving_up_half_themselves() {
         assert!(first_line_chars(text, CharSpacing::DoNotCompress, natural - 0.05).0 < n, "{text}");
     }
 }
+
+#[test]
+fn a_last_unit_wider_than_an_em_enlarges_the_pool() {
+    if !full_width_marks() {
+        return;
+    }
+    // WPS (mode 14): two commas and a line ending in the digits 120 (in 仿宋 a last unit 1.5 em
+    // wide) squeeze a whole em: half an em plus what the unit is wider than an em; with the digits
+    // mid-line and an ideograph ending the line, half an em. Measured here from the digits' own
+    // width, which depends on the machine's fonts.
+    let end = "甲中中中，中中中中中中中中，中中中中中中中120国国国";
+    let mid = "甲中中中，中中中中120中中中中，中中中中中中瑞国国国";
+    for text in [end, mid] {
+        let n = text.chars().count() - 3;
+        let g = first_para(&lay(&doc(text, CharSpacing::CompressPunctuation, None)));
+        let space = |k: usize| g.auto_space.iter().find(|a| a.0 == k).map_or(0.0, |a| a.1);
+        // The case's natural width: where the first 国 starts, less the automatic space before it.
+        let natural = (g.lines[0].xs[n] - g.lines[0].xs[0] - space(n - 1)) / SIZE;
+        // The room: the two commas' blank halves and half the automatic space before the digits.
+        let room = 1.0 + space(text.chars().position(|c| c == '1').unwrap() - 1) / 2.0 / SIZE;
+        let squeeze = if text == end {
+            let digits: f32 = g.clusters[n - 3..n].iter().map(|c| c.adv).sum::<f32>() - space(n - 1);
+            (0.5 + (digits / SIZE - 1.0).max(0.0)).min(room)
+        } else {
+            0.5
+        };
+        assert_eq!(first_line_chars(text, CharSpacing::CompressPunctuation, natural - squeeze + 0.01).0, n, "{text}: {squeeze}");
+        assert!(first_line_chars(text, CharSpacing::CompressPunctuation, natural - squeeze - 0.05).0 < n, "{text}: {squeeze}");
+        if text == end {
+            assert!(squeeze > 0.9, "the end case squeezes about an em: {squeeze}");
+        }
+    }
+}
