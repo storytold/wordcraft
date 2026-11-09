@@ -506,16 +506,19 @@ mod tests {
 
     #[test]
     fn a_pane_order_changed_by_the_other_process_is_kept() {
-        // `paneOrder` is saved only when it isn't the default. B reorders; A leaves it alone.
+        // `paneOrder` is saved only when it isn't the default. B reorders; A leaves it alone and
+        // switches to dark.
         let loaded = prefs(json!({}));
         let order = json!(["styles", "navigation"]);
         let b = prefs(json!({"paneOrder": order}));
-        assert_eq!(b_then_a(&loaded, b, loaded.clone())["paneOrder"], order);
+        let merged = b_then_a(&loaded, b, prefs(json!({"theme": "dark"})));
+        assert_eq!((&merged["paneOrder"], &merged["theme"]), (&order, &json!("dark")));
         // B goes back to the default order; A, which loaded B's order and left it, doesn't bring
         // it back.
         let loaded = prefs(json!({"paneOrder": order}));
-        let merged = b_then_a(&loaded, prefs(json!({})), loaded.clone());
+        let merged = b_then_a(&loaded, prefs(json!({})), prefs(json!({"paneOrder": order, "theme": "dark"})));
         assert!(merged.get("paneOrder").is_none(), "{merged}");
+        assert_eq!(merged["theme"], "dark");
     }
 
     #[test]
