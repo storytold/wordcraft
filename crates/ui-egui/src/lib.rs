@@ -676,6 +676,8 @@ pub struct WordApp {
     /// Whether the installed UI fonts use the Korean CJK face order.
     fonts_korean: bool,
     fonts_hant: bool,
+    /// Whether the installed UI fonts put the Thai interface faces first (a Thai interface).
+    fonts_thai: bool,
     /// Whether the installed UI fonts include an installed CJK fallback font (#241).
     fonts_system_cjk: bool,
     /// Whether the installed UI fonts were asked to include an installed Arabic font (an Arabic

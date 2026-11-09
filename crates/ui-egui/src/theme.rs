@@ -500,9 +500,66 @@ pub fn install_fonts_language_arabic(
     system_arabic: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
+    install_fonts_language_thai(ctx, (prefer_hans, prefer_korean, prefer_hant), system_cjk, system_arabic, false, faces);
+}
+
+/// [`install_fonts_language_arabic`], with `thai` for a Thai interface: the Thai interface faces
+/// ([`thai_interface_faces`]) go first, so Sarabun draws the whole interface when it is installed.
+pub fn install_fonts_language_thai(
+    ctx: &egui::Context,
+    (prefer_hans, prefer_korean, prefer_hant): (bool, bool, bool),
+    system_cjk: bool,
+    system_arabic: bool,
+    thai: bool,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+) {
     let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
+    if thai && let Some((regular, heading)) = thai_interface_faces(wordcraft_fonts::FontDb::global()) {
+        add_primary_faces(&mut fonts, &regular, &heading);
+    }
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
+}
+
+/// The family a Thai interface is drawn in when it is installed: Sarabun (Cadson Demak, OFL), a
+/// Thai and Latin family made for screen and documents alike. Not bundled: font files belong in
+/// craft-fonts, so it is used from the system.
+pub const THAI_UI_FAMILY: &str = "Sarabun";
+
+/// Faces for a Thai interface: (text, headings). Sarabun's Regular and its SemiBold (else Medium,
+/// else Bold, else Regular) when Sarabun is installed; otherwise an installed face with Thai
+/// letters for both, so Thai menus never draw as boxes. `None` when no installed face has Thai.
+pub fn thai_interface_faces(db: &wordcraft_fonts::FontDb) -> Option<(Arc<wordcraft_fonts::FontFace>, Arc<wordcraft_fonts::FontFace>)> {
+    if db.has_family(THAI_UI_FAMILY) {
+        let regular = db.face(THAI_UI_FAMILY, "Regular");
+        if regular.named(THAI_UI_FAMILY) && regular.covers('ก') {
+            let heading = ["SemiBold", "Medium", "Bold"]
+                .into_iter()
+                .map(|style| (style, db.face(THAI_UI_FAMILY, style)))
+                .find(|(style, f)| f.named(THAI_UI_FAMILY) && f.style.replace(' ', "").eq_ignore_ascii_case(style))
+                .map_or_else(|| regular.clone(), |(_, f)| f);
+            return Some((regular, heading));
+        }
+    }
+    db.fallback_for('ก', u32::MAX).map(|f| (f.clone(), f))
+}
+
+/// Put `regular` first in the interface's text families and `heading` first in the semibold one.
+pub fn add_primary_faces(fonts: &mut FontDefinitions, regular: &Arc<wordcraft_fonts::FontFace>, heading: &Arc<wordcraft_fonts::FontFace>) {
+    let mut add = |f: &Arc<wordcraft_fonts::FontFace>| {
+        let name = format!("primary {} {} {}", f.family, f.style, f.id());
+        let mut data = FontData::from_owned(f.data().to_vec());
+        data.index = f.index();
+        fonts.font_data.insert(name.clone(), Arc::new(data));
+        name
+    };
+    let (text, head) = (add(regular), add(heading));
+    for (fam, name) in [(FontFamily::Proportional, &text), (FontFamily::Name("medium".into()), &text), (FontFamily::Name("semibold".into()), &head)] {
+        if let Some(v) = fonts.families.get_mut(&fam) {
+            v.retain(|n| n != name);
+            v.insert(0, name.clone());
+        }
+    }
 }
 
 /// Add `faces` after every other font of the interface families.
