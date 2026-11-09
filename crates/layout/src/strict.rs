@@ -163,7 +163,7 @@ fn collect_media(draws: &[Draw], out: &mut Vec<String>) {
 /// The story a placed item is in, named as [`undecodable_pictures`] says.
 fn story_name(doc: &Document, region: Region, it: &Placed) -> String {
     let names = &doc.missing_pictures;
-    let known = |id: Option<u32>| id.and_then(|id| names.part_names.get(&id)).cloned();
+    let known = |id: Option<u32>| id.and_then(|id| names.part_names.get(&id)).map(|n| n.to_string());
     match region {
         Region::Header(id) => known(id).unwrap_or_else(|| "header".into()),
         Region::Footer(id) => known(id).unwrap_or_else(|| "footer".into()),

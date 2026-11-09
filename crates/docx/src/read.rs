@@ -105,7 +105,7 @@ pub(crate) struct Reader<'p> {
     /// The main document part's name.
     main: String,
     /// The part being read (`word/header2.xml`), for naming where a dropped picture was.
-    story: String,
+    story: Arc<str>,
     /// The package's content types, read when first needed.
     content_types: Option<ContentTypes>,
     /// Parts kept for charts, diagrams and OLE objects (see `embed`).
@@ -186,7 +186,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         glued: HashSet::new(),
         shape_ids: false,
         main: main.clone(),
-        story: main.clone(),
+        story: main.as_str().into(),
         content_types: None,
         embedded: EmbeddedManifest::default(),
         txbx_links: Vec::new(),
@@ -235,18 +235,18 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         let ex = part(rt::COMMENTS_EX);
         let ids = part(rt::COMMENTS_IDS);
         let cex = part(rt::COMMENTS_EXTENSIBLE);
-        r.story = p.clone();
+        r.story = p.as_str().into();
         lenient("comments", r.read_comments(&p, ex.as_deref(), ids.as_deref(), cex.as_deref()));
     }
     if let Some(p) = part(rt::FOOTNOTES) {
-        r.story = p.clone();
+        r.story = p.as_str().into();
         lenient("footnotes", r.read_notes(&p, true));
     }
     if let Some(p) = part(rt::ENDNOTES) {
-        r.story = p.clone();
+        r.story = p.as_str().into();
         lenient("endnotes", r.read_notes(&p, false));
     }
-    r.story = main.clone();
+    r.story = main.as_str().into();
     // Bibliography sources live in a custom XML data store (`b:Sources`), related from the
     // package root or the main part; Word's own files sometimes leave the relationship out, so
     // the conventional `customXml/itemN.xml` names are tried too. Each part is read at most once.

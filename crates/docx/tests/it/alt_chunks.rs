@@ -433,3 +433,13 @@ fn a_chunks_total_of_dropped_pictures_counts_past_the_list() {
     assert!(d.missing_pictures.truncated);
     assert_eq!(d.missing_pictures.total, n as u64);
 }
+
+/// The same chunk imported twice counts its unlisted pictures once, as it dedupes its listed ones.
+#[test]
+fn a_chunk_imported_twice_counts_its_dropped_pictures_past_the_list_once() {
+    let n = wordcraft_doc::MAX_MISSING_PICTURES + 44;
+    let inner = inner_with_dropped_pictures(n, false);
+    let d = read(&package(&format!("{}{CHUNK}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)))).unwrap();
+    assert_eq!(d.missing_pictures.list.len(), wordcraft_doc::MAX_MISSING_PICTURES);
+    assert_eq!(d.missing_pictures.total, n as u64);
+}

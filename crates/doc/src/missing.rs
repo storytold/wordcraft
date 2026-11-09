@@ -81,7 +81,7 @@ pub struct MissingPictures {
     /// A header, footer, note or comment story's part id ([`crate::Document::parts`]) to the
     /// part it was read from (`word/header2.xml`). Ids freed and reused after opening may name
     /// the old part.
-    pub part_names: std::collections::BTreeMap<u32, String>,
+    pub part_names: std::collections::BTreeMap<u32, std::sync::Arc<str>>,
     /// A [`crate::Document::media`] key to the part its bytes were read from
     /// (`word/media/image2.bin`).
     pub media_parts: std::collections::BTreeMap<String, String>,
@@ -89,9 +89,21 @@ pub struct MissingPictures {
     seen: std::collections::HashSet<MissingPicture>,
     /// Hashes of the distinct pictures past the cap (8 bytes each), so the total counts them once.
     unlisted: std::collections::HashSet<u64>,
+    /// The chunk parts whose unlisted pictures [`Self::add_unlisted`] has counted, so a chunk
+    /// imported twice counts them once.
+    counted_chunks: std::collections::HashSet<String>,
 }
 
 impl MissingPictures {
+    /// Add `n` pictures of the chunk part `chunk` that its reader counted but did not list. The
+    /// same chunk part counts once however often it is imported (its listed pictures dedupe
+    /// through [`Self::push`]).
+    pub fn add_unlisted(&mut self, chunk: &str, n: u64) {
+        if n > 0 && self.counted_chunks.insert(chunk.to_string()) {
+            self.total = self.total.saturating_add(n);
+        }
+    }
+
     /// Add one (the same part, story and reason once).
     pub fn push(&mut self, mut item: MissingPicture) {
         for name in [&mut item.part, &mut item.story] {

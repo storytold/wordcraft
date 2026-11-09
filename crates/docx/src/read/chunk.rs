@@ -93,7 +93,7 @@ impl Reader<'_> {
         // The nested records past its list are the file's too; their stories carry the chunk's
         // part, so none is one the outer list already counted.
         let unlisted = nested.total.saturating_sub(list_len);
-        self.doc.missing_pictures.total = self.doc.missing_pictures.total.saturating_add(unlisted);
+        self.doc.missing_pictures.add_unlisted(&part, unlisted);
         self.doc.missing_pictures.truncated |= nested.truncated;
         let mut blocks = self.doc.adopt_blocks(doc, keep, &mut self.next_perm);
         // Bookmarks and comment marks read before the chunk stay before it.

@@ -54,7 +54,7 @@ impl Reader<'_> {
             if let Some(root) = root.filter(|r| r.name == "w:glossaryDocument" && ct.as_deref().is_none_or(|t| t == GLOSSARY_CONTENT_TYPE)) {
                 let rels = self.pkg.rels(&rel.target);
                 // Pictures in a building block belong to the glossary part, not the main story.
-                let outer = std::mem::replace(&mut self.story, rel.target.clone());
+                let outer = std::mem::replace(&mut self.story, rel.target.as_str().into());
                 entries = self.doc_parts(&root, &rels);
                 self.story = outer;
             }

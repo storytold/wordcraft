@@ -394,3 +394,74 @@ fn usage_errors_keep_their_line_breaks() {
     let all = format!("{}{}", String::from_utf8_lossy(&r.stdout), stderr(&r));
     assert!(all.lines().count() > 3 && all.lines().any(|l| l == "USAGE:"), "{all}");
 }
+
+/// A minimal EMF (88-byte header, 100 mm square frame) with one EMR_EXTTEXTOUTW record showing
+/// `text` in the default font.
+fn emf_with_text(text: &str) -> Vec<u8> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let mut rec = vec![0u8; 76];
+    rec[0..4].copy_from_slice(&84u32.to_le_bytes());
+    rec[36..40].copy_from_slice(&10i32.to_le_bytes());
+    rec[40..44].copy_from_slice(&40i32.to_le_bytes());
+    rec[44..48].copy_from_slice(&(units.len() as u32).to_le_bytes());
+    rec[48..52].copy_from_slice(&76u32.to_le_bytes());
+    rec.extend(units.iter().flat_map(|u| u.to_le_bytes()));
+    while !rec.len().is_multiple_of(4) {
+        rec.push(0);
+    }
+    let len = rec.len() as u32;
+    rec[4..8].copy_from_slice(&len.to_le_bytes());
+    let eof: Vec<u8> = [14u32.to_le_bytes(), 20u32.to_le_bytes(), [0; 4], [0; 4], 20u32.to_le_bytes()].concat();
+    let total = 88 + rec.len() + eof.len();
+    let mut h = vec![0u8; 88];
+    h[0..4].copy_from_slice(&1u32.to_le_bytes());
+    h[4..8].copy_from_slice(&88u32.to_le_bytes());
+    h[8..24].copy_from_slice(&[0i32, 0, 100, 100].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>());
+    h[24..40].copy_from_slice(&[0i32, 0, 10000, 10000].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>());
+    h[40..44].copy_from_slice(&0x464D_4520u32.to_le_bytes());
+    h[44..48].copy_from_slice(&0x0001_0000u32.to_le_bytes());
+    h[48..52].copy_from_slice(&(total as u32).to_le_bytes());
+    h[52..56].copy_from_slice(&2u32.to_le_bytes());
+    h[56..58].copy_from_slice(&1u16.to_le_bytes());
+    h[72..76].copy_from_slice(&1000i32.to_le_bytes());
+    h[76..80].copy_from_slice(&1000i32.to_le_bytes());
+    h[80..84].copy_from_slice(&250i32.to_le_bytes());
+    h[84..88].copy_from_slice(&250i32.to_le_bytes());
+    [h, rec, eof].concat()
+}
+
+/// The text a metafile picture draws is checked like the page's own: a character no face covers
+/// refuses the export from `convert` and `render`, naming the code point, and nothing is written.
+#[test]
+fn a_character_in_a_metafile_pictures_text_fails_strict_like_the_pages_own() {
+    if without_fonts() {
+        return;
+    }
+    let c = uncovered();
+    let cp = format!("U+{:04X}", c as u32);
+    let d = dir("emf-text");
+    let emf = emf_with_text(&format!("ab{c}"));
+    let input = d.join("in.docx");
+    std::fs::write(&input, docx_with_header_picture(&emf)).unwrap();
+    for out in ["out.pdf", "out.png"] {
+        let out = d.join(out);
+        let r = convert(&input, &out, true);
+        assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+        assert_eq!(report_json(&r)["missing_glyphs"][0]["cp"], cp.as_str(), "{}", stderr(&r));
+        assert!(!out.exists(), "{} was written", out.display());
+        // Without --strict it converts, the character a hollow box.
+        let r = convert(&input, &out, false);
+        assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
+        std::fs::remove_file(&out).unwrap();
+    }
+    let out = d.join("p1.png");
+    let r = render(&input, &out, &["--strict"]);
+    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    assert!(r.stdout.is_empty() && !out.exists());
+    assert_eq!(report_json(&r)["missing_glyphs"][0]["cp"], cp.as_str());
+    // Text the faces cover passes.
+    std::fs::write(&input, docx_with_header_picture(&emf_with_text("abc"))).unwrap();
+    let r = convert(&input, &d.join("ok.pdf"), true);
+    assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
+    std::fs::remove_dir_all(d).unwrap();
+}

@@ -98,7 +98,7 @@ fn a_header_pictures_story_is_the_header_part() {
     let d = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(missing(&d), [("https://example.invalid/logo.png".into(), "word/header2.xml".into(), MissingPictureReason::ExternalTarget)]);
     assert_eq!(d.missing_pictures.main, "word/document.xml");
-    assert!(d.missing_pictures.part_names.values().any(|n| n == "word/header2.xml"));
+    assert!(d.missing_pictures.part_names.values().any(|n| &**n == "word/header2.xml"));
     assert_eq!(d.missing_pictures.media_parts.get("ok.png").map(String::as_str), Some("word/media/ok.png"));
 }
 
@@ -146,4 +146,18 @@ fn the_list_is_capped_and_the_document_is_still_equal() {
     e.missing_pictures = Default::default();
     assert_eq!(d, e);
     assert!(!serde_json::to_string(&d).unwrap().contains("gone"));
+}
+
+/// Every note of a part shares the one allocation of its source name, so a file with many notes
+/// in a part with a long name does not keep a copy of the name per note.
+#[test]
+fn the_notes_of_a_part_share_one_copy_of_its_name() {
+    let notes: String = (1..=3).map(|i| format!(r#"<w:footnote w:id="{i}"><w:p><w:r><w:t>n{i}</w:t></w:r></w:p></w:footnote>"#)).collect();
+    let rels = format!(r#"<Relationship Id="rIdF" Type="{REL}/footnotes" Target="footnotes.xml"/>"#);
+    let part = format!(r#"<w:footnotes {NS}>{notes}</w:footnotes>"#);
+    let d = wordcraft_docx::read(&package("x", &rels, None, &[("word/footnotes.xml", part.into_bytes())])).unwrap();
+    let names: Vec<_> = d.missing_pictures.part_names.values().collect();
+    assert!(names.len() >= 3, "{names:?}");
+    assert!(names.iter().all(|n| &***n == "word/footnotes.xml"));
+    assert!(names.windows(2).all(|w| std::sync::Arc::ptr_eq(w[0], w[1])), "each note holds its own copy of the part name");
 }

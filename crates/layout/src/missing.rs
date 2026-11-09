@@ -2,7 +2,7 @@
 //! id 0 in a [`Draw::Glyphs`] of the display list, traced back to its character through the
 //! run's `text` and per-glyph `ranges`. Backs strict export (#6005).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::{Range, RangeInclusive};
 
 use wordcraft_doc::Document;
@@ -121,7 +121,11 @@ impl DocLayout {
                 continue;
             }
             for d in page_display(doc, page, opts) {
-                found.walk(&d);
+                found.walk(doc, &d);
+            }
+            // The page picture is drawn behind every page, outside the display list.
+            if let Some(pic) = &doc.settings.page_picture {
+                found.metafile_text(doc, &pic.media);
             }
         }
         found.finish()
@@ -143,6 +147,16 @@ pub fn watermark_run(wm: &wordcraft_doc::Watermark, max_chars: usize) -> Option<
     Some((face, text, shaped))
 }
 
+/// How a metafile text run is shaped for output, as the PDF export and the page raster both do:
+/// in the face its font name resolves to (no fallback face), so a character that face lacks shapes
+/// to glyph id 0. Strict export checks these same glyphs, so the check and the exporters can't
+/// drift.
+pub fn metafile_text_run(t: &wordcraft_metafile::Text) -> (wordcraft_fonts::FaceRef, Vec<ShapedGlyph>) {
+    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
+    let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
+    (face, shaped)
+}
+
 /// The characters of the watermark that draw as an empty box (glyph id 0), counted as
 /// [`DocLayout::missing_glyphs`] counts them; sorted by code point. The watermark is on every
 /// page, so it counts once.
@@ -157,24 +171,49 @@ pub fn missing_watermark_glyphs(wm: &wordcraft_doc::Watermark, max_chars: usize)
 
 #[derive(Default)]
 struct Found {
+    /// The text runs of each metafile picture met, by media key, shaped once: (face, text, ranges, glyph ids).
+    metafiles: HashMap<String, Vec<MetaRun>>,
     counts: BTreeMap<char, u64>,
     truncated: bool,
     /// Every distinct code point, started when the list passes its cap.
     over: Option<Box<CodePointSet>>,
 }
 
+/// A metafile text run as drawn: its face, text, per-glyph ranges and glyph ids.
+struct MetaRun {
+    face: wordcraft_fonts::FaceRef,
+    text: String,
+    ranges: Vec<Range<usize>>,
+    gids: Vec<u32>,
+}
+
 impl Found {
+    /// The text of the metafile picture `key` (nothing for a picture that is not a metafile, does
+    /// not parse or has no size: the exporters draw none of it), counted once per call.
+    fn metafile_text(&mut self, doc: &Document, key: &str) {
+        if !self.metafiles.contains_key(key) {
+            let runs = doc.media.get(key).map(|bytes| meta_runs(bytes)).unwrap_or_default();
+            self.metafiles.insert(key.to_string(), runs);
+        }
+        let Some(runs) = self.metafiles.remove(key) else { return };
+        for r in &runs {
+            self.run(&r.face, r.gids.iter().copied(), &r.text, &r.ranges);
+        }
+        self.metafiles.insert(key.to_string(), runs);
+    }
+
     fn finish(self) -> MissingGlyphs {
         let total = self.over.as_ref().map_or(self.counts.len(), |s| s.len());
         MissingGlyphs { chars: self.counts.into_iter().collect(), truncated: self.truncated, total, seen: self.over }
     }
 
-    fn walk(&mut self, d: &Draw) {
+    fn walk(&mut self, doc: &Document, d: &Draw) {
         match d {
             Draw::Glyphs { face, glyphs, text, ranges, .. } => self.run(face, glyphs.iter().map(|g| g.0), text, ranges),
+            Draw::Image { media, .. } => self.metafile_text(doc, media),
             Draw::Figure { draws: items, .. } | Draw::Turned { items, .. } | Draw::Rotated { items, .. } | Draw::Clip { items, .. } => {
                 for d in items {
-                    self.walk(d);
+                    self.walk(doc, d);
                 }
             }
             _ => {}
@@ -222,6 +261,29 @@ impl Found {
             self.over = Some(Box::new(set));
         }
     }
+}
+
+/// The text runs of a metafile picture that the exporters draw (a run whose layout fails is not).
+fn meta_runs(bytes: &[u8]) -> Vec<MetaRun> {
+    if !wordcraft_metafile::is_metafile(bytes) {
+        return Vec::new();
+    }
+    let Ok(pic) = wordcraft_metafile::parse(bytes) else { return Vec::new() };
+    if !pic.has_size() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for item in &pic.items {
+        let wordcraft_metafile::Item::Text(t) = item else { continue };
+        let (face, shaped) = metafile_text_run(t);
+        let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
+        if t.layout(face.upem, face.ascent, face.descent, &glyphs).is_none() {
+            continue;
+        }
+        let ranges = cluster_ranges(&t.text, &shaped);
+        out.push(MetaRun { gids: shaped.iter().map(|g| g.gid).collect(), text: t.text.clone(), ranges, face });
+    }
+    out
 }
 
 /// The byte range of `text` each of `shaped` shows: from its cluster to the next cluster start in

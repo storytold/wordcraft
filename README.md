@@ -191,7 +191,7 @@ story part it sits in such as `word/header2.xml`, and a reason code; `source_par
 (`300 characters cannot be drawn (first 256 listed)`).
 Each list stops at 256 entries separately; `truncated` is true when either was cut, and the totals
 count every distinct character and picture found, those past the cap included. Only characters the output draws count (not hidden text, or deleted text
-without `--markup`), and a character a fallback font draws is fine. A Private Use Area character
+without `--markup`), and a character a fallback font draws is fine. Text inside a WMF or EMF picture counts too, shaped in the font the picture names with no fallback. A Private Use Area character
 fails only if no installed font maps it. The result depends on the fonts installed on the host
 (see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
 loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of any page is also refused for a missing or external picture anywhere in the document, unused headers included. `render --strict` checks only the page it

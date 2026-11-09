@@ -128,7 +128,7 @@ impl Reader<'_> {
     /// Remember a picture that was dropped at open, in the story being read.
     pub(super) fn note_missing_picture(&mut self, part: &str, reason: MissingPictureReason) {
         let part: String = part.chars().take(1024).collect();
-        let story = self.story.clone();
+        let story = self.story.to_string();
         self.doc.missing_pictures.push(MissingPicture { part, story, reason });
     }
 
@@ -153,7 +153,8 @@ impl Reader<'_> {
         let kind = if footer { PartKind::Footer } else { PartKind::Header };
         let id = self.doc.add_part(kind, Blocks::new());
         self.hf_by_path.insert(path.to_string(), id);
-        self.doc.missing_pictures.part_names.insert(id, path.to_string());
+        let name: Arc<str> = path.into();
+        self.doc.missing_pictures.part_names.insert(id, Arc::clone(&name));
         let root = match self.xml(path) {
             Ok(Some(r)) => r,
             _ => return Some(id),
@@ -163,7 +164,7 @@ impl Reader<'_> {
         sc.in_hf = true;
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
-        let outer = std::mem::replace(&mut self.story, path.to_string());
+        let outer = std::mem::replace(&mut self.story, name);
         self.read_blocks(&mut sc, &root, &rels, &mut blocks, self.chunks.depth);
         self.story = outer;
         self.hf_depth = self.hf_depth.saturating_sub(1);
