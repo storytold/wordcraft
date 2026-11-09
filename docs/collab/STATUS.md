@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `828fa107` plus this status commit — 53 commits over
+- HEAD at this writing: `cd4c623c` plus this status commit — 55 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -56,7 +56,8 @@ missing, and where the next session should start.
   `merge_para`, `insert_block` (with the block body and its container path),
   `remove_block`, `move_block` (a run of blocks swapped with the neighbour named
   by its session id, §5.12), `permute` (a contiguous run of paragraphs put in
-  the order of an explicit id list, §5.13), `insert_row`, `remove_row`, and
+  the order of an explicit id list, §5.13), `set_para_level` (the outline level
+  of a list of paragraphs named by session id, §5.14), `insert_row`, `remove_row`, and
   `set_para_format` (restore one paragraph's runs, mark and `ParaProps` — the
   inverse of a formatting command, §5.10).
 - Node ids address every container: a table `[block]`, its rows
@@ -79,7 +80,9 @@ missing, and where the next session should start.
   a column insert/remove, a cell merge/split and a reorder wider than 64 blocks
   are reported as unsupported (they fall back to a command); a pure reorder the
   primitives cannot name is refused rather than mistaken for a chain of text
-  edits.
+  edits. An outline level change leaves the text alone, so it is not a diff
+  either: `para.promote`/`demote` travel as a command and the server names the
+  levels (§5.14).
 - A column removal, a cell merge and a cell split carry an exact inverse
   (`split_cells`/`merge_cells`/`insert_column` with `restore`): the removed
   bodies, the grid and the session ids travel in the inverse, so undo restores
@@ -121,6 +124,15 @@ missing, and where the next session should start.
   ids in their new order; replicas replay the same transaction delta and the
   inverse puts the old order back in one step (§5.13). A sort wider than 64
   blocks keeps the command delta and its undo answers `unsupported`.
+- The outline level commands (`para.promote`/`para.demote`, the `outline.*`
+  pair that runs them, and the Outlining tab's absolute levels) are normalized
+  after the command to one `set_para_level` structural operation naming each
+  changed paragraph's session id and target level, plus the exact style and
+  direct outline level when the level does not imply them; replicas replay the
+  same transaction delta, undo puts the earlier levels back in one step and a
+  foreign edit in any levelled paragraph makes it `undo-conflict` (§5.14). A
+  step wider than 64 paragraphs, or one that also changes a list level, keeps
+  the command delta.
 
 ### Client and transport (`crates/collab-client`, `crates/collab-ws`)
 
@@ -312,9 +324,9 @@ Results at this writing:
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
   `format.enclose`, whose inverse restores the paragraph's body (§5.11), and a
-  paragraph move and a paragraph sort are addressable structural operations
-  with an exact inverse (§5.12, §5.13); every other command still has none and
-  acts as an undo barrier. The
+  paragraph move, a paragraph sort and an outline level step are addressable
+  structural operations with an exact inverse (§5.12, §5.13, §5.14); every
+  other command still has none and acts as an undo barrier. The
   `opId` dedup window travels with the snapshot (§5.5), so a retry across a
   restart is
   deduplicated; the window is bounded at 10 000 answers, so a retry after more
@@ -328,8 +340,9 @@ Results at this writing:
   caret of a client holding a cell id survives. What still travels as a command
   is a text box, formatting and anything the diff cannot express; a formatting
   command's inverse is a `set_para_format` primitive (§5.10, §5.11), a paragraph
-  move is a `move_block` structural operation (§5.12) and a sort is a `permute`
-  (§5.13), the rest stay barriers; a command that
+  move is a `move_block` structural operation (§5.12), a sort is a `permute`
+  (§5.13) and an outline level change is a `set_para_level` (§5.14), the rest
+  stay barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
   table edits undo exactly (§5.8): an inserted column, a column removal, a merge
@@ -932,9 +945,9 @@ the room version; the step stays on the stack and the session stays `InSync`
 
 **What stays a barrier.** Only commands a paragraph snapshot can name are
 listed; §5.11 lifts the two that rewrite text out of this list, §5.12 lifts the
-adjacent paragraph move and §5.13 lifts the paragraph sort. Commands that
-reorder blocks in other ways (`para.promote`/`demote`), move text past more than
-64 blocks
+adjacent paragraph move, §5.13 lifts the paragraph sort and §5.14 lifts the
+outline level commands (`para.promote`/`demote`). Commands that move text past
+more than 64 blocks
 (`para.moveUp`/`moveDown` over a wider selection), strip text
 (`para.removeBlank`, `para.convertBreaks`, the space/indent text tools),
 allocate numbering definitions (`para.bullets`, `para.numbering`,
@@ -1141,9 +1154,9 @@ block the move did not displace does not block the undo.
 
 **What stays a barrier.** A selection wider than 64 blocks is not captured as a
 move: the command still runs, but the step keeps the command delta and its undo
-answers `unsupported`. `para.promote`/`demote` and every other command that
-reorders or rewrites blocks remain barriers (§5.10); `para.sort` is lifted out
-of this list by §5.13.
+answers `unsupported`. Every other command that reorders or rewrites blocks
+remains a barrier (§5.10); `para.sort` is lifted out of this list by §5.13 and
+the outline level commands by §5.14.
 
 **Tests.**
 
@@ -1244,8 +1257,8 @@ resulting order by ids after it; a sort that reorders nothing still becomes an
 identity `permute`, so the step is addressable instead of a barrier. A run
 wider than 64 paragraphs, a run that crosses a container or a paragraph without
 a session id is not captured: the command keeps its delta and its undo answers
-`unsupported`. `para.promote`/`demote` change outline levels as well as order
-and stay barriers.
+`unsupported`. `para.promote`/`demote` change outline levels and are lifted out
+of the barrier list by §5.14.
 
 **A fresh node map after a permutation.** `SyncState::set_nodes` used to rebase
 ids one by one; with a permutation that can erase a key another id just wrote
@@ -1285,6 +1298,121 @@ leaves the client's map consistent.
 **Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app` — 50, 70, 35 and 24 passed; `cargo clippy` on those four
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
+
+### 5.14 An outline level is an addressable structural operation (run 2026-11-09)
+
+§5.13 lifted `para.sort` out of the barrier list and left `para.promote`/`demote`
+there: they change a paragraph's outline level, which no primitive could name and
+no replica could replay backwards (a relative step would move twice). The level
+is now one structural `set_para_level` operation with an explicit list of
+session ids and levels: **head `cd4c623c`** on
+`feature/realtime-collaboration`, with this entry's docs commit on top (no push,
+CI unchanged).
+
+**The operation.** `kind:"structural"`,
+`payload: {"op":"set_para_level","items":[{"id":42,"level":2},{"id":17,"level":null}]}`.
+`level: 1…9` gives the paragraph `Heading{n}`, `level: null` makes it body text.
+A level change reorders nothing and moves no block, so the block paths and the id
+map stay exactly as they are; the caret holder of a levelled paragraph keeps its
+id and keeps typing in its own block.
+
+An item may also name its exact `style` (a style id, or `null` for the default
+style) and direct `outline` level (`0…8`). That is how the inverse restores a
+paragraph the level alone does not describe: a `Quote` promoted to a heading, or
+a paragraph whose `Heading2` style carried the direct outline level `0` (level 1
+by the engine's rule, style `Heading2`). An `outline` without a named `style` is
+refused, because the implied styles (`Heading{n}` and body text) always clear the
+direct outline level.
+
+**One transaction, the same JSON at the author and the peer.** The authoritative
+delta wraps the operation in the step's unit:
+
+```json
+{"op":"transaction","ops":[{"op":"set_para_level","items":[{"id":42,"level":2}]}]}
+```
+
+The command path reads the difference back: it walks the document before and the
+document after the command side by side (blocks the command did not touch share
+their `Arc`) and collects every paragraph whose style or direct outline level
+changed. A command that also changed text, runs, objects, the mark, the section,
+another paragraph property, a list level, a table's shape or the block order is
+not captured at all: the step keeps its command delta and stays a barrier. The
+`outline.promote`/`demote` pair (which runs `para.promote`/`demote`) and the
+Outlining tab's absolute levels (`outline.promoteToHeading1`,
+`outline.demoteToBody`, `outline.level`) are captured the same way. A delta that
+carries a level change and a `permute` in one transaction applies all or none:
+the replica path already runs a transaction on a scratch copy (§5.13).
+
+**Undo and redo.** The inverse is one `set_para_level` naming the levels before
+the step, with the exact `style`/`outline` where the earlier level does not imply
+them. The room wraps the step's operations, so both the forward step and its
+inverse reach every replica as one `transaction` delta: the author applies the
+answer to its own document and the peer applies the same JSON, ending at the
+identical `Document`. Redo replays the original command and the levels return.
+
+**A foreign edit is `undo-conflict`.** The step reports every paragraph whose
+level it changed in `Effect::touched`. Any later edit another user makes in one
+of them makes undo answer `undo-conflict`, leaves both documents byte-identical
+and does not move the room version; the step stays on the stack and the session
+stays `InSync` (§5.9).
+
+**The command path, a step that changes nothing, and the bound.** `para.promote`
+and `para.demote` run through the engine as before (Word's rules decide each
+paragraph's target level, including the heading before a promoted body
+paragraph); the adapter names the result. A `set_para_level` that names the
+levels already in place is still an addressable step: the document does not
+change but the delta, the undo step and the inverse exist, so nothing falls back
+to a command barrier. A step wider than `MAX_LEVEL_PARAGRAPHS` (64 paragraphs)
+is not captured:
+the command runs, keeps its delta and its undo answers `unsupported`. A
+selection with a list item changes a numbering level too and stays a barrier for
+the same reason.
+
+A replica applying the delta adds the built-in `Heading{n}` style (and its
+linked character style) when its document lacks it — the command path does the
+same before it writes the style id — so a file that brought no heading styles
+formats the same on every replica.
+
+**Tests.**
+
+- `crates/collab-doc/src/tests.rs`:
+  `levelling_paragraphs_is_one_transactional_level_step` (delta shape, styles
+  after the step, ids unchanged), `undo_of_a_level_step_lands_as_one_transaction_and_redo_returns_the_levels`,
+  `undo_restores_a_style_the_level_does_not_imply` (`Quote` → heading → `Quote`),
+  `undo_restores_a_direct_outline_level_the_style_does_not_imply` (`Heading2`
+  with outline level 0),
+  `a_level_step_with_an_unknown_retired_or_unaddressable_id_is_refused_before_mutation`
+  (unknown, duplicate, level 0/10, `outline` without `style`, a stale path
+  outside the container → `invalid`; retired → `gone`; document and version
+  unchanged every time), `a_level_step_on_a_table_is_refused_before_mutation`,
+  `a_level_step_wider_than_the_bound_is_refused_before_mutation` (65 items),
+  `a_foreign_edit_of_a_levelled_block_makes_undo_a_conflict` (the step stays on
+  the stack), `a_level_step_that_names_the_current_levels_is_an_identity_step`,
+  `a_replica_applies_a_level_step_and_keeps_the_styles`.
+- `crates/collab-engine/src/tests.rs`:
+  `a_promote_lands_as_one_level_operation_and_undoes` (the command yields a
+  transaction `set_para_level`; a replica that never ran it converges from the
+  delta, undoes and redoes),
+  `a_promote_over_a_selection_levels_every_paragraph_in_one_transaction`,
+  `a_promote_over_more_than_64_paragraphs_stays_an_undo_barrier`,
+  `a_promote_with_nothing_to_promote_is_refused_before_mutation` (document,
+  version and undo stack unchanged),
+  `a_level_step_that_changes_nothing_is_still_an_addressable_step`,
+  `a_level_step_and_a_permute_land_as_one_transaction_on_a_replica` (both
+  operations land; a refused transaction changes nothing).
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s): `a_promote_undo_lands_as_one_transaction_at_its_author_and_the_peer`
+  (the plan is the command; the delta is one transaction, undo and redo reach the
+  author once and the peer as the same delta, documents identical),
+  `a_foreign_edit_of_a_promoted_paragraph_refuses_the_undo_without_touching_the_document`
+  (Bob types into the promoted paragraph; both documents byte-identical, room
+  version unchanged).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 50, 80, 41 and 26 passed; `cargo clippy` on those four
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
