@@ -136,6 +136,9 @@ pub(crate) struct Writer<'d> {
     /// Linked text boxes: part id → (`wps:txbx`/`wps:linkedTxbx` id, seq; 0 for the box holding
     /// the text).
     txbx_links: HashMap<u32, (u32, u32)>,
+    /// The deletion of the shape whose `wps:wsp` is written next: its text box goes with it, so
+    /// the box's text is written deleted by the same revision. Taken by `wsp`.
+    box_del: Option<u32>,
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";

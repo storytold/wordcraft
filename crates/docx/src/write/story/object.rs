@@ -384,6 +384,7 @@ impl Writer<'_> {
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
+        self.box_del = self.box_deletion(props);
         self.wsp(w, o, None, (0.0, 0.0), rels, depth);
         w.close("a:graphicData");
         w.close("a:graphic");
@@ -451,6 +452,7 @@ impl Writer<'_> {
                 }
                 InlineObject::Shape { extra, .. } => {
                     let id = self.shape_docpr(extra.id);
+                    self.box_del = self.box_deletion(props);
                     self.wsp(w, &c.obj, Some(&id), at, rels, depth);
                 }
                 // Native ink kept from the file, with its fallback, at the member's place.
