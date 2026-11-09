@@ -29,6 +29,8 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 mod page_objects;
 use page_objects::PageObjects;
 
+pub mod action_pen;
+
 /// What dragging on the page does (Draw tab).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +44,10 @@ pub enum DrawMode {
     Eraser,
     /// Dragging draws ink with this pen.
     Pen(InkTool),
+    /// Dragging draws a stroke that Word's natural gestures read: a loop selects, a line through
+    /// text deletes, a caret puts the insertion point down, and so on. A stroke that makes no
+    /// gesture stays ink.
+    ActionPen,
 }
 
 impl DrawMode {
@@ -221,6 +227,16 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("draw.pen", "Pen", "Draw › Pens", |s, v| pen(s, v, InkTool::Pen)).params(PEN_PARAMS).pure(),
         CommandSpec::new("draw.pencil", "Pencil", "Draw › Pens", |s, v| pen(s, v, InkTool::Pencil)).params(PEN_PARAMS).pure(),
         CommandSpec::new("draw.highlighter", "Highlighter", "Draw › Pens", |s, v| pen(s, v, InkTool::Highlighter)).params(PEN_PARAMS).pure(),
+        CommandSpec::new("draw.actionPen", "Action Pen", "Draw › Pens", |s, v| {
+            let on = p::bool(v, "value").unwrap_or(s.view.draw.mode != DrawMode::ActionPen);
+            s.view.draw.mode = if on { DrawMode::ActionPen } else { DrawMode::Select };
+            Ok(json!({"value": on, "mode": s.view.draw.mode}))
+        })
+        .params(r#"{"value"?: bool}  (no value: toggle the Action Pen; on, a stroke is read as a gesture)"#)
+        .pure(),
+        CommandSpec::new("draw.actionPenStroke", "Action Pen Stroke", "Draw › Pens", action_pen::perform).params(
+            r#"{"page": n, "points": [[x, y], …], "text"?: string}  (a gesture edits the text; an unrecognised or too-small stroke stays ink; text: typed in after a caret gesture)"#,
+        ),
         CommandSpec::new("draw.addPen", "Add Pen", "Draw › Pens", add_pen)
             .params(r#"{"kind"?: "pen|pencil|highlighter", "color"?: "RRGGBB", "width"?: pt}  (adds the pen to the gallery and picks it up)"#)
             .pure(),

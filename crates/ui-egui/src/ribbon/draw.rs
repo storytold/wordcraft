@@ -1,6 +1,9 @@
 use super::common::{mi, stack};
 use super::language::mi_check;
-use super::{CONTENT_H, Rect, Sense, Stroke, Target, Tokens, Ui, WordApp, big, big_toggle, group, icons, json, menu_button, pos2, split, vec2};
+use super::{
+    CONTENT_H, Rect, Sense, Stroke, Target, Tokens, Ui, WordApp, big, big_split_toggle, big_toggle, group, icons, json, menu_button, pos2, split,
+    vec2,
+};
 
 pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
     use wordcraft_doc::freeform::InkTool;
@@ -20,6 +23,12 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
         big_toggle(ui, app, "pen", "Pen", "draw.pen", mode == DrawMode::Pen(InkTool::Pen) && custom.is_none());
         big_toggle(ui, app, "pencil", "Pencil", "draw.pencil", mode == DrawMode::Pen(InkTool::Pencil) && custom.is_none());
         big_toggle(ui, app, "highlight", "Highlighter", "draw.highlighter", mode == DrawMode::Pen(InkTool::Highlighter) && custom.is_none());
+        // The Action Pen reads a stroke as a gesture (Edit with natural gestures). Its drop-down
+        // turns Track Changes on and off, so each gesture edit is recorded as a revision.
+        big_split_toggle(ui, app, "actionPen", "Action\nPen", "draw.actionPen", mode == DrawMode::ActionPen, |ui, app| {
+            let tracking = app.session.doc.settings.track_changes;
+            mi_check(ui, app, "Track Changes", tracking, "review.trackChanges", json!({}));
+        });
         // Pens added with Add Pen; right-click one to remove it.
         let pens = app.session.view.draw.pens.clone();
         for (i, pen) in pens.iter().enumerate() {

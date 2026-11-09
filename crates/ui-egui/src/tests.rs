@@ -3570,6 +3570,29 @@ fn the_ribbon_boxes_name_themselves_for_a_screen_reader() {
     }
 }
 
+/// The Action Pen's drop-down arrow names the options it opens, as `split`'s does (#3172): a
+/// screen reader gets "Action Pen options", not an unnamed button.
+#[test]
+fn the_action_pen_arrow_names_the_options_it_opens() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("file.new", json!({"template": "sample"})).unwrap();
+    a.run("ui.tab", json!({ "tab": "Draw" })).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    for name in ["Action Pen", "Action Pen options"] {
+        assert!(h.query_by_role_and_label(Role::Button, name).is_some(), "nothing on the Draw ribbon is called {name:?}");
+    }
+}
+
 /// #1015: focusing Save is not enough: its dialog must expose the question and any failed
 /// save's explanation, so assistive technology has context for the three choices.
 #[test]
@@ -8054,6 +8077,125 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
+}
+
+/// Draw › Pens › Action Pen (#5984): drawing a loop with the pointer around a word selects it,
+/// exactly like dragging a selection, so the formatting commands work on it; nothing is inked.
+#[test]
+fn the_action_pen_loop_selects_words_with_the_pointer() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("document.setText", json!({"text": "alpha beta gamma\nsecond line"})).unwrap();
+    a.run("draw.actionPen", json!({"value": true})).unwrap();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0f64;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..4 {
+        frame(&mut a, Vec::new());
+    }
+    let layout = a.session.layout();
+    let map = wordcraft_engine::cmd::draw::action_pen::page_text(&a.session, &layout, 0);
+    let cells: Vec<_> = map.rows.first().map(|r| r.cells.iter().map(|c| c.rect).collect()).unwrap_or_default();
+    assert!(cells.len() >= 10, "the document is laid out");
+    let r = cells[0].union(&cells[4]).expand(5.0);
+    let stroke: Vec<[f32; 2]> = (0..=40)
+        .map(|i| {
+            let a = i as f32 / 40.0 * std::f32::consts::TAU;
+            [r.x + r.w / 2.0 + (r.w / 2.0 + 4.0) * a.cos(), r.y + r.h / 2.0 + (r.h / 2.0 + 4.0) * a.sin()]
+        })
+        .collect();
+    // Press inside the page and drag the loop, as a person would.
+    let start = crate::canvas::page_to_screen(&mut a, 0, stroke[0][0], stroke[0][1]).unwrap();
+    frame(&mut a, vec![egui::Event::PointerMoved(start)]);
+    frame(
+        &mut a,
+        vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+    );
+    for p in stroke.iter().skip(1) {
+        let at = crate::canvas::page_to_screen(&mut a, 0, p[0], p[1]).unwrap();
+        frame(&mut a, vec![egui::Event::PointerMoved(at)]);
+    }
+    let last = *stroke.last().unwrap();
+    let end = crate::canvas::page_to_screen(&mut a, 0, last[0], last[1]).unwrap();
+    frame(&mut a, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    frame(&mut a, Vec::new());
+    assert_eq!(
+        (a.session.sel.anchor.off.min(a.session.sel.focus.off), a.session.sel.anchor.off.max(a.session.sel.focus.off)),
+        (0, 5),
+        "the loop selected the word"
+    );
+    assert_eq!(body_ink(&a), 0, "the gesture left no ink");
+    // The selection is normal: Bold applies to it.
+    a.run("format.bold", json!({})).unwrap();
+    assert_eq!(body_text(&a), "alpha beta gamma\nsecond line");
+    let para = a.session.doc.para(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(para.runs.first().is_some_and(|r| r.props.bold == Some(true)), "the selected word is bold: {:?}", para.runs);
+}
+
+/// A line drawn through text with the Action Pen deletes it with the pointer, in one undo step.
+#[test]
+fn the_action_pen_line_through_text_deletes_with_the_pointer() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("document.setText", json!({"text": "alpha beta gamma\nsecond line"})).unwrap();
+    a.run("draw.actionPen", json!({"value": true})).unwrap();
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0f64;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..4 {
+        frame(&mut a, Vec::new());
+    }
+    let layout = a.session.layout();
+    let map = wordcraft_engine::cmd::draw::action_pen::page_text(&a.session, &layout, 0);
+    let cells: Vec<_> = map.rows.first().map(|r| r.cells.iter().map(|c| c.rect).collect()).unwrap_or_default();
+    let y = cells[0].y + cells[0].h / 2.0;
+    let (x0, x1) = (cells[0].x - 2.0, cells[4].right() + 2.0);
+    let start = crate::canvas::page_to_screen(&mut a, 0, x0, y).unwrap();
+    frame(&mut a, vec![egui::Event::PointerMoved(start)]);
+    frame(
+        &mut a,
+        vec![egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }],
+    );
+    for i in 1..=10 {
+        let x = x0 + (x1 - x0) * i as f32 / 10.0;
+        let at = crate::canvas::page_to_screen(&mut a, 0, x, y).unwrap();
+        frame(&mut a, vec![egui::Event::PointerMoved(at)]);
+    }
+    let end = crate::canvas::page_to_screen(&mut a, 0, x1, y).unwrap();
+    frame(&mut a, vec![egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() }]);
+    frame(&mut a, Vec::new());
+    assert_eq!(body_text(&a), " beta gamma\nsecond line", "the crossed word went");
+    assert_eq!(body_ink(&a), 0, "no ink was committed");
+    a.run("edit.undo", json!({})).unwrap();
+    assert_eq!(body_text(&a), "alpha beta gamma\nsecond line", "one undo step");
+}
+
+/// Ink strokes in the body.
+fn body_ink(a: &WordApp) -> usize {
+    a.session
+        .doc
+        .para_paths(wordcraft_doc::StoryRef::Body)
+        .iter()
+        .filter_map(|p| a.session.doc.para(wordcraft_doc::StoryRef::Body, p))
+        .flat_map(|p| p.objects.iter())
+        .filter(|o| o.ink().is_some())
+        .count()
 }
 
 /// Issue #2716: taking documents off the recent list is final — the open document must not be

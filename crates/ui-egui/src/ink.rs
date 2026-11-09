@@ -17,11 +17,13 @@ use wordcraft_layout::DocLayout;
 use crate::WordApp;
 use crate::canvas::page_at;
 
-/// A stroke being drawn: its page and points (page points).
+/// A stroke being drawn: its page and points (page points), and whether it is an Action Pen
+/// stroke (read as a gesture) or ink.
 pub struct InkDrag {
     page: usize,
     tool: InkTool,
     pts: Vec<[f32; 2]>,
+    action: bool,
 }
 
 /// The lasso in use: a loop being drawn, or the selection being dragged (page points).
@@ -82,9 +84,14 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
         ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.primary_released(), i.pointer.latest_pos()));
     let starts = pressed && resp.contains_pointer();
     match mode {
-        DrawMode::Pen(tool) => {
+        DrawMode::Pen(_) | DrawMode::ActionPen => {
+            let action = mode == DrawMode::ActionPen;
+            let tool = match mode {
+                DrawMode::Pen(t) => t,
+                _ => InkTool::Pen,
+            };
             if starts && let Some((page, x, y)) = at.and_then(|p| page_at(rects, layout, scale, p)) {
-                app.canvas.ink = Some(InkDrag { page, tool, pts: vec![[x, y]] });
+                app.canvas.ink = Some(InkDrag { page, tool, pts: vec![[x, y]], action });
             } else if down
                 && let Some(p) = at
                 && let Some(d) = app.canvas.ink.as_mut()
@@ -96,7 +103,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
                 }
             }
             if released && let Some(d) = app.canvas.ink.take() {
-                let _ = app.run("draw.stroke", json!({"page": d.page, "points": d.pts, "tool": d.tool.name()}));
+                // The Action Pen's stroke is classified: a gesture edits the text, anything else
+                // stays ink, all in one command and one undo step.
+                let cmd = if d.action { "draw.actionPenStroke" } else { "draw.stroke" };
+                let _ = app.run(cmd, json!({"page": d.page, "points": d.pts, "tool": d.tool.name()}));
             }
         }
         DrawMode::Eraser => {
@@ -228,6 +238,13 @@ pub fn paint(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayou
     paint_replay(app, painter, rects, layout, scale);
     paint_lasso(app, painter, rects, layout, scale);
     let Some(d) = &app.canvas.ink else { return };
+    // The Action Pen's live feedback: the words a loop would select, the range a cross-out would
+    // delete, or the point a caret or backwards L would use.
+    if d.action
+        && let Some(g) = wordcraft_engine::cmd::draw::action_pen::preview(&app.session, layout, d.page, &d.pts)
+    {
+        paint_action_gesture(app, painter, rects, layout, scale, d.page, &g);
+    }
     let Some(map) = to_screen(rects, layout, scale, d.page) else { return };
     let s = page_scale(rects, layout, scale, d.page).unwrap_or(scale);
     let set = app.session.view.draw.settings(d.tool);
@@ -239,6 +256,38 @@ pub fn paint(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayou
         painter.circle_filled(*only, width / 2.0, color);
     } else {
         painter.add(egui::Shape::line(pts, Stroke::new(width, color)));
+    }
+}
+
+/// Highlights what the Action Pen's stroke would do while it is still being drawn: the range a
+/// selection, deletion or join covers, or the insertion point a caret (or the line a backwards L
+/// starts) uses. Colours are the existing theme tokens, so it reads the same in both themes.
+fn paint_action_gesture(
+    app: &WordApp,
+    painter: &Painter,
+    rects: &[Rect],
+    layout: &DocLayout,
+    scale: f32,
+    page: usize,
+    g: &wordcraft_engine::cmd::draw::action_pen::Gesture,
+) {
+    let Some(map) = to_screen(rects, layout, scale, page) else { return };
+    let t = crate::theme::Tokens::get(painter.ctx());
+    if let Some((a, b)) = g.range() {
+        for (pi, r) in layout.selection_rects(&app.session.doc, a, b, page) {
+            if pi != page {
+                continue;
+            }
+            let (p0, p1) = (map([r.x, r.y]), map([r.right(), r.bottom()]));
+            painter.rect_filled(Rect::from_min_max(p0, p1), 0.0, t.selection);
+        }
+    }
+    if let Some(pos) = g.point()
+        && let Some(c) = layout.caret_on(pos, page)
+    {
+        let h = c.height.max(6.0);
+        let (top, bottom) = (map([c.x, c.top - h * 0.1]), map([c.x, c.top + h * 1.1]));
+        painter.line_segment([top, bottom], Stroke::new(2.0, t.accent));
     }
 }
 
@@ -270,7 +319,7 @@ pub fn cursor(app: &WordApp) -> Option<egui::CursorIcon> {
     match app.session.view.draw.mode {
         DrawMode::Select => None,
         DrawMode::Lasso if matches!(app.canvas.ink_ui.lasso, Some(LassoDrag::Move { .. })) => Some(egui::CursorIcon::Grabbing),
-        DrawMode::Eraser | DrawMode::Pen(_) | DrawMode::Lasso => Some(egui::CursorIcon::Crosshair),
+        DrawMode::Eraser | DrawMode::Pen(_) | DrawMode::ActionPen | DrawMode::Lasso => Some(egui::CursorIcon::Crosshair),
     }
 }
 

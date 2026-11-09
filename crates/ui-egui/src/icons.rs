@@ -641,6 +641,12 @@ fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
             pen.line_c(&[(15.0, 2.0), (15.0, 8.0)], a);
             pen.line_c(&[(12.0, 5.0), (18.0, 5.0)], a);
         }
+        // The Action Pen: a pen over the loop and line gestures it reads.
+        "actionPen" => {
+            pen.line(&[(3.0, 18.0), (11.0, 10.0), (13.0, 12.0), (5.0, 20.0), (2.5, 20.5), (3.0, 18.0)]);
+            pen.fill(&[(11.0, 10.0), (12.5, 8.5), (14.5, 10.5), (13.0, 12.0)], a);
+            pen.closed(&[(13.0, 4.0), (16.0, 2.0), (18.5, 4.5), (17.0, 7.5), (14.0, 7.0)], c);
+        }
         // Ink Replay's controls.
         "replayRewind" => {
             pen.frect(4.0, 5.0, 5.5, 15.0, c);
