@@ -817,3 +817,31 @@ fn relink_table_remaps_row_cell_ins_del_and_exceptions_fmt_change() {
     assert_eq!(tbl.rows[0].cells[0].props.ins, None);
     assert_eq!(d.revisions[1].author, "Bob");
 }
+
+#[test]
+fn missing_picture_names_are_capped_at_a_char_boundary() {
+    let mut d = Document::new();
+    let long: String = "é".repeat(5000);
+    d.missing_pictures.push(MissingPicture { part: long.clone(), story: long, reason: MissingPictureReason::MissingPart });
+    let item = &d.missing_pictures.list[0];
+    assert_eq!((item.part.chars().count(), item.story.chars().count()), (1024, 1024));
+}
+
+#[test]
+fn missing_pictures_are_capped_deduplicated_and_not_content() {
+    let mut d = Document::new();
+    let item = |n: usize| MissingPicture { part: format!("p{n}"), story: "word/document.xml".into(), reason: MissingPictureReason::MissingPart };
+    d.missing_pictures.push(item(0));
+    d.missing_pictures.push(item(0));
+    assert_eq!(d.missing_pictures.list.len(), 1);
+    for n in 1..MAX_MISSING_PICTURES + 3 {
+        d.missing_pictures.push(item(n));
+    }
+    assert_eq!(d.missing_pictures.list.len(), MAX_MISSING_PICTURES);
+    assert!(d.missing_pictures.truncated);
+    let e = Document::new();
+    assert_eq!(d, e);
+    assert!(d.same_content(&e));
+    assert!(!serde_json::to_string(&d).unwrap().contains("p0"));
+    assert_eq!(MissingPictureReason::ExternalTarget.label(), "external target");
+}

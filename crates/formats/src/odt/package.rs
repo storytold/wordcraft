@@ -29,7 +29,7 @@ fn columns_xml(c: &Columns) -> String {
 /// Preformatted Text), each with the look of the document's own style: font, size, bold,
 /// italic, colour and the rest of its text formatting, spacing, indents, alignment and keep with
 /// next, written out in full so other programs show them as WordCraft does.
-fn kind_styles(doc: &Document) -> String {
+fn kind_styles(doc: &Document, on_outline: &std::collections::BTreeSet<String>) -> String {
     let mut s = String::new();
     let mut kinds: Vec<(String, String, String, Option<u8>, &str)> =
         (1..=6).map(|n| (format!("Heading_20_{n}"), format!("Heading {n}"), format!("Heading{n}"), Some(n), "text")).collect();
@@ -63,20 +63,49 @@ fn kind_styles(doc: &Document) -> String {
         if let Some(c) = pp.contextual_spacing {
             para.push_str(&format!(" style:contextual-spacing=\"{c}\""));
         }
-        // A heading level the outline doesn't number names no list style: LibreOffice would
-        // otherwise give it the outline's (unnumbered) level, and its indent.
-        let numbered = pp
-            .numbering
-            .and_then(|r| doc.numbering.level(r.num, r.level))
-            .is_some_and(|l| !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet));
-        let detach = if outline.is_some() && !numbered { " style:list-style-name=\"\"" } else { "" };
-        let outline = outline.map(|n| format!(" style:default-outline-level=\"{n}\"{detach}")).unwrap_or_default();
+        let outline = outline.map(|n| outline_attrs(doc, n, &pp, on_outline.contains(&id))).unwrap_or_default();
         s.push_str(&format!(
             "<style:style style:name=\"{name}\" style:display-name=\"{display}\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:next-style-name=\"Standard\"{outline} style:class=\"{class}\"><style:paragraph-properties{para}/><style:text-properties{}/></style:style>",
             props_text(&cp)
         ));
     }
     s
+}
+
+/// The styles of the headings in `blocks` (and their tables, to 16 levels deep) with a number by
+/// their own outline level.
+fn styles_numbered_by_own_level(blocks: &[std::sync::Arc<wordcraft_doc::Block>], depth: usize, out: &mut std::collections::BTreeSet<String>) {
+    for b in blocks {
+        match &**b {
+            wordcraft_doc::Block::Para(p) => {
+                if p.props.outline_level.is_some()
+                    && p.props.numbering.is_some_and(|n| n.num != 0)
+                    && let Some(s) = &p.props.style
+                {
+                    out.insert(s.clone());
+                }
+            }
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                    styles_numbered_by_own_level(&cell.blocks, depth + 1, out);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
+        }
+    }
+}
+
+/// A paragraph style's outline level `n` (`style:default-outline-level`), its properties being `pp`.
+fn outline_attrs(doc: &Document, n: u8, pp: &wordcraft_doc::props::ParaProps, on_outline: bool) -> String {
+    // A level the outline doesn't number names no list style: LibreOffice would otherwise give
+    // it the outline's (unnumbered) level, and its indent. Unless a heading in the style has a
+    // number by its own level (`on_outline`), which that would take from it.
+    let numbered = pp
+        .numbering
+        .and_then(|r| doc.numbering.level(r.num, r.level))
+        .is_some_and(|l| !matches!(l.format, wordcraft_doc::section::NumFormat::None | wordcraft_doc::section::NumFormat::Bullet));
+    let detach = if numbered || on_outline { "" } else { " style:list-style-name=\"\"" };
+    format!(" style:default-outline-level=\"{n}\"{detach}")
 }
 
 /// The ODF parent of document style `id`: Standard for Normal, the kinds' styles for theirs, a
@@ -98,7 +127,7 @@ fn odf_parent(doc: &Document, id: Option<&str>) -> String {
 /// The custom paragraph styles in `named` and the custom styles they are based on, as common
 /// styles (ODF 1.3 §16.2): named by their document id, shown by their name, each with its own
 /// paragraph and text formatting over its parent's.
-fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> String {
+fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_outline: &std::collections::BTreeSet<String>) -> String {
     let mut todo: Vec<String> = named.iter().cloned().collect();
     let mut done = std::collections::BTreeSet::new();
     let mut s = String::new();
@@ -146,14 +175,27 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>) -> 
             })
             .unwrap_or_default();
         let parent = odf_parent(doc, st.based_on.as_deref());
+        let outline = pp.outline_level.filter(|l| *l < 9).map(|l| outline_attrs(doc, l + 1, pp, on_outline.contains(&id))).unwrap_or_default();
         s.push_str(&format!(
-            "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
+            "<style:style style:name=\"{}\" style:display-name=\"{}\" style:family=\"paragraph\" style:parent-style-name=\"{parent}\"{outline}><style:paragraph-properties{attrs}>{tabs}</style:paragraph-properties><style:text-properties{}/></style:style>",
             super::writer::odf_name(&id),
             x(&super::writer::generated_style(&id).map_or_else(|| st.name.clone(), |(_, d)| d)),
-            props_text(&st.chr)
+            props_text(&with_complex_size(doc, &id, &st.chr))
         ));
     }
     s
+}
+
+/// Paragraph style `id`'s own text formatting `chr`, with the complex-script size it takes when it
+/// states only a size: a parent's complex size where one sets it (the model takes it from there,
+/// and the writer would otherwise give it this style's size), else its own size.
+fn with_complex_size(doc: &Document, id: &str, chr: &wordcraft_doc::props::CharProps) -> wordcraft_doc::props::CharProps {
+    let mut chr = chr.clone();
+    if chr.size.is_some() && chr.size_cs.is_none() {
+        let cs = doc.styles.resolve_char(Some(id), &wordcraft_doc::props::CharProps::default()).size_cs;
+        chr.size_cs = (chr.size != Some(cs)).then_some(cs);
+    }
+    chr
 }
 
 /// The custom character styles in `named` and those they are based on, as common text styles.
@@ -346,25 +388,31 @@ fn styles_xml(
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:letter-kerning=\"{kern}\"{color}{scripts}/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:font-size-asian=\"{size}\"{size_cs} style:letter-kerning=\"{kern}\"{color}{lang}{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
         // Widow and orphan control as Normal has it, said either way (the standard leaves it open
         // when unsaid, and readers differ: docs/odf-interpretation.md).
         widows = if normal.widow_control { " fo:widows=\"2\" fo:orphans=\"2\"" } else { " fo:widows=\"0\" fo:orphans=\"0\"" },
         size = pt(size),
+        size_cs = if doc.styles.default_chr.size_cs.is_none() { format!(" style:font-size-complex=\"{}\"", pt(size)) } else { String::new() },
         // The document's text colour (a colour, not automatic).
         color = match doc.styles.default_chr.color {
             Some(wordcraft_doc::props::TextColor::Rgb(c)) => format!(" fo:color=\"#{}\"", c.hex().to_ascii_lowercase()),
             _ => String::new(),
         },
         tab = pt(tab),
+        // The document's language, without which each reader uses its own default: Normal's, as
+        // WordCraft has it (a Word file's Normal may state another than its defaults).
+        lang = doc.styles.resolve_char(None, &Default::default()).lang.as_deref().map(|l| super::writer::lang_attrs(l, "")).unwrap_or_default(),
         scripts = super::writer::script_attrs(&doc.styles.default_chr)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
-    s.push_str(&kind_styles(doc));
+    let mut on_outline = std::collections::BTreeSet::new();
+    styles_numbered_by_own_level(&doc.body, 0, &mut on_outline);
+    s.push_str(&kind_styles(doc, &on_outline));
     s.push_str(&outline_style(doc));
-    s.push_str(&custom_styles(doc, named));
+    s.push_str(&custom_styles(doc, named, &on_outline));
     // The note text styles, as WordCraft's Footnote Text and Endnote Text: 10 pt, no spacing.
     for (name, class) in [("Footnote", "extra"), ("Endnote", "extra")] {
         s.push_str(&format!(
