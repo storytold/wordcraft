@@ -12,8 +12,6 @@ use std::rc::Rc;
 use crate::launched::{self, Launches, Step, admit, next_step};
 use wasm_bindgen::JsCast as _;
 
-/// Largest launched file read into memory; wasm32 has 4 GB at most, shared with the app.
-const MAX_LAUNCHED_BYTES: f64 = (256u32 << 20) as f64;
 /// How often the reader looks whether the app has opened the file it read last.
 const DRAIN_POLL_MS: i32 = 50;
 
@@ -86,11 +84,11 @@ async fn sleep(ms: i32) {
     let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
 }
 
-/// The file's bytes, refusing one over [`MAX_LAUNCHED_BYTES`] before reading it.
+/// The file's bytes, refusing one over the limit before reading it.
 async fn read(handle: &web_sys::FileSystemFileHandle) -> Result<Vec<u8>, String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
     let file: web_sys::File = wasm_bindgen_futures::JsFuture::from(handle.get_file()).await.map_err(js)?.dyn_into().map_err(js)?;
-    if file.size() > MAX_LAUNCHED_BYTES {
+    if !launched::size_within_limit(file.size()) {
         return Err("the file is larger than 256 MB".into());
     }
     let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(js)?;

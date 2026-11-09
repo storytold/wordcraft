@@ -8,6 +8,15 @@ use std::rc::Rc;
 
 use wordcraft_ui_egui::{WordApp, i18n};
 
+/// Largest launched file read into memory; wasm32 has 4 GB at most, shared with the app.
+const MAX_LAUNCHED_BYTES: f64 = (256u32 << 20) as f64;
+
+/// Whether a launched file's size is within the limit, checked before the bytes are read.
+/// The browser reports the size as a float; a value that isn't finite and nonnegative is refused.
+pub(crate) fn size_within_limit(size: f64) -> bool {
+    size.is_finite() && (0.0..=MAX_LAUNCHED_BYTES).contains(&size)
+}
+
 /// Most launched files waiting to be read, over every launch; the operating system can pass a
 /// whole folder's selection.
 pub(crate) const MAX_WAITING_FILES: usize = 20;
@@ -342,6 +351,19 @@ mod tests {
         }
         assert!(matches!(next_step(&mut q, true), Step::Read(100)), "the file that filled the freed slot opens last");
         assert!(matches!(next_step(&mut q, true), Step::Finish(2)), "both left-out files are counted");
+    }
+
+    /// The size limit is checked on the reported size before the bytes are read: exactly 256 MB
+    /// is allowed, one byte over is refused, and a nonsensical size is refused rather than
+    /// truncated.
+    #[test]
+    fn the_size_limit_is_checked_at_the_boundary() {
+        assert!(size_within_limit(0.0));
+        assert!(size_within_limit(MAX_LAUNCHED_BYTES));
+        assert!(!size_within_limit(MAX_LAUNCHED_BYTES + 1.0));
+        for bad in [f64::NAN, f64::INFINITY, -1.0] {
+            assert!(!size_within_limit(bad), "{bad}");
+        }
     }
 
     /// While a dialog is up (a launched file asks for its password), the next file waits.
