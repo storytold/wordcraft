@@ -635,6 +635,41 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
 }
 
+/// Three windows, two on saved documents and one blank: unsaved work in a window behind holds
+/// the update back, the update's close quits the whole app instead of closing one window, and
+/// the documents to reopen are the saved ones, the one in front last. The blank one is left out.
+#[test]
+fn quitting_for_an_update_quits_every_window_and_lists_their_documents() {
+    let ctx = backend();
+    let mut a = app("First");
+    let first = a.session.document_id();
+    let first_path = std::path::PathBuf::from("first.docx");
+    a.session.path = Some(first_path.clone());
+    a.session.dirty = false;
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    let second_path = std::path::PathBuf::from("second.docx");
+    a.session.path = Some(second_path.clone());
+    a.run("text.insert", json!({"text": "Second"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.show_document(first).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 3);
+    assert!(!a.session.dirty, "the window in front has nothing to save");
+    assert!(!crate::updates_ui::ready_to_restart(&a), "the second window's unsaved text holds the update back");
+    assert!(a.documents_to_reopen().is_empty(), "nothing to reopen before an update quits");
+
+    let second = a.session.documents().into_iter().find(|d| d.path.as_ref() == Some(&second_path)).map(|d| d.id).unwrap();
+    a.session.with_document(second, |s| s.dirty = false).unwrap();
+    assert!(crate::updates_ui::ready_to_restart(&a));
+    crate::updates_ui::quit_for_update(&mut a);
+    assert!(a.quit_requested, "the update quits the app");
+    assert!(!a.closes_a_window(), "a close now ends the app, not one window");
+    assert_eq!(a.documents_to_reopen(), [second_path, first_path], "the window in front comes back in front");
+}
+
 /// Opening a second document when another is already open constrains the new window's requested
 /// dimensions so that it fits within the active monitor's bounds, even on displays with high
 /// DPI scaling (such as 2560x1440 at 200% scale = 1280x720 pt) where the unconstrained default

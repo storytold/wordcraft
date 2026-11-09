@@ -3057,6 +3057,48 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
 }
 
+/// Files opened in turn wait for a password prompt instead of replacing it: each locked file
+/// gets its own, and what follows it still opens once the prompt is answered or cancelled.
+#[test]
+fn files_opened_in_turn_wait_for_each_password_prompt() {
+    let dir = scratch("password-queue");
+    let file = |name: &str, password: Option<&str>| {
+        let path = dir.join(name);
+        let mut s = Session::new(wordcraft_doc::Document::from_text(name));
+        let mut params = json!({"path": path.to_string_lossy()});
+        if let Some(p) = password {
+            params["password"] = json!(p);
+        }
+        s.run("file.save", &params).unwrap();
+        path.to_string_lossy().to_string()
+    };
+    let (one, two, plain) = (file("one.docx", Some("sesame")), file("two.docx", Some("tahini")), file("plain.docx", None));
+    let asked = |a: &WordApp| match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { params, .. }) => params["path"].as_str().map(str::to_string),
+        _ => None,
+    };
+
+    let mut a = app();
+    let blank = a.session.blank_document();
+    a.replace_startup_document(blank);
+    a.open_in_turn([one.clone(), two.clone(), plain]);
+    assert_eq!(asked(&a), Some(one.clone()), "the second file doesn't replace the first's prompt");
+    a.open_next_in_turn();
+    assert_eq!(asked(&a), Some(one.clone()), "the rest wait while it is open");
+
+    // The right password: the prompt closes and the next file asks for its own.
+    a.dialog = None;
+    a.run("file.open", json!({"path": one, "password": "sesame"})).unwrap();
+    a.open_next_in_turn();
+    assert_eq!(asked(&a), Some(two), "the next locked file asks in its turn");
+
+    // Cancelled: the last file still opens.
+    a.dialog = None;
+    a.open_next_in_turn();
+    assert!(a.dialog.is_none());
+    assert!(body_text(&a).contains("plain.docx"), "{}", body_text(&a));
+}
+
 /// A template WordCraft can be handed, saved by the engine with `text` (and `password`).
 fn template_file(path: &std::path::Path, text: &str, password: Option<&str>) -> Vec<u8> {
     let mut s = Session::new(wordcraft_doc::Document::from_text(text));
@@ -3125,6 +3167,27 @@ fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_
     assert_eq!((a.session.path.as_ref(), a.session.password.is_some()), (None, false));
     assert_eq!(a.session.documents().len(), 1);
     assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Files opened in turn at startup: a template reopened after an update opens as itself (it was
+/// being edited), and one the platform hands the app starts a new document, in the same queue.
+#[test]
+fn a_reopened_template_opens_itself_and_one_from_the_platform_starts_a_new_document() {
+    let dir = scratch("queued-templates");
+    let edited = dir.join("Edited.dotx");
+    template_file(&edited, "Edited template", None);
+    let handed = dir.join("Handed.dotx");
+    template_file(&handed, "Handed template", None);
+
+    let mut a = app();
+    a.open_in_turn([edited.to_string_lossy().to_string()]);
+    a.open_from_platform_in_turn([handed.to_string_lossy().to_string()]);
+    let paths: Vec<_> = a.session.documents().into_iter().map(|d| d.path).collect();
+    assert!(paths.contains(&Some(edited.clone())), "the reopened template is itself: {paths:?}");
+    assert!(!paths.contains(&Some(handed.clone())), "the handed template isn't opened itself: {paths:?}");
+    assert_eq!(a.session.path, None, "the new document from the handed template is in front");
+    assert!(body_text(&a).contains("Handed template"), "{}", body_text(&a));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
