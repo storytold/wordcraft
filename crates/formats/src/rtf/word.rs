@@ -15,6 +15,9 @@ impl Reader {
         if w == "shppict" || self.start_header_footer_word(w) {
             return;
         }
+        if self.start_note_word(w) {
+            return;
+        }
         let dest = self.destination_for_word(w);
         if let Some(d) = dest {
             match d {
@@ -89,7 +92,7 @@ impl Reader {
                 }
                 self.skip_chars = self.st.uc;
             }
-            "uc" => self.st.uc = pv.clamp(0, 8) as usize,
+            "uc" => self.st.uc = pv.max(0) as usize,
             "plain" => {
                 self.st.fmt = Fmt { link: self.st.fmt.link.clone(), ..Default::default() };
                 self.st.rev = RevSt::default();
@@ -206,15 +209,24 @@ impl Reader {
             "clbrdrb" => self.cell_side = Some('b'),
             "clbrdrr" => self.cell_side = Some('r'),
             "brdrs" | "brdrth" | "brdrsh" | "brdrdb" | "brdrdot" | "brdrdash" | "brdrdashsm" | "brdrdashd" | "brdrdashdd" | "brdrhair"
-            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil"
-            | "brdrtbl"
+            | "brdrtriple" | "brdrthtnsg" | "brdrtnthsg" | "brdrtnthtnsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrtnthtnmg" | "brdrthtnlg"
+            | "brdrtnthlg" | "brdrtnthtnlg" | "brdrwavy" | "brdrwavydb" | "brdrnone" | "brdrnil" | "brdrtbl"
                 if self.cell_side.is_some() || self.st.border_side.is_some() =>
             {
                 use wordcraft_doc::props::{Border, BorderStyle};
                 let style = match w {
                     "brdrnone" | "brdrnil" | "brdrtbl" => BorderStyle::None,
                     "brdrth" => BorderStyle::Thick,
-                    "brdrdb" | "brdrthtnsg" | "brdrtnthsg" | "brdrthtnmg" | "brdrtnthmg" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrdb" | "brdrwavydb" => BorderStyle::Double,
+                    "brdrtnthsg" => BorderStyle::ThinThickSmallGap,
+                    "brdrthtnsg" => BorderStyle::ThickThinSmallGap,
+                    "brdrtnthtnsg" => BorderStyle::ThinThickThinSmallGap,
+                    "brdrtnthmg" => BorderStyle::ThinThickMediumGap,
+                    "brdrthtnmg" => BorderStyle::ThickThinMediumGap,
+                    "brdrtnthtnmg" => BorderStyle::ThinThickThinMediumGap,
+                    "brdrtnthlg" => BorderStyle::ThinThickLargeGap,
+                    "brdrthtnlg" => BorderStyle::ThickThinLargeGap,
+                    "brdrtnthtnlg" => BorderStyle::ThinThickThinLargeGap,
                     "brdrdot" => BorderStyle::Dotted,
                     "brdrdash" | "brdrdashsm" => BorderStyle::Dashed,
                     "brdrdashd" | "brdrdashdd" => BorderStyle::DotDash,
@@ -286,6 +298,22 @@ impl Reader {
             // Transparent wrapper: read the nested pict without changing the destination.
             "pict" => Some(Dest::Pict),
             "bkmkstart" => Some(Dest::Bookmark),
+            "atrfstart" | "atrfend" | "atnid" | "atnauthor" | "atndate" | "atntime" | "atnref"
+                if self.marks_on
+                    && self.hf.is_none()
+                    && self.st.dest == Dest::Body
+                    && self.sub.as_ref().is_none_or(|s| s.comment && !w.starts_with("atrf")) =>
+            {
+                self.atn_text.clear();
+                Some(Dest::Atn(match w {
+                    "atrfstart" => 1,
+                    "atrfend" => 2,
+                    "atnid" => 3,
+                    "atnauthor" => 4,
+                    "atndate" | "atntime" => 5,
+                    _ => 6,
+                }))
+            }
             "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
             | "listtext" | "object" | "nonshppict" | "xe" | "tc" | "txe" | "private" | "bkmkend" | "atnid" | "atnauthor" | "comment" | "shpinst"
             | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
@@ -298,6 +326,32 @@ impl Reader {
             }
             _ => None,
         }
+    }
+
+    /// The words that open a note or comment story of their own (`\footnote`, `\annotation`) and
+    /// the two inside a note: `\ftnalt` (an endnote) and `\chftn` (the note's own number).
+    fn start_note_word(&mut self, word: &str) -> bool {
+        if self.st.dest == Dest::Body {
+            match word {
+                "ftnalt" => {
+                    if let Some(sub) = self.sub.as_mut() {
+                        sub.endnote = true;
+                    }
+                    return true;
+                }
+                "chftn" if self.sub.as_ref().is_some_and(|s| !s.comment) => {
+                    let f = self.st.fmt.clone();
+                    self.push_mark('S', 0, f);
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        if !matches!(word, "footnote" | "annotation") || !self.marks_on || self.hf.is_some() || self.sub.is_some() || self.st.dest != Dest::Body {
+            return false;
+        }
+        self.start_sub(word == "annotation");
+        true
     }
 
     fn start_header_footer_word(&mut self, word: &str) -> bool {
@@ -389,6 +443,12 @@ impl Reader {
                 self.picture_word(word, value);
                 true
             }
+            Dest::Atn(kind) => {
+                if kind == 5 {
+                    self.record_atn_part(word, value);
+                }
+                !matches!(word, "u" | "uc")
+            }
             Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(word, "u" | "uc") => true,
             Dest::Info(_) | Dest::FldInst | Dest::Bookmark => false,
             Dest::OldProps(false) if matches!(word, "crauth" | "crdate") => {
@@ -409,6 +469,19 @@ impl Reader {
                 false
             }
             Dest::OldProps(true) | Dest::Body => false,
+        }
+    }
+
+    fn record_atn_part(&mut self, word: &str, value: i32) {
+        let v = value.clamp(0, 9999) as u32;
+        let c = self.atn_parts.get_or_insert((0, 1, 1, 0, 0));
+        match word {
+            "yr" => c.0 = v,
+            "mo" => c.1 = v,
+            "dy" => c.2 = v,
+            "hr" => c.3 = v,
+            "min" => c.4 = v,
+            _ => {}
         }
     }
 
@@ -507,76 +580,7 @@ impl Reader {
     }
 }
 
-/// The target of a `HYPERLINK "url"` (or `HYPERLINK "url" \l "bookmark"`, `HYPERLINK \l "bookmark"`) field instruction.
+/// The target of a `HYPERLINK` field instruction; `%22` is a quote, as the writer stores one.
 pub(super) fn hyperlink(instr: &str) -> Option<String> {
-    let t = instr.trim();
-    let rest = if t.get(..9).is_some_and(|h| h.eq_ignore_ascii_case("hyperlink")) {
-        t[9..].trim()
-    } else {
-        return None;
-    };
-    if rest.is_empty() {
-        return None;
-    }
-
-    let mut url: Option<String> = None;
-    let mut local: Option<String> = None;
-    let mut switch: Option<&str> = None;
-
-    let mut i = 0;
-    let bytes = rest.as_bytes();
-    while i < bytes.len() {
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-            i += 1;
-        }
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b'\\' {
-            let start = i;
-            i += 1;
-            while i < bytes.len() && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'*') {
-                i += 1;
-            }
-            switch = Some(&rest[start..i]);
-            continue;
-        }
-        let arg = if bytes[i] == b'"' {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'"' {
-                i += 1;
-            }
-            let val = &rest[start..i];
-            if i < bytes.len() && bytes[i] == b'"' {
-                i += 1;
-            }
-            val.to_string()
-        } else {
-            let start = i;
-            while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
-                i += 1;
-            }
-            rest[start..i].to_string()
-        };
-        let clean_arg = arg.replace("%22", "\"");
-        if switch.take() == Some("\\l") {
-            local = Some(clean_arg);
-        } else if url.is_none() {
-            url = Some(clean_arg);
-        }
-    }
-
-    match (url, local) {
-        (Some(u), Some(l)) if !u.is_empty() && !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            if u.contains('#') { Some(u) } else { Some(format!("{u}#{frag}")) }
-        }
-        (Some(u), _) if !u.is_empty() => Some(u),
-        (None, Some(l)) if !l.is_empty() => {
-            let frag = l.trim_start_matches('#');
-            Some(format!("#{frag}"))
-        }
-        _ => None,
-    }
+    wordcraft_doc::link::hyperlink_target(instr).map(|t| t.replace("%22", "\""))
 }
