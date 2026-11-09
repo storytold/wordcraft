@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::ids::NodeIds;
-use crate::journal::Journal;
+use crate::journal::{DedupWindow, Journal};
 use crate::undo::{UndoStacks, UndoStep};
 use crate::wire::{Applied, HistoryAction, NodeRef, Op, OpId, Reject, RejectCode, Version};
 
@@ -127,14 +127,22 @@ impl<M: Model> Room<M> {
     }
 
     /// Restore a room from a snapshot: the model is authoritative at `version`.
-    pub fn restore(model: M, version: Version, epoch: u64) -> Room<M> {
+    /// `dedup` is the `opId` window saved with that snapshot, so a client that
+    /// retries an operation from before the restart is answered from it instead
+    /// of applying it a second time.
+    pub fn restore(model: M, version: Version, epoch: u64, dedup: DedupWindow) -> Room<M> {
         let mut journal = Journal::new(10_000, 10_000);
-        journal.restore(version, epoch);
+        journal.restore_with(version, epoch, dedup);
         Room { model, journal, ids: NodeIds::new(), undo: UndoStacks::new(200), last_touch: HashMap::new(), last_structural: 0, nodes_changed: false }
     }
 
     pub fn version(&self) -> Version {
         self.journal.head()
+    }
+
+    /// The `opId` window to save with the next snapshot (ADR-0003, ADR-0005).
+    pub fn dedup(&self) -> DedupWindow {
+        self.journal.dedup()
     }
 
     /// Whether the room should write a snapshot now (ADR-0005: 500 operations).

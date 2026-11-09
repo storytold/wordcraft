@@ -158,13 +158,13 @@ impl AppState {
     }
 
     /// Write the room's snapshot (ADR-0005): model JSON plus the source `.docx`
-    /// when one is known.
+    /// when one is known, plus the `opId` window so retries survive a restart.
     fn persist(&self, doc: &str, room: &Arc<Mutex<RoomState>>, source: Option<Vec<u8>>) -> Result<(), String> {
-        let (version, epoch, model) = {
+        let (version, epoch, model, dedup) = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-            (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot())
+            (guard.room.version(), guard.room.epoch(), guard.room.model().snapshot(), guard.room.dedup())
         };
-        self.store.save(doc, &Snapshot { version, epoch, model, source })
+        self.store.save(doc, &Snapshot { version, epoch, model, source, dedup })
     }
 
     fn room_for(&self, doc: &str) -> Arc<Mutex<RoomState>> {
@@ -188,7 +188,7 @@ impl AppState {
                         document.kept = from_file.kept;
                     }
                     Some(RoomState {
-                        room: Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch),
+                        room: Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch, snapshot.dedup),
                         peers: HashMap::new(),
                         session: String::new(),
                         lease_seen: std::time::Instant::now(),

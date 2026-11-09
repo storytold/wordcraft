@@ -467,6 +467,35 @@ fn a_room_is_restored_from_disk() {
 }
 
 #[test]
+fn a_retry_after_a_snapshot_restore_is_not_applied_twice() {
+    let cfg = dev_config();
+    let doc = "doc-dedup-restore";
+    let state = AppState::new(cfg.clone());
+    let room = state.room_for(doc);
+    let node = {
+        let mut guard = room.lock().expect("room lock");
+        guard.room.join(None, false).nodes.first().expect("a node").id
+    };
+    let op = insert("alice", 1, 0, node, 0, "Hi");
+    let first = room.lock().expect("room lock").room.submit("alice", wordcraft_collab::room::Role::Editor, op.clone()).expect("apply");
+    assert_eq!(first.version, 1);
+    state.persist(doc, &room, None).expect("persist");
+    drop(room);
+    drop(state);
+
+    // A restart: the room comes back at version 1 with the saved `opId` window.
+    let restored = AppState::new(cfg);
+    let room = restored.room_for(doc);
+    let mut guard = room.lock().expect("room lock");
+    assert_eq!(guard.room.version(), 1);
+    let again = guard.room.submit("alice", wordcraft_collab::room::Role::Editor, op).expect("the retry is deduplicated");
+    assert_eq!(first, again, "the client gets the answer it lost");
+    assert_eq!(guard.room.version(), 1, "the repeat moves no version");
+    let text = guard.room.model().session().doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
+    assert_eq!(text, "Hi", "the operation is not applied a second time");
+}
+
+#[test]
 fn a_restored_room_takes_kept_markup_from_the_source_docx() {
     let cfg = dev_config();
     let doc = "doc-kept";

@@ -132,6 +132,33 @@ fn a_repeated_op_id_is_not_applied_twice() {
 }
 
 #[test]
+fn a_repeat_after_a_snapshot_restore_is_not_applied() {
+    let mut room = Room::new(TextModel::default());
+    let op = insert("a", 7, 0, 0, "x");
+    let first = room.submit("alice", Role::Editor, op.clone()).expect("first");
+    assert_eq!(room.version(), 1);
+
+    // A server restart: the snapshot carries the model at version 1 and the
+    // `opId` window that answered `first`.
+    let mut restored = Room::restore(TextModel { text: "x".to_string() }, 1, 0, room.dedup());
+    let again = restored.submit("alice", Role::Editor, op).expect("dedup after restore");
+
+    assert_eq!(first, again, "the stored answer comes back, delta included");
+    assert_eq!(restored.version(), 1, "the repeat moves no version");
+    assert_eq!(restored.model().text, "x", "the operation is not applied a second time");
+}
+
+#[test]
+fn a_restore_without_a_window_still_starts_clean() {
+    // Older snapshots have no window; the room behaves as before rather than
+    // refusing to open.
+    let mut restored = Room::restore(TextModel::default(), 3, 0, crate::journal::DedupWindow::default());
+    assert_eq!(restored.version(), 3);
+    let applied = restored.submit("alice", Role::Editor, insert("a", 1, 3, 0, "y")).expect("first op after restore");
+    assert_eq!(applied.version, 4);
+}
+
+#[test]
 fn viewer_cannot_write() {
     let mut room = Room::new(TextModel::default());
     let err = room.submit("carol", Role::Viewer, insert("c", 1, 0, 0, "x")).expect_err("viewer is refused");

@@ -65,6 +65,27 @@ not echoed back.
 again after a structural edit moves paths (ADR-0002). Operations are addressed
 by `(nodeId, off)`; index paths never travel as identity.
 
+## Snapshots on disk
+
+A room is snapshotted every 500 operations, after a commit, when its last peer
+leaves and on SIGTERM. The directory `<dataDir>/<doc>/` holds:
+
+| File | Content |
+|---|---|
+| `model.json` | `serde_json` of `wordcraft_doc::Document` |
+| `source.docx` | the file the model was read from, for `Document::kept` (ADR-0011) |
+| `dedup.json` | the `opId` window: stored `applied` answers at or before the snapshot version |
+| `meta` | `version=` and `epoch=` lines, written last as the commit marker |
+| `prev/` | the previous set of the four files, for one-step rollback |
+
+The window makes a retry survive a restart: a client that reconnects with the
+same `opId` after the server came back is answered with the stored `applied`
+frame and the version does not move. It is server state only — the wire is
+unchanged. A snapshot written before the window was stored has no `dedup.json`
+and still opens; only deduplication across that restart is missing. A retry of
+an operation accepted after the last snapshot is not covered, because the restore
+cannot replay the operation itself either.
+
 ## Limits (v1)
 
 - WebSocket frame ≤ 1 MiB.
@@ -145,5 +166,4 @@ skips over it.
 ## What is not here yet
 
 - Client connection and UI (feature flag `collab`), PR-4.
-- Snapshot persistence on disk and restart recovery.
 - Lease enforcement and token refresh.

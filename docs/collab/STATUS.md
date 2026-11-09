@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `d39ef64c` plus this status commit — 33 commits over
+- HEAD at this writing: `957d9005` plus this status commit — 34 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head `a6d6ae90` until
   it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -20,7 +20,10 @@ missing, and where the next session should start.
 - One envelope per operation: `{opId, baseVersion, epoch, kind, target, payload,
   history}`; the server is the single authority (ADR-0001/0003).
 - Journal with `opId` dedup, monotonic `version`, `epoch` for structural work,
-  tail replay and compaction (ADR-0003/0005).
+  tail replay and compaction (ADR-0003/0005). The dedup window is written with
+  the snapshot and read back on restore, so a client that retries an operation
+  (reconnect with the same `opId`) across a server restart is answered from the
+  window and the version does not move (§5.5).
 - Session node ids with tombstones and path shifts; a fresh node map is sent when
   an operation moves paths or adds ids (ADR-0002).
 - Per-user undo/redo as an operation with a `history` field: one version per undo,
@@ -201,8 +204,7 @@ Results at this writing:
   -- -D warnings` and `cargo test -p wordcraft-collab-web -p wordcraft-web`
   (14 tests) run from the committed manifest, green.
 - `trunk build` in `apps/wordcraft-web` (trunk 0.22.1) finished on the pin and
-  wrote `dist/web` (`index.html`, the JS glue, a 76.9 MB dev `_bg.wasm`).
-- Two-client host run (2026-11-09): Chrome 154 headless (SwiftShader WebGL), the
+  wrote `dist/web` (`index.html`, the JS glue, a 76.9 MB dev `_bg.wasm`).- Two-client host run (2026-11-09): Chrome 154 headless (SwiftShader WebGL), the
   same `dist/web` served from one origin, two iframes hosted by a page that
   speaks the `craft-web-host` contract, and the sync server on HS256 dev tokens
   with one `sid`. Both clients synchronized, 30 operations accepted with 0
@@ -225,6 +227,13 @@ Results at this writing:
   `theme::tests::interface_symbols_have_glyphs` — and all three live in files
   unchanged against `main`. `cargo metadata --locked` accepted the rebased lock
   and the CI run did not modify it.
+- After the `opId`-window change (§5.5) the affected crates were re-run on the
+  build host from the committed tree: `cargo test -p wordcraft-collab` (45
+  passed), `cargo test -p wordcraft-collab-server -p wordcraft-collab-client`
+  (29 + 13 passed, 1 ignored: the LibreOffice commit gate),
+  `cargo clippy -p wordcraft-collab -p wordcraft-collab-server
+  -p wordcraft-collab-client --all-targets -- -D warnings` and
+  `cargo fmt --all -- --check`, all green.
 
 ## 4. Known limitations
 
@@ -245,8 +254,10 @@ Results at this writing:
   real cabinet page and its storage, and the visible commit status stay manual.
 - A step of several operations is now one transaction (every inverse or none);
   commands still have no inverse and act as an undo barrier. The `opId` dedup
-  window is in memory and is cleared when a room is restored from a snapshot, so
-  a retry that crosses a restart is not deduplicated yet.
+  window travels with the snapshot (§5.5), so a retry across a restart is
+  deduplicated; the window is bounded at 10 000 answers, so a retry after more
+  than that (or of an operation accepted after the last snapshot, which the
+  restore cannot replay either) is not covered.
 - A command that allocates ids (comments, tables, shapes, footnotes…) makes
   replicas request a snapshot after it; there is no id delta on the wire yet.
 - Node ids address top-level paragraphs and story parts; a table cell has no id,
@@ -329,12 +340,12 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    and the pin is acceptable to the maintainers (GitHub reports
    `action_required` for fork PRs until a maintainer approves, and the PR shows
    `CONFLICTING` until the force-push).
-3. Optional hardening: command inverses for the common engine commands, persisting
-   the `opId` dedup window across a snapshot restore, table-cell node ids and
-   property primitives, offline queue, or a join broadcast that carries the role
-   before the first presence frame (presence already carries it, §5.3).
-   (The multi-operation undo transaction is done:
-   `a_step_of_several_operations_lands_as_one_transaction`.)
+3. Optional hardening: command inverses for the common engine commands, table-cell
+   node ids and property primitives, offline queue, or a join broadcast that
+   carries the role before the first presence frame (presence already carries it,
+   §5.3). (The multi-operation undo transaction is done:
+   `a_step_of_several_operations_lands_as_one_transaction`; the `opId` window now
+   survives a snapshot restore: §5.5.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
@@ -423,6 +434,59 @@ them). The branch was rebased in place, no commit dropped:
 **Still to do by hand:** force-push the rebased branch to `copoka/wordcraft`
 (`git push --force-with-lease fork feature/realtime-collaboration`); the PR page
 stays `CONFLICTING` until then.
+
+### 5.5 The `opId` window survives a snapshot restore (run 2026-11-09)
+
+§4 recorded the gap: the dedup window lived in `Journal` memory only and
+`Journal::restore` cleared it, so after the server came back from a snapshot a
+client retrying an operation it never saw acknowledged (a reconnect resends the
+unconfirmed queue with the same `opId`) had that operation applied twice.
+
+**What is stored.** The window is server-side state, so nothing about it goes on
+the wire and the protocol is unchanged — a retry is still an ordinary
+`clientMessage{type:"op"}` with the same `opId`, and the answer is still
+`applied{...}`.
+
+- `crates/collab/src/journal.rs`: `DedupWindow` (`{entries: [Applied…]}`, oldest
+  first) plus `Journal::dedup()` and `Journal::restore_with(version, epoch,
+  window)`. A restored window is clamped to answers at or before the restored
+  head (an answer past the head would hide work the snapshot lost) and to the
+  journal's bound (10 000), dropping the oldest first, exactly as a live journal
+  evicts.
+- `crates/collab/src/room.rs`: `Room::restore(model, version, epoch, dedup)` and
+  `Room::dedup()`; `submit` already checks the window before `journal.check`, so
+  the restored room answers a repeat with the stored `Applied` (delta included)
+  and neither applies the operation nor bumps the version.
+- `apps/collab-server/src/store.rs`: `Snapshot` gains `dedup`; it is written to
+  `dedup.json` next to `model.json`/`meta`/`source.docx`, rotated with the
+  previous snapshot, and written before `meta` (the commit marker). A snapshot
+  without `dedup.json` (written before this change) or with an unreadable one
+  loads with an empty window: the document still opens, and dedup across the
+  restart is the only thing missing.
+- `apps/collab-server/src/lib.rs`: `persist` reads `room.dedup()` under the same
+  lock as the version and the model, so the window always matches the snapshot's
+  version; `room_for` passes `snapshot.dedup` to `Room::restore`.
+
+**Tests.**
+
+- `the_dedup_window_survives_a_restore`, `a_restore_drops_answers_newer_than_its_head`,
+  `a_restored_window_respects_its_bound` (`crates/collab/src/journal.rs`).
+- `a_repeat_after_a_snapshot_restore_is_not_applied` (room, fake model),
+  `a_restore_without_a_window_still_starts_clean` (`crates/collab/src/tests.rs`).
+- `a_retry_after_a_snapshot_restore_is_not_applied_twice`
+  (`apps/collab-server/src/tests.rs`): a real `AppState` and data directory — one
+  accepted `insert_text`, `persist`, drop the state, a new `AppState` on the same
+  directory — then the same `opId` again: the stored `Applied` comes back, the
+  version stays 1 and the text stays `Hi`.
+- `the_op_id_window_round_trips_with_the_snapshot`, `a_snapshot_without_a_window_still_opens`,
+  `a_corrupt_window_does_not_lose_the_document` (`apps/collab-server/src/store.rs`).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab` 45 passed; `cargo test -p wordcraft-collab-server -p
+wordcraft-collab-client` 29 passed + 13 passed, 1 ignored (the LibreOffice commit
+gate, needs `soffice`); `cargo clippy -p wordcraft-collab -p wordcraft-collab-server
+-p wordcraft-collab-client --all-targets -- -D warnings` clean; `cargo fmt --all
+-- --check` clean.
 
 ## 6. Where things live
 

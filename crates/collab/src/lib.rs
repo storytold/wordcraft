@@ -24,7 +24,7 @@ pub mod undo;
 pub mod wire;
 
 pub use ids::{NodeId, NodeIds};
-pub use journal::{Entry, Journal};
+pub use journal::{DedupWindow, Entry, Journal};
 pub use room::{Effect, JoinPlan, Model, Role, Room};
 pub use undo::{UndoStacks, UndoStep};
 pub use wire::{Applied, ClientMsg, NodeRef, Op, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
