@@ -76,7 +76,10 @@ a save that doesn't touch it:
 
 - a paragraph or table WordCraft hasn't changed keeps its own markup, with what it names (its
   automatic styles, common styles, font faces, and the package files and folders they refer to);
-- the file's own style and list definitions, gradients and fill pictures, except a definition WordCraft has changed, which is written from the model on its own, and one it has deleted;
+- the file's own style and list definitions, gradients and fill pictures, except a style
+  WordCraft has changed, which is written from the model on its own under the file's name for
+  it, and one it has deleted. The file's list styles always stay as read: WordCraft writes the
+  lists it numbers as automatic list styles of its own;
 - while the page setup didn't change, its page layouts and master pages, and each section starts
   with the master page it started with;
 - named sections around unedited paragraphs, the document properties WordCraft doesn't model,

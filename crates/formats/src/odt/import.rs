@@ -986,6 +986,11 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
             k.keep_file(path, bytes);
         }
         k.section_masters = section_masters;
+        // Which of the file's styles became which of the document's (by kept key): a save names
+        // an edited style's definition, parent and next style by the file's names for them.
+        let paras = named_odt.iter().map(|n| (format!("common:{n}"), super::styles::style_id(n)));
+        let texts = char_styles.iter().map(|(n, id)| (format!("common:{n}|text"), id.clone()));
+        k.style_ids = paras.chain(texts).collect();
     }
     doc.seal_kept();
     let (prints, pages) = (super::package::style_prints(&doc), wordcraft_doc::kept::pages_fingerprint(&doc));

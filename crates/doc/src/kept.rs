@@ -77,6 +77,10 @@ pub struct KeptXml {
     /// What the format would write for each style definition when read, by [`KeptXml::defs`]'
     /// key, as a hash: while a definition's is the same, the file's own is written as it was.
     pub style_prints: BTreeMap<String, u64>,
+    /// The style id the reader read each of the file's styles into, by [`KeptXml::defs`]' key:
+    /// only those it read (its text's styles and what they derive from), not every style the
+    /// file defines.
+    pub style_ids: BTreeMap<String, String>,
     /// The document's page setup's [`pages_fingerprint`] when read: while it is the same, the
     /// file's own page layouts and master pages can be written as they were.
     pub pages_fp: Option<u64>,
