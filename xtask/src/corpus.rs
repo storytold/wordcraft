@@ -60,12 +60,21 @@ fn download_and_verify(path: &Path) -> Result<Vec<u8>, String> {
     curl.args(["-fsSL", "-o"]).arg(path).arg(PNGSUITE_URL);
     crate::run(curl, &format!("curl {PNGSUITE_URL}"))?;
     let bytes = std::fs::read(path).map_err(|e| format!("read {}: {e}", path.display()))?;
-    let got = hex(&sha256(&bytes));
-    if got != PNGSUITE_SHA256 {
+    if let Err(e) = verify_digest(&bytes) {
         let _ = std::fs::remove_file(path);
-        return Err(format!("PngSuite archive digest mismatch: expected {PNGSUITE_SHA256}, got {got}; refused, nothing extracted"));
+        return Err(e);
     }
     Ok(bytes)
+}
+
+/// Check `bytes` against the pinned [`PNGSUITE_SHA256`]; a mismatch is refused before any
+/// decompression or extraction runs, so a tampered download is never unpacked (#1357).
+fn verify_digest(bytes: &[u8]) -> Result<(), String> {
+    let got = hex(&sha256(bytes));
+    if got != PNGSUITE_SHA256 {
+        return Err(format!("PngSuite archive digest mismatch: expected {PNGSUITE_SHA256}, got {got}; refused, nothing extracted"));
+    }
+    Ok(())
 }
 
 /// Write the regular files of the tar stream `tar` into `dir`; how many of them are PNG files.
@@ -260,6 +269,7 @@ mod tests {
     fn skips_links_and_directories() {
         let mut tar = tar_header("basi0g01.png", b"real", b'0');
         tar.extend_from_slice(&tar_header("evil", b"", b'2')); // symlink
+        tar.extend_from_slice(&tar_header("evil2", b"", b'1')); // hard link
         tar.extend_from_slice(&tar_header("sub/", b"", b'5')); // directory
         tar.extend_from_slice(&[0u8; 1024]);
         let entries = parse_tar(&tar).unwrap();
@@ -312,6 +322,44 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         assert!(extract(&tar, &dir).is_err());
         assert!(!dir.exists(), "nothing is written before a member is refused");
+    }
+
+    #[test]
+    fn refuses_an_absolute_member_and_writes_nothing() {
+        let mut tar = tar_header("/etc/passwd", b"evil", b'0');
+        tar.extend_from_slice(&[0u8; 1024]);
+        assert!(parse_tar(&tar).is_err());
+        let dir = std::env::temp_dir().join(format!("wordcraft-corpus-absolute-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(extract(&tar, &dir).is_err());
+        assert!(!dir.exists(), "nothing is written before a member is refused");
+    }
+
+    #[test]
+    fn refuses_a_digest_mismatch() {
+        // `verify_digest` is the gate in front of gunzip/extract: a tampered download
+        // is refused here, so nothing downstream ever runs on it (#1357).
+        let err = verify_digest(b"tampered PngSuite bytes").unwrap_err();
+        assert!(err.contains("digest mismatch"), "{err}");
+        assert!(verify_digest(b"").is_err());
+    }
+
+    #[test]
+    fn refuses_a_truncated_gzip_stream() {
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(b"hello corpus").unwrap();
+        let gz = enc.finish().unwrap();
+        let half = gz.len() / 2;
+        assert!(gunzip(&gz[..half]).is_err(), "truncated gzip must be refused");
+    }
+
+    #[test]
+    fn refuses_an_oversize_stream() {
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(&vec![0u8; (MAX_UNPACKED + 1) as usize]).unwrap();
+        let gz = enc.finish().unwrap();
+        let err = gunzip(&gz).unwrap_err();
+        assert!(err.contains("far larger"), "{err}");
     }
 
     /// A 512-byte tar header for `name`, followed by `data` padded to a 512-byte block.
