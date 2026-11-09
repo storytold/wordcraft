@@ -484,17 +484,31 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let bytes = read_document(path)?;
+    open_read(path, &bytes, password, region)
+}
+
+/// [`open_path`] for a file of at most `max` bytes, for a file read for what it lists (AutoMark's
+/// concordance file) rather than to edit: a larger one is refused before it is read.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_path_up_to(path: &std::path::Path, max: u64) -> Result<Document, String> {
+    let bytes = read_document_up_to(path, max)?;
+    open_read(path, &bytes, None, &wordcraft_geom::Region::default()).map(|(doc, _)| doc)
+}
+
+/// The document in `bytes`, read from `path`.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_read(path: &std::path::Path, bytes: &[u8], password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let name = path.to_string_lossy();
     if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
         // Pictures referenced by a relative path load from beside the HTML file.
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
-        let html = wordcraft_formats::html::decode(&bytes);
+        let html = wordcraft_formats::html::decode(bytes);
         let mut doc = wordcraft_formats::html::import_on(&html, &|src| images.load(src), &region_page(region));
         fit_pictures(&mut doc);
         opened(&mut doc);
         return Ok((doc, false));
     }
-    open_bytes_in(&name, &bytes, password, region)
+    open_bytes_in(&name, bytes, password, region)
 }
 
 /// Largest document file opened by path.
@@ -507,18 +521,29 @@ const MAX_DOCUMENT: u64 = 2 << 30;
 /// opens a file whose name isn't valid Unicode through `file.open`'s `data` (#1440).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_document(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    read_document_up_to(path, MAX_DOCUMENT)
+}
+
+/// [`read_document`] for a file of at most `max` bytes (at most 2 GB whatever `max` says).
+#[cfg(not(target_arch = "wasm32"))]
+fn read_document_up_to(path: &std::path::Path, max: u64) -> Result<Vec<u8>, String> {
+    let max = max.min(MAX_DOCUMENT);
+    let too_large = || {
+        let limit = if max >= 1 << 30 { format!("{} GB", max >> 30) } else { format!("{} MB", (max >> 20).max(1)) };
+        format!("{}: file is larger than {limit}", path.display())
+    };
     crate::file_access::check_read(&path.to_string_lossy())?;
     let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
     if !meta.is_file() {
         return Err(format!("{}: not a file", path.display()));
     }
-    if meta.len() > MAX_DOCUMENT {
-        return Err(format!("{}: file is larger than 2 GB", path.display()));
+    if meta.len() > max {
+        return Err(too_large());
     }
     // Checked again on the opened file, which may not be the one just looked at.
-    match read_regular_file(path, MAX_DOCUMENT) {
-        Some(bytes) if bytes.len() as u64 <= MAX_DOCUMENT => Ok(bytes),
-        Some(_) => Err(format!("{}: file is larger than 2 GB", path.display())),
+    match read_regular_file(path, max) {
+        Some(bytes) if bytes.len() as u64 <= max => Ok(bytes),
+        Some(_) => Err(too_large()),
         None => Err(format!("{}: could not be read as a file", path.display())),
     }
 }
@@ -828,6 +853,11 @@ pub fn write_file(path: &str, _bytes: &[u8]) -> Result<(), String> {
 #[cfg(target_arch = "wasm32")]
 pub fn open_path_with(path: &std::path::Path, _password: Option<&str>) -> Result<(Document, bool), String> {
     Err(format!("{}: files are opened through the browser on the web", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn open_path_up_to(path: &std::path::Path, _max: u64) -> Result<Document, String> {
+    open_path_with(path, None).map(|(doc, _)| doc)
 }
 
 #[cfg(target_arch = "wasm32")]

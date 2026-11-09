@@ -4696,10 +4696,11 @@ fn hostile_junk() -> [serde_json::Value; 8] {
     ]
 }
 
-/// `file.*`, `insert.picture` and `insert.textFromFile`: `hostile_file_params_never_panic` runs
-/// them, held to a folder of its own, and `hostile_params_never_panic` every other command.
+/// `file.*`, `insert.picture`, `insert.textFromFile` and `references.autoMark`:
+/// `hostile_file_params_never_panic` runs them, held to a folder of its own, and
+/// `hostile_params_never_panic` every other command.
 fn reaches_files(id: &str) -> bool {
-    id.starts_with("file.") || id == "insert.picture" || id == "insert.textFromFile"
+    id.starts_with("file.") || matches!(id, "insert.picture" | "insert.textFromFile" | "references.autoMark")
 }
 
 #[test]
@@ -4723,9 +4724,10 @@ fn hostile_params_never_panic() {
     }
 }
 
-/// `file.*`, `insert.picture` and `insert.textFromFile` take junk params and paths to files they
-/// can't use (#3719). They may read only `in` and write only `out`, so a save can't replace a file
-/// another run is meant to find broken, and nothing outside those folders is touched.
+/// `file.*`, `insert.picture`, `insert.textFromFile` and `references.autoMark` take junk params
+/// and paths to files they can't use (#3719). They may read only `in` and write only `out`, so a
+/// save can't replace a file another run is meant to find broken, and nothing outside those
+/// folders is touched.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn hostile_file_params_never_panic() {
