@@ -939,9 +939,15 @@ struct StyledCell {
     para: ParaProps,
 }
 
-fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>, (ri, ci): (usize, usize), ncols: usize) -> Option<StyledCell> {
+fn styled_cell(
+    t: &Table,
+    style: Option<&wordcraft_doc::styles::TableStyleProps>,
+    bands: &wordcraft_doc::styles::TableBands,
+    (ri, ci): (usize, usize),
+    ncols: usize,
+) -> Option<StyledCell> {
     use wordcraft_doc::props::{Border, BorderStyle, Borders};
-    use wordcraft_doc::styles::{PartSet, TableBands, TablePart};
+    use wordcraft_doc::styles::{PartSet, TablePart};
     let row = t.rows.get(ri)?;
     let cell = row.cells.get(ci)?;
     let nrows = t.rows.len();
@@ -957,8 +963,7 @@ fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>
     };
     let mut part_borders = Vec::new();
     if let Some(st) = style {
-        let bands = TableBands::new(&t.props.look, Some(&st.parts), t.rows.iter().map(|r| r.props.header));
-        for part in PartSet::of_cell(&bands, (ri, nrows), (g, span, ncols)).iter() {
+        for part in PartSet::of_cell(bands, (ri, nrows), (g, span, ncols)).iter() {
             let f = st.part(part);
             out.fill = f.fill.or(out.fill);
             out.v_align = f.v_align.or(out.v_align);
@@ -1047,13 +1052,14 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     // Formats that keep cell formatting get the table style's and the table's borders cell by cell.
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
     let bake = tracked.paras;
+    let bands = wordcraft_doc::styles::TableBands::new(&t.props.look, style.as_ref().map(|s| &s.parts), t.rows.iter().map(|r| r.props.header));
     let ncols =
         t.rows.iter().map(|r| r.first_grid() + r.cells.iter().map(|c| c.span()).sum::<usize>() + r.grid_after()).max().unwrap_or(0).max(t.grid.len());
     for (ri, r) in t.rows.iter().enumerate() {
         let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
         let mut cells = Vec::new();
         for (ci, c) in r.cells.iter().enumerate() {
-            let styled = if bake { styled_cell(t, style.as_ref(), (ri, ci), ncols) } else { None };
+            let styled = if bake { styled_cell(t, style.as_ref(), &bands, (ri, ci), ncols) } else { None };
             let mut rowspan = 1;
             if c.props.vmerge == VMerge::Restart {
                 let g = t.grid_col(ri, ci);
