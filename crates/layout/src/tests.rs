@@ -9043,6 +9043,33 @@ fn widow_control_leaves_two_lines_of_a_split_footnote_on_the_next_page() {
 }
 
 #[test]
+fn orphan_control_keeps_two_lines_of_a_split_footnote_with_its_reference() {
+    crate::test_fonts();
+    // Observed in Word for Mac 16.113.4: rather than leave a note paragraph's first line alone at
+    // the bottom of the page, the line with the reference goes on to the next page with it.
+    let first_piece = |body: usize, widow: bool| {
+        let (mut d, id) = long_note_after(body, 60, widow);
+        // Body lines as tall as the note's, so the room under the text shrinks a note line at a time.
+        for block in &mut d.body {
+            if let Block::Para(para) = Arc::make_mut(block) {
+                para.props.space_after = Some(0.0);
+            }
+        }
+        let l = lay(&d);
+        let refs = l.caret(&Pos::body(body - 1, 4)).unwrap().page;
+        let pieces = note_pieces(&l, id);
+        (refs, pieces.first().map(|p| (p.0, p.2 - p.1)))
+    };
+    let orphans: Vec<usize> = (20..60).filter(|&b| first_piece(b, false).1.is_some_and(|p| p.1 == 1)).collect();
+    assert!(!orphans.is_empty(), "no body length leaves one line of the note with its reference");
+    for b in orphans {
+        let (refs, piece) = first_piece(b, true);
+        assert_eq!(piece.map(|p| p.0), Some(refs), "body of {b} lines: the note starts on its reference's page");
+        assert!(piece.is_some_and(|p| p.1 >= 2), "body of {b} lines: {piece:?}");
+    }
+}
+
+#[test]
 fn short_footnotes_stay_whole() {
     crate::test_fonts();
     let mut d = Document::from_text(&"Body text line.\n".repeat(60));

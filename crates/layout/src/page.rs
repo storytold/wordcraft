@@ -184,11 +184,12 @@ impl PageBuilder<'_> {
             // always leaves something here (its first line, or all of it if it can't be split),
             // so continuing ends.
             let first = placed.is_empty();
-            let cuts = n.cuts();
+            // Widow/orphan control in the note keeps two of a paragraph's lines on either side;
+            // the page's first note gives that up before it gives up the page's room.
             let room = room - self.seps.notice_h();
-            // Widow control in the note leaves two of a paragraph's lines on the next page.
-            let ok = |c: &&f32| **c <= room + 0.01 && !n.leaves_widow(**c);
-            match cuts.iter().rev().find(ok).or(cuts.first().filter(|_| first)).copied() {
+            let fit = |cuts: Vec<f32>| cuts.into_iter().rev().find(|&c| c <= room + 0.01);
+            let cut = fit(n.kept_cuts()).or_else(|| if first { fit(n.cuts()).or(n.cuts().first().copied()) } else { None });
+            match cut {
                 Some(c) => {
                     let (head, tail) = n.split(c);
                     notice_y = Some(y + head.h);

@@ -223,23 +223,31 @@ impl NoteBox {
         cuts
     }
 
-    /// Whether splitting at `cut` leaves the last line of a paragraph with widow control alone
-    /// on the next page.
-    pub(crate) fn leaves_widow(&self, cut: f32) -> bool {
+    /// Whether widow/orphan control in the note's paragraphs forbids splitting at `cut`: a
+    /// paragraph's first line alone above it (an orphan) or its last line alone below it (a
+    /// widow), as in Word for Mac 16.113.4.
+    pub(crate) fn breaks_widow_control(&self, cut: f32) -> bool {
         self.items.iter().filter(|it| self.splittable(it)).any(|it| {
             let Placed::Lines { para, l0, l1, y, .. } = it else { return false };
             let Some(first) = para.lines.get(*l0) else { return false };
-            para.rp.widow_control
-                && *l1 == para.lines.len()
-                && *l1 >= 2
-                && para.lines.get(*l1 - 2).is_some_and(|l| (y + l.top - first.top + l.height - cut).abs() < 0.01)
+            let ends_at = |k: usize| para.lines.get(k).is_some_and(|l| (y + l.top - first.top + l.height - cut).abs() < 0.01);
+            let n = para.lines.len();
+            para.rp.widow_control && n >= 2 && ((*l0 == 0 && *l1 >= 2 && ends_at(0)) || (*l1 == n && ends_at(n - 2)))
         })
     }
 
-    /// The least of the note that must stay with its reference: its first line (all of it if it
-    /// can't be split).
+    /// Where the note may be split with its paragraphs' widow/orphan control kept, ascending.
+    pub(crate) fn kept_cuts(&self) -> Vec<f32> {
+        let mut cuts = self.cuts();
+        cuts.retain(|&c| !self.breaks_widow_control(c));
+        cuts
+    }
+
+    /// The least of the note that must stay with its reference: its first line, or more under
+    /// widow/orphan control (all of it if it can't be split).
     pub(crate) fn first_piece(&self) -> f32 {
-        self.cuts().first().copied().unwrap_or(self.h).min(self.h)
+        // Widow/orphan control may keep more lines together (two, or a short paragraph whole).
+        self.kept_cuts().first().copied().unwrap_or(self.h).min(self.h)
     }
 
     /// Split the note at line bottom `cut`: the part above (`cut` tall) and the rest, moved up to
