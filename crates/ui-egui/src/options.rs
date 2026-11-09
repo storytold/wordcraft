@@ -225,6 +225,21 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
     interface_size_picker(app, ui);
+    ui.horizontal(|ui| {
+        use wordcraft_engine::cmd::view::PaperColor;
+        let label = ui.label(tl!("Screen paper color:"));
+        let selected = app.session.prefs.paper_color;
+        let combo = craft_ui::ComboBox::from_id_salt("screen_paper_color").selected_text(tl!(selected.label())).width(220.0).show_ui(ui, |ui| {
+            for color in PaperColor::ALL {
+                if ui.selectable_label(selected == color, tl!(color.label())).clicked() {
+                    let _ = app.run("view.paperColor", json!({"value": color}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id).on_hover_text(tl!(
+            "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
+        ));
+    });
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -313,6 +328,9 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     }
     numeral_picker(app, ui);
     ui.add_space(8.0);
+    section(ui, "Status bar");
+    status_count_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
     ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));
@@ -337,15 +355,13 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Dictionaries");
-    dictionaries(app, ui);
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
-/// usual places, saved with the settings, and the dictionary each language found. An app started
-/// from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`, so this is how it finds a
-/// dictionary kept in a folder of the user's own.
+/// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
+/// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
+/// own. Each language's status ("Your own dictionary") is in Your languages above, and the file
+/// each language found is under Dictionary files.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
     let id = egui::Id::unique("options_dictionaries_folder");
@@ -373,6 +389,15 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
+    note(ui, "An installed Language pack is used after this folder.");
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!("Dictionary files")).strong());
+    dictionary_files(ui);
+}
+
+/// The dictionary each language found (#1063): its file, "no dictionary found", or why the file
+/// couldn't be read, looked up again after the folder changes.
+fn dictionary_files(ui: &mut Ui) {
     // The dictionary each language found, looked up again after the folder changes.
     let found_id = egui::Id::unique("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
@@ -519,7 +544,11 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     };
     ui.label(RichText::new(text).small().weak());
     ui.add_space(8.0);
-    crate::language_packs::options_section(app, ui);
+    crate::language_packs::your_languages_section(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Dictionaries");
+    dictionaries(app, ui);
+    crate::language_packs::add_language_window(app, &ui.ctx().clone());
 }
 
 /// Draws Accessibility options: the animation setting and Read Aloud speed and skip-citations.
@@ -637,6 +666,11 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
     }
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        ui.add_space(8.0);
+        section(ui, "Linux display server");
+        display_server_picker(app, ui);
+    }
     // The web app has no folders to name.
     if !cfg!(target_arch = "wasm32") {
         ui.add_space(8.0);
@@ -710,6 +744,25 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What the status bar's live count shows (#2797): words (as Word's status bar counts), characters
+/// with spaces, or characters without spaces. Right-clicking the count in the status bar offers
+/// the same choices.
+fn status_count_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::StatusCount;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Status bar count:"));
+        let combo = craft_ui::ComboBox::from_id_salt("status_count").selected_text(tl!(app.ui.status_count.label())).width(220.0).show_ui(ui, |ui| {
+            for c in StatusCount::ALL {
+                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "You can also right-click the count in the status bar to change it.");
+}
+
 /// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it
 /// draws at, or an absolute size, so "100%" means one screen pixel per point.
 fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
@@ -769,6 +822,25 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
         };
         note(ui, reported);
     }
+}
+
+/// Linux display server (#2184): Automatic, Wayland or X11 (XWayland). The desktop app reads it
+/// before the window opens, so a change applies at the next launch.
+fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::DisplayServer;
+    let name = |d: DisplayServer| if d == DisplayServer::Auto { tl!(d.label()) } else { d.label() };
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Display server:"));
+        let combo = craft_ui::ComboBox::from_id_salt("display_server").selected_text(name(app.ui.display_server)).width(220.0).show_ui(ui, |ui| {
+            for d in DisplayServer::ALL {
+                if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
+                    let _ = app.run("ui.displayServer", json!({"value": d.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "Applies the next time WordCraft starts.");
 }
 
 /// Interface language: follow the system (the default) or pick one (#8).

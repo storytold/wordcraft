@@ -128,7 +128,16 @@ fn a_bookmark_marking_a_place_is_an_i_beam_and_hidden_ones_show_nothing() {
     assert_eq!(b.iter().map(facing).collect::<Vec<_>>(), [1, -1]);
     // So does a picture: a bookmark round an inline picture alone isn't a place.
     let mut d = Document::from_text("Hello world");
-    let pic = InlineObject::Image { media: "m".into(), w: 30.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: "m".into(),
+        w: 30.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     d.insert_object(&Pos::body(0, 5), pic, &CharProps::default()).unwrap();
     bookmark(&mut d, 0, (5, 8), "Picture");
     let l = lay(&d);

@@ -16,7 +16,7 @@ use wordcraft_doc::props::VMerge;
 use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::table::{Cell, Row, Table};
-use wordcraft_doc::{Block, Blocks, Document, Paragraph, Revision, RevisionKind};
+use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef};
 
 use crate::Session;
 
@@ -210,6 +210,51 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
             r.blocks(&pb.blocks, &mut pa.blocks, 0);
         }
     }
+}
+
+/// Builds the tracked paragraph-property change for a command that also changes the paragraph's
+/// text. The ordinary after-command recorder deliberately compares only paragraphs with identical
+/// text, so mixed text/paragraph-format transformations use this before assigning their props.
+/// Made once per command, before it creates revisions: it keeps the revisions as they were then
+/// (all `Recorder::own` needs), instead of copying the list for every paragraph.
+pub(crate) struct ParaPropTracker {
+    before: Vec<Revision>,
+}
+
+impl ParaPropTracker {
+    pub(crate) fn new(s: &Session) -> Self {
+        let tracking = s.doc.settings.track_changes && s.prefs.markup.track_formatting;
+        ParaPropTracker { before: if tracking { s.doc.revisions.clone() } else { Vec::new() } }
+    }
+
+    pub(crate) fn changed(&self, s: &mut Session, before: &ParaProps, after: &ParaProps) -> Option<Box<PropChange<ParaProps>>> {
+        if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
+            return after.fmt_change.clone();
+        }
+        let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &self.before, revisions: &mut s.doc.revisions, rid: None };
+        r.change(before, after, ParaProps::formatting, |p| &p.fmt_change)
+            .map(|Replacement(change)| change)
+            .unwrap_or_else(|| after.fmt_change.clone())
+    }
+}
+
+/// Record the paragraph formatting a command changed on the paragraph at `path` whose text it also
+/// changed, which [`record`] doesn't compare: `before` is the paragraph's properties before the
+/// command. As in [`record`], the author's own earlier change keeps the formatting before it and
+/// another author's is superseded.
+pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, before: &ParaProps) -> Result<(), crate::CmdError> {
+    if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
+        return Ok(());
+    }
+    let Some(after) = s.doc.para(story, path).map(|p| p.props.clone()) else { return Ok(()) };
+    let revisions = s.doc.revisions.clone();
+    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &revisions, revisions: &mut s.doc.revisions, rid: None };
+    if let Some(Replacement(want)) = r.change(before, &after, ParaProps::formatting, |p| &p.fmt_change) {
+        let p = s.doc.para_mut(story, path)?;
+        p.props.fmt_change = want;
+        p.touch();
+    }
+    Ok(())
 }
 
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
