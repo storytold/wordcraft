@@ -8,7 +8,7 @@ use crate::{WordApp, icons};
 
 /// The page button the Backstage focused for the open page (#1012), while it keeps the focus.
 pub(crate) fn page_focus_id() -> egui::Id {
-    egui::Id::new("wc_backstage_page_focus")
+    egui::Id::unique("wc_backstage_page_focus")
 }
 
 /// The side menu: page id, label and icon (#1714).
