@@ -31,6 +31,9 @@ pub(super) fn language(s: &mut Session, v: &Value) -> CmdResult {
     if p::bool(v, "default") == Some(true) {
         let l = lang.clone().ok_or_else(|| CmdError::Params("`default` needs `lang`".into()))?;
         Arc::make_mut(&mut s.doc.styles).default_chr.lang = Some(l.clone());
+        // When setting a new default language, also update the default no-proof setting.
+        // If noProof was not explicitly passed, default to false (proofing enabled).
+        Arc::make_mut(&mut s.doc.styles).default_chr.no_proof = no_proof;
         // A Normal style that names its own language follows the new default.
         if let Some(n) = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "Normal")
             && n.chr.lang.is_some()

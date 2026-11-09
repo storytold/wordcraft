@@ -256,7 +256,6 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
-    // An empty file opens as a new blank document that saves back to it (#1384).
     let (doc, encrypted) = read_document(s, path, v)?;
     match s.used_because() {
         None => s.set_document(doc),
