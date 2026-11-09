@@ -766,8 +766,7 @@ fn table_style_whole_table_shading_and_margins() {
     assert_eq!(whole.para.align, None);
     assert_eq!(whole.chr.bold, Some(true));
     assert_eq!(whole.chr.color, None);
-    assert_eq!(whole.table.as_ref().unwrap().fill, None);
-    assert_eq!(whole.table.as_ref().unwrap().cell_margins, None);
+    assert!(whole.table.is_none(), "a wholeTable region adds nothing to the style");
     let merged = d.styles.table_style("Whole").unwrap();
     assert_eq!(merged.para.space_after, Some(0.0), "from Base");
     assert_eq!(merged.para.align, None);

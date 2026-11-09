@@ -5059,8 +5059,11 @@ fn table_style_shading_and_no_colour_paint_as_in_word() {
         t.props.look.header_row = true;
         t.rows[1].cells[0].props.shading_auto = own_auto;
         let l = lay(&d);
-        let cells: Vec<(usize, usize, wordcraft_geom::Rect)> =
-            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, row, cell, .. } = i { Some((*row, *cell, *rect)) } else { None }).collect();
+        let cells: Vec<(usize, usize, wordcraft_geom::Rect)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Cell { rect, row, cell, .. } = i { Some((*row, *cell, *rect)) } else { None })
+            .collect();
         let mut got: Vec<(usize, usize, wordcraft_doc::props::Rgb)> = l.pages[0]
             .items
             .iter()
