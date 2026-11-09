@@ -5,6 +5,14 @@ use super::{
 };
 use wordcraft_doc::picfx::PicFx;
 
+/// How a picture is drawn besides its rect and crop: the outline it is clipped to and its
+/// brightness, contrast and transparency.
+#[derive(Clone, Copy, Default)]
+struct PicLook {
+    shape: Option<ShapeKind>,
+    fx: PicFx,
+}
+
 impl Exporter<'_> {
     /// Paint one display item on the PDF surface in its current point-coordinate system.
     /// Nested clips and turns are pushed and popped around their child items. Shape and path
@@ -44,7 +52,7 @@ impl Exporter<'_> {
                 }
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha, .. } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
-            Draw::Image { rect, media, crop, alpha, shape, fx, .. } => self.picture(s, rect, media, crop, *alpha, *shape, *fx),
+            Draw::Image { rect, media, crop, alpha, shape, fx, .. } => self.picture(s, rect, media, crop, *alpha, PicLook { shape: *shape, fx: *fx }),
             Draw::Path { segs, fill: f, stroke, stroke_width, dash, cap } => {
                 let mut pb = PathBuilder::new();
                 append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
@@ -290,7 +298,7 @@ impl Exporter<'_> {
         // Centred once at its natural size (an ODT page background that doesn't repeat).
         if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("center")) {
             let (iw, ih) = centred_size(pw, ph, w, h);
-            self.picture(s, &Rect::new((w - iw) / 2.0, (h - ih) / 2.0, iw, ih), &pic.media, &[0.0; 4], 1.0, None, PicFx::default());
+            self.picture(s, &Rect::new((w - iw) / 2.0, (h - ih) / 2.0, iw, ih), &pic.media, &[0.0; 4], 1.0, PicLook::default());
             return;
         }
         if let Some((pw, ph)) = dims.filter(|_| pic.fill_type.eq_ignore_ascii_case("tile")) {
@@ -300,7 +308,7 @@ impl Exporter<'_> {
                 while y < h {
                     let mut x = 0.0;
                     while x < w {
-                        self.picture(s, &Rect::new(x, y, tw, th), &pic.media, &[0.0; 4], 1.0, None, PicFx::default());
+                        self.picture(s, &Rect::new(x, y, tw, th), &pic.media, &[0.0; 4], 1.0, PicLook::default());
                         x += tw;
                     }
                     y += th;
@@ -308,24 +316,25 @@ impl Exporter<'_> {
                 return;
             }
         }
-        self.picture(s, &Rect::new(0.0, 0.0, w, h), &pic.media, &[0.0; 4], 1.0, None, PicFx::default());
+        self.picture(s, &Rect::new(0.0, 0.0, w, h), &pic.media, &[0.0; 4], 1.0, PicLook::default());
     }
 
-    fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, shape: Option<ShapeKind>, fx: PicFx) {
+    fn picture(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, look: PicLook) {
+        let shape = look.shape;
         // A shaped picture is also clipped to its frame: an outline reaching past the frame
         // can't draw outside it.
         let frame = shape.and_then(|_| rect_path(rect));
         if let Some(f) = &frame {
             s.push_clip_path(f, &FillRule::NonZero);
         }
-        self.picture_in(s, rect, media, crop, alpha, shape, fx);
+        self.picture_in(s, rect, media, crop, alpha, look);
         if frame.is_some() {
             s.pop();
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn picture_in(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, shape: Option<ShapeKind>, fx: PicFx) {
+    fn picture_in(&mut self, s: &mut Surface, rect: &Rect, media: &str, crop: &[f32; 4], alpha: f32, look: PicLook) {
+        let PicLook { shape, fx } = look;
         // Crop to Shape: the picture shows inside the shape's outline only.
         let clip = match shape {
             Some(k) => shape_path(k, rect, None),
