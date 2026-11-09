@@ -204,9 +204,10 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         | "review.language"
         | "wordArt.textFill"
         | "wordArt.textOutline"
-        | "styles.inspectorClear"
-        | "list.multilevelPreset" => per_row(s, run, v, &segs),
-        _ if id.starts_with("format.") || id.starts_with("para.") || matches!(id, "select.column" | "select.add") => run(s, v),
+        | "styles.inspectorClear" => per_row(s, run, v, &segs),
+        _ if id.starts_with("format.") || id.starts_with("para.") || matches!(id, "select.column" | "select.add" | "list.multilevelPreset") => {
+            run(s, v)
+        }
         // Pasting formatting (the format painter) leaves the text alone.
         _ if mutates && (id.starts_with("text.") || (id.starts_with("edit.paste") && id != "edit.pasteFormat")) => {
             delete(s, &cut)?;
@@ -313,6 +314,11 @@ fn per_row(s: &mut Session, run: fn(&mut Session, &Value) -> CmdResult, v: &Valu
             };
             let pieces: Vec<(Pos, Pos)> = pieces.iter().map(|(a, b)| (shift(a), shift(b))).filter(|(a, b)| a != b).collect();
             match (pieces.first(), pieces.last()) {
+                // One piece left is an ordinary selection.
+                (Some((x, y)), Some(_)) if pieces.len() == 1 => {
+                    s.sel = Selection { anchor: x.clone(), focus: y.clone() };
+                    block = None;
+                }
                 (Some((first, _)), Some((_, last))) => {
                     let forward = c.sel.anchor <= c.sel.focus;
                     let (x, y) = (first.clone(), last.clone());

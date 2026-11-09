@@ -13421,3 +13421,30 @@ fn refused_select_add_from_points_changes_no_page_hint() {
     assert!(s.run("select.add", &bad).is_err());
     assert_eq!(s.page_hint, 3);
 }
+
+#[test]
+fn multi_selection_multilevel_preset_makes_one_list_for_every_piece() {
+    let mut s = multi_doc();
+    three_pieces(&mut s);
+    let before = s.doc.numbering.abstracts.len();
+    run(&mut s, "list.multilevelPreset", json!({"preset": "article"}));
+    assert_eq!(s.doc.numbering.abstracts.len(), before + 1);
+    for i in [0, 2] {
+        assert!(s.doc.para_at(&Pos::body(i, 0)).unwrap().props.style.as_deref() == Some("Heading1"), "paragraph {i}");
+    }
+}
+
+#[test]
+fn multi_selection_left_with_one_piece_is_an_ordinary_selection() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ŉx two ŉy"}));
+    run(&mut s, "select.text", json!({"text": "ŉx"}));
+    // The second piece is empty after a change that cannot keep it: pieces that vanish leave one.
+    add(&mut s, (0, 8), (0, 11));
+    if let Some(c) = &mut s.column {
+        c.pieces = Some(vec![(Pos::body(0, 0), Pos::body(0, 3)), (Pos::body(0, 5), Pos::body(0, 5))]);
+    }
+    run(&mut s, "format.changeCase", json!({"mode": "upper"}));
+    assert!(s.selection_pieces().is_none());
+    assert_eq!(s.sel.ordered().0, Pos::body(0, 0));
+}
