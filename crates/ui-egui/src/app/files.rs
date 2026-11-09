@@ -462,16 +462,24 @@ impl WordApp {
             } else if list {
                 self.load_recipients(json!({"csv": wordcraft_engine::io::decode_text(&bytes)}))
             } else if img && std::mem::take(&mut self.background_picture_pending) {
-                // Format Background's picker: the image becomes the pane's draft picture.
+                // Format Background's picker: the image becomes the pane's draft picture. Past
+                // the page-picture limit it is refused before the base64 encode and hashing, so
+                // a huge web selection can't exhaust the tab before `design.pageFill` sees it.
                 let (tile, transparency) = match &self.background.fill {
                     crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
                     _ => (false, 0.0),
                 };
-                // Hash the picture once, when the picker hands it over, not on every repaint.
-                let data = Some(wordcraft_engine::cmd::insert::base64_encode(&bytes));
-                let data_key = crate::format_background::picture_cache_key(&None, &data, &None);
-                self.background.fill = crate::format_background::DraftFill::Picture { path: None, media: None, data, data_key, tile, transparency };
-                Ok(json!({"pending": "formatBackground"}))
+                if bytes.len() as u64 > crate::paste_picture::MAX_FILE_BYTES {
+                    self.status("The picture is larger than 200 MB.".to_string());
+                    Err("the picture is larger than 200 MB".to_string())
+                } else {
+                    // Hash the picture once, when the picker hands it over, not on every repaint.
+                    let data = Some(wordcraft_engine::cmd::insert::base64_encode(&bytes));
+                    let data_key = crate::format_background::picture_cache_key(&None, &data, &None);
+                    self.background.fill =
+                        crate::format_background::DraftFill::Picture { path: None, media: None, data, data_key, tile, transparency };
+                    Ok(json!({"pending": "formatBackground"}))
+                }
             } else if img {
                 self.caret_after_placed_picture(placed_picture);
                 let r = self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
