@@ -36,3 +36,14 @@ fn mixed_scripts_and_brackets_are_unchanged() {
     assert_eq!(c, &a("c"));
     assert!(matches!(&base[..], [MNode::Delim { beg: Some('('), elems, .. }] if elems[0] == vec![sup(a("a"), a("b"))]), "{base:?}");
 }
+
+#[test]
+fn stacked_scripts_on_a_function_name_nest_to_the_right() {
+    let name = |s: &str| vec![MNode::Run(MRun::plain(s))];
+    let func = |n: Vec<MNode>| vec![MNode::Func { name: n, e: a("x") }];
+    assert_eq!(parse_linear("sin^2^3 x"), func(vec![sup(name("sin"), vec![sup(a("2"), a("3"))])]));
+    assert_eq!(parse_linear("log_a_b x"), func(vec![sub(name("log"), vec![sub(a("a"), a("b"))])]));
+    // Mixed scripts on a name are still one sub-superscript.
+    let subsup = MNode::Script { kind: ScriptKind::SubSup, base: name("log"), sub: a("2"), sup: a("3") };
+    assert_eq!(parse_linear("log_2^3 x"), func(vec![subsup]));
+}
