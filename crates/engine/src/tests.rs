@@ -6129,6 +6129,78 @@ fn styles_apply_character_style() {
 }
 
 #[test]
+fn applying_paragraph_style_to_selection_preserves_unselected_character_formatting() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this text"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    run(&mut s, "format.size", json!({"size": 22.0}));
+    run(&mut s, "format.color", json!({"color": "156082"}));
+    run(&mut s, "select.text", json!({"text": "this"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let untouched = p.props_of_char(1);
+    assert_eq!(untouched.size, Some(22.0));
+    assert_eq!(untouched.color, Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x15, 0x60, 0x82))));
+    assert_eq!(untouched.style, None);
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(para_style(&s, 0), None);
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(1).size, Some(22.0));
+    run(&mut s, "edit.redo", json!({}));
+
+    let saved = wordcraft_docx::write(&s.doc).unwrap();
+    let reopened = wordcraft_docx::read(&saved).unwrap();
+    let p = reopened.para_at(&Pos::body(0, 0)).unwrap();
+    let reopened_unselected = p.props_of_char(1);
+    assert_eq!(reopened_unselected.size, Some(22.0));
+    assert_eq!(reopened_unselected.color, Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x15, 0x60, 0x82))));
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+}
+
+#[test]
+fn applying_paragraph_style_to_selection_ending_at_paragraph_end_preserves_prefix_formatting() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep this text"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    run(&mut s, "format.size", json!({"size": 22.0}));
+    run(&mut s, "select.text", json!({"text": "this text"}));
+    run(&mut s, "styles.apply", json!({"style": "Heading 1"}));
+
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(1).size, Some(22.0));
+    assert_eq!(p.props_of_char(6).size, None);
+    assert_eq!(p.props.style.as_deref(), Some("Heading1"));
+}
+
+#[test]
+fn creating_a_style_from_a_selection_clears_only_matching_copied_formatting() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "keep suffix"}));
+    run(&mut s, "select.text", json!({"text": "keep"}));
+    run(&mut s, "format.size", json!({"size": 14.0}));
+    run(&mut s, "select.text", json!({"text": "suf"}));
+    run(&mut s, "format.size", json!({"size": 18.0}));
+    run(&mut s, "select.text", json!({"text": "fix"}));
+    run(&mut s, "format.size", json!({"size": 22.0}));
+    run(&mut s, "select.text", json!({"text": "suffix"}));
+
+    let id = run(&mut s, "styles.create", json!({"name": "From Selection"}))["id"].as_str().unwrap().to_string();
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props_of_char(1).size, Some(14.0), "formatting before the selection stays direct");
+    assert_eq!(p.props_of_char(6).size, Some(18.0), "different formatting within the selection stays direct");
+    assert_eq!(p.props_of_char(9).size, None, "the copied formatting is now supplied by the style");
+    assert_eq!(s.doc.styles.get(&id).unwrap().chr.size, Some(22.0));
+
+    run(&mut s, "styles.modify", json!({"style": id, "chr": {"size": 30.0}}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(1)).size, 14.0);
+    assert_eq!(s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(6)).size, 18.0);
+    assert_eq!(s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(9)).size, 30.0);
+}
+
+#[test]
 fn styles_apply_multi_paragraph_selection() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "One"}));
