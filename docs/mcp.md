@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-09 · `references.autoMark` reads its concordance file inside the read root and never from a network path; previously (2026-10-31) delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -85,8 +85,9 @@ config works across the suite) keep the agent to the folders you give it:
 
 - Every file a command reads must lie inside the **read root**: `open_document` and `file.open`,
   `file.newFromTemplate`, `insert.textFromFile` and `insert.object`, `insert.picture` and
-  `picture.change` with a `path`, `mailings.recipients` with a `path` (csv, tsv, txt, xlsx, xlsm,
-  ods), `review.compare` (`path` and `original`), the templates and documents `tools.updateStyles`,
+  `picture.change` with a `path`, `references.autoMark` with a `path` (a concordance file; a
+  network path is refused before anything looks at it, roots or not), `mailings.recipients` with a
+  `path` (csv, tsv, txt, xlsx, xlsm, ods), `review.compare` (`path` and `original`), the templates and documents `tools.updateStyles`,
   `styles.organizer` and `styles.copyFrom` read, and the folders `file.options` takes
   (`dictionariesFolder`, `userTemplatesFolder`). The pictures an opened HTML file names are read
   from beside that file and must be inside the read root too, even when the file was opened through
