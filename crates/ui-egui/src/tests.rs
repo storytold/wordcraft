@@ -1019,6 +1019,35 @@ fn table_properties_show_a_style_indent() {
     assert_eq!(f.changes(&f.clone()), json!({}));
 }
 
+/// The Table Properties fields' limits are in inches whatever unit is chosen: with points, a
+/// 36 pt indent drawn in the dialog stays 36 pt, and OK changes nothing (it was clamped to 22).
+#[test]
+fn table_properties_keep_an_indent_drawn_in_points() {
+    let mut a = app();
+    a.session.prefs.units = Some(wordcraft_geom::Unit::Points);
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    for b in &mut a.session.doc.body {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.props.indent = Some(36.0);
+        }
+    }
+    a.run("table.properties", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let Some(dialogs::Dialog::TableProperties { form, basis }) = h.state().dialog.clone() else { panic!("no dialog") };
+    assert!((form.indent - 36.0).abs() < 0.01, "drawn in points: {}", form.indent);
+    assert_eq!(form.changes(&basis), json!({}));
+}
+
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
 /// changes nothing left alone; clicked, OK sets it for every selected row.
 #[test]

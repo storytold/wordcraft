@@ -382,8 +382,12 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
 /// The Table Properties dialog's fields: Table, Row, Column and Cell sections.
 pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     let unit = crate::options::unit();
-    fn len(v: &mut f32, lo: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
-        egui::DragValue::new(v).speed(0.01).range(lo..=22.0).measure(unit).max_decimals(2)
+    // The limits are in inches, the field in the chosen unit: drawing a field clamps its value
+    // to the range, so a range in the wrong unit would rewrite a length nobody touched (36 pt
+    // shown as 22 with points chosen).
+    let inch = 72.0 / unit.pt_per_unit();
+    fn len(v: &mut f32, lo: f32, inch: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
+        egui::DragValue::new(v).speed(0.01).range(lo * inch..=22.0 * inch).measure(unit).max_decimals(2)
     }
     let heading = |ui: &mut Ui, s: &str| {
         ui.add_space(4.0);
@@ -393,7 +397,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     crate::rtl::Table::new("tp_table").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
             r.cell(|ui| ui.checkbox(&mut f.width_on, tl!("Preferred width:")));
-            r.cell(|ui| ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit)));
+            r.cell(|ui| ui.add_enabled(f.width_on, len(&mut f.width, 0.1, inch, unit)));
         });
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Alignment:")));
@@ -408,7 +412,10 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Indent from left:")));
             r.cell(|ui| {
-                ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2))
+                ui.add_enabled(
+                    f.align == "left",
+                    egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0 * inch..=22.0 * inch).measure(unit).max_decimals(2),
+                )
             });
         });
         t.row(|r| {
@@ -427,7 +434,7 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
             let specify = r.cell(|ui| ui.checkbox(&mut f.row_height_on, tl!("Specify height:")));
             r.cell(|ui| {
                 ui.horizontal(|ui| {
-                    ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
+                    ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, inch, unit));
                     ui.add_enabled_ui(f.row_height_on, |ui| {
                         let rule = craft_ui::ComboBox::from_id_salt("tp_rule")
                             .selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" }))
@@ -448,14 +455,14 @@ pub(super) fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     crate::rtl::Table::new("tp_col").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Preferred width:")));
-            r.cell(|ui| ui.add(len(&mut f.column_width, 0.1, unit)));
+            r.cell(|ui| ui.add(len(&mut f.column_width, 0.1, inch, unit)));
         });
     });
     heading(ui, "Cell");
     crate::rtl::Table::new("tp_cell").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         t.row(|r| {
             r.cell(|ui| ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:")));
-            r.cell(|ui| ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit)));
+            r.cell(|ui| ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, inch, unit)));
         });
         t.row(|r| {
             r.cell(|ui| ui.label(tl!("Vertical alignment:")));
