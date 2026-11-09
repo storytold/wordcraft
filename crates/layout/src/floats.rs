@@ -418,7 +418,7 @@ pub(crate) fn place_late(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, oi:
     let Some(o) = p.objects.get(oi) else { return };
     let Some((w, h, float)) = floating(o) else { return };
     let h = ctx.float_height(o, w, h);
-    let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+    let frame = PageFrame { sect: pb.sect, margin_area: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
     let rect = float_rect(Some(frame), (pb.col_x(), pb.col_w()), top, w, h, float);
     let outline = ctx.wrap_outline(o);
     let area = wrap_area(rect, float, outline.as_deref().map(Vec::as_slice)).map(|a| {
