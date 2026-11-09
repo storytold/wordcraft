@@ -2846,6 +2846,249 @@ fn table_properties_apply_in_one_step() {
     assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
 }
 
+/// #5884: Table Properties supports text wrapping options: "none" (inline) and "around" (floating).
+#[test]
+fn table_properties_text_wrapping() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let query0 = run(&mut s, "table.properties", json!({}));
+    assert_eq!(query0["wrapping"], "none");
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // Set wrapping to around.
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let query_around = run(&mut s, "table.properties", json!({}));
+    assert_eq!(query_around["wrapping"], "around");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.props.float.is_some());
+
+    // Undo restores none.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // Redo restores around.
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "around");
+    assert!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float.is_some());
+
+    // Set wrapping back to none.
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // "wrap" alias also works.
+    run(&mut s, "table.properties", json!({"wrap": "around"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "around");
+    run(&mut s, "table.properties", json!({"wrap": "none"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+
+    // Both "wrapping" and "wrap" matching succeeds.
+    run(&mut s, "table.properties", json!({"wrapping": "around", "wrap": "around"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "around");
+    run(&mut s, "table.properties", json!({"wrapping": "none", "wrap": "none"}));
+    assert_eq!(run(&mut s, "table.properties", json!({}))["wrapping"], "none");
+
+    // Conflicting "wrapping" and "wrap" parameters return an error.
+    assert!(s.run("table.properties", &json!({"wrapping": "around", "wrap": "none"})).is_err());
+    assert!(s.run("table.properties", &json!({"wrapping": "none", "wrap": "around"})).is_err());
+
+    // Invalid wrapping value returns error (unknown strings and non-string types).
+    assert!(s.run("table.properties", &json!({"wrapping": "tight"})).is_err());
+    assert!(s.run("table.properties", &json!({"wrap": "tight"})).is_err());
+    assert!(s.run("table.properties", &json!({"wrapping": 123})).is_err());
+    assert!(s.run("table.properties", &json!({"wrap": true})).is_err());
+    assert!(s.run("table.properties", &json!({"wrapping": []})).is_err());
+    assert!(s.run("table.properties", &json!({"wrap": {}})).is_err());
+
+    // Nested tables cannot wrap text around.
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let (nested_path, _, _) = s.sel.focus.path.cell().unwrap();
+    assert_eq!(nested_path.0.len(), 4, "inside nested table");
+    let err = s.run("table.properties", &json!({"wrapping": "around"}));
+    assert!(matches!(err, Err(crate::CmdError::Disabled(_))), "nested table text wrapping around rejected");
+    // Nested table setting wrapping to none is permitted.
+    assert!(s.run("table.properties", &json!({"wrapping": "none"})).is_ok());
+
+    // Non-body tables (e.g. in headers/footers) also cannot wrap text around.
+    let hid = s.doc.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("header", Default::default())))],
+    );
+    s.doc.last_section.headers.default = Some(hid);
+    s.sel = crate::Selection::caret(s.doc.start_of(wordcraft_doc::StoryRef::Part(hid)));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let err_header = s.run("table.properties", &json!({"wrapping": "around"}));
+    assert!(matches!(err_header, Err(crate::CmdError::Disabled(_))), "header table text wrapping around rejected");
+    assert!(s.run("table.properties", &json!({"wrapping": "none"})).is_ok());
+}
+
+/// #5884: Table Properties text wrapping preserves custom float settings and initializes alignment.
+#[test]
+fn table_properties_text_wrapping_float_alignment_and_preservation() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+
+    // A pre-existing custom float is preserved when "around" is re-applied,
+    // and is restored intact after "none" via undo.
+    let custom_float = wordcraft_doc::props::TableFloat {
+        h_rel: wordcraft_doc::para::Anchor::Margin,
+        v_rel: wordcraft_doc::para::Anchor::Page,
+        x: 42.0,
+        y: 108.0,
+        dist: [12.0, 15.0, 12.0, 15.0],
+        overlap: false,
+        ..Default::default()
+    };
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    s.doc.table_mut(s.sel.focus.story, &tp).unwrap().props.float = Some(custom_float);
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float, Some(custom_float));
+
+    // Re-applying "around" preserves custom float settings without resetting to default.
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float, Some(custom_float));
+
+    // Changing non-alignment properties with "around" preserves the custom float.
+    run(&mut s, "table.properties", json!({"width": 200.0, "wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float, Some(custom_float));
+
+    // Changing alignment on a wrapped table updates the float's h_align and position.
+    run(&mut s, "table.properties", json!({"align": "center"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::Center));
+
+    run(&mut s, "table.properties", json!({"align": "right"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::End));
+
+    run(&mut s, "table.properties", json!({"align": "left", "indent": 18.0}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, None);
+    assert_eq!(t.props.float.unwrap().x, 18.0);
+
+    // Setting "none" clears the float.
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+    assert_eq!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.float, None);
+
+    // Undo restores the previous float settings.
+    run(&mut s, "edit.undo", json!({}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.props.float.is_some());
+    run(&mut s, "table.properties", json!({"wrapping": "none", "align": "left", "indent": 0.0}));
+
+    // When enabling around wrapping, float position is initialized from table alignment for LTR tables.
+    run(&mut s, "table.properties", json!({"align": "center", "wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::Center));
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+
+    run(&mut s, "table.properties", json!({"align": "right", "wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, Some(wordcraft_doc::para::FloatAlign::End));
+    run(&mut s, "table.properties", json!({"wrapping": "none"}));
+
+    // RTL table retains None for float h_align.
+    run(&mut s, "table.properties", json!({"align": "right", "rtl": true, "wrapping": "around"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.float.unwrap().h_align, None);
+    run(&mut s, "table.properties", json!({"wrapping": "none", "rtl": false, "align": "left"}));
+
+    // Left-aligned indented table retains position when wrapped around.
+    run(&mut s, "table.columnWidth", json!({"width": 80.0}));
+    run(&mut s, "table.properties", json!({"indent": 36.0, "wrapping": "none"}));
+    let x_left_none = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let x_left_around = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    assert!((x_left_none - x_left_around).abs() < 1.0, "left-aligned indented table retains position when wrapped around");
+
+    // Narrow centered/right-aligned tables retain alignment in page layout when wrapped around.
+    run(&mut s, "table.properties", json!({"align": "center", "indent": 0.0, "wrapping": "none"}));
+    let x_center_none = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let x_center_around = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    assert!((x_center_none - x_center_around).abs() < 1.0, "centered table retains position when wrapped around");
+
+    run(&mut s, "table.properties", json!({"align": "right", "wrapping": "none"}));
+    let x_right_none = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let x_right_around = s.layout().pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(rect.x),
+            _ => None,
+        })
+        .unwrap();
+    assert!((x_right_none - x_right_around).abs() < 1.0, "right-aligned table retains position when wrapped around");
+}
+
+/// #5884: DOCX round-trip preserves table text wrapping ("around" and "none").
+#[test]
+fn table_properties_text_wrapping_docx_round_trip() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.properties", json!({"wrapping": "around"}));
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    let t_back = back.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t_back.props.float.is_some(), "table float persists across DOCX round-trip");
+    let f_back = t_back.props.float.unwrap();
+    assert_eq!(f_back.h_rel, wordcraft_doc::para::Anchor::Column);
+    assert_eq!(f_back.v_rel, wordcraft_doc::para::Anchor::Paragraph);
+    assert!(f_back.overlap);
+
+    let mut s_back = Session::new(back);
+    // Put caret into table
+    let tp = s_back.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    s_back.sel.focus = Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path(vec![tp as u32, 0, 0, 0]), 0);
+    s_back.sel.anchor = s_back.sel.focus.clone();
+    assert_eq!(run(&mut s_back, "table.properties", json!({}))["wrapping"], "around");
+
+    run(&mut s_back, "table.properties", json!({"wrapping": "none"}));
+    let bytes2 = wordcraft_docx::write(&s_back.doc).unwrap();
+    let back2 = wordcraft_docx::read(&bytes2).unwrap();
+    let t_back2 = back2.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t_back2.props.float.is_none(), "table float cleared across DOCX round-trip");
+}
+
 /// #4857: Table Properties' row settings apply to every selected row (the whole table, say), the
 /// column width to every selected column and the cell settings to every selected cell, as in
 /// Word, in one undo step; with nothing selected, to the caret's alone.
