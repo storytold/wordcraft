@@ -78,7 +78,7 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
 /// The flow formatting of a run with properties `props`: with `opts.chars`, its extra formatting,
 /// its custom character style by name (only its direct formatting then its own) and a
 /// monospaced font by its name.
-fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> Fmt {
+fn run_fmt(doc: &Document, para_style: Option<&str>, props: &CharProps, in_code: bool, opts: FlowOpts) -> Fmt {
     let mut f = fmt_of(doc, props, in_code);
     if !opts.chars {
         return f;
@@ -104,6 +104,16 @@ fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> 
     if let Some(id) = custom {
         f.extra.get_or_insert_with(Default::default).style = Some(id.to_string());
     }
+    // A size stated without a complex-script size leaves the complex size to what is above it
+    // (a style's, or this size where none says one): said where it isn't this size, since a
+    // writer that gives every script the one size would otherwise change it.
+    let sized = props.size.is_some() || custom.is_some_and(|id| doc.styles.chain(id).iter().any(|s| s.chr.size.is_some()));
+    if props.size_cs.is_none() && sized && f.extra.as_ref().is_none_or(|x| x.size_cs.is_none()) {
+        let cs = doc.styles.resolve_char(para_style, props).size_cs;
+        if f.size != Some(cs) {
+            f.extra.get_or_insert_with(Default::default).size_cs = Some(cs);
+        }
+    }
     if f.code {
         f.code = false;
         f.font = e.shown_font().map(Arc::from);
@@ -116,11 +126,15 @@ fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> 
 fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
     let set = |v: Option<bool>| v.filter(|b| *b);
     let x = CharProps {
-        underline: e.underline.filter(|u| !matches!(u, Underline::None | Underline::Single)),
+        // What it turns off, over what the style of its paragraph or span turns on, too.
+        bold: e.bold.filter(|b| !*b),
+        italic: e.italic.filter(|b| !*b),
+        strike: e.strike.filter(|b| !*b),
+        underline: e.underline.filter(|u| *u != Underline::Single),
         underline_color: e.underline_color,
         double_strike: set(e.double_strike),
-        caps: set(e.caps),
-        small_caps: set(e.small_caps),
+        caps: e.caps,
+        small_caps: e.small_caps,
         hidden: set(e.hidden),
         spacing: e.spacing.filter(|v| *v != 0.0 && v.is_finite()),
         scale: e.scale.filter(|v| *v != 100.0 && v.is_finite()),
@@ -508,7 +522,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         // Formats that keep hidden text get it, marked hidden.
         let hidden_text = (props.hidden.unwrap_or(false) && !opts.chars) || (props.del.is_some() && !tracked);
         let hidden_obj = (props.hidden.unwrap_or(false) && !opts.chars) || props.del.is_some();
-        let mut f = run_fmt(doc, props, in_code, opts);
+        let mut f = run_fmt(doc, p.props.style.as_deref(), props, in_code, opts);
         if tracked {
             (f.ins, f.del) = rev_marks(doc, props);
             f.fmt_change = props.fmt_change.as_deref().map(|c| Box::new(FmtChange { mark: rev_mark(doc, c.rev), old: fmt_of(doc, &c.old, in_code) }));

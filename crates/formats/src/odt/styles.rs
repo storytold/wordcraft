@@ -39,6 +39,26 @@ impl FmtDelta {
             ($($k:ident),*) => { $( if let Some(v) = self.$k.clone() { f.$k = v; } )* };
         }
         set!(bold, italic, underline, strike, sup, sub, code);
+        // What this turns off stays said on the text, or the style of its paragraph or span would
+        // show through; turned back on, it no longer is.
+        if self.bold.is_some() || self.italic.is_some() || self.underline.is_some() || self.strike.is_some() {
+            use wordcraft_doc::props::Underline;
+            let mut x = f.extra.take().map(|b| *b).unwrap_or_default();
+            if self.strike == Some(false) {
+                x.double_strike = None;
+            }
+            for (state, said) in [(self.bold, &mut x.bold), (self.italic, &mut x.italic), (self.strike, &mut x.strike)] {
+                if let Some(on) = state {
+                    *said = (!on).then_some(false);
+                }
+            }
+            match self.underline {
+                Some(false) => x.underline = Some(Underline::None),
+                Some(true) if x.underline == Some(Underline::None) => x.underline = None,
+                _ => {}
+            }
+            f.extra = (x != wordcraft_doc::props::CharProps::default()).then(|| Box::new(x));
+        }
         if self.color.is_some() {
             f.color = self.color;
         }
@@ -61,10 +81,12 @@ impl FmtDelta {
                 let size = f.size.unwrap_or(12.0);
                 x.position = Some((r / 100.0 * size).clamp(-1584.0, 1584.0)).filter(|p| *p != 0.0);
             }
-            // An explicit "off" only cancels what a parent style set.
-            for b in
-                [&mut x.double_strike, &mut x.caps, &mut x.small_caps, &mut x.hidden, &mut x.outline, &mut x.shadow, &mut x.emboss, &mut x.engrave]
-            {
+            // An explicit "off" only cancels what a parent style set (capitals are kept: a
+            // paragraph's or span's style may set them too).
+            if self.strike == Some(false) {
+                x.double_strike = None;
+            }
+            for b in [&mut x.double_strike, &mut x.hidden, &mut x.outline, &mut x.shadow, &mut x.emboss, &mut x.engrave] {
                 if *b == Some(false) {
                     *b = None;
                 }
@@ -249,6 +271,8 @@ struct StyleInfo {
     cell_padding: [Option<f32>; 4],
     /// `style:column-width` of a table-column style's `style:table-column-properties`, in points.
     column_width: Option<f32>,
+    /// `style:rel-column-width` of the same: its share of the table (`1*`).
+    column_share: Option<f32>,
     /// A table style's `style:table-properties`: `table:align`, and its width (`style:width`,
     /// points, or `style:rel-width`, percent of the text width).
     table_align: Option<Align>,
@@ -583,6 +607,20 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
     any.then_some(b)
 }
 
+/// The properties element a table column's or row's `style:default-style` (of `family`) holds.
+fn table_default_props(family: Option<&str>) -> Option<&'static str> {
+    match family {
+        Some("table-column") => Some("table-column-properties"),
+        Some("table-row") => Some("table-row-properties"),
+        _ => None,
+    }
+}
+
+/// A table column's share of its table (`style:rel-column-width`, `1*`).
+fn column_share_of(a: &Attrs) -> Option<f32> {
+    get(a, "style:rel-column-width").and_then(|v| v.trim().strip_suffix('*')?.trim().parse::<f32>().ok()).filter(|r| r.is_finite() && *r > 0.0)
+}
+
 /// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
 /// one (paragraph, table, column, cell, section and graphic properties, tab stops).
 /// What `fo:background-color` says of a table or row: a colour, or none (`transparent`).
@@ -652,6 +690,9 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
         "table-column-properties" => {
             if let Some(w) = get(a, "style:column-width").and_then(length) {
                 s.column_width = Some(w);
+            }
+            if let Some(r) = column_share_of(a) {
+                s.column_share = Some(r);
             }
         }
         "table-cell-properties" => table_cell_properties(a, s),
@@ -812,13 +853,18 @@ fn text_properties(a: &Attrs, style: &mut StyleInfo, faces: &HashMap<String, Str
         let weight = weight.trim();
         weight.eq_ignore_ascii_case("bold") || weight.parse::<u32>().is_ok_and(|n| n >= 600)
     };
-    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks.
-    if let Some(weight) = get(a, "fo:font-weight").or_else(|| get(a, "style:font-weight-asian")).or_else(|| get(a, "style:font-weight-complex")) {
+    // Latin attributes take precedence; Asian and complex-script attributes are fallbacks, to turn
+    // it on: one of those saying normal says nothing of Latin text.
+    if let Some(weight) = get(a, "fo:font-weight") {
         fmt.bold = Some(is_bold(weight));
+    } else if get(a, "style:font-weight-asian").or_else(|| get(a, "style:font-weight-complex")).is_some_and(is_bold) {
+        fmt.bold = Some(true);
     }
     let is_italic = |value: &str| value.trim().eq_ignore_ascii_case("italic") || value.trim().eq_ignore_ascii_case("oblique");
-    if let Some(value) = get(a, "fo:font-style").or_else(|| get(a, "style:font-style-asian")).or_else(|| get(a, "style:font-style-complex")) {
+    if let Some(value) = get(a, "fo:font-style") {
         fmt.italic = Some(is_italic(value));
+    } else if get(a, "style:font-style-asian").or_else(|| get(a, "style:font-style-complex")).is_some_and(is_italic) {
+        fmt.italic = Some(true);
     }
     let is_not_none = |value: &str| !value.trim().eq_ignore_ascii_case("none");
     if let Some(value) = get(a, "style:text-underline-style").or_else(|| get(a, "style:text-underline-type")) {
@@ -1070,6 +1116,8 @@ pub(super) struct Styles {
     default_color: Option<wordcraft_doc::props::Rgb>,
     /// `style:default-style` for graphics: what every drawing shape's style falls back on.
     default_graphic: super::frames::Graphic,
+    /// `style:default-style` for table columns: the share of a column whose style gives none.
+    default_column_share: Option<f32>,
     /// `style:default-style` for table rows: `fo:keep-together`, for a row whose style doesn't say.
     default_row_keep: Option<bool>,
     /// The named dashes and gradients graphic styles use.
@@ -1079,12 +1127,23 @@ pub(super) struct Styles {
 }
 
 impl Styles {
+    /// A table column's or row's `style:default-style` properties (`props` names which): what a
+    /// column or row whose own style doesn't say falls back on.
+    fn read_table_default(&mut self, props: &str, a: &Attrs) {
+        if props == "table-row-properties" {
+            self.default_row_keep = get(a, "fo:keep-together").map(|k| k.trim() == "always");
+        } else {
+            self.default_column_share = column_share_of(a);
+        }
+    }
+
     pub(super) fn read(&mut self, xml: &[u8], auto_section_is_auto: bool) {
         let mut in_auto = false;
         let mut cur: Option<(String, StyleInfo)> = None;
         let mut in_default = false;
         let mut in_graphic_default = false;
-        let mut in_row_default = false;
+        // In a table column's or row's `style:default-style`: the properties element it reads.
+        let mut in_table_default: Option<&str> = None;
         let mut dates = DateStyles::default();
         let mut list: Option<(String, Vec<ListLevel>)> = None;
         // The list or outline level being read.
@@ -1113,12 +1172,10 @@ impl Styles {
                 "default-style" if q.starts_with("style:") => {
                     in_default = get(&a, "style:family") == Some("paragraph");
                     in_graphic_default = get(&a, "style:family") == Some("graphic");
-                    in_row_default = get(&a, "style:family") == Some("table-row");
+                    in_table_default = table_default_props(get(&a, "style:family"));
                 }
                 "graphic-properties" if in_graphic_default && cur.is_none() => self.default_graphic = super::frames::Graphic::read(&a),
-                "table-row-properties" if in_row_default && cur.is_none() => {
-                    self.default_row_keep = get(&a, "fo:keep-together").map(|k| k.trim() == "always")
-                }
+                props if in_table_default == Some(props) && cur.is_none() => self.read_table_default(props, &a),
                 "text-properties" if in_default && cur.is_none() => {
                     self.default_font = default_font(&a, &self.faces);
                     if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| v.is_finite() && *v >= 1.0) {
@@ -1186,7 +1243,7 @@ impl Styles {
             },
             Ev::End(q) => match local(&q) {
                 "automatic-styles" => in_auto = false,
-                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_row_default) = (false, false, false),
+                "default-style" if q.starts_with("style:") => (in_default, in_graphic_default, in_table_default) = (false, false, None),
                 "style" if q.starts_with("style:") => {
                     if let Some((n, s)) = cur.take()
                         && self.map.len() < 100_000
@@ -1326,6 +1383,32 @@ impl Styles {
         let chain = self.chain(name);
         let Some(at) = chain.iter().position(|(n, _)| self.is_named_text(n)) else { return self.text_fmt(name, base) };
         let mut f = base.clone();
+        // What the span's character style says is its own: its paragraph turning that off doesn't
+        // reach past it (ODF: the span's style wins).
+        if let Some(x) = f.extra.as_deref_mut() {
+            use wordcraft_doc::props::Underline;
+            for (_, s) in chain.iter().skip(at) {
+                let (d, e) = (&s.fmt, &s.fmt.extra);
+                if d.bold.is_some() && x.bold == Some(false) {
+                    x.bold = None;
+                }
+                if d.italic.is_some() && x.italic == Some(false) {
+                    x.italic = None;
+                }
+                if d.underline.is_some() && x.underline == Some(Underline::None) {
+                    x.underline = None;
+                }
+                if (d.strike.is_some() || e.double_strike.is_some()) && x.strike == Some(false) {
+                    (x.strike, x.double_strike) = (None, None);
+                }
+                if e.caps.is_some() && x.caps == Some(false) {
+                    x.caps = None;
+                }
+                if e.small_caps.is_some() && x.small_caps == Some(false) {
+                    x.small_caps = None;
+                }
+            }
+        }
         for (_, s) in chain.iter().take(at).rev() {
             s.fmt.apply(&mut f);
         }
@@ -1367,6 +1450,12 @@ impl Styles {
     /// Width in points of a table-column style (whole chain).
     pub(super) fn column_width(&self, name: &str) -> Option<f32> {
         self.chain(name).iter().find_map(|(_, s)| s.column_width)
+    }
+
+    /// A table column's share of its table (`style:rel-column-width`): its style's, whole chain,
+    /// else the default style's.
+    pub(super) fn column_share(&self, name: Option<&str>) -> Option<f32> {
+        name.and_then(|n| self.chain(n).iter().find_map(|(_, s)| s.column_share)).or(self.default_column_share)
     }
 
     /// A table style's alignment, width (points) and relative width (percent), whole chain.
