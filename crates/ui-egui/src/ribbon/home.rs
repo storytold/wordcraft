@@ -270,7 +270,14 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
                 small(ui, app, "alignRight", None, "Align Right", crate::widgets::ButtonAction::new("para.alignRight", json!({}), align == A::Right));
                 small(ui, app, "justify", None, "Justify", crate::widgets::ButtonAction::new("para.justify", json!({}), align == A::Justify));
-                small(ui, app, "distribute", None, "Distributed", crate::widgets::ButtonAction::new("para.distribute", json!({}), align == A::Distribute));
+                small(
+                    ui,
+                    app,
+                    "distribute",
+                    None,
+                    "Distributed",
+                    crate::widgets::ButtonAction::new("para.distribute", json!({}), align == A::Distribute),
+                );
                 small(
                     ui,
                     app,

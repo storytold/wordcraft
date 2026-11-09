@@ -154,16 +154,7 @@ impl<'a> Builder<'a> {
             None => (r.synth_bold, r.synth_italic),
             Some(f) => (rc.bold && f.get().weight < 600.0, rc.italic && !f.get().italic),
         };
-        let st = StyleRun {
-            face,
-            size,
-            synth_bold,
-            synth_italic,
-            rc: rc.clone(),
-            ascent,
-            descent,
-            shift: rc.baseline_shift(),
-        };
+        let st = StyleRun { face, size, synth_bold, synth_italic, rc: rc.clone(), ascent, descent, shift: rc.baseline_shift() };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
         // hold in memory, so every format keeps its own style.
         let i = u32::try_from(self.styles.len()).unwrap_or(u32::MAX);

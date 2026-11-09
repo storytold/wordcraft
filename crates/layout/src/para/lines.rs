@@ -577,7 +577,8 @@ impl<'e> Breaker<'e> {
         // Thai Distributed spreads a line across its character gaps as Distributed does, but like
         // Justify leaves the paragraph's last line alone (and stretches one ending with Shift+Enter).
         let by_chars = matches!(rp.align, Align::Distribute | Align::ThaiDistribute);
-        let justify = display.is_none() && (matches!(rp.align, Align::Justify | Align::ThaiDistribute) && stretch_end || rp.align == Align::Distribute);
+        let justify =
+            display.is_none() && (matches!(rp.align, Align::Justify | Align::ThaiDistribute) && stretch_end || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
