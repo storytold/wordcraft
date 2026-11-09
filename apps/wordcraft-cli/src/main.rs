@@ -17,7 +17,7 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-   wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, epub, md, tex, txt, json,
                                               png, xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
