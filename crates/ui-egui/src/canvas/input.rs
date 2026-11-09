@@ -162,7 +162,21 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     let story = app.session.sel.focus.story;
     handle_page_pointer(
         app,
-        PagePointer { ui, resp, layout, rects, scale, p, page, x, y, story, pressed: route.pressed, finger: route.finger, finger_press: route.finger_press },
+        PagePointer {
+            ui,
+            resp,
+            layout,
+            rects,
+            scale,
+            p,
+            page,
+            x,
+            y,
+            story,
+            pressed: route.pressed,
+            finger: route.finger,
+            finger_press: route.finger_press,
+        },
     );
 }
 
@@ -591,7 +605,7 @@ fn skip_equation_or_outline(app: &mut WordApp, pointer: &PagePointer<'_>) -> boo
 }
 
 fn show_hover_link(app: &WordApp, pointer: &PagePointer<'_>) {
-    let PagePointer { ui, resp, layout, rects, scale, p, page, x, y, story } = pointer;
+    let PagePointer { ui, resp, layout, rects, scale, p, page, x, y, story, .. } = pointer;
     // Hover a link: show its target, unless the context menu is opening or open: a tooltip draws
     // above the menu and would cover its first items (#3368). A linked picture or shape under the
     // pointer comes first: it lies over the text (#5267).
