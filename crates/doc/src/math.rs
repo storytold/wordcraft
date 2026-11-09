@@ -550,11 +550,14 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
 /// writes it. The parser reads them back as grouping only, so `〖a^b〗^c` keeps its tree, where
 /// `(a^b)^c` would gain a visible delimiter (#6075). A base that is itself one invisible delimiter
 /// (LaTeX `\left.a\right.`) gets an outer pair too, so the inner one reads back as that delimiter.
+/// So does an operator (`⊗`, `×`, `<`…): a script after one reads as a pre-script, so `⊗_i` would
+/// come back as `⊗` and a pre-script, where `〖⊗〗_i` keeps it the base.
 fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
     let mut inner = String::new();
     lin_arg(a, &mut inner, depth);
     let invisible = matches!(a, [MNode::Delim { beg: None, end: None, elems, .. }] if elems.len() == 1);
-    if simple_operand(a) && !inner.is_empty() && !invisible {
+    let operator = matches!(a, [MNode::Run(r)] if r.text.chars().all(crate::math_linear::is_boundary));
+    if simple_operand(a) && !inner.is_empty() && !invisible && !operator {
         s.push_str(&inner);
     } else {
         s.push('〖');

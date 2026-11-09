@@ -51,3 +51,14 @@ fn an_invisible_delimiter_as_the_base_is_kept() {
     assert!(matches!(&latex[..], [MNode::Script { base, .. }] if matches!(&base[..], [MNode::Delim { beg: None, end: None, .. }])), "{latex:?}");
     assert_eq!(parse_linear(&to_linear(&latex)), latex, "{}", to_linear(&latex));
 }
+
+#[test]
+fn an_operator_as_the_base_prints_back_the_same() {
+    // A script after an operator reads as a pre-script, so an operator base is grouped: `〖⊗〗_i`.
+    for op in ["⊗", "×", "∗", "*", "<", "&", "#"] {
+        let n = vec![MNode::Script { kind: ScriptKind::Sub, base: a(op), sub: a("i"), sup: Vec::new() }];
+        assert_eq!(parse_linear(&to_linear(&n)), n, "{op}: {}", to_linear(&n));
+        let n = vec![sup(a(op), a("2"))];
+        assert_eq!(parse_linear(&to_linear(&n)), n, "{op}: {}", to_linear(&n));
+    }
+}
