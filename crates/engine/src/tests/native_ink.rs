@@ -162,6 +162,39 @@ fn unreadable_direct_native_ink_has_a_visible_sized_placeholder() {
     }
 }
 
+/// Repeated stationary samples that paint a tap on screen also reach PDF, not just the raster.
+#[test]
+fn repeated_stationary_native_samples_reach_pdf_like_a_tap() {
+    let single = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>50 50</trace></ink>"##;
+    let repeated = r##"<ink xmlns="http://www.w3.org/2003/InkML"><brush><brushProperty name="color" value="#2563EB"/><brushProperty name="width" value="4" units="pt"/></brush><trace>50 50,50 50</trace></ink>"##;
+    for placement in ["inline", "floating", "group", "canvas", "direct"] {
+        let mut doc = crate::io::open_bytes("tap.docx", &document_with_ink(placement, repeated)).unwrap();
+        let mut control = crate::io::open_bytes("tap.docx", &document_with_ink(placement, single)).unwrap();
+        for round in 0..2 {
+            let (mut session, mut control_session) = (Session::new(doc), Session::new(control));
+            let (layout, control_layout) = (session.layout(), control_session.layout());
+            let actual =
+                wordcraft_pdf::export_layout(&session.doc, &layout, &wordcraft_pdf::PdfOptions { compress: false, ..Default::default() }).unwrap();
+            let want = wordcraft_pdf::export_layout(
+                &control_session.doc,
+                &control_layout,
+                &wordcraft_pdf::PdfOptions { compress: false, ..Default::default() },
+            )
+            .unwrap();
+            let (actual, want) = (String::from_utf8_lossy(&actual), String::from_utf8_lossy(&want));
+            // A single-sample tap is a filled blue circle; repeated coincident samples must
+            // export the same blue fill (#2563EB) rather than a krilla-dropped zero-size stroke.
+            assert!(want.contains("0.92156863 rg"), "{placement} round {round}: single tap has no blue fill: {want}");
+            assert!(actual.contains("0.92156863 rg"), "{placement} round {round}: repeated samples lost their tap in PDF: {actual}");
+            assert!(!actual.contains("/Subtype /Image"), "{placement}: ink must stay vector in PDF");
+            let saved = crate::io::save_bytes("tap.docx", &session.doc).unwrap();
+            doc = crate::io::open_bytes("tap.docx", &saved).unwrap();
+            let saved = crate::io::save_bytes("tap.docx", &control_session.doc).unwrap();
+            control = crate::io::open_bytes("tap.docx", &saved).unwrap();
+        }
+    }
+}
+
 /// Count the advanced fixture's compound outlines and check that layout keeps pen opacity.
 fn outlines(draws: &[Draw]) -> usize {
     draws
