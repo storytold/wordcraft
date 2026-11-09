@@ -495,6 +495,13 @@ fn length_units_follow_the_interface_language() {
     assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
 }
 
+/// File › Options › Language shows "עברית" in the interface-language list, so an English window
+/// asks for a Hebrew face before that list is drawn.
+#[test]
+fn the_english_interface_language_picker_asks_for_a_hebrew_face() {
+    crate::i18n::open_english_screen(super::language_picker);
+}
+
 #[test]
 fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     use wordcraft_engine::cmd::view::PaperColor;
