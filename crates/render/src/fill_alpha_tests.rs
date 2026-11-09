@@ -231,6 +231,53 @@ fn rotated_clips_preserve_backdrop_blending_and_clip_boundaries() {
     }
 }
 
+/// A clip that carries mask ink must not disturb the source-over siblings around it: their
+/// overlap composites exactly as it would in the same clip with no mask present, in both
+/// light and dark pages.
+#[test]
+fn mixed_mask_clips_preserve_unmasked_siblings() {
+    let area = Rect::new(0.0, 0.0, 40.0, 40.0);
+    // Two overlapping semi-transparent fills, away from the mask region: the siblings under test.
+    let red = Draw::Fill { rect: Rect::new(6.0, 6.0, 20.0, 20.0), color: RED, alpha: 0.5, text_bg: false };
+    let green = Draw::Fill { rect: Rect::new(18.0, 6.0, 20.0, 20.0), color: GREEN, alpha: 0.5, text_bg: false };
+    // A binary mask confined to the lower-left corner, not touching the red/green overlap.
+    let mask = Draw::MaskInk {
+        segs: vec![PathSeg::Move(2.0, 30.0), PathSeg::Line(16.0, 30.0), PathSeg::Line(16.0, 38.0), PathSeg::Line(2.0, 38.0), PathSeg::Close],
+        color: Rgb::BLACK,
+        alpha: 1.0,
+    };
+    let clip_rect = Rect::new(2.0, 2.0, 36.0, 36.0);
+    for dark in [false, true] {
+        let opts = RenderOptions { dark, ..Default::default() };
+        let background = Draw::Fill { rect: area, color: Rgb::WHITE, alpha: 1.0, text_bg: false };
+        let control = render_items(
+            &Document::new(),
+            &[background.clone(), Draw::Clip { rect: clip_rect, items: vec![red.clone(), green.clone()] }],
+            area,
+            1.0,
+            &opts,
+        );
+        let mixed = render_items(
+            &Document::new(),
+            &[background, Draw::Clip { rect: clip_rect, items: vec![red.clone(), green.clone(), mask.clone()] }],
+            area,
+            1.0,
+            &opts,
+        );
+        for (x, y) in [(18.0, 16.0), (20.0, 12.0), (24.0, 20.0)] {
+            assert_eq!(mixed.pixel(x as u32, y as u32), control.pixel(x as u32, y as u32), "dark={dark} sibling at ({x},{y})");
+        }
+        // The mask must still paint: Multiply black darkens a light page, while its dark-page
+        // Screen complement (white) lightens the dark paper.
+        let (masked, base) = (mixed.pixel(8, 34), control.pixel(8, 34));
+        if dark {
+            assert!(masked[0] > base[0], "dark={dark} mask did not lighten: {masked:?} vs {base:?}");
+        } else {
+            assert!(masked[0] < base[0], "dark={dark} mask did not darken: {masked:?} vs {base:?}");
+        }
+    }
+}
+
 fn close(pixel: [u8; 4], alpha: f32) {
     let red = (255.0 * alpha).round() as u8;
     let blue = (255.0 * (1.0 - alpha)).round() as u8;
