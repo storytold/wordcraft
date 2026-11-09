@@ -24,9 +24,13 @@ const TONES_NFD: &[&str] = &[
     "\u{0323}", // nặng (dot below)
 ];
 
+/// 1. Precomposed Vietnamese glyph shaping & Cluster integrity.
+///
+/// # WHY:
 /// Verifies that every precomposed Vietnamese character in the Latin Extended Additional
 /// block (U+1EA0..=U+1EF9) and Latin-1/Latin Extended-A shapes to exactly one glyph
-/// with positive advance and non-zero glyph ID across all bundled fonts.
+/// with a positive advance width, non-zero glyph ID, and valid cluster index 0.
+/// Cluster index 0 is vital for caret placement and hit-testing in the text editor.
 #[test]
 fn precomposed_latin_extended_additional_shapes_as_one_glyph() {
     let db = FontDb::global();
@@ -45,6 +49,7 @@ fn precomposed_latin_extended_additional_shapes_as_one_glyph() {
             assert_eq!(glyphs.len(), 1, "{family} U+{cp:04X} ('{ch}') should shape to exactly 1 glyph, got {}", glyphs.len());
             assert_ne!(glyphs[0].gid, 0, "{family} U+{cp:04X} ('{ch}') shaped to .notdef (gid 0)");
             assert!(glyphs[0].x_advance > 0, "{family} U+{cp:04X} ('{ch}') advance should be positive, got {}", glyphs[0].x_advance);
+            assert_eq!(glyphs[0].cluster, 0, "{family} U+{cp:04X} ('{ch}') cluster index must be 0, got {}", glyphs[0].cluster);
         }
 
         // Also verify Vietnamese letters in Latin-1 / Latin Extended-A (đ, Đ, and base accented vowels in both cases)
@@ -54,12 +59,22 @@ fn precomposed_latin_extended_additional_shapes_as_one_glyph() {
             let glyphs = shape(&face, &text, &[], |c| c);
             assert_eq!(glyphs.len(), 1, "{family} ('{ch}') should shape to exactly 1 glyph, got {}", glyphs.len());
             assert_ne!(glyphs[0].gid, 0, "{family} ('{ch}') shaped to .notdef (gid 0)");
+            assert!(glyphs[0].x_advance > 0, "{family} ('{ch}') advance should be positive, got {}", glyphs[0].x_advance);
+            assert_eq!(glyphs[0].cluster, 0, "{family} ('{ch}') cluster index must be 0, got {}", glyphs[0].cluster);
         }
     }
 }
 
-/// Verifies canonical equivalence between NFC and NFD forms across all bundled fonts.
-/// Ensures identical glyph sequences, per-glyph advance widths, and positioning offsets.
+/// 2. Canonical equivalence & Composition Guard.
+///
+/// # WHY:
+/// - Verifies that decomposed (NFD) text normalizes to standard precomposed (NFC) forms
+///   across all 24 vowels × 5 tones (120 combinations).
+/// - We explicitly assert `glyphs_nfc.len() == 1` and `gid != 0`. Without this guard, if
+///   the OpenType shaper or font `ccmp` table fails to compose diacritics, both NFC and NFD
+///   could decompose into identical multi-glyph sequences, causing a dangerous VACUOUS PASS!
+/// - We assert ordered per-glyph advance vectors (`Vec<i32>`) and offsets (`Vec<(i32, i32)>`)
+///   rather than scalar `.sum()`, preventing positioning errors from masking each other.
 #[test]
 fn nfc_nfd_equivalence_across_bundled_fonts() {
     let db = FontDb::global();
@@ -73,6 +88,12 @@ fn nfc_nfd_equivalence_across_bundled_fonts() {
                 let nfc: String = nfd.nfc().collect();
                 let glyphs_nfd = shape(&face, &nfd, &[], |c| c);
                 let glyphs_nfc = shape(&face, &nfc, &[], |c| c);
+
+                // Anti-vacuous-pass guard: precomposed NFC vowel+tone MUST shape to exactly 1 glyph
+                assert_eq!(glyphs_nfc.len(), 1, "{family}: NFC {nfc:?} must shape to exactly 1 glyph, got {}", glyphs_nfc.len());
+                assert_ne!(glyphs_nfc[0].gid, 0, "{family}: NFC {nfc:?} shaped to .notdef (gid 0)");
+                assert!(glyphs_nfc[0].x_advance > 0, "{family}: NFC {nfc:?} advance must be positive, got {}", glyphs_nfc[0].x_advance);
+                assert_eq!(glyphs_nfc[0].cluster, 0, "{family}: NFC {nfc:?} cluster index must be 0, got {}", glyphs_nfc[0].cluster);
 
                 let gids_nfd: Vec<u32> = glyphs_nfd.iter().map(|g| g.gid).collect();
                 let gids_nfc: Vec<u32> = glyphs_nfc.iter().map(|g| g.gid).collect();
@@ -90,15 +111,22 @@ fn nfc_nfd_equivalence_across_bundled_fonts() {
     }
 }
 
-/// Verifies positioning of stacked double diacritics without a precomposed base.
-/// Validates that either both marks are represented with vertical separation in y-down coordinates,
-/// or one mark is composed with the base while the second mark is attached.
+/// 3. Stacked double diacritics without a precomposed base.
+///
+/// # WHY:
+/// Tests mark positioning when 'c' is followed by circumflex (U+0302) and acute (U+0301).
+/// There is no precomposed 'c' with circumflex and acute in Unicode.
+/// Fonts handle this via two legitimate OpenType strategies:
+/// (a) Composition with base + mark: The font composes 'c' + circumflex into 'ccircumflex' (ĉ),
+///     leaving the acute mark attached on top. We verify that the base is 'ccircumflex'
+///     (differs from plain 'c') and the remaining mark is acute with non-empty outline.
+///     If the base remained plain 'c', the single mark must be a dedicated combined accent
+///     ligature representing both marks (neither mark was lost).
+/// (b) GPOS `mkmk` separate marks: When separate marks are emitted, we convert shaping
+///     `y_offset` into y-down coordinates and verify that the upper mark's bottom edge
+///     is positioned at or above the lower mark's top edge without vertical collision.
 #[test]
 fn double_diacritics_stacking_without_precomposed_base() {
-    // 'c' + circumflex + acute has no precomposed glyph in Unicode.
-    // OpenType handles this via either:
-    // (a) `ccmp` / normalization composing the base + first mark, with the second mark attached, OR
-    // (b) GPOS `mkmk` lifting the second mark above the first in y-down coordinates.
     let text = "c\u{0302}\u{0301}";
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
@@ -170,8 +198,12 @@ fn double_diacritics_stacking_without_precomposed_base() {
     }
 }
 
-/// Verifies shaping consistency for common Vietnamese phrases across all bundled fonts,
-/// ensuring NFC and NFD produce identical glyph IDs, per-glyph advances, and offsets.
+/// 4. Sentence-level shaping consistency across canonical forms.
+///
+/// # WHY:
+/// Verifies natural Vietnamese phrase runs across both NFC and NFD forms, ensuring that
+/// common national mottos and phrases produce identical glyph ID sequences, per-glyph
+/// advances, and offsets without `.notdef` (missing glyphs).
 #[test]
 fn vietnamese_phrases_shaping_consistency() {
     let phrases =
@@ -207,16 +239,18 @@ fn vietnamese_phrases_shaping_consistency() {
     }
 }
 
-/// Verifies that fully decomposed triple-codepoints (ASCII base + inherent diacritic + tone mark)
-/// shape identically to their precomposed counterpart, testing both canonical NFD and valid CCC orderings.
+/// 5. Fully decomposed triple-codepoints (ASCII base + inherent diacritic + tone mark).
+///
+/// # WHY:
+/// Verifies deep NFD decomposition where letters with two marks (e.g. 'ệ', 'ế', 'ở', 'ự')
+/// are broken into 3 codepoints: base ASCII + inherent mark + tone mark.
+/// Tests both:
+/// (a) Canonical NFD order (above marks share CCC 230; tone follows inherent mark).
+/// (b) Alternative Canonical Combining Class (CCC) orderings for dot-below (CCC 220) vs
+///     above marks (CCC 230), proving that Unicode normalization canonically composes
+///     both permutations to the identical precomposed glyph.
 #[test]
 fn fully_decomposed_triple_codepoint_equivalence() {
-    // Letters with two marks: base ASCII + inherent diacritic (circumflex, breve, horn) + tone mark.
-    // In canonical Unicode order:
-    // (a) For tone mark ABOVE: base ASCII + inherent mark (\u{0302}/\u{0306}/\u{031B}) + tone mark (\u{0301}/\u{0300}/\u{0309}/\u{0303}).
-    // (b) For dot BELOW (\u{0323}, ccc 220): because it has a different Canonical Combining Class
-    //     than above marks (ccc 230), Unicode normalization ensures dot-below can be ordered
-    //     either before or after the above mark, and both compose identically to the precomposed glyph.
     let triply_decomposed = [
         ("ệ", "e\u{0302}\u{0323}", Some("e\u{0323}\u{0302}")), // 'ệ': circumflex + dot below (both CCC orders)
         ("ế", "e\u{0302}\u{0301}", None),                      // 'ế': e + circumflex + acute
@@ -276,13 +310,20 @@ fn fully_decomposed_triple_codepoint_equivalence() {
     }
 }
 
-/// Verifies that both new-style (hòa, thủy) and old-style (hoà, thuỷ) orthography
-/// shape cleanly without missing glyphs and with positive advances across all bundled fonts.
+/// 6. Orthography styles: Modern (new-style) vs Traditional (old-style) tone placement.
+///
+/// # WHY:
+/// In Vietnamese orthography, vowels in diphthongs have two widely accepted tone placement rules:
+/// - Modern style: tone mark placed on the nuclear vowel (e.g. "hòa", "thủy", "tòa", "hóa", "khỏe").
+/// - Traditional style: tone mark placed on the first vowel (e.g. "hoà", "thuỷ", "toà", "hoá", "khoẻ").
+///
+/// Note: Words with initial digraph "qu" (e.g. "quế") are excluded because "qu" functions as an
+/// initial consonant cluster /kʷ/, so the syllable nucleus is invariant ("ê") in both styles.
+///
+/// Both styles must shape cleanly with valid non-zero glyphs and positive advances.
 #[test]
 fn vietnamese_orthography_new_and_old_styles() {
-    // Both new-style (hòa, thủy) and old-style (hoà, thuỷ) orthography are widely used.
-    // Both must shape without .notdef or font anomalies, with positive advances.
-    let pairs = [("hòa", "hoà"), ("thủy", "thuỷ"), ("họa", "hoạ"), ("khỏe", "khoẻ"), ("tòa", "toà"), ("quế", "quế")];
+    let pairs = [("hòa", "hoà"), ("thủy", "thuỷ"), ("họa", "hoạ"), ("khỏe", "khoẻ"), ("tòa", "toà"), ("hóa", "hoá")];
 
     let db = FontDb::global();
     for &family in BUNDLED_FAMILIES {
