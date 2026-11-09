@@ -4416,7 +4416,8 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(key(egui::Key::C, modifiers));
         h.step();
-        assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+        assert!(h.state().session.painter.is_none(), "{modifiers:?}: Copy Formatting doesn't arm the Format Painter brush");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
         assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
@@ -4427,12 +4428,47 @@ fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
         h.event(key(egui::Key::V, modifiers));
         h.step();
         assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
-        assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
-        assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
+        assert!(h.state().session.copied_format.is_some(), "{modifiers:?}: copied formatting stays for the next Paste Formatting");
+        // Pasted again, as in Word: formatting again, never the clipboard's text (#5616).
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": " more"})).unwrap();
+        h.state_mut().run("select.text", json!({"text": "more"})).unwrap();
+        // It types on in the pasted bold: make it plain first.
+        h.state_mut().run("format.bold", json!({})).unwrap();
+        assert_eq!(bold(&mut h), Some(false));
+        h.event(key(egui::Key::V, modifiers));
+        h.step();
+        assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: a second Paste Formatting made the next target bold");
+        assert_eq!(body_text(h.state()), "Bold plain more", "{modifiers:?}: the second paste left the text alone");
         assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
         assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
         assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));
     }
+}
+
+/// #1537/#4943: with no formatting picked up, Ctrl/Cmd+Shift+V pastes the clipboard as text
+/// only (Word for Windows): the text arrives in the destination's formatting, not the source's.
+#[test]
+fn ctrl_shift_v_without_copied_formatting_pastes_text_only() {
+    let mut a = app();
+    a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
+    a.run("select.text", json!({"text": "Bold"})).unwrap();
+    a.run("format.bold", json!({})).unwrap();
+    a.run("edit.copy", json!({})).unwrap();
+    a.run("select.text", json!({"text": "plain"})).unwrap();
+    // The destination has formatting of its own, so a paste that dropped it would show.
+    a.run("format.italic", json!({})).unwrap();
+    assert!(a.session.painter.is_none());
+    let mut h = harness(a);
+    h.run_steps(6);
+    let modifiers = egui::Modifiers::COMMAND | egui::Modifiers::SHIFT;
+    h.event(egui::Event::Key { key: egui::Key::V, physical_key: None, pressed: true, repeat: false, modifiers });
+    h.step();
+    assert_eq!(body_text(h.state()), "Bold Bold", "the clipboard text replaced the selection");
+    let bold = h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool);
+    assert_ne!(bold, Some(true), "the pasted text took the destination's formatting, not the copied bold");
+    let italic = h.state_mut().run("format.state", json!({})).unwrap().get("italic").and_then(Value::as_bool);
+    assert_eq!(italic, Some(true), "the pasted text kept the destination's italic");
 }
 
 /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing

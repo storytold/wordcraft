@@ -132,7 +132,26 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         if m.alt && !crate::widgets::enabled(app, spec.id) {
             return false;
         }
-        let _ = app.run(spec.id, json!({}));
+        // Mod+Shift+V pastes the formatting Mod+Shift+C (or the Format Painter) picked up; with
+        // none picked up it pastes the clipboard as text only, as Word for Windows does (#1537,
+        // #4943). Another key bound to Paste Formatting only pastes formatting.
+        let id = if spec.id == "edit.pasteFormat" {
+            let formatting = app.session.painter.is_some() || app.session.copied_format.is_some();
+            let chord = key == Key::V && m.command && m.shift && !m.alt;
+            // A browser sends a paste event after that chord (the desktop doesn't): after
+            // pasting formatting it's ignored; with none, it pastes the text there, once. A
+            // rebinding to another key makes no paste event.
+            let paste_follows = chord && app.canvas.paste_event_follows_chord;
+            app.canvas.ignore_next_paste = formatting && paste_follows;
+            app.canvas.paste_wait_since = None;
+            if !formatting && paste_follows {
+                return true;
+            }
+            if !formatting && chord { "edit.pasteText" } else { spec.id }
+        } else {
+            spec.id
+        };
+        let _ = app.run(id, json!({}));
         return true;
     }
     let Some(name) = name else { return false };

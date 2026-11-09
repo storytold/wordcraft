@@ -46,6 +46,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
         interrupted_preedit: std::mem::take(&mut app.canvas.ime_interrupted_preedit),
         interrupted_replacement: EquationReplacementDrop::None,
     };
+    let now = ctx.input(|i| i.time);
+    expire_paste_wait(app, now);
     let held = ctx.input(|i| i.modifiers);
     if held.command {
         app.canvas.paste_mods = Some(held);
@@ -60,7 +62,8 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             continue;
         }
         note_key_state(app, &e);
-        if drop_refused_replacement(app, &e, &mut batch)
+        if ignored_paste(app, &e)
+            || drop_refused_replacement(app, &e, &mut batch)
             || prefilter(app, ctx, &e, alt_codes)
             || paste_release(app, &e)
             || equation_event(app, ctx, &e, &mut batch)
@@ -68,6 +71,27 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             continue;
         }
         handle_event(app, ctx, e);
+    }
+    if app.canvas.ignore_next_paste && app.canvas.paste_wait_since.is_none() {
+        app.canvas.paste_wait_since = Some(now);
+    }
+}
+
+/// How long the paste event paired with Mod+Shift+V is waited for. A browser sends it with the
+/// key, in the same frame; with no text on the clipboard it sends none at all.
+const PASTE_WAIT: f64 = 1.0;
+
+/// Ends a wait for the paired paste event that never came, so a later paste (a browser menu's,
+/// say) isn't dropped (#5616).
+fn expire_paste_wait(app: &mut WordApp, now: f64) {
+    if !app.canvas.ignore_next_paste {
+        app.canvas.paste_wait_since = None;
+    } else if app.canvas.paste_wait_since.is_some_and(|t| now - t > PASTE_WAIT) {
+        app.canvas.ignore_next_paste = false;
+        app.canvas.paste_wait_since = None;
+        // No key came since the chord (any key ends the wait), so noted modifiers are the
+        // chord's: a later paste reads the modifiers held then.
+        app.canvas.paste_event_mods = None;
     }
 }
 
@@ -158,18 +182,50 @@ fn stale_composition(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -> bool 
 fn note_key_state(app: &mut WordApp, e: &egui::Event) {
     // Which presses reached the canvas, and the modifiers held with Mod, in event order: Mod
     // can go down and up within one frame, leaving the frame's modifiers without it.
+    if matches!(e, egui::Event::Key { pressed: true, key, .. } if !is_modifier_key(*key))
+        || matches!(e, egui::Event::WindowFocused(_) | egui::Event::PointerButton { pressed: true, .. })
+    {
+        app.canvas.ignore_next_paste = false;
+    }
     match &e {
-        egui::Event::ModifiersChanged(m) if m.command => app.canvas.paste_mods = Some(*m),
-        egui::Event::Key { key: Key::V | Key::Paste, pressed: true, .. } => app.canvas.v_pressed = true,
+        egui::Event::ModifiersChanged(m) => {
+            app.canvas.paste_event_mods = m.command.then_some(*m);
+            if m.command {
+                app.canvas.paste_mods = Some(*m);
+            }
+        }
+        egui::Event::Key { key: Key::V | Key::Paste, pressed: true, modifiers, .. } => {
+            app.canvas.v_pressed = true;
+            app.canvas.paste_event_mods = modifiers.command.then_some(*modifiers);
+        }
         egui::Event::Key { key, pressed: true, modifiers, .. } if !is_modifier_key(*key) => {
             app.canvas.paste_mods = modifiers.command.then_some(*modifiers);
+            // An unrelated key's modifiers mustn't steer a later keyless paste.
+            app.canvas.paste_event_mods = None;
         }
+        egui::Event::PointerButton { pressed: true, .. } => app.canvas.paste_event_mods = None,
         egui::Event::WindowFocused(_) => {
             app.canvas.v_pressed = false;
             app.canvas.paste_mods = None;
+            app.canvas.paste_event_mods = None;
         }
         _ => {}
     }
+}
+
+/// The browser's paste event that follows a Mod+Shift+V that pasted formatting is the same
+/// keystroke: ignored before an equation or a picture-file paste can take it (#5616).
+/// With no text on the clipboard eframe sends no paste event, so the wait ends at the next key,
+/// pointer press or focus change, or after `PASTE_WAIT`.
+fn ignored_paste(app: &mut WordApp, e: &egui::Event) -> bool {
+    if matches!(e, egui::Event::Paste(_)) && std::mem::take(&mut app.canvas.ignore_next_paste) {
+        // Not a Mod+V with no text either: the release mustn't paste a picture.
+        app.canvas.pasted = true;
+        // Its Mod+Shift is used up too, or a later menu-bar paste would read as Keep Text Only.
+        app.canvas.paste_event_mods = None;
+        return true;
+    }
+    false
 }
 
 /// The replacement paired with a refused equation deletion is dropped.
@@ -509,10 +565,15 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         egui::Event::Ime(egui::ImeEvent::Commit(text)) => ime_commit(app, text),
         egui::Event::Paste(t) => {
             // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
-            let m = ctx.input(|i| i.modifiers);
+            // The modifiers held with Mod in event order: Shift may be up by the frame's end.
+            app.canvas.paste_mods = None;
+            let m = app.canvas.paste_event_mods.take().unwrap_or_else(|| ctx.input(|i| i.modifiers));
+            // A browser sends Mod+Shift+V as a paste too: Keep Text Only, as the key does on the
+            // desktop (#1537). (egui-winit sends that chord as a key, and Shift+Insert has no Mod.)
             let id = match (m.alt, m.shift) {
                 (true, true) => "edit.pasteText",
                 (true, false) => "edit.pasteSpecial",
+                (false, true) if m.command => "edit.pasteText",
                 _ => "edit.paste",
             };
             let _ = app.run(id, json!({"text": t}));
