@@ -122,7 +122,19 @@ fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
         "DejaVu Serif",
         "Source Serif 4",
     ];
+    // TH Sarabun New, TH SarabunPSK and TH SarabunIT๙: Sarabun (Cadson Demak, OFL) is the same
+    // design, drawn smaller and with TH Sarabun New's line height when it stands in
+    // ([`size_match`]), so lines and pages fall where they do in the original font.
+    #[cfg(windows)]
+    const TH_SARABUN: &[&str] = &["Sarabun", "Cordia New", "Leelawadee UI", "Leelawadee", "Tahoma", "Noto Sans Thai", "Browallia New", "Angsana New"];
+    #[cfg(target_os = "macos")]
+    const TH_SARABUN: &[&str] = &["Sarabun", "Thonburi", "Ayuthaya", "Sathu", "Krungthep", "Noto Sans Thai", "Tahoma"];
+    #[cfg(not(any(windows, target_os = "macos")))]
+    const TH_SARABUN: &[&str] = &["Sarabun", "Noto Sans Thai", "Laksaman", "Garuda", "Waree", "Tlwg Typo", "Loma", "Umpush", "Noto Serif Thai"];
     let f = family.to_ascii_lowercase();
+    if is_th_sarabun(&f) {
+        return (TH_SARABUN, true);
+    }
     if is_thai_serif(&f) {
         return (THAI_SERIF, true);
     }
@@ -323,6 +335,45 @@ fn is_persian_sans(f: &str) -> bool {
         "arabic transparent",
     ];
     NAMES.contains(&f) || f.starts_with("iransans") || f.starts_with("iranyekan")
+}
+
+/// TH Sarabun New and the fonts made from it: TH SarabunPSK (its predecessor) and TH SarabunIT๙
+/// (Thai digits by default), however a document spells them.
+pub fn is_th_sarabun(family: &str) -> bool {
+    let f = family.trim().to_lowercase();
+    let f: String = f.split_whitespace().collect();
+    matches!(f.as_str(), "thsarabunnew" | "thsarabunpsk" | "thsarabunit๙" | "thsarabunit9")
+}
+
+/// How a face standing in for a missing font is sized so text takes the room it takes in the
+/// original: glyphs drawn at `scale` times the asked size, and the line `ascent` and `descent`
+/// (per em of the asked size) the original font gives it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SizeMatch {
+    pub scale: f32,
+    pub ascent: f64,
+    pub descent: f64,
+}
+
+/// TH Sarabun New's design at Sarabun's size: Sarabun's glyphs are drawn about half as large
+/// again as TH Sarabun New's at the same point size. Measured from the fonts' `hmtx` (both 1000
+/// units per em): a Thai government text with Latin words, digits and spaces is 0.660 as wide in
+/// TH Sarabun New as in Sarabun (0.663 bold); Thai letters alone 0.654, Latin 0.692. TH Sarabun
+/// New's x-height and cap height are 0.68 of Sarabun's.
+const TH_SARABUN_SCALE: f32 = 0.66;
+
+/// Sizing for `drawn` standing in for the missing `requested` font ([`SizeMatch`]): Sarabun for
+/// TH Sarabun New, TH SarabunPSK or TH SarabunIT๙. The line is TH Sarabun New's (hhea 844 / -457,
+/// gap 30 per 1000), worked out as [`line_metrics`] does for an installed font, so a document
+/// paginates the same whether TH Sarabun New is installed or Sarabun draws it. TH SarabunPSK and
+/// TH SarabunIT๙ take TH Sarabun New's figures (the same design); they were not measured
+/// separately. Any other pair: `None`.
+pub fn size_match(requested: &str, drawn: &str) -> Option<SizeMatch> {
+    if !is_th_sarabun(charset_base_family(requested)) || !drawn.trim().eq_ignore_ascii_case("Sarabun") {
+        return None;
+    }
+    let (a, d) = hhea_line(844, -457, 30);
+    Some(SizeMatch { scale: TH_SARABUN_SCALE, ascent: a / 1000.0, descent: d / 1000.0 })
 }
 
 /// Thai document fonts: Word's Thai families (Cordia New, Angsana New, Browallia New, the UPC
@@ -757,6 +808,24 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_th_sarabun_fonts_prefer_sarabun_sized_to_match() {
+        for family in ["TH Sarabun New", "TH SarabunPSK", "TH Sarabun PSK", "TH SarabunIT๙", "TH SarabunIT9", "th sarabun new"] {
+            assert!(is_th_sarabun(family), "{family}");
+            assert_eq!(substitutes(family).first(), Some(&"Sarabun"), "{family}");
+            assert!(has_named_substitutes(family), "{family}");
+            let m = size_match(family, "Sarabun").expect("Sarabun is sized to match");
+            assert!((m.scale - 0.66).abs() < 1e-6, "{family}: {m:?}");
+            // 0.874 + 0.457: TH Sarabun New's single line, 1.331 em.
+            assert!((m.ascent - 0.874).abs() < 1e-9 && (m.descent - 0.457).abs() < 1e-9, "{family}: {m:?}");
+        }
+        assert!(!is_th_sarabun("Sarabun"));
+        assert!(!is_th_sarabun("TH Niramit AS"));
+        assert_eq!(size_match("TH Sarabun New", "Noto Sans Thai"), None, "only Sarabun is the same design");
+        assert_eq!(size_match("Cordia New", "Sarabun"), None, "Sarabun keeps its own size for other fonts");
+        assert_eq!(size_match("Sarabun", "Sarabun"), None, "Sarabun asked for is drawn at its own size");
+    }
 
     #[test]
     fn the_line_gap_goes_above_the_ascent() {

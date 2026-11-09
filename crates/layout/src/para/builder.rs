@@ -142,6 +142,12 @@ impl<'a> Builder<'a> {
             None => wordcraft_fonts::word::line_metrics(&face),
         };
         let k = size as f64 / face.upem.max(1.0);
+        // A missing TH Sarabun font drawn in Sarabun: smaller glyphs and TH Sarabun New's line, so
+        // lines wrap and pages break about where they do in the original.
+        let (size, ascent, descent) = match wordcraft_fonts::word::size_match(lookup_family(self.env.doc, &rc.font), face.get().family) {
+            Some(m) => (size * m.scale, (m.ascent * f64::from(size)) as f32, (m.descent * f64::from(size)) as f32),
+            None => (size, (a * k) as f32, (d * k) as f32),
+        };
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
         // no bold or italic of its own.
         let (synth_bold, synth_italic) = match face_override {
@@ -154,8 +160,8 @@ impl<'a> Builder<'a> {
             synth_bold,
             synth_italic,
             rc: rc.clone(),
-            ascent: (a * k) as f32,
-            descent: (d * k) as f32,
+            ascent,
+            descent,
             shift: rc.baseline_shift(),
         };
         // A `u32` index (like the glyph ranges) counts more distinct formats than a paragraph can
