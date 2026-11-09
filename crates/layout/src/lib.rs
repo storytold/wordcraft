@@ -20,6 +20,13 @@ fn test_fonts() {
     assert!(wordcraft_fonts::FontDb::init_test_fonts(), "layout tests must initialize fixed fonts before any global font lookup");
 }
 
+/// Process-wide lock for tests that install or reload custom Hunspell dictionary fixtures.
+#[cfg(test)]
+pub(crate) fn test_dict_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 pub mod balloons;
 mod contour;
 pub mod display;
