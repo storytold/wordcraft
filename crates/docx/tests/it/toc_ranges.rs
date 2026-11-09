@@ -228,6 +228,7 @@ fn hyperlink_field_targets_follow_the_field_code() {
     for (para, link) in [
         (complex(r#"HYPERLINK "https://example.org/a" \l "sec""#), Some("https://example.org/a#sec")),
         (complex(r#"hyperlink \o "A tip" \t "_blank" "https://example.org/""#), Some("https://example.org/")),
+        (complex(r#"HYPERLINK "x \* Upper""#), Some("x * Upper")),
         (complex(r#"HYPERLINK "C:\\Docs\\My file.docx""#), Some(r"C:\Docs\My file.docx")),
         (simple(r#"HYPERLINK \l &quot;Sec&quot; \m"#), Some("#Sec")),
         (simple("HYPERLINK https://example.org/b"), Some("https://example.org/b")),

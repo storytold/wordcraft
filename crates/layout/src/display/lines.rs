@@ -7,7 +7,10 @@ use super::{
     Block, Border, ClKind, DeleteMark, Document, Draw, InlineObject, InsertMark, LineEnd, MItem, ParaLayout, Path, Rect, Rgb, SectionStart, Spin,
     StoryRef, TextColor, Underline,
 };
+use crate::display::Paint;
 use wordcraft_doc::Paragraph;
+use wordcraft_doc::graphic::PathSeg;
+use wordcraft_doc::para::ShapeKind;
 
 /// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
 /// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
@@ -346,6 +349,57 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
             }
         }
+        // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
+        if rc.emphasis != wordcraft_doc::props::EmphasisMark::None {
+            for kk in run_start..end_k {
+                if pl.clusters.get(kk).is_none_or(|c| c.kind != ClKind::Text) {
+                    continue;
+                }
+                let a = x + line.cl_left(kk).unwrap_or(0.0);
+                let b = x + line.cl_right(kk).unwrap_or(a - x);
+                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, color));
+            }
+        }
+    }
+}
+
+/// An emphasis mark `mark` for a character centred at `cx` on baseline `base`, in a font of
+/// `size` points: a dot or a hollow circle above, a comma (sesame) above, or a dot below.
+fn emphasis_mark(mark: wordcraft_doc::props::EmphasisMark, cx: f32, base: f32, size: f32, color: Rgb) -> Draw {
+    use wordcraft_doc::props::EmphasisMark as E;
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+    let r = size * 0.07;
+    // Above the tallest letters, or below the descenders.
+    // Clear of full-height (East Asian) characters, inside the room the line makes for them.
+    let cy = if mark == E::UnderDot { base + size * 0.32 } else { base - size * 1.2 };
+    let disc = |r: f32, fill: bool| Draw::Shape {
+        rect: Rect::new(cx - r, cy - r, r * 2.0, r * 2.0),
+        kind: ShapeKind::Ellipse,
+        fill: fill.then_some(Paint::Solid(color, 1.0)),
+        stroke: (!fill).then_some(color),
+        stroke_width: size * 0.03,
+        dash: Vec::new(),
+        cap: Default::default(),
+        effects: Default::default(),
+        corner: None,
+    };
+    match mark {
+        E::Circle => disc(r * 1.3, false),
+        // A teardrop leaning right, as the sesame mark is drawn.
+        E::Comma => Draw::Path {
+            segs: vec![
+                PathSeg::Move(cx - r * 0.4, cy - r * 1.4),
+                PathSeg::Cubic(cx + r * 1.2, cy - r * 0.6, cx + r * 1.0, cy + r * 1.0, cx - r * 0.2, cy + r * 1.4),
+                PathSeg::Cubic(cx + r * 0.2, cy + r * 0.4, cx - r * 0.6, cy - r * 0.4, cx - r * 0.4, cy - r * 1.4),
+                PathSeg::Close,
+            ],
+            fill: Some(Paint::Solid(color, 1.0)),
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Vec::new(),
+            cap: Default::default(),
+        },
+        _ => disc(r, true),
     }
 }
 
@@ -574,7 +628,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     for k in line.c0..line.c1 {
         let Some(c) = pl.clusters.get(k) else { continue };
         let ClKind::Object(oi) = c.kind else { continue };
-        if c.obj_h <= 0.0 {
+        if c.obj_h + c.obj_d <= 0.0 {
             continue;
         }
         // A dragged inline object is left out too: its preview stands in for it.
@@ -583,9 +637,20 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
         let obj = para.and_then(|p| p.objects.get(oi));
-        let rect = inline_rect(obj, cx, base, c.adv, c.obj_h, pl.rule_room(line, k));
+        let modern = doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+        let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern);
         let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
         match obj {
+            // A turn its line keeps no room for overhangs the line; Word cuts it at the line's top
+            // and bottom, not at its sides.
+            Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. }))
+                if o.frame().is_some_and(|(w, h, f)| f.is_bare_turn() && f.spin_pad(w, h).1 > f.line_pad(w, h, modern).1 + 0.01) =>
+            {
+                let mut items = Vec::new();
+                object_draws(o, rect, Spin::default(), alpha, opts, &mut items);
+                let band = Rect::new(rect.x - 4000.0, ctx.top, rect.w + 8000.0, (ctx.bottom - ctx.top).max(0.0));
+                out.push(Draw::Clip { rect: band, items });
+            }
             Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
                 object_draws(o, rect, Spin::default(), alpha, opts, out)
             }
@@ -602,7 +667,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             Some(o @ InlineObject::Field { .. }) => {
                 if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { checked, .. }) = o.legacy_form() {
                     let color = pl.styles.get(c.style as usize).map_or(Rgb::BLACK, |st| text_color(&st.rc.color, None));
-                    let frame = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h + c.obj_d);
+                    let frame = Rect::new(cx, base - c.obj_h.max(0.0), c.adv, c.obj_h + c.obj_d);
                     check_box(frame, checked, color, alpha, out);
                 }
             }
@@ -750,6 +815,8 @@ pub fn section_break_label(start: SectionStart) -> &'static str {
 
 /// Width of a [`Draw::MarkText`] label.
 pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    #[cfg(test)]
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let k = size / face.upem.max(1.0) as f32;
     text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()

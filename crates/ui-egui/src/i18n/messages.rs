@@ -122,6 +122,7 @@ mod tests {
         let message = result.as_array().unwrap().iter().filter_map(|i| i["message"].as_str()).find(|m| m.starts_with("Repeated word:")).unwrap();
         set_current(japanese());
         assert_eq!(proof_message(message), "単語が重複しています: \"café\"");
+        assert_eq!(crate::canvas::issue_heading(&json!({"kind": "grammar", "message": message})), "単語が重複しています: \"café\"");
         let word = "あア亜 {word} \"café\"";
         let supplied = format!("Repeated word: \"{word}\"");
         assert_eq!(proof_message(&supplied), format!("単語が重複しています: \"{word}\""));
