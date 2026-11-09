@@ -120,6 +120,12 @@ pub struct Applied {
     /// a newer state (ADR-0004).
     #[serde(default)]
     pub conflict: bool,
+    /// Set when this answer is the result of an undo/redo (ADR-0010). Unlike an
+    /// ordinary edit, which the caller already applied optimistically, the
+    /// inverse exists only here: the author's replica must apply this delta,
+    /// while the echo of its own edit is still skipped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistoryAction>,
 }
 
 /// Why an operation was refused (ADR-0004).

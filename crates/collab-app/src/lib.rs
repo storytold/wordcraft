@@ -20,7 +20,7 @@ use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::Role;
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab::wire::Participant;
-use wordcraft_collab::wire::{Applied, NodeRef, OpKind, Target, Version};
+use wordcraft_collab::wire::{Applied, NodeRef, OpKind, Reject, RejectCode, Target, Version};
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab_client::Event;
 #[cfg(not(target_arch = "wasm32"))]
@@ -42,6 +42,19 @@ pub enum Status {
     Resyncing,
     Offline,
     Failed(String),
+}
+
+/// What a refusal means for the session. The room refuses before changing the
+/// document, so a refused undo (`undo-conflict`) is not a broken session: it is
+/// shown as an error and editing continues with its stack intact (ADR-0010). A
+/// refusal that asks for a snapshot (`stale`, `gone`, an expired lease or
+/// token) resyncs instead.
+pub fn refusal_status(reject: &Reject) -> (Status, bool) {
+    match reject.code {
+        RejectCode::Stale | RejectCode::Lease | RejectCode::TokenExpired | RejectCode::Gone => (Status::Resyncing, true),
+        RejectCode::UndoConflict | RejectCode::Unsupported => (Status::InSync, false),
+        _ => (Status::Failed(reject.message.clone()), false),
+    }
 }
 
 /// A participant's cursor: a session node and a byte offset.
@@ -105,7 +118,10 @@ impl SyncState {
 
     /// Apply an authoritative answer. Our own operations are already in the
     /// document (the UI applied them optimistically); their delta is skipped so
-    /// the edit does not land twice. Everything else is replayed.
+    /// the edit does not land twice. An undo/redo answer is the exception: its
+    /// inverse is never applied optimistically (the caller sends the operation
+    /// and the engine does not run), so this delta is the only copy and is
+    /// applied exactly once (ADR-0010). Everything else is replayed.
     pub fn apply(&mut self, applied: &Applied, session: &mut Session) -> Result<Outcome, String> {
         self.version = self.version.max(applied.version);
         let command = applied.delta.as_ref().and_then(|delta| delta.get("command")).and_then(Value::as_str);
@@ -114,7 +130,7 @@ impl SyncState {
         if command.is_some_and(allocates_ids) {
             return Ok(Outcome::Resync);
         }
-        if applied.op_id.client == self.client_id {
+        if applied.op_id.client == self.client_id && applied.history.is_none() {
             return Ok(Outcome::Quiet);
         }
         if let Some(delta) = &applied.delta {
@@ -306,7 +322,14 @@ impl Collab {
                 Err(message) => self.status = Status::Failed(message),
             },
             Event::Rejected { reject } => {
-                self.status = if reject.retryable { Status::Resyncing } else { Status::Failed(reject.message) };
+                let (status, resync) = refusal_status(&reject);
+                self.status = status;
+                // The panel shows the reason; a refused undo must be visible at
+                // its author, not silent.
+                self.last_error = Some(reject.message.clone());
+                if resync {
+                    let _ = self.handle.resync();
+                }
             }
             Event::Presence { client_id, role, state } => self.presence_of(&client_id, &role, &state),
             Event::Left { client_id } => self.participants.retain(|participant| participant.client_id != client_id),
@@ -314,6 +337,7 @@ impl Collab {
                 if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
                     self.state.version = version;
                     self.status = Status::InSync;
+                    self.last_error = None;
                 }
             }
             Event::Committed { version, sha256, warnings } => {

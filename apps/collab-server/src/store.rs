@@ -136,6 +136,7 @@ mod tests {
                 epoch: 0,
                 delta: Some(serde_json::json!({"op": "insert_text", "text": "x"})),
                 conflict: false,
+                history: None,
             }],
         };
         let snapshot = Snapshot { version: 7, epoch: 2, model: b"{\"body\":[]}".to_vec(), source: Some(b"PK\x03\x04".to_vec()), dedup };
@@ -156,6 +157,7 @@ mod tests {
                     epoch: 0,
                     delta: None,
                     conflict: seq == 3,
+                    history: None,
                 })
                 .collect(),
         };

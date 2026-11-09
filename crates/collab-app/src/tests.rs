@@ -1,14 +1,17 @@
 //! Sync-state tests: no socket, just the room, the document and the maps.
 
+use std::sync::Arc;
+
 use serde_json::json;
 
+use wordcraft_collab::ids::NodeKey;
 use wordcraft_collab::room::{Role, Room};
-use wordcraft_collab::wire::{Applied, NodeRef, OpId, OpKind, Target};
+use wordcraft_collab::wire::{Applied, HistoryAction, NodeRef, Op, OpId, OpKind, Reject, RejectCode, Target};
 use wordcraft_collab_doc::DocModel;
-use wordcraft_doc::{Document, Path, Pos, StoryRef};
+use wordcraft_doc::{Block, Cell, Document, Path, Pos, StoryRef, Table};
 use wordcraft_engine::Session;
 
-use crate::SyncState;
+use crate::{Outgoing, Status, SyncState};
 
 fn server() -> (Room<DocModel>, Vec<NodeRef>) {
     let mut room = Room::new(DocModel::new(Document::new()));
@@ -121,6 +124,7 @@ fn our_own_answer_is_not_applied_twice() {
         epoch: 0,
         delta: Some(json!({"op": "insert_text", "nodeId": node, "off": 0, "text": "once"})),
         conflict: false,
+        history: None,
     };
     state.apply(&applied, &mut session).expect("no error");
     assert_eq!(text(&session), "once", "the authoritative echo did not duplicate the text");
@@ -192,4 +196,225 @@ fn a_presence_without_a_role_keeps_the_known_role() {
     crate::apply_presence(&mut people, "c1", "", &json!({"active": false}));
     assert_eq!(people[0].role, "owner", "an older server sends no role");
     assert!(!people[0].active);
+}
+
+/// Build the operation a client would send for one planned change.
+fn op_from(client: &str, seq: u64, base: u64, plan: &Outgoing, history: Option<HistoryAction>) -> Op {
+    Op {
+        op_id: OpId::new(client, seq),
+        base_version: base,
+        epoch: None,
+        kind: plan.kind,
+        target: plan.target.clone(),
+        payload: plan.payload.clone(),
+        history,
+    }
+}
+
+/// Build the undo/redo request for a confirmed step.
+fn history_op(client: &str, seq: u64, base: u64, step: &Op, action: HistoryAction) -> Op {
+    Op {
+        op_id: OpId::new(client, seq),
+        base_version: base,
+        epoch: None,
+        kind: step.kind,
+        target: step.target.clone(),
+        payload: json!({}),
+        history: Some(action),
+    }
+}
+
+#[test]
+fn the_author_and_a_peer_apply_an_undo_answer_once() {
+    let (mut room, nodes) = server();
+    let mut alice = state_with(&nodes);
+    let mut peer = SyncState::new("bob", "Bob", Role::Editor);
+    peer.set_nodes(&nodes);
+    let mut mine = Session::new(Document::new());
+    let mut theirs = Session::new(Document::new());
+
+    // The UI applies Alice's typing optimistically; its own echo is skipped.
+    let before = mine.doc.clone();
+    mine.run("text.insert", &json!({"text": "abc"})).expect("type");
+    let plan = alice.plan(&before, &mine, "text.insert", &json!({"text": "abc"})).expect("a plan").remove(0);
+    let first = op_from("alice", 1, 0, &plan, None);
+    let echo = room.submit("alice", Role::Editor, first.clone()).expect("the first edit lands");
+    alice.apply(&echo, &mut mine).expect("own echo is skipped");
+    peer.apply(&echo, &mut theirs).expect("the peer applies");
+
+    mine.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 3 });
+    let before = mine.doc.clone();
+    mine.run("text.insert", &json!({"text": "def"})).expect("type");
+    let plan = alice.plan(&before, &mine, "text.insert", &json!({"text": "def"})).expect("a plan").remove(0);
+    let second = op_from("alice", 2, alice.version, &plan, None);
+    let echo = room.submit("alice", Role::Editor, second.clone()).expect("the second edit lands");
+    alice.apply(&echo, &mut mine).expect("own echo is skipped");
+    peer.apply(&echo, &mut theirs).expect("the peer applies");
+    assert_eq!(text(&mine), "abcdef");
+    assert_eq!(text(&theirs), "abcdef");
+
+    // Undo, then redo, then undo again: every answer reaches the author once
+    // (no snapshot, no doubled inverse) and the peer as an ordinary delta.
+    for (round, undo) in [true, false, true, false].into_iter().enumerate() {
+        let expected = if undo { "abc" } else { "abcdef" };
+        let action = if undo { HistoryAction::Undo { op_id: second.op_id.clone() } } else { HistoryAction::Redo { op_id: second.op_id.clone() } };
+        let request = history_op("alice", 3 + round as u64, alice.version, &second, action.clone());
+        let answer = room.submit("alice", Role::Editor, request).expect("the history step lands");
+        assert_eq!(answer.history, Some(action), "the answer names the history operation");
+        alice.apply(&answer, &mut mine).expect("the author applies its own inverse");
+        peer.apply(&answer, &mut theirs).expect("the peer applies the inverse");
+        assert_eq!(text(&mine), expected, "round {round}: the author is not waiting for a snapshot");
+        assert_eq!(text(&theirs), expected, "round {round}: the peer converged");
+    }
+
+    // The second step undoes as well, so the first is the newest step left;
+    // the later edit on the same node still blocks it. The refusal leaves both
+    // documents exactly as they were.
+    let undo = history_op("alice", 9, alice.version, &second, HistoryAction::Undo { op_id: second.op_id.clone() });
+    let answer = room.submit("alice", Role::Editor, undo).expect("the newest step undoes");
+    alice.apply(&answer, &mut mine).expect("the author applies the inverse");
+    peer.apply(&answer, &mut theirs).expect("the peer applies the inverse");
+    assert_eq!(text(&mine), "abc");
+    let err = room
+        .submit("alice", Role::Editor, history_op("alice", 10, alice.version, &first, HistoryAction::Undo { op_id: first.op_id.clone() }))
+        .expect_err("a later edit on the same node blocks the older undo");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(text(&mine), "abc");
+    assert_eq!(text(&theirs), "abc");
+}
+
+fn table_doc(rows: usize, cols: usize) -> Document {
+    let mut doc = Document::new();
+    let mut table = Table::new(rows, cols, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    doc.body.push(Arc::new(Block::Table(table)));
+    doc
+}
+
+fn cell_text(session: &Session, row: u32, cell: u32) -> String {
+    session.doc.para(StoryRef::Body, &Path(vec![1, row, cell, 0])).map(|para| para.text.clone()).unwrap_or_default()
+}
+
+#[test]
+fn an_undo_in_a_table_is_refused_at_the_author_without_losing_the_peers_edit() {
+    let doc = table_doc(2, 2);
+    let mut room = Room::new(DocModel::new(doc.clone()));
+    let plan = room.join(None, false);
+    let table = room.ids().get(&NodeKey::new("body", vec![1])).expect("the table has an id").0;
+    let merged = room.ids().get(&NodeKey::new("body", vec![1, 0, 0, 0])).expect("the cell paragraph has an id").0;
+
+    let mut alice = state_with(&plan.nodes);
+    let mut peer = SyncState::new("bob", "Bob", Role::Editor);
+    peer.set_nodes(&plan.nodes);
+    let mut mine = Session::new(doc.clone());
+    let mut theirs = Session::new(doc);
+
+    // Alice merges two cells; her document has the merge optimistically.
+    let merge = Op {
+        op_id: OpId::new("alice", 1),
+        base_version: 0,
+        epoch: None,
+        kind: OpKind::Structural,
+        target: Target::new("body", table, 0),
+        payload: json!({"op": "merge_cells", "rows": [0, 0], "cols": [0, 1]}),
+        history: None,
+    };
+    let answer = room.submit("alice", Role::Editor, merge.clone()).expect("the cells merge");
+    let mut ids = alice.ids.clone();
+    wordcraft_collab_engine::apply_delta(&mut mine, &mut ids, answer.delta.as_ref().expect("a delta")).expect("the merge applies");
+    alice.ids = ids;
+    alice.version = answer.version;
+    peer.apply(&answer, &mut theirs).expect("the peer merges");
+
+    // Bob types into the merged cell; the author applies that as a remote delta.
+    let edit = Op {
+        op_id: OpId::new("bob", 1),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", merged, 4),
+        payload: json!({"op": "insert_text", "text": "!"}),
+        history: None,
+    };
+    let answer = room.submit("bob", Role::Editor, edit).expect("bob types");
+    peer.apply(&answer, &mut theirs).expect("bob's own echo is skipped");
+    alice.apply(&answer, &mut mine).expect("the author applies the peer's edit");
+    let before = serde_json::to_value(&mine.doc).expect("json");
+    assert_eq!(cell_text(&mine, 0, 0), "r0c0!", "the author shows the peer's edit");
+
+    // Undoing the merge would overwrite that edit; the room refuses before
+    // changing anything and the author keeps the document it had.
+    let undo = Op {
+        op_id: OpId::new("alice", 2),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Structural,
+        target: Target::new("body", table, 0),
+        payload: json!({}),
+        history: Some(HistoryAction::Undo { op_id: merge.op_id.clone() }),
+    };
+    let err = room.submit("alice", Role::Editor, undo).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    let (status, resync) = crate::refusal_status(&err);
+    assert_eq!(status, Status::InSync, "a refused undo leaves the session usable");
+    assert!(!resync);
+    assert_eq!(serde_json::to_value(&mine.doc).expect("json"), before, "the refused undo changed nothing at the author");
+    assert_eq!(cell_text(&mine, 0, 0), "r0c0!", "bob's text survived");
+    assert_eq!(room.version(), 2, "the room did not advance");
+}
+
+#[test]
+fn a_refused_undo_is_an_error_and_a_stale_answer_resyncs() {
+    let op = OpId::new("alice", 9);
+    let conflict = Reject::new(op.clone(), RejectCode::UndoConflict, "the step's targets changed after it landed");
+    assert_eq!(crate::refusal_status(&conflict), (Status::InSync, false));
+    let stale = Reject::new(op, RejectCode::Stale, "baseVersion was compacted out of the journal; resync from a snapshot");
+    assert_eq!(crate::refusal_status(&stale), (Status::Resyncing, true));
+}
+
+#[test]
+fn a_table_undo_reaches_its_author_and_the_peer_like_a_text_undo() {
+    for (name, payload) in [
+        ("merge_cells", json!({"op": "merge_cells", "rows": [0, 0], "cols": [0, 1]})),
+        ("split_cells", json!({"op": "split_cells", "row": 0, "cell": 0, "columns": 2})),
+        ("remove_column", json!({"op": "remove_column", "index": 0})),
+    ] {
+        let doc = table_doc(2, 2);
+        let mut room = Room::new(DocModel::new(doc.clone()));
+        let plan = room.join(None, false);
+        let table = room.ids().get(&NodeKey::new("body", vec![1])).expect("the table has an id").0;
+        let mut alice = state_with(&plan.nodes);
+        let mut peer = SyncState::new("bob", "Bob", Role::Editor);
+        peer.set_nodes(&plan.nodes);
+        let mut mine = Session::new(doc.clone());
+        let mut theirs = Session::new(doc.clone());
+
+        let step = Op {
+            op_id: OpId::new("alice", 1),
+            base_version: 0,
+            epoch: None,
+            kind: OpKind::Structural,
+            target: Target::new("body", table, 0),
+            payload,
+            history: None,
+        };
+        let answer = room.submit("alice", Role::Editor, step.clone()).expect("the table edit lands");
+        let mut ids = alice.ids.clone();
+        wordcraft_collab_engine::apply_delta(&mut mine, &mut ids, answer.delta.as_ref().expect("a delta")).expect("the edit applies");
+        alice.ids = ids;
+        alice.version = answer.version;
+        peer.apply(&answer, &mut theirs).expect("the peer applies the table edit");
+        assert_ne!(serde_json::to_value(&mine.doc).expect("json"), serde_json::to_value(&doc).expect("json"), "{name}: the edit landed");
+
+        let undo = history_op("alice", 2, alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+        let answer = room.submit("alice", Role::Editor, undo).expect("the inverse lands");
+        alice.apply(&answer, &mut mine).expect("the author applies its own inverse, without a snapshot");
+        peer.apply(&answer, &mut theirs).expect("the peer applies the inverse");
+        assert_eq!(serde_json::to_value(&mine.doc).expect("json"), serde_json::to_value(&doc).expect("json"), "{name}: the author is back");
+        assert_eq!(serde_json::to_value(&theirs.doc).expect("json"), serde_json::to_value(&doc).expect("json"), "{name}: the peer converged");
+    }
 }

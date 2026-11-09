@@ -74,7 +74,9 @@ async fn an_unconfirmed_operation_is_resent_after_a_reconnect() {
         assert_eq!(second.payload, first.payload);
         send_server_msg(
             &mut socket,
-            &ServerMsg::Applied { applied: Applied { op_id: second.op_id.clone(), version: 1, epoch: 0, delta: None, conflict: false } },
+            &ServerMsg::Applied {
+                applied: Applied { op_id: second.op_id.clone(), version: 1, epoch: 0, delta: None, conflict: false, history: None },
+            },
         )
         .await;
         // Keep the socket open until the client has read the answer.

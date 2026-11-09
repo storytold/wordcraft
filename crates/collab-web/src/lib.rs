@@ -330,8 +330,12 @@ impl Collab {
                 Err(message) => self.status = Status::Failed(message),
             },
             Event::Rejected { reject } => {
-                self.status = if reject.retryable { Status::Resyncing } else { Status::Failed(reject.message) };
-                if reject.retryable {
+                let (status, resync) = wordcraft_collab_app::refusal_status(&reject);
+                self.status = status;
+                // A refused undo is visible at its author; the document stays as
+                // it was because the room refused before changing it.
+                self.last_error = Some(reject.message.clone());
+                if resync {
                     self.request_snapshot();
                 }
             }
@@ -341,6 +345,7 @@ impl Collab {
                 if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
                     self.state.version = version;
                     self.status = Status::InSync;
+                    self.last_error = None;
                 }
             }
             Event::Committed { version, sha256, warnings } => {
