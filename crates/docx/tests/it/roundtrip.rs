@@ -2867,14 +2867,16 @@ fn deep_drawing_groups_round_trip_beyond_depth_8() {
         zip.finish().unwrap().into_inner()
     };
 
-    let d = wordcraft_docx::read(&build_doc(12)).unwrap();
-    let r = rt(&d);
-    match &paras(&r)[0].objects[0] {
-        InlineObject::Group { children, .. } => {
-            assert_eq!(children.len(), 1);
-            assert!(matches!(children[0].obj, InlineObject::Shape { kind: ShapeKind::Ellipse, .. }));
+    for depth in [12, 65] {
+        let d = wordcraft_docx::read(&build_doc(depth)).unwrap();
+        let r = rt(&d);
+        match &paras(&r)[0].objects[0] {
+            InlineObject::Group { children, .. } => {
+                assert_eq!(children.len(), 1, "depth {depth}");
+                assert!(matches!(children[0].obj, InlineObject::Shape { kind: ShapeKind::Ellipse, .. }), "depth {depth}");
+            }
+            other => panic!("depth {depth}: expected Group, got {other:?}"),
         }
-        other => panic!("expected Group, got {other:?}"),
     }
 
     // Groups nested beyond MAX_DML_GROUP_DEPTH (64 inner wpg:wgp inside the outer group) drop the leaf cleanly without panicking.
