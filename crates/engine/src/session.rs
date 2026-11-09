@@ -71,6 +71,9 @@ pub struct Session {
     /// HTML for the system clipboard beside [`Self::clipboard_text`]: the copy's formatting for
     /// programs that read HTML, equations as MathML (#816); empty when nothing was copied.
     pub clipboard_html: String,
+    /// RTF for the system clipboard beside [`Self::clipboard_html`], for programs that read RTF
+    /// rather than HTML; empty when nothing was copied.
+    pub clipboard_rtf: String,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
     pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
@@ -180,6 +183,8 @@ pub struct Session {
     pub merge: crate::cmd::mailings::MergeState,
     /// Requests from commands to the UI (open a dialog, scroll…), drained by the front end.
     pub ui_requests: Vec<Value>,
+    /// View › Window: the other WordCraft windows and Side by Side (#322).
+    pub windows: crate::cmd::view::Windows,
     /// Read Aloud player (Review › Speech).
     pub read_aloud: crate::speech::ReadAloud,
     /// Preferences the front end saves between runs.
@@ -216,6 +221,10 @@ pub struct Session {
     /// More pictures and shapes selected along with the one the selection holds (Shift+click),
     /// for Group. Cleared by any edit or selection change other than adding to it.
     pub also_selected: Vec<Pos>,
+    /// The member of the selected Drawing Canvas picked on its own (#2637), which Shape Format,
+    /// Delete, Copy and the frame act on; see [`crate::cmd::canvas::selected_member`]. Cleared by
+    /// any selection change, caret movement or undo.
+    pub member: Option<crate::cmd::canvas::CanvasMember>,
     /// Column (block) selection, if one was made (see [`Session::column_segments`]).
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
