@@ -140,17 +140,40 @@ fn every_command_has_unique_id() {
 
 #[test]
 fn every_shortcut_runs_one_command() {
-    // `by_shortcut` takes the first match, so a shared key silently shadows the later command (#186).
+    // `by_shortcut` takes the first match, so a shared key silently shadows the later command
+    // (#186). A state-specific command (`when`) may share a key: `KeyMap::resolve_in` gives it
+    // the key in that state and the general command keeps it elsewhere.
     let reg = cmd::registry();
     let mut seen = std::collections::HashMap::new();
     for c in reg.all() {
         for k in c.shortcut.split(" / ").filter(|k| !k.is_empty()) {
             if let Some(other) = seen.insert(k.to_ascii_lowercase(), c.id) {
-                panic!("{k} is bound to both {other} and {}", c.id);
+                let conditional = |id: &str| reg.get(id).is_some_and(|spec| spec.conditional);
+                assert!(conditional(other) || conditional(c.id), "{k} is bound to both {other} and {}", c.id);
             }
         }
     }
     assert_eq!(reg.by_shortcut("Shift+F3").map(|c| c.id), Some("format.changeCase"));
+}
+
+/// Word's Ctrl+Shift+N: Demote to Body Text in Outline view, Normal Style elsewhere on
+/// Windows/Linux (where both are Mod+Shift+N). macOS keeps Normal Style on ⌘⇧N.
+#[test]
+fn ctrl_shift_n_demotes_in_outline_view_and_is_normal_elsewhere() {
+    let mut s = s();
+    let reg = s.registry.clone();
+    let resolve = |s: &Session, key: &str| s.keymap.resolve_in(&reg, s, key).map(|c| c.id);
+    let key = if cfg!(target_os = "macos") { "Ctrl+Shift+N" } else { "Mod+Shift+N" };
+    if cfg!(target_os = "macos") {
+        let spec = s.keymap.resolve_in(&reg, &s, key).expect("Ctrl+Shift+N is bound");
+        assert_eq!(spec.id, "outline.demoteToBody");
+        assert!((spec.enabled)(&s).is_some(), "Demote to Body Text is in Outline view only");
+        assert_eq!(resolve(&s, "Mod+Shift+N"), Some("para.normal"), "Normal Style keeps ⌘⇧N");
+    } else {
+        assert_eq!(resolve(&s, key), Some("para.normal"), "Normal Style outside Outline view");
+    }
+    run(&mut s, "view.outline", json!({}));
+    assert_eq!(resolve(&s, key), Some("outline.demoteToBody"), "Demote to Body Text in Outline view");
 }
 
 /// The command a shortcut runs.
@@ -245,11 +268,16 @@ fn word_for_mac_default_shortcuts_resolve() {
         ("F2", Some("edit.cut"), None),
         ("Mod+Ctrl+V", Some("edit.pasteSpecial"), None),
         ("Mod+Alt+C", Some("edit.copyFormat"), Some("text.copyright")),
+        ("Mod+Alt+R", None, Some("text.registered")),
+        ("Mod+Alt+T", None, Some("text.trademark")),
+        ("Mod+Alt+.", None, Some("text.ellipsis")),
         ("Ctrl+Shift+M", Some("para.indent"), None),
         ("Alt+Space", Some("text.nbsp"), None),
-        ("Alt+G", Some("text.copyright"), None),
-        ("Alt+R", Some("text.registered"), None),
-        ("Alt+2", Some("text.trademark"), None),
+        // ⌥G/⌥R/⌥2 stay unbound: no Mac key, and the engine keys are the Windows Mod+⌥ ones
+        // above (#2905: binding them would fire on every Mac layout through the physical keys).
+        ("Alt+G", None, None),
+        ("Alt+R", None, None),
+        ("Alt+2", None, None),
         ("Alt+;", Some("text.ellipsis"), None),
         ("Mod+Ctrl+Alt+R", Some("review.thesaurus"), None),
         // Word for Mac's Control+Shift outline keys.

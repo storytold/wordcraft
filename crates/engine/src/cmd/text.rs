@@ -5,7 +5,7 @@ use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_H
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
 
-use super::{delete_selection, delete_selection_effect, sel_result, split_para, type_text, type_text_effect};
+use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, type_text, type_text_effect};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod autoformat;
@@ -53,13 +53,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.typeCode", "Type Character Code", "Editing", insert_code)
             .params(r#"{"code": string (decimal digits as typed on the keypad, e.g. "0233"), "ansi"?: 874 | 1250–1258 (the leading-0 code page, default 1252), "oem"?: 437 | 737 | 850 | 852 | 857 | 866 (default from the locale)}"#),
         CommandSpec::new("text.emDash", "Em Dash", "Insert › Symbols", |s, _| ins_char(s, '—')).key("Mod+Alt+-"),
-        // macOS types these symbols with Option itself; the same commands keep the Windows keys.
-        CommandSpec::new("text.copyright", "Copyright Sign", "Insert › Symbols", |s, _| ins_char(s, '©'))
-            .key(super::mac_or("Alt+G", "Mod+Alt+C")),
-        CommandSpec::new("text.registered", "Registered Sign", "Insert › Symbols", |s, _| ins_char(s, '®'))
-            .key(super::mac_or("Alt+R", "Mod+Alt+R")),
-        CommandSpec::new("text.trademark", "Trademark Sign", "Insert › Symbols", |s, _| ins_char(s, '™'))
-            .key(super::mac_or("Alt+2", "Mod+Alt+T")),
+        // macOS types ©, ® and ™ with Option itself, so Word for Mac has no Cmd shortcut for
+        // them; binding ⌥G/⌥R/⌥2 would fire on every Mac layout through the physical keys (#2905).
+        CommandSpec::new("text.copyright", "Copyright Sign", "Insert › Symbols", |s, _| ins_char(s, '©')).key(non_mac("Mod+Alt+C")),
+        CommandSpec::new("text.registered", "Registered Sign", "Insert › Symbols", |s, _| ins_char(s, '®')).key(non_mac("Mod+Alt+R")),
+        CommandSpec::new("text.trademark", "Trademark Sign", "Insert › Symbols", |s, _| ins_char(s, '™')).key(non_mac("Mod+Alt+T")),
         CommandSpec::new("text.ellipsis", "Ellipsis", "Insert › Symbols", |s, _| ins_char(s, '…'))
             .key(super::mac_or("Alt+;", "Mod+Alt+.")),
     ]

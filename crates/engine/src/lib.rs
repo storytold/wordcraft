@@ -107,6 +107,9 @@ pub struct CommandSpec {
     pub mutates: bool,
     /// `None` = enabled; `Some(reason)` = disabled.
     pub enabled: fn(&Session) -> Option<&'static str>,
+    /// `when` set this: the command is available only in some state, so it may share a
+    /// key with an everywhere command (the first wins elsewhere; see `KeyMap::resolve_in`).
+    pub conditional: bool,
     pub run: fn(&mut Session, &Value) -> CmdResult,
 }
 
@@ -116,7 +119,7 @@ fn always(_: &Session) -> Option<&'static str> {
 
 impl CommandSpec {
     pub const fn new(id: &'static str, label: &'static str, location: &'static str, run: fn(&mut Session, &Value) -> CmdResult) -> Self {
-        CommandSpec { id, label, location, shortcut: "", params: "{}", mutates: true, enabled: always, run }
+        CommandSpec { id, label, location, shortcut: "", params: "{}", mutates: true, enabled: always, conditional: false, run }
     }
     pub const fn key(mut self, s: &'static str) -> Self {
         self.shortcut = s;
@@ -133,6 +136,7 @@ impl CommandSpec {
     }
     pub const fn when(mut self, f: fn(&Session) -> Option<&'static str>) -> Self {
         self.enabled = f;
+        self.conditional = true;
         self
     }
 }

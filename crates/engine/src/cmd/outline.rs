@@ -61,10 +61,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("outline.promoteToHeading1", "Promote to Heading 1", "Outlining › Outline Tools", |s, _| set_levels(s, Some(1))),
         CommandSpec::new("outline.promote", "Promote", "Outlining › Outline Tools", |s, _| run_joined(s, "para.promote")),
         CommandSpec::new("outline.demote", "Demote", "Outlining › Outline Tools", |s, _| run_joined(s, "para.demote")),
-        // Word's Ctrl+Shift+N; on macOS the Mac key (⌘⇧N) is Normal style, so the Windows key is
-        // the one left free for the same command.
+        // Word's Ctrl+Shift+N (Mod+Shift+N on Windows/Linux). Normal Style also has that key
+        // there, so this command takes it in Outline view and Normal Style keeps it elsewhere.
+        // On macOS Normal Style is ⌘⇧N, leaving the Control key free for this.
         CommandSpec::new("outline.demoteToBody", "Demote to Body Text", "Outlining › Outline Tools", |s, _| set_levels(s, None))
-            .key(super::mac_or("Ctrl+Shift+N", "")),
+            .key(super::mac_or("Ctrl+Shift+N", "Mod+Shift+N"))
+            .when(in_outline),
         CommandSpec::new("outline.level", "Outline Level", "Outlining › Outline Tools", |s, v| {
             let level = match v.get("level") {
                 Some(Value::String(b)) if b.eq_ignore_ascii_case("body") => None,

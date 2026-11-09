@@ -240,6 +240,92 @@ fn paste_release_modifiers_fall_back_to_those_held_with_mod() {
 }
 
 #[test]
+fn named_keys_and_semicolon_reach_the_registry() {
+    // ⌥; (Ellipsis) and the named table-selection keys need registry spellings too.
+    assert_eq!(key_name(Key::Semicolon), Some(";"));
+    assert_eq!(key_name(Key::Home), Some("Home"));
+    assert_eq!(key_name(Key::End), Some("End"));
+    assert_eq!(key_name(Key::PageUp), Some("PageUp"));
+    assert_eq!(key_name(Key::PageDown), Some("PageDown"));
+}
+
+/// ⌥; runs Ellipsis and the character macOS sends with it is swallowed: the document gets
+/// exactly one ellipsis, through the same key and text events the canvas receives.
+#[cfg(target_os = "macos")]
+#[test]
+fn option_semicolon_types_one_ellipsis() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.state().canvas.focused, "the canvas has the keyboard focus");
+    let alt = Modifiers { alt: true, ..Default::default() };
+    h.event(egui::Event::Key { key: Key::Semicolon, physical_key: Some(Key::Semicolon), pressed: true, repeat: false, modifiers: alt });
+    h.event(egui::Event::Text("…".into()));
+    h.step();
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "…");
+}
+
+/// ⌘⌃V opens Paste Special. Ctrl going up before V must not turn the release into ⌘V and
+/// paste the clipboard's picture under the dialog (#2905).
+#[cfg(target_os = "macos")]
+#[test]
+fn paste_special_v_release_does_not_paste_after_ctrl_goes_up() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    let cmd_ctrl = Modifiers { ctrl: true, command: true, mac_cmd: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd_ctrl, vec![key_event(Key::V, true, cmd_ctrl)]);
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("pasteSpecial"), "⌘⌃V opens Paste Special");
+
+    let cmd = Modifiers { command: true, mac_cmd: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd, vec![key_event(Key::ControlLeft, false, cmd)]);
+    mods_frame(&ctx, &mut a, cmd, vec![key_event(Key::V, false, cmd)]);
+    assert_eq!(pictures(&mut a), 0, "the V release adds no picture");
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "the picture is not in the document");
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("pasteSpecial"), "Paste Special stays open");
+    assert_eq!(a.canvas.v_press_mods, None, "the snapshot is cleared on the V release");
+}
+
+/// The winit text path sends no V press (egui-winit turns ⌘⌃V into a paste event), so the
+/// event's own modifiers must still make it Paste Special rather than Paste (#2905).
+#[cfg(target_os = "macos")]
+#[test]
+fn paste_event_with_ctrl_still_down_is_paste_special() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    let cmd_ctrl = Modifiers { ctrl: true, command: true, mac_cmd: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd_ctrl, vec![egui::Event::Paste("Hello".into())]);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "the paste does not reach the document");
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("pasteSpecial"), "the paste opens Paste Special");
+}
+
+/// ⌘⌃V can arrive as a paste event after Ctrl went up: the V press's modifiers still make
+/// it Paste Special, and the snapshot is cleared once the paste is handled (#2905).
+#[cfg(target_os = "macos")]
+#[test]
+fn paste_event_uses_the_v_press_modifiers() {
+    let ctx = egui::Context::default();
+    let mut a = picture_app();
+    let cmd_ctrl = Modifiers { ctrl: true, command: true, mac_cmd: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd_ctrl, vec![key_event(Key::V, true, cmd_ctrl)]);
+    a.dialog = None;
+
+    let cmd = Modifiers { command: true, mac_cmd: true, ..Default::default() };
+    mods_frame(&ctx, &mut a, cmd, vec![key_event(Key::ControlLeft, false, cmd)]);
+    mods_frame(&ctx, &mut a, cmd, vec![egui::Event::Paste("Hello".into())]);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "the paste does not reach the document");
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("pasteSpecial"), "the paste opens Paste Special");
+    assert_eq!(a.canvas.v_press_mods, None, "the snapshot is cleared when the paste arrives");
+}
+
+#[test]
 fn shift_delete_is_only_shift_and_delete() {
     let m = |shift, ctrl, alt| egui::Modifiers { shift, ctrl, command: ctrl, alt, ..Default::default() };
     assert!(is_shift_delete(Key::Delete, m(true, false, false)));
