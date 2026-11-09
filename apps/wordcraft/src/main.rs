@@ -218,16 +218,6 @@ fn user_dict_path() -> Option<std::path::PathBuf> {
     wordcraft_control_key::settings_dir().map(|b| b.join(wordcraft_engine::Session::USER_DICT_FILE))
 }
 
-fn load_user_dictionary(app: &mut WordApp) {
-    if !prefs_enabled() {
-        return;
-    }
-    if let Some(p) = user_dict_path() {
-        wordcraft_proof::load_user_dictionary(&p);
-        app.session.user_dict_path = Some(p);
-    }
-}
-
 /// Runs without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
 fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
@@ -237,21 +227,35 @@ fn prefs_enabled() -> bool {
 /// to write only what this process changed since (#3773, see `prefs_merge`).
 static LOADED_PREFS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
 
-/// Apply the saved preferences (`ui.json`) to `app`, and remember the result for `save_prefs`.
+/// Apply the saved preferences (`ui.json`) and the user dictionary to `app`, and remember the
+/// result for `save_prefs`. Runs without preferences neither read nor keep them.
 fn load_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = prefs_path()
-        && let Ok(bytes) = std::fs::read(&p)
+    let loaded = load_prefs_from(app, prefs_path().as_deref(), user_dict_path());
+    if let Ok(mut slot) = LOADED_PREFS.lock() {
+        *slot = loaded;
+    }
+}
+
+/// Apply the preferences saved at `prefs` to `app`, then load the user dictionary at `dict`
+/// (`custom-dictionary.txt`, #40), and give back the preferences as `prefs()` does after both:
+/// the words only the dictionary file has are part of what was loaded, so a word another process
+/// removes from `ui.json` isn't written back as one added here (#3773).
+fn load_prefs_from(app: &mut WordApp, prefs: Option<&std::path::Path>, dict: Option<std::path::PathBuf>) -> Option<serde_json::Value> {
+    if let Some(p) = prefs
+        && let Ok(bytes) = std::fs::read(p)
         && let Some(ui) = UiState::from_json(&bytes)
     {
         app.apply_prefs(ui);
     }
-    // As `prefs()` gives them back, so a setting nobody touched compares equal at exit.
-    if let (Ok(loaded), Ok(mut slot)) = (serde_json::to_value(app.prefs()), LOADED_PREFS.lock()) {
-        *slot = Some(loaded);
+    if let Some(p) = dict {
+        wordcraft_proof::load_user_dictionary(&p);
+        app.session.user_dict_path = Some(p);
     }
+    // As `prefs()` gives them back, so a setting nobody touched compares equal at exit.
+    serde_json::to_value(app.prefs()).ok()
 }
 
 /// Fonts the user added (#582) live in `fonts` in the settings folder: load them, and store fonts
@@ -668,7 +672,6 @@ fn main() -> eframe::Result {
             if updates_unsafe {
                 app.disable_self_update();
             }
-            load_user_dictionary(&mut app);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -854,7 +857,7 @@ mod prefs_tests {
     use serde_json::{Value, json};
     use wordcraft_ui_egui::{UiState, theme::Appearance};
 
-    use super::{lock_prefs, prefs_merge, save_merged, write_prefs};
+    use super::{load_prefs_from, lock_prefs, prefs_merge, save_merged, write_prefs};
 
     /// The preferences saved with `theme` (every other setting at its default).
     fn with_theme(theme: &str) -> Value {
@@ -881,6 +884,24 @@ mod prefs_tests {
         // A exits without touching the theme since its save: B's choice, made later, stays.
         save_merged(&path, &mut a, with_theme("dark")).unwrap();
         assert_eq!(saved_theme(&path), Appearance::Light);
+    }
+
+    #[test]
+    fn the_loaded_preferences_include_the_words_of_the_dictionary_file() {
+        // A word only `custom-dictionary.txt` has is loaded, not added here: if another process
+        // removes it from `ui.json`, this one mustn't write it back.
+        let dir = tempfile::tempdir().unwrap();
+        let (prefs, dict) = (dir.path().join("ui.json"), dir.path().join("custom-dictionary.txt"));
+        std::fs::write(&prefs, br#"{"dictionary": ["zqxinjson"]}"#).unwrap();
+        std::fs::write(&dict, "zqxinfile\n").unwrap();
+        let mut app = wordcraft_ui_egui::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let loaded = load_prefs_from(&mut app, Some(&prefs), Some(dict)).unwrap();
+        let words = loaded["dictionary"].as_array().unwrap();
+        for word in ["zqxinjson", "zqxinfile"] {
+            assert!(words.contains(&json!(word)), "{word}: {words:?}");
+        }
+        wordcraft_engine::proof::remove_word("zqxinjson");
+        wordcraft_engine::proof::remove_word("zqxinfile");
     }
 
     #[test]
