@@ -46,7 +46,9 @@ fn save_in(dir: &Path, paths: &[PathBuf], written: u64) {
     // Absolute: the new copy may start in another folder. `file.open` takes its path as text; a
     // name that isn't valid Unicode stays in Recent.
     let paths: Vec<PathBuf> = paths.iter().filter_map(|p| std::path::absolute(p).ok()).collect();
-    let paths: Vec<&str> = paths.iter().filter_map(|p| p.to_str()).take(MAX_PATHS).collect();
+    let paths: Vec<&str> = paths.iter().filter_map(|p| p.to_str()).collect();
+    // The one in front is last: keep the last ones.
+    let paths = paths.get(paths.len().saturating_sub(MAX_PATHS)..).unwrap_or_default();
     if paths.is_empty() {
         return;
     }
@@ -82,7 +84,9 @@ fn take_from(dir: &Path, now: u64) -> Vec<String> {
         return Vec::new();
     }
     let Some(paths) = list.get("paths").and_then(Value::as_array) else { return Vec::new() };
-    paths.iter().filter_map(Value::as_str).filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file())).take(MAX_PATHS).map(str::to_owned).collect()
+    // The last ones, as `save_in` keeps them: the one in front is last.
+    let paths = paths.get(paths.len().saturating_sub(MAX_PATHS)..).unwrap_or_default();
+    paths.iter().filter_map(Value::as_str).filter(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file())).map(str::to_owned).collect()
 }
 
 #[cfg(test)]
@@ -158,6 +162,19 @@ mod tests {
         std::fs::write(&file, b"x").unwrap();
         save_in(&dir, &vec![file.clone(); MAX_PATHS + 10], 10);
         assert_eq!(take_from(&dir, 10).len(), MAX_PATHS);
+        // Past the cap, the first ones are dropped and the one in front (last) comes back last.
+        let docs: Vec<PathBuf> = (0..MAX_PATHS + 3).map(|i| dir.join(format!("{i}.docx"))).collect();
+        for d in &docs {
+            std::fs::write(d, b"x").unwrap();
+        }
+        save_in(&dir, &docs, 10);
+        let back = take_from(&dir, 10);
+        let want: Vec<&str> = docs[3..].iter().map(|d| d.to_str().unwrap()).collect();
+        assert_eq!(back, want);
+        // A list longer than the cap (not one this app wrote) keeps its last ones too.
+        let long: Vec<&str> = docs.iter().map(|d| d.to_str().unwrap()).collect();
+        std::fs::write(dir.join(FILE), serde_json::to_vec(&json!({"written": 10, "paths": long})).unwrap()).unwrap();
+        assert_eq!(take_from(&dir, 10), want);
         save_in(&dir, &[], 10);
         assert!(!dir.join(FILE).exists());
         let _ = std::fs::remove_dir_all(&dir);
