@@ -1,6 +1,53 @@
 use super::*;
 
 #[test]
+fn overflowing_numeric_entities_use_replacement_character() {
+    for reference in ["&#4294967296;", "&#x100000000;", "&#X100000000;", "&#99999999999999999999999999999;", "&#1114112;", "&#xD800;"] {
+        let flow = parse(&format!("<p>before{reference}after</p>"));
+        assert_eq!(paras(&flow)[0].text(), "before\u{FFFD}after", "{reference}");
+    }
+    // Leading zeroes still decode; malformed references remain literal.
+    assert_eq!(unescape("&#00000000000000000000000000065;"), "A");
+    for reference in ["&#;", "&#x;", "&#+4294967296;", "&#x+100000000;"] {
+        assert_eq!(unescape(reference), reference);
+    }
+    // The upstream semicolonless parser ends a numeric reference at the first non-digit.
+    for (reference, expected) in [("&#4294967296x;", "\u{FFFD}x;"), ("&#x100000000g;", "\u{FFFD}g;")] {
+        let flow = parse(&format!("<p>before{reference}after</p>"));
+        assert_eq!(paras(&flow)[0].text(), format!("before{expected}after"), "{reference}");
+    }
+}
+
+#[test]
+fn long_numeric_references_consume_only_their_own_semicolon() {
+    // Exercise both sides of the bounded named-entity lookahead, and longer numeric runs.
+    for (prefix, digit, lengths, suffix) in
+        [("", "9", [31, 32, 33, 128], "x;"), ("x", "f", [30, 31, 33, 128], "g;"), ("X", "F", [30, 31, 33, 128], "g;")]
+    {
+        for len in lengths {
+            let numeric = format!("&#{prefix}{}", digit.repeat(len));
+            for (ending, expected) in
+                [(";", "\u{FFFD}"), ("", "\u{FFFD}"), (";;", "\u{FFFD};"), (suffix, if prefix.is_empty() { "\u{FFFD}x;" } else { "\u{FFFD}g;" })]
+            {
+                let reference = format!("{numeric}{ending}");
+                let flow = parse(&format!("<p>before{reference}|after</p>"));
+                assert_eq!(paras(&flow)[0].text(), format!("before{expected}|after"), "{reference}");
+                assert_eq!(entity::unescape_attr(&reference), expected, "{reference}");
+            }
+        }
+    }
+    for (prefix, digits, suffix) in [("", "65", "x;"), ("x", "41", "g;"), ("X", "41", "g;")] {
+        let numeric = format!("&#{prefix}{}{digits}", "0".repeat(128));
+        for (ending, expected) in [(";", "A"), ("", "A"), (";;", "A;"), (suffix, if prefix.is_empty() { "Ax;" } else { "Ag;" })] {
+            let reference = format!("{numeric}{ending}");
+            let flow = parse(&format!("<p>before{reference}|after</p>"));
+            assert_eq!(paras(&flow)[0].text(), format!("before{expected}|after"), "{reference}");
+            assert_eq!(entity::unescape_attr(&reference), expected, "{reference}");
+        }
+    }
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");

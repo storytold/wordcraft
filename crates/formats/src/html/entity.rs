@@ -12,10 +12,11 @@ fn decode_char(name: &str) -> Option<char> {
             Some(h) => (h, 16),
             None => (num, 10),
         };
-        if !digits.chars().all(|c| c.is_digit(radix)) {
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
             return None;
         }
-        let v = u32::from_str_radix(digits, radix).ok()?;
+        // With nonempty digits validated, a parse error means the value is outside Unicode.
+        let v = u32::from_str_radix(digits, radix).unwrap_or(u32::MAX);
         let c = match v {
             0 => '\u{FFFD}',
             0x80..=0x9F => crate::txt::cp1252(v as u8),
@@ -246,8 +247,8 @@ const BARE_NAMES: &[&str] = &[
     "sect", "shy", "sup1", "sup2", "sup3", "szlig", "times", "uacute", "ucirc", "ugrave", "uuml", "yacute", "yen", "yuml",
 ];
 
-/// A reference written without its `;` at the start of `after` (the text after `&`): a numeric one,
-/// or the longest legacy name. In attribute values a name followed by `=` or an alphanumeric stays text.
+/// A numeric reference (possibly beyond the named-entity lookahead) or the longest legacy name
+/// at the start of `after` (the text after `&`). In attribute values a name followed by `=` or an alphanumeric stays text.
 fn bare_reference(after: &str, attr: bool) -> Option<(char, usize)> {
     if let Some(num) = after.strip_prefix('#') {
         let hex = num.starts_with(['x', 'X']);
@@ -258,7 +259,8 @@ fn bare_reference(after: &str, attr: bool) -> Option<(char, usize)> {
             return None;
         }
         let len = 1 + skip + n;
-        return decode_char(after.get(..len)?).map(|c| (c, len));
+        let consumed = len + usize::from(after.as_bytes().get(len) == Some(&b';'));
+        return decode_char(after.get(..len)?).map(|c| (c, consumed));
     }
     // Legacy names are 2 to 6 ASCII alphanumerics: try the longest prefix first.
     let run = after.bytes().take(6).take_while(u8::is_ascii_alphanumeric).count();
