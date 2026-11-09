@@ -15,6 +15,8 @@ pub(super) struct Reader {
     /// Code pages of the fonts whose charset names one (`\fcharset204` → 1251).
     pub(super) font_cps: HashMap<i32, u16>,
     pub(super) font_cp_cur: Option<u16>,
+    /// The font table entry being read named its code page with `\cpg`.
+    pub(super) font_cpg_named: bool,
     /// The document's code page (`\ansicpg`); 0 until it names one (Windows-1252 then).
     pub(super) ansicpg: u16,
     /// The default font (`\deff`), whose charset applies before any `\f`.

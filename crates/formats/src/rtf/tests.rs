@@ -368,6 +368,34 @@ fn a_symbol_font_reads_its_bytes_as_its_own_codes() {
     assert_eq!(texts(&f), ["Normal:Мир\u{F0D8}\u{F0E8}\u{F0FC}"]);
 }
 
+/// A symbol default font's page is for text set in it: the font table's names, and text in a font
+/// selected with `\f` (a monospace one too), are read in the document's code page. An explicit
+/// `\cpg` before `\fcharset2` stays the entry's code page, as one after it does.
+#[test]
+fn a_symbol_default_font_reads_only_its_own_text_as_codes() {
+    let run_font = |f: &Flow, text: &str| {
+        f.blocks.iter().find_map(|b| match b {
+            FBlock::Para(p) => p.inlines.iter().find_map(|i| match i {
+                Inline::Text(t, fmt) if t.trim() == text => Some(fmt.font.as_deref().map(str::to_string)),
+                _ => None,
+            }),
+            FBlock::Table(_) => None,
+        })
+    };
+    let f = parse(
+        br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil\fcharset2 Symbol;}{\f1\fcharset0 Caf\'e9 Sans;}{\f2 Courier New;}}\'b7 {\f1 caf\'e9}{\f2 na\'efve}\par}",
+    )
+    .unwrap();
+    assert_eq!(texts(&f), ["Normal:\u{F0B7} cafénaïve"]);
+    assert_eq!(run_font(&f, "café"), Some(Some("Café Sans".to_string())));
+    for rtf in [
+        &br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\cpg1252\fcharset2 Odd;}}{\f1 \'93}\par}"[..],
+        br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fcharset2\cpg1252 Odd;}}{\f1 \'93}\par}",
+    ] {
+        assert_eq!(texts(&parse(rtf).unwrap()), ["Normal:\u{201C}"]);
+    }
+}
+
 /// #1653: the East Asian code pages (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5) decode their
 /// bytes as a run, so a lead byte and its trail byte decode together, escaped or raw.
 #[test]

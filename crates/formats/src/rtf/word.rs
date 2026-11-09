@@ -147,6 +147,7 @@ impl Reader {
             "deff" => self.deff = pv,
             "f" => {
                 self.st.cp = self.font_cps.get(&pv).copied();
+                self.st.font_set = true;
                 let name = self.fonts.get(&pv).cloned();
                 match name {
                     Some(n) if model::is_mono(&n) => {
@@ -427,11 +428,19 @@ impl Reader {
                 self.font_cur = value;
                 self.font_name.clear();
                 self.font_cp_cur = None;
+                self.font_cpg_named = false;
             }
-            "fcharset" => self.font_cp_cur = wordcraft_doc::encoding::charset_code_page(value),
+            "fcharset" => {
+                // The symbol charset doesn't replace a code page the entry named with `\cpg`.
+                let cp = wordcraft_doc::encoding::charset_code_page(value);
+                if !(self.font_cpg_named && cp == Some(wordcraft_doc::encoding::SYMBOL_CODE_PAGE)) {
+                    self.font_cp_cur = cp;
+                }
+            }
             "cpg" => {
                 if let Some(cp) = u16::try_from(value).ok().filter(|cp| wordcraft_doc::encoding::is_text_code_page(*cp)) {
                     self.font_cp_cur = Some(cp);
+                    self.font_cpg_named = true;
                 }
             }
             _ => {}
