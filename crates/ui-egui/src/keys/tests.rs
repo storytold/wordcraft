@@ -376,6 +376,108 @@ fn altgr_types_its_characters_without_keytips() {
     assert_eq!(a.ui.keytips, crate::keytips::Phase::Tabs);
 }
 
+/// The Find dialog's Find what box, after the frames that open the dialog and focus the box.
+fn find_box_harness() -> egui_kittest::Harness<'static, WordApp> {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.dialog = crate::dialogs::Dialog::open("find", &mut a);
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h
+}
+
+/// What the Find dialog's Find what box holds.
+fn find_box(h: &egui_kittest::Harness<'static, WordApp>) -> String {
+    match &h.state().dialog {
+        Some(crate::dialogs::Dialog::Find { query, .. }) => query.clone(),
+        _ => panic!("the Find dialog is open"),
+    }
+}
+
+/// One frame: Alt held, `digits` pressed and released (with their text, as Linux sends it, when
+/// `digit_text`), Alt let go; then `after`, which a platform may send once Alt is up.
+fn alt_code_frame(h: &mut egui_kittest::Harness<'static, WordApp>, digits: &str, digit_text: bool, after: &[&str]) {
+    let alt = Modifiers { alt: true, ..Default::default() };
+    let key = |key, pressed, modifiers| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false, modifiers };
+    h.event(egui::Event::ModifiersChanged(alt));
+    h.event(key(Key::AltLeft, true, alt));
+    for d in digits.chars() {
+        let k = Key::from_name(&d.to_string()).expect("a digit key");
+        h.event(key(k, true, alt));
+        if digit_text {
+            h.event(egui::Event::Text(d.to_string()));
+        }
+        h.event(key(k, false, alt));
+    }
+    h.event(key(Key::AltLeft, false, alt));
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    for t in after {
+        h.event(egui::Event::Text((*t).to_string()));
+    }
+    h.step();
+}
+
+/// #4403: an Alt code typed in a text box (here Find what) types its character there, as on the
+/// page. Before, the box got the digits (Linux sends their text with Alt held), or on Windows only
+/// what the system composes, a byte for a code above 255. The page's text is left alone.
+#[test]
+fn alt_code_types_its_character_in_a_text_box() {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+    // The code pages the page's Alt codes use (`text.typeCode`).
+    let (ansi, oem) = if cfg!(target_os = "windows") {
+        wordcraft_engine::cmd::text::system_code_pages()
+    } else {
+        (1252, wordcraft_engine::cmd::text::system_oem_code_page())
+    };
+    let ch = |code| wordcraft_engine::cmd::text::alt_code_char(code, ansi, oem).expect("a character code").to_string();
+    let mut h = find_box_harness();
+    assert_eq!(find_box(&h), "");
+    // Linux: each digit's text arrives too; none of it is typed.
+    alt_code_frame(&mut h, "0233", true, &[]);
+    let mut want = ch("0233");
+    assert_eq!(find_box(&h), want);
+    // Above 255 the code is the Unicode character's (Word's €), and a platform's echo of the
+    // same character isn't typed twice.
+    alt_code_frame(&mut h, "8364", false, &["\u{20AC}"]);
+    want.push('\u{20AC}');
+    assert_eq!(find_box(&h), want);
+    // Windows composes a code itself: up to 255 its character replaces ours (it knows the code
+    // pages), above that ours stays (it reduces the code to a byte). Elsewhere text after the
+    // release is typed as it comes.
+    alt_code_frame(&mut h, "0199", false, &["\u{1E9E}"]);
+    alt_code_frame(&mut h, "9731", false, &["X"]);
+    if cfg!(target_os = "windows") {
+        want.push_str("\u{1E9E}\u{2603}");
+    } else {
+        want.push_str(&format!("{}\u{1E9E}\u{2603}X", ch("0199")));
+    }
+    assert_eq!(find_box(&h), want);
+    // A code we name no character for (past Unicode here; a double-byte lead byte on Windows)
+    // types nothing of ours, and the character the system composes for it is typed, not taken
+    // for a digit's text. Windows sends no digit text; Linux does.
+    assert_eq!(wordcraft_engine::cmd::text::alt_code_char("1114112", ansi, oem), None);
+    alt_code_frame(&mut h, "1114112", !cfg!(target_os = "windows"), &["Y"]);
+    want.push('Y');
+    assert_eq!(find_box(&h), want);
+    // Digits without Alt type themselves; a bare Alt tap types nothing and opens no keytips.
+    h.event(egui::Event::Key { key: Key::Num5, physical_key: Some(Key::Num5), pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.event(egui::Event::Text("5".into()));
+    h.step();
+    alt_code_frame(&mut h, "", false, &[]);
+    want.push('5');
+    assert_eq!(find_box(&h), want);
+    assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), "", "the page typed nothing");
+}
+
 fn alt_frame_app() -> (egui::Context, WordApp) {
     let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     (egui::Context::default(), a)
@@ -1232,4 +1334,25 @@ fn typing_with_smart_art_selected_types_into_an_item() {
     a.run("edit.undo", json!({})).unwrap();
     let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
     assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
+}
+
+#[test]
+fn delete_previous_sentence_shortcut_dispatches_and_can_be_reassigned() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    app.run("text.insert", json!({"text": "First. Second sentence.", "raw": true})).unwrap();
+    let mods = if cfg!(target_os = "macos") {
+        Modifiers { mac_cmd: true, command: true, shift: true, ..Default::default() }
+    } else {
+        Modifiers { ctrl: true, command: true, shift: true, ..Default::default() }
+    };
+    assert!(dispatch(&mut app, Key::Backspace, mods));
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. ");
+    app.run("edit.undo", json!({})).unwrap();
+    assert!(dispatch(&mut app, Key::Backspace, Modifiers { shift: false, ..mods }));
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second ");
+    app.run("edit.undo", json!({})).unwrap();
+    app.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+Shift+Backspace": "select.all"}}));
+    assert!(dispatch(&mut app, Key::Backspace, mods));
+    assert!(!app.session.sel.is_collapsed());
+    assert_eq!(app.session.doc.para_at(&app.session.sel.focus).unwrap().text, "First. Second sentence.");
 }

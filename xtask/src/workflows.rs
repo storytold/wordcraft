@@ -59,7 +59,7 @@ pub fn run(root: &Path) -> Result<(), String> {
                 violations.push(format!("{name}:{}: `uses: {uses}` names no `@ref`", index + 1));
                 continue;
             };
-            if is_immutable_reference(reference) {
+            if is_immutable_reference(target, reference) {
                 continue;
             }
             if let Some(allowed) = ALLOWED.iter().find(|a| a.matches(target, reference)) {
@@ -100,10 +100,15 @@ fn repo_of(target: &str) -> Option<&str> {
 }
 
 /// The value of a `uses:` line, without a YAML list marker, quotes or a trailing comment.
+/// Every supported spelling of the key counts (`uses:`, `uses :`, `'uses':`), so a different
+/// spelling can't slip a mutable ref past the check.
 fn uses_value(line: &str) -> Option<&str> {
     let rest = line.trim_start();
     let rest = rest.strip_prefix('-').map_or(rest, str::trim_start);
-    let rest = rest.strip_prefix("uses:")?.trim();
+    let rest = rest.strip_prefix(['\'', '"']).unwrap_or(rest);
+    let rest = rest.strip_prefix("uses")?;
+    let rest = rest.trim_start_matches(['\'', '"']);
+    let rest = rest.trim_start().strip_prefix(':')?.trim();
     if rest.starts_with('#') {
         return None;
     }
@@ -116,12 +121,14 @@ fn is_commit_sha(reference: &str) -> bool {
     reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// A full commit SHA or a Docker `sha256:` digest. Tags and branches are mutable.
-fn is_immutable_reference(reference: &str) -> bool {
+/// A full commit SHA, or (for a Docker target only) a `sha256:` digest. Tags and branches
+/// are mutable; a digest pins a Docker image but is not a Git ref.
+fn is_immutable_reference(target: &str, reference: &str) -> bool {
     if is_commit_sha(reference) {
         return true;
     }
-    reference.strip_prefix("sha256:").is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
+    target.starts_with("docker://")
+        && reference.strip_prefix("sha256:").is_some_and(|digest| digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 #[cfg(test)]
@@ -142,9 +149,16 @@ mod tests {
     #[test]
     fn accepts_immutable_docker_digests() {
         let digest = format!("sha256:{}", "a".repeat(64));
-        assert!(is_immutable_reference(&digest));
-        assert!(!is_immutable_reference("sha256:latest"));
-        assert!(!is_immutable_reference("sha256:abc"));
+        assert!(is_immutable_reference("docker://alpine", &digest));
+        assert!(!is_immutable_reference("docker://alpine", "sha256:latest"));
+        assert!(!is_immutable_reference("docker://alpine", "sha256:abc"));
+    }
+
+    #[test]
+    fn a_digest_is_not_a_git_ref() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        assert!(!is_immutable_reference("actions/checkout", &digest), "a GitHub SHA digest is not a commit SHA");
+        assert!(is_immutable_reference("actions/checkout", SHA));
     }
 
     #[test]
@@ -181,6 +195,20 @@ mod tests {
         assert_eq!(uses_value("      - uses: actions/checkout@v4"), Some("actions/checkout@v4"));
         assert_eq!(uses_value("      -   uses: actions/checkout@v4"), Some("actions/checkout@v4"));
         assert_eq!(uses_value("      - name: checkout"), None);
+    }
+
+    #[test]
+    fn reads_every_supported_uses_spelling() {
+        // Valid YAML allows the space before the colon and quotes around the key; the check
+        // must see them or a mutable ref slips past it.
+        assert_eq!(uses_value("      - uses : actions/checkout@v4"), Some("actions/checkout@v4"));
+        assert_eq!(uses_value("      - 'uses': actions/checkout@v4"), Some("actions/checkout@v4"));
+        assert_eq!(uses_value("      - \"uses\": actions/checkout@v4"), Some("actions/checkout@v4"));
+        assert_eq!(uses_value("      - 'uses' : actions/checkout@v4 # v4"), Some("actions/checkout@v4"));
+        // Lines that are not `uses` keys stay invisible.
+        assert_eq!(uses_value("    username: actions/checkout@v4"), None);
+        assert_eq!(uses_value("      - usesname: actions/checkout@v4"), None);
+        assert_eq!(uses_value("    usess: actions/checkout@v4"), None);
     }
 
     #[test]

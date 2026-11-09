@@ -23,8 +23,8 @@ produce unsigned builds with a warning, so forks still build.
 ## Shared workflow trust
 
 Every workflow here that calls `storytold/craft-common-actions` does so at `@main`: `ci.yml`,
-`release.yml`, `freebsd.yml`, `nix.yml`, `packaging-lint.yml`, `sonarcloud.yml`, `windows-arm64.yml`
-and the craft-i18n and craft-fonts checkout steps in `printing.yml`. That is deliberate: a fix to
+`release.yml`, `freebsd.yml`, `house-rules.yml`, `nix.yml`, `packaging-lint.yml`, `sonarcloud.yml`,
+`windows-arm64.yml` and the craft-i18n and craft-fonts checkout steps in `printing.yml`. That is deliberate: a fix to
 the shared pipeline reaches every craft app without a pull request in each repository. The decision
 is recorded in [craft-common-actions#6](https://github.com/storytold/craft-common-actions/issues/6);
 the remaining hardening is [WordCraft #1358](https://github.com/storytold/wordcraft/issues/1358).
