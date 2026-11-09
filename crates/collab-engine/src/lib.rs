@@ -289,7 +289,7 @@ impl SessionModel {
             // every paragraph they changed, so their forward effect travels as
             // `set_para_list` instead of a command every replica replays.
             if is_list_command(command)
-                && let Some(effect) = self.normalized_list(op, &before_doc, ids, label)
+                && let Some(effect) = self.normalized_list(op, &before_doc, ids, label, list_op_name(command))
             {
                 return Ok(effect);
             }
@@ -574,7 +574,7 @@ impl SessionModel {
     /// section, another paragraph property or the block order — or a changed
     /// paragraph inside a table or without a session id — is not captured: the
     /// step keeps its command delta and stays a barrier.
-    fn normalized_list(&self, op: &Op, before: &Document, ids: &NodeIds, label: &str) -> Option<Effect> {
+    fn normalized_list(&self, op: &Op, before: &Document, ids: &NodeIds, label: &str, name: &str) -> Option<Effect> {
         let (items, define) = list_changes(before, &self.session.doc, ids)?;
         if items.is_empty() || items.len() > wordcraft_collab_doc::MAX_LIST_PARAGRAPHS {
             return None;
@@ -583,8 +583,8 @@ impl SessionModel {
         let plan = wordcraft_collab_doc::plan_list(before, ids, &step).ok()?;
         let touched = wordcraft_collab_doc::list_touched(&plan);
         Some(Effect {
-            delta: Some(wordcraft_collab_doc::list_delta(&plan)),
-            inverse: wordcraft_collab_doc::list_inverse_ops(op, &plan),
+            delta: Some(wordcraft_collab_doc::list_delta(&plan, name)),
+            inverse: wordcraft_collab_doc::list_inverse_ops(op, &plan, name),
             forward: vec![op.clone()],
             label: label.to_string(),
             nodes_changed: false,
@@ -856,10 +856,22 @@ fn is_level_command(command: &str) -> bool {
 /// (ADR-0010). A command that also changed a list definition another way, a
 /// paragraph inside a table or a step wider than the bound stays a command
 /// barrier.
-const LIST_COMMANDS: &[&str] = &["para.bullets", "para.numbering"];
+const LIST_COMMANDS: &[&str] = &["para.bullets", "para.numbering", "para.multilevel", "para.restartNumbering"];
 
 fn is_list_command(command: &str) -> bool {
     LIST_COMMANDS.contains(&command)
+}
+
+/// The structural operation a list command normalizes to. The Multilevel button
+/// and Restart numbering keep their own op name so a step (and its inverse) is
+/// readable as what the user asked for; the two single-level buttons share
+/// `set_para_list`.
+fn list_op_name(command: &str) -> &'static str {
+    match command {
+        "para.multilevel" => "set_para_multilevel",
+        "para.restartNumbering" => "set_para_restart_numbering",
+        _ => "set_para_list",
+    }
 }
 
 fn path_key(path: &Path) -> String {

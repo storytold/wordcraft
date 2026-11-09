@@ -1155,3 +1155,189 @@ fn a_list_step_that_names_the_current_list_is_an_identity_step() {
     assert!(undone.delta.is_some(), "the undo carries a delta too");
     assert_eq!(document_json(&room), listed, "the undo changes nothing either");
 }
+
+#[test]
+fn a_multilevel_command_lands_as_one_multilevel_operation_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(0), node(1));
+
+    // A replica learns the step and its undo only from the deltas.
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let command = op("a", 1, 0, OpKind::Command, one, 0, json!({"command": "para.multilevel", "params": {}, "selection": selected(one, two)}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the multilevel list lands");
+    let delta = applied.delta.clone().expect("the step carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_multilevel"), "the forward effect keeps the multilevel op");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "every selected paragraph is named");
+    let num = items[0]["num"].as_u64().expect("a list id");
+    assert_eq!(items[1]["num"], json!(num), "both paragraphs join one definition");
+    assert_eq!(delta["ops"][0]["define"][0]["abstract"]["levels"].as_array().expect("levels").len(), 9, "nine levels travel");
+    crate::apply_delta(&mut replica, &mut ids, &delta).expect("the replica applies the multilevel list");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, one, &command)).expect("the undo lands");
+    let delta = undone.delta.as_ref().expect("the undo carries a delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_multilevel"), "the inverse keeps the multilevel op");
+    assert_eq!(delta["ops"][0]["items"][0]["num"], serde_json::Value::Null);
+    assert_eq!(delta["ops"][0]["undefine"], json!([num]), "the definition the step created is dropped");
+    crate::apply_delta(&mut replica, &mut ids, delta).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", one, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(para_numbering(room.model().session(), 0).map(|n| n.num), Some(u32::try_from(num).expect("a list id")), "redo lists again");
+}
+
+#[test]
+fn a_restart_numbering_command_lands_as_one_restart_operation_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(0), node(1));
+
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    // The paragraphs are one numbered list first; the replica learns it from
+    // the listing delta.
+    let listing = op("a", 1, 0, OpKind::Command, one, 0, json!({"command": "para.numbering", "params": {}, "selection": selected(one, two)}));
+    let applied = room.submit("alice", Role::Editor, listing).expect("the numbering lands");
+    let delta = applied.delta.clone().expect("a delta");
+    crate::apply_delta(&mut replica, &mut ids, &delta).expect("the replica applies the listing");
+    let source = para_numbering(room.model().session(), 0).expect("a list").num;
+
+    let command = op("a", 2, 1, OpKind::Command, one, 0, json!({"command": "para.restartNumbering", "params": {}}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the restart lands");
+    let delta = applied.delta.clone().expect("the step carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_restart_numbering"), "the forward effect keeps the restart op");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    let num = items[0]["num"].as_u64().expect("a restarted list");
+    assert_ne!(num, u64::from(source), "a fresh instance");
+    assert_eq!(items[0]["level"], json!(0), "the level is kept");
+    assert_eq!(delta["ops"][0]["define"][0]["num"]["startOverrides"][0][0], json!(0), "the restart names its level");
+    crate::apply_delta(&mut replica, &mut ids, &delta).expect("the replica applies the restart");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(3, 2, one, &command)).expect("the undo lands");
+    let delta = undone.delta.as_ref().expect("the undo carries a delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_restart_numbering"), "the inverse keeps the restart op");
+    assert_eq!(delta["ops"][0]["items"][0]["num"], json!(source), "the earlier instance is back");
+    assert_eq!(delta["ops"][0]["undefine"], json!([num]), "the instance the step created is dropped");
+    crate::apply_delta(&mut replica, &mut ids, delta).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+
+    let redo = Op {
+        op_id: OpId::new("a", 4),
+        base_version: 3,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", one, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(para_numbering(room.model().session(), 0).map(|n| n.num), Some(u32::try_from(num).expect("a list id")), "redo restarts again");
+}
+
+#[test]
+fn a_multilevel_step_that_names_the_current_levels_is_an_identity_step() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One"])));
+    let plan = room.join(None, false);
+    let one = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let payload = json!({"op": "set_para_multilevel", "kind": "legal", "levels": [{"id": one, "level": 0}]});
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, payload.clone())).expect("the first multilevel step lands");
+    let listed = document_json(&room);
+    let definitions = room.model().session().doc.numbering.nums.len();
+
+    let applied =
+        room.submit("alice", Role::Editor, op("a", 2, 1, OpKind::Structural, one, 0, payload.clone())).expect("an identity step still lands");
+    assert_eq!(applied.delta.as_ref().and_then(|delta| delta.get("op")).and_then(|op| op.as_str()), Some("transaction"));
+    assert_eq!(document_json(&room), listed, "the document is unchanged");
+    assert_eq!(room.model().session().doc.numbering.nums.len(), definitions, "no second definition is allocated");
+
+    let undone =
+        room.submit("alice", Role::Editor, undo_op(3, 2, one, &op("a", 2, 1, OpKind::Structural, one, 0, payload))).expect("the identity undo lands");
+    assert!(undone.delta.is_some(), "the undo carries a delta too");
+    assert_eq!(document_json(&room), listed, "the undo changes nothing either");
+}
+
+#[test]
+fn a_restart_step_that_names_the_current_start_is_an_identity_step() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(0), node(1));
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, one, 0, json!({"op": "set_para_list", "ids": [one, two], "kind": "numbering", "level": 0})),
+    )
+    .expect("the listing lands");
+    let payload = json!({"op": "set_para_restart_numbering", "ids": [one, two], "start": 4});
+    room.submit("alice", Role::Editor, op("a", 2, 1, OpKind::Structural, one, 0, payload.clone())).expect("the first restart lands");
+    let restarted = document_json(&room);
+    let definitions = room.model().session().doc.numbering.nums.len();
+
+    let applied = room.submit("alice", Role::Editor, op("a", 3, 2, OpKind::Structural, one, 0, payload)).expect("an identity restart still lands");
+    assert_eq!(applied.delta.as_ref().and_then(|delta| delta.get("op")).and_then(|op| op.as_str()), Some("transaction"));
+    assert_eq!(document_json(&room), restarted, "the document is unchanged");
+    assert_eq!(room.model().session().doc.numbering.nums.len(), definitions, "no second instance is allocated");
+}
+
+#[test]
+fn a_multilevel_command_over_more_than_64_paragraphs_stays_an_undo_barrier() {
+    let names: Vec<String> = (0..65).map(|index| format!("p{index:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&refs)));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, last) = (node(0), node(64));
+
+    let command = op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.multilevel", "params": {}, "selection": selected(first, last)}));
+    room.submit("alice", Role::Editor, command.clone()).expect("a wide multilevel step still lands");
+    assert!(para_numbering(room.model().session(), 64).is_some(), "the last paragraph was listed too");
+
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("a step this wide has no inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+}
+
+#[test]
+fn a_restart_step_with_a_zero_start_is_refused_before_mutation() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(0), node(1));
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, one, 0, json!({"op": "set_para_list", "ids": [one, two], "kind": "numbering", "level": 0})),
+    )
+    .expect("the listing lands");
+    let before = document_json(&room);
+
+    for payload in [
+        json!({"op": "set_para_restart_numbering", "ids": [one], "start": 0}),
+        json!({"op": "set_para_restart_numbering", "ids": [one], "start": -3}),
+    ] {
+        let err = room.submit("alice", Role::Editor, op("a", 2, 1, OpKind::Structural, one, 0, payload)).expect_err("a bad start is refused");
+        assert_eq!(err.code, RejectCode::Invalid);
+        assert_eq!(document_json(&room), before, "the refusal changed nothing");
+        assert_eq!(room.version(), 1, "the version did not move");
+    }
+}

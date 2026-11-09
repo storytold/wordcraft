@@ -78,6 +78,27 @@
 //! level outside `0..=8`, an empty set and a step wider than
 //! [`MAX_LIST_PARAGRAPHS`] are refused before the document changes.
 //!
+//! `set_para_multilevel` is the nine-level form of the same step: every
+//! paragraph names its own level (`0..=8`) and the payload names the kind
+//! (`legal`, Word's `1.`, `1.1.`, `1.1.1.`, or `outline`). The adapter reuses an
+//! existing definition whose nine levels are the canonical levels of that kind
+//! or creates one deterministically, so the same payload on the same document
+//! yields the same numbering id at every replica; a step whose paragraphs
+//! already carry that definition at their levels is an identity and allocates
+//! nothing. The exact form is the `set_para_list` one (`items`, `define`,
+//! `undefine`), so undo restores the earlier levels and drops the definition the
+//! step created.
+//!
+//! `set_para_restart_numbering` restarts one existing list at an explicit
+//! start: the payload names the paragraphs that move to a fresh instance and
+//! the first number it shows. Every named paragraph must already be in the same
+//! list; the new `num` is allocated by the document's own deterministic
+//! allocator (a pure function of the numbering table), and the step is an
+//! identity when the paragraphs already sit in an instance whose start
+//! overrides are exactly the requested ones, so a repeat allocates nothing. The
+//! inverse names the earlier numbering references and drops the instance the
+//! step created.
+//!
 //! `set_para_format` restores one paragraph's body and formatting to a named
 //! earlier value: it is the inverse of a character or paragraph command, whose
 //! forward effect a replica replays as a command (a toggle or a relative step
@@ -150,6 +171,11 @@ pub const MAX_LIST_DEFINITIONS: usize = 4;
 /// The most levels one numbering definition may carry: OOXML numbers list
 /// levels 0–8.
 pub const MAX_LIST_LEVELS: usize = 9;
+
+/// The largest explicit start a restart step may name. It is the engine's own
+/// bound on "Set Numbering Value", so an addressable step and the command it
+/// normalizes accept the same values.
+pub const MAX_LIST_START: u32 = 100_000;
 
 /// The longest style id a level item may name. A style id is a short token
 /// (`Heading2`, `Quote`); the bound keeps a hostile payload small.
@@ -834,6 +860,34 @@ impl ListStyle {
     }
 }
 
+/// The multilevel list kinds the Home › Paragraph Multilevel button asks for:
+/// joined numbering (Word's `legal`, `1.`, `1.1.`, `1.1.1.`) and an outline
+/// (`I.`, `A.`, `1.`, `a.`, `i.`). Both are nine-level definitions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MultilevelStyle {
+    Legal,
+    Outline,
+}
+
+impl MultilevelStyle {
+    /// The kind a `set_para_multilevel` payload names (`legal`/`multilevel`,
+    /// `outline`).
+    pub fn parse(value: &str) -> Option<MultilevelStyle> {
+        match value {
+            "legal" | "multilevel" => Some(MultilevelStyle::Legal),
+            "outline" => Some(MultilevelStyle::Outline),
+            _ => None,
+        }
+    }
+
+    fn kind(self) -> wordcraft_doc::numbering::ListKind {
+        match self {
+            MultilevelStyle::Legal => wordcraft_doc::numbering::ListKind::Legal,
+            MultilevelStyle::Outline => wordcraft_doc::numbering::ListKind::Outline,
+        }
+    }
+}
+
 /// The list-facing state of one paragraph: its numbering reference, its style
 /// and the indents the list commands rewrite. Everything else in `ParaProps`
 /// is left alone, so an exact item restores these fields only.
@@ -913,12 +967,24 @@ pub struct ListPlan {
     pub removed: Vec<ListDefinition>,
 }
 
-/// A parsed `set_para_list` payload: the forward form a client sends (`ids`,
-/// `kind`, `level`) or the exact form the command path and the inverse write
-/// (`items`, `define`, `undefine`).
+/// One paragraph of a forward `set_para_multilevel` request: the session id and
+/// the list level (`0..=8`) the paragraph takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelTarget {
+    pub id: u32,
+    pub level: u8,
+}
+
+/// A parsed list payload: the forward forms a client sends (`ids` + `kind` +
+/// `level`, `levels` + `kind`, `ids` + `start`) or the exact form the command
+/// path and the inverse write (`items`, `define`, `undefine`). The exact form
+/// is the same for all three operations, so an inverse or a delta of one is
+/// read by the same code.
 #[derive(Clone, Debug)]
 pub enum ListStep {
     Requested { style: ListStyle, level: u8, ids: Vec<u32> },
+    Multilevel { style: MultilevelStyle, levels: Vec<LevelTarget> },
+    Restart { start: u32, ids: Vec<u32> },
     Exact { items: Vec<ListItem>, define: Vec<ListDefinition>, undefine: Vec<u32> },
 }
 
@@ -939,9 +1005,21 @@ fn list_matches(doc: &Document, state: &ListState, style: ListStyle, level: u8) 
 /// replicas that hold the same document pick the same definition — and a redo
 /// after an undo reuses the definition the first run created instead of
 /// allocating a second one.
-fn find_list(numbering: &wordcraft_doc::Numbering, style: ListStyle) -> Option<u32> {
-    let want = wordcraft_doc::numbering::levels_for(style.kind());
+fn find_list(numbering: &wordcraft_doc::Numbering, kind: wordcraft_doc::numbering::ListKind) -> Option<u32> {
+    let want = wordcraft_doc::numbering::levels_for(kind);
     numbering.nums.iter().map(|n| n.id).filter(|id| (0..9u8).all(|level| numbering.level(*id, level) == want.get(usize::from(level)))).min()
+}
+
+/// The canonical definition of `kind` a list step creates, with the ids the
+/// document's own allocator gives. The document is cloned so nothing changes if
+/// a later item is refused; the allocation is a pure function of the document,
+/// so every replica that applies the same payload picks the same ids.
+fn create_definition(doc: &Document, kind: wordcraft_doc::numbering::ListKind) -> Result<(u32, ListDefinition), MoveError> {
+    let mut numbering = (*doc.numbering).clone();
+    let num = numbering.try_add_list(kind).map_err(|err| MoveError::Bad(err.to_string()))?;
+    let abstract_num = numbering.abstract_of(num).cloned().ok_or_else(|| MoveError::Bad("the new list has no abstract definition".into()))?;
+    let instance = numbering.num(num).cloned().ok_or_else(|| MoveError::Bad("the new list has no instance".into()))?;
+    Ok((num, ListDefinition { abstract_num, num: instance }))
 }
 
 /// Resolve one id of a list step: it must name a top-level paragraph. A block
@@ -979,17 +1057,11 @@ fn plan_requested(doc: &Document, ids: &NodeIds, style: ListStyle, level: u8, ta
     let identity = resolved.iter().all(|(_, _, _, state)| list_matches(doc, state, style, level));
     let (num, define) = if identity {
         (0, Vec::new())
-    } else if let Some(num) = find_list(&doc.numbering, style) {
+    } else if let Some(num) = find_list(&doc.numbering, style.kind()) {
         (num, Vec::new())
     } else {
-        // The document is cloned so nothing changes if a later item is refused;
-        // the allocation is a pure function of the document, so every replica
-        // that applies the same payload picks the same ids.
-        let mut numbering = (*doc.numbering).clone();
-        let num = numbering.try_add_list(style.kind()).map_err(|err| MoveError::Bad(err.to_string()))?;
-        let abstract_num = numbering.abstract_of(num).cloned().ok_or_else(|| MoveError::Bad("the new list has no abstract definition".into()))?;
-        let instance = numbering.num(num).cloned().ok_or_else(|| MoveError::Bad("the new list has no instance".into()))?;
-        (num, vec![ListDefinition { abstract_num, num: instance }])
+        let (num, definition) = create_definition(doc, style.kind())?;
+        (num, vec![definition])
     };
     let mut changes = Vec::with_capacity(resolved.len());
     for (id, story, path, before) in resolved {
@@ -1010,6 +1082,100 @@ fn plan_requested(doc: &Document, ids: &NodeIds, style: ListStyle, level: u8, ta
                 indent_first_chars: None,
             }
         };
+        changes.push(ListChange { story, path, id, before, after });
+    }
+    Ok(ListPlan { changes, define, undefine: Vec::new(), removed: Vec::new() })
+}
+
+/// Resolve a `set_para_multilevel` forward request: every paragraph takes its
+/// named level of one multilevel definition. The definition is the canonical
+/// nine-level list of the requested kind, reused when the document already has
+/// it and created deterministically otherwise; a request whose paragraphs
+/// already carry that definition at their levels changes nothing and allocates
+/// nothing.
+fn plan_multilevel(doc: &Document, ids: &NodeIds, style: MultilevelStyle, levels: &[LevelTarget]) -> Result<ListPlan, MoveError> {
+    let mut resolved = Vec::with_capacity(levels.len());
+    for target in levels {
+        let (story, path, state) = resolve_list_para(doc, ids, target.id)?;
+        resolved.push((target.id, target.level, story, path, state));
+    }
+    let (num, define) = match find_list(&doc.numbering, style.kind()) {
+        Some(num) => (num, Vec::new()),
+        None => {
+            let (num, definition) = create_definition(doc, style.kind())?;
+            (num, vec![definition])
+        }
+    };
+    let mut changes = Vec::with_capacity(resolved.len());
+    for (id, level, story, path, before) in resolved {
+        let after = if before.numbering == Some(NumRef { num, level }) {
+            // Already this definition at this level: a repeated step does not
+            // rewrite the style or the indents.
+            before.clone()
+        } else {
+            ListState {
+                numbering: Some(NumRef { num, level }),
+                style: match before.style.as_deref() {
+                    None | Some("Normal") => Some("ListParagraph".to_string()),
+                    Some(_) => before.style.clone(),
+                },
+                indent_left: None,
+                indent_first: None,
+                indent_left_chars: None,
+                indent_first_chars: None,
+            }
+        };
+        changes.push(ListChange { story, path, id, before, after });
+    }
+    Ok(ListPlan { changes, define, undefine: Vec::new(), removed: Vec::new() })
+}
+
+/// Resolve a `set_para_restart_numbering` forward request: the named paragraphs
+/// move from their current list to a fresh instance whose explicit start is
+/// `start`. Every paragraph must already be in the same list (a restart
+/// restarts one list); the instance is allocated by the document's own
+/// deterministic allocator, so the same payload on the same document picks the
+/// same id at every replica. A request whose paragraphs already carry exactly
+/// the requested start overrides changes nothing and allocates nothing.
+fn plan_restart(doc: &Document, ids: &NodeIds, start: u32, targets: &[u32]) -> Result<ListPlan, MoveError> {
+    let mut resolved = Vec::with_capacity(targets.len());
+    let mut source: Option<u32> = None;
+    let mut named_levels: Vec<u8> = Vec::new();
+    for id in targets {
+        let (story, path, state) = resolve_list_para(doc, ids, *id)?;
+        let Some(n) = state.numbering.filter(|n| n.num != 0) else {
+            return Err(MoveError::Bad(format!("node {id} is not in a list")));
+        };
+        match source {
+            Some(num) if num != n.num => return Err(MoveError::Bad("a restart step restarts one list".into())),
+            Some(_) => {}
+            None => source = Some(n.num),
+        }
+        if !named_levels.contains(&n.level) {
+            named_levels.push(n.level);
+        }
+        resolved.push((*id, story, path, state));
+    }
+    let source = source.ok_or_else(|| MoveError::Bad("a restart step needs a paragraph".into()))?;
+    named_levels.sort_unstable();
+    let wanted: Vec<(u8, u32)> = named_levels.iter().map(|level| (*level, start)).collect();
+    let identity = doc.numbering.num(source).is_some_and(|num| num.start_overrides == wanted);
+    let (num, define) = if identity {
+        (source, Vec::new())
+    } else {
+        let mut numbering = (*doc.numbering).clone();
+        let num = numbering.restart(source).ok_or_else(|| MoveError::Bad("no free list id".into()))?;
+        if let Some(instance) = numbering.nums.iter_mut().find(|n| n.id == num) {
+            instance.start_overrides = wanted;
+        }
+        let abstract_num = numbering.abstract_of(num).cloned().ok_or_else(|| MoveError::Bad("the new list has no abstract definition".into()))?;
+        let instance = numbering.num(num).cloned().ok_or_else(|| MoveError::Bad("the new list has no instance".into()))?;
+        (num, vec![ListDefinition { abstract_num, num: instance }])
+    };
+    let mut changes = Vec::with_capacity(resolved.len());
+    for (id, story, path, before) in resolved {
+        let level = before.numbering.map_or(0, |n| n.level);
+        let after = ListState { numbering: Some(NumRef { num, level }), ..before.clone() };
         changes.push(ListChange { story, path, id, before, after });
     }
     Ok(ListPlan { changes, define, undefine: Vec::new(), removed: Vec::new() })
@@ -1087,6 +1253,38 @@ pub fn plan_list(doc: &Document, ids: &NodeIds, step: &ListStep) -> Result<ListP
                 seen.push(*id);
             }
             plan_requested(doc, ids, *style, *level, targets)
+        }
+        ListStep::Multilevel { style, levels } => {
+            if levels.is_empty() || levels.len() > MAX_LIST_PARAGRAPHS {
+                return Err(MoveError::Bad(format!("a multilevel step carries 1 to {MAX_LIST_PARAGRAPHS} paragraphs, not {}", levels.len())));
+            }
+            let mut seen: Vec<u32> = Vec::with_capacity(levels.len());
+            for target in levels {
+                if seen.contains(&target.id) {
+                    return Err(MoveError::Bad(format!("the step names node {} twice", target.id)));
+                }
+                seen.push(target.id);
+                if target.level > 8 {
+                    return Err(MoveError::Bad("a list level is 0–8".into()));
+                }
+            }
+            plan_multilevel(doc, ids, *style, levels)
+        }
+        ListStep::Restart { start, ids: targets } => {
+            if targets.is_empty() || targets.len() > MAX_LIST_PARAGRAPHS {
+                return Err(MoveError::Bad(format!("a restart step carries 1 to {MAX_LIST_PARAGRAPHS} paragraphs, not {}", targets.len())));
+            }
+            if *start == 0 || *start > MAX_LIST_START {
+                return Err(MoveError::Bad(format!("a restart start is 1 to {MAX_LIST_START}, not {start}")));
+            }
+            let mut seen: Vec<u32> = Vec::with_capacity(targets.len());
+            for id in targets {
+                if seen.contains(id) {
+                    return Err(MoveError::Bad(format!("the step names node {id} twice")));
+                }
+                seen.push(*id);
+            }
+            plan_restart(doc, ids, *start, targets)
         }
         ListStep::Exact { items, define, undefine } => {
             if items.is_empty() || items.len() > MAX_LIST_PARAGRAPHS {
@@ -1179,13 +1377,14 @@ pub fn list_touched(plan: &ListPlan) -> Vec<u32> {
     touched
 }
 
-/// The operations that undo a list step: one exact `set_para_list` naming the
-/// state before it, plus the definitions the forward step created (dropped
-/// again only when nothing uses them). The room wraps the step's deltas, so
-/// undo lands as one `transaction` delta on every replica.
-pub fn list_inverse_ops(op: &Op, plan: &ListPlan) -> Vec<Op> {
+/// The operations that undo a list step: one exact op of the same name
+/// (`set_para_list`, `set_para_multilevel` or `set_para_restart_numbering`)
+/// naming the state before it, plus the definitions the forward step created
+/// (dropped again only when nothing uses them). The room wraps the step's
+/// deltas, so undo lands as one `transaction` delta on every replica.
+pub fn list_inverse_ops(op: &Op, plan: &ListPlan, name: &str) -> Vec<Op> {
     let items: Vec<Value> = plan.changes.iter().map(|change| list_state_json(change.id, &change.before)).collect();
-    let mut payload = json!({"op": "set_para_list", "items": items});
+    let mut payload = json!({"op": name, "items": items});
     if !plan.define.is_empty() {
         payload["undefine"] = json!(plan.define.iter().map(|definition| definition.num.id).collect::<Vec<u32>>());
     }
@@ -1198,12 +1397,13 @@ pub fn list_inverse_ops(op: &Op, plan: &ListPlan) -> Vec<Op> {
     vec![inverse_op(OpKind::Structural, op, story, node, 0, payload)]
 }
 
-/// The authoritative delta of a list step: one `set_para_list` naming the exact
-/// state every paragraph took (plus the definitions it added or dropped) inside
-/// a `transaction`, so the step lands on every replica as one delta.
-pub fn list_delta(plan: &ListPlan) -> Value {
+/// The authoritative delta of a list step: one exact op of the step's name
+/// naming the state every paragraph took (plus the definitions it added or
+/// dropped) inside a `transaction`, so the step lands on every replica as one
+/// delta.
+pub fn list_delta(plan: &ListPlan, name: &str) -> Value {
     let items: Vec<Value> = plan.changes.iter().map(|change| list_state_json(change.id, &change.after)).collect();
-    let mut op = json!({"op": "set_para_list", "items": items});
+    let mut op = json!({"op": name, "items": items});
     if !plan.define.is_empty() {
         op["define"] = definitions_json(&plan.define);
     }
@@ -1345,10 +1545,20 @@ fn list_undefine(value: Option<&Value>) -> Result<Vec<u32>, String> {
     Ok(out)
 }
 
-/// Read a `set_para_list` payload. `items` names the exact target state of each
-/// paragraph (what the command path and an inverse write); otherwise `ids`,
-/// `kind` and `level` describe the forward request.
+/// Read a list payload. The op name decides the forward form: `set_para_list`
+/// reads `ids`, `kind` and `level`; `set_para_multilevel` reads `kind` and
+/// `levels` (one `id` and `level` per paragraph); `set_para_restart_numbering`
+/// reads `ids` and `start`. `items` is the exact form every one of them shares
+/// (what the command path and an inverse write).
 pub fn list_step(payload: &Value) -> Result<ListStep, String> {
+    let name = payload.get(PAYLOAD_OP).and_then(Value::as_str).unwrap_or("set_para_list");
+    if payload.get("items").is_none() {
+        match name {
+            "set_para_multilevel" => return multilevel_step(payload),
+            "set_para_restart_numbering" => return restart_step(payload),
+            _ => {}
+        }
+    }
     if payload.get("items").is_some() {
         let entries = payload.get("items").and_then(Value::as_array).ok_or_else(|| "`items` must be a list".to_string())?;
         if entries.is_empty() {
@@ -1399,6 +1609,72 @@ pub fn list_step(payload: &Value) -> Result<ListStep, String> {
     Ok(ListStep::Requested { style, level, ids })
 }
 
+/// Read the paragraph ids of a forward request: a non-empty list of at most
+/// [`MAX_LIST_PARAGRAPHS`] session ids without duplicates.
+fn list_targets(payload: &Value, op: &str) -> Result<Vec<u32>, String> {
+    let entries = payload.get("ids").and_then(Value::as_array).ok_or_else(|| format!("{op} needs `ids`"))?;
+    if entries.is_empty() {
+        return Err("`ids` is empty".to_string());
+    }
+    if entries.len() > MAX_LIST_PARAGRAPHS {
+        return Err(format!("a list step carries at most {MAX_LIST_PARAGRAPHS} paragraphs"));
+    }
+    let mut ids: Vec<u32> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry.as_u64().ok_or_else(|| "`ids` must be a list of ids".to_string())?;
+        let id = u32::try_from(id).map_err(|_| "an id does not fit".to_string())?;
+        if ids.contains(&id) {
+            return Err(format!("the step names node {id} twice"));
+        }
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
+/// Read a `set_para_multilevel` forward request: the kind and one `id`/`level`
+/// pair per paragraph (`0..=8`).
+fn multilevel_step(payload: &Value) -> Result<ListStep, String> {
+    let style = payload
+        .get("kind")
+        .and_then(Value::as_str)
+        .and_then(MultilevelStyle::parse)
+        .ok_or_else(|| "`kind` must be `legal` or `outline`".to_string())?;
+    let entries = payload.get("levels").and_then(Value::as_array).ok_or_else(|| "set_para_multilevel needs `levels`".to_string())?;
+    if entries.is_empty() {
+        return Err("`levels` is empty".to_string());
+    }
+    if entries.len() > MAX_LIST_PARAGRAPHS {
+        return Err(format!("a multilevel step carries at most {MAX_LIST_PARAGRAPHS} paragraphs"));
+    }
+    let mut levels: Vec<LevelTarget> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry.get("id").and_then(Value::as_u64).ok_or_else(|| "a level item needs an `id`".to_string())?;
+        let id = u32::try_from(id).map_err(|_| "an id does not fit".to_string())?;
+        if levels.iter().any(|seen| seen.id == id) {
+            return Err(format!("the step names node {id} twice"));
+        }
+        let level = entry.get("level").and_then(Value::as_u64).ok_or_else(|| "`level` must be 0–8".to_string())?;
+        let level = u8::try_from(level).map_err(|_| "`level` must be 0–8".to_string())?;
+        if level > 8 {
+            return Err("`level` must be 0–8".to_string());
+        }
+        levels.push(LevelTarget { id, level });
+    }
+    Ok(ListStep::Multilevel { style, levels })
+}
+
+/// Read a `set_para_restart_numbering` forward request: the paragraphs that
+/// move to the restarted instance and the first number it shows.
+fn restart_step(payload: &Value) -> Result<ListStep, String> {
+    let start = payload.get("start").and_then(Value::as_u64).ok_or_else(|| "`start` must be 1 or more".to_string())?;
+    let start = u32::try_from(start).map_err(|_| "`start` does not fit".to_string())?;
+    if start == 0 || start > MAX_LIST_START {
+        return Err(format!("a restart start is 1 to {MAX_LIST_START}"));
+    }
+    let ids = list_targets(payload, "set_para_restart_numbering")?;
+    Ok(ListStep::Restart { start, ids })
+}
+
 /// The WordCraft half of a room.
 pub struct DocModel {
     doc: Document,
@@ -1443,7 +1719,9 @@ impl DocModel {
             "move_block" => self.move_block(op, ids),
             "permute" => self.permute(op, ids),
             "set_para_level" => self.set_para_level(op, ids),
-            "set_para_list" => self.set_para_list(op, ids),
+            "set_para_list" => self.list_op(op, ids, "set_para_list", "List"),
+            "set_para_multilevel" => self.list_op(op, ids, "set_para_multilevel", "Multilevel list"),
+            "set_para_restart_numbering" => self.list_op(op, ids, "set_para_restart_numbering", "Restart numbering"),
             "insert_row" => self.insert_row(op, ids),
             "remove_row" => self.remove_row(op, ids),
             "insert_column" => self.insert_column(op, ids),
@@ -1827,10 +2105,10 @@ impl DocModel {
         })
     }
 
-    /// Make a list of top-level paragraphs a bulleted or numbered list at an
-    /// explicit level, or restore each paragraph's exact list state.
-    /// `payload.ids` + `kind` + `level` is the forward form: the adapter reuses
-    /// a canonical definition of that kind or creates one deterministically.
+    /// A list step: make top-level paragraphs a bulleted, numbered or
+    /// multilevel list, restart one at an explicit start, or restore each
+    /// paragraph's exact list state. The op name selects the forward form
+    /// (`ids` + `kind` + `level`, `levels` + `kind`, `ids` + `start`), and
     /// `payload.items` names each paragraph's exact numbering instance, style
     /// and indents, which is what the command path and an inverse write; the
     /// `define`/`undefine` lists add or drop numbering definitions so a replica
@@ -1839,15 +2117,15 @@ impl DocModel {
     /// Every check runs before the document or the id map changes: an unknown
     /// id, a retired id, a block that is not a top-level paragraph (a table, a
     /// row, a cell, a paragraph inside a table), a duplicate id, a level outside
-    /// `0..=8`, an empty set, a step wider than [`MAX_LIST_PARAGRAPHS`], a
-    /// definition that collides with an existing one and a numbering reference
-    /// without a definition are refused.
+    /// `0..=8`, a restart start outside `1..=100_000`, an empty set, a step
+    /// wider than [`MAX_LIST_PARAGRAPHS`], a definition that collides with an
+    /// existing one and a numbering reference without a definition are refused.
     ///
-    /// The authoritative delta is one exact `set_para_list` inside a
+    /// The authoritative delta is one exact op of the step's name inside a
     /// `transaction`; the inverse names the state before the step and drops the
     /// definitions it created, so undo and redo reach every replica as one
     /// delta.
-    fn set_para_list(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+    fn list_op(&mut self, op: &Op, ids: &mut NodeIds, name: &str, label: &str) -> Result<Effect, Reject> {
         let step = list_step(&op.payload).map_err(|why| invalid(op, why))?;
         let plan = plan_list(&self.doc, ids, &step).map_err(|err| match err {
             MoveError::Unknown(id) => invalid(op, format!("unknown node {id}")),
@@ -1857,9 +2135,16 @@ impl DocModel {
         // Undo puts the earlier list references back, so an edit another user
         // makes in any listed paragraph must refuse the undo.
         let touched = list_touched(&plan);
-        let inverse = list_inverse_ops(op, &plan);
+        let inverse = list_inverse_ops(op, &plan, name);
         apply_list(&mut self.doc, &plan).map_err(|err| invalid(op, err))?;
-        Ok(Effect { delta: Some(list_delta(&plan)), inverse, forward: vec![op.clone()], label: "List".into(), nodes_changed: false, touched })
+        Ok(Effect {
+            delta: Some(list_delta(&plan, name)),
+            inverse,
+            forward: vec![op.clone()],
+            label: label.to_string(),
+            nodes_changed: false,
+            touched,
+        })
     }
 
     /// Insert a row into the table the operation addresses. `payload.index` is
@@ -3166,7 +3451,7 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             let plan = plan_level(doc, ids, &items).map_err(|err| err.to_string())?;
             apply_level(doc, &plan)?;
         }
-        "set_para_list" => {
+        "set_para_list" | "set_para_multilevel" | "set_para_restart_numbering" => {
             let step = list_step(delta)?;
             let plan = plan_list(doc, ids, &step).map_err(|err| err.to_string())?;
             apply_list(doc, &plan)?;

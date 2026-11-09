@@ -1050,3 +1050,120 @@ fn a_foreign_edit_of_a_listed_paragraph_refuses_the_undo_without_touching_the_do
     assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
     assert_eq!(pair.room.version(), version, "the version did not move");
 }
+
+#[test]
+fn a_multilevel_undo_lands_as_one_transaction_at_its_author_and_the_peer() {
+    let mut pair = FormatPair::new(&["One", "Two"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(1), off: 3 },
+    };
+    let before = serde_json::to_value(&pair.mine.doc).expect("json");
+
+    let (step, echo) = pair.list(1, "para.multilevel", json!({}));
+    let delta = echo.delta.clone().expect("the multilevel list carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_multilevel"), "the forward effect keeps the multilevel op");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "both selected paragraphs are named");
+    let num = items[0]["num"].as_u64().expect("a list id");
+    assert_eq!(items[1]["num"], json!(num), "one definition for the step");
+    assert_eq!(delta["ops"][0]["define"][0]["num"]["id"], json!(num), "the definition travels with the delta");
+    let listed = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), listed, "the author and the peer hold the same document");
+    assert_eq!(para_numbering(&pair.mine, 0), para_numbering(&pair.theirs, 0), "both replicas name the same numbering id");
+
+    let undo = history_op("alice", 2, pair.alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    let delta = answer.delta.clone().expect("the undo carries a delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_multilevel"), "the inverse keeps the multilevel op");
+    assert_eq!(delta["ops"][0]["items"][0]["num"], serde_json::Value::Null);
+    assert_eq!(delta["ops"][0]["undefine"], json!([num]), "the definition the step created is dropped");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the author is back at the earlier document");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the peer is back at the earlier document");
+
+    let redo = history_op("alice", 3, pair.alice.version, &step, HistoryAction::Redo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), listed, "redo lists again with the same numbering id");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), listed);
+}
+
+#[test]
+fn a_restart_numbering_undo_lands_as_one_transaction_at_its_author_and_the_peer() {
+    let mut pair = FormatPair::new(&["One", "Two"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(1), off: 3 },
+    };
+    let (listing, _echo) = pair.list(1, "para.numbering", json!({}));
+    let source = para_numbering(&pair.mine, 0).expect("a list").num;
+    let listed = serde_json::to_value(&pair.mine.doc).expect("json");
+
+    // Restart numbering at the caret of the first paragraph.
+    pair.mine.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    let (step, echo) = pair.list(2, "para.restartNumbering", json!({}));
+    let delta = echo.delta.clone().expect("the restart carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_restart_numbering"), "the forward effect keeps the restart op");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    let num = items[0]["num"].as_u64().expect("a restarted list");
+    assert_ne!(num, u64::from(source), "a fresh instance");
+    assert_eq!(items[1]["num"], json!(num), "the following paragraphs of the list move too");
+    assert_eq!(delta["ops"][0]["define"][0]["num"]["id"], json!(num), "the instance travels with the delta");
+    let restarted = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), restarted, "the author and the peer hold the same document");
+    assert_eq!(para_numbering(&pair.mine, 0), para_numbering(&pair.theirs, 0), "both replicas name the same instance");
+
+    let undo = history_op("alice", 3, pair.alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    let delta = answer.delta.clone().expect("the undo carries a delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_restart_numbering"), "the inverse keeps the restart op");
+    assert_eq!(delta["ops"][0]["items"][0]["num"], json!(source), "the earlier instance is back");
+    assert_eq!(delta["ops"][0]["undefine"], json!([num]), "the instance the step created is dropped");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), listed, "the author is back at the listed document");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), listed, "the peer is back at the listed document");
+    assert_eq!(para_numbering(&pair.mine, 0).map(|n| n.num), Some(source), "the listing step is still on the stack underneath");
+
+    let redo = history_op("alice", 4, pair.alice.version, &step, HistoryAction::Redo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), restarted, "redo restarts again with the same instance");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), restarted);
+    let _ = listing;
+}
+
+#[test]
+fn a_foreign_edit_of_a_multilevel_paragraph_refuses_the_undo_without_touching_the_document() {
+    let mut pair = FormatPair::new(&["One", "Two"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(1), off: 3 },
+    };
+    let (step, _echo) = pair.list(1, "para.multilevel", json!({}));
+
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "X"})).expect("bob types");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "X"})).expect("a plan").remove(0);
+    let edit = op_from("bob", 1, pair.peer.version, &plan, None);
+    let echo = pair.room.submit("bob", Role::Editor, edit).expect("bob's edit lands");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("own echo is skipped");
+    pair.alice.apply(&echo, &mut pair.mine).expect("alice applies bob's edit");
+
+    let mine_before = serde_json::to_value(&pair.mine.doc).expect("json");
+    let theirs_before = serde_json::to_value(&pair.theirs.doc).expect("json");
+    let version = pair.alice.version;
+    let undo = history_op("alice", 2, version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), mine_before, "the author's document is unchanged");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
+    assert_eq!(pair.room.version(), version, "the version did not move");
+}

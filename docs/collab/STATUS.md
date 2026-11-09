@@ -59,7 +59,9 @@ missing, and where the next session should start.
   the order of an explicit id list, §5.13), `set_para_level` (the outline level
   of a list of paragraphs named by session id, §5.14), `set_para_list` (a
   bulleted or numbered list at an explicit level, with the numbering definition
-  it creates, §5.15), `insert_row`, `remove_row`, and
+  it creates, §5.15), `set_para_multilevel` (one multilevel definition with each
+  paragraph at its own level `0..=8`, §5.16), `set_para_restart_numbering` (one
+  list restarted at an explicit start, §5.16), `insert_row`, `remove_row`, and
   `set_para_format` (restore one paragraph's runs, mark and `ParaProps` — the
   inverse of a formatting command, §5.10).
 - Node ids address every container: a table `[block]`, its rows
@@ -86,7 +88,9 @@ missing, and where the next session should start.
   either: `para.promote`/`demote` travel as a command and the server names the
   levels (§5.14). A list membership change is the same: `para.bullets`/
   `para.numbering` travel as a command and the server names the exact list state
-  and the numbering definition it allocated (§5.15).
+  and the numbering definition it allocated (§5.15); `para.multilevel` and
+  `para.restartNumbering` do too, keeping their own op names and the multilevel
+  levels or the restarted instance with its explicit start (§5.16).
 - A column removal, a cell merge and a cell split carry an exact inverse
   (`split_cells`/`merge_cells`/`insert_column` with `restore`): the removed
   bodies, the grid and the session ids travel in the inverse, so undo restores
@@ -148,6 +152,18 @@ missing, and where the next session should start.
   it `undo-conflict` (§5.15). A step wider than 64 paragraphs, a paragraph
   inside a table, a paragraph without a session id, or a command that also
   changed anything but those fields keeps the command delta.
+- The Multilevel List button (`para.multilevel`) is normalized after the
+  command to one `set_para_multilevel` structural operation naming each changed
+  paragraph's session id, level (`0..=8`), style and indents plus the
+  nine-level numbering definition the command allocated; replicas replay the
+  same transaction delta and undo restores the earlier list state and drops the
+  definition the step created (§5.16). Restart numbering
+  (`para.restartNumbering`) is normalized to one
+  `set_para_restart_numbering` operation naming the paragraphs that moved to
+  the fresh instance and the instance with its explicit start overrides, so
+  undo puts the earlier numbering references back and drops the instance
+  (§5.16). Both keep the command delta for a step wider than 64 paragraphs, a
+  paragraph inside a table or one without a session id.
 
 ### Client and transport (`crates/collab-client`, `crates/collab-ws`)
 
@@ -235,7 +251,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step and a bulleted/numbered list step are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15 |
+| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step and a restarted list step are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -339,9 +355,9 @@ Results at this writing:
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
   `format.enclose`, whose inverse restores the paragraph's body (§5.11), and a
-  paragraph move, a paragraph sort, an outline level step and a list step are
-  addressable structural operations with an exact inverse (§5.12, §5.13, §5.14,
-  §5.15); every
+  paragraph move, a paragraph sort, an outline level step, a list step, a
+  multilevel list step and a restarted list step are addressable structural
+  operations with an exact inverse (§5.12, §5.13, §5.14, §5.15, §5.16); every
   other command still has none and acts as an undo barrier. The
   `opId` dedup window travels with the snapshot (§5.5), so a retry across a
   restart is
@@ -357,8 +373,10 @@ Results at this writing:
   is a text box, formatting and anything the diff cannot express; a formatting
   command's inverse is a `set_para_format` primitive (§5.10, §5.11), a paragraph
   move is a `move_block` structural operation (§5.12), a sort is a `permute`
-  (§5.13), an outline level change is a `set_para_level` (§5.14) and a list
-  membership change is a `set_para_list` (§5.15), the rest
+  (§5.13), an outline level change is a `set_para_level` (§5.14), a list
+  membership change is a `set_para_list` (§5.15), a multilevel list is a
+  `set_para_multilevel` and a restarted list is a
+  `set_para_restart_numbering` (§5.16), the rest
   stay barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
