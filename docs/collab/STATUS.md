@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `eda7924f` plus this status commit — 43 commits over
+- HEAD at this writing: `2ce54064` plus this status commit — 44 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -29,7 +29,11 @@ missing, and where the next session should start.
 - Per-user undo/redo as an operation with a `history` field: one version per undo,
   `undoConflict` when the step's target changed, a step of several operations
   replayed as one all-or-nothing transaction (a refused inverse takes back the
-  ones already applied), and commands act as an undo barrier (ADR-0010). An
+  ones already applied), and commands act as an undo barrier (ADR-0010). The
+  exception is a character or paragraph formatting command: the room captures
+  the covered paragraphs and stores an exact `set_para_format` inverse, so its
+  undo restores the previous value instead of reporting `unsupported` (§5.10).
+  An
   operation also reports the nodes beside its target whose content its inverse
   would overwrite (`Effect::touched`): a text edit another user made there after
   the step makes the undo `undo-conflict` instead of dropping that edit (§5.8).
@@ -50,7 +54,9 @@ missing, and where the next session should start.
 
 - Primitives: `insert_text`, `delete_range`, `replace_range`, `split_para`,
   `merge_para`, `insert_block` (with the block body and its container path),
-  `remove_block`, `insert_row`, `remove_row`.
+  `remove_block`, `insert_row`, `remove_row`, and `set_para_format` (restore one
+  paragraph's runs, mark and `ParaProps` — the inverse of a formatting command,
+  §5.10).
 - Node ids address every container: a table `[block]`, its rows
   `[block, row]`, its cells `[block, row, cell]` and the paragraphs inside a
   cell `[block, row, cell, block]` each have one (`NodeIds::shift_children`).
@@ -90,6 +96,13 @@ missing, and where the next session should start.
   `collab.*`, undo/redo/repeat, read-aloud) and only mutating commands.
 - A command that grows the document/parts (tables, comments, shapes, references)
   reports `nodes changed`, so replicas refresh the node map.
+- A formatting command (`format.*` character properties, `para.*` paragraph
+  properties, from a named list of property-only commands) captures every
+  paragraph between the selection ends before it runs and returns one
+  `set_para_format` inverse per paragraph whose formatting changed, carrying
+  only the changed fields' previous values; several paragraphs land as one
+  transaction. A covered paragraph without a session id is refused before the
+  command runs; commands that also move text stay barriers (§5.10).
 
 ### Client and transport (`crates/collab-client`, `crates/collab-ws`)
 
@@ -177,7 +190,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9 |
+| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -278,8 +291,9 @@ Results at this writing:
   (two iframes through a cabinet-like host page, §5.1). Two real machines, the
   real cabinet page and its storage, and the visible commit status stay manual.
 - A step of several operations is now one transaction (every inverse or none);
-  commands still have no inverse and act as an undo barrier. The `opId` dedup
-  window travels with the snapshot (§5.5), so a retry across a restart is
+  character and paragraph formatting commands carry an exact inverse (§5.10),
+  and every other command still has none and acts as an undo barrier. The `opId`
+  dedup window travels with the snapshot (§5.5), so a retry across a restart is
   deduplicated; the window is bounded at 10 000 answers, so a retry after more
   than that (or of an operation accepted after the last snapshot, which the
   restore cannot replay either) is not covered.
@@ -289,7 +303,9 @@ Results at this writing:
   cells (§5.7): a column insert/remove, a cell merge and a cell split travel as
   structural operations that reindex cell ids instead of retiring them, so the
   caret of a client holding a cell id survives. What still travels as a command
-  is a text box, formatting and anything the diff cannot express; a command that
+  is a text box, formatting and anything the diff cannot express; a formatting
+  command's inverse is a `set_para_format` primitive (§5.10), the rest stay
+  barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
   table edits undo exactly (§5.8): an inserted column, a column removal, a merge
@@ -300,7 +316,10 @@ Results at this writing:
   and the map is sent on join and after structural operations.
 - An inverse carries the bodies it puts back, so it is bounded: a merge, a split
   or a column removal whose restore data would pass 256 KiB keeps no inverse and
-  undo reports that step as `unsupported` (§5.8). A structural step still cannot
+  undo reports that step as `unsupported` (§5.8). A formatting step carries the
+  previous runs, mark and paragraph properties of the paragraphs it changed and
+  is bounded at 256 paragraphs, so a formatting action over a wider selection
+  stays a barrier too (§5.10). A structural step still cannot
   be undone once any later structural operation landed, so two merges in a row
   can be undone only newest first (§4, ADR-0010).
 - Offline editing is not supported: while a session reconnects, document commands
@@ -381,14 +400,15 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    and the pin is acceptable to the maintainers (GitHub reports
    `action_required` for fork PRs until a maintainer approves, and the PR shows
    `CONFLICTING` until the force-push).
-3. Optional hardening: command inverses for the common engine commands, property
+3. Optional hardening: property
    primitives, an offline queue, or a join broadcast that carries the role before
    the first presence frame (presence already carries it, §5.3). (The
    multi-operation undo transaction is done:
    `a_step_of_several_operations_lands_as_one_transaction`; the `opId` window
    survives a snapshot restore: §5.5; table-cell ids are done: §5.6; columns,
    merges and splits are primitives: §5.7; their inverses are done and an undo
-   answer lands at its author: §5.8, §5.9.)
+   answer lands at its author: §5.8, §5.9; command inverses for the frequent
+   character and paragraph formatting commands are done: §5.10.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
@@ -837,6 +857,95 @@ wordcraft-collab-client -p wordcraft-collab-ws -p wordcraft-collab-server -p
 wordcraft-collab-web` — 13, 1 (the socket test), 29 + 1 ignored and 5 passed;
 `cargo clippy` on those six crates with `--all-targets -- -D warnings` clean;
 `cargo fmt --all -- --check` clean. No push was made and CI is unchanged.
+
+### 5.10 Inverses for character and paragraph formatting (run 2026-11-09)
+
+§5.2 п.3 listed "command inverses for the common engine commands" as optional
+hardening, and §4 recorded the cost: every `kind:"command"` step was an undo
+barrier, because the room replays a command at every replica but has no way to
+replay it backwards — a toggle would flip again and a relative step (grow font)
+would move twice. **Head `2ce54064`** on `feature/realtime-collaboration`, with
+this entry's docs commit on top (no push, CI unchanged).
+
+**The forward effect is unchanged.** A formatting command still travels as
+`kind:"command"` and every replica replays it (`apply_delta` →
+`Session::run_remote`); no wire field changed. Only the step now carries an
+inverse: `crates/collab-doc` gained the primitive `set_para_format`, which
+restores one paragraph's `runs`, its `mark` (the formatting of the paragraph
+mark) and its paragraph `props`. Each field is optional, so the inverse carries
+only what the command changed, with the values captured **before** the command
+ran.
+
+**How the server builds it.** `SessionModel::apply_command` captures every
+paragraph between the ordered selection ends before running a command from
+`CHAR_FORMAT_COMMANDS`/`PARA_FORMAT_COMMANDS` (`crates/collab-engine`). That
+range is a superset of what the command touches: a selection, the word under a
+collapsed caret and the mark of an empty paragraph all live in those paragraphs.
+After the run it compares text length, runs, mark and `ParaProps` per paragraph
+and emits one `set_para_format` per paragraph whose formatting changed. Several
+paragraphs become several inverse operations and therefore one
+`{"op":"transaction","ops":[…]}` delta, as a table step already does. Redo still
+replays the original command — with the exact previous value back in place, a
+toggle or a relative step computes the same result it did the first time.
+
+**Addressable, or refused before anything changes.** If a paragraph the command
+could touch has no session id, the inverse could not name it: the command is
+refused as `invalid` before `Session::run`. The primitive itself refuses a node
+that is not a paragraph (a table, a row, a cell, an unknown or a deleted id),
+a run list that does not cover the current text byte for byte, a run that ends
+inside a character, an empty patch, and more than `MAX_FORMAT_RUNS` (100 000)
+runs — all before the document is touched, with the patch parsed from a clone.
+
+**A foreign edit of the same fields is `undo-conflict`.** The step reports every
+changed paragraph in `Effect::touched`. Any later operation by another user in
+one of those paragraphs — typing or formatting — makes undo answer
+`undo-conflict` without changing the document at any replica and without moving
+the room version; the step stays on the stack and the session stays `InSync`
+(§5.9). An edit in a paragraph the step did not touch does not block the undo.
+
+**What stays a barrier.** Only property-only commands are listed. Commands that
+move or rewrite text (`format.changeCase`, `format.enclose` with `text`,
+`para.sort`, `para.moveUp`/`moveDown`, `para.promote`/`demote`,
+`para.removeBlank`, `para.convertBreaks`, the space/indent text tools), allocate
+numbering definitions (`para.bullets`, `para.numbering`, `para.multilevel`,
+`para.restartNumbering`) or otherwise change more than `runs`/`mark`/`props`
+still have no inverse, and their undo answers `unsupported` — as do a step over
+more than 256 paragraphs, and a collapsed-caret formatting command that only
+sets the session's pending formatting (no document change to restore).
+
+**Tests.**
+
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s): `a_char_format_undo_returns_the_previous_value_at_its_author_and_the_peer`
+  (bold as a planned command, undo → the exact earlier document JSON at the
+  author and the peer, redo → bold again),
+  `a_foreign_format_change_refuses_the_undo_without_touching_the_document`
+  (Bob italicises the same paragraph; Alice's undo is `undo-conflict`, both
+  documents byte-identical before and after, room version unchanged),
+  `a_two_paragraph_align_undo_lands_as_one_transaction_on_both_replicas`
+  (`para.alignCenter` over two paragraphs → one `transaction` delta restoring
+  `ParaProps` at both replicas).
+- `crates/collab-engine/src/tests.rs`:
+  `a_formatting_command_carries_the_previous_value_as_its_inverse` (undo back to
+  the exact JSON, then redo),
+  `a_paragraph_align_undo_restores_every_covered_paragraph`,
+  `a_command_that_moves_text_is_still_an_undo_barrier` (`format.changeCase` →
+  `unsupported`, text unchanged),
+  `a_format_restore_on_a_node_that_is_not_a_paragraph_is_refused_before_mutation`
+  (a table id → `invalid`, document and version unchanged),
+  `a_format_restore_that_does_not_cover_the_text_is_refused_before_mutation`
+  (999-byte and 2-of-5-byte run lists → `invalid`, nothing written).
+- `crates/collab-doc/src/tests.rs`:
+  `a_format_restore_rewrites_the_runs_and_properties_it_names` (the adapter's
+  own round trip: apply, then the stored inverse restores the exact JSON),
+  `a_format_restore_on_an_unknown_node_is_refused_before_mutation`.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app -p wordcraft-collab-client -p wordcraft-collab-ws` — 49,
+52, 22, 17, 13 and 0 plus 1 socket test, all passed; `cargo clippy` on those six
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
 
 ## 6. Where things live
 
