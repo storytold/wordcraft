@@ -143,14 +143,7 @@ impl Reader<'_> {
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
                 if let Some(ch) = p.child("w:pPrChange") {
-                    let old = ch
-                        .child("w:pPr")
-                        .map(|o| {
-                            let mut old = self.pc.ppr(o).0;
-                            crate::read::props::resolve_level_only(&self.doc.styles, &mut old, &id);
-                            old.formatting()
-                        })
-                        .unwrap_or_default();
+                    let old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
                     st.para.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
                 }
             }
@@ -195,6 +188,29 @@ impl Reader<'_> {
             .collect();
         for (s, n) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+        }
+        // Old style formatting revisions that give only a list level take the list from the style
+        // they are based on, rather than the revised style's own list.
+        let fixed_old_num: Vec<Option<Option<wordcraft_doc::props::NumRef>>> = sheet
+            .styles
+            .iter()
+            .map(|s| {
+                s.para.fmt_change.as_ref().and_then(|ch| match ch.old.numbering {
+                    Some(n) if n.num == props::LEVEL_ONLY => {
+                        let base_style = ch.old.style.as_deref().or(s.based_on.as_deref());
+                        let base = base_style.and_then(|b| props::chain_list(&sheet, b));
+                        Some(base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }))
+                    }
+                    _ => None,
+                })
+            })
+            .collect();
+        for (s, opt_num) in sheet.styles.iter_mut().zip(fixed_old_num) {
+            if let Some(new_num) = opt_num
+                && let Some(ch) = &mut s.para.fmt_change
+            {
+                ch.old.numbering = new_num;
+            }
         }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;

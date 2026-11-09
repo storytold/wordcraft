@@ -2893,3 +2893,105 @@ fn style_definition_property_changes_roundtrip() {
     assert_eq!(rch.old.size, Some(14.0));
     assert_eq!(rch.old.bold, Some(false));
 }
+
+/// A style definition's old properties in `w:pPrChange` with level-only numbering resolve the
+/// list from their based-on style chain once the parsed style sheet is available, rather than
+/// inheriting the revised style's own list or being discarded against unparsed styles.
+#[test]
+fn style_definition_level_only_numbering_resolves_from_based_on_chain() {
+    use std::io::Write;
+    const W_XML: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let doc_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_XML}"><w:body><w:p><w:r><w:t>Sample</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let styles_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W_XML}">
+        <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+        <w:style w:type="paragraph" w:styleId="CustomBase">
+            <w:name w:val="Custom Base"/>
+            <w:pPr>
+                <w:numPr>
+                    <w:ilvl w:val="0"/>
+                    <w:numId w:val="42"/>
+                </w:numPr>
+            </w:pPr>
+        </w:style>
+        <w:style w:type="paragraph" w:styleId="CustomChild">
+            <w:name w:val="Custom Child"/>
+            <w:basedOn w:val="CustomBase"/>
+            <w:pPr>
+                <w:numPr>
+                    <w:ilvl w:val="1"/>
+                    <w:numId w:val="99"/>
+                </w:numPr>
+                <w:pPrChange w:id="1" w:author="Editor" w:date="2026-11-07T00:00:00Z">
+                    <w:pPr>
+                        <w:numPr>
+                            <w:ilvl w:val="2"/>
+                        </w:numPr>
+                    </w:pPr>
+                </w:pPrChange>
+            </w:pPr>
+        </w:style>
+        </w:styles>"#
+    );
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, content) in [
+        ("_rels/.rels", root),
+        ("word/document.xml", doc_xml.as_str()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/styles.xml", styles_xml.as_str()),
+    ] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(content.as_bytes()).unwrap();
+    }
+    let bytes = zw.finish().unwrap().into_inner();
+    let doc = wordcraft_docx::read(&bytes).expect("read");
+
+    let child = doc.styles.get("CustomChild").expect("CustomChild style exists");
+    assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
+    let pch = child.para.fmt_change.as_deref().expect("pPrChange preserved");
+    // Resolved list from CustomBase (num: 42), not from revised style's list (num: 99):
+    assert_eq!(pch.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }));
+}
+
+/// Tracked change `w:id` values in `styles.xml` continue from the document's revision sequence
+/// instead of restarting at 1 when the body contains revisions.
+#[test]
+fn style_revisions_continue_xml_id_sequence_past_body() {
+    let mut doc = Document::new();
+    doc.revisions.push(Revision { kind: RevisionKind::Insert, author: "Author1".into(), date: "2026-11-07T00:00:00Z".into(), move_name: None });
+    doc.revisions.push(Revision { kind: RevisionKind::Format, author: "Editor".into(), date: "2026-11-07T00:00:00Z".into(), move_name: None });
+
+    // Body run with tracked insertion (revision 0 -> w:id="1"):
+    doc.body = vec![Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph {
+        text: "Hello".into(),
+        runs: vec![wordcraft_doc::Run { len: 5, props: CharProps { ins: Some(0), ..Default::default() } }],
+        ..Default::default()
+    }))];
+
+    // Style with tracked formatting change (revision 1 -> w:id="2", not restarting at 1):
+    let old_chr = CharProps { bold: Some(false), ..CharProps::default() };
+    let st = Style {
+        id: "CustomHeading".into(),
+        name: "Custom Heading".into(),
+        kind: StyleKind::Paragraph,
+        chr: CharProps { bold: Some(true), fmt_change: wordcraft_doc::props::PropChange::boxed(1, old_chr), ..CharProps::default() },
+        ..Default::default()
+    };
+    Arc::make_mut(&mut doc.styles).styles.push(st);
+
+    let bytes = wordcraft_docx::write(&doc).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+
+    let mut doc_xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut doc_xml).unwrap();
+    assert!(doc_xml.contains(r#"<w:ins w:id="1""#), "document.xml has ins with w:id=1: {doc_xml}");
+
+    let mut styles_xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/styles.xml").unwrap(), &mut styles_xml).unwrap();
+    assert!(styles_xml.contains(r#"<w:rPrChange w:id="2""#), "styles.xml continues with w:id=2: {styles_xml}");
+    assert!(!styles_xml.contains(r#"<w:rPrChange w:id="1""#), "styles.xml must not restart at w:id=1: {styles_xml}");
+}

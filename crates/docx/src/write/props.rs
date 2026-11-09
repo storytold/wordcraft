@@ -1,5 +1,6 @@
 //! Property writers, in ECMA-376 schema element order.
 
+use wordcraft_doc::Document;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
     TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
@@ -167,6 +168,29 @@ pub fn has_rpr(c: &CharProps) -> bool {
 
 /// Attributes of a tracked change element: `w:id`, `w:author`, `w:date`.
 pub type ChangeAttrs = Vec<(&'static str, String)>;
+
+/// Format `w:id`, `w:author`, and `w:date` of a tracked change by revision `idx`.
+///
+/// Increments and uses `next_rev_id` as the XML `w:id` attribute identifier, distinct from `idx`
+/// which indexes `doc.revisions` to look up author and timestamp metadata.
+pub fn rev_attrs(doc: &Document, next_rev_id: &mut u32, idx: u32) -> (String, String, String) {
+    *next_rev_id += 1;
+    let r = doc.revisions.get(idx as usize);
+    let author = crate::write::annotation_author(doc, r.map_or("", |r| r.author.as_str())).to_string();
+    // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
+    let date = if doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
+    (next_rev_id.to_string(), author, date)
+}
+
+/// Format tracked change attributes `w:id`, `w:author`, and optionally `w:date` for revision `idx`.
+pub fn change_attrs(doc: &Document, next_rev_id: &mut u32, idx: u32) -> ChangeAttrs {
+    let (id, author, date) = rev_attrs(doc, next_rev_id, idx);
+    let mut a = vec![("w:id", id), ("w:author", author)];
+    if !date.is_empty() {
+        a.push(("w:date", date));
+    }
+    a
+}
 
 /// Open a tracked change element (`w:rPrChange`, `w:pPrChange`, `w:tblPrChange`…).
 pub fn open_change(w: &mut W, tag: &str, a: &ChangeAttrs) {

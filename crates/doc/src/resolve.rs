@@ -339,9 +339,7 @@ impl StyleSheet {
                     sp.tabs = Some(merged);
                 }
                 pp.overlay(&sp);
-                let mut sc = s.chr.clone();
-                sc.fmt_change = None;
-                cp.overlay(&sc);
+                cp.overlay(&s.chr);
             }
         }
         pp.style = None;
@@ -370,9 +368,7 @@ impl StyleSheet {
             if let Some(cs) = run_style {
                 for s in self.chain(cs) {
                     if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
-                        let mut sc = s.chr.clone();
-                        sc.fmt_change = None;
-                        cp.overlay(&sc);
+                        cp.overlay(&s.chr);
                     }
                 }
             }
@@ -435,9 +431,7 @@ impl StyleSheet {
         if let Some(cs) = c.style.as_deref() {
             for s in self.chain(cs) {
                 if s.kind == StyleKind::Character || s.kind == StyleKind::Paragraph {
-                    let mut sc = s.chr.clone();
-                    sc.fmt_change = None;
-                    cp.overlay(&sc);
+                    cp.overlay(&s.chr);
                 }
             }
         }

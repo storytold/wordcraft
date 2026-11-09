@@ -17,7 +17,7 @@ fn file_style_name(name: &str) -> String {
 }
 
 /// Serialize a document's style sheet and document defaults to `word/styles.xml`.
-pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
+pub(super) fn styles_xml(doc: &Document, rev_id: &mut u32) -> Vec<u8> {
     let s = &doc.styles;
     let mut w = W::new();
     let ns = xml::body_ns();
@@ -50,28 +50,11 @@ pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     }
     // Kinds whose default style the file named (`w:default`); the English ids stand in otherwise.
     let flagged: Vec<StyleKind> = s.styles.iter().filter(|st| st.default).map(|st| st.kind).collect();
-    let mut rev_id = 0u32;
     for st in &s.styles {
-        style_xml(&mut w, doc, &mut rev_id, st, &flagged);
+        style_xml(&mut w, doc, rev_id, st, &flagged);
     }
     w.close("w:styles");
     w.into_bytes()
-}
-
-/// Format tracked change attributes `w:id`, `w:author`, and optionally `w:date` for revision `idx`.
-///
-/// Increments and uses `rev_id` as the XML `w:id` attribute identifier, distinct from `idx`
-/// which indexes `doc.revisions` to look up author and timestamp metadata.
-fn change_attrs(doc: &Document, rev_id: &mut u32, idx: u32) -> props::ChangeAttrs {
-    *rev_id += 1;
-    let r = doc.revisions.get(idx as usize);
-    let author = crate::write::annotation_author(doc, r.map_or("", |r| r.author.as_str())).to_string();
-    let date = if doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
-    let mut a = vec![("w:id", rev_id.to_string()), ("w:author", author)];
-    if !date.is_empty() {
-        a.push(("w:date", date));
-    }
-    a
 }
 
 /// Write a style's paragraph properties `w:pPr`, including tracked formatting changes `w:pPrChange`.
@@ -84,7 +67,7 @@ fn write_style_ppr(w: &mut W, doc: &Document, rev_id: &mut u32, st: &Style) {
         w.open("w:pPr", &[]);
         props::ppr_inner(w, &st.para, false, None);
         if let Some(ch) = &st.para.fmt_change {
-            let a = change_attrs(doc, rev_id, ch.rev);
+            let a = props::change_attrs(doc, rev_id, ch.rev);
             props::open_change(w, "w:pPrChange", &a);
             w.open("w:pPr", &[]);
             props::ppr_inner(w, &ch.old, false, None);
@@ -105,7 +88,7 @@ fn write_style_rpr(w: &mut W, doc: &Document, rev_id: &mut u32, st: &Style) {
         w.open("w:rPr", &[]);
         props::rpr_inner(w, &st.chr);
         if let Some(ch) = &st.chr.fmt_change {
-            let a = change_attrs(doc, rev_id, ch.rev);
+            let a = props::change_attrs(doc, rev_id, ch.rev);
             props::open_change(w, "w:rPrChange", &a);
             w.open("w:rPr", &[]);
             props::rpr_inner(w, &ch.old);

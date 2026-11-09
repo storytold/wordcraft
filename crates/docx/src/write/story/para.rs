@@ -284,23 +284,14 @@ impl Writer<'_> {
         }
     }
 
+    /// Format `w:id`, `w:author`, and `w:date` of a tracked change by revision `idx`.
     pub(super) fn rev_attrs(&mut self, idx: u32) -> (String, String, String) {
-        self.next_rev_id += 1;
-        let r = self.doc.revisions.get(idx as usize);
-        let author = crate::write::annotation_author(self.doc, r.map_or("", |r| r.author.as_str())).to_string();
-        // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
-        let date = if self.doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
-        (self.next_rev_id.to_string(), author, date)
+        crate::write::props::rev_attrs(self.doc, &mut self.next_rev_id, idx)
     }
 
     /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
     pub(super) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
-        let (id, author, date) = self.rev_attrs(idx);
-        let mut a = vec![("w:id", id), ("w:author", author)];
-        if !date.is_empty() {
-            a.push(("w:date", date));
-        }
-        a
+        crate::write::props::change_attrs(self.doc, &mut self.next_rev_id, idx)
     }
 
     /// A run's `w:rPr`, with its tracked formatting change last (§17.13.5.31).
