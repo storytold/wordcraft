@@ -273,6 +273,23 @@ fn typed_multi_letter_scripts_stay_whole() {
 }
 
 #[test]
+fn typed_stacked_scripts_nest_to_the_right() {
+    // #6074, Word for Windows (build 16.0.20527): `a^b^c` + Space builds a^(b^c).
+    use wordcraft_doc::math::ScriptKind;
+    let mut s = session();
+    s.run("insert.equation", &json!({})).unwrap();
+    s.run("equation.type", &json!({"text": "a^b^c "})).unwrap();
+    let nodes = nodes_of(&s, &s.math.as_ref().unwrap().at).unwrap();
+    let [MNode::Script { kind: ScriptKind::Sup, base, sup, .. }] = &nodes[..] else { panic!("{nodes:#?}") };
+    assert!(matches!(base.as_slice(), [MNode::Run(r)] if r.text == "a"), "{nodes:#?}");
+    assert!(
+        matches!(sup.as_slice(), [MNode::Script { kind: ScriptKind::Sup, base, sup, .. }]
+            if matches!(base.as_slice(), [MNode::Run(r)] if r.text == "b") && matches!(sup.as_slice(), [MNode::Run(r)] if r.text == "c")),
+        "{nodes:#?}"
+    );
+}
+
+#[test]
 fn a_built_script_keeps_the_letter_typed_after_it() {
     // #1609 review: `x_i y ` built x_{iy}: the letter after a script is its own item.
     let mut s = session();

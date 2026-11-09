@@ -9,7 +9,9 @@
 //! an operator or space; a parenthesised operand loses its parentheses). `^`/`_` with nothing
 //! before them are pre-scripts. A top-level `#` numbers the equation (`E=mc^2#(1)`).
 
-use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
+use crate::math::{
+    Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, WRAP_DEPTH, any_too_deep, is_nary_char, math_class, merge_runs, too_deep,
+};
 
 /// Function names set upright and applied to the following operand.
 pub const FUNCTION_NAMES: &[&str] = &[
@@ -172,7 +174,7 @@ impl P {
                         out.push(self.prescript(stops));
                     } else {
                         self.i += 1;
-                        let s = self.script_operand(stops);
+                        let s = self.script_chain(c, stops, 0);
                         if out.last().is_some_and(too_deep) {
                             out.push(text(c));
                             out.extend(s);
@@ -584,7 +586,7 @@ impl P {
             }
             match c {
                 '^' | '_' => {
-                    let s = self.script_operand(stops);
+                    let s = self.script_chain(c, stops, 0);
                     let b = base(out);
                     out.push(attach_script(b, c == '^', s));
                 }
@@ -599,6 +601,22 @@ impl P {
                 }
             }
         }
+    }
+
+    /// A script operand, with the same script operator after it nested inside: `a^b^c` is
+    /// `a^(b^c)`, as Word builds it (#6074). The chain stops at `WRAP_DEPTH` like every other
+    /// wrap, so `x^1^1^1…` stays shallow (#1456) and the rest is left to the caller as text.
+    fn script_chain(&mut self, op: char, stops: &[char], level: usize) -> Arg {
+        let s = self.script_operand(stops);
+        if self.peek() != Some(op) || s.is_empty() || level + 1 >= WRAP_DEPTH || self.tired() || any_too_deep(&s) {
+            return s;
+        }
+        self.i += 1;
+        self.depth += 1;
+        let inner = self.script_chain(op, stops, level + 1);
+        self.depth -= 1;
+        let (kind, sub, sup) = if op == '^' { (ScriptKind::Sup, Vec::new(), inner) } else { (ScriptKind::Sub, inner, Vec::new()) };
+        vec![MNode::Script { kind, base: s, sub, sup }]
     }
 
     /// A script or limit: a parenthesised group, a structure, a number, a signed operand, a run of
