@@ -24,6 +24,10 @@ const NO_FILL: &str = "none";
 /// Color, and takes what the based-on style gives it.
 const INHERIT_FILL: &str = "inherit";
 
+/// The fill menu's choices that aren't colours. Inherit comes first because it also names a part
+/// that sets no fill: nothing of its own covers what's below it, unlike No Color.
+const FILL_CHOICES: [(&str, &str); 2] = [("Inherit", INHERIT_FILL), ("No Color", NO_FILL)];
+
 /// One table style part in the dialog, as it resolves through the based-on chain: colours are
 /// hex, empty for none; a fill can also be [`NO_FILL`] or [`INHERIT_FILL`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -587,7 +591,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         ui.horizontal(|ui| {
             ui.push_id("tstyle_fill", |ui| {
                 ui.label(tl!("Fill color:"));
-                color_field_with(ui, &theme, &mut r.fill, &[("No Color", NO_FILL), ("Inherit", INHERIT_FILL)]);
+                color_field_with(ui, &theme, &mut r.fill, &FILL_CHOICES);
             });
             ui.add_space(12.0);
             ui.label(tl!("Alignment:"));
@@ -743,6 +747,15 @@ mod tests {
         let again = table_regions(&app, "Parts");
         assert_eq!(again[part_index(TablePart::FirstRow)].fill, NO_FILL);
         assert!(table_style_params(Some("Parts"), "Parts", "Table Grid", &again, &again).get("firstRow").is_none());
+    }
+
+    /// A part that sets no fill doesn't read as No Color, which is a different choice.
+    #[test]
+    fn a_part_without_a_fill_reads_as_inherit() {
+        use super::super::chrome::shown_choice;
+        assert_eq!(shown_choice("", &FILL_CHOICES), "Inherit");
+        assert_eq!(shown_choice(INHERIT_FILL, &FILL_CHOICES), "Inherit");
+        assert_eq!(shown_choice(NO_FILL, &FILL_CHOICES), "No Color");
     }
 
     /// Inherit gives up a derived style's own colour, or its No Color, for the based-on style's.

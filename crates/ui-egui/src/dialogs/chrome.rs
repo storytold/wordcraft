@@ -30,12 +30,7 @@ pub(crate) fn color_field_with(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value:
             }
         }
         ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let label = if c.is_some() {
-            value.clone()
-        } else {
-            let shown = choices.iter().find(|(_, v)| *v == value.as_str()).or(choices.first());
-            shown.map(|(l, _)| tl!(*l).to_string()).unwrap_or_default()
-        };
+        let label = if c.is_some() { value.clone() } else { tl!(shown_choice(value, choices)).to_string() };
         ui.menu_button(label, |ui| {
             for (label, choice) in choices {
                 if ui.button(tl!(*label)).clicked() {
@@ -46,6 +41,11 @@ pub(crate) fn color_field_with(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value:
             crate::colors::field_menu(ui, theme, id, value);
         });
     });
+}
+
+/// The label of the choice `value` is, or the first choice's when it is none of them.
+pub(crate) fn shown_choice<'a>(value: &str, choices: &[(&'a str, &str)]) -> &'a str {
+    choices.iter().find(|(_, v)| *v == value).or(choices.first()).map_or("", |(l, _)| *l)
 }
 
 /// The open dialog, as (window id, frames it has been centred for).
