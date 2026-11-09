@@ -7,16 +7,21 @@ use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableLook, Underline, VAlign};
-use wordcraft_doc::styles::{PartFormat, PartSet, TablePart, TableStyleProps};
+use wordcraft_doc::styles::{FillOff, PartFormat, PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{CharProps, Rgb, TextColor};
 use wordcraft_engine::cmd::table_style::CELL_ALIGNS;
 
+use super::chrome::color_field;
 use crate::WordApp;
 use crate::dialogs::{Dialog, buttons, color_menu};
 use crate::theme::Tokens;
 
+/// A part's fill in the dialog when No Color was chosen. Unlike an unset fill (empty), which lets
+/// the parts below show, this covers them.
+const NO_FILL: &str = "none";
+
 /// One table style part in the dialog, as it resolves through the based-on chain: colours are
-/// hex, empty for none.
+/// hex, empty for none; a fill can also be [`NO_FILL`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRegion {
@@ -140,7 +145,11 @@ fn region_of(st: &TableStyleProps, part: TablePart) -> TableRegion {
             Some(TextColor::Rgb(c)) => c.hex(),
             _ => String::new(),
         },
-        fill: f.fill.map(Rgb::hex).unwrap_or_default(),
+        fill: match (f.fill, st.parts.fills_off.get(&part)) {
+            (Some(c), _) => c.hex(),
+            (None, Some(FillOff::Auto)) => NO_FILL.to_string(),
+            (None, _) => String::new(),
+        },
         borders: f.borders.unwrap_or_default(),
         align: align_name(f.align, f.v_align),
     }
@@ -186,7 +195,7 @@ pub fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
         v["color"] = color(&r.color);
     }
     if r.fill != basis.fill {
-        v["fill"] = color(&r.fill);
+        v["fill"] = if r.fill == NO_FILL { Value::Null } else { color(&r.fill) };
     }
     if r.align != basis.align {
         v["cellAlign"] = if r.align.is_empty() { Value::Null } else { json!(r.align) };
@@ -570,7 +579,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         ui.horizontal(|ui| {
             ui.push_id("tstyle_fill", |ui| {
                 ui.label(tl!("Fill color:"));
-                color_menu(ui, &theme, &mut r.fill);
+                color_field(ui, &theme, &mut r.fill, "No Color", NO_FILL);
             });
             ui.add_space(12.0);
             ui.label(tl!("Alignment:"));
@@ -701,6 +710,31 @@ mod tests {
         for other in [TablePart::WholeTable, TablePart::Band1Horz, TablePart::FirstRow, TablePart::Band2Vert] {
             assert_ne!(st.table_part(other).chr.bold, Some(true), "{}", other.ooxml());
         }
+    }
+
+    /// No Color on a part with no colour of its own covers the whole table's, and reopening the
+    /// dialog shows it and sends nothing; a part left alone stays unset.
+    #[test]
+    fn no_color_on_a_part_without_a_colour_covers_the_whole_table() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("table.newStyle", json!({"name": "Parts", "apply": false, "wholeTable": {"fill": "FF0000"}})).unwrap();
+        let red = Some(Rgb(0xFF, 0, 0));
+        let colours = |app: &WordApp, p: TablePart| {
+            let st = app.session.doc.styles.table_style("Parts").unwrap();
+            st.parts.fill_over(p, st.parts.fill_over(TablePart::WholeTable, None))
+        };
+        let basis = table_regions(&app, "Parts");
+        let mut regions = basis.clone();
+        regions[part_index(TablePart::FirstRow)].fill = NO_FILL.to_string();
+        let params = table_style_params(Some("Parts"), "Parts", "Table Grid", &regions, &basis);
+        assert!(params["firstRow"]["fill"].is_null() && params["firstRow"].get("fill").is_some(), "{params}");
+        assert!(params.get("lastRow").is_none(), "{params}");
+        app.run("table.modifyStyle", params).unwrap();
+        assert_eq!(colours(&app, TablePart::FirstRow), None);
+        assert_eq!(colours(&app, TablePart::LastRow), red);
+        let again = table_regions(&app, "Parts");
+        assert_eq!(again[part_index(TablePart::FirstRow)].fill, NO_FILL);
+        assert!(table_style_params(Some("Parts"), "Parts", "Table Grid", &again, &again).get("firstRow").is_none());
     }
 
     /// The border picker sets and toggles edges with the pen, and only changed edges are sent.
