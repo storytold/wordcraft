@@ -894,7 +894,7 @@ impl OpenControl {
 }
 
 /// A content control that holds plain text, as a form control does.
-fn plain_control(kind: &wordcraft_doc::control::ControlKind) -> bool {
+pub fn plain_control(kind: &wordcraft_doc::control::ControlKind) -> bool {
     use wordcraft_doc::control::ControlKind as K;
     matches!(kind, K::Text { .. } | K::CheckBox { .. } | K::DropDown { .. } | K::ComboBox { .. } | K::Date { .. })
 }

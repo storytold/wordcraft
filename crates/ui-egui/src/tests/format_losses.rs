@@ -11,13 +11,13 @@ fn app() -> WordApp {
     WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
 }
 
-/// An app with typed text; `comment` adds a comment on it (which RTF and ODT can't keep).
-fn draft(comment: bool) -> WordApp {
+/// An app with typed text; `control` adds a rich text content control around it (which neither RTF nor ODT can keep).
+fn draft(control: bool) -> WordApp {
     let mut a = app();
     a.run("text.insert", json!({"text": TEXT})).unwrap();
-    if comment {
+    if control {
         a.run("select.all", json!({})).unwrap();
-        a.run("review.newComment", json!({"text": "Tighten this"})).unwrap();
+        a.run("developer.richText", json!({"title": "Name"})).unwrap();
     }
     assert!(a.session.dirty);
     a
@@ -47,7 +47,7 @@ fn pick(a: &mut WordApp, picked: Vec<std::path::PathBuf>) -> std::rc::Rc<std::ce
 }
 
 #[test]
-fn save_as_rtf_with_a_comment_warns_and_continue_saves() {
+fn save_as_rtf_with_a_content_control_warns_and_continue_saves() {
     for ext in ["rtf", "odt"] {
         let dir = scratch(&format!("continue-{ext}"));
         let file = dir.join(format!("draft.{ext}"));
@@ -60,12 +60,12 @@ fn save_as_rtf_with_a_comment_warns_and_continue_saves() {
         match &a.dialog {
             Some(crate::dialogs::Dialog::FormatLosses { name, losses, .. }) => {
                 assert_eq!(name, &format!("draft.{ext}"));
-                assert_eq!(losses, &["comments".to_string()]);
+                assert_eq!(losses, &["contentControls".to_string()]);
             }
             _ => panic!("{ext}: the warning is open"),
         }
         let r = a.run("ui.formatLosses", json!({"answer": "continue"})).unwrap();
-        assert_eq!(r["losses"], json!(["comments"]), "{ext}");
+        assert_eq!(r["losses"], json!(["contentControls"]), "{ext}");
         assert_eq!(prompt(&a), None);
         assert!(file.exists(), "{ext}: saved");
         assert!(!a.session.dirty, "{ext}: Continue counts as saved, as in Word");
@@ -124,6 +124,23 @@ fn a_document_rtf_can_hold_saves_without_a_warning() {
     }
 }
 
+/// Both writers keep comments (#3747), so saving one warns about nothing.
+#[test]
+fn a_comment_is_kept_so_saving_it_does_not_warn() {
+    for ext in ["rtf", "odt"] {
+        let dir = scratch(&format!("comment-{ext}"));
+        let file = dir.join(format!("comment.{ext}"));
+        let mut a = draft(false);
+        a.run("select.all", json!({})).unwrap();
+        a.run("review.newComment", json!({"text": "Tighten this"})).unwrap();
+        pick(&mut a, vec![file.clone()]);
+        a.run("file.saveAs", json!({})).unwrap();
+        assert_eq!(prompt(&a), None, "{ext}: nothing to warn about");
+        assert!(file.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Save (Ctrl+S) on a document whose file is RTF warns each time it has something to lose.
 #[test]
 fn save_to_the_documents_own_rtf_file_warns() {
@@ -133,7 +150,7 @@ fn save_to_the_documents_own_rtf_file_warns() {
     a.run("file.save", json!({"path": file.to_string_lossy()})).unwrap();
     assert!(!a.session.dirty, "a plain document saves without asking");
     a.run("select.all", json!({})).unwrap();
-    a.run("review.newComment", json!({"text": "Hm"})).unwrap();
+    a.run("developer.richText", json!({"title": "Name"})).unwrap();
     let before = std::fs::read(&file).unwrap();
     a.run("file.save", json!({})).unwrap();
     assert_eq!(prompt(&a), Some("formatLosses"));
@@ -152,13 +169,13 @@ fn programmatic_saves_never_ask() {
     let mut a = draft(true);
     let r = a.execute("file.save", json!({"path": file.to_string_lossy()})).unwrap();
     assert_eq!(prompt(&a), None);
-    assert_eq!(r["losses"], json!(["comments"]));
+    assert_eq!(r["losses"], json!(["contentControls"]));
     assert!(file.exists());
     assert!(!a.session.dirty);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// "Save changes?" → Save on an RTF document with a comment warns too; Continue saves and then
+/// "Save changes?" → Save on an RTF document with a content control warns too; Continue saves and then
 /// does what was asked (here: New).
 #[test]
 fn the_save_changes_prompt_warns_before_saving_to_rtf() {
@@ -168,7 +185,7 @@ fn the_save_changes_prompt_warns_before_saving_to_rtf() {
         let mut a = draft(false);
         a.run("file.save", json!({"path": file.to_string_lossy()})).unwrap();
         a.run("select.all", json!({})).unwrap();
-        a.run("review.newComment", json!({"text": "Hm"})).unwrap();
+        a.run("developer.richText", json!({"title": "Name"})).unwrap();
         let before = std::fs::read(&file).unwrap();
         pick(&mut a, vec![dir.join("draft.docx")]);
         a.run("file.close", json!({})).unwrap();
@@ -216,7 +233,7 @@ fn a_browser_download_lists_the_losses() {
         a.services.download = Some(Box::new(|_, _| Ok(())));
         let r = a.execute("file.saveAs", json!({"path": name})).unwrap();
         assert!(r.get("downloaded").is_some(), "{name}: {r}");
-        assert_eq!(r["losses"], json!(["comments"]), "{name}");
+        assert_eq!(r["losses"], json!(["contentControls"]), "{name}");
     }
     let mut a = draft(true);
     a.services.download = Some(Box::new(|_, _| Ok(())));
@@ -224,7 +241,7 @@ fn a_browser_download_lists_the_losses() {
     assert!(r.get("losses").is_none(), "{r}");
 }
 
-/// AutoSave writes only files that keep everything: not an RTF that would lose a comment.
+/// AutoSave writes only files that keep everything: not an RTF that would lose a content control.
 #[test]
 fn autosave_skips_an_rtf_file_that_would_lose_something() {
     let dir = scratch("autosave");
@@ -234,7 +251,7 @@ fn autosave_skips_an_rtf_file_that_would_lose_something() {
     assert_eq!(a.autosave_block(), None, "a plain RTF document can be autosaved");
     assert_eq!(a.autosave_block(), None, "asked again (cached)");
     a.run("select.all", json!({})).unwrap();
-    a.run("review.newComment", json!({"text": "Hm"})).unwrap();
+    a.run("developer.richText", json!({"title": "Name"})).unwrap();
     assert_eq!(a.autosave_block(), Some(AutoSaveBlock::Losses { name: "draft.rtf".into() }));
     assert!(a.autosave_block().is_some_and(|b| b.save_as_helps()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -268,7 +285,7 @@ fn the_warning_answers_from_its_buttons() {
         for _ in 0..3 {
             h.step();
         }
-        assert!(h.query_by_label("Comments").is_some() || h.query_by_label_contains("Comments").is_some(), "the loss is listed");
+        assert!(h.query_by_label("Content controls").is_some() || h.query_by_label_contains("Content controls").is_some(), "the loss is listed");
         h.get_by_label(button).click();
         for _ in 0..3 {
             h.step();

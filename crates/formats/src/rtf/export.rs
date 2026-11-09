@@ -890,7 +890,8 @@ fn level_def(ordered: bool, l: usize) -> String {
 
 /// Whether the RTF writer keeps a picture with this extension ([`model::media_ext`]) and bytes:
 /// PNG, JPEG and the metafiles (EMF, WMF, #4259) go in as they are, other formats only when they
-/// can be read to re-encode as PNG (not SVG, which is left out).
+/// can be read within the decode limit to re-encode as PNG (not SVG, nor a GIF cut short or a
+/// bitmap declaring huge dimensions, which are left out).
 pub fn can_write_picture(ext: &str, data: &[u8]) -> bool {
     match ext {
         "png" | "jpeg" | "jpg" => return true,
@@ -902,7 +903,7 @@ pub fn can_write_picture(ext: &str, data: &[u8]) -> bool {
         "emf" | "wmf" => return true,
         _ => {}
     }
-    image::guess_format(data).is_ok_and(|f| f.reading_enabled())
+    model::decode_bounded(data).is_some()
 }
 
 /// RTF text of a document.
