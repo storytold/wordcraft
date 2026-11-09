@@ -58,25 +58,31 @@ pub(super) fn ranges_hold(ranges: &[(u32, u32)], cp: u32) -> bool {
     ranges.get(i).is_some_and(|r| r.0 <= cp)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_FACES: u32 = 256;
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_RANGES: usize = 1 << 17;
+
+/// Sorts and merges overlapping or adjacent `(start, end)` inclusive code-point ranges in place.
+#[cfg(not(target_arch = "wasm32"))]
+fn compact(r: &mut Vec<(u32, u32)>) {
+    r.sort_unstable();
+    let mut out: Vec<(u32, u32)> = Vec::with_capacity(r.len());
+    for &(s, e) in r.iter() {
+        match out.last_mut() {
+            Some(last) if s <= last.1.saturating_add(1) => last.1 = last.1.max(e),
+            _ => out.push((s, e)),
+        }
+    }
+    *r = out;
+}
+
 /// The code points mapped by the faces of `data` (a font file or collection), as sorted,
 /// disjoint, inclusive ranges. Bounded however damaged the file: at most 256 faces, a budget of
 /// mappings read across them, and a cap on the ranges kept.
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) fn coverage_ranges(data: &[u8]) -> Box<[(u32, u32)]> {
-    const MAX_FACES: u32 = 256;
     const MAX_MAPPINGS: usize = 4 * 0x11_0000;
-    const MAX_RANGES: usize = 1 << 17;
-    fn compact(r: &mut Vec<(u32, u32)>) {
-        r.sort_unstable();
-        let mut out: Vec<(u32, u32)> = Vec::with_capacity(r.len());
-        for &(s, e) in r.iter() {
-            match out.last_mut() {
-                Some(last) if s <= last.1.saturating_add(1) => last.1 = last.1.max(e),
-                _ => out.push((s, e)),
-            }
-        }
-        *r = out;
-    }
     let count = match FileRef::new(data) {
         Ok(FileRef::Font(_)) => 1,
         Ok(FileRef::Collection(c)) => c.len().min(MAX_FACES),
@@ -133,7 +139,6 @@ pub(super) fn read_family_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> 
         return coverage_ranges(&data);
     }
     use std::io::{Read, Seek, SeekFrom};
-    const MAX_FACES: u32 = 256;
     const MAX_CMAP: u32 = 4 << 20;
     let Ok(mut file) = std::fs::File::open(path) else { return Box::new([]) };
     let Ok(meta) = file.metadata() else { return Box::new([]) };
@@ -168,19 +173,15 @@ pub(super) fn read_family_coverage(path: &std::path::Path) -> Box<[(u32, u32)]> 
         let Some(cmap) = read_at(offset.into(), len as usize) else { continue };
         let mini = super::names::mini_font(&[(*b"cmap", cmap)]);
         all.extend(coverage_ranges(&mini).iter().copied());
-        if all.len() >= (1 << 17) {
-            break;
+        if all.len() >= MAX_RANGES {
+            compact(&mut all);
+            if all.len() >= MAX_RANGES {
+                break;
+            }
         }
     }
-    all.sort_unstable();
-    let mut out: Vec<(u32, u32)> = Vec::with_capacity(all.len());
-    for (s, e) in all {
-        match out.last_mut() {
-            Some(last) if s <= last.1.saturating_add(1) => last.1 = last.1.max(e),
-            _ => out.push((s, e)),
-        }
-    }
-    out.into_boxed_slice()
+    compact(&mut all);
+    all.into_boxed_slice()
 }
 
 /// Families preferred for right-to-left scripts (Persian, Arabic, Urdu, Hebrew) when the
