@@ -124,21 +124,30 @@ pub fn check_supplied(doc: &mut Document) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Whether any markup kept as read has a field, by its field markup: `instr` (Word's
-/// `w:instrText` and `w:fldSimple w:instr`) or `dde` (OpenDocument's `text:dde-connection`), in
-/// any case. Every piece is looked at: paragraphs, tables, indexes, the wrappers kept around them
-/// and the definitions they refer to, sealed or not.
+/// Whether any markup kept as read has a field, by its field markup in any case and with any
+/// namespace prefix ([`field_markup`]). Every piece is looked at: paragraphs, tables, indexes, the
+/// wrappers kept around them and the definitions they refer to, sealed or not.
 fn kept_fields(k: &KeptXml) -> bool {
-    let fields = |xml: &str| {
-        let xml = xml.to_ascii_lowercase();
-        xml.contains("instr") || xml.contains("dde")
-    };
     let wraps = k.wraps.values().chain(k.pending_wraps.values()).chain(k.twin_wraps.values()).chain(k.table_wraps.values());
     let wraps = wraps.chain(k.pending_table_wraps.iter().map(|(_, w)| w)).flat_map(|(tags, _)| tags.iter());
     let pieces = k.paras.values().chain(k.tables.values()).chain(k.pending.values()).chain(k.defs.values());
     let pieces = pieces.chain(k.pending_tables.iter().map(|(_, xml)| xml)).chain(wraps);
     let mut pieces = pieces.chain(k.indexes.values().map(|(_, _, xml)| xml)).chain(k.pending_indexes.values().map(|(_, xml)| xml));
-    pieces.any(|xml| fields(xml))
+    pieces.any(|xml| field_markup(xml))
+}
+
+/// Whether `xml` holds field markup: Word's `instrText` element or `instr` attribute (an
+/// `instr` that isn't part of a longer name, followed by `Text` or by `=`), or OpenDocument's
+/// `dde-connection` (and its declarations) or `dde-source` (a section linked by DDE). Not text
+/// that merely contains those letters ("instructions", "hidden", "middle").
+fn field_markup(xml: &str) -> bool {
+    let xml = xml.to_ascii_lowercase();
+    let instr = xml.match_indices("instr").any(|(i, m)| {
+        let before = xml[..i].chars().next_back().is_none_or(|c| !c.is_ascii_alphanumeric() && c != '_' && c != '-' && c != '.');
+        let after = &xml[i + m.len()..];
+        before && (after.starts_with("text") || after.trim_start().starts_with('='))
+    });
+    instr || xml.contains("dde-connection") || xml.contains("dde-source")
 }
 
 /// The blocks of `doc`'s body and of its other stories: headers, footers, notes, comments and
@@ -194,10 +203,12 @@ mod tests {
     use super::*;
     use crate::Session;
 
+    /// A session with a new, empty document.
     fn session() -> Session {
         Session::new(wordcraft_doc::Document::new())
     }
 
+    /// The codes of the fields in the body of `s`'s document, in order.
     fn codes(s: &Session) -> Vec<String> {
         crate::cmd::fields::story_fields(s, wordcraft_doc::StoryRef::Body).into_iter().map(|f| f.instr).collect()
     }
@@ -436,5 +447,12 @@ mod tests {
             assert!(kept_fields(k), "{i}");
         }
         assert!(!kept_fields(&KeptXml { paras: [(1, xml("<w:p><w:r><w:t>Hi</w:t></w:r></w:p>"))].into(), ..Default::default() }));
+        // Field markup with any prefix, or none, and spaces round `=`…
+        for markup in [r#"<fldSimple instr = "LINK x"/>"#, "<W:INSTRTEXT>DDE x</W:INSTRTEXT>", r#"<text:section office:dde-source="x"/>"#] {
+            assert!(field_markup(markup), "{markup}");
+        }
+        // …but not text or names that merely hold its letters.
+        let plain = r#"<text:p x:xinstr="1" style:vertical-align="middle" text:display="hidden">Added instructions<w:instrument/></text:p>"#;
+        assert!(!field_markup(plain));
     }
 }
