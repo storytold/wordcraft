@@ -39,3 +39,15 @@ fn half_typed_scripts_print_back_the_same() {
         assert_eq!(parse_linear(&to_linear(&n)), n, "{s} → {}", to_linear(&n));
     }
 }
+
+#[test]
+fn an_invisible_delimiter_as_the_base_is_kept() {
+    // A base that is itself an invisible delimiter (LaTeX `\left.a\right.^2` makes one) is written
+    // `〖〖a〗〗^2`: the outer pair only groups, the inner one reads back as that delimiter.
+    let invisible = MNode::Delim { beg: None, end: None, sep: None, grow: true, shp_match: false, elems: vec![a("a")] };
+    let n = vec![sup(vec![invisible], a("2"))];
+    assert_eq!(parse_linear(&to_linear(&n)), n, "{}", to_linear(&n));
+    let latex = wordcraft_doc::math_latex::parse_latex(r"\left.a\right.^2");
+    assert!(matches!(&latex[..], [MNode::Script { base, .. }] if matches!(&base[..], [MNode::Delim { beg: None, end: None, .. }])), "{latex:?}");
+    assert_eq!(parse_linear(&to_linear(&latex)), latex, "{}", to_linear(&latex));
+}

@@ -548,11 +548,13 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
 
 /// A script base: bare when simple, else in invisible brackets `〖…〗`, as Word's Linear format
 /// writes it. The parser reads them back as grouping only, so `〖a^b〗^c` keeps its tree, where
-/// `(a^b)^c` would gain a visible delimiter (#6075).
+/// `(a^b)^c` would gain a visible delimiter (#6075). A base that is itself one invisible delimiter
+/// (LaTeX `\left.a\right.`) gets an outer pair too, so the inner one reads back as that delimiter.
 fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
     let mut inner = String::new();
     lin_arg(a, &mut inner, depth);
-    if simple_operand(a) && !inner.is_empty() {
+    let invisible = matches!(a, [MNode::Delim { beg: None, end: None, elems, .. }] if elems.len() == 1);
+    if simple_operand(a) && !inner.is_empty() && !invisible {
         s.push_str(&inner);
     } else {
         s.push('〖');
