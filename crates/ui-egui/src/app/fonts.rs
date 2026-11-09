@@ -157,19 +157,24 @@ impl WordApp {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
         // An Arabic interface, or a screen that shows Arabic names (language picker / packs) in
         // another interface language, asks for an installed Arabic font when none is embedded.
-        let system_arabic = lang.rtl() || self.want_system_arabic;
+        // Hebrew is a different script: a Hebrew interface, or "עברית" in that same list, asks
+        // for a Hebrew face. Right-to-left layout itself does not choose the face.
+        let system_arabic = lang.code() == "ar" || self.want_system_arabic;
+        let system_hebrew = lang.code() == "he" || self.want_system_hebrew;
         if !self.styled
             || lang.prefers_hans() != self.fonts_hans
             || lang.prefers_korean() != self.fonts_korean
             || lang.prefers_hant() != self.fonts_hant
             || system_cjk != self.fonts_system_cjk
             || system_arabic != self.fonts_system_arabic
+            || system_hebrew != self.fonts_system_hebrew
         {
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
             self.fonts_hant = lang.prefers_hant();
             self.fonts_system_cjk = system_cjk;
             self.fonts_system_arabic = system_arabic;
+            self.fonts_system_hebrew = system_hebrew;
             self.apply_ui_fonts(ctx);
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
@@ -196,7 +201,7 @@ impl WordApp {
             self.fonts_korean,
             self.fonts_hant,
             self.fonts_system_cjk,
-            self.fonts_system_arabic,
+            theme::InstalledScripts { arabic: self.fonts_system_arabic, hebrew: self.fonts_system_hebrew },
         );
         // Every window's borrowed faces: the fonts are the app's.
         let mut faces = self.canvas.ime_faces.clone();
