@@ -3058,6 +3058,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "libthai"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34fa6fbd54d1cf93560f469365655672fc94ef415fea1e73fbf2a4992b4905c8"
+
+[[package]]
 name = "linebender_resource_handle"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6864,6 +6870,7 @@ name = "wordcraft-doc"
 version = "0.15.1"
 dependencies = [
  "base64 0.23.1",
+ "libthai",
  "log",
  "proptest",
  "serde",
@@ -7005,6 +7012,7 @@ dependencies = [
  "image",
  "js-sys",
  "kurbo",
+ "libthai",
  "log",
  "serde",
  "serde_json",

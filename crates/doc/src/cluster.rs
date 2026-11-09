@@ -141,6 +141,127 @@ pub fn backspaces_by_char(c: char) -> bool {
         | 0xAA60..=0xAA7F) // Myanmar Extended-A
 }
 
+/// Thai or Lao character (U+0E00–U+0E7F / U+0E80–U+0EFF). libthai only handles Thai; Lao is
+/// excluded from the libthai path but grouped here because they share the UAX #14 SA class.
+pub fn is_thai_lao(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0EFF)
+}
+
+/// Singleton Thai word-breaker (built once per process).
+fn thai_brk() -> &'static libthai::wbrk::ThWBrk {
+    static BRK: std::sync::OnceLock<libthai::wbrk::ThWBrk> = std::sync::OnceLock::new();
+    BRK.get_or_init(libthai::wbrk::ThWBrk::new)
+}
+
+/// The contiguous Thai run that contains byte offset `off` in `text`.
+/// Returns `(run_start, run_end, offset_within_run)` where the run contains only Thai chars
+/// (U+0E00–U+0E7F, the range libthai handles). Clamps and snaps to char boundaries safely.
+fn thai_run_at(text: &str, off: usize) -> (usize, usize, usize) {
+    // Snap to a char boundary (snap backward like char_floor).
+    let mut off = off.min(text.len());
+    while off > 0 && !text.is_char_boundary(off) {
+        off -= 1;
+    }
+    // Walk left to find run start.
+    let mut start = off;
+    for (i, c) in text.get(..off).unwrap_or("").char_indices().rev() {
+        if matches!(u32::from(c), 0x0E00..=0x0E7F) {
+            start = i;
+        } else {
+            break;
+        }
+    }
+    // Walk right to find run end.
+    let mut end = off;
+    for (i, c) in text.get(off..).unwrap_or("").char_indices() {
+        if matches!(u32::from(c), 0x0E00..=0x0E7F) {
+            end = off + i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (start, end, off - start)
+}
+
+/// Ctrl+Left in Thai text: start of the word at or before `off`.
+pub fn thai_word_start(text: &str, off: usize) -> usize {
+    let (rs, re, rel) = thai_run_at(text, off);
+    let run = match text.get(rs..re) {
+        Some(r) => r,
+        None => return off,
+    };
+    let mut breaks = thai_brk().find_breaks(run);
+    // Synthesise start (0) and end boundaries so the whole run is covered.
+    if breaks.first().copied() != Some(0) {
+        breaks.insert(0, 0);
+    }
+    if breaks.last().copied() != Some(run.len()) {
+        breaks.push(run.len());
+    }
+    // Find the word boundary strictly to the left of rel (i.e., the word-start).
+    let idx = breaks.partition_point(|&b| b < rel);
+    let b = breaks.get(idx.saturating_sub(1)).copied().unwrap_or(0);
+    rs + b
+}
+
+/// Ctrl+Right in Thai text: end of the word after `off`, including trailing ASCII spaces.
+pub fn thai_word_end(text: &str, off: usize) -> usize {
+    let (rs, re, rel) = thai_run_at(text, off);
+    let run = match text.get(rs..re) {
+        Some(r) => r,
+        None => return off,
+    };
+    let mut breaks = thai_brk().find_breaks(run);
+    if breaks.last().copied() != Some(run.len()) {
+        breaks.push(run.len());
+    }
+    // First boundary strictly after rel.
+    let b = breaks.iter().copied().find(|&b| b > rel).unwrap_or(run.len());
+    let word_end = rs + b;
+    // Include trailing ASCII spaces, as Word does.
+    let mut end = word_end;
+    for (i, c) in text.get(word_end..).unwrap_or("").char_indices() {
+        if c == ' ' {
+            end = word_end + i + 1;
+        } else {
+            break;
+        }
+    }
+    end
+}
+
+/// Double-click in Thai text: `(start, end)` of the word around `off` (no trailing space).
+pub fn thai_word_at(text: &str, off: usize) -> (usize, usize) {
+    let (rs, re, rel) = thai_run_at(text, off);
+    let run = match text.get(rs..re) {
+        Some(r) => r,
+        None => return (off, off),
+    };
+    let mut breaks = thai_brk().find_breaks(run);
+    // Synthesise start + end so every position has a containing word.
+    if breaks.first().copied() != Some(0) {
+        breaks.insert(0, 0);
+    }
+    if breaks.last().copied() != Some(run.len()) {
+        breaks.push(run.len());
+    }
+    // Find the word (a..b) that contains rel: a is the last boundary <= rel, b is the
+    // first boundary > rel. If rel is exactly a boundary, select the word to its left
+    // (unless rel is 0, in which case select the word to its right).
+    let idx = breaks.partition_point(|&b| b <= rel);
+    let (a, b) = if rel > 0 && breaks.get(idx.saturating_sub(1)).copied() == Some(rel) {
+        // Exactly on a boundary — select word to the left.
+        let a = breaks.get(idx.saturating_sub(2)).copied().unwrap_or(0);
+        (a, rel)
+    } else {
+        // Inside a word.
+        let a = breaks.get(idx.saturating_sub(1)).copied().unwrap_or(0);
+        let b = breaks.get(idx).copied().unwrap_or(run.len());
+        (a, b)
+    };
+    (rs + a, rs + b)
+}
+
 /// A Myanmar character that starts a syllable: a consonant (with the Mon, Shan and Karen ones),
 /// an independent vowel, the great sa.
 fn myanmar_syllable_start(c: char) -> bool {
@@ -265,5 +386,94 @@ mod tests {
         assert!(backspaces_by_char('\u{064E}') && backspaces_by_char('\u{06E7}') && backspaces_by_char('\u{10EFF}'));
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
         assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
+    }
+
+    /// "สวัสดีครับ" (Sawasdee khrab — Thai greeting): สวัสดี | ครับ.
+    const THAI_HELLO: &str = "\u{0E2A}\u{0E27}\u{0E31}\u{0E2A}\u{0E14}\u{0E35}\u{0E04}\u{0E23}\u{0E31}\u{0E1A}";
+
+    #[test]
+    fn thai_word_caret_movement() {
+        // สวัสดี = bytes 0..18, ครับ = bytes 18..30 (each Thai char is 3 UTF-8 bytes).
+        let s = THAI_HELLO;
+        // Ctrl+Left from end of "ครับ" → start of "ครับ".
+        assert_eq!(thai_word_start(s, s.len()), 18, "word_start from end");
+        // Ctrl+Left from start of "ครับ" → start of "สวัสดี".
+        assert_eq!(thai_word_start(s, 18), 0, "word_start from mid boundary");
+        // Ctrl+Right from start → end of "สวัสดี" (= 18).
+        assert_eq!(thai_word_end(s, 0), 18, "word_end from start");
+        // Ctrl+Right from 18 → end of string.
+        assert_eq!(thai_word_end(s, 18), s.len(), "word_end from second word");
+        // Double-click in "สวัสดี" → (0, 18).
+        assert_eq!(thai_word_at(s, 6), (0, 18), "word_at inside first word");
+        // Double-click in "ครับ" → (18, 30).
+        assert_eq!(thai_word_at(s, 21), (18, s.len()), "word_at inside second word");
+    }
+
+    /// Forward and backward word navigation must visit the same set of boundaries (symmetric).
+    #[test]
+    fn thai_word_skip_symmetry() {
+        let s = THAI_HELLO; // สวัสดี | ครับ — 2 words, boundary at 18.
+
+        // Collect forward positions: 0 →(end)→ 18 →(end)→ 30.
+        let mut fwd = vec![0usize];
+        loop {
+            let next = thai_word_end(s, *fwd.last().unwrap());
+            if next == *fwd.last().unwrap() || next > s.len() {
+                break;
+            }
+            fwd.push(next);
+            if next >= s.len() {
+                break;
+            }
+        }
+
+        // Collect backward positions: 30 →(start)→ 18 →(start)→ 0.
+        let mut bwd = vec![s.len()];
+        loop {
+            let prev = thai_word_start(s, *bwd.last().unwrap());
+            if prev == *bwd.last().unwrap() {
+                break;
+            }
+            bwd.push(prev);
+            if prev == 0 {
+                break;
+            }
+        }
+        bwd.reverse();
+
+        assert_eq!(fwd, bwd, "forward and backward word skip must visit the same boundaries");
+        // Expected: [0, 18, 30].
+        assert_eq!(fwd, vec![0, 18, 30]);
+    }
+
+    /// word_at at a word boundary should select the word to its left (not an empty range).
+    #[test]
+    fn thai_word_at_boundary_selects_left_word() {
+        let s = THAI_HELLO;
+        // At boundary 18: should select "สวัสดี" = (0, 18), not (18, 18).
+        let (a, b) = thai_word_at(s, 18);
+        assert!(b > a, "word_at(18) must not return an empty range, got ({a}, {b})");
+        assert_eq!((a, b), (0, 18), "word_at(boundary) should select the word to the left");
+        // At pos 0: select "สวัสดี" to the right.
+        let (a, b) = thai_word_at(s, 0);
+        assert!(b > a, "word_at(0) must not return an empty range");
+        assert_eq!((a, b), (0, 18));
+    }
+
+    #[test]
+    fn thai_word_caret_hostile_offsets() {
+        let s = THAI_HELLO;
+        // Off past end: clamp.
+        assert!(thai_word_start(s, 1_000) <= s.len());
+        assert!(thai_word_end(s, 1_000) <= s.len());
+        // Mid-char offsets: must stay at or before a char boundary.
+        for off in 0..s.len() {
+            let ws = thai_word_start(s, off);
+            let we = thai_word_end(s, off);
+            assert!(s.is_char_boundary(ws), "word_start({off}) = {ws} not on char boundary");
+            assert!(s.is_char_boundary(we), "word_end({off}) = {we} not on char boundary");
+            let (wa, wb) = thai_word_at(s, off);
+            assert!(s.is_char_boundary(wa) && s.is_char_boundary(wb), "word_at({off}) not on boundaries");
+        }
     }
 }
