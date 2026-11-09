@@ -527,8 +527,10 @@ pub fn install_fonts_language_thai(
 pub const THAI_UI_FAMILY: &str = "Sarabun";
 
 /// Faces for a Thai interface: (text, headings). Sarabun's Regular and its SemiBold (else Medium,
-/// else Bold, else Regular) when Sarabun is installed; otherwise an installed face with Thai
-/// letters for both, so Thai menus never draw as boxes. `None` when no installed face has Thai.
+/// else Bold, else Regular) when Sarabun is installed; `None` otherwise. Only Sarabun goes first:
+/// the first face sets every row's height, and Sarabun's line (1.30 em) is close to Inter's, while
+/// Noto Sans Thai's (1.51 em, room for stacked marks) made ribbon groups run into their labels.
+/// Without Sarabun the craft-fonts Thai face and the document fallbacks draw Thai after Inter.
 pub fn thai_interface_faces(db: &wordcraft_fonts::FontDb) -> Option<(Arc<wordcraft_fonts::FontFace>, Arc<wordcraft_fonts::FontFace>)> {
     if db.has_family(THAI_UI_FAMILY) {
         let regular = db.face(THAI_UI_FAMILY, "Regular");
@@ -541,7 +543,7 @@ pub fn thai_interface_faces(db: &wordcraft_fonts::FontDb) -> Option<(Arc<wordcra
             return Some((regular, heading));
         }
     }
-    db.fallback_for('ก', u32::MAX).map(|f| (f.clone(), f))
+    None
 }
 
 /// Put `regular` first in the interface's text families and `heading` first in the semibold one.
