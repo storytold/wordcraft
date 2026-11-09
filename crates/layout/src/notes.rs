@@ -223,6 +223,19 @@ impl NoteBox {
         cuts
     }
 
+    /// Whether splitting at `cut` leaves the last line of a paragraph with widow control alone
+    /// on the next page.
+    pub(crate) fn leaves_widow(&self, cut: f32) -> bool {
+        self.items.iter().filter(|it| self.splittable(it)).any(|it| {
+            let Placed::Lines { para, l0, l1, y, .. } = it else { return false };
+            let Some(first) = para.lines.get(*l0) else { return false };
+            para.rp.widow_control
+                && *l1 == para.lines.len()
+                && *l1 >= 2
+                && para.lines.get(*l1 - 2).is_some_and(|l| (y + l.top - first.top + l.height - cut).abs() < 0.01)
+        })
+    }
+
     /// The least of the note that must stay with its reference: its first line (all of it if it
     /// can't be split).
     pub(crate) fn first_piece(&self) -> f32 {

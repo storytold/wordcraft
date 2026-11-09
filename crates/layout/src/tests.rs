@@ -8982,6 +8982,66 @@ fn long_footnotes_continue_on_the_next_page() {
     assert!(own_note.top > p1.3, "own note after the continued one: {own_note:?} {p1:?}");
 }
 
+/// A document of `body` one-line paragraphs, the last of them referencing a footnote of `note`
+/// sentences, with widow control `widow` in the note; the note's id.
+fn long_note_after(body: usize, note: usize, widow: bool) -> (Document, u32) {
+    let mut d = Document::from_text(&"Body text line.\n".repeat(body));
+    let mut p = wordcraft_doc::Paragraph::with_text(&"A long footnote that runs on. ".repeat(note), Default::default());
+    p.props.widow_control = Some(widow);
+    p.props.space_after = Some(0.0);
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(p)]);
+    d.insert_object(
+        &Pos::body(body.saturating_sub(1), 4),
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    (d, id)
+}
+
+#[test]
+fn a_footnote_continuing_on_the_next_page_ends_on_the_bottom_margin() {
+    crate::test_fonts();
+    // Observed in Word for Mac 16.113.4: whatever room the split leaves goes above the
+    // separator, the note's last line on the page sitting on the bottom margin.
+    let bottom = Document::default().last_section.page_h - Document::default().last_section.margin_bottom;
+    let mut slack = Vec::new();
+    for body in 11..24 {
+        let (d, id) = long_note_after(body, 60, false);
+        let l = lay(&d);
+        let pieces = note_pieces(&l, id);
+        assert!(pieces.len() >= 2 && pieces[0].0 == 0 && pieces[1].0 == 1, "{body}: {pieces:?}");
+        let (para, l0, l1, y) = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Part(s), para, l0, l1, y, .. } if *s == id => Some((para.clone(), *l0, *l1, *y)),
+                _ => None,
+            })
+            .unwrap();
+        let end = item_bottom(y, &para, l0, l1).unwrap();
+        slack.push(bottom - end);
+    }
+    assert!(slack.iter().all(|s| s.abs() < 0.05), "room left under the note: {slack:?}");
+}
+
+#[test]
+fn widow_control_leaves_two_lines_of_a_split_footnote_on_the_next_page() {
+    crate::test_fonts();
+    // Observed in Word for Mac 16.113.4: a note that would leave its last line alone on the next
+    // page takes one more line along when its paragraph has widow control.
+    let lines_after = |body: usize, widow: bool| {
+        let (d, id) = long_note_after(body, 60, widow);
+        let pieces = note_pieces(&lay(&d), id);
+        pieces.get(1).filter(|p| p.0 == 1).map(|p| p.2 - p.1)
+    };
+    let widows: Vec<usize> = (9..26).filter(|&b| lines_after(b, false) == Some(1)).collect();
+    assert!(!widows.is_empty(), "no body length leaves one line of the note on page 2");
+    for b in widows {
+        assert_eq!(lines_after(b, true), Some(2), "body of {b} lines");
+    }
+}
+
 #[test]
 fn short_footnotes_stay_whole() {
     crate::test_fonts();
