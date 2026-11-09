@@ -182,8 +182,8 @@ The JSON line (schema 1, also what `file.strictReport` returns) has `schema`, `s
 (`"passed"` or `"failed"`), `missing_glyphs` (entries `{"cp", "count"}`, sorted by code point),
 `missing_pictures` (entries `{"part", "source_part", "reason"}`: the picture's part or target, the
 story part it sits in such as `word/header2.xml`, and a reason code; `source_part` is also
-`background` (the page picture), `body`, `header`, `footer` or `text box` where the part name is not
-known (a document not opened from a DOCX), or a chunk path such as
+`background` (the page picture), `body`, `header`, `footer`, `footnote`, `endnote`, `comment` or
+`text box` where the part name is not known (a document not opened from a DOCX), or a chunk path such as
 `word/afchunk1.docx > word/header1.xml` for a picture inside an embedded DOCX chunk), `truncated`, the two totals
 `total_missing_glyphs` and `total_missing_pictures`, and `glyphs_truncated` and
 `pictures_truncated` for each list. The reason codes are `missing_part`, `external_target`,
