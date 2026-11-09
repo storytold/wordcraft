@@ -1201,14 +1201,16 @@ fn align_in_part(
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let mut kept = f32::MIN;
-    for ((items, splits), _) in cells.iter().zip(splits).zip(realign).filter(|(_, al)| al.is_none()) {
+    for (((items, splits), _), end) in cells.iter().zip(splits).zip(realign).zip(ends.iter()).filter(|((_, al), _)| al.is_none()) {
+        // No further than the cell's content: its last paragraph may have dropped its space after.
+        let end = end.unwrap_or(f32::MAX);
         for (it, &split) in items.iter().zip(splits) {
             let bottom = match (it.turned_bounds(), it) {
                 (Some(r), _) => Some(r.bottom()),
                 // A paragraph kept whole ends with its space after.
                 (None, Placed::Lines { para, l0, y, .. }) if split > *l0 => crate::item_bottom(*y, para, *l0, split)
                     .filter(|&b| b <= limit + 0.01)
-                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(limit) } else { b }),
+                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(end.max(b)).min(limit) } else { b }),
                 (None, Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }) => {
                     Some(rect.bottom())
                 }
@@ -1584,6 +1586,7 @@ mod width_tests {
 
     #[test]
     fn autofit_shares_donor_loss() {
+        crate::test_fonts();
         let table = Table::new(1, 4, 260.0);
         let mut grid = [30.0, 120.0, 20.0, 90.0];
         let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
@@ -1593,6 +1596,7 @@ mod width_tests {
 
     #[test]
     fn autofit_exhausts_donors() {
+        crate::test_fonts();
         let table = Table::new(1, 2, 50.0);
         let mut grid = [30.0, 20.0];
         autofit(&mut grid, &[(25.0, 25.0), (40.0, 40.0)], &table, 50.0);
@@ -1601,6 +1605,7 @@ mod width_tests {
 
     #[test]
     fn autofit_keeps_fitting_widths() {
+        crate::test_fonts();
         let table = Table::new(1, 3, 120.0);
         let mut grid = [30.0, 40.0, 50.0];
         autofit(&mut grid, &[(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)], &table, 120.0);
