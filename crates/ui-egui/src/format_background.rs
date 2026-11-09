@@ -34,6 +34,9 @@ pub enum DraftFill {
         path: Option<String>,
         media: Option<String>,
         data: Option<String>,
+        /// The cache key of `data`, hashed once when the picker hands the picture over: the pane
+        /// must not hash a large base64 string on every repaint.
+        data_key: Option<String>,
         tile: bool,
         transparency: f32,
     },
@@ -64,6 +67,7 @@ impl Draft {
                 path: None,
                 media: Some(p.media.clone()),
                 data: None,
+                data_key: None,
                 tile: p.fill_type.eq_ignore_ascii_case("tile"),
                 transparency: p.transparency,
             }
@@ -117,7 +121,7 @@ impl Draft {
                 }
                 json!({"fill": "gradient", "angle": angle, "stops": list})
             }
-            DraftFill::Picture { path, media, data, tile, transparency } => {
+            DraftFill::Picture { path, media, data, tile, transparency, .. } => {
                 let mut p = json!({"fill": "picture", "tile": tile, "transparency": transparency});
                 if let Some(o) = p.as_object_mut() {
                     if let Some(path) = path {
@@ -178,7 +182,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
         app.background.fill = match pick {
             1 => DraftFill::Solid { color: accent },
             2 => DraftFill::Gradient { start: accent, end: Rgb::WHITE, angle: 90.0, transparency: 0.0, stops: Vec::new() },
-            3 => DraftFill::Picture { path: None, media: None, data: None, tile: false, transparency: 0.0 },
+            3 => DraftFill::Picture { path: None, media: None, data: None, data_key: None, tile: false, transparency: 0.0 },
             4 => DraftFill::Pattern { preset: "ltDnDiag".into(), fore: Rgb::BLACK, back: Rgb::WHITE, transparency: 0.0 },
             _ => DraftFill::None,
         };
@@ -224,7 +228,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
                 *transparency = t;
             }
         }
-        DraftFill::Picture { path, media, data, tile, transparency } => {
+        DraftFill::Picture { path, media, data, tile, transparency, .. } => {
             let chosen = path.is_some() || media.is_some() || data.is_some();
             ui.label(egui::RichText::new(if chosen { tl!("Picture") } else { tl!("No picture chosen") }).weak());
             if ui.button(tl!("Select Picture…")).clicked() {
@@ -488,10 +492,12 @@ pub(crate) fn picture_cache_key(path: &Option<String>, data: &Option<String>, me
 /// The chosen picture's thumbnail, its texture cached by path, data or media key; a dashed frame
 /// when none is chosen or it can't be read.
 fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
-    let DraftFill::Picture { path, media, data, tile, transparency } = &app.background.fill else {
+    let DraftFill::Picture { path, media, data, data_key, tile, transparency } = &app.background.fill else {
         return;
     };
-    let key = picture_cache_key(path, data, media);
+    // `data_key` was hashed when the picture arrived; hashing the whole base64 string here would
+    // run on every repaint.
+    let key = path.clone().or_else(|| data_key.clone()).or_else(|| media.as_ref().map(|m| format!("media:{m}")));
     let Some(key) = key else {
         dashed_frame(p, rect, Tokens::get(ui.ctx()).border_strong);
         return;
@@ -645,16 +651,40 @@ mod tests {
             .drop_without_applying_deltas();
         };
         let ctx = egui::Context::default();
-        a.background.fill = DraftFill::Picture { path: None, media: Some("good.png".into()), data: None, tile: false, transparency: 0.0 };
+        a.background.fill =
+            DraftFill::Picture { path: None, media: Some("good.png".into()), data: None, data_key: None, tile: false, transparency: 0.0 };
         frame(&ctx, &a);
         assert!(matches!(entry(&ctx, "media:good.png"), Some(Some(_))), "the decoded picture is cached");
         // An unreadable one caches its failure, so it isn't decoded every frame.
-        a.background.fill = DraftFill::Picture { path: None, media: Some("junk.png".into()), data: None, tile: false, transparency: 0.0 };
+        a.background.fill =
+            DraftFill::Picture { path: None, media: Some("junk.png".into()), data: None, data_key: None, tile: false, transparency: 0.0 };
         frame(&ctx, &a);
         assert!(matches!(entry(&ctx, "media:junk.png"), Some(None)), "the failed load is cached");
         frame(&ctx, &a);
         assert!(matches!(entry(&ctx, "media:junk.png"), Some(None)), "and still is");
         // The picture before it is released.
         assert!(entry(&ctx, "media:good.png").is_none(), "the previous picture's texture is gone");
+    }
+
+    /// A data picture's key is hashed once, when the picker hands it over: the preview uses the
+    /// stored key, not a fresh hash of the whole base64 string on every repaint.
+    #[test]
+    fn picture_data_uses_its_stored_key() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("x")), Default::default());
+        a.background.fill = DraftFill::Picture {
+            path: None,
+            media: None,
+            data: Some("bm90IGFuIGltYWdl".into()), // "not an image": the load fails and caches that
+            data_key: Some("data:12:sentinel".into()),
+            tile: false,
+            transparency: 0.0,
+        };
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_picture_preview(&a, ui, ui.painter(), Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 30.0)));
+        })
+        .drop_without_applying_deltas();
+        let entry = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(Id::unique(("formatBackground.picture", "data:12:sentinel"))));
+        assert!(matches!(entry, Some(None)), "the stored key is the one cached");
     }
 }

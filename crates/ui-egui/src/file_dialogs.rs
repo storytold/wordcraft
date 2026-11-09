@@ -264,7 +264,8 @@ impl WordApp {
                     crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
                     _ => (false, 0.0),
                 };
-                self.background.fill = crate::format_background::DraftFill::Picture { path: Some(path), media: None, data: None, tile, transparency };
+                self.background.fill =
+                    crate::format_background::DraftFill::Picture { path: Some(path), media: None, data: None, data_key: None, tile, transparency };
                 Ok(json!({"pending": "formatBackground"}))
             }
             AfterPick::Font => {
