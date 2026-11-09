@@ -121,6 +121,15 @@ and `413` are one refusal to the author with no retry; a network failure or a
 `5xx`/`408`/`429` is retried with the same body. The callback accepts `http://`
 only: TLS is terminated by the ingress (`production.md`).
 
+The room keeps the file it built for a refused commit in memory. The owner may
+send `saveCopy{op_id}` to fetch it as `saveCopy{version, sha256, warnings[],
+bytes, last}` chunks (512 KiB, like a snapshot) and save a copy without writing
+the cabinet (TASK.md §6). Editors are refused (`forbidden`); with no refused
+commit the answer is `rejected{code:"conflict"}`. The lookalike `saveCopy` frame
+in both directions is deliberate: the direction says who sends it. A restart
+drops the copy (it is not part of the document or the snapshot); the owner
+commits again to see the new conflict.
+
 Known limitation, ADR-0005: `Document::kept` is not serialized, so unmodelled
 paragraph markup is preserved only for paragraphs unchanged since open. The
 warning says so; the fix is to keep the source `.docx` next to the snapshot.

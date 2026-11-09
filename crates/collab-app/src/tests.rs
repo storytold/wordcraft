@@ -12,7 +12,7 @@ use wordcraft_collab_engine::SessionModel;
 use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
 use wordcraft_engine::Session;
 
-use crate::{Outgoing, Status, SyncState};
+use crate::{CopyBuffer, Outgoing, Status, SyncState};
 
 fn server() -> (Room<DocModel>, Vec<NodeRef>) {
     let mut room = Room::new(DocModel::new(Document::new()));
@@ -1261,4 +1261,25 @@ fn a_foreign_edit_of_a_neighbouring_paragraph_refuses_the_blank_undo_without_tou
     assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), mine_before, "the author's document is unchanged");
     assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
     assert_eq!(pair.room.version(), version, "the version did not move");
+}
+
+/// The refused commit's file arrives in chunks; a chunk from an older answer
+/// never joins a newer one, and only `last` releases the copy (TASK.md §6).
+#[test]
+fn refused_copy_chunks_join_until_last_and_restart_on_a_new_version() {
+    let mut buffer = CopyBuffer::default();
+    assert!(buffer.push(4, "aa".into(), vec!["kept".into()], b"PK", false).is_none());
+    assert!(buffer.push(4, "aa".into(), vec!["kept".into()], b"\x03\x04", false).is_none());
+    let copy = buffer.push(4, "aa".into(), vec!["kept".into()], b"body", true).expect("the last chunk completes the copy");
+    assert_eq!(copy.version, 4);
+    assert_eq!(copy.sha256, "aa");
+    assert_eq!(copy.warnings, vec!["kept".to_string()]);
+    assert_eq!(copy.bytes, b"PK\x03\x04body");
+
+    // A late chunk of the finished copy does not leak into the next answer.
+    assert!(buffer.push(4, "aa".into(), vec![], b"late", false).is_none());
+    let next = buffer.push(5, "bb".into(), vec![], b"new", true).expect("a new version is a new copy");
+    assert_eq!(next.version, 5);
+    assert_eq!(next.bytes, b"new", "the older chunk is dropped when a new version opens the copy");
+    assert_eq!(next.sha256, "bb", "the metadata follows the version that opened the copy");
 }

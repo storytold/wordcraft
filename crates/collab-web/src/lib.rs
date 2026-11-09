@@ -19,8 +19,8 @@ use serde_json::{Value, json};
 
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
-pub use wordcraft_collab_app::{Commit, Cursor, ParticipantView, Status};
-use wordcraft_collab_app::{Outcome, SyncState, apply_presence};
+pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Status};
+use wordcraft_collab_app::{CopyBuffer, Outcome, SyncState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -180,6 +180,11 @@ pub struct Collab {
     status: Status,
     participants: Vec<ParticipantView>,
     commit: Option<Commit>,
+    /// The cabinet refused the last commit (`409`); the panel offers the room's
+    /// file as a copy (TASK.md §6).
+    conflict: Option<String>,
+    copy: Option<CommitCopy>,
+    copy_buffer: CopyBuffer,
     snapshot: Vec<u8>,
     snapshot_version: Version,
     last_presence_ms: f64,
@@ -207,6 +212,9 @@ impl Collab {
             status: Status::Connecting,
             participants: Vec::new(),
             commit: None,
+            conflict: None,
+            copy: None,
+            copy_buffer: CopyBuffer::default(),
             snapshot: Vec::new(),
             snapshot_version: 0,
             last_presence_ms: 0.0,
@@ -256,6 +264,18 @@ impl Collab {
         self.last_error.as_deref()
     }
 
+    /// Why the cabinet refused the last commit (`409`), while the panel may
+    /// still offer its file as a copy (TASK.md §6).
+    pub fn conflict(&self) -> Option<&str> {
+        self.conflict.as_deref()
+    }
+
+    /// The refused file, once it has fully arrived; taken so the UI saves it
+    /// exactly once.
+    pub fn take_copy(&mut self) -> Option<CommitCopy> {
+        self.copy.take()
+    }
+
     /// Resolve a remote cursor for drawing.
     pub fn cursor_position(&self, cursor: &wordcraft_collab_app::Cursor) -> Option<DocPos> {
         self.state.position(cursor)
@@ -295,7 +315,7 @@ impl Collab {
         let Ok(message) = serde_json::from_str::<ServerMsg>(text) else { return false };
         let event = self.client.on(message);
         let welcome = matches!(&event, Event::Welcome { .. });
-        let resync = matches!(&event, Event::Resync { .. });
+        let resync = matches!(&event, Event::Resync { .. } | Event::Conflict { .. });
         self.on_event(event, session);
         if welcome {
             for message in self.client.unconfirmed() {
@@ -351,6 +371,20 @@ impl Collab {
             Event::Committed { version, sha256, warnings, cabinet } => {
                 self.state.version = self.state.version.max(version);
                 self.commit = Some(Commit { version, sha256, warnings, cabinet });
+                self.conflict = None;
+            }
+            Event::Conflict { reason } => {
+                // The cabinet refused the commit (409): the snapshot follows
+                // (`on_text` asked for it), and the panel keeps the room's file
+                // available as a copy (TASK.md §6).
+                self.status = Status::Resyncing;
+                self.last_error = Some(reason.clone());
+                self.conflict = Some(reason);
+            }
+            Event::SaveCopy { version, sha256, warnings, bytes, last } => {
+                if let Some(copy) = self.copy_buffer.push(version, sha256, warnings, &bytes, last) {
+                    self.copy = Some(copy);
+                }
             }
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;
@@ -446,6 +480,16 @@ impl Collab {
         }
         let op_id = self.client.next_op_id();
         let message = ClientMsg::Commit { op_id, expected_version: self.client.version(), etag: None };
+        let _ = self.send(&message);
+    }
+
+    /// Ask the room for the file of a commit the cabinet refused (`409`), to
+    /// save it as a copy (TASK.md §6).
+    pub fn request_copy(&mut self) {
+        if self.client.state() != wordcraft_collab_client::State::Joined {
+            return;
+        }
+        let message = self.client.save_copy();
         let _ = self.send(&message);
     }
 

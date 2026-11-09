@@ -307,3 +307,58 @@ fn a_commit_answer_carries_the_cabinet_copy_when_the_room_published_it() {
         other => panic!("expected committed, got {other:?}"),
     }
 }
+
+/// A `409` from the cabinet is its own event: the panel uses it to offer the
+/// room's file as a copy, while every replica still resyncs (TASK.md §6).
+#[test]
+fn a_cabinet_conflict_is_a_separate_event_and_resyncs() {
+    let mut client = Client::new("alice");
+    let event =
+        client.on(ServerMsg::Error { code: "cabinetConflict".into(), message: "the file changed outside the session".into(), retryable: true });
+    match event {
+        Event::Conflict { reason } => assert!(reason.contains("changed outside"), "{reason}"),
+        other => panic!("expected a conflict, got {other:?}"),
+    }
+    assert_eq!(client.state(), State::Resyncing, "the stale base must be replaced");
+}
+
+/// A conflict frame still reaches an app that has no copy support: a plain
+/// retryable error keeps its old resync meaning.
+#[test]
+fn any_other_error_still_resyncs() {
+    let mut client = Client::new("alice");
+    let event = client.on(ServerMsg::Error { code: "lease".into(), message: "held".into(), retryable: true });
+    assert!(matches!(event, Event::Resync { .. }), "got {event:?}");
+    assert_eq!(client.state(), State::Resyncing);
+}
+
+/// The room's refused file arrives chunked, and the owner can ask for it.
+#[test]
+fn a_save_copy_chunk_parses_and_the_request_names_an_operation() {
+    let message: ServerMsg = serde_json::from_value(json!({
+        "type": "saveCopy",
+        "version": 6,
+        "sha256": "ab",
+        "warnings": ["kept"],
+        "bytes": [80, 75],
+        "last": true,
+    }))
+    .expect("the save-copy frame");
+    match Client::new("alice").on(message) {
+        Event::SaveCopy { version, sha256, warnings, bytes, last } => {
+            assert_eq!(version, 6);
+            assert_eq!(sha256, "ab");
+            assert_eq!(warnings, vec!["kept".to_string()]);
+            assert_eq!(bytes, [80, 75]);
+            assert!(last);
+        }
+        other => panic!("expected a copy chunk, got {other:?}"),
+    }
+
+    let mut client = Client::new("alice");
+    let request = client.save_copy();
+    match request {
+        ClientMsg::SaveCopy { op_id } => assert_eq!(op_id, OpId::new("alice", 1)),
+        other => panic!("expected saveCopy, got {other:?}"),
+    }
+}

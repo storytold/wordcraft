@@ -97,21 +97,29 @@ pub(crate) fn is_settings(id: &str) -> bool {
 /// Poll the transport, apply answers and publish this window's caret. Called
 /// once per frame before layout, so a remote edit is laid out in this frame.
 pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
-    let Some(collab) = app.collab.as_mut() else { return };
-    let changed = collab.poll(&mut app.session);
-    if changed {
-        app.session.relayout();
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    collab.publish_presence(&app.session, std::time::Instant::now());
-    #[cfg(target_arch = "wasm32")]
-    collab.publish_presence_now(&app.session);
-    if changed {
-        ctx.request_repaint();
-    } else {
-        // Answers arrive on the transport thread; keep the window listening
-        // without redrawing at full speed.
-        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    let copy = {
+        let Some(collab) = app.collab.as_mut() else { return };
+        let changed = collab.poll(&mut app.session);
+        if changed {
+            app.session.relayout();
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        collab.publish_presence(&app.session, std::time::Instant::now());
+        #[cfg(target_arch = "wasm32")]
+        collab.publish_presence_now(&app.session);
+        if changed {
+            ctx.request_repaint();
+        } else {
+            // Answers arrive on the transport thread; keep the window listening
+            // without redrawing at full speed.
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
+        collab.take_copy()
+    };
+    // The room built the file but the cabinet refused the commit (409): the
+    // owner saves it as a copy, never writing the cabinet (TASK.md §6).
+    if let Some(copy) = copy {
+        app.save_room_copy(copy);
     }
 }
 
@@ -132,9 +140,14 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
         .iter()
         .map(|participant| (participant.client_id.clone(), participant.role.clone(), participant.color.clone()))
         .collect();
-    let error = collab.last_error().map(str::to_string);
+    // A refused commit (409) keeps its reason in `conflict`; the error line
+    // shows it and the owner gets the copy action (TASK.md §6).
+    let conflict = collab.conflict().map(str::to_string);
+    let error = conflict.clone().or_else(|| collab.last_error().map(str::to_string));
+    let can_save_copy = collab.role().can_commit();
     let last_commit = collab.last_commit().cloned();
     let mut commit_clicked = false;
+    let mut copy_clicked = false;
     egui::Window::new("Collaboration").anchor(Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0)).resizable(false).collapsible(true).show(ctx, |ui| {
         ui.horizontal(|ui| {
             ui.label(status);
@@ -156,6 +169,9 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
             ui.separator();
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if conflict.is_some() && can_save_copy && ui.button(tl!("Save a copy…")).clicked() {
+            copy_clicked = true;
+        }
         if let Some(commit) = &last_commit {
             ui.separator();
             ui.label(format!("committed v{} · {}", commit.version, &commit.sha256[..commit.sha256.len().min(12)]));
@@ -169,6 +185,46 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
     });
     if commit_clicked {
         request_commit(app);
+    }
+    if copy_clicked && let Some(collab) = app.collab.as_mut() {
+        collab.request_copy();
+        app.status(tl!("Preparing a copy of the room's file…"));
+    }
+}
+
+impl WordApp {
+    /// The name "Save a copy" suggests: the document's save name with `(copy)`
+    /// before its extension.
+    pub(crate) fn room_copy_name(&self) -> String {
+        let name = self.default_save_name();
+        match name.rsplit_once('.') {
+            Some((stem, ext)) if !stem.is_empty() => format!("{stem} (copy).{ext}"),
+            _ => format!("{name} (copy)"),
+        }
+    }
+
+    /// Save the file the room built for a commit the cabinet refused with
+    /// `409` (TASK.md §6). The cabinet is not written and the document is not
+    /// marked saved: this is only a copy of the owner's work.
+    pub(crate) fn save_room_copy(&mut self, copy: crate::collab_session::CommitCopy) {
+        let name = self.room_copy_name();
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let request = crate::file_dialogs::FileDialogRequest::Save { name: name.clone(), dir: None };
+            let _ = self.ask_file(request, crate::file_dialogs::AfterPick::SaveCopy { name, bytes: copy.bytes });
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            match self.services.download.as_ref() {
+                Some(download) => match download(&name, &copy.bytes) {
+                    Ok(()) => self.status(crate::i18n::fmt(tl!("Saved a copy as {name}"), &[("name", &name)])),
+                    Err(error) => {
+                        self.status(crate::i18n::fmt(tl!("Couldn't save a copy as {name}: {error}"), &[("name", &name), ("error", &error)]))
+                    }
+                },
+                None => self.status(tl!("This page can't download a copy of the file")),
+            }
+        }
     }
 }
 

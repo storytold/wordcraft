@@ -75,6 +75,7 @@ first WebSocket frame must be `auth`.
 | `wordcraft_collab_cabinet_published_total` | commits the cabinet stored |
 | `wordcraft_collab_cabinet_conflicts_total` | cabinet `409` answers |
 | `wordcraft_collab_cabinet_errors_total` | commits not stored (token, size, exhausted retry) |
+| `wordcraft_collab_save_copies_total` | refused copies the owner took to save |
 | `wordcraft_collab_presence_total` | presence frames |
 
 A publication that is not counted in `cabinet_published_total` did not become a
@@ -113,7 +114,7 @@ Content-Type: application/json
 | Cabinet answer | Room | Clients |
 |---|---|---|
 | `200 {version, etag}` | stores the etag with the snapshot, counts `cabinet_published_total` | `committed` with `cabinet` |
-| `409` | leaves the etag alone, counts `cabinet_conflicts_total`, logs the refusal | every peer gets a retryable `error {code:"cabinetConflict"}` and resyncs; the file is not overwritten |
+| `409` | leaves the etag alone, counts `cabinet_conflicts_total`, logs the refusal, keeps the built file for the owner | every peer gets a retryable `error {code:"cabinetConflict"}` and resyncs; the owner may `saveCopy` and save the room's `.docx` as a copy; the cabinet is not overwritten |
 | `401`/`403` | counts `cabinet_errors_total`, logs without the token | the author gets `rejected {code:"forbidden"}`; no retry — fix the token |
 | `413` | counts `cabinet_errors_total` | the author gets `rejected {code:"tooLarge"}`; no retry |
 | `408`, `425`, `429`, `5xx`, network | retried with the **same body** (`COLLAB_CABINET_ATTEMPTS`, 200 ms then 800 ms) | on success as above; when every attempt fails the author gets `rejected {code:"invalid"}` with the reason and the next Commit retries |
@@ -124,8 +125,9 @@ past a lost `200` is not possible with this contract: a retry carries the old
 `expectedVersion`, so a cabinet that did store the first attempt answers `409`
 and the room reports the conflict instead of a second version. The cabinet's own
 notes list callback idempotency as its next step; until then, a lost answer
-after a successful store surfaces as a conflict, and the recovery is reopening
-the file (the stored bytes are already the room's).
+after a successful store surfaces as a conflict, and the recovery is saving a
+copy of the room's file (the panel's "Save a copy…") or reopening it (the stored
+bytes are already the room's).
 
 ## Rollout to `CRAFT_COLLAB_ENABLED=true`
 

@@ -143,6 +143,22 @@ struct RoomState {
     /// commit is checked against (M87). Stored with the snapshot, so a restart
     /// keeps the conflict check.
     published: Option<Published>,
+    /// The file the room built for a commit the cabinet refused with `409`, so
+    /// the owner can save a copy without overwriting the cabinet (TASK.md §6).
+    /// Kept in memory only: it is not part of the document and a restart loses
+    /// nothing the cabinet did not already refuse.
+    refused: Option<Refused>,
+}
+
+/// A built `.docx` the cabinet refused with `409`, kept for the owner's
+/// "save a copy" action (TASK.md §6).
+#[derive(Clone)]
+struct Refused {
+    version: Version,
+    sha256: String,
+    warnings: Vec<String>,
+    /// Shared so a request for the copy does not copy the whole file.
+    bytes: Arc<Vec<u8>>,
 }
 
 /// Counters for `/metrics`.
@@ -160,6 +176,8 @@ pub struct Metrics {
     /// Commits not stored by the cabinet: a wrong token, a size refusal, an
     /// exhausted retry or any other refusal.
     publish_errors: AtomicU64,
+    /// Refused copies the owner took to save (TASK.md §6).
+    copies: AtomicU64,
 }
 
 impl Metrics {
@@ -179,6 +197,7 @@ impl Metrics {
             ("cabinet_published_total", self.published.load(Ordering::Relaxed)),
             ("cabinet_conflicts_total", self.publish_conflicts.load(Ordering::Relaxed)),
             ("cabinet_errors_total", self.publish_errors.load(Ordering::Relaxed)),
+            ("save_copies_total", self.copies.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -244,6 +263,7 @@ impl AppState {
                         window: std::time::Instant::now(),
                         ops_in_window: 0,
                         published: snapshot.cabinet,
+                        refused: None,
                     })
                 });
                 Arc::new(Mutex::new(restored.unwrap_or_else(|| RoomState {
@@ -255,6 +275,7 @@ impl AppState {
                     window: std::time::Instant::now(),
                     ops_in_window: 0,
                     published: None,
+                    refused: None,
                 })))
             })
             .clone()
@@ -521,6 +542,7 @@ async fn process_frame(
             let call = CommitCall { client_id, op_id, expected_version };
             handle_commit(state, room, sink, claims, role, call).await
         }
+        ClientMsg::SaveCopy { op_id } => handle_save_copy(state, room, sink, op_id, role).await,
         ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }).await.is_ok(),
         ClientMsg::Auth { .. } => {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "already authenticated");
@@ -634,17 +656,24 @@ async fn handle_commit(
     let cabinet = match outcome {
         Some(Ok(published)) => {
             Metrics::inc(&state.metrics.published);
-            room.lock().unwrap_or_else(|poison| poison.into_inner()).published = Some(published.clone());
+            let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+            guard.published = Some(published.clone());
+            // The refused copy belonged to an older attempt; the cabinet now
+            // holds this one.
+            guard.refused = None;
             Some(CabinetCommit { version: published.version, etag: published.etag })
         }
         Some(Err(PublishError::Conflict(message))) => {
             Metrics::inc(&state.metrics.publish_conflicts);
             // The file changed outside the session: the room must not
             // overwrite it, and every replica resyncs so the refusal and the
-            // stale base are visible everywhere.
+            // stale base are visible everywhere. The built file stays in the
+            // room for the owner's "save a copy" action (TASK.md §6).
             log::warn!("cabinet refused the commit of {} as a conflict: {message}", claims.doc);
+            let refused = Refused { version, sha256: sha256.clone(), warnings: warnings.clone(), bytes: Arc::new(bytes.clone()) };
+            room.lock().unwrap_or_else(|poison| poison.into_inner()).refused = Some(refused);
             let notice =
-                ServerMsg::Error { code: "cabinetConflict".into(), message: format!("{message}; reopen the file to continue"), retryable: true };
+                ServerMsg::Error { code: "cabinetConflict".into(), message: format!("{message}; save a copy or reopen the file"), retryable: true };
             let _ = state.persist(&claims.doc, room, Some(bytes));
             broadcast(room, client_id, notice, sink).await;
             return true;
@@ -672,6 +701,47 @@ async fn handle_commit(
     // participants panel never claims a save the cabinet did not take.
     broadcast(room, client_id, ServerMsg::Committed { version, sha256, warnings, cabinet }, sink).await;
     true
+}
+
+/// The owner asked for the file of a refused commit (`409`): send the bytes the
+/// room built, chunked like a snapshot, to this peer only. Nothing is written
+/// to the cabinet (TASK.md §6).
+async fn handle_save_copy(
+    state: &AppState,
+    room: &Arc<Mutex<RoomState>>,
+    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    op_id: wordcraft_collab::wire::OpId,
+    role: Role,
+) -> bool {
+    if !role.can_commit() {
+        let reject = Reject::new(op_id, RejectCode::Forbidden, "only the owner saves a copy of a refused commit");
+        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+    }
+    let refused = room.lock().unwrap_or_else(|poison| poison.into_inner()).refused.clone();
+    let Some(refused) = refused else {
+        let reject = Reject::new(op_id, RejectCode::Conflict, "there is no refused commit to save; commit again to see the conflict");
+        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+    };
+    Metrics::inc(&state.metrics.copies);
+    let mut offset = 0;
+    loop {
+        let end = (offset + SNAPSHOT_CHUNK).min(refused.bytes.len());
+        let last = end >= refused.bytes.len();
+        let chunk = ServerMsg::SaveCopy {
+            version: refused.version,
+            sha256: refused.sha256.clone(),
+            warnings: refused.warnings.clone(),
+            bytes: refused.bytes[offset..end].to_vec(),
+            last,
+        };
+        if send(sink, &chunk).await.is_err() {
+            return false;
+        }
+        if last {
+            return true;
+        }
+        offset = end;
+    }
 }
 
 fn now_secs() -> u64 {

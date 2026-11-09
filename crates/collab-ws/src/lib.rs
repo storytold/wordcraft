@@ -48,6 +48,9 @@ pub enum Intent {
     },
     /// Build the file on the server at the version the client knows.
     Commit,
+    /// Ask the room for the file of a commit the cabinet refused (`409`), to
+    /// save it as a copy (TASK.md §6).
+    SaveCopy,
     /// Ask for a snapshot even when the journal tail is available.
     Resync,
     /// Drop the socket; the task reconnects with the token in [`Handle`].
@@ -95,6 +98,12 @@ impl Handle {
     /// Ask the server to write the file.
     pub fn commit(&self) -> Result<(), String> {
         self.intents.send(Intent::Commit).map_err(|_| "the session task is gone".to_string())
+    }
+
+    /// Ask for the file of a commit the cabinet refused (`409`), to save as a
+    /// copy (TASK.md §6).
+    pub fn save_copy(&self) -> Result<(), String> {
+        self.intents.send(Intent::SaveCopy).map_err(|_| "the session task is gone".to_string())
     }
 
     /// Fetch a fresh snapshot (a command allocated ids this replica cannot derive).
@@ -274,6 +283,14 @@ async fn handle_intent(client: &mut Client, sink: &mut Sink, intent: Intent, wai
                 let op_id = client.next_op_id();
                 let commit = ClientMsg::Commit { op_id, expected_version: client.version(), etag: None };
                 if send(sink, &commit).await.is_err() {
+                    return Flow::Reconnect;
+                }
+            }
+        }
+        Intent::SaveCopy => {
+            if joined {
+                let message = client.save_copy();
+                if send(sink, &message).await.is_err() {
                     return Flow::Reconnect;
                 }
             }

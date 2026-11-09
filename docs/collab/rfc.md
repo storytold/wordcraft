@@ -142,6 +142,8 @@ WebSocket, JSON text frames (UTF-8), один фрейм ≤ 1 MiB; TLS снар
 | `snapshot` | S→C | `version`, `chunk`, `last` | догон/ресинк |
 | `commit` | C→S | `op_id`, `expected_version`, `etag?` | сборка файла |
 | `committed` | S→C | `version`, `sha256`, `bytes?`, `warnings[]` | результат |
+| `saveCopy` | C→S | `op_id` | файл отказанного коммита (только owner) |
+| `saveCopy` | S→C | `version`, `sha256`, `warnings[]`, `bytes`, `last` | чанк файла; `last` завершает |
 | `error` | S→C | `code`, `message`, `retryable` | вне операций |
 | `ping`/`pong` | C↔S | `ts` | heartbeat |
 
@@ -606,6 +608,11 @@ Lease — одна комната на файл, TTL + heartbeat; отзыв з�
   вне сессии: перезаписи нет, комната шлёт retryable `error{code:"cabinetConflict"}`;
   `401`/`413` — один отказ без повтора; сетевой сбой/`5xx` — повтор тем же телом.
   Кабинет остаётся владельцем версии, аудита и антивируса (`production.md`).
+- `409` не отменяет работу пользователя: комната хранит собранный `.docx` и по
+  запросу `saveCopy{op_id}` (только `owner`) отдаёт его чанками
+  `saveCopy{version, sha256, warnings[], bytes, last}` этому пиру, ничего не
+  записывая в кабинет. Панель Commit предлагает «Save a copy…»; это не коммит и
+  не помечает документ сохранённым (TASK.md §6).
 - `expected_version` коммита не совпал с головой комнаты → `rejected{conflict}`; `etag`
   на проводе остаётся клиентским полем, конфликт с кабинетом решает его etag.
 - Ответ несёт `warnings[]`: что именно не сохранится (правленые абзацы, чей `kept`

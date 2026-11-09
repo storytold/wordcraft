@@ -101,6 +101,21 @@ pub enum Event {
         /// The cabinet's copy, when the room posted the file itself.
         cabinet: Option<CabinetCommit>,
     },
+    /// The room built the file but the cabinet refused it (`409`: the file
+    /// changed outside the session). The replica resyncs; the owner may ask for
+    /// the refused bytes with [`Client::save_copy`] and save them as a copy
+    /// (TASK.md §6).
+    Conflict {
+        reason: String,
+    },
+    /// One chunk of the refused commit's `.docx`; `last` ends the copy.
+    SaveCopy {
+        version: Version,
+        sha256: String,
+        warnings: Vec<String>,
+        bytes: Vec<u8>,
+        last: bool,
+    },
     /// Nothing for the app to do.
     None,
 }
@@ -231,6 +246,12 @@ impl Client {
         OpId::new(self.client_id.clone(), self.seq)
     }
 
+    /// Ask the room for the file it built for the commit the cabinet refused
+    /// (`409`), so the owner can save a copy (TASK.md §6).
+    pub fn save_copy(&mut self) -> ClientMsg {
+        ClientMsg::SaveCopy { op_id: self.next_op_id() }
+    }
+
     /// Operations the server has not confirmed yet, oldest first.
     pub fn pending(&self) -> &[Pending] {
         &self.pending
@@ -292,8 +313,16 @@ impl Client {
                 if retryable {
                     self.state = State::Resyncing;
                 }
-                Event::Resync { reason: format!("{code}: {message}") }
+                if code == "cabinetConflict" {
+                    // The cabinet refused the commit (409): the copy is still
+                    // saveable, so the panel keeps the conflict apart from a
+                    // plain resync (TASK.md §6).
+                    Event::Conflict { reason: message }
+                } else {
+                    Event::Resync { reason: format!("{code}: {message}") }
+                }
             }
+            ServerMsg::SaveCopy { version, sha256, warnings, bytes, last } => Event::SaveCopy { version, sha256, warnings, bytes, last },
             ServerMsg::Pong { .. } => Event::None,
         }
     }

@@ -80,6 +80,11 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+    /// Write the file the room built for a commit the cabinet refused (`409`)
+    /// to this path. Not a save of the document: the cabinet is untouched and
+    /// the app stays unsaved (TASK.md §6).
+    #[cfg(not(target_arch = "wasm32"))]
+    SaveCopy { name: String, bytes: Vec<u8> },
 }
 
 /// What to do once Save As has written the document.
@@ -290,6 +295,19 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 crate::dialogs_review::set_compare_path(self, revised, path);
                 Ok(json!({"picked": true}))
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            AfterPick::SaveCopy { name, bytes } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                if let Err(error) = std::fs::write(&path, &bytes) {
+                    let msg = crate::i18n::fmt(tl!("Couldn't save a copy as {name}: {error}"), &[("name", &name), ("error", &error.to_string())]);
+                    log::error!("saving a copy as {path} failed: {error}");
+                    self.status(msg.clone());
+                    return Err(msg);
+                }
+                let msg = crate::i18n::fmt(tl!("Saved a copy as {path}"), &[("path", &crate::i18n::isolate_path(&path))]);
+                self.status(msg);
+                Ok(json!({"savedCopy": path, "bytes": bytes.len()}))
             }
             AfterPick::Export { ext } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };

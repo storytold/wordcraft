@@ -711,3 +711,39 @@ fn many_failed_fonts_end_with_a_count() {
     let msg = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
     assert_eq!(msg, "Added 0 fonts; 5 couldn't be read: f0.ttf, f1.ttf, f2.ttf and 2 more");
 }
+
+/// TASK.md §6: the file the room built for a refused commit is written to the
+/// path the owner picks; it is a copy, so the document is not marked saved and
+/// nothing else is touched.
+#[test]
+fn a_refused_commit_is_saved_as_a_copy_without_marking_the_document_saved() {
+    let dir = scratch("room-copy");
+    let (mut a, shown) = async_app();
+    a.session.path = Some(dir.join("Report.docx"));
+    assert_eq!(a.room_copy_name(), "Report (copy).docx");
+    let bytes = b"PK\x03\x04room-built-document".to_vec();
+    let copy = crate::collab_session::CommitCopy { version: 7, sha256: "ab".into(), warnings: vec![], bytes: bytes.clone() };
+    a.save_room_copy(copy);
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Report (copy).docx".into(), dir: None });
+    let path = dir.join("Report (copy).docx");
+    answer(&shown, Some(&path.to_string_lossy()));
+    let result = a.poll_file_dialog().unwrap().unwrap();
+    assert_eq!(result["savedCopy"], json!(path.to_string_lossy()));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    assert!(!a.session.dirty, "a copy is not a save of the document");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Cancelling the save picker writes nothing and leaves the document as it was.
+#[test]
+fn cancelling_a_room_copy_writes_nothing() {
+    let dir = scratch("room-copy-cancel");
+    let (mut a, shown) = async_app();
+    a.session.path = Some(dir.join("Report.docx"));
+    let copy = crate::collab_session::CommitCopy { version: 7, sha256: "ab".into(), warnings: vec![], bytes: b"PK".to_vec() };
+    a.save_room_copy(copy);
+    answer(&shown, None);
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap()["cancelled"], true);
+    assert!(!dir.join("Report (copy).docx").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}

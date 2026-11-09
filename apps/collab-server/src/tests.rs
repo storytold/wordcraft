@@ -1053,6 +1053,116 @@ async fn a_cabinet_conflict_resyncs_every_client() {
     let _ = std::fs::remove_dir_all(&cfg.data_dir);
 }
 
+/// TASK.md §6: after a `409` the owner saves the file the room built as a
+/// copy. The bytes go to the owner only, the cabinet is not written again,
+/// and an editor cannot ask for them.
+#[tokio::test]
+async fn a_refused_commit_can_be_saved_as_a_copy_without_overwriting_the_cabinet() {
+    use sha2::Digest;
+    let (cabinet_url, mut requests) = fake_cabinet(vec![Some("HTTP/1.1 409 Conflict\r\nContent-Length: 2\r\n\r\n{}")]).await;
+    let cfg = config_with_cabinet(&config_for("cabinet-copy"), &cabinet_url);
+    let url = spawn_server_with(cfg.clone()).await;
+
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let mut editor = connect(&url, &cfg, "editor", "editor").await;
+    let _ = next_msg(&mut owner).await;
+    let node = node_of(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+    let _ = node_of(&mut editor).await;
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::Op { op: insert("owner", 1, 0, node, 0, "Save me") }).expect("json").into()))
+        .await
+        .expect("insert");
+    let _ = next_msg(&mut owner).await;
+    let _ = next_msg(&mut editor).await;
+
+    owner
+        .send(Message::Text(
+            serde_json::to_string(&ClientMsg::Commit { op_id: OpId::new("owner", 2), expected_version: 1, etag: None }).expect("json").into(),
+        ))
+        .await
+        .expect("commit");
+    for socket in [&mut owner, &mut editor] {
+        loop {
+            match next_msg(socket).await {
+                ServerMsg::Error { code, .. } => {
+                    assert_eq!(code, "cabinetConflict");
+                    break;
+                }
+                ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+                other => panic!("expected a conflict notice, got {other:?}"),
+            }
+        }
+    }
+    let _ = requests.recv().await.expect("the commit reached the cabinet once");
+
+    // An editor may not take the file: it is the owner's commit to save.
+    editor
+        .send(Message::Text(serde_json::to_string(&ClientMsg::SaveCopy { op_id: OpId::new("editor", 2) }).expect("json").into()))
+        .await
+        .expect("saveCopy");
+    let reject = loop {
+        match next_msg(&mut editor).await {
+            ServerMsg::Rejected { reject } => break reject,
+            ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+    };
+    assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Forbidden);
+
+    // The owner gets the room's file, chunk after chunk, and the cabinet gets
+    // no second request: a copy never overwrites it.
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::SaveCopy { op_id: OpId::new("owner", 3) }).expect("json").into()))
+        .await
+        .expect("saveCopy");
+    let mut bytes = Vec::new();
+    let mut sha: Option<String> = None;
+    loop {
+        match next_msg(&mut owner).await {
+            ServerMsg::SaveCopy { version, sha256, bytes: chunk, last, .. } => {
+                assert_eq!(version, 1);
+                sha.get_or_insert(sha256);
+                bytes.extend_from_slice(&chunk);
+                if last {
+                    break;
+                }
+            }
+            ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+            other => panic!("expected a copy chunk, got {other:?}"),
+        }
+    }
+    assert_eq!(&bytes[..4], b"PK\x03\x04", "the copy is a .docx the room built");
+    let sha = sha.expect("every chunk names the digest");
+    assert_eq!(sha, crate::hex(&sha2::Sha256::digest(&bytes)), "the copy's digest matches its bytes");
+    assert!(requests.try_recv().is_err(), "saving a copy never posts to the cabinet");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// Without a refused commit there is nothing to copy: the request is refused
+/// instead of building a file behind the owner's back.
+#[tokio::test]
+async fn a_copy_without_a_refused_commit_is_refused() {
+    let cfg = config_for("cabinet-no-copy");
+    let url = spawn_server_with(cfg.clone()).await;
+    let mut owner = connect(&url, &cfg, "owner", "owner").await;
+    let _ = next_msg(&mut owner).await;
+    let _ = node_of(&mut owner).await;
+    owner
+        .send(Message::Text(serde_json::to_string(&ClientMsg::SaveCopy { op_id: OpId::new("owner", 1) }).expect("json").into()))
+        .await
+        .expect("saveCopy");
+    let reject = loop {
+        match next_msg(&mut owner).await {
+            ServerMsg::Rejected { reject } => break reject,
+            ServerMsg::Applied { .. } | ServerMsg::Nodes { .. } | ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+    };
+    assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Conflict);
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
 /// `401`: a deployment error. The owner is told once, without a retry, and no
 /// other peer is disturbed.
 #[tokio::test]

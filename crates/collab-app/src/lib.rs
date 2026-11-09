@@ -59,6 +59,55 @@ pub struct Commit {
     pub cabinet: Option<CabinetCommit>,
 }
 
+/// The file the room built for a commit the cabinet refused with `409`:
+/// saving it creates a copy without overwriting the cabinet (TASK.md §6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitCopy {
+    /// The room's document version the refused commit was taken at.
+    pub version: Version,
+    /// SHA-256 of the built `.docx`.
+    pub sha256: String,
+    /// What the file could not keep (ADR-0011).
+    pub warnings: Vec<String>,
+    /// The `.docx` bytes the room built.
+    pub bytes: Vec<u8>,
+}
+
+/// Accumulates the chunks of a refused commit's file. A new version starts a
+/// new copy, so a chunk from an older answer cannot be joined to a newer one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CopyBuffer {
+    version: Version,
+    sha256: String,
+    warnings: Vec<String>,
+    bytes: Vec<u8>,
+    started: bool,
+}
+
+impl CopyBuffer {
+    /// Add one chunk; `Some` when `last` completes the copy.
+    pub fn push(&mut self, version: Version, sha256: String, warnings: Vec<String>, bytes: &[u8], last: bool) -> Option<CommitCopy> {
+        if !self.started || self.version != version {
+            self.version = version;
+            self.sha256 = sha256;
+            self.warnings = warnings;
+            self.bytes.clear();
+            self.started = true;
+        }
+        self.bytes.extend_from_slice(bytes);
+        if !last {
+            return None;
+        }
+        self.started = false;
+        Some(CommitCopy {
+            version: self.version,
+            sha256: std::mem::take(&mut self.sha256),
+            warnings: std::mem::take(&mut self.warnings),
+            bytes: std::mem::take(&mut self.bytes),
+        })
+    }
+}
+
 /// What a refusal means for the session. The room refuses before changing the
 /// document, so a refused undo (`undo-conflict`) is not a broken session: it is
 /// shown as an error and editing continues with its stack intact (ADR-0010). A
@@ -218,6 +267,12 @@ pub struct Collab {
     status: Status,
     participants: Vec<ParticipantView>,
     commit: Option<Commit>,
+    /// The cabinet refused the last commit (`409`): the reason, until a commit
+    /// is accepted. The panel offers "save a copy" while it is set.
+    conflict: Option<String>,
+    /// The last refused file the owner asked for (TASK.md §6).
+    copy: Option<CommitCopy>,
+    copy_buffer: CopyBuffer,
     snapshot: Vec<u8>,
     snapshot_version: Version,
     last_presence: Option<Instant>,
@@ -246,6 +301,9 @@ impl Collab {
             status: Status::Connecting,
             participants: Vec::new(),
             commit: None,
+            conflict: None,
+            copy: None,
+            copy_buffer: CopyBuffer::default(),
             snapshot: Vec::new(),
             snapshot_version: 0,
             last_presence: None,
@@ -287,6 +345,18 @@ impl Collab {
 
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// Why the cabinet refused the last commit (`409`), while the panel may
+    /// still offer its file as a copy (TASK.md §6).
+    pub fn conflict(&self) -> Option<&str> {
+        self.conflict.as_deref()
+    }
+
+    /// The refused file, once it has fully arrived; taken so the UI saves it
+    /// exactly once.
+    pub fn take_copy(&mut self) -> Option<CommitCopy> {
+        self.copy.take()
     }
 
     /// Resolve a remote cursor for drawing.
@@ -358,6 +428,21 @@ impl Collab {
             Event::Committed { version, sha256, warnings, cabinet } => {
                 self.state.version = self.state.version.max(version);
                 self.commit = Some(Commit { version, sha256, warnings, cabinet });
+                self.conflict = None;
+            }
+            Event::Conflict { reason } => {
+                // The room built the file but the cabinet refused it (409):
+                // every replica resyncs, and the panel offers the file as a
+                // copy instead of pretending the save happened (TASK.md §6).
+                self.status = Status::Resyncing;
+                self.last_error = Some(reason.clone());
+                self.conflict = Some(reason);
+                let _ = self.handle.resync();
+            }
+            Event::SaveCopy { version, sha256, warnings, bytes, last } => {
+                if let Some(copy) = self.copy_buffer.push(version, sha256, warnings, &bytes, last) {
+                    self.copy = Some(copy);
+                }
             }
             Event::Resync { reason } => {
                 self.status = Status::Resyncing;
@@ -430,6 +515,12 @@ impl Collab {
 
     pub fn commit(&self) {
         let _ = self.handle.commit();
+    }
+
+    /// Ask the room for the file of a commit the cabinet refused (`409`), to
+    /// save it as a copy (TASK.md §6).
+    pub fn request_copy(&self) {
+        let _ = self.handle.save_copy();
     }
 
     /// Replace the JWT (the cabinet pushes a fresh one before `exp`) and

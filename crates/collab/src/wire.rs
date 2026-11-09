@@ -234,6 +234,12 @@ pub enum ClientMsg {
         #[serde(default)]
         etag: Option<String>,
     },
+    /// Ask for the file the room built for a commit the cabinet refused with
+    /// `409`. The owner saves a copy instead of overwriting the cabinet
+    /// (TASK.md §6). The answer is chunked [`ServerMsg::SaveCopy`].
+    SaveCopy {
+        op_id: OpId,
+    },
     Ping {
         ts: u64,
     },
@@ -309,6 +315,18 @@ pub enum ServerMsg {
         code: String,
         message: String,
         retryable: bool,
+    },
+    /// One chunk of the `.docx` the room built for a commit the cabinet
+    /// refused with `409`; the owner can save it as a copy without writing the
+    /// cabinet (TASK.md §6). `version`, `sha256` and `warnings` describe the
+    /// whole file and repeat on every chunk; `last` ends the copy. Sent only to
+    /// the peer that asked, never broadcast.
+    SaveCopy {
+        version: Version,
+        sha256: String,
+        warnings: Vec<String>,
+        bytes: Vec<u8>,
+        last: bool,
     },
     Pong {
         ts: u64,
