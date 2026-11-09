@@ -387,6 +387,7 @@ mod tests {
 
     #[test]
     fn ref_link_switches() {
+        crate::test_fonts();
         for instr in [r"REF mark\w\h", r#" REF "mark" \h"#, "REF\tmark \\H"] {
             assert_eq!(reference_link(instr).as_deref(), Some("#mark"), "{instr}");
         }
@@ -410,6 +411,7 @@ mod tests {
 
     #[test]
     fn page_fields() {
+        crate::test_fonts();
         let ctx = FieldCtx { page: 4, pages: 12, ..Default::default() };
         assert_eq!(field_text("PAGE", "", &ctx), ("4".into(), true));
         assert_eq!(field_text(" PAGE \\* ROMAN ", "", &ctx).0, "IV");
@@ -504,6 +506,7 @@ mod tests {
     /// #1765: ASK and SET only assign text to a bookmark; they show nothing, whatever result is stored.
     #[test]
     fn ask_and_set_show_nothing() {
+        crate::test_fonts();
         let ctx = FieldCtx::default();
         assert_eq!(field_text(r#" ASK Nominativo "Inserire nome" \d "«NOME»" "#, "«NOME» «COGNOME»", &ctx), (String::new(), false));
         assert_eq!(field_text(r#"SET Codice "COD""#, "COD", &ctx), (String::new(), false));
@@ -514,6 +517,7 @@ mod tests {
 
     #[test]
     fn page_references_show_their_bookmarks_page() {
+        crate::test_fonts();
         let pages = HashMap::from([
             ("End_1".to_string(), (3, NumFormat::Decimal)),
             ("Intro".to_string(), (4, NumFormat::LowerRoman)),

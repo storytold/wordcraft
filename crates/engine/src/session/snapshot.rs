@@ -32,7 +32,7 @@ impl Session {
         self.hf_return = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
-        self.view.read_page_color = self.prefs.read_page_color;
+        self.view.follow_prefs(&self.prefs);
         // A copy the replaced document kept stays in the recovery list.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -139,6 +139,8 @@ impl Session {
             pending_ime_application_change: _,
             ime_origin: _,
             read_aloud: _,
+            // The other windows, like `view`: not part of the document or its history.
+            windows: _,
             prefs: _,
             system_region: _,
             keymap: _,

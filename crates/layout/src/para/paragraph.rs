@@ -648,6 +648,8 @@ fn shown_text(cx: &Cx) -> Option<String> {
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
+    #[cfg(test)]
+    crate::test_fonts();
     let doc = env.doc;
     let rp = paragraph_props(p, env);
     let res = Resolver { doc, style: p.props.style.as_deref(), table: env.table.map(|t| &t.chr) };
@@ -867,6 +869,9 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // UAX #14 breaks between a full stop and an opening parenthesis; Word keeps
+    // "2023.(Example" whole and wraps it at the space before.
+    found.retain(|&i| !(text.get(..i).is_some_and(|t| t.ends_with('.')) && text.get(i..).is_some_and(|t| t.starts_with('('))));
     // Asian typography: kinsoku and breaking Latin words anywhere.
     crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
     found
