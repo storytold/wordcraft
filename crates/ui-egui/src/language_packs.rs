@@ -1303,6 +1303,21 @@ mod tests {
         assert!(packs::is_installed("pl"));
     }
 
+    /// Your languages lists every language's own name, including עברית, from an English interface.
+    #[test]
+    fn your_languages_in_english_asks_for_a_hebrew_face() {
+        crate::i18n::open_english_screen(super::your_languages_section);
+    }
+
+    /// Add a language lists pack names in their own scripts, including Hebrew, from an English interface.
+    #[test]
+    fn add_a_language_in_english_asks_for_a_hebrew_face() {
+        crate::i18n::open_english_screen(|app, ui| {
+            app.packs_rt.picker = true;
+            super::add_language_window(app, ui.ctx());
+        });
+    }
+
     // ---- Options › Language: Your languages, Add a language (CP4.3) ----
 
     struct ResetBackend;
