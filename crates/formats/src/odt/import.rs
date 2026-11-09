@@ -296,6 +296,8 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             }),
             contextual_spacing: look.contextual,
             bidi: look.rtl.filter(|r| *r),
+            // The document's nine levels; ODF's tenth is the last of them.
+            outline_level: def.outline.map(|o| o.clamp(1, 9) - 1),
             ..Default::default()
         };
         let name = super::writer::generating_style(name).map_or_else(|| def.name.clone(), |(_, n)| n);
@@ -327,7 +329,7 @@ fn turned_off(mut chr: wordcraft_doc::props::CharProps, off: [bool; 4]) -> wordc
         chr.underline = Some(wordcraft_doc::props::Underline::None);
     }
     if strike {
-        chr.strike = Some(false);
+        (chr.strike, chr.double_strike) = (Some(false), Some(false));
     }
     chr
 }
@@ -362,7 +364,7 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
 fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     use wordcraft_doc::numbering::{AbstractNum, ListKind, Num, levels_for};
     use wordcraft_doc::props::NumRef;
-    let numbered: Vec<bool> = (0..6).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
+    let numbered: Vec<bool> = (0..9).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
     if !numbered.contains(&true) {
         return;
     }
@@ -395,9 +397,153 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     numbering.abstracts.push(AbstractNum { id: aid, name: None, levels: out, ..Default::default() });
     let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
     numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
+    let styles = Arc::make_mut(&mut doc.styles);
     for (i, on) in numbered.iter().enumerate() {
-        if *on && let Some(st) = Arc::make_mut(&mut doc.styles).get_mut(&format!("Heading{}", i + 1)) {
+        if *on && let Some(st) = styles.get_mut(&format!("Heading{}", i + 1)) {
             st.para.numbering = Some(NumRef { num: nid, level: i as u8 });
+        }
+    }
+    // LibreOffice numbers a custom style at an outline level along with that level's headings.
+    for st in &mut styles.styles {
+        if let Some(l) = st.para.outline_level.filter(|l| numbered.get(usize::from(*l)) == Some(&true)) {
+            st.para.numbering = Some(NumRef { num: nid, level: l });
+        }
+    }
+    // A style at a level the outline doesn't number doesn't take its parent's number from it.
+    let of_outline = |st: &wordcraft_doc::styles::Style| {
+        let at = wordcraft_doc::props::ParaProps { style: Some(st.id.clone()), ..Default::default() };
+        st.para.numbering.is_none()
+            && st.para.outline_level.is_some_and(|l| numbered.get(usize::from(l)) != Some(&true))
+            && styles.resolve_para(&at).numbering.is_some_and(|n| n.num == nid)
+    };
+    let unnumbered: Vec<String> = styles.styles.iter().filter(|st| of_outline(st)).map(|st| st.id.clone()).collect();
+    for id in unnumbered {
+        if let Some(st) = styles.get_mut(&id) {
+            // (`num: 0` switches the number off.)
+            st.para.numbering = Some(NumRef { num: 0, level: 0 });
+        }
+    }
+    // A heading's own outline level goes before its style's: LibreOffice numbers it by that level.
+    // A heading in a list is that list's.
+    let styles = doc.styles.clone();
+    each_body_para(&mut doc.body, 0, &mut |p| {
+        let Some(l) = p.props.outline_level.filter(|_| p.props.numbering.is_none()) else { return };
+        let style = styles.resolve_para(&wordcraft_doc::props::ParaProps { style: p.props.style.clone(), ..Default::default() });
+        if style.outline_level.is_none() {
+            return;
+        }
+        let own = (numbered.get(usize::from(l)) == Some(&true)).then_some(NumRef { num: nid, level: l });
+        if own != style.numbering {
+            // (`num: 0` switches the style's number off.)
+            p.props.numbering = Some(own.unwrap_or(NumRef { num: 0, level: 0 }));
+        }
+    });
+}
+
+/// Each paragraph of `blocks`, those in tables too (to 16 levels deep).
+fn each_body_para(blocks: &mut [Arc<wordcraft_doc::Block>], depth: usize, f: &mut dyn FnMut(&mut wordcraft_doc::Paragraph)) {
+    for b in blocks {
+        match Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => f(p),
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    each_body_para(&mut cell.blocks, depth + 1, f);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
+        }
+    }
+}
+
+/// What a run's complex size comes from: its paragraph's style, its character style, and the size
+/// and complex size it states (as bits).
+type SizeSource<'a> = (Option<&'a str>, Option<&'a str>, Option<u32>, Option<u32>);
+
+/// A complex-script size the same as the text's (what WordCraft writes for every script) is no size
+/// of its own: a later change of size takes it along. The default's and the styles' go together,
+/// unless a run's complex size would change: a size stated alone, or another complex size between
+/// them, shows what's above it, so they stay as the file says. A run's goes where its stays the same.
+fn one_size_for_all_scripts(doc: &mut Document) {
+    let mut sources = std::collections::BTreeSet::new();
+    for blocks in std::iter::once(&doc.body).chain(doc.parts.values().map(|part| &part.blocks)) {
+        size_sources(blocks, 0, &mut sources);
+    }
+    let sizes = |styles: &wordcraft_doc::styles::StyleSheet| -> Vec<f32> {
+        let of = |(para, chr, size, size_cs): &SizeSource| {
+            let run = wordcraft_doc::props::CharProps {
+                style: chr.map(str::to_string),
+                size: size.map(f32::from_bits),
+                size_cs: size_cs.map(f32::from_bits),
+                ..Default::default()
+            };
+            styles.resolve_char(*para, &run).size_cs
+        };
+        sources.iter().map(of).collect()
+    };
+    let as_read = Arc::clone(&doc.styles);
+    let was = sizes(&as_read);
+    let styles = Arc::make_mut(&mut doc.styles);
+    let one_size = |c: &mut wordcraft_doc::props::CharProps| {
+        if c.size.is_some() && c.size_cs == c.size {
+            c.size_cs = None;
+        }
+    };
+    one_size(&mut styles.default_chr);
+    styles.styles.iter_mut().for_each(|st| one_size(&mut st.chr));
+    if sizes(&doc.styles) != was {
+        doc.styles = as_read;
+    }
+    let styles = Arc::clone(&doc.styles);
+    let stories = std::iter::once(&mut doc.body).chain(doc.parts.values_mut().map(|part| &mut part.blocks));
+    for blocks in stories {
+        runs_one_size(blocks, 0, &styles);
+    }
+}
+
+/// What the runs in `blocks` (and their tables, to 16 levels deep) take their complex sizes from.
+fn size_sources<'a>(blocks: &'a [Arc<wordcraft_doc::Block>], depth: usize, out: &mut std::collections::BTreeSet<SizeSource<'a>>) {
+    for b in blocks {
+        match &**b {
+            wordcraft_doc::Block::Para(p) => {
+                for r in &p.runs {
+                    out.insert((
+                        p.props.style.as_deref(),
+                        r.props.style.as_deref(),
+                        r.props.size.map(f32::to_bits),
+                        r.props.size_cs.map(f32::to_bits),
+                    ));
+                }
+            }
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                    size_sources(&cell.blocks, depth + 1, out);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
+        }
+    }
+}
+
+/// [`one_size_for_all_scripts`] for the runs in `blocks` (and their tables, to 16 levels deep).
+fn runs_one_size(blocks: &mut [Arc<wordcraft_doc::Block>], depth: usize, styles: &wordcraft_doc::styles::StyleSheet) {
+    for b in blocks {
+        match Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => {
+                let style = p.props.style.clone();
+                for r in &mut p.runs {
+                    let Some(said) = r.props.size_cs.filter(|s| Some(*s) == r.props.size) else { continue };
+                    r.props.size_cs = None;
+                    if styles.resolve_char(style.as_deref(), &r.props).size_cs != said {
+                        r.props.size_cs = Some(said);
+                    }
+                }
+            }
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    runs_one_size(&mut cell.blocks, depth + 1, styles);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
         }
     }
 }
@@ -655,6 +801,8 @@ struct Parsed {
     widows: Option<bool>,
     /// The document's default Asian and complex-script fonts and languages.
     scripts: wordcraft_doc::props::CharProps,
+    /// The document's default language, if it states one.
+    default_lang: Option<String>,
     /// The default tab interval, points.
     default_tab: Option<f32>,
     /// Tab stops are measured from the indent (LibreOffice's `TabsRelativeToIndent`).
@@ -850,6 +998,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         kern: styles.default_kern,
         widows: styles.stated_widows(),
         scripts: styles.default_scripts.clone(),
+        default_lang: styles.document_lang(),
         default_tab: styles.default_tab,
         tabs_from_indent: styles.tabs_from_indent,
         page_doc: pages.doc.clone(),
@@ -895,6 +1044,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         kern,
         widows,
         scripts,
+        default_lang,
         default_tab,
         tabs_from_indent,
         page_doc,
@@ -932,6 +1082,9 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     Arc::make_mut(&mut doc.styles).default_chr.kern = kern.then_some(1.0);
     Arc::make_mut(&mut doc.styles).default_chr.overlay(&scripts);
+    // The file's own, or none when it states none (each application then uses its own default):
+    // not the English of WordCraft's new documents.
+    Arc::make_mut(&mut doc.styles).default_chr.lang = default_lang;
     if let Some(t) = default_tab {
         doc.settings.default_tab = t;
     }
@@ -970,6 +1123,7 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     }
     doc.last_section = last;
     page_parts::add(&mut doc, parts);
+    one_size_for_all_scripts(&mut doc);
     if let Some(t) = track {
         doc.settings.track_changes = t;
     }
