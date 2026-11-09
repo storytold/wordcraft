@@ -233,8 +233,8 @@ fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
 }
 
-/// The preferences as this process loaded them, which `save_prefs` compares with to write only
-/// what this process changed (#3773, see `prefs_merge`).
+/// The preferences as this process last loaded or saved them, which `save_prefs` compares with
+/// to write only what this process changed since (#3773, see `prefs_merge`).
 static LOADED_PREFS: std::sync::Mutex<Option<serde_json::Value>> = std::sync::Mutex::new(None);
 
 /// Apply the saved preferences (`ui.json`) to `app`, and remember the result for `save_prefs`.
@@ -327,20 +327,75 @@ fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
     let ours = serde_json::to_value(app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
-    let bytes = serde_json::to_vec_pretty(&merged_prefs(&p, ours)).map_err(|e| format!("cannot serialize: {e}"))?;
-    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))?;
+    let mut base = LOADED_PREFS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    save_merged(&p, &mut base, ours)?;
     Ok(true)
 }
 
-/// `ours` with what other WordCraft processes saved to `path` since this one loaded it, for the
-/// settings this one left alone (#3773, see `prefs_merge`). `ours` as it is when nothing was
-/// loaded, or the file is missing or unreadable now.
-fn merged_prefs(path: &std::path::Path, ours: serde_json::Value) -> serde_json::Value {
-    let base = LOADED_PREFS.lock().ok().and_then(|slot| slot.clone());
-    let disk = std::fs::read(path).ok().and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok());
-    match (base, disk) {
-        (Some(base), Some(disk)) if disk.is_object() => prefs_merge::merge(&base, ours, &disk),
-        _ => ours,
+/// Writes `ours` to `path`, merged with what other WordCraft processes saved there since this one
+/// loaded or saved `base` (`merged_prefs`), and makes `ours` the new `base`: a setting changed here
+/// before this save and by another process after it then takes the other's value at the next save.
+/// Holds `lock_prefs` from the read to the rename.
+fn save_merged(path: &std::path::Path, base: &mut Option<serde_json::Value>, ours: serde_json::Value) -> Result<(), String> {
+    let _lock = lock_prefs(path);
+    let merged = merged_prefs(path, base.as_ref(), ours.clone());
+    let bytes = serde_json::to_vec_pretty(&merged).map_err(|e| format!("cannot serialize: {e}"))?;
+    write_prefs(path, &bytes).map_err(|e| format!("cannot save {}: {e}", path.display()))?;
+    *base = Some(ours);
+    Ok(())
+}
+
+/// `ours` with what other WordCraft processes saved to `path` since this one loaded or saved
+/// `base`, for the settings this one left alone (#3773, see `prefs_merge`). `ours` as it is when
+/// there's no `base`, or the file is missing or isn't preferences now.
+fn merged_prefs(path: &std::path::Path, base: Option<&serde_json::Value>, ours: serde_json::Value) -> serde_json::Value {
+    let Some(base) = base else { return ours };
+    let disk = match std::fs::read(path) {
+        Ok(bytes) => prefs_merge::as_read(&bytes),
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                log::debug!("preferences: cannot read {} to merge, saving this process's: {e}", path.display());
+            }
+            return ours;
+        }
+    };
+    match disk {
+        Some(disk) => prefs_merge::merge(base, ours, &disk),
+        None => {
+            log::debug!("preferences: {} isn't preferences, saving this process's", path.display());
+            ours
+        }
+    }
+}
+
+/// How long a save waits for another process's save to finish before going ahead anyway: a save
+/// takes milliseconds, and a process stuck holding the lock mustn't stop this one from saving.
+const PREFS_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// An advisory lock beside `path` (`.ui.json.lock`), held while it is returned, so that two
+/// processes saving at once (logging out closes every window together) take turns at reading,
+/// merging and replacing `ui.json` instead of one losing the other's changes. `None` (save
+/// unlocked) when the lock file can't be opened or the lock isn't free within [`PREFS_LOCK_WAIT`].
+fn lock_prefs(path: &std::path::Path) -> Option<std::fs::File> {
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "ui.json".into());
+    let lock = path.with_file_name(format!(".{name}.lock"));
+    let file = match std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock) {
+        Ok(f) => f,
+        Err(e) => {
+            log::debug!("preferences: cannot open {}, saving without it: {e}", lock.display());
+            return None;
+        }
+    };
+    let start = std::time::Instant::now();
+    loop {
+        match file.try_lock() {
+            Ok(()) => return Some(file),
+            Err(std::fs::TryLockError::WouldBlock) if start.elapsed() < PREFS_LOCK_WAIT => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Err(e) => {
+                log::warn!("preferences: {} is held, saving without it: {e}", lock.display());
+                return None;
+            }
+        }
     }
 }
 
@@ -796,7 +851,54 @@ mod launch_arg_tests {
 
 #[cfg(test)]
 mod prefs_tests {
-    use super::write_prefs;
+    use serde_json::{Value, json};
+    use wordcraft_ui_egui::{UiState, theme::Appearance};
+
+    use super::{lock_prefs, prefs_merge, save_merged, write_prefs};
+
+    /// The preferences saved with `theme` (every other setting at its default).
+    fn with_theme(theme: &str) -> Value {
+        prefs_merge::as_read(&serde_json::to_vec(&json!({"theme": theme})).unwrap()).unwrap()
+    }
+
+    /// The theme the next process loads from `path`.
+    fn saved_theme(path: &std::path::Path) -> Appearance {
+        UiState::from_json(&std::fs::read(path).unwrap()).unwrap().theme
+    }
+
+    #[test]
+    fn a_setting_changed_by_another_process_after_a_save_here_keeps_its_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui.json");
+        std::fs::write(&path, serde_json::to_vec(&with_theme("light")).unwrap()).unwrap();
+        // A loads Light, switches to Dark and saves before exiting (taking a document off the
+        // recent list does).
+        let mut a = Some(with_theme("light"));
+        save_merged(&path, &mut a, with_theme("dark")).unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Dark);
+        // B starts, loads Dark, switches to Light and exits.
+        save_merged(&path, &mut Some(with_theme("dark")), with_theme("light")).unwrap();
+        // A exits without touching the theme since its save: B's choice, made later, stays.
+        save_merged(&path, &mut a, with_theme("dark")).unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Light);
+    }
+
+    #[test]
+    fn a_save_waits_for_another_process_saving_at_the_same_moment() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ui.json");
+        // Another process is between reading and replacing `ui.json`.
+        let held = lock_prefs(&path).expect("the lock is free");
+        let saver = {
+            let path = path.clone();
+            std::thread::spawn(move || save_merged(&path, &mut None, with_theme("dark")))
+        };
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert!(!path.exists(), "saved while another process held the lock");
+        drop(held);
+        saver.join().unwrap().unwrap();
+        assert_eq!(saved_theme(&path), Appearance::Dark);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
