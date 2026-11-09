@@ -856,3 +856,101 @@ fn a_foreign_edit_of_a_sorted_paragraph_refuses_the_undo_without_touching_the_do
     assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
     assert_eq!(pair.room.version(), version, "the version did not move");
 }
+
+// --- promoting and demoting paragraphs --------------------------------------
+
+/// Two replicas on a document whose paragraphs carry the styles named.
+#[allow(clippy::expect_used)]
+fn styled_pair(texts: &[(&str, Option<&str>)]) -> FormatPair {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for (text, style) in texts {
+        let mut para = Paragraph::with_text(text, CharProps::default());
+        para.props.style = style.map(str::to_string);
+        doc.body.push(Arc::new(Block::Para(para)));
+    }
+    let mut room = Room::new(SessionModel::from_document(doc.clone()));
+    let nodes = room.join(None, false).nodes;
+    let mut peer = SyncState::new("bob", "Bob", Role::Editor);
+    peer.set_nodes(&nodes);
+    FormatPair { room, alice: state_with(&nodes), peer, mine: Session::new(doc.clone()), theirs: Session::new(doc) }
+}
+
+fn para_styles(session: &Session) -> Vec<Option<String>> {
+    session.doc.body.iter().filter_map(|block| block.as_para()).map(|para| para.props.style.clone()).collect()
+}
+
+#[test]
+fn a_promote_undo_lands_as_one_transaction_at_its_author_and_the_peer() {
+    let mut pair = styled_pair(&[("Title", Some("Heading1")), ("Body", None)]);
+    pair.mine.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
+    let before = pair.mine.doc.clone();
+    pair.mine.run("para.promote", &json!({})).expect("the UI promotes the paragraph");
+    let plan = pair.alice.plan(&before, &pair.mine, "para.promote", &json!({})).expect("a plan").remove(0);
+    assert_eq!(plan.kind, OpKind::Command, "the client sends the command; the server names the level");
+    let step = op_from("alice", 1, pair.alice.version, &plan, None);
+    let echo = pair.room.submit("alice", Role::Editor, step.clone()).expect("the promote lands");
+    let delta = echo.delta.clone().expect("the promote carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_level"), "the forward effect is a level operation");
+    assert_eq!(delta["ops"][0]["items"][0]["level"], json!(1));
+    pair.alice.apply(&echo, &mut pair.mine).expect("own echo is skipped");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("the peer applies the level");
+    assert_eq!(para_styles(&pair.mine), vec![Some("Heading1".to_string()), Some("Heading1".to_string())]);
+    assert_eq!(
+        serde_json::to_value(&pair.mine.doc).expect("json"),
+        serde_json::to_value(&pair.theirs.doc).expect("json"),
+        "the author and the peer hold the same document"
+    );
+
+    let undo = history_op("alice", 2, pair.alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    let delta = answer.delta.clone().expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "the inverse is one delta too");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_level"), "the inverse names the earlier level");
+    assert_eq!(delta["ops"][0]["items"][0]["level"], serde_json::Value::Null);
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(para_styles(&pair.mine), vec![Some("Heading1".to_string()), None], "the author is back at body text");
+    assert_eq!(para_styles(&pair.theirs), vec![Some("Heading1".to_string()), None], "the peer converged");
+
+    let redo = history_op("alice", 3, pair.alice.version, &step, HistoryAction::Redo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(para_styles(&pair.mine), vec![Some("Heading1".to_string()), Some("Heading1".to_string())], "redo promotes again");
+    assert_eq!(para_styles(&pair.theirs), vec![Some("Heading1".to_string()), Some("Heading1".to_string())]);
+}
+
+#[test]
+fn a_foreign_edit_of_a_promoted_paragraph_refuses_the_undo_without_touching_the_document() {
+    let mut pair = styled_pair(&[("Title", Some("Heading1")), ("Body", None)]);
+    pair.mine.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
+    let before = pair.mine.doc.clone();
+    pair.mine.run("para.promote", &json!({})).expect("the UI promotes the paragraph");
+    let plan = pair.alice.plan(&before, &pair.mine, "para.promote", &json!({})).expect("a plan").remove(0);
+    let step = op_from("alice", 1, pair.alice.version, &plan, None);
+    let echo = pair.room.submit("alice", Role::Editor, step.clone()).expect("the promote lands");
+    pair.alice.apply(&echo, &mut pair.mine).expect("own echo is skipped");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("the peer applies the level");
+
+    // Bob types into the paragraph Alice levelled.
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "X"})).expect("bob types");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "X"})).expect("a plan").remove(0);
+    let edit = op_from("bob", 1, pair.peer.version, &plan, None);
+    let echo = pair.room.submit("bob", Role::Editor, edit).expect("bob's edit lands");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("own echo is skipped");
+    pair.alice.apply(&echo, &mut pair.mine).expect("alice applies bob's edit");
+
+    let mine_before = serde_json::to_value(&pair.mine.doc).expect("json");
+    let theirs_before = serde_json::to_value(&pair.theirs.doc).expect("json");
+    let version = pair.alice.version;
+    let undo = history_op("alice", 2, version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), mine_before, "the author's document is unchanged");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
+    assert_eq!(pair.room.version(), version, "the version did not move");
+}

@@ -841,3 +841,178 @@ fn a_permute_on_an_unknown_node_is_refused_before_mutation() {
     assert_eq!(document_json(&room), before);
     assert_eq!(room.version(), 0);
 }
+
+// --- promoting and demoting paragraphs --------------------------------------
+
+/// A document whose paragraphs carry the styles named: `Some("Heading2")` is a
+/// heading, `None` body text.
+fn heading_doc(texts: &[(&str, Option<&str>)]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for (text, style) in texts {
+        let mut para = Paragraph::with_text(text, CharProps::default());
+        para.props.style = style.map(str::to_string);
+        doc.body.push(Arc::new(Block::Para(para)));
+    }
+    doc
+}
+
+fn heading(room: &Room<SessionModel>, block: usize) -> Option<String> {
+    room.model().session().doc.body.get(block).and_then(|b| b.as_para()).and_then(|p| p.props.style.clone())
+}
+
+fn selected(anchor: u32, focus: u32) -> serde_json::Value {
+    json!({"anchor": {"nodeId": anchor, "off": 0}, "focus": {"nodeId": focus, "off": 1}})
+}
+
+#[test]
+fn a_promote_lands_as_one_level_operation_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(heading_doc(&[("Title", Some("Heading1")), ("Body", None)])));
+    let plan = room.join(None, false);
+    let body = plan.nodes.iter().find(|node| node.path == vec![1]).expect("a block").id;
+
+    // A replica learns the step and its undo only from the deltas.
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let command = op("a", 1, 0, OpKind::Command, body, 0, json!({"command": "para.promote", "params": {}}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the promote lands");
+    assert_eq!(heading(&room, 1).as_deref(), Some("Heading1"), "body text becomes a heading at the level above it");
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "set_para_level", "items": [{"id": body, "level": 1}]}]})),
+        "the promote lands as one level operation inside the step's transaction"
+    );
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica applies the level");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, body, &command)).expect("the undo lands");
+    let delta = undone.delta.as_ref().expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_level"), "the inverse names the earlier level");
+    assert_eq!(heading(&room, 1), None, "the paragraph is body text again");
+    crate::apply_delta(&mut replica, &mut ids, delta).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", body, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(heading(&room, 1).as_deref(), Some("Heading1"), "redo promotes again");
+}
+
+#[test]
+fn a_promote_over_a_selection_levels_every_paragraph_in_one_transaction() {
+    let mut room = Room::new(SessionModel::from_document(heading_doc(&[("Title", Some("Heading1")), ("One", None), ("Two", None)])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(1), node(2));
+
+    let command = op("a", 1, 0, OpKind::Command, one, 0, json!({"command": "para.promote", "params": {}, "selection": selected(one, two)}));
+    let applied = room.submit("alice", Role::Editor, command).expect("the promote lands");
+    assert_eq!(heading(&room, 1).as_deref(), Some("Heading1"));
+    assert_eq!(heading(&room, 2).as_deref(), Some("Heading1"));
+    let delta = applied.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(
+        delta["ops"][0],
+        json!({"op": "set_para_level", "items": [{"id": one, "level": 1}, {"id": two, "level": 1}]}),
+        "every changed paragraph is named, in document order"
+    );
+}
+
+#[test]
+fn a_promote_over_more_than_64_paragraphs_stays_an_undo_barrier() {
+    let names: Vec<String> = (0..65).map(|index| format!("p{index:02}")).collect();
+    let mut texts: Vec<(&str, Option<&str>)> = vec![("Title", Some("Heading1"))];
+    texts.extend(names.iter().map(|name| (name.as_str(), None)));
+    let mut room = Room::new(SessionModel::from_document(heading_doc(&texts)));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, last) = (node(1), node(65));
+
+    let command = op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.promote", "params": {}, "selection": selected(first, last)}));
+    room.submit("alice", Role::Editor, command.clone()).expect("a wide promote still lands");
+    assert_eq!(heading(&room, 65).as_deref(), Some("Heading1"), "the last paragraph was promoted too");
+
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("a step this wide has no inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+}
+
+#[test]
+fn a_promote_with_nothing_to_promote_is_refused_before_mutation() {
+    let mut room = Room::new(SessionModel::from_document(heading_doc(&[("Title", Some("Heading1"))])));
+    let plan = room.join(None, false);
+    let title = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let before = document_json(&room);
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, title, 0, json!({"command": "para.promote", "params": {}})))
+        .expect_err("Heading 1 cannot be promoted");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(document_json(&room), before, "the refusal changed nothing");
+    assert_eq!(room.version(), 0, "the version did not move");
+    assert_eq!(room.model().session().undo_depth(), 0, "no undo step was recorded");
+}
+
+#[test]
+fn a_level_step_that_changes_nothing_is_still_an_addressable_step() {
+    let mut room = Room::new(SessionModel::from_document(heading_doc(&[("Body", None)])));
+    let plan = room.join(None, false);
+    let body = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let before = document_json(&room);
+
+    let step = op("a", 1, 0, OpKind::Structural, body, 0, json!({"op": "set_para_level", "items": [{"id": body, "level": null}]}));
+    let applied = room.submit("alice", Role::Editor, step.clone()).expect("an identity level step still lands");
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "set_para_level", "items": [{"id": body, "level": null}]}]})),
+        "the step is addressable even when it changes nothing"
+    );
+    assert_eq!(document_json(&room), before, "the document is unchanged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, body, &step)).expect("the identity undo lands");
+    assert!(undone.delta.is_some(), "the undo carries a delta too");
+    assert_eq!(document_json(&room), before, "the undo changes nothing either");
+}
+
+#[test]
+fn a_level_step_and_a_permute_land_as_one_transaction_on_a_replica() {
+    let mut room = Room::new(SessionModel::from_document(heading_doc(&[("One", None), ("Two", Some("Heading2"))])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(0), node(1));
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    // A command that levels and reorders in one step: both operations land or
+    // neither does.
+    let delta = json!({"op": "transaction", "ops": [
+        {"op": "set_para_level", "items": [{"id": one, "level": 2}]},
+        {"op": "permute", "nodeId": one, "order": [two, one]},
+    ]});
+    crate::apply_delta(&mut replica, &mut ids, &delta).expect("the replica applies the step");
+    assert_eq!(replica.doc.body[1].as_para().and_then(|para| para.props.style.clone()).as_deref(), Some("Heading2"), "the levelled paragraph moved");
+    assert_eq!(
+        replica.doc.body.iter().filter_map(|block| block.as_para().map(|para| para.text.clone())).collect::<Vec<_>>(),
+        ["Two", "One"],
+        "the order changed too"
+    );
+
+    let before = serde_json::to_value(&replica.doc).expect("json");
+    let refused = json!({"op": "transaction", "ops": [
+        {"op": "set_para_level", "items": [{"id": one, "level": 1}]},
+        {"op": "permute", "nodeId": one, "order": [one, 4_242]},
+    ]});
+    let err = crate::apply_delta(&mut replica, &mut ids, &refused).expect_err("the second operation is unknown");
+    assert!(err.contains("unknown node"), "{err}");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), before, "a refused transaction changes nothing");
+}

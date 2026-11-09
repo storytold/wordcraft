@@ -20,7 +20,7 @@ use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
-use wordcraft_doc::{Block, Blocks, Document, InlineObject, ParaProps, Path, Pos, Run, StoryRef};
+use wordcraft_doc::{Block, Blocks, Document, InlineObject, ParaProps, Paragraph, Path, Pos, Run, StoryRef, Table};
 use wordcraft_engine::{Selection, Session};
 
 /// Command areas that must never run from a network operation.
@@ -82,8 +82,9 @@ const CHAR_FORMAT_COMMANDS: &[&str] = &[
 /// paragraphs wider than [`MOVE_COMMANDS`] captures, move them wider than the
 /// bound, strip text (`para.removeBlank`) or allocate numbering definitions
 /// (`para.bullets`) stay barriers. `para.sort` is normalized to `permute` by
-/// [`SessionModel::normalized_permute`]; `para.promote`/`demote` change outline
-/// levels as well as order and stay barriers.
+/// [`SessionModel::normalized_permute`], and the outline level commands
+/// (`para.promote`/`demote` and the Outlining tab's levels) to
+/// `set_para_level` by [`SessionModel::normalized_level`].
 const PARA_FORMAT_COMMANDS: &[&str] = &[
     "para.addSpaceBefore",
     "para.align",
@@ -229,7 +230,7 @@ impl SessionModel {
         // normalized from the selected run it ran over, so even a sort that
         // changes nothing is an addressable step.
         let sort_range = if command == "para.sort" { self.sort_range(ids) } else { None };
-        let before_doc = (is_move_command(command) || command == "para.sort").then(|| self.session.doc.clone());
+        let before_doc = (is_move_command(command) || command == "para.sort" || is_level_command(command)).then(|| self.session.doc.clone());
         let before = doc_shape(&self.session.doc);
         let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
@@ -270,7 +271,17 @@ impl SessionModel {
             {
                 return Ok(effect);
             }
-            if let Some(effect) = self.normalized_move(op, &before_doc, ids) {
+            if is_move_command(command)
+                && let Some(effect) = self.normalized_move(op, &before_doc, ids)
+            {
+                return Ok(effect);
+            }
+            // A level command names the level of every paragraph it changed, so
+            // its forward effect travels as `set_para_level` instead of a
+            // command every replica replays.
+            if is_level_command(command)
+                && let Some(effect) = self.normalized_level(op, &before_doc, ids, label)
+            {
                 return Ok(effect);
             }
         }
@@ -499,6 +510,154 @@ impl SessionModel {
             touched,
         })
     }
+
+    /// A level command as one structural `set_para_level`: the command already
+    /// changed the document, so the difference is read back. When the only
+    /// change is the level of at most
+    /// [`MAX_LEVEL_PARAGRAPHS`](wordcraft_collab_doc::MAX_LEVEL_PARAGRAPHS)
+    /// paragraphs, the step's delta names every changed paragraph by session id
+    /// and its level, and its inverse names the levels before it; both travel as
+    /// one `transaction` delta, and an edit in any levelled paragraph blocks the
+    /// undo. A command that also changed text, numbering or the block order
+    /// keeps its command delta and stays a barrier.
+    fn normalized_level(&self, op: &Op, before: &Document, ids: &NodeIds, label: &str) -> Option<Effect> {
+        let changes = level_changes(before, &self.session.doc)?;
+        if changes.is_empty() || changes.len() > wordcraft_collab_doc::MAX_LEVEL_PARAGRAPHS {
+            return None;
+        }
+        let mut items = Vec::with_capacity(changes.len());
+        for change in &changes {
+            let id = ids.get(&NodeKey::new(change.story.clone(), change.path.clone()))?.0;
+            let implied = wordcraft_collab_doc::implied_style(change.after_level);
+            let style = if change.after_style == implied && change.after_outline.is_none() {
+                wordcraft_collab_doc::LevelStyle::Implied
+            } else {
+                wordcraft_collab_doc::LevelStyle::Named(change.after_style.clone())
+            };
+            let outline = if style == wordcraft_collab_doc::LevelStyle::Implied { None } else { change.after_outline };
+            items.push(wordcraft_collab_doc::LevelItem { id, level: change.after_level, style, outline });
+        }
+        // A level change moves no path, so the same ids resolve in the document
+        // before the command and the plan names the levels undo puts back.
+        let plan = wordcraft_collab_doc::plan_level(before, ids, &items).ok()?;
+        let touched = wordcraft_collab_doc::level_touched(&plan);
+        Some(Effect {
+            delta: Some(wordcraft_collab_doc::level_delta(&items)),
+            inverse: wordcraft_collab_doc::level_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: label.to_string(),
+            nodes_changed: false,
+            touched,
+        })
+    }
+}
+
+/// One paragraph a level command changed: where it lives and the level, style
+/// and direct outline level it carries after the command.
+struct LevelChangeAt {
+    story: String,
+    path: Vec<u32>,
+    after_level: Option<u8>,
+    after_style: Option<String>,
+    after_outline: Option<u8>,
+}
+
+/// The paragraphs whose outline level changed between two documents, or `None`
+/// when the difference is more than a level: a different number of blocks or
+/// parts, a block or table shape that moved, or a paragraph whose text, runs,
+/// mark, objects, section or other properties changed. A level command leaves
+/// every path in place, so the two documents are walked side by side; blocks the
+/// command did not touch share their `Arc` and are skipped by pointer.
+fn level_changes(before: &Document, after: &Document) -> Option<Vec<LevelChangeAt>> {
+    if before.parts.len() != after.parts.len() {
+        return None;
+    }
+    let mut out = Vec::new();
+    if !collect_level_changes("body", &mut Vec::new(), &before.body, &after.body, after, &mut out) {
+        return None;
+    }
+    for (part, old) in &before.parts {
+        let new = after.parts.get(part)?;
+        if !collect_level_changes(&format!("part:{part}"), &mut Vec::new(), &old.blocks, &new.blocks, after, &mut out) {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+fn collect_level_changes(story: &str, prefix: &mut Vec<u32>, old: &Blocks, new: &Blocks, after: &Document, out: &mut Vec<LevelChangeAt>) -> bool {
+    if old.len() != new.len() {
+        return false;
+    }
+    for (index, (a, b)) in old.iter().zip(new.iter()).enumerate() {
+        if std::sync::Arc::ptr_eq(a, b) {
+            continue;
+        }
+        prefix.push(index as u32);
+        let ok = match (a.as_ref(), b.as_ref()) {
+            (Block::Para(old_para), Block::Para(new_para)) => {
+                if !same_para_except_level(old_para, new_para) {
+                    false
+                } else if old_para.props.style != new_para.props.style || old_para.props.outline_level != new_para.props.outline_level {
+                    out.push(LevelChangeAt {
+                        story: story.to_string(),
+                        path: prefix.clone(),
+                        after_level: wordcraft_collab_doc::para_level(after, &new_para.props),
+                        after_style: new_para.props.style.clone(),
+                        after_outline: new_para.props.outline_level,
+                    });
+                    true
+                } else {
+                    // Touched but unchanged (a command that set the level it
+                    // already had): not part of the step's address.
+                    true
+                }
+            }
+            (Block::Table(old_table), Block::Table(new_table)) => {
+                let mut cells_ok = same_table_shape(old_table, new_table);
+                for (r, (old_row, new_row)) in old_table.rows.iter().zip(&new_table.rows).enumerate() {
+                    if !cells_ok {
+                        break;
+                    }
+                    for (c, (old_cell, new_cell)) in old_row.cells.iter().zip(&new_row.cells).enumerate() {
+                        prefix.push(r as u32);
+                        prefix.push(c as u32);
+                        cells_ok = collect_level_changes(story, prefix, &old_cell.blocks, &new_cell.blocks, after, out);
+                        prefix.pop();
+                        prefix.pop();
+                        if !cells_ok {
+                            break;
+                        }
+                    }
+                }
+                cells_ok
+            }
+            _ => false,
+        };
+        prefix.pop();
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether two paragraphs differ only in their style and direct outline level:
+/// a level command changes nothing else, so any other difference means the
+/// step cannot be named by levels alone.
+fn same_para_except_level(old: &Paragraph, new: &Paragraph) -> bool {
+    if old.text != new.text || old.objects != new.objects || old.runs != new.runs || old.mark != new.mark || old.section != new.section {
+        return false;
+    }
+    let strip = |props: &ParaProps| ParaProps { style: None, outline_level: None, ..props.clone() };
+    strip(&old.props) == strip(&new.props)
+}
+
+/// Whether two tables have the same rows and the same cells per row: a level
+/// command never changes a table's shape, so a different shape is a structural
+/// change.
+fn same_table_shape(old: &Table, new: &Table) -> bool {
+    old.rows.len() == new.rows.len() && old.rows.iter().zip(&new.rows).all(|(old_row, new_row)| old_row.cells.len() == new_row.cells.len())
 }
 
 /// The path of a child of `container`.
@@ -517,6 +676,19 @@ const MOVE_COMMANDS: &[&str] = &["para.moveUp", "para.moveDown", "outline.moveUp
 
 fn is_move_command(command: &str) -> bool {
     MOVE_COMMANDS.contains(&command)
+}
+
+/// Commands whose only effect is an outline level: promote and demote (Word's
+/// Alt+Shift+←/→), and the Outlining tab's absolute levels. They are normalized
+/// to `set_para_level` after the run — the levels the command left, named by
+/// session ids — so every replica applies the same structural delta and the
+/// step's inverse puts the earlier levels back (ADR-0010). A command that also
+/// changed a list level, moved a block or rewrote text stays a command barrier.
+const LEVEL_COMMANDS: &[&str] =
+    &["para.promote", "para.demote", "outline.promote", "outline.demote", "outline.promoteToHeading1", "outline.demoteToBody", "outline.level"];
+
+fn is_level_command(command: &str) -> bool {
+    LEVEL_COMMANDS.contains(&command)
 }
 
 fn path_key(path: &Path) -> String {

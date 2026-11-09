@@ -28,7 +28,8 @@
 //!
 //! What this adapter deliberately does not do (v1):
 //! - it does not run `CommandSpec` commands (`kind: "command"` is refused);
-//! - it does not touch styles, numbering, comments or track changes;
+//! - it does not touch numbering, comments or track changes (a level step
+//!   carries a heading style, never a list level);
 //! - it does not normalize formatting or a rearrangement wider than
 //!   [`MAX_PERMUTE_BLOCKS`]; the forward effect of a formatting command is
 //!   still the command itself, and only its inverse is a primitive
@@ -50,6 +51,17 @@
 //! ids in their old order, and the authoritative delta wraps the operation in a
 //! `transaction`, so a sort lands on every replica as one delta and undo puts
 //! the earlier order back in one step.
+//!
+//! `set_para_level` gives a list of paragraphs an explicit outline level: every
+//! item names a session id and a level (`1..=9` for `Heading{n}`, `null` for
+//! body text). A level change reorders nothing and moves no block, so the id
+//! map stays as it is; an item may also name its exact style and direct outline
+//! level, which is how an inverse restores a paragraph whose earlier style the
+//! level does not imply. Duplicates, an unknown or retired id, a block that is
+//! not a paragraph, a paragraph that has left its container and a step wider
+//! than [`MAX_LEVEL_PARAGRAPHS`] are refused before the document changes. The
+//! authoritative delta is one `set_para_level` inside a `transaction`, so a
+//! step — and a `permute` beside it — lands on every replica as one delta.
 //!
 //! `set_para_format` restores one paragraph's body and formatting to a named
 //! earlier value: it is the inverse of a character or paragraph command, whose
@@ -103,6 +115,15 @@ pub const MAX_MOVE_BLOCKS: usize = 64;
 /// still runs, but the command path cannot name the order on every replica, so
 /// the step stays a command and its undo answers `unsupported`.
 pub const MAX_PERMUTE_BLOCKS: usize = MAX_MOVE_BLOCKS;
+
+/// The most paragraphs one `set_para_level` step changes. A level command over
+/// a wider selection still runs, but the command path does not capture it, so
+/// the step stays a command and its undo answers `unsupported`.
+pub const MAX_LEVEL_PARAGRAPHS: usize = MAX_MOVE_BLOCKS;
+
+/// The longest style id a level item may name. A style id is a short token
+/// (`Heading2`, `Quote`); the bound keeps a hostile payload small.
+pub const MAX_STYLE_ID: usize = 128;
 
 /// Payload key that names the primitive (`insert_text`, `delete_range`, …).
 pub const PAYLOAD_OP: &str = "op";
@@ -458,6 +479,301 @@ pub fn permute_delta(order_ids: &[u32]) -> Value {
     json!({"op": "transaction", "ops": [permute_payload(order_ids)]})
 }
 
+/// The style a [`LevelItem`] leaves on its paragraph.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LevelStyle {
+    /// The style the named level implies: `Heading{level}` for 1–9, the default
+    /// paragraph style (none) for body text.
+    Implied,
+    /// An exact style id, `None` for the default paragraph style. The inverse
+    /// of a paragraph whose style the level does not imply (a `Quote` promoted
+    /// to a heading, a heading whose own style is `Heading2` at level 1) names
+    /// it so undo restores the paragraph byte for byte.
+    Named(Option<String>),
+}
+
+/// One paragraph of a `set_para_level` operation: the address, the target
+/// level the user asked for, and — when the level alone does not say it — the
+/// exact style and direct outline level to store.
+///
+/// `level` is the named target: `1..=9` makes the paragraph `Heading{n}`,
+/// `None` makes it body text. With [`LevelStyle::Named`] the stored fields are
+/// the item's own (`style`, `outline`), so an inverse can restore a paragraph
+/// whose style is not the one its level implies; an `outline` without a named
+/// style is refused, because the implied style is always body text or a
+/// heading, and both clear the direct outline level.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LevelItem {
+    /// The session id of the paragraph.
+    pub id: u32,
+    /// The target level: 1–9 for a heading, `None` for body text.
+    pub level: Option<u8>,
+    pub style: LevelStyle,
+    /// The direct `props.outline_level` (0–8) to store; only with a named
+    /// style. `None` clears it, as the implied styles do.
+    pub outline: Option<u8>,
+}
+
+/// One paragraph a level step changes, resolved against a document and the
+/// session map: the id, where it lives, and the style/outline level before and
+/// after. Every address is a session id, so the same plan names the same
+/// paragraph on every replica.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LevelChange {
+    pub story: StoryRef,
+    pub path: Path,
+    pub id: u32,
+    /// The item's named target level.
+    pub level: Option<u8>,
+    /// The level the paragraph has before the step (`None` = body text).
+    pub before_level: Option<u8>,
+    /// The style and direct outline level before the step.
+    pub before_style: Option<String>,
+    pub before_outline: Option<u8>,
+    /// The style and direct outline level the step leaves.
+    pub after_style: Option<String>,
+    pub after_outline: Option<u8>,
+}
+
+/// The level a paragraph's resolved properties give it: 1–9 for a heading (a
+/// style's outline level wins over body text), `None` for body text. This is
+/// the engine's rule for a heading, so the operation and the commands agree on
+/// what "level 2" means.
+pub fn para_level(doc: &Document, props: &ParaProps) -> Option<u8> {
+    doc.styles.resolve_para(props).outline_level.filter(|level| *level < 9).map(|level| level.saturating_add(1))
+}
+
+/// The style a named level implies: `Heading{n}` for a heading, none for body
+/// text.
+pub fn implied_style(level: Option<u8>) -> Option<String> {
+    level.map(|n| format!("Heading{n}"))
+}
+
+/// The style and outline level an item leaves on its paragraph.
+fn level_target(item: &LevelItem) -> (Option<String>, Option<u8>) {
+    match &item.style {
+        LevelStyle::Implied => (implied_style(item.level), None),
+        LevelStyle::Named(style) => (style.clone(), item.outline),
+    }
+}
+
+/// A paragraph is the only block a level step may address.
+fn level_at<'a>(doc: &'a Document, story: StoryRef, path: &Path) -> Option<&'a Paragraph> {
+    doc.para(story, path)
+}
+
+/// Resolve a list of level items into one step, or say why the addresses do
+/// not describe one.
+///
+/// Every check runs before the document or the id map is touched: an unknown
+/// id (`invalid`), a retired id (`gone`), an id that names a table, a row, a
+/// cell or a paragraph that has left its container (`invalid`), a duplicate id
+/// and a list outside `1..=MAX_LEVEL_PARAGRAPHS` are all refused here.
+pub fn plan_level(doc: &Document, ids: &NodeIds, items: &[LevelItem]) -> Result<Vec<LevelChange>, MoveError> {
+    if items.is_empty() || items.len() > MAX_LEVEL_PARAGRAPHS {
+        return Err(MoveError::Bad(format!("a level step carries 1 to {MAX_LEVEL_PARAGRAPHS} paragraphs, not {}", items.len())));
+    }
+    let mut out: Vec<LevelChange> = Vec::with_capacity(items.len());
+    for item in items {
+        if out.iter().any(|change| change.id == item.id) {
+            return Err(MoveError::Bad(format!("the step names node {} twice", item.id)));
+        }
+        let key = ids.resolve(NodeId(item.id)).map_err(|why| match why {
+            wordcraft_collab::ids::Resolve::Unknown => MoveError::Unknown(item.id),
+            wordcraft_collab::ids::Resolve::Gone(version) => MoveError::Gone(item.id, version),
+        })?;
+        if key.path.is_empty() {
+            return Err(MoveError::Bad(format!("node {} is not a block", item.id)));
+        }
+        let story = parse_story(&key.story).ok_or_else(|| MoveError::Bad(format!("unknown story {:?}", key.story)))?;
+        let path = Path(key.path.clone());
+        let Some(para) = level_at(doc, story, &path) else {
+            return Err(MoveError::Bad(format!("node {} does not name a paragraph", item.id)));
+        };
+        let (after_style, after_outline) = level_target(item);
+        out.push(LevelChange {
+            story,
+            path,
+            id: item.id,
+            level: item.level,
+            before_level: para_level(doc, &para.props),
+            before_style: para.props.style.clone(),
+            before_outline: para.props.outline_level,
+            after_style,
+            after_outline,
+        });
+    }
+    Ok(out)
+}
+
+/// Apply a resolved level step: every paragraph takes the style and direct
+/// outline level the plan names. The block paths and the id map do not move —
+/// a level change never reorders or re-contains a paragraph.
+pub fn apply_level(doc: &mut Document, plan: &[LevelChange]) -> Result<(), String> {
+    for change in plan {
+        if change.after_style == change.before_style && change.after_outline == change.before_outline {
+            continue;
+        }
+        ensure_heading_style(doc, change.after_style.as_deref());
+        let para = doc.para_mut(change.story, &change.path).map_err(|err| err.to_string())?;
+        para.props.style = change.after_style.clone();
+        para.props.outline_level = change.after_outline;
+        para.touch();
+    }
+    Ok(())
+}
+
+/// Make sure the built-in `Heading{n}` style (and its linked character style)
+/// is in the document, for files that didn't bring it. The command path adds it
+/// before it writes the style id; a replica applying the delta must add the
+/// same style, or the paragraph would format differently on that replica.
+pub fn ensure_heading_style(doc: &mut Document, style: Option<&str>) {
+    let Some(id) = style else { return };
+    let heading = id.strip_prefix("Heading").and_then(|rest| rest.parse::<u8>().ok()).is_some_and(|n| (1..=9).contains(&n));
+    if !heading {
+        return;
+    }
+    if doc.styles.get(id).is_some() {
+        return;
+    }
+    let builtin = wordcraft_doc::styles::StyleSheet::builtin();
+    for sid in [id.to_string(), format!("{id}Char")] {
+        if doc.styles.get(&sid).is_none()
+            && let Some(style) = builtin.get(&sid).cloned()
+        {
+            Arc::make_mut(&mut doc.styles).upsert(style);
+        }
+    }
+}
+
+/// The ids whose level the step changes: an edit another user makes in one of
+/// them after the step makes undo a conflict instead of overwriting it.
+pub fn level_touched(plan: &[LevelChange]) -> Vec<u32> {
+    let mut touched: Vec<u32> = plan
+        .iter()
+        .filter(|change| change.after_style != change.before_style || change.after_outline != change.before_outline)
+        .map(|change| change.id)
+        .collect();
+    touched.sort_unstable();
+    touched.dedup();
+    touched
+}
+
+/// The items that undo a level step: the same ids with the levels they had
+/// before it. A paragraph whose earlier style (or direct outline level) the
+/// earlier level does not imply carries it exactly, so undo restores the
+/// paragraph it found.
+pub fn level_inverse_items(plan: &[LevelChange]) -> Vec<LevelItem> {
+    plan.iter()
+        .map(|change| {
+            let implied = implied_style(change.before_level);
+            let style = if change.before_style == implied && change.before_outline.is_none() {
+                LevelStyle::Implied
+            } else {
+                LevelStyle::Named(change.before_style.clone())
+            };
+            let outline = if style == LevelStyle::Implied { None } else { change.before_outline };
+            LevelItem { id: change.id, level: change.before_level, style, outline }
+        })
+        .collect()
+}
+
+/// The operations that undo a level step: one `set_para_level` naming the
+/// levels before it. The room wraps the step's deltas, so undo lands as one
+/// `transaction` delta on every replica.
+pub fn level_inverse_ops(op: &Op, plan: &[LevelChange]) -> Vec<Op> {
+    let items = level_inverse_items(plan);
+    let first = plan.first();
+    let story = first.map(|change| change.story).unwrap_or(StoryRef::Body);
+    let node = first.map(|change| change.id).unwrap_or(0);
+    vec![inverse_op(OpKind::Structural, op, story, node, 0, json!({"op": "set_para_level", "items": level_items_json(&items)}))]
+}
+
+/// Read the `items` of a `set_para_level` payload: one `{id, level}` per
+/// paragraph, plus `style`/`outline` when the level does not imply them.
+pub fn level_items(payload: &Value) -> Result<Vec<LevelItem>, String> {
+    let items = payload.get("items").and_then(Value::as_array).ok_or_else(|| "set_para_level needs an `items` list".to_string())?;
+    if items.is_empty() {
+        return Err("`items` is empty".to_string());
+    }
+    if items.len() > MAX_LEVEL_PARAGRAPHS {
+        return Err(format!("a level step carries at most {MAX_LEVEL_PARAGRAPHS} paragraphs"));
+    }
+    let mut out: Vec<LevelItem> = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item.get("id").and_then(Value::as_u64).ok_or_else(|| "a level item needs an `id`".to_string())?;
+        let id = u32::try_from(id).map_err(|_| "an id does not fit".to_string())?;
+        if out.iter().any(|seen| seen.id == id) {
+            return Err(format!("the step names node {id} twice"));
+        }
+        let level = match item.get("level") {
+            Some(Value::Null) | None => None,
+            Some(value) => {
+                let n = value.as_u64().ok_or_else(|| "`level` must be 1–9 or null".to_string())?;
+                let n = u8::try_from(n).map_err(|_| "`level` must be 1–9 or null".to_string())?;
+                if !(1..=9).contains(&n) {
+                    return Err("`level` must be 1–9 or null".to_string());
+                }
+                Some(n)
+            }
+        };
+        let style = match item.get("style") {
+            None => LevelStyle::Implied,
+            Some(Value::Null) => LevelStyle::Named(None),
+            Some(Value::String(style)) => {
+                if style.is_empty() || style.len() > MAX_STYLE_ID {
+                    return Err("a style id is empty or too long".to_string());
+                }
+                LevelStyle::Named(Some(style.clone()))
+            }
+            Some(_) => return Err("`style` must be a style id or null".to_string()),
+        };
+        let outline = match item.get("outline") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let n = value.as_u64().ok_or_else(|| "`outline` must be 0–8".to_string())?;
+                let n = u8::try_from(n).map_err(|_| "`outline` must be 0–8".to_string())?;
+                if n > 8 {
+                    return Err("`outline` must be 0–8".to_string());
+                }
+                Some(n)
+            }
+        };
+        if style == LevelStyle::Implied && outline.is_some() {
+            return Err("`outline` needs a named `style`: an implied level clears the direct outline level".to_string());
+        }
+        out.push(LevelItem { id, level, style, outline });
+    }
+    Ok(out)
+}
+
+/// The JSON of a list of level items; forward and inverse deltas use the same
+/// shape, so the author and every peer read one form.
+pub fn level_items_json(items: &[LevelItem]) -> Vec<Value> {
+    items
+        .iter()
+        .map(|item| {
+            let mut out = json!({"id": item.id, "level": item.level});
+            match &item.style {
+                LevelStyle::Implied => {}
+                LevelStyle::Named(Some(style)) => out["style"] = json!(style),
+                LevelStyle::Named(None) => out["style"] = Value::Null,
+            }
+            if let Some(outline) = item.outline {
+                out["outline"] = json!(outline);
+            }
+            out
+        })
+        .collect()
+}
+
+/// The authoritative delta of a level step: one `set_para_level` inside a
+/// transaction, so the step — and, with a `permute` beside it, the order a
+/// command also changed — lands on every replica as one delta.
+pub fn level_delta(items: &[LevelItem]) -> Value {
+    json!({"op": "transaction", "ops": [{"op": "set_para_level", "items": level_items_json(items)}]})
+}
+
 /// The WordCraft half of a room.
 pub struct DocModel {
     doc: Document,
@@ -501,6 +817,7 @@ impl DocModel {
             "remove_block" => self.remove_block(op, ids),
             "move_block" => self.move_block(op, ids),
             "permute" => self.permute(op, ids),
+            "set_para_level" => self.set_para_level(op, ids),
             "insert_row" => self.insert_row(op, ids),
             "remove_row" => self.remove_row(op, ids),
             "insert_column" => self.insert_column(op, ids),
@@ -842,6 +1159,44 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Sort paragraphs".into(),
             nodes_changed: true,
+            touched,
+        })
+    }
+
+    /// Change the outline level of a list of paragraphs. `payload.items` names
+    /// each paragraph by session id and gives its target level (`1..=9` for a
+    /// heading, `null` for body text); an item may name its exact style and
+    /// direct outline level too, which is how an inverse restores a paragraph
+    /// the level alone does not describe.
+    ///
+    /// A level change never reorders or re-contains a paragraph, so the block
+    /// paths and the id map do not move. An unknown id, a retired id, an id
+    /// that names a table, a row, a cell or a paragraph outside its container,
+    /// a duplicate id and a step wider than [`MAX_LEVEL_PARAGRAPHS`] are refused
+    /// before the document changes.
+    ///
+    /// The authoritative delta is one `set_para_level` inside a `transaction`
+    /// (a command that also reorders would put its `permute` in the same
+    /// transaction); the inverse names the levels before the step, so undo and
+    /// redo reach every replica as one delta.
+    fn set_para_level(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let items = level_items(&op.payload).map_err(|why| invalid(op, why))?;
+        let plan = plan_level(&self.doc, ids, &items).map_err(|err| match err {
+            MoveError::Unknown(id) => invalid(op, format!("unknown node {id}")),
+            MoveError::Gone(id, version) => Reject::new(op.op_id.clone(), RejectCode::Gone, format!("node {id} was deleted at version {version}")),
+            MoveError::Bad(why) => invalid(op, why),
+        })?;
+        // Undo puts the earlier levels back, so an edit another user makes in
+        // any paragraph the step levelled must refuse the undo.
+        let touched = level_touched(&plan);
+        let inverse = level_inverse_ops(op, &plan);
+        apply_level(&mut self.doc, &plan).map_err(|err| invalid(op, err))?;
+        Ok(Effect {
+            delta: Some(level_delta(&items)),
+            inverse,
+            forward: vec![op.clone()],
+            label: "Outline level".into(),
+            nodes_changed: false,
             touched,
         })
     }
@@ -2144,6 +2499,11 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             }
             let plan = plan_permute(doc, ids, &order).map_err(|err| err.to_string())?;
             apply_permute(doc, ids, &plan)?;
+        }
+        "set_para_level" => {
+            let items = level_items(delta)?;
+            let plan = plan_level(doc, ids, &items).map_err(|err| err.to_string())?;
+            apply_level(doc, &plan)?;
         }
         "insert_row" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;

@@ -1611,3 +1611,302 @@ fn a_replica_applies_a_permute_and_keeps_the_ids_of_the_blocks_it_moved() {
     assert_eq!(replica_ids.resolve(NodeId(beta)).map(|key| key.path.clone()), Ok(vec![1]));
     assert_eq!(replica_ids.resolve(NodeId(gamma)).map(|key| key.path.clone()), Ok(vec![2]));
 }
+
+// --- promoting and demoting paragraphs --------------------------------------
+
+/// A document whose paragraphs carry the styles named: `Some("Heading2")` is a
+/// heading, `None` body text.
+fn styled_doc(texts: &[(&str, Option<&str>)]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for (text, style) in texts {
+        let mut para = Paragraph::with_text(text, CharProps::default());
+        para.props.style = style.map(str::to_string);
+        doc.body.push(Arc::new(Block::Para(para)));
+    }
+    doc
+}
+
+fn styled_room(texts: &[(&str, Option<&str>)]) -> Room<DocModel> {
+    let mut room = Room::new(DocModel::new(styled_doc(texts)));
+    let _ = room.join(None, false);
+    room
+}
+
+fn level_step(items: serde_json::Value) -> serde_json::Value {
+    json!({"op": "set_para_level", "items": items})
+}
+
+fn para_style(room: &Room<DocModel>, block: usize) -> Option<String> {
+    room.model().document().body.get(block).and_then(|b| b.as_para()).and_then(|p| p.props.style.clone())
+}
+
+#[test]
+fn levelling_paragraphs_is_one_transactional_level_step() {
+    let mut room = styled_room(&[("Title", Some("Heading1")), ("One", None), ("Two", Some("Heading2"))]);
+    let (one, two) = (block_id(&room, 1), block_id(&room, 2));
+
+    let applied = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 1}, {"id": two, "level": 3}]))),
+        )
+        .expect("the level step lands");
+
+    assert_eq!(para_style(&room, 1).as_deref(), Some("Heading1"), "body text becomes the heading the step names");
+    assert_eq!(para_style(&room, 2).as_deref(), Some("Heading3"), "a heading goes down a level");
+    assert_eq!(
+        applied.delta,
+        Some(json!({
+            "op": "transaction",
+            "ops": [{"op": "set_para_level", "items": [{"id": one, "level": 1}, {"id": two, "level": 3}]}],
+        })),
+        "the step lands as one level operation inside the step's transaction"
+    );
+    // The ids keep naming their paragraphs: a level change moves no block.
+    assert_eq!(room.ids().resolve(NodeId(one)).map(|key| key.path.clone()), Ok(vec![1]));
+    assert_eq!(room.ids().resolve(NodeId(two)).map(|key| key.path.clone()), Ok(vec![2]));
+}
+
+#[test]
+fn undo_of_a_level_step_lands_as_one_transaction_and_redo_returns_the_levels() {
+    let mut room = styled_room(&[("Title", Some("Heading1")), ("One", None), ("Two", Some("Heading2"))]);
+    let (one, two) = (block_id(&room, 1), block_id(&room, 2));
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 1}, {"id": two, "level": 3}]))),
+    )
+    .expect("the level step lands");
+
+    let undone = room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the undo lands");
+    assert_eq!(
+        undone.delta,
+        Some(json!({
+            "op": "transaction",
+            "ops": [{"op": "set_para_level", "items": [{"id": one, "level": null}, {"id": two, "level": 2}]}],
+        })),
+        "the inverse is one level operation naming the levels before the step"
+    );
+    assert_eq!(para_style(&room, 1), None, "the promoted paragraph is body text again");
+    assert_eq!(para_style(&room, 2).as_deref(), Some("Heading2"), "the demoted heading is back at level 2");
+
+    let redo = Op {
+        op_id: OpId::new("alice", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Structural,
+        target: Target::new("body", one, 0),
+        payload: serde_json::Value::Null,
+        history: Some(HistoryAction::Redo { op_id: OpId::new("a", 1) }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(para_style(&room, 1).as_deref(), Some("Heading1"), "redo levels again");
+    assert_eq!(para_style(&room, 2).as_deref(), Some("Heading3"));
+}
+
+#[test]
+fn undo_restores_a_style_the_level_does_not_imply() {
+    let mut room = styled_room(&[("Quoted", Some("Quote"))]);
+    let one = block_id(&room, 0);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 2}]))))
+        .expect("the promote lands");
+    assert_eq!(para_style(&room, 0).as_deref(), Some("Heading2"));
+
+    let undone = room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the undo lands");
+    assert_eq!(
+        undone.delta,
+        Some(json!({
+            "op": "transaction",
+            "ops": [{"op": "set_para_level", "items": [{"id": one, "level": null, "style": "Quote"}]}],
+        })),
+        "the inverse names the style the level does not imply"
+    );
+    assert_eq!(para_style(&room, 0).as_deref(), Some("Quote"), "the paragraph keeps the style it had");
+}
+
+#[test]
+fn undo_restores_a_direct_outline_level_the_style_does_not_imply() {
+    let mut para = Paragraph::with_text("Odd", CharProps::default());
+    para.props.style = Some("Heading2".into());
+    para.props.outline_level = Some(0);
+    let mut doc = Document::new();
+    doc.body = vec![Arc::new(Block::Para(para))];
+    let mut room = Room::new(DocModel::new(doc));
+    let _ = room.join(None, false);
+    let one = block_id(&room, 0);
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 3}]))))
+        .expect("the level step lands");
+    assert_eq!(para_style(&room, 0).as_deref(), Some("Heading3"));
+
+    let undone = room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the undo lands");
+    assert_eq!(
+        undone.delta,
+        Some(json!({
+            "op": "transaction",
+            "ops": [{"op": "set_para_level", "items": [{"id": one, "level": 1, "style": "Heading2", "outline": 0}]}],
+        })),
+        "the inverse names the style and the direct outline level"
+    );
+    let restored = room.model().document().body.first().and_then(|b| b.as_para()).expect("a paragraph");
+    assert_eq!(restored.props.style.as_deref(), Some("Heading2"));
+    assert_eq!(restored.props.outline_level, Some(0), "the direct outline level is back");
+}
+
+#[test]
+fn a_level_step_with_an_unknown_retired_or_unaddressable_id_is_refused_before_mutation() {
+    let mut room = styled_room(&[("One", None), ("Two", None)]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    // An id the session never issued.
+    let err = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 1}, {"id": 999_999, "level": 1}]))),
+        )
+        .expect_err("an unknown id is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "nothing changed");
+    assert_eq!(room.version(), 0, "the version did not move");
+
+    // The same id twice: the inverse could not name one level per paragraph.
+    let err = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op("a", 2, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 1}, {"id": one, "level": 2}]))),
+        )
+        .expect_err("a duplicate is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // A level outside 1–9, and an outline level without a named style.
+    for payload in [json!([{"id": one, "level": 0}]), json!([{"id": one, "level": 10}]), json!([{"id": one, "level": 1, "outline": 0}])] {
+        let err = room
+            .submit("alice", Role::Editor, op("a", 3, 0, OpKind::Structural, one, 0, level_step(payload)))
+            .expect_err("a malformed level is refused");
+        assert_eq!(err.code, RejectCode::Invalid);
+        assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    }
+
+    // A stale id that names a path outside the container (a map from an older
+    // document): there is no paragraph there, so the step is refused.
+    let stale = room.ids_mut().id_for(&NodeKey::new("body", vec![9])).0;
+    let err = room
+        .submit("alice", Role::Editor, op("a", 4, 0, OpKind::Structural, stale, 0, level_step(json!([{"id": stale, "level": 1}]))))
+        .expect_err("a path outside the container is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // A retired id is gone rather than invalid; the document still does not move.
+    room.submit("alice", Role::Editor, op("a", 5, 0, OpKind::Structural, two, 0, json!({"op": "remove_block", "index": 1})))
+        .expect("remove the last block");
+    let before_retired = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+    let err = room
+        .submit("alice", Role::Editor, op("a", 6, version, OpKind::Structural, two, 0, level_step(json!([{"id": two, "level": 1}]))))
+        .expect_err("a retired id is refused");
+    assert_eq!(err.code, RejectCode::Gone);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before_retired);
+    assert_eq!(room.version(), version);
+}
+
+#[test]
+fn a_level_step_on_a_table_is_refused_before_mutation() {
+    let mut room = Room::new(DocModel::new(table_doc(1, 1)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, level_step(json!([{"id": table, "level": 1}]))))
+        .expect_err("a table has no outline level");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(room.version(), 0);
+}
+
+#[test]
+fn a_level_step_wider_than_the_bound_is_refused_before_mutation() {
+    let names: Vec<String> = (0..65).map(|index| format!("p{index:02}")).collect();
+    let refs: Vec<(&str, Option<&str>)> = names.iter().map(|name| (name.as_str(), None)).collect();
+    let mut room = styled_room(&refs);
+    let items: Vec<serde_json::Value> = (0..65).map(|index| json!({"id": block_id(&room, index), "level": 1})).collect();
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let first = block_id(&room, 0);
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, first, 0, level_step(serde_json::Value::Array(items))))
+        .expect_err("65 paragraphs are wider than a level step");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(room.version(), 0);
+}
+
+#[test]
+fn a_foreign_edit_of_a_levelled_block_makes_undo_a_conflict() {
+    let mut room = styled_room(&[("One", None), ("Two", None)]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 1}, {"id": two, "level": 2}]))),
+    )
+    .expect("the level step lands");
+
+    // Bob types into the second paragraph, which the step levelled.
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, two, 0, json!({"op": "insert_text", "text": "X"}))).expect("bob types");
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+
+    let err = room.submit("alice", Role::Editor, undo_request("alice", 2, version, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refusal changed nothing");
+    assert_eq!(room.version(), version, "the version did not move");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step stays on the stack");
+}
+
+#[test]
+fn a_level_step_that_names_the_current_levels_is_an_identity_step() {
+    let mut room = styled_room(&[("One", Some("Heading2"))]);
+    let one = block_id(&room, 0);
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, level_step(json!([{"id": one, "level": 2}]))))
+        .expect("an identity level step still lands");
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "set_para_level", "items": [{"id": one, "level": 2}]}]})),
+        "the step is addressable even when it changes nothing"
+    );
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the document is unchanged");
+    assert_eq!(room.version(), 1, "the step still moves the version");
+
+    room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the identity undo lands");
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the undo changes nothing either");
+    assert_eq!(para_style(&room, 0).as_deref(), Some("Heading2"));
+}
+
+#[test]
+fn a_replica_applies_a_level_step_and_keeps_the_styles() {
+    let mut room = styled_room(&[("Title", Some("Heading1")), ("Body", None)]);
+    let body = block_id(&room, 1);
+    let mut replica = room.model().document().clone();
+    let mut replica_ids = room.ids().clone();
+
+    submit_and_mirror(
+        &mut room,
+        op("a", 1, 0, OpKind::Structural, body, 0, level_step(json!([{"id": body, "level": 1}]))),
+        &mut replica,
+        &mut replica_ids,
+    );
+
+    let para = replica.body.get(1).and_then(|block| block.as_para()).expect("the replica kept the paragraph");
+    assert_eq!(para.props.style.as_deref(), Some("Heading1"), "the replica applied the same level");
+    assert_eq!(replica_ids.resolve(NodeId(body)).map(|key| key.path.clone()), Ok(vec![1]), "the id still names its paragraph");
+}
