@@ -1,7 +1,7 @@
 //! The text pointer over the page on Windows (#1746, #1417, #1126). Windows' I-beam inverts what
 //! lies under it, but over the GPU-drawn window it stays white, so it vanishes on white paper.
-//! Supply the contrasting I-beam as a native RGBA cursor: hiding the OS pointer and painting
-//! its replacement makes Windows Magnifier's centered mouse tracking jump across the canvas.
+//! Supply the contrasting I-beam as a native RGBA cursor: a controlled comparison implicated hiding the OS pointer and painting
+//! its replacement in centered Magnifier panning jumps. The mechanism is unknown.
 //! Other platforms keep their system pointer. Caret/accessibility geometry is unchanged.
 
 use std::collections::VecDeque;
@@ -35,6 +35,7 @@ struct Key {
 }
 
 impl Key {
+    /// Quantize display scale and contrast so equivalent bitmaps share a cache entry.
     fn new(ppp: f32, color: Color32) -> Option<Self> {
         if !ppp.is_finite() || ppp <= 0.0 {
             return None;
@@ -95,7 +96,7 @@ fn raster(key: Key) -> CustomCursorImage {
     let mut rgba = vec![0; usize::from(width) * usize::from(height) * 4];
     let foreground = if key.light { 255 } else { 0 };
     let outline = 255 - foreground;
-    for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = (index % usize::from(width)) as i32 - hx;
         let y = (index / usize::from(width)) as i32 - hy;
         let band = |v: i32, center: i32, thickness: i32| v >= center - thickness / 2 && v < center - thickness / 2 + thickness;
@@ -190,9 +191,9 @@ mod tests {
                 assert_eq!(image.rgba.len(), usize::from(image.size[0]) * usize::from(image.size[1]) * 4);
                 assert_eq!(image.hotspot, [image.size[0] / 2, image.size[1] / 2]);
                 assert_eq!(center(&image), color);
-                assert!(image.rgba.chunks_exact(4).all(|p| p[3] == 0 || p[3] == 255));
+                assert!(image.rgba.as_chunks::<4>().0.iter().all(|p| p[3] == 0 || p[3] == 255));
                 let opposite = if color == Color32::BLACK { [255; 4] } else { [0, 0, 0, 255] };
-                assert!(image.rgba.chunks_exact(4).any(|p| p == opposite));
+                assert!(image.rgba.as_chunks::<4>().0.contains(&opposite));
                 for x in 0..image.size[0] {
                     assert_eq!(pixel(&image, x, 0)[3], 0);
                     assert_eq!(pixel(&image, x, image.size[1] - 1)[3], 0);
@@ -254,6 +255,7 @@ mod tests {
         assert_eq!(hover_page(&mut h), (CursorIcon::Text, None));
     }
 
+    /// Leaving the page clears the image and returning reuses its pixels.
     #[test]
     fn native_image_is_cached_and_cleared_on_ribbon_exit_and_backstage() {
         let mut h = window(true, false);
@@ -274,6 +276,7 @@ mod tests {
         assert!(h.output().platform_output.cursor_image.is_none());
     }
 
+    /// A later resize request wins, and invalid coordinates leave the stock cursor selected.
     #[test]
     fn another_cursor_choice_wins_and_invalid_geometry_is_bounded() {
         let ctx = egui::Context::default();
@@ -315,6 +318,7 @@ mod tests {
         }
     }
 
+    /// Evicting scale variants in one window leaves another window independent.
     #[test]
     fn native_bitmap_caches_are_bounded_and_local_to_their_context() {
         let first = egui::Context::default();
