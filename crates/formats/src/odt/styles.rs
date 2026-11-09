@@ -123,14 +123,10 @@ fn script_properties(a: &Attrs, x: &mut wordcraft_doc::props::CharProps, faces: 
     if let Some(s) = get(a, "style:font-style-complex") {
         x.italic_cs = Some(matches!(s.trim(), "italic" | "oblique"));
     }
-    fn tag(v: Option<&str>) -> Option<&str> {
-        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none" && *v != "zxx")
-    }
-    let lang = |l: &str, c: &str| tag(get(a, l)).map(|l| tag(get(a, c)).map_or_else(|| l.to_string(), |c| format!("{l}-{c}")));
-    if let Some(l) = lang("style:language-asian", "style:country-asian") {
+    if let Some(l) = language_tag(a, "style:language-asian", "style:script-asian", "style:country-asian") {
         x.lang_ea = Some(l);
     }
-    if let Some(l) = lang("style:language-complex", "style:country-complex") {
+    if let Some(l) = language_tag(a, "style:language-complex", "style:script-complex", "style:country-complex") {
         x.lang_bidi = Some(l);
     }
 }
@@ -203,15 +199,26 @@ fn extra_text_properties(a: &Attrs, d: &mut FmtDelta) {
     if let Some(v) = get(a, "style:font-relief") {
         (x.emboss, x.engrave) = (Some(v.trim() == "embossed"), Some(v.trim() == "engraved"));
     }
+    if let Some(l) = language(a) {
+        x.lang = Some(l);
+    }
+}
+
+/// The language `fo:language`, `fo:script` and `fo:country` state: see [`language_tag`].
+fn language(a: &Attrs) -> Option<String> {
+    language_tag(a, "fo:language", "fo:script", "fo:country")
+}
+
+/// The language the attributes `language`, `script` and `country` state, as a tag (`de-DE`,
+/// `sr-Latn-RS`); `None` when they state none, or no language at all (`none`, `zxx`). A script of
+/// any other shape than a script's is left out: written back, it would read as a country.
+fn language_tag(a: &Attrs, language: &str, script: &str, country: &str) -> Option<String> {
     fn tag(v: Option<&str>) -> Option<&str> {
-        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()))
+        v.map(str::trim).filter(|v| (1..=8).contains(&v.len()) && v.chars().all(|c| c.is_ascii_alphanumeric()) && *v != "none")
     }
-    if let Some(l) = tag(get(a, "fo:language")).filter(|l| *l != "none" && *l != "zxx") {
-        x.lang = Some(match tag(get(a, "fo:country")).filter(|c| *c != "none") {
-            Some(c) => format!("{l}-{c}"),
-            None => l.to_string(),
-        });
-    }
+    let language = tag(get(a, language)).filter(|l| *l != "zxx")?;
+    let script = tag(get(a, script)).filter(|s| super::writer::is_script(s));
+    Some([Some(language), script, tag(get(a, country))].into_iter().flatten().collect::<Vec<_>>().join("-"))
 }
 
 #[derive(Clone, Debug, Default)]
@@ -229,7 +236,7 @@ struct StyleInfo {
     outline: Option<u8>,
     border_bottom: bool,
     /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
-    cell_background: Option<Rgb>,
+    cell_background: Option<Option<Rgb>>,
     /// A table-cell style's background picture (§17.3 `style:background-image`): its package
     /// path, `style:repeat` and `style:position`.
     cell_picture: Option<(String, String, String)>,
@@ -254,6 +261,9 @@ struct StyleInfo {
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
+    /// `fo:background-color` of a table or table-row style (§20.175): what shows behind cells
+    /// with none of their own. `Some(None)`: `transparent`, which clears a parent style's.
+    table_background: Option<Option<Rgb>>,
     /// `fo:keep-together` of a table-row style: the row doesn't break across pages.
     row_keep: Option<bool>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
@@ -457,6 +467,8 @@ pub(super) struct NamedStyle {
     /// What it turns off, which a style it is based on may turn on: bold, italic, underline,
     /// strike-through (`fo:font-weight="normal"`…).
     pub(super) off: [bool; 4],
+    /// Its outline level, 1–10 (`style:default-outline-level`).
+    pub(super) outline: Option<u8>,
 }
 
 /// Reads date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -589,6 +601,12 @@ fn column_share_of(a: &Attrs) -> Option<f32> {
 
 /// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
 /// one (paragraph, table, column, cell, section and graphic properties, tab stops).
+/// What `fo:background-color` says of a table or row: a colour, or none (`transparent`).
+fn table_background_of(a: &Attrs) -> Option<Option<Rgb>> {
+    let bg = get(a, "fo:background-color")?;
+    if bg.trim() == "transparent" { Some(None) } else { model::parse_color(bg).map(Some) }
+}
+
 fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
     match name {
         "paragraph-properties" => paragraph_properties(a, s),
@@ -615,6 +633,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
                 s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
             }
             // §20.300 `table:align`: `margins` fills the text width, as no alignment does.
+            s.table_background = table_background_of(a).or(s.table_background);
             s.table_align = match get(a, "table:align").map(str::trim) {
                 Some("left") => Some(Align::Left),
                 Some("center") => Some(Align::Center),
@@ -636,6 +655,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             }
         }
         "table-row-properties" => {
+            s.table_background = table_background_of(a).or(s.table_background);
             if let Some(h) = get(a, "style:row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
                 s.row_height = Some((h.min(MAX_LEN), true));
             } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
@@ -696,7 +716,7 @@ pub(super) fn writing_direction(m: &str) -> wordcraft_doc::props::TextDirection 
 /// A table-cell style's `style:table-cell-properties` (ODF 1.3 §17.18): background, borders,
 /// padding and vertical alignment.
 fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
-    if let Some(c) = get(a, "fo:background-color").and_then(model::parse_color) {
+    if let Some(c) = table_background_of(a) {
         s.cell_background = Some(c);
     }
     cell_borders_and_padding(a, s);
@@ -1058,6 +1078,8 @@ pub(super) struct Styles {
     pub(super) default_tab: Option<f32>,
     /// The Asian and complex-script fonts and languages of `style:default-style` for paragraphs.
     pub(super) default_scripts: wordcraft_doc::props::CharProps,
+    /// The language the default paragraph style states.
+    pub(super) default_lang: Option<String>,
     /// Pair kerning of `style:default-style` for paragraphs (`style:letter-kerning`, §20.317;
     /// off unless it says so).
     pub(super) default_kern: bool,
@@ -1135,6 +1157,7 @@ impl Styles {
                     self.default_kern = get(&a, "style:letter-kerning").is_some_and(|k| k.trim() == "true");
                     self.default_color = get(&a, "fo:color").and_then(model::parse_color);
                     script_properties(&a, &mut self.default_scripts, &self.faces);
+                    self.default_lang = language(&a);
                 }
                 "paragraph-properties" if in_default && cur.is_none() => {
                     paragraph_spacing(&a, &mut self.default_spacing);
@@ -1230,6 +1253,12 @@ impl Styles {
             .or(self.default_size)
             .filter(|v| v.is_finite() && *v >= 1.0)
             .map(|v| v.min(1638.0))
+    }
+
+    /// The document's language: its Standard style's, else its default paragraph style's. (Written
+    /// from the model, Standard is empty and the default style says it for both.)
+    pub(super) fn document_lang(&self) -> Option<String> {
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.extra.lang.clone()).or_else(|| self.default_lang.clone())
     }
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
@@ -1415,8 +1444,13 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.cell_picture.clone())
     }
 
+    pub(super) fn table_background(&self, name: &str) -> Option<Rgb> {
+        self.chain(name).iter().find_map(|(_, s)| s.table_background).flatten()
+    }
+
+    /// Background of a table-cell style (whole chain).
     pub(super) fn cell_background(&self, name: &str) -> Option<Rgb> {
-        self.chain(name).iter().find_map(|(_, s)| s.cell_background)
+        self.chain(name).iter().find_map(|(_, s)| s.cell_background).flatten()
     }
 
     /// Borders of a table-cell style (whole chain).
@@ -1543,6 +1577,13 @@ impl Styles {
         if s.parent.is_none() && fmt.size.is_none() && self.doc_size() != self.default_size {
             fmt.size = self.default_size;
         }
+        // And its language, likewise.
+        if s.parent.is_none()
+            && let Some(lang) = self.default_lang.as_ref().filter(|l| self.document_lang().as_ref() != Some(*l))
+            && fmt.extra.as_ref().is_none_or(|x| x.lang.is_none())
+        {
+            fmt.extra.get_or_insert_with(Default::default).lang = Some(lang.clone());
+        }
         let look = ParaLook {
             align: s.align,
             keep_next: s.keep_next == Some(true),
@@ -1557,13 +1598,16 @@ impl Styles {
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
         let off = [s.fmt.bold, s.fmt.italic, s.fmt.underline, s.fmt.strike].map(|v| v == Some(false));
-        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look, off })
+        let outline = s.outline.filter(|o| (1..=10).contains(o));
+        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look, off, outline })
     }
 
     pub(super) fn para(&self, name: &str) -> ParaLook {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         let mut kind_at = chain.len();
+        // The nearest outline level; a style with one is no kind's style: its look is its own.
+        let mut outline = None;
         for (i, (n, s)) in chain.iter().enumerate() {
             kind_at = i;
             let dn = s.display.as_deref().unwrap_or(n).to_ascii_lowercase().replace("_20_", " ");
@@ -1582,11 +1626,11 @@ impl Styles {
             if kind != Kind::Normal {
                 break;
             }
-            if let Some(o) = s.outline.filter(|o| (1..=10).contains(o)) {
-                kind = Kind::Heading(o.min(6));
-                break;
-            }
+            outline = outline.or(s.outline.filter(|o| (1..=10).contains(o)));
             kind_at = chain.len();
+        }
+        if let Some(o) = outline {
+            kind = Kind::Heading(o.min(6));
         }
         // The nearest custom style: its formatting stays in it; the automatic styles over it give
         // the paragraph's own.
