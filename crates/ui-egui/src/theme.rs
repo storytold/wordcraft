@@ -964,10 +964,10 @@ mod tests {
     /// installed Sarabun draws the whole interface; the headings family takes the heading face.
     #[test]
     fn thai_interface_faces_come_first() {
-        wordcraft_fonts::FontDb::init_test_fonts();
         let db = wordcraft_fonts::FontDb::global();
         let regular = db.face("Source Sans 3", "Regular");
         let heading = db.face("Source Sans 3", "Bold");
+        use super::{FontFamily, add_primary_faces, font_definitions};
         let mut fonts = font_definitions(false, false);
         add_primary_faces(&mut fonts, &regular, &heading);
         add_primary_faces(&mut fonts, &regular, &heading);
