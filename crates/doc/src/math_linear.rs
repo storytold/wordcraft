@@ -171,6 +171,7 @@ impl P {
                     if pre {
                         out.push(self.prescript(stops));
                     } else {
+                        let group = self.after_group();
                         self.i += 1;
                         let s = self.script_operand(stops);
                         if out.last().is_some_and(too_deep) {
@@ -178,7 +179,7 @@ impl P {
                             out.extend(s);
                         } else {
                             let base = out.pop();
-                            out.push(attach_script(base, c == '^', s));
+                            out.push(attach_script(base, c == '^', s, group));
                         }
                     }
                 }
@@ -244,6 +245,11 @@ impl P {
         }
         self.i += 1;
         vec![text(c)]
+    }
+
+    /// The character just before the cursor closed a `〖…〗` group.
+    fn after_group(&self) -> bool {
+        self.i.checked_sub(1).and_then(|k| self.c.get(k)) == Some(&'〗')
     }
 
     /// A bracket group after its opening character; `closers` end it.
@@ -450,11 +456,11 @@ impl P {
             Some(c @ ('^' | '_')) => {
                 self.i += 1;
                 let s = self.script_operand(stops);
-                let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s);
+                let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s, false);
                 if let Some(c2 @ ('^' | '_')) = self.peek() {
                     self.i += 1;
                     let s2 = self.script_operand(stops);
-                    n = attach_script(Some(n), c2 == '^', s2);
+                    n = attach_script(Some(n), c2 == '^', s2, false);
                 }
                 vec![n]
             }
@@ -575,6 +581,7 @@ impl P {
             }
             // The base is already deep: the operator is text (see `too_deep`).
             let deep = if whole { any_too_deep(out) } else { out.last().is_some_and(too_deep) };
+            let group = self.after_group();
             self.i += 1;
             if deep {
                 let s = if matches!(c, '^' | '_' | '┬' | '┴') { self.script_operand(stops) } else { Vec::new() };
@@ -586,7 +593,7 @@ impl P {
                 '^' | '_' => {
                     let s = self.script_operand(stops);
                     let b = base(out);
-                    out.push(attach_script(b, c == '^', s));
+                    out.push(attach_script(b, c == '^', s, group));
                 }
                 '┬' | '┴' => {
                     let lim = self.script_operand(stops);
@@ -683,12 +690,14 @@ pub fn strip_parens(mut a: Arg) -> Arg {
     a
 }
 
-fn attach_script(base: Option<MNode>, sup: bool, s: Arg) -> MNode {
+/// `group`: the base was just closed by `〗`, so a characterless delimiter around it is that grouping
+/// (and dropped), not an explicit `├…┤` one (kept).
+fn attach_script(base: Option<MNode>, sup: bool, s: Arg, group: bool) -> MNode {
     match base {
         Some(MNode::Script { kind: ScriptKind::Sub, base, sub, .. }) if sup => MNode::Script { kind: ScriptKind::SubSup, base, sub, sup: s },
         Some(MNode::Script { kind: ScriptKind::Sup, base, sup: sp, .. }) if !sup => MNode::Script { kind: ScriptKind::SubSup, base, sub: s, sup: sp },
         // `〖…〗` only groups: as a script base it leaves no delimiter, as Word builds it (#6075).
-        Some(MNode::Delim { beg: None, end: None, mut elems, .. }) if elems.len() == 1 => {
+        Some(MNode::Delim { beg: None, end: None, mut elems, .. }) if group && elems.len() == 1 => {
             let base = elems.pop().unwrap_or_default();
             if sup {
                 MNode::Script { kind: ScriptKind::Sup, base, sub: Vec::new(), sup: s }

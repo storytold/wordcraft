@@ -62,3 +62,13 @@ fn an_operator_as_the_base_prints_back_the_same() {
         assert_eq!(parse_linear(&to_linear(&n)), n, "{op}: {}", to_linear(&n));
     }
 }
+
+#[test]
+fn an_explicit_delimiter_as_the_base_is_kept() {
+    // `├a┤` is an explicit (invisible) delimiter, not a grouping `〖a〗`: it stays the base.
+    let [MNode::Script { base, sup: two, .. }] = &parse_linear("├a┤^2")[..] else { panic!() };
+    assert_eq!(two, &a("2"));
+    assert!(matches!(&base[..], [MNode::Delim { beg: None, end: None, elems, .. }] if elems == &vec![a("a")]), "{base:?}");
+    // Grouping still leaves none.
+    assert_eq!(parse_linear("〖a〗^2"), vec![sup(a("a"), a("2"))]);
+}
