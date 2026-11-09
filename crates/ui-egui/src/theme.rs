@@ -960,6 +960,28 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    /// A Thai interface's faces go first in every interface text family, ahead of Inter, so an
+    /// installed Sarabun draws the whole interface; the headings family takes the heading face.
+    #[test]
+    fn thai_interface_faces_come_first() {
+        wordcraft_fonts::FontDb::init_test_fonts();
+        let db = wordcraft_fonts::FontDb::global();
+        let regular = db.face("Source Sans 3", "Regular");
+        let heading = db.face("Source Sans 3", "Bold");
+        let mut fonts = font_definitions(false, false);
+        add_primary_faces(&mut fonts, &regular, &heading);
+        add_primary_faces(&mut fonts, &regular, &heading);
+        let first = |fam: FontFamily| fonts.families.get(&fam).and_then(|v| v.first().cloned()).unwrap_or_default();
+        let text = format!("primary {} {} {}", regular.family, regular.style, regular.id());
+        let head = format!("primary {} {} {}", heading.family, heading.style, heading.id());
+        assert_eq!(first(FontFamily::Proportional), text);
+        assert_eq!(first(FontFamily::Name("medium".into())), text);
+        assert_eq!(first(FontFamily::Name("semibold".into())), head);
+        let count = fonts.families.get(&FontFamily::Proportional).map_or(0, |v| v.iter().filter(|n| **n == text).count());
+        assert_eq!(count, 1, "installing twice lists the face once");
+        assert!(fonts.font_data.contains_key(&text) && fonts.font_data.contains_key(&head));
+    }
+
     use std::collections::BTreeSet;
 
     /// Ink of a line of interface text at 1.45x (a 145 % desktop) in `appearance`, drawn in the
