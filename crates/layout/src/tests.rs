@@ -4853,6 +4853,25 @@ fn drop_cap_layout(set: impl Fn(&mut wordcraft_doc::props::ParaProps)) -> std::s
     pl
 }
 
+/// The Drop Cap font draws the letter even when the letter is non-ASCII and its run names a
+/// high-ANSI font of its own.
+#[test]
+fn a_drop_cap_font_beats_the_runs_high_ansi_font() {
+    let (cap, hansi) = ("Source Serif 4", "JetBrains Mono");
+    let text = "\u{c9}very line of this paragraph wraps around a large first letter. ".repeat(6);
+    let mut d = Document::from_text(&text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.font_hansi = Some(hansi.into())).unwrap();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.drop_cap = Some(3);
+        p.drop_cap_font = Some(cap.into());
+    })
+    .unwrap();
+    let l = lay(&d);
+    let para = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }).unwrap();
+    let first = para.clusters.first().unwrap();
+    assert_eq!(para.styles[first.style as usize].face.get().family, cap);
+}
+
 /// #2601: Drop Cap Options. Dropped indents the first lines by the letter's width plus the
 /// distance from the text; In margin leaves every line at the paragraph's indent and hangs the
 /// letter left of it, the distance away; the letter takes the chosen font.

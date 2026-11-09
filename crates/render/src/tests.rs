@@ -327,6 +327,36 @@ fn a_picture_fill_is_clipped_to_its_shape() {
     }
 }
 
+/// A clip far larger than can be rasterised stays a clip: inside the visible area it covers
+/// what the whole path covers, with its points bounded, near the area, however big the curve.
+#[test]
+fn an_oversized_clip_keeps_its_area_inside_the_view_with_bounded_work() {
+    use kurbo::{Point, Rect};
+    let visible = Rect::new(0.0, 0.0, 600.0, 800.0);
+    let mut path = BezPath::new();
+    path.move_to((-3e9, -3e9));
+    path.curve_to((3e9, -4e9), (5e9, 300.0), (300.0, 400.0));
+    path.quad_to((-2e9, 3e9), (-3e9, 3e9));
+    path.close_path();
+    assert!(!path_extent_ok(Affine::IDENTITY, &path));
+    let cut = clip_to_visible(&path, Affine::IDENTITY, &visible);
+    assert!(cut.elements().len() <= MAX_CLIP_POINTS + 8, "{}", cut.elements().len());
+    let near = visible.inflate(1.001, 1.001);
+    assert!(path_extent_ok(Affine::IDENTITY, &cut) && near.contains_rect(cut.bounding_box()), "{:?}", cut.bounding_box());
+    for x in (5..600).step_by(45) {
+        for y in (5..800).step_by(45) {
+            let p = Point::new(f64::from(x), f64::from(y));
+            assert_eq!(cut.winding(p) != 0, path.winding(p) != 0, "{p:?}");
+        }
+    }
+    // A clip that passes around the view, showing nothing of it, stays empty.
+    let mut away = BezPath::new();
+    away.move_to((-3e9, 2000.0));
+    away.curve_to((0.0, 1e9), (0.0, 1e9), (3e9, 2000.0));
+    away.close_path();
+    assert_eq!(clip_to_visible(&away, Affine::IDENTITY, &visible).elements().len(), 0);
+}
+
 /// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
 fn grey(img: &Rendered) -> usize {
     img.pixels.as_chunks::<4>().0.iter().filter(|p| (40..215).contains(&p[0])).count()

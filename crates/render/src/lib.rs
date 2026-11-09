@@ -645,11 +645,15 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
         Draw::ClipTo { outline, items } => {
             let Some(path) = outline_path(outline) else { return };
             let b = path.bounding_box();
-            if !b.overlaps(*visible) {
+            if !b.overlaps(*visible) || !path.is_finite() {
                 return;
             }
             ctx.set_transform(view);
-            ctx.push_clip_layer(&path);
+            if path_extent_ok(view, &path) {
+                ctx.push_clip_layer(&path);
+            } else {
+                ctx.push_clip_layer(&clip_to_visible(&path, view, visible));
+            }
             let local = b.intersect(*visible);
             for it in items {
                 draw(ctx, doc, it, view, &local, opts);
@@ -906,6 +910,87 @@ const MAX_PATH_PIXELS: f64 = 1_048_576.0;
 fn path_extent_ok(view: Affine, path: &kurbo::BezPath) -> bool {
     let b = view.transform_rect_bbox(path.bounding_box());
     path.is_finite() && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
+}
+
+/// The most points [`clip_to_visible`] splits curves into, over a whole path.
+const MAX_CLIP_POINTS: usize = 100_000;
+/// How many times [`flatten_near`] may halve one curve.
+const MAX_CLIP_SPLITS: u32 = 40;
+
+/// `path`, too large to rasterise whole ([`MAX_PATH_PIXELS`]), as polygons that cover the same
+/// area inside `visible`: curves are only flattened finely near it, and the result is cut to it.
+fn clip_to_visible(path: &BezPath, view: Affine, visible: &kurbo::Rect) -> BezPath {
+    let scale = view.determinant().abs().sqrt();
+    let tolerance = if scale.is_finite() && scale > 1e-9 { 0.25 / scale } else { 1.0 };
+    let near = visible.inflate(1.0, 1.0);
+    let mut budget = MAX_CLIP_POINTS;
+    let mut out = BezPath::new();
+    let mut points: Vec<kurbo::Point> = Vec::new();
+    for el in path.elements() {
+        let from = points.last().copied().unwrap_or_default();
+        match *el {
+            kurbo::PathEl::MoveTo(p) => {
+                push_cut_polygon(&mut out, std::mem::take(&mut points), &near);
+                points.push(p);
+            }
+            kurbo::PathEl::LineTo(p) => points.push(p),
+            kurbo::PathEl::QuadTo(c, p) => {
+                flatten_near(kurbo::QuadBez::new(from, c, p).raise(), (&near, tolerance), MAX_CLIP_SPLITS, &mut budget, &mut points);
+            }
+            kurbo::PathEl::CurveTo(a, b, p) => {
+                flatten_near(kurbo::CubicBez::new(from, a, b, p), (&near, tolerance), MAX_CLIP_SPLITS, &mut budget, &mut points);
+            }
+            kurbo::PathEl::ClosePath => {}
+        }
+    }
+    push_cut_polygon(&mut out, points, &near);
+    out
+}
+
+/// Add `c` to `out` as straight lines, fine within `limits` (the area that matters, and the
+/// flatness wanted). A curve whose control points lie off to one side of the area becomes its
+/// chord: neither can reach the area, so it is wound around the same way.
+fn flatten_near(c: kurbo::CubicBez, limits: (&kurbo::Rect, f64), splits: u32, budget: &mut usize, out: &mut Vec<kurbo::Point>) {
+    let (near, tolerance) = limits;
+    let hull = kurbo::Rect::from_points(c.p0, c.p1).union_pt(c.p2).union_pt(c.p3);
+    let flat = (c.p1 - c.p0.lerp(c.p3, 1.0 / 3.0)).hypot().max((c.p2 - c.p0.lerp(c.p3, 2.0 / 3.0)).hypot()) <= tolerance;
+    if flat || splits == 0 || *budget == 0 || !hull.overlaps(*near) {
+        *budget = budget.saturating_sub(1);
+        out.push(c.p3);
+        return;
+    }
+    let (a, b) = kurbo::ParamCurve::subdivide(&c);
+    flatten_near(a, limits, splits - 1, budget, out);
+    flatten_near(b, limits, splits - 1, budget, out);
+}
+
+/// Cut the closed polygon `points` to `near`, edge by edge (Sutherland-Hodgman), and add it to `out`.
+fn push_cut_polygon(out: &mut BezPath, mut points: Vec<kurbo::Point>, near: &kurbo::Rect) {
+    let edges: [(fn(kurbo::Point) -> f64, f64, f64); 4] =
+        [(|p| p.x, near.x0, 1.0), (|p| p.x, near.x1, -1.0), (|p| p.y, near.y0, 1.0), (|p| p.y, near.y1, -1.0)];
+    for (coord, limit, side) in edges {
+        let mut kept = Vec::with_capacity(points.len());
+        for (i, &a) in points.iter().enumerate() {
+            let Some(&b) = points.get(i + 1).or(points.first()) else { break };
+            let (da, db) = (side * (coord(a) - limit), side * (coord(b) - limit));
+            if da >= 0.0 {
+                kept.push(a);
+            }
+            if (da >= 0.0) != (db >= 0.0) {
+                kept.push(a.lerp(b, da / (da - db)));
+            }
+        }
+        points = kept;
+    }
+    let mut points = points.into_iter();
+    if points.len() < 3 {
+        return;
+    }
+    if let Some(first) = points.next() {
+        out.move_to(first);
+        points.for_each(|p| out.line_to(p));
+        out.close_path();
+    }
 }
 
 fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
