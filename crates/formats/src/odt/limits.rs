@@ -7,6 +7,12 @@ pub(super) const MAX_XML_DEPTH: usize = 512;
 /// Most sections an import makes (page-style changes and column sections); later ones are ignored.
 pub(super) const MAX_SECTIONS: usize = 10_000;
 
+/// Longest shown text a field keeps, in bytes.
+pub(super) const MAX_FIELD_RESULT: usize = 64 << 10;
+
+/// Most comments read; later ones are left out.
+pub(super) const MAX_COMMENTS: usize = 100_000;
+
 /// Most `text:changed-region`s read (hostile input).
 pub(super) const MAX_REGIONS: usize = 10_000;
 
@@ -15,3 +21,5 @@ pub(super) const MAX_OPEN_INSERTIONS: usize = 64;
 
 /// Longest change author or date kept, in characters.
 pub(super) const MAX_INFO_CHARS: usize = 256;
+/// Most spaces the document's `text:s` elements add beyond the one each stands for (hostile input).
+pub(super) const MAX_EXTRA_SPACES: usize = 4 << 20;
