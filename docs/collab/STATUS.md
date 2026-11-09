@@ -4,9 +4,9 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `957d9005` plus this status commit — 34 commits over
-  `4b0d3995`; the fork copy still carries the pre-rebase head `a6d6ae90` until
-  it is force-pushed
+- HEAD at this writing: `722b7ada` plus its status commit — 35 commits over
+  `4b0d3995`; the fork copy still carries the pre-rebase head
+  `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`.
 
@@ -43,15 +43,28 @@ missing, and where the next session should start.
 ### Document adapter (`crates/collab-doc`)
 
 - Primitives: `insert_text`, `delete_range`, `replace_range`, `split_para`,
-  `merge_para`, `insert_block` (with the block body), `remove_block`.
+  `merge_para`, `insert_block` (with the block body and its container path),
+  `remove_block`, `insert_row`, `remove_row`.
+- Node ids address every container: a table `[block]`, its rows
+  `[block, row]`, its cells `[block, row, cell]` and the paragraphs inside a
+  cell `[block, row, cell, block]` each have one (`NodeIds::shift_children`).
+  Typing in a cell is an ordinary primitive on that paragraph's id; a row
+  insert moves the cell ids with their content, and a removed row tombstones
+  its subtree (`NodeIds::remove_subtree`).
 - Every accepted operation returns an authoritative delta; a replica applies it
   with `apply_delta` and converges to the same document JSON (tested after each
   operation).
 - `diff(before, after, ids)` derives a local command's primitives from the
-  document difference. Cloning a document shares its `Arc` blocks, so untouched
-  blocks are one pointer compare. Text becomes `replace_range`, Enter/Backspace
-  become `split_para`/`merge_para`, block insert/remove become structural.
-  Formatting-only changes, tables and several moves are reported as unsupported.
+  document difference, descending into table cells. Cloning a document shares
+  its `Arc` blocks, so untouched blocks are one pointer compare. Text becomes
+  `replace_range`, Enter/Backspace become `split_para`/`merge_para`, block
+  insert/remove and row insert/remove become structural. Formatting-only
+  changes, a column insert/remove, a cell merge/split and several moves are
+  reported as unsupported (they fall back to a command).
+- A table command that still arrives as `kind:"command"` (a client that could
+  not diff it, or track changes) retires the ids of the tables whose shape it
+  changed: their paths mean something else afterwards, so a stale cell id is
+  answered `gone` instead of editing another cell.
 
 ### Engine adapter (`crates/collab-engine`)
 
@@ -181,9 +194,10 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
-- 120 protocol/adapter/client/server tests (119 unit + 1 socket reconnect), all
-  green; the LibreOffice commit gate stays the one ignored test. One of the unit
-  tests is new: `two_sessions_on_one_document_get_different_client_ids`.
+- 139 protocol/adapter/client/server tests (138 unit + 1 socket reconnect), all
+  green; the LibreOffice commit gate stays the one ignored test. §5.6 added 19:
+  4 in `collab`, 13 in `collab-doc` and 2 in `collab-engine` (per-crate counts
+  are in §5.6).
 - 5 engine collaboration tests, all green.
 - 1137 UI tests, green (3 ignored).
 - 5 web-session tests (`wordcraft-collab-web`: session/token redaction, commit
@@ -260,8 +274,16 @@ Results at this writing:
   restore cannot replay either) is not covered.
 - A command that allocates ids (comments, tables, shapes, footnotes…) makes
   replicas request a snapshot after it; there is no id delta on the wire yet.
-- Node ids address top-level paragraphs and story parts; a table cell has no id,
-  so table-cell edits travel as commands and may resync.
+- Table cells are addressable now, with the limits that remain: a column
+  insert/remove, a cell merge/split and a text box are still commands and still
+  resync. A command that changes a table's shape retires that table's ids
+  (`insert_row`/`remove_row` as primitives do the same by shifting them), so a
+  client holding an old cell id is refused `gone` and resyncs rather than
+  editing a neighbour — correct, but the caret of that client is lost. The node
+  map is larger: it carries every row, cell and cell paragraph, so a document
+  with a 2000-cell table sends ~3× more `nodes` entries than before; the server
+  bounds the document at 64 MiB and the map is sent on join and after structural
+  operations.
 - Offline editing is not supported: while a session reconnects, document commands
   pause instead of diverging.
 - The token is read from the environment on desktop; the cabinet must push a fresh
@@ -340,12 +362,13 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    and the pin is acceptable to the maintainers (GitHub reports
    `action_required` for fork PRs until a maintainer approves, and the PR shows
    `CONFLICTING` until the force-push).
-3. Optional hardening: command inverses for the common engine commands, table-cell
-   node ids and property primitives, offline queue, or a join broadcast that
-   carries the role before the first presence frame (presence already carries it,
-   §5.3). (The multi-operation undo transaction is done:
-   `a_step_of_several_operations_lands_as_one_transaction`; the `opId` window now
-   survives a snapshot restore: §5.5.)
+3. Optional hardening: command inverses for the common engine commands, property
+   primitives, column insert/remove as primitives, a cell merge/split primitive,
+   offline queue, or a join broadcast that carries the role before the first
+   presence frame (presence already carries it, §5.3). (The multi-operation undo
+   transaction is done: `a_step_of_several_operations_lands_as_one_transaction`;
+   the `opId` window survives a snapshot restore: §5.5; table-cell ids are done:
+   §5.6.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
@@ -487,6 +510,82 @@ wordcraft-collab-client` 29 passed + 13 passed, 1 ignored (the LibreOffice commi
 gate, needs `soffice`); `cargo clippy -p wordcraft-collab -p wordcraft-collab-server
 -p wordcraft-collab-client --all-targets -- -D warnings` clean; `cargo fmt --all
 -- --check` clean.
+
+- After the table-cell ids (§5.6) the affected crates were re-run on the build
+  host from the committed tree: `cargo test -p wordcraft-collab
+  -p wordcraft-collab-doc -p wordcraft-collab-engine -p wordcraft-collab-app
+  -p wordcraft-collab-client` (49 + 32 + 15 + 10 + 13 passed),
+  `cargo test -p wordcraft-collab-server -p wordcraft-collab-ws
+  -p wordcraft-collab-web` (29 passed + 1 ignored, the LibreOffice gate; 1 socket
+  test; 5 web tests), `cargo clippy` on the same crates with
+  `--all-targets -- -D warnings` and `cargo fmt --all -- --check`, all green.
+
+### 5.6 Table cell ids (run 2026-11-09)
+
+`TASK.md` §8 asks that a structural conflict in a table neither loses data nor
+edits the wrong cell; §4 recorded that a table cell had no id, so every edit in
+a cell travelled as a command and could make the room resync. The node map now
+addresses the whole document tree.
+
+- **Ids.** `NodeIds` keys are the full `doc::Path`, and `DocModel::index_nodes`
+  walks every container: a table `[block]`, each row `[block, row]`, each cell
+  `[block, row, cell]` and every block inside a cell (nested tables included).
+  `NodeIds::shift_children(story, container, at, delta)` moves the child index
+  in one container and leaves other containers alone; `NodeIds::remove_subtree`
+  tombstones a removed block, row or cell with everything under it, so a late
+  operation is `gone` instead of landing on a neighbour. `shift_top_blocks` is
+  now the empty-container case of `shift_children`.
+- **Primitives.** `split_para`/`merge_para` shift their own container (`path
+  .parent()`), not the top-level block index — before, splitting a paragraph in a
+  cell shifted the story's blocks. `insert_block`/`remove_block` take an optional
+  `path` (the container) next to `index`; with no index they use the target
+  node's own container and position. Two structural operations are new:
+  `insert_row {index, row}` and `remove_row {index}`, addressed at the table (or
+  at any node inside it); the row body travels in the operation and in its
+  inverse, so undo and replicas never have to guess which neighbour a row was
+  copied from.
+- **Diff.** `collab-doc::diff` descends into cells: a paragraph inside a cell
+  becomes `replace_range` on its id, a changed table is compared row by row and
+  cell by cell (`same_row`/`same_cell` use the shared `Arc` blocks), a row that
+  appears or disappears becomes `insert_row`/`remove_row`. A column insert, a
+  merge/split and a formatting-only change are still `Unsupported` and fall back
+  to `kind:"command"`.
+- **Commands.** `SessionModel::apply_command` compares the table shape (rows and
+  cells per row) for `table.*`/`insert.*` commands; when it changed, the ids of
+  the moved tables are tombstoned and reissued and `nodes changed` is reported.
+  A client that could not normalize the command and still holds an old cell id
+  is refused `gone` and resyncs — it never edits another cell.
+
+**Tests.**
+
+- `crates/collab/src/ids.rs`: `a_row_inserted_above_moves_the_cells_it_does_not_touch`,
+  `a_row_removed_takes_its_cells_and_the_later_rows_move_up`,
+  `removing_a_table_block_removes_every_node_below_it`,
+  `a_shift_inside_a_cell_leaves_the_table_and_its_other_cells_alone`.
+- `crates/collab-doc/src/tests.rs`: `every_table_node_gets_an_id_of_its_own`,
+  `two_replicas_edit_different_cells_of_one_table_and_converge` (two replicas,
+  two cells, the same JSON), `a_repeated_cell_edit_after_a_reconnect_is_applied_once`
+  (one version, one insertion),
+  `a_row_insert_moves_the_cell_ids_and_an_active_edit_lands_in_its_own_cell`,
+  `a_removed_row_tombstones_its_cells_and_a_late_edit_is_gone`,
+  `splitting_a_paragraph_inside_a_cell_moves_only_that_cell`,
+  `typing_in_a_cell_diffs_to_a_replace_range`,
+  `inserting_a_row_diffs_to_insert_row`, `deleting_a_row_diffs_to_remove_row`,
+  `inserting_a_table_diffs_to_insert_block_and_its_cells_get_ids`,
+  `a_column_insert_is_still_reported_as_unsupported`,
+  `undo_of_a_row_insert_removes_the_row_again`,
+  `a_replica_applies_a_row_insert_and_a_row_removal`.
+- `crates/collab-engine/src/tests.rs`:
+  `a_table_row_insert_lands_through_the_session_adapter_and_moves_cell_ids`,
+  `a_table_command_retires_the_cell_ids_it_moves`.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app -p wordcraft-collab-client` — 49, 32, 15, 10, 13 passed;
+`cargo test -p wordcraft-collab-server -p wordcraft-collab-ws -p
+wordcraft-collab-web` — 29 passed + 1 ignored (LibreOffice gate), 1 socket test,
+5 web tests; `cargo clippy` on those crates with `--all-targets -- -D warnings`
+clean; `cargo fmt --all -- --check` clean. No push was made and CI is unchanged.
 
 ## 6. Where things live
 
