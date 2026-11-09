@@ -225,6 +225,7 @@ fn every_para_prop_round_trips() {
         fmt_change: None,
         snap_to_grid: Some(false),
         text_alignment: Some(TextAlignment::Top),
+        force_char_break: false,
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
