@@ -339,6 +339,7 @@ pub(crate) fn helper_mode() -> Option<i32> {
     }
     let result = args.next().ok_or_else(|| "print helper directory missing".to_owned()).and_then(|dir| {
         helper(Path::new(&dir), craft_print::Cancel::cancel, |pdf, job, cancel| {
+            require_dlls(&PRINT_DLLS)?;
             craft_print::submit_cancellable(pdf, job, &mut |_, _| {}, cancel).map_err(error)
         })
     });
@@ -346,6 +347,24 @@ pub(crate) fn helper_mode() -> Option<i32> {
         let _ = emit(&Event::Done(Err(message.clone())));
     }
     Some(i32::from(result.is_err()))
+}
+
+/// The system DLLs a Windows job calls into: craft-print draws the PDF through Windows.Data.Pdf.dll
+/// and sets the job's options through the Print Ticket API in prntvpt.dll.
+#[cfg(windows)]
+const PRINT_DLLS: [&str; 2] = ["Windows.Data.Pdf.dll", "prntvpt.dll"];
+
+/// build.rs delay-loads [`PRINT_DLLS`] so the app starts on Windows installations that lack them
+/// (NTLite and similar). A call into one that can't load would end this helper at the delay-load
+/// stub with no receipt, so load each first, the way the stub would, and say which is missing.
+#[cfg(windows)]
+fn require_dlls(names: &[&str]) -> Result<(), String> {
+    match names.iter().find(|name| winsafe::HINSTANCE::LoadLibrary(name).is_err()) {
+        Some(name) => Err(format!(
+            "printing needs {name}, which this Windows installation lacks or cannot load; use Save these pages as PDF… and print the PDF from another app"
+        )),
+        None => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -588,5 +607,15 @@ mod tests {
         let error = remove_inputs(directory.path()).unwrap_err();
         assert!(error.contains("could not remove job.json"), "{error}");
         assert!(!directory.path().join("input.pdf").exists(), "a settings cleanup failure does not retain the PDF");
+    }
+
+    /// A print DLL that can't load is named before any driver call, so the helper answers with
+    /// a receipt instead of ending at the delay-load stub.
+    #[cfg(windows)]
+    #[test]
+    fn a_print_dll_that_cannot_load_is_named() {
+        assert_eq!(require_dlls(&["kernel32.dll"]), Ok(()));
+        let missing = require_dlls(&["kernel32.dll", "wordcraft-missing-print.dll"]).unwrap_err();
+        assert!(missing.starts_with("printing needs wordcraft-missing-print.dll,"), "{missing}");
     }
 }

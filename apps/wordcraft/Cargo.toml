@@ -94,3 +94,7 @@ getrandom = "0.3"
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
+# The print helper loads Windows.Data.Pdf.dll and prntvpt.dll before printing (build.rs
+# delay-loads them): LoadLibrary is a safe call in these bindings. Already in the build through
+# craft-print, at this version; this adds only the `kernel` bindings.
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
