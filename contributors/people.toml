@@ -207,3 +207,7 @@ real_name = "Ashok Ram"
 
 [people.benandez]
 sync_github_name = true
+
+[people.yonatan-langer83]
+real_name = "Yonatan Langer"
+consent_source = "Asked to be credited as Yonatan Langer (GitHub @yonatan-langer83), 2026-11-06"
