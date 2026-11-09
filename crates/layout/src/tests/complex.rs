@@ -66,6 +66,40 @@ fn myanmar_without_spaces_wraps_between_syllables() {
     assert!(pl.lines[0].c1 - pl.lines[0].c0 > 10);
 }
 
+/// "สวัสดีครับ": สวัสดี (hello) + ครับ (polite particle) — two words, no spaces.
+const THAI_HELLO: &str = "\u{0E2A}\u{0E27}\u{0E31}\u{0E2A}\u{0E14}\u{0E35}\u{0E04}\u{0E23}\u{0E31}\u{0E1A}";
+
+#[test]
+fn thai_without_spaces_breaks_at_word_boundaries() {
+    // A short text fits on one line; repeat it so that wrapping is forced.
+    let text = THAI_HELLO.repeat(30);
+    let l = lay(&Document::from_text(&text));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "a long Thai paragraph must wrap");
+    // Every line break must land on a char boundary of the original text.
+    for line in pl.lines.iter().skip(1) {
+        let start = pl.clusters[line.c0].start;
+        assert!(text.is_char_boundary(start), "line starts at non-char-boundary byte {start}");
+    }
+    // At least one cluster must be breakable (dictionary found some word boundaries).
+    assert!(pl.clusters.iter().any(|c| c.break_after), "no break opportunities in Thai text");
+}
+
+#[test]
+fn thai_break_positions_are_char_boundaries() {
+    use libthai::wbrk::ThWBrk;
+    let brk = ThWBrk::new();
+    for &s in &[
+        THAI_HELLO,
+        "\u{0E01}\u{0E32}\u{0E27}",           // กาว (glue)
+        "\u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22}", // ภาษาไทย (Thai language)
+    ] {
+        for pos in brk.find_breaks(s) {
+            assert!(s.is_char_boundary(pos), "byte {pos} is not a char boundary in {s:?}");
+        }
+    }
+}
+
 /// A face with Myanmar letters (an installed system font), or `None` to skip.
 fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
     crate::test_fonts();

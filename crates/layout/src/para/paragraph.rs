@@ -866,11 +866,19 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.sort_unstable();
         found.dedup();
     }
+    // Thai has no spaces between words: break at dictionary word boundaries.
+    if text.chars().any(|c| matches!(u32::from(c), 0x0E00..=0x0E7F)) {
+        static THAI_BRK: std::sync::OnceLock<libthai::wbrk::ThWBrk> = std::sync::OnceLock::new();
+        let brk = THAI_BRK.get_or_init(libthai::wbrk::ThWBrk::new);
+        found.extend(brk.find_breaks(text));
+        found.sort_unstable();
+        found.dedup();
+    }
     // UAX #14 breaks between a full stop and an opening parenthesis; Word keeps
     // "2023.(Example" whole and wraps it at the space before.
     found.retain(|&i| !(text.get(..i).is_some_and(|t| t.ends_with('.')) && text.get(i..).is_some_and(|t| t.starts_with('('))));
     // Asian typography: kinsoku and breaking Latin words anywhere.
-    crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap);
+    crate::kinsoku::apply(text, &mut found, rp.kinsoku, rp.word_wrap, rp.force_char_break);
     found
 }
 
