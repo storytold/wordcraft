@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/dotCooCoo/craft-libs?rev=c7c84230631cbc01ee928f0a0e0d838b1ed612ae#c7c84230631cbc01ee928f0a0e0d838b1ed612ae"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "krilla",
  "thiserror 2.0.21",
@@ -1135,7 +1135,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/dotCooCoo/craft-libs?rev=c7c84230631cbc01ee928f0a0e0d838b1ed612ae#c7c84230631cbc01ee928f0a0e0d838b1ed612ae"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "chrono",
  "dunce",
@@ -2981,7 +2981,7 @@ dependencies = [
 [[package]]
 name = "krilla"
 version = "0.8.2"
-source = "git+https://github.com/dotCooCoo/craft-libs?rev=c7c84230631cbc01ee928f0a0e0d838b1ed612ae#c7c84230631cbc01ee928f0a0e0d838b1ed612ae"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "base64 0.22.1",
  "bumpalo",
