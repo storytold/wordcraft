@@ -417,11 +417,25 @@ pub(super) fn place(a: &Attrs, w: f32, h: f32, g: &Graphic, size: f32) -> Float 
         f.rot = rot;
     }
     f.z = z_of(a);
+    f.page = page_of(get(a, "text:anchor-type"), get(a, "text:anchor-page-number"), g);
     if f.wrap == Wrap::Inline {
         f.y = inline_raise(g, y.as_deref().and_then(length), h, size);
     }
     f
 }
+
+/// The page a drawing anchored as `anchor` (or as its style says) is on: `number`, its
+/// `text:anchor-page-number` (§19.872). 0 when it states none, or isn't anchored to a page, where
+/// LibreOffice ignores the number.
+pub(super) fn page_of(anchor: Option<&str>, number: Option<&str>, g: &Graphic) -> u32 {
+    if anchor.or(g.anchor.as_deref()).map(str::trim) != Some("page") {
+        return 0;
+    }
+    number.and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(0).min(MAX_ANCHOR_PAGE)
+}
+
+/// Highest anchor page kept.
+const MAX_ANCHOR_PAGE: u32 = 1_000_000;
 
 /// A drawing's place in the stacking order (§19.231 `draw:z-index`, from 0 at the bottom) as
 /// WordCraft's [`Float::z`] (higher on top, 0 for unknown): one more.
@@ -564,7 +578,10 @@ pub(super) fn turned(f: &Float) -> bool {
 /// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
 /// `draw:transform` when it is turned (`w` × `h` its size).
 pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
-    let anchor = if f.h_rel == Anchor::Page && f.v_rel == Anchor::Page {
+    // A page number holds until it is placed by its paragraph: moved in WordCraft.
+    let by_paragraph =
+        matches!(f.h_rel, Anchor::Column | Anchor::Character) || matches!(f.v_rel, Anchor::Paragraph | Anchor::Line | Anchor::Character);
+    let anchor = if (f.page > 0 && !by_paragraph) || (f.h_rel == Anchor::Page && f.v_rel == Anchor::Page) {
         "page"
     } else if f.v_rel == Anchor::Line {
         "char"
