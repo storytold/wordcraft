@@ -180,6 +180,23 @@ impl NodeIds {
         }
     }
 
+    /// Delete every id strictly below `path` in `story` at version `at`, and
+    /// keep the node at `path` itself live: a cell whose content was moved
+    /// elsewhere (a merge drains a continued cell into the cell above) keeps its
+    /// own id, while the ids of the blocks it used to hold must not name the
+    /// blocks that now sit there.
+    pub fn remove_descendants(&mut self, story: &str, path: &[u32], at: Version) {
+        let gone: Vec<NodeId> = self
+            .back
+            .iter()
+            .filter(|(_, key)| key.story == story && key.path.len() > path.len() && key.path.starts_with(path))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in gone {
+            self.remove(id, at);
+        }
+    }
+
     /// Shift the top-level block index of every node in `story` whose block is
     /// at or after `at`, after a block was inserted (`delta` > 0) or removed
     /// (`delta` < 0). Nested nodes move with their block; an edit inside a table

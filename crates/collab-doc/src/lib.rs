@@ -19,11 +19,19 @@
 //! insert/delete pairs; structural inverses carry the removed block or row as
 //! JSON, so undo restores it without a snapshot.
 //!
+//! Structural table edits keep the ids of the cells they do not move: a column
+//! insert shifts the cell ids of the rows that gained a cell and leaves the ones
+//! that widened alone (`insert_column`/`remove_column`), a merge keeps the id of
+//! the cell that absorbs the range (`merge_cells`), and a split keeps the id of
+//! the cell it cuts (`split_cells`). A range that cannot be addressed cell by
+//! cell is refused before the document is touched.
+//!
 //! What this adapter deliberately does not do (v1):
 //! - it does not run `CommandSpec` commands (`kind: "command"` is refused);
 //! - it does not touch styles, numbering, comments or track changes;
-//! - it normalizes block insert/remove, row insert/remove and text; a column
-//!   insert/remove, a cell merge or split and a text box stay commands.
+//! - it does not normalize formatting, a text box or several rearranged blocks;
+//!   those still fall back to the command path, and a merge, a split and a
+//!   column removal have no inverse, so undo reports them as unsupported.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::sync::Arc;
@@ -33,6 +41,8 @@ use wordcraft_collab::ids::NodeKey;
 use wordcraft_collab::ids::{NodeId, NodeIds};
 use wordcraft_collab::room::{Effect, Model};
 use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
+use wordcraft_doc::props::VMerge;
+use wordcraft_doc::table::MAX_COLS;
 use wordcraft_doc::table::MAX_ROWS;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
 use wordcraft_doc::{Block, Blocks, CharProps, Document, Paragraph, Path, Pos, Row, StoryRef, Table};
@@ -82,6 +92,10 @@ impl DocModel {
             "remove_block" => self.remove_block(op, ids),
             "insert_row" => self.insert_row(op, ids),
             "remove_row" => self.remove_row(op, ids),
+            "insert_column" => self.insert_column(op, ids),
+            "remove_column" => self.remove_column(op, ids),
+            "merge_cells" => self.merge_cells(op, ids),
+            "split_cells" => self.split_cells(op, ids),
             other => Err(invalid(op, format!("unknown structural operation {other:?}"))),
         }
     }
@@ -327,6 +341,101 @@ impl DocModel {
         })
     }
 
+    /// Insert a grid column at grid index `index` into the table the operation
+    /// addresses. The rows whose cells do not span the new column get one empty
+    /// cell and their later cell ids move one place right; a row whose cell spans
+    /// the column only widens it and keeps every id.
+    fn insert_column(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, table_path) = self.table_path(op, ids)?;
+        let index = self.column_index(op)?;
+        let table = self.doc.table(story, &table_path).ok_or_else(|| invalid(op, "the node is not a table"))?;
+        if table.grid.len() >= MAX_COLS {
+            return Err(invalid(op, "the table is full"));
+        }
+        if index > table.grid.len() {
+            return Err(invalid(op, format!("column {index} is past the grid")));
+        }
+        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        let before_columns = table.grid.len();
+        insert_column_at(&mut self.doc, ids, story, &table_path, index).map_err(|err| invalid(op, err))?;
+        // Undo of an insert is the same column taken out again; it is exact
+        // because nothing existed there before. A one-column table cannot lose
+        // its column, so such an insert carries no inverse.
+        let inverse = if before_columns >= 2 {
+            vec![inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "remove_column", "index": index}))]
+        } else {
+            Vec::new()
+        };
+        Ok(Effect {
+            delta: Some(json!({"op": "insert_column", "nodeId": table_node.0, "index": index})),
+            inverse,
+            forward: vec![op.clone()],
+            label: "Insert column".into(),
+            nodes_changed: true,
+        })
+    }
+
+    /// Remove grid column `index`: a cell that spans it shrinks and keeps its id,
+    /// a cell that only covered it is tombstoned, and the cells to its right
+    /// move one place left.
+    fn remove_column(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, table_path) = self.table_path(op, ids)?;
+        let index = self.column_index(op)?;
+        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        remove_column_at(&mut self.doc, ids, story, &table_path, index, op.base_version).map_err(|err| invalid(op, err))?;
+        Ok(Effect {
+            // The removed cells' content is gone with them, so there is no
+            // inverse that would bring it back; undo reports the step as
+            // unsupported (ADR-0010) instead of restoring a wrong table.
+            delta: Some(json!({"op": "remove_column", "nodeId": table_node.0, "index": index})),
+            inverse: Vec::new(),
+            forward: vec![op.clone()],
+            label: "Delete column".into(),
+            nodes_changed: true,
+        })
+    }
+
+    /// Merge the cells covering `payload.rows` (`[first, last]`) and
+    /// `payload.cols` (`[first, last]`), grid indexes both. The first cell of
+    /// each merged row keeps its id; the cells it absorbs are tombstoned, and the
+    /// content of the continued rows moves into the first row's cell.
+    fn merge_cells(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, table_path) = self.table_path(op, ids)?;
+        let (r0, r1, g0, g1) = self.merge_range(op)?;
+        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        merge_cells_at(&mut self.doc, ids, story, &table_path, (r0, r1, g0, g1), op.base_version).map_err(|err| invalid(op, err))?;
+        Ok(Effect {
+            // A merge rewrites the cells it absorbs; the removed bodies are not
+            // carried, so undo reports the step as unsupported.
+            delta: Some(json!({"op": "merge_cells", "nodeId": table_node.0, "rows": [r0, r1], "cols": [g0, g1]})),
+            inverse: Vec::new(),
+            forward: vec![op.clone()],
+            label: "Merge cells".into(),
+            nodes_changed: true,
+        })
+    }
+
+    /// Split cell `payload.cell` of row `payload.row` into `payload.columns`
+    /// cells. The cell keeps its id and its content; the parts to its right are
+    /// new cells, and the cells after it move right by that many.
+    fn split_cells(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, table_path) = self.table_path(op, ids)?;
+        let row = self.small_index(op, "row")?;
+        let cell = self.small_index(op, "cell")?;
+        let columns = self.small_index(op, "columns")?;
+        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        split_cells_at(&mut self.doc, ids, story, &table_path, row, cell, columns).map_err(|err| invalid(op, err))?;
+        Ok(Effect {
+            // Splitting loses no content but the grid it may refine is not
+            // undone by a merge, so the step has no inverse.
+            delta: Some(json!({"op": "split_cells", "nodeId": table_node.0, "row": row, "cell": cell, "columns": columns})),
+            inverse: Vec::new(),
+            forward: vec![op.clone()],
+            label: "Split cells".into(),
+            nodes_changed: true,
+        })
+    }
+
     /// The container and the index an insert/remove addresses.
     ///
     /// `payload.path` names the container: absent or empty is the story's block
@@ -382,6 +491,42 @@ impl DocModel {
     fn row_index(&self, op: &Op) -> Result<usize, Reject> {
         let index = op.payload.get("index").and_then(Value::as_u64).ok_or_else(|| invalid(op, "a row operation needs `index`"))?;
         usize::try_from(index).map_err(|_| invalid(op, "`index` does not fit"))
+    }
+
+    fn column_index(&self, op: &Op) -> Result<usize, Reject> {
+        let index = op.payload.get("index").and_then(Value::as_u64).ok_or_else(|| invalid(op, "a column operation needs `index`"))?;
+        usize::try_from(index).map_err(|_| invalid(op, "`index` does not fit"))
+    }
+
+    /// A small row, cell or column-count field; bounded so a hostile payload
+    /// cannot ask for an allocation.
+    fn small_index(&self, op: &Op, key: &str) -> Result<usize, Reject> {
+        let value = op.payload.get(key).and_then(Value::as_u64).ok_or_else(|| invalid(op, format!("a cell operation needs `{key}`")))?;
+        let value = usize::try_from(value).map_err(|_| invalid(op, format!("`{key}` does not fit")))?;
+        if value > MAX_ROWS {
+            return Err(invalid(op, format!("`{key}` is out of range")));
+        }
+        Ok(value)
+    }
+
+    /// `payload.rows` and `payload.cols`, each `[first, last]`.
+    fn merge_range(&self, op: &Op) -> Result<(usize, usize, usize, usize), Reject> {
+        let pair = |key: &str| -> Result<(usize, usize), Reject> {
+            let items =
+                op.payload.get(key).and_then(Value::as_array).ok_or_else(|| invalid(op, format!("a merge needs `{key}` as [first, last]")))?;
+            if items.len() != 2 {
+                return Err(invalid(op, format!("`{key}` must hold two indexes")));
+            }
+            let first = items.first().and_then(Value::as_u64).ok_or_else(|| invalid(op, format!("`{key}` must hold two indexes")))?;
+            let last = items.get(1).and_then(Value::as_u64).ok_or_else(|| invalid(op, format!("`{key}` must hold two indexes")))?;
+            Ok((
+                usize::try_from(first).map_err(|_| invalid(op, "an index does not fit"))?,
+                usize::try_from(last).map_err(|_| invalid(op, "an index does not fit"))?,
+            ))
+        };
+        let (r0, r1) = pair("rows")?;
+        let (g0, g1) = pair("cols")?;
+        Ok((r0, r1, g0, g1))
     }
 }
 
@@ -452,6 +597,300 @@ fn index_row(ids: &mut NodeIds, story: &str, table_path: &mut Vec<u32>, index: u
         table_path.pop();
     }
     table_path.pop();
+}
+
+/// What inserting grid column `g` does to one row's cell list: `Some(index)` is
+/// the cell a new empty cell appears in front of, `None` says a cell spanning the
+/// column widens instead. It mirrors `Table::insert_col`, which cannot report
+/// what it did; a test pins the two together.
+fn column_insert_plan(table: &Table, g: usize) -> Vec<Option<usize>> {
+    table
+        .rows
+        .iter()
+        .map(|row| {
+            let mut x = 0usize;
+            for (i, cell) in row.cells.iter().enumerate() {
+                if g <= x {
+                    return Some(i);
+                }
+                if g < x.saturating_add(cell.span()) {
+                    return None;
+                }
+                x = x.saturating_add(cell.span());
+            }
+            Some(row.cells.len())
+        })
+        .collect()
+}
+
+/// What deleting grid column `g` does to one row's cell list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ColumnRemoval {
+    /// The row does not reach the column.
+    Kept,
+    /// A cell spanning the column shrinks and keeps its id.
+    Shrunk,
+    /// The cell at this index disappears.
+    Removed(usize),
+}
+
+fn column_removal_plan(table: &Table, g: usize) -> Vec<ColumnRemoval> {
+    table
+        .rows
+        .iter()
+        .map(|row| {
+            let mut x = 0usize;
+            for (i, cell) in row.cells.iter().enumerate() {
+                if g < x.saturating_add(cell.span()) {
+                    return if cell.span() > 1 { ColumnRemoval::Shrunk } else { ColumnRemoval::Removed(i) };
+                }
+                x = x.saturating_add(cell.span());
+            }
+            ColumnRemoval::Kept
+        })
+        .collect()
+}
+
+/// Insert grid column `g`: the document's own `Table::insert_col` does the edit,
+/// and the plan above says which rows gained a cell. Every cell of such a row at
+/// or after the new index moves one place right with its whole subtree, so a
+/// client editing one of them keeps its id; the widened cells keep theirs too.
+fn insert_column_at(doc: &mut Document, ids: &mut NodeIds, story: StoryRef, table_path: &Path, g: usize) -> Result<(), String> {
+    let name = story_name(story);
+    let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+    if table.grid.len() >= MAX_COLS {
+        return Err("the table is full".to_string());
+    }
+    if g > table.grid.len() {
+        return Err(format!("column {g} is past the grid"));
+    }
+    let plan = column_insert_plan(table, g);
+    doc.table_mut(story, table_path).map_err(|err| err.to_string())?.insert_col(g);
+    let table = doc.table(story, table_path).ok_or_else(|| "the table vanished".to_string())?;
+    for (r, at) in plan.into_iter().enumerate() {
+        let Some(at) = at else { continue };
+        let mut container = table_path.0.clone();
+        container.push(r as u32);
+        ids.shift_children(&name, &container, at, 1);
+        let Some(cell) = table.rows.get(r).and_then(|row| row.cells.get(at)) else { continue };
+        let mut path = container;
+        path.push(at as u32);
+        ids.id_for(&NodeKey::new(name.clone(), path.clone()));
+        index_blocks(ids, &name, &mut path, &cell.blocks, 0);
+    }
+    Ok(())
+}
+
+/// Remove grid column `g`. The rows that lose a cell tombstone it and move their
+/// later cells left; the cells it does not touch keep their ids. A row that held
+/// only that cell disappears from the table, and the rows below move up.
+fn remove_column_at(doc: &mut Document, ids: &mut NodeIds, story: StoryRef, table_path: &Path, g: usize, at: u64) -> Result<(), String> {
+    let name = story_name(story);
+    let (plan, dropped) = {
+        let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+        if table.grid.len() <= 1 {
+            return Err("the table has one column".to_string());
+        }
+        if g >= table.grid.len() {
+            return Err(format!("column {g} does not exist"));
+        }
+        let plan = column_removal_plan(table, g);
+        let dropped: Vec<usize> = plan
+            .iter()
+            .enumerate()
+            .filter(|(r, step)| matches!(step, ColumnRemoval::Removed(0)) && table.rows.get(*r).is_some_and(|row| row.cells.len() == 1))
+            .map(|(r, _)| r)
+            .collect();
+        (plan, dropped)
+    };
+    doc.table_mut(story, table_path).map_err(|err| err.to_string())?.delete_col(g);
+    for (r, step) in plan.iter().enumerate() {
+        if dropped.contains(&r) {
+            continue;
+        }
+        let ColumnRemoval::Removed(c) = step else { continue };
+        let mut container = table_path.0.clone();
+        container.push(r as u32);
+        let mut gone = container.clone();
+        gone.push(*c as u32);
+        ids.remove_subtree(&name, &gone, at);
+        ids.shift_children(&name, &container, c + 1, -1);
+    }
+    let mut removed_before = 0usize;
+    for r in dropped {
+        let at_row = r.saturating_sub(removed_before);
+        let mut row_path = table_path.0.clone();
+        row_path.push(at_row as u32);
+        ids.remove_subtree(&name, &row_path, at);
+        ids.shift_children(&name, &table_path.0, at_row, -1);
+        removed_before = removed_before.saturating_add(1);
+    }
+    Ok(())
+}
+
+/// The cell index of the cell covering grid column `g` in row `r`, with the row
+/// reachable at all.
+fn cell_at_grid(table: &Table, r: usize, g: usize) -> Option<usize> {
+    table.cell_at_grid(r, g)
+}
+
+/// The vertical-merge state of the cell that covers grid column `g` in row `r`.
+fn vmerge_at(table: &Table, r: usize, g: usize) -> Option<VMerge> {
+    table.cell_at_grid(r, g).and_then(|c| table.rows.get(r)?.cells.get(c)).map(|cell| cell.props.vmerge)
+}
+
+/// Merge the rectangle `rows r0..=r1 × grid columns g0..=g1` with `Table::merge`,
+/// which keeps the first cell of each merged row. That cell keeps its id; the
+/// cells it absorbs are tombstoned; a continued row's content moves into the
+/// first row's cell, so the ids of its blocks are retired too.
+///
+/// Every refusal happens before the document is touched: a range that is not on
+/// cell boundaries of every row it covers, or that starts or ends inside a
+/// vertical merge, cannot be addressed cell by cell and is refused.
+fn merge_cells_at(
+    doc: &mut Document,
+    ids: &mut NodeIds,
+    story: StoryRef,
+    table_path: &Path,
+    range: (usize, usize, usize, usize),
+    at: u64,
+) -> Result<(), String> {
+    let (r0, r1, g0, g1) = range;
+    let name = story_name(story);
+    let plan: Vec<(usize, usize)> = {
+        let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+        if r0 > r1 || g0 > g1 {
+            return Err("the range is inverted".to_string());
+        }
+        if r1 >= table.rows.len() {
+            return Err(format!("row {r1} does not exist"));
+        }
+        if g1 >= table.grid.len() {
+            return Err(format!("column {g1} does not exist"));
+        }
+        let mut plan = Vec::with_capacity(r1.saturating_sub(r0).saturating_add(1));
+        for r in r0..=r1 {
+            let (Some(a), Some(b)) = (cell_at_grid(table, r, g0), cell_at_grid(table, r, g1)) else {
+                return Err(format!("row {r} has no cell at the range's edge"));
+            };
+            plan.push((a, b));
+        }
+        if vmerge_at(table, r0, g0) == Some(VMerge::Continue) {
+            return Err("the range starts inside a vertical merge".to_string());
+        }
+        if r1.saturating_add(1) < table.rows.len() && vmerge_at(table, r1 + 1, g0) == Some(VMerge::Continue) {
+            return Err("the range ends inside a vertical merge".to_string());
+        }
+        if r0 == r1 && plan.first().is_some_and(|(a, b)| a == b) {
+            return Err("the range is one cell".to_string());
+        }
+        plan
+    };
+    let before: Vec<Vec<Arc<Block>>> = plan
+        .iter()
+        .enumerate()
+        .map(|(i, (a, _))| {
+            doc.table(story, table_path)
+                .and_then(|t| t.rows.get(r0 + i))
+                .and_then(|row| row.cells.get(*a))
+                .map(|cell| cell.blocks.clone())
+                .unwrap_or_default()
+        })
+        .collect();
+    doc.table_mut(story, table_path).map_err(|err| err.to_string())?.merge(r0, r1, g0, g1);
+    let table = doc.table(story, table_path).ok_or_else(|| "the table vanished".to_string())?;
+    for (i, (a, b)) in plan.iter().enumerate() {
+        let r = r0 + i;
+        let mut container = table_path.0.clone();
+        container.push(r as u32);
+        for c in (a + 1)..=*b {
+            let mut gone = container.clone();
+            gone.push(c as u32);
+            ids.remove_subtree(&name, &gone, at);
+        }
+        ids.shift_children(&name, &container, a + 1, -i32::try_from(*b - *a).unwrap_or(i32::MAX));
+        // The first cell kept its id; everything below it can have moved, so
+        // keep the blocks that are still the same object at the same index and
+        // reissue the rest (a continued row was drained, the first row gained
+        // blocks from the rows below).
+        let mut cell = container;
+        cell.push(*a as u32);
+        let old = before.get(i).cloned().unwrap_or_default();
+        let blocks = table.rows.get(r).and_then(|row| row.cells.get(*a)).map(|c| c.blocks.clone()).unwrap_or_default();
+        for (k, block) in blocks.iter().enumerate() {
+            if old.get(k).is_some_and(|was| Arc::ptr_eq(was, block)) {
+                continue;
+            }
+            let mut block_path = cell.clone();
+            block_path.push(k as u32);
+            ids.remove_descendants(&name, &block_path, at);
+            if let Some(id) = ids.get(&NodeKey::new(name.clone(), block_path.clone())) {
+                ids.remove(id, at);
+            }
+            ids.id_for(&NodeKey::new(name.clone(), block_path.clone()));
+            if let Block::Table(nested) = &**block {
+                index_table(ids, &name, &mut block_path, nested, 0);
+            }
+        }
+        // Blocks that left the cell (the merged-away tail) are tombstoned: a
+        // late edit is refused instead of landing on a block that moved up.
+        for k in blocks.len()..old.len() {
+            let mut block_path = cell.clone();
+            block_path.push(k as u32);
+            ids.remove_subtree(&name, &block_path, at);
+        }
+    }
+    Ok(())
+}
+
+/// Split cell `c` of row `r` into `columns` cells with `Table::split_cell`: the
+/// cell keeps its id and its content, the new parts appear to its right, and the
+/// cells after it move right. The split can refine the grid inside the cell
+/// (other rows' cells widen over the new lines), which `split_cell` does itself.
+fn split_cells_at(
+    doc: &mut Document,
+    ids: &mut NodeIds,
+    story: StoryRef,
+    table_path: &Path,
+    r: usize,
+    c: usize,
+    columns: usize,
+) -> Result<(), String> {
+    let name = story_name(story);
+    if columns < 2 {
+        return Err("a split needs at least two cells".to_string());
+    }
+    if columns > MAX_COLS {
+        return Err("a split asks for too many cells".to_string());
+    }
+    let mut probe = {
+        let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+        if r >= table.rows.len() {
+            return Err(format!("row {r} does not exist"));
+        }
+        if table.rows.get(r).is_none_or(|row| c >= row.cells.len()) {
+            return Err(format!("cell {c} does not exist"));
+        }
+        table.clone()
+    };
+    let parts = probe.split_cell(r, c, columns);
+    if parts.len() < 2 {
+        return Err("the cell cannot be split that way".to_string());
+    }
+    let added = parts.len().saturating_sub(1);
+    *doc.table_mut(story, table_path).map_err(|err| err.to_string())? = probe;
+    let table = doc.table(story, table_path).ok_or_else(|| "the table vanished".to_string())?;
+    let mut container = table_path.0.clone();
+    container.push(r as u32);
+    ids.shift_children(&name, &container, c + 1, i32::try_from(added).unwrap_or(i32::MAX));
+    for k in 1..=added {
+        let Some(cell) = table.rows.get(r).and_then(|row| row.cells.get(c + k)) else { continue };
+        let mut path = container.clone();
+        path.push((c + k) as u32);
+        ids.id_for(&NodeKey::new(name.clone(), path.clone()));
+        index_blocks(ids, &name, &mut path, &cell.blocks, 0);
+    }
+    Ok(())
 }
 
 /// The path of a child of `container` (a block list, a row list or a cell list).
@@ -604,6 +1043,41 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             let gone = child_path(&table_path.0, index);
             ids.remove_subtree(&name, &gone.0, 0);
             ids.shift_children(&name, &table_path.0, index + 1, -1);
+        }
+        "insert_column" => {
+            let (story, table_path) = delta_table(delta, doc, ids)?;
+            let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "insert_column has no `index`".to_string())?)
+                .map_err(|_| "`index` does not fit".to_string())?;
+            insert_column_at(doc, ids, story, &table_path, index)?;
+        }
+        "remove_column" => {
+            let (story, table_path) = delta_table(delta, doc, ids)?;
+            let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "remove_column has no `index`".to_string())?)
+                .map_err(|_| "`index` does not fit".to_string())?;
+            remove_column_at(doc, ids, story, &table_path, index, 0)?;
+        }
+        "merge_cells" => {
+            let (story, table_path) = delta_table(delta, doc, ids)?;
+            let pair = |key: &str| -> Result<(usize, usize), String> {
+                let items = delta.get(key).and_then(Value::as_array).ok_or_else(|| format!("merge_cells has no `{key}`"))?;
+                let first = items.first().and_then(Value::as_u64).ok_or_else(|| format!("`{key}` must hold two indexes"))?;
+                let last = items.get(1).and_then(Value::as_u64).ok_or_else(|| format!("`{key}` must hold two indexes"))?;
+                Ok((
+                    usize::try_from(first).map_err(|_| "an index does not fit".to_string())?,
+                    usize::try_from(last).map_err(|_| "an index does not fit".to_string())?,
+                ))
+            };
+            let (r0, r1) = pair("rows")?;
+            let (g0, g1) = pair("cols")?;
+            merge_cells_at(doc, ids, story, &table_path, (r0, r1, g0, g1), 0)?;
+        }
+        "split_cells" => {
+            let (story, table_path) = delta_table(delta, doc, ids)?;
+            let field = |key: &str| -> Result<usize, String> {
+                let value = delta.get(key).and_then(Value::as_u64).ok_or_else(|| format!("split_cells has no `{key}`"))?;
+                usize::try_from(value).map_err(|_| format!("`{key}` does not fit"))
+            };
+            split_cells_at(doc, ids, story, &table_path, field("row")?, field("cell")?, field("columns")?)?;
         }
         "command" => return Err("a command delta needs a Session, not a bare Document".to_string()),
         // One undo step may change several places; replicas must land all of
@@ -770,6 +1244,10 @@ fn diff_block(story: &str, path: &[u32], old: &Block, new: &Block, ids: &NodeIds
 /// was added or removed as `insert_row`/`remove_row`.
 fn diff_table(story: &str, table_path: &[u32], old: &Table, new: &Table, ids: &NodeIds, out: &mut Vec<LocalChange>) -> Result<(), DiffError> {
     if old.rows.len() == new.rows.len() {
+        if let Some(change) = table_shape_change(story, table_path, old, new, ids) {
+            out.push(change);
+            return Ok(());
+        }
         for (r, (a, b)) in old.rows.iter().zip(&new.rows).enumerate() {
             if same_row(a, b) {
                 continue;
@@ -816,6 +1294,87 @@ fn diff_table(story: &str, table_path: &[u32], old: &Table, new: &Table, ids: &N
     }
 
     Err(DiffError::Unsupported(format!("{} rows became {} in {where_}", old.rows.len(), new.rows.len())))
+}
+
+/// A column insert or removal, a cell merge or a cell split: replayed on a copy
+/// of the old table with the document's own primitive, the one that reproduces
+/// the new table names the operation. `None` leaves the change to the per-cell
+/// walk or to the command fallback.
+fn table_shape_change(story: &str, table_path: &[u32], old: &Table, new: &Table, ids: &NodeIds) -> Option<LocalChange> {
+    let table = node_id(ids, story, table_path, usize::MAX).ok()?;
+    if old.grid.len().saturating_add(1) == new.grid.len() {
+        for g in 0..=old.grid.len() {
+            let mut probe = old.clone();
+            probe.insert_col(g);
+            if &probe == new {
+                return Some(LocalChange {
+                    kind: OpKind::Structural,
+                    target: Target::new(story, table, 0),
+                    payload: json!({"op": "insert_column", "index": g}),
+                });
+            }
+        }
+    }
+    if old.grid.len() == new.grid.len().saturating_add(1) {
+        for g in 0..old.grid.len() {
+            let mut probe = old.clone();
+            probe.delete_col(g);
+            if &probe == new {
+                return Some(LocalChange {
+                    kind: OpKind::Structural,
+                    target: Target::new(story, table, 0),
+                    payload: json!({"op": "remove_column", "index": g}),
+                });
+            }
+        }
+    }
+    let changed: Vec<usize> = (0..old.rows.len()).filter(|&r| !same_row(&old.rows[r], &new.rows[r])).collect();
+    let first = *changed.first()?;
+    let last = *changed.last()?;
+    let contiguous = changed.len() == last.saturating_sub(first).saturating_add(1);
+    // A merge takes cells away from every row it covers and leaves the grid
+    // alone; a split adds cells to one row and may widen cells of the others.
+    if contiguous && old.grid == new.grid && changed.iter().all(|&r| old.rows[r].cells.len() > new.rows[r].cells.len()) {
+        let k = old.rows[first].cells.len().checked_sub(new.rows[first].cells.len())?;
+        if !(first..=last).all(|r| old.rows[r].cells.len().checked_sub(new.rows[r].cells.len()) == Some(k)) {
+            return None;
+        }
+        for a in 0..=old.rows[first].cells.len().saturating_sub(k.saturating_add(1)) {
+            let g0 = old.grid_col(first, a);
+            let g1 = old.grid_col(first, a.saturating_add(k));
+            let mut probe = old.clone();
+            probe.merge(first, last, g0, g1);
+            if &probe == new {
+                return Some(LocalChange {
+                    kind: OpKind::Structural,
+                    target: Target::new(story, table, 0),
+                    payload: json!({"op": "merge_cells", "rows": [first, last], "cols": [g0, g1]}),
+                });
+            }
+        }
+        return None;
+    }
+    let grown: Vec<usize> = changed.iter().copied().filter(|&r| new.rows[r].cells.len() > old.rows[r].cells.len()).collect();
+    if let [r] = grown[..] {
+        let columns = new.rows[r].cells.len().checked_sub(old.rows[r].cells.len())?.saturating_add(1);
+        if columns > MAX_COLS {
+            return None;
+        }
+        for c in 0..old.rows[r].cells.len() {
+            let mut probe = old.clone();
+            if probe.split_cell(r, c, columns).len() < 2 {
+                continue;
+            }
+            if &probe == new {
+                return Some(LocalChange {
+                    kind: OpKind::Structural,
+                    target: Target::new(story, table, 0),
+                    payload: json!({"op": "split_cells", "row": r, "cell": c, "columns": columns}),
+                });
+            }
+        }
+    }
+    None
 }
 
 /// The id of the child at `index` of `prefix`, or of `prefix` itself when

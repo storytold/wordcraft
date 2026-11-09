@@ -202,6 +202,65 @@ fn a_table_row_insert_lands_through_the_session_adapter_and_moves_cell_ids() {
 }
 
 #[test]
+fn a_column_insert_lands_through_the_session_adapter_and_keeps_the_caret_cell() {
+    let mut doc = Document::new();
+    let mut table = wordcraft_doc::Table::new(2, 2, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = wordcraft_doc::Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    doc.body.push(Arc::new(Block::Table(table)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let table_node = plan.nodes.iter().find(|node| node.path == vec![1]).expect("the table has an id").id;
+    let cell_node = plan.nodes.iter().find(|node| node.path == vec![1, 1, 1, 0]).expect("the cell paragraph has an id").id;
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table_node, 0, json!({"op": "insert_column", "index": 1})))
+        .expect("the column lands through the session adapter");
+
+    // The cell's id followed the cell past the new column; the caret holder can
+    // keep typing where they were instead of resyncing.
+    let key = room.ids().resolve(wordcraft_collab::NodeId(cell_node)).expect("the id is live");
+    assert_eq!(key.path, vec![1, 1, 2, 0]);
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, cell_node, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("the stale address names the same cell");
+    let text = room.model().session().doc.para(StoryRef::Body, &Path(vec![1, 1, 2, 0])).map(|p| p.text.clone());
+    assert_eq!(text, Some("r1c1!".to_string()));
+}
+
+#[test]
+fn a_merge_lands_through_the_session_adapter_and_the_caret_cell_keeps_its_id() {
+    let mut doc = Document::new();
+    let mut table = wordcraft_doc::Table::new(2, 2, 200.0);
+    for (r, row) in table.rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            *cell = wordcraft_doc::Cell::with_text(&format!("r{r}c{c}"));
+        }
+    }
+    doc.body.push(Arc::new(Block::Table(table)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let table_node = plan.nodes.iter().find(|node| node.path == vec![1]).expect("the table has an id").id;
+    let cell = plan.nodes.iter().find(|node| node.path == vec![1, 0, 0]).expect("the cell has an id").id;
+    let caret = plan.nodes.iter().find(|node| node.path == vec![1, 0, 0, 0]).expect("the cell paragraph has an id").id;
+
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, table_node, 0, json!({"op": "merge_cells", "rows": [0, 0], "cols": [0, 1]})),
+    )
+    .expect("the merge lands through the session adapter");
+
+    assert_eq!(room.ids().resolve(wordcraft_collab::NodeId(cell)).map(|key| key.path.clone()), Ok(vec![1, 0, 0]));
+    assert_eq!(room.ids().resolve(wordcraft_collab::NodeId(caret)).map(|key| key.path.clone()), Ok(vec![1, 0, 0, 0]));
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, caret, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("the caret holder keeps typing in the merged cell");
+    let text = room.model().session().doc.para(StoryRef::Body, &Path(vec![1, 0, 0, 0])).map(|p| p.text.clone());
+    assert_eq!(text, Some("r0c0!".to_string()));
+}
+
+#[test]
 fn a_table_command_retires_the_cell_ids_it_moves() {
     let mut doc = Document::new();
     let mut table = wordcraft_doc::Table::new(2, 2, 200.0);
