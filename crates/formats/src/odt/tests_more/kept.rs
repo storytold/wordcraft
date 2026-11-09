@@ -276,6 +276,54 @@ fn a_picture_in_a_header_holding_an_empty_paragraph_stays_in_its_own_and_words_s
     assert!(header(&held).iter().any(|t| t.contains("Words on it")), "{:?}", header(&held));
 }
 
+/// The paragraphs of a document whose first paragraph holds [`SHAPE_PICTURE`] with `inside` in
+/// place of its empty paragraph, followed by [`AFTER_PICTURE`].
+fn with_in_picture(inside: &str) -> wordcraft_doc::Document {
+    let held = SHAPE_PICTURE.replace("<text:p/>", inside);
+    let (pkg, _) = shape_picture_doc(&format!(r#"<text:p text:style-name="Standard">A {held} B</text:p>{AFTER_PICTURE}"#));
+    import(&pkg).unwrap()
+}
+
+#[test]
+fn words_in_a_picture_written_as_cdata_or_after_a_comment_are_not_lost() {
+    // Read as the parser reads them, not as the bytes look: CDATA is text, and a comment naming
+    // the picture's end doesn't end it.
+    for inside in ["<text:p><![CDATA[Words on it]]></text:p>", "<!-- </draw:image> --><text:p>Words on it</text:p>"] {
+        let mut d = with_in_picture(inside);
+        assert!(texts(&d.body).iter().any(|t| t.contains("Words on it")), "{inside}: {:?}", texts(&d.body));
+        assert!(String::from_utf8(crate::txt::export(&d)).unwrap().contains("Words on it"), "{inside}");
+        d.kept.clear();
+        assert!(content_of(&export(&d).unwrap()).contains("Words on it"), "{inside}");
+    }
+}
+
+#[test]
+fn an_empty_picture_with_a_greater_than_sign_in_its_markup_stays_in_its_own() {
+    // A `>` in an attribute or a comment isn't a word.
+    for inside in [r#"<text:p text:style-name="a&gt;b" text:odd="1 > 0"/>"#, "<!-- a > b --><text:p/>", "<text:p><![CDATA[ ]]></text:p>"] {
+        let d = with_in_picture(inside);
+        assert_eq!(texts(&d.body), ["A \u{FFFC} B", "Text after it."], "{inside}");
+    }
+}
+
+#[test]
+fn many_pictures_without_their_ends_are_read_in_linear_time() {
+    // Each picture's contents are looked at only so far: a picture whose end is far off, or never
+    // comes, isn't looked through to the end of the file once for every picture.
+    let run = |n: usize| {
+        let stray = "<draw:image></x>".repeat(n);
+        let open = "<draw:image>".repeat(n);
+        let (pkg, _) = shape_picture_doc(&format!(
+            r#"<text:p><draw:frame svg:width="1cm" svg:height="1cm">{stray}</draw:frame></text:p><text:p><draw:frame svg:width="1cm" svg:height="1cm">{open}</draw:frame></text:p>"#
+        ));
+        let t = std::time::Instant::now();
+        assert!(import(&pkg).is_ok());
+        t.elapsed()
+    };
+    let took = run(20_000);
+    assert!(took.as_secs_f32() < 3.0, "{took:?}");
+}
+
 #[test]
 fn the_files_font_declarations_are_kept() {
     // A reader without a font picks its substitute by how the file declares it. WordCraft's own

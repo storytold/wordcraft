@@ -94,3 +94,37 @@ pub(super) fn events_at(xml: &[u8], mut f: impl FnMut(Ev, (usize, usize))) {
         }
     }
 }
+
+/// Most events, and bytes, [`holds_words`] looks at: an element still open past them counts as
+/// holding words (an empty one LibreOffice writes is a handful of events).
+const LOOK_EVENTS: usize = 64;
+const LOOK_BYTES: usize = 4096;
+
+/// Whether the element whose start tag ends at `from` in `xml` holds any words before its end,
+/// read as [`events`] reads them: text, CDATA or a reference that isn't only whitespace (comments
+/// and processing instructions hold none). Any end at its own depth ends it, as in [`events`].
+/// `true` when that can't be told within [`LOOK_EVENTS`] events and [`LOOK_BYTES`] bytes, or
+/// the markup is malformed, so nothing in it is taken for empty unread.
+pub(super) fn holds_words(xml: &[u8], from: usize) -> bool {
+    let Some(rest) = xml.get(from..from.saturating_add(LOOK_BYTES).min(xml.len())) else { return true };
+    let mut r = quick_xml::Reader::from_reader(rest);
+    let cfg = r.config_mut();
+    cfg.trim_text(false);
+    cfg.check_end_names = false;
+    cfg.allow_unmatched_ends = true;
+    let mut buf = Vec::new();
+    let mut depth = 0usize;
+    for _ in 0..LOOK_EVENTS {
+        buf.clear();
+        match r.read_event_into(&mut buf) {
+            Ok(Event::Start(_)) => depth = depth.saturating_add(1),
+            Ok(Event::End(_)) if depth == 0 => return false,
+            Ok(Event::End(_)) => depth -= 1,
+            Ok(Event::Text(t)) if t.iter().any(|b| !b.is_ascii_whitespace()) => return true,
+            Ok(Event::CData(t)) if t.iter().any(|b| !b.is_ascii_whitespace()) => return true,
+            Ok(Event::GeneralRef(_)) | Ok(Event::Eof) | Err(_) => return true,
+            Ok(_) => {}
+        }
+    }
+    true
+}

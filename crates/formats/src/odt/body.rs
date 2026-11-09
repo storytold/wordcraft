@@ -1440,33 +1440,21 @@ impl Body<'_> {
         }
     }
 
-    /// Part of a frame: its picture, embedded object, description or contour.
-    /// Whether the `draw:image` just started holds any text, from its markup; `true` when the
-    /// markup isn't known, so nothing in it is skipped unread.
+    /// Whether the `draw:image` just started holds any text, read from its markup as the rest of
+    /// the file is read (`xml::holds_words`); `true` when the markup isn't known, so nothing in
+    /// it is skipped unread.
     fn picture_holds_words(&self) -> bool {
-        let (Some(before), Some(rest)) = (self.markup.get(..self.tag_end), self.markup.get(self.tag_end..)) else { return true };
+        let Some(before) = self.markup.get(..self.tag_end) else { return true };
         if before.is_empty() {
             return true;
         }
         if before.ends_with(b"/>") {
             return false;
         }
-        let close = b"</draw:image>";
-        let Some(end) = rest.windows(close.len()).position(|w| w == close) else { return true };
-        let mut in_tag = false;
-        rest.get(..end).unwrap_or_default().iter().any(|&b| match b {
-            b'<' => {
-                in_tag = true;
-                false
-            }
-            b'>' => {
-                in_tag = false;
-                false
-            }
-            _ => !in_tag && !b.is_ascii_whitespace(),
-        })
+        super::xml::holds_words(self.markup, self.tag_end)
     }
 
+    /// Part of a frame: its picture, embedded object, description or contour.
     fn frame_part(&mut self, q: &str, a: &Attrs) {
         match local(q) {
             "image" => {
