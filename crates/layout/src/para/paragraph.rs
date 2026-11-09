@@ -867,7 +867,6 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
         found.dedup();
     }
     // Thai has no spaces between words: break at dictionary word boundaries via libthai.
-    // Lao also has no word spaces but libthai does not cover it; Lao relies on UAX #14 SA rules.
     if text.chars().any(|c| matches!(u32::from(c), 0x0E00..=0x0E7F)) {
         static THAI_BRK: std::sync::OnceLock<libthai::wbrk::ThWBrk> = std::sync::OnceLock::new();
         let brk = THAI_BRK.get_or_init(libthai::wbrk::ThWBrk::new);
