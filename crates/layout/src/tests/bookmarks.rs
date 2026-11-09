@@ -163,18 +163,59 @@ fn a_bookmark_across_paragraphs_opens_in_one_and_closes_in_the_other() {
 }
 
 #[test]
-fn a_bookmark_in_hidden_text_shows_only_with_the_hidden_text() {
+fn a_bookmark_round_hidden_text_is_an_i_beam_until_the_text_is_shown() {
     let mut d = Document::from_text("Hello secret world");
     bookmark(&mut d, 0, (6, 12), "Secret");
     // "secret" and both its markers hidden (bytes 6..18).
     d.format_range(&Pos::body(0, 6), &Pos::body(0, 18), &|c| c.hidden = Some(true)).unwrap();
+    // Word: with the hidden text not shown, an I-beam where it is, between "Hello " and "world".
     let l = lay(&d);
-    assert!(brackets(&draws(&d, &l, true)).is_empty());
+    let b = brackets(&draws(&d, &l, true));
+    assert_eq!(b.iter().map(facing).collect::<Vec<_>>(), [0], "{b:?}");
+    at_caret(&l, &b[0], Pos::body(0, 6));
+    at_caret(&l, &b[0], Pos::body(0, 18));
     let shown = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden: true, ..Default::default() });
     let b = brackets(&draws(&d, &shown, true));
     assert_eq!(b.iter().map(facing).collect::<Vec<_>>(), [1, -1]);
     at_caret(&shown, &b[0], Pos::body(0, 9));
     at_caret(&shown, &b[1], Pos::body(0, 15));
+}
+
+#[test]
+fn a_bookmark_round_tracked_deleted_text_is_bracketed_in_markup_and_an_i_beam_without() {
+    // As Word 16 shows it: in All Markup the struck-through text is on screen and the brackets go
+    // round it; in No Markup it is gone and the bookmark is an I-beam where it was. Either with
+    // the markers deleted too (the text was bookmarked, then deleted) or not (the deleted text
+    // was bookmarked).
+    for (markers, (a, b)) in [("deleted too", (6, 17)), ("not deleted", (9, 14))] {
+        let mut d = Document::from_text("Hello brave world");
+        bookmark(&mut d, 0, (6, 11), "Pick");
+        d.format_range(&Pos::body(0, a), &Pos::body(0, b), &|c| c.del = Some(0)).unwrap();
+        let markup = lay(&d);
+        let br = brackets(&draws(&d, &markup, true));
+        assert_eq!(br.iter().map(facing).collect::<Vec<_>>(), [1, -1], "markers {markers}: {br:?}");
+        at_caret(&markup, &br[0], Pos::body(0, 9));
+        at_caret(&markup, &br[1], Pos::body(0, 14));
+        let no_markup = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted: true, ..Default::default() });
+        let br = brackets(&draws(&d, &no_markup, true));
+        assert_eq!(br.iter().map(facing).collect::<Vec<_>>(), [0], "markers {markers}: {br:?}");
+        // Between "Hello " and "world", which now close up.
+        at_caret(&no_markup, &br[0], Pos::body(0, 6));
+        at_caret(&no_markup, &br[0], Pos::body(0, 17));
+    }
+}
+
+#[test]
+fn a_bookmark_in_a_paragraph_left_out_altogether_shows_nothing() {
+    // A paragraph whose text and mark are all a tracked deletion takes no room in No Markup.
+    let mut d = Document::from_text("Gone\nKept");
+    bookmark(&mut d, 0, (0, 4), "Gone");
+    d.format_range(&Pos::body(0, 0), &Pos::body(1, 0), &|c| c.del = Some(0)).unwrap();
+    let no_markup = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted: true, ..Default::default() });
+    assert!(brackets(&draws(&d, &no_markup, true)).is_empty());
+    // With markup the deletion is on screen, and so is its bookmark.
+    let b = brackets(&draws(&d, &lay(&d), true));
+    assert_eq!(b.iter().map(facing).collect::<Vec<_>>(), [1, -1], "{b:?}");
 }
 
 #[test]

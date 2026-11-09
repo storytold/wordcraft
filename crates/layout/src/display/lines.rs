@@ -69,7 +69,7 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
     };
     // Worked out once for the lines drawn, not once per line.
     let bookmarks = match para {
-        Some(p) if opts.bookmarks => bookmark_marks(p),
+        Some(p) if opts.bookmarks => bookmark_marks(p, &pl.left_out),
         _ => Vec::new(),
     };
     for li in l0..l1 {
@@ -109,22 +109,28 @@ enum BookmarkMark {
 /// The bookmark marks of `para` by byte offset, in text order, from one pass over its text, so a
 /// paragraph of many bookmarks isn't scanned again for each one (#3614). Hidden bookmarks (named
 /// with a leading `_`, as Word's `_Toc…`, `_Ref…` and `_GoBack` are) show nothing, as in Word. A
-/// bookmark whose start and end in this paragraph have nothing between them (no text, and no
-/// object other than markers: a picture counts) is a [`BookmarkMark::Point`].
-fn bookmark_marks(para: &Paragraph) -> Vec<(usize, BookmarkMark)> {
+/// bookmark whose start and end in this paragraph have nothing shown between them (no text, and
+/// no object other than markers: a picture counts) is a [`BookmarkMark::Point`]. What the layout
+/// leaves out (`left_out`, in order: hidden text not shown, tracked deletions in No Markup) isn't
+/// shown, so a bookmark round only that is a place too: Word draws an I-beam there.
+fn bookmark_marks(para: &Paragraph, left_out: &[std::ops::Range<usize>]) -> Vec<(usize, BookmarkMark)> {
     let mut marks = Vec::new();
-    // Each bookmark started and not yet ended: its mark, and the content (characters and objects
-    // other than markers) before it.
+    // Each bookmark started and not yet ended: its mark, and the content shown (characters and
+    // objects other than markers) before it.
     let mut open: std::collections::HashMap<&str, (usize, usize)> = std::collections::HashMap::new();
     let mut objects = para.objects.iter();
+    let mut gone = left_out.iter().peekable();
     let mut content = 0usize;
     for (off, c) in para.text.char_indices() {
+        // Past the left-out ranges that end by here; is `off` in the next one?
+        while gone.next_if(|r| r.end <= off).is_some() {}
+        let shown = !gone.peek().is_some_and(|r| r.start <= off);
         if c != wordcraft_doc::para::OBJ {
-            content += 1;
+            content += usize::from(shown);
             continue;
         }
         let o = objects.next();
-        if o.is_some_and(|o| !o.is_marker()) {
+        if shown && o.is_some_and(|o| !o.is_marker()) {
             content += 1;
         }
         match o {
@@ -145,9 +151,14 @@ fn bookmark_marks(para: &Paragraph) -> Vec<(usize, BookmarkMark)> {
 /// File › Options › Advanced › Show bookmarks: a grey bracket as tall as the line's caret where
 /// each bookmark on it starts and ends, opening towards its text (to the right in left-to-right
 /// text, to the left in right-to-left text), and an I-beam where one marks a place. They take no
-/// room: the text doesn't move when they are shown.
+/// room: the text doesn't move when they are shown. A bookmark is a place in the text, not text, so
+/// one whose markers are in text left out still shows where that text would be, as in Word.
 fn bookmark_brackets(ctx: &LineContext<'_, '_, '_>, marks: &[(usize, BookmarkMark)], out: &mut Vec<Draw>) {
     let line = ctx.line;
+    // A paragraph the layout leaves out altogether has lines of no height: nothing to draw.
+    if line.height <= 0.0 {
+        return;
+    }
     let from = marks.partition_point(|(off, _)| *off < line.start);
     let to = marks.partition_point(|(off, _)| *off < line.stop).max(from);
     let clusters = ctx.pl.clusters.get(line.c0..line.c1).unwrap_or_default();
@@ -167,11 +178,6 @@ fn bookmark_brackets(ctx: &LineContext<'_, '_, '_>, marks: &[(usize, BookmarkMar
         text_bg: None,
     };
     for &(off, mark) in &marks[from..to] {
-        // Hidden text that isn't shown (and text deleted from the final view) shows no bracket.
-        let gone = ctx.pl.left_out.partition_point(|r| r.end <= off);
-        if ctx.pl.left_out.get(gone).is_some_and(|r| r.start <= off) {
-            continue;
-        }
         // The bookmark's own marker on the line.
         let i = clusters.partition_point(|c| c.start < off);
         if !clusters.get(i).is_some_and(|c| c.start == off) {
