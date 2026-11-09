@@ -477,20 +477,26 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
 }
 
 /// The cache key of the chosen picture: its path, a fingerprint of its `data`, or its media key.
-/// The data fingerprint samples the head, middle and tail: a PNG's head is its signature and
-/// header, the same for every picture of a given length, so the head alone can't tell two apart.
-pub(crate) fn picture_cache_key(path: &Option<String>, data: &Option<String>, media: &Option<String>) -> Option<String> {
+/// The data fingerprint hashes the whole string: sampled windows can collide, and two pictures of
+/// one length would then share a cached texture (or a cached failure). The media fallback is
+/// scoped to the open document and the media's byte length, so a key reused by another document
+/// (or replaced bytes under one key) can't serve the wrong cached texture.
+pub(crate) fn picture_cache_key(
+    path: &Option<String>,
+    data: &Option<String>,
+    media: &Option<String>,
+    doc_id: u64,
+    media_len: impl Fn(&str) -> usize,
+) -> Option<String> {
     if let Some(path) = path {
         return Some(path.clone());
     }
     if let Some(d) = data {
-        // Hash the whole string: sampled windows can collide, and two pictures of one length
-        // would then share a cached texture (or a cached failure).
         let mut h = std::collections::hash_map::DefaultHasher::new();
         d.hash(&mut h);
         return Some(format!("data:{}:{:016x}", d.len(), h.finish()));
     }
-    media.as_ref().map(|m| format!("media:{m}"))
+    media.as_ref().map(|m| format!("media:{doc_id}:{m}:{}", media_len(m)))
 }
 
 /// The chosen picture's thumbnail, its texture cached by path, data or media key; a dashed frame
@@ -500,8 +506,13 @@ fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) 
         return;
     };
     // `data_key` was hashed when the picture arrived; hashing the whole base64 string here would
-    // run on every repaint.
-    let key = path.clone().or_else(|| data_key.clone()).or_else(|| media.as_ref().map(|m| format!("media:{m}")));
+    // run on every repaint. The media fallback carries the document and the media's byte length,
+    // so a key reused by another document can't serve the wrong cached texture.
+    let doc_id = app.session.document_id();
+    let key = path
+        .clone()
+        .or_else(|| data_key.clone())
+        .or_else(|| media.as_ref().map(|m| format!("media:{doc_id}:{m}:{}", app.session.doc.media.get(m).map_or(0, |b| b.len()))));
     let Some(key) = key else {
         dashed_frame(p, rect, Tokens::get(ui.ctx()).border_strong);
         return;
@@ -658,19 +669,24 @@ mod tests {
             .drop_without_applying_deltas();
         };
         let ctx = egui::Context::default();
+        let doc_id = a.session.document_id();
+        let good_len = a.session.doc.media.get("good.png").map_or(0, |b| b.len());
+        let junk_len = a.session.doc.media.get("junk.png").map_or(0, |b| b.len());
+        let good = format!("media:{doc_id}:good.png:{good_len}");
+        let junk = format!("media:{doc_id}:junk.png:{junk_len}");
         a.background.fill =
             DraftFill::Picture { path: None, media: Some("good.png".into()), data: None, data_key: None, tile: false, transparency: 0.0 };
         frame(&ctx, &a);
-        assert!(matches!(entry(&ctx, "media:good.png"), Some(Some(_))), "the decoded picture is cached");
+        assert!(matches!(entry(&ctx, &good), Some(Some(_))), "the decoded picture is cached");
         // An unreadable one caches its failure, so it isn't decoded every frame.
         a.background.fill =
             DraftFill::Picture { path: None, media: Some("junk.png".into()), data: None, data_key: None, tile: false, transparency: 0.0 };
         frame(&ctx, &a);
-        assert!(matches!(entry(&ctx, "media:junk.png"), Some(None)), "the failed load is cached");
+        assert!(matches!(entry(&ctx, &junk), Some(None)), "the failed load is cached");
         frame(&ctx, &a);
-        assert!(matches!(entry(&ctx, "media:junk.png"), Some(None)), "and still is");
+        assert!(matches!(entry(&ctx, &junk), Some(None)), "and still is");
         // The picture before it is released.
-        assert!(entry(&ctx, "media:good.png").is_none(), "the previous picture's texture is gone");
+        assert!(entry(&ctx, &good).is_none(), "the previous picture's texture is gone");
     }
 
     /// A data picture's key is hashed once, when the picker hands it over: the preview uses the

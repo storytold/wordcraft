@@ -475,7 +475,10 @@ impl WordApp {
                 } else {
                     // Hash the picture once, when the picker hands it over, not on every repaint.
                     let data = Some(wordcraft_engine::cmd::insert::base64_encode(&bytes));
-                    let data_key = crate::format_background::picture_cache_key(&None, &data, &None);
+                    let doc_id = self.session.document_id();
+                    let data_key = crate::format_background::picture_cache_key(&None, &data, &None, doc_id, |m| {
+                        self.session.doc.media.get(m).map_or(0, |b| b.len())
+                    });
                     self.background.fill =
                         crate::format_background::DraftFill::Picture { path: None, media: None, data, data_key, tile, transparency };
                     Ok(json!({"pending": "formatBackground"}))

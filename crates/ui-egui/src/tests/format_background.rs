@@ -100,23 +100,34 @@ fn a_cancelled_background_picker_ends_its_request() {
 /// is its signature and header, so sampling only the head would show the first one's thumbnail.
 #[test]
 fn same_length_picture_data_gets_a_different_cache_key() {
-    let key = crate::format_background::picture_cache_key;
-    let no_path: Option<String> = None;
+    let key = |data: &Option<String>, media: &Option<String>| crate::format_background::picture_cache_key(&None, data, media, 7, |_| 11);
     let no_data: Option<String> = None;
     let no_media: Option<String> = None;
     let a = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==".to_string();
     let b = a.replace("hKmMIQAAAABJRU5ErkJggg", "hKmMIQAAAABJRU5ErkJggH");
     assert_eq!(a.len(), b.len());
-    assert_ne!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(b), &no_media), "the tails differ");
-    assert_eq!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(a.clone()), &no_media), "the same data keeps its cache");
+    assert_ne!(key(&Some(a.clone()), &no_media), key(&Some(b), &no_media), "the tails differ");
+    assert_eq!(key(&Some(a.clone()), &no_media), key(&Some(a.clone()), &no_media), "the same data keeps its cache");
     // A byte outside the sampled head, middle and tail still changes the key: the whole data is
     // hashed, not three windows that two different pictures can share.
     let mut bytes = a.clone().into_bytes();
     bytes[30] = if bytes[30] == b'Z' { b'Y' } else { b'Z' };
     let interior = String::from_utf8(bytes).expect("base64 is ASCII");
     assert_eq!(interior.len(), a.len());
-    assert_ne!(key(&no_path, &Some(interior), &no_media), key(&no_path, &Some(a.clone()), &no_media), "an interior byte differs");
-    assert_eq!(key(&no_path, &no_data, &Some("m.png".to_string())), Some("media:m.png".to_string()));
+    assert_ne!(key(&Some(interior), &no_media), key(&Some(a.clone()), &no_media), "an interior byte differs");
+    assert_eq!(key(&no_data, &Some("m.png".to_string())), Some("media:7:m.png:11".to_string()));
+    // The media fallback is scoped: another document, or replaced bytes under one key, can't
+    // serve the first document's cached texture.
+    assert_ne!(
+        key(&no_data, &Some("m.png".to_string())),
+        crate::format_background::picture_cache_key(&None, &no_data, &Some("m.png".to_string()), 8, |_| 11),
+        "another document gets its own cache"
+    );
+    assert_ne!(
+        key(&no_data, &Some("m.png".to_string())),
+        crate::format_background::picture_cache_key(&None, &no_data, &Some("m.png".to_string()), 7, |_| 12),
+        "replaced bytes under one key get their own cache"
+    );
 }
 
 /// Apply carries the document's whole stop list: a multi-stop gradient keeps its interior colours

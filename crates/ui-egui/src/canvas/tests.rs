@@ -327,6 +327,37 @@ fn reading_wheel_snaps_one_column_per_tick_and_respects_touchpads() {
     assert!((size.x - 1100.0 - (last_left - GAP)).abs() < 1.0, "last column aligns against the pane");
     assert!(reading_size(vec2(1440.0, 750.0), PX_PER_PT, Some(612.0)).0 <= 612.0);
 }
+/// Format Background: the page texture cache key follows the gradient and pattern fills, so
+/// changing either one repaints the page instead of serving the previous fill's texture.
+#[test]
+fn the_view_key_changes_when_the_gradient_or_pattern_fill_changes() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::pattern::PagePattern;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("x")), Default::default());
+    let plain = view_key(&a, false, None, true);
+    a.session.doc.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            wordcraft_doc::wordart::GradStop { pos: 0.0, color: wordcraft_doc::props::Rgb::BLACK, transparency: 0.0 },
+            wordcraft_doc::wordart::GradStop { pos: 100.0, color: wordcraft_doc::props::Rgb::WHITE, transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 90.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let gradient = view_key(&a, false, None, true);
+    assert_ne!(plain, gradient, "a gradient fill gets its own page texture");
+    a.session.doc.settings.page_gradient = None;
+    a.session.doc.settings.page_pattern = Some(PagePattern {
+        preset: "ltDnDiag".into(),
+        fore: wordcraft_doc::props::Rgb::BLACK,
+        back: wordcraft_doc::props::Rgb::WHITE,
+        transparency: 0.0,
+    });
+    let pattern = view_key(&a, false, None, true);
+    assert_ne!(plain, pattern, "a pattern fill gets its own page texture");
+    assert_ne!(gradient, pattern, "each fill gets its own page texture");
+}
 
 /// #299: the caret is black on light backgrounds and white on dark ones, whatever the UI
 /// theme: on white paper, a dark page colour, a dark page (Switch Modes) and a highlight.
