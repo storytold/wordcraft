@@ -3947,6 +3947,33 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
     }
 }
 
+/// A `w:rFonts` fallback list longer than the reader keeps is cut at the last complete family
+/// within the bound, so the family a real list would pick survives while a hostile list cannot
+/// cost its whole length in every piece of text drawn in it.
+#[test]
+fn a_hostile_fallback_list_keeps_its_leading_families() {
+    let candidates: Vec<String> = (0..500).map(|i| format!("MissingCandidateFont{i}")).collect();
+    let list = format!("{};Source Serif 4", candidates.join(";"));
+    let body = format!(r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="{list}" w:hAnsi="{list}"/></w:rPr><w:t>x</w:t></w:r></w:p>"#);
+    let d = read_body(&body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    let kept = c.font.as_deref().expect("the leading families are kept");
+    assert!(kept.len() <= 256, "{} bytes kept", kept.len());
+    assert!(kept.starts_with("MissingCandidateFont0"), "{kept}");
+    // Every kept entry is a whole family name: the cut lands on a `;`, never inside a name.
+    assert!(kept.split(';').all(|f| f.starts_with("MissingCandidateFont") || f.contains("Source Serif")), "{kept}");
+    assert!(!kept.ends_with(';'), "no dangling separator: {kept}");
+}
+
+/// A real LibreOffice fallback list is read whole: a few families, well under any bound.
+#[test]
+fn a_real_fallback_list_is_read_whole() {
+    let body = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans;Arial" w:hAnsi="Liberation Sans;Arial"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(c.font.as_deref(), Some("Liberation Sans;Arial"));
+}
+
 /// The font table's family classes: Word draws a missing roman font in a serif face.
 #[test]
 fn roman_fonts_are_read_from_the_font_table() {
@@ -3954,6 +3981,15 @@ fn roman_fonts_are_read_from_the_font_table() {
     let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
     let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
+}
+
+/// Semicolon-separated roman font fallback lists in `fontTable.xml` register each candidate family.
+#[test]
+fn roman_fonts_split_fallback_lists() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Liberation Serif;Times New Roman"><w:family w:val="roman"/></w:font></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    assert_eq!(d.settings.roman_fonts, ["Liberation Serif", "Times New Roman"]);
 }
 
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
@@ -4352,6 +4388,54 @@ fn zero_effects_stay_zero_rotated() {
             assert!((h + 2.0 * py - expected.1).abs() < 0.001);
         }
     }
+}
+
+/// A turned picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`) is
+/// marked so its line keeps to its frame as in Word, and saves that way; one with the room keeps
+/// its rotated bounds.
+#[test]
+fn bare_turns_are_kept_through_a_save() {
+    let pic = |effects: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1524000" cy="762000"/>{effects}<wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="2700000"><a:off x="0" y="0"/><a:ext cx="1524000" cy="762000"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let read =
+        |body: &str| wordcraft_docx::read(&docx(body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+    let bare = |d: &Document| paras(d)[0].objects[0].frame().unwrap().2.bare_turn;
+    for effects in ["", r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#] {
+        let d = read(&pic(effects));
+        assert!(bare(&d), "{effects:?}");
+        let out = wordcraft_docx::write(&d).unwrap();
+        let body = text(&unzip(&out), "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
+        assert!(bare(&wordcraft_docx::read(&out).unwrap()));
+    }
+    // 120 × 60 pt at 45°: Word's rotated-bounds room, 3.64 pt wider and 33.64 pt taller each side.
+    let d = read(&pic(r#"<wp:effectExtent l="46210" t="427210" r="46210" b="427210"/>"#));
+    assert!(!bare(&d));
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.set_spin(wordcraft_geom::Spin::new(30.0, false, false));
+    assert!(!f.bare_turn, "turned here: the rotated bounds again");
+    // A shadow's room added later: saved, and so laid out, with the turn's room again.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.effect = [2.0; 4];
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    // Made floating: saved with the turn's room, so it opens again as an ordinary turn.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.wrap = wordcraft_doc::para::Wrap::Square;
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    assert!(!bare(&wordcraft_docx::read(&out).unwrap()));
+    // Only inline ones: a floating one keeps text clear of its rotated bounds as before.
+    let anchored = pic("").replace("<wp:inline>", "<wp:anchor>").replace("</wp:inline>", "</wp:anchor>");
+    assert!(!bare(&read(&anchored)));
 }
 
 /// The math namespace, declared on the math element itself (the fixture root doesn't).

@@ -41,6 +41,7 @@ impl Reader<'_> {
             }
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
+            float.bare_turn = !anchored && float.rot != 0.0 && float.effect == [0.0; 4];
             let (px, py) = float.spin_pad(w, h);
             for (e, p) in float.effect.iter_mut().zip([px, py, px, py]) {
                 if *e != 0.0 {
@@ -106,7 +107,11 @@ impl Reader<'_> {
         self.set_shape_id(&mut obj, c.child("wp:docPr").and_then(|p| p.attr("id")));
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
+        // Shadow or glow room the file didn't record: saving records it (and the turn's room).
+        let fx_room = matches!(&obj, InlineObject::Shape { effects, .. } if effects.extent() != [0.0; 4]);
         if let Some(f) = obj.float_mut() {
+            // None recorded: Word keeps an inline one's line to the frame (see `Float::bare_turn`).
+            f.bare_turn = !anchored && !fx_room && f.rot != 0.0 && f.effect == [0.0; 4];
             let (px, py) = f.spin_pad(w, h);
             for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
                 // Zero adds no effects room when rotation contracts this axis.
@@ -274,7 +279,15 @@ impl Reader<'_> {
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
         float.set_spin(xfrm_spin(pic.find("pic:spPr")));
-        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        let Some(embed) = blip.attr("r:embed") else {
+            // A linked picture holds no copy: nothing to draw, and nothing is fetched.
+            if let Some(link) = blip.attr("r:link") {
+                let target = rels.by_id(link).map_or_else(|| link.to_string(), |r| r.target.clone());
+                self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+            }
+            return None;
+        };
+        let media = self.media_for(rels, embed)?;
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {
