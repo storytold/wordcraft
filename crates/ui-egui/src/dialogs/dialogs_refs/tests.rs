@@ -426,3 +426,80 @@ fn the_source_manager_imports_a_word_sources_file() {
     assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| m.contains("Imported 2 sources")), "{:?}", h.state().status_msg);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// References › Insert Index › AutoMark… (desktop): the button closes the dialog and asks the
+/// host for a concordance file; the picked file's table marks its entries and the status line
+/// counts them. Run without a file (command search), AutoMark asks again; a cancelled pick marks
+/// nothing, and a file it can't read is reported on the status line.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn automark_marks_entries_from_the_picked_concordance_file() {
+    use std::sync::mpsc::{Sender, channel};
+
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    use crate::file_dialogs::{FileDialogAnswer, FileDialogRequest};
+    type Shown = std::rc::Rc<std::cell::RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-ui-automark-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let concordance = dir.join("Concordance.docx");
+    let mut c = Session::new(wordcraft_doc::Document::from_text("Kiln\tKilns\nglaze\tGlazes:clear"));
+    c.run("select.all", &json!({})).unwrap();
+    c.run("table.fromText", &json!({"separator": "tab"})).unwrap();
+    c.run("file.saveAs", &json!({"path": concordance.to_string_lossy()})).unwrap();
+    let broken = dir.join("broken.docx");
+    std::fs::write(&broken, b"not a document").unwrap();
+
+    let shown: Shown = Default::default();
+    let log = shown.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |req| {
+            let (tx, rx) = channel();
+            log.borrow_mut().push((req, tx));
+            rx
+        })),
+        ..Default::default()
+    };
+    let answer = |shown: &Shown, picked: Option<&std::path::Path>| {
+        let (req, tx) = shown.borrow_mut().pop().expect("a file dialog");
+        assert_eq!(req, FileDialogRequest::Open { purpose: "document".into() });
+        tx.send(Ok(picked.map(|p| p.to_string_lossy().into_owned()).into_iter().collect())).unwrap();
+    };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Kiln walls and glaze, kiln and glaze.")), services);
+    assert_eq!(a.run("references.index", json!({})).unwrap(), json!({"pending": "index"}));
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get_by_role_and_label(Role::Button, "AutoMark…").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none(), "AutoMark closes the Index dialog");
+    assert!(h.state().file_dialog_open());
+    answer(&shown, Some(&concordance));
+    h.run_steps(3);
+    assert_eq!(instrs(h.state()), vec![r#"XE "Kilns""#.to_string(), r#"XE "Glazes:clear""#.to_string()]);
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Kiln walls and glaze, kiln and glaze.");
+    assert_eq!(h.state().status_msg.as_ref().map(|(m, _)| m.as_str()), Some("2 entries marked"));
+
+    let a = h.state_mut();
+    a.run("edit.undo", json!({})).unwrap();
+    assert!(instrs(a).is_empty());
+    assert_eq!(a.run("references.autoMark", json!({})).unwrap(), json!({"pending": "autoMark"}));
+    answer(&shown, None);
+    assert_eq!(a.poll_file_dialog().unwrap().unwrap(), json!({"cancelled": true}));
+    assert!(instrs(a).is_empty(), "a cancelled pick marks nothing");
+    a.run("references.autoMark", json!({})).unwrap();
+    answer(&shown, Some(&broken));
+    let e = a.poll_file_dialog().unwrap().unwrap_err();
+    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(e.as_str()));
+    assert!(instrs(a).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

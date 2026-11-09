@@ -37,6 +37,11 @@ impl WordApp {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
         }
+        // AutoMark without a concordance file asks for one (desktop), as Insert Index's button does.
+        #[cfg(not(target_arch = "wasm32"))]
+        if id == "references.autoMark" && !has_value(&params, "path") && !has_value(&params, "entries") && widgets::enabled(self, id) {
+            return self.pick_concordance();
+        }
         // A button whose command needs input the user hasn't given yet opens its dialog (#240).
         if let Some(name) = input_dialog(id, &params)
             && widgets::enabled(self, id)
