@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `227dc176` plus this status commit — 50 commits over
+- HEAD at this writing: `828fa107` plus this status commit — 53 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -55,9 +55,10 @@ missing, and where the next session should start.
 - Primitives: `insert_text`, `delete_range`, `replace_range`, `split_para`,
   `merge_para`, `insert_block` (with the block body and its container path),
   `remove_block`, `move_block` (a run of blocks swapped with the neighbour named
-  by its session id, §5.12), `insert_row`, `remove_row`, and `set_para_format`
-  (restore one paragraph's runs, mark and `ParaProps` — the inverse of a
-  formatting command, §5.10).
+  by its session id, §5.12), `permute` (a contiguous run of paragraphs put in
+  the order of an explicit id list, §5.13), `insert_row`, `remove_row`, and
+  `set_para_format` (restore one paragraph's runs, mark and `ParaProps` — the
+  inverse of a formatting command, §5.10).
 - Node ids address every container: a table `[block]`, its rows
   `[block, row]`, its cells `[block, row, cell]` and the paragraphs inside a
   cell `[block, row, cell, block]` each have one (`NodeIds::shift_children`).
@@ -71,12 +72,14 @@ missing, and where the next session should start.
   document difference, descending into table cells. Cloning a document shares
   its `Arc` blocks, so untouched blocks are one pointer compare. Text becomes
   `replace_range`, Enter/Backspace become `split_para`/`merge_para`, block
-  insert/remove and row insert/remove become structural, and a block (or a run
-  of up to 64) that swapped places with its neighbour becomes `move_block`
-  (§5.12). Formatting-only changes, a column insert/remove, a cell merge/split
-  and a wider rearrangement are reported as unsupported (they fall back to a
-  command); a pure reorder the primitives cannot name is refused rather than
-  mistaken for a chain of text edits.
+  insert/remove and row insert/remove become structural, a block (or a run of
+  up to 64) that swapped places with its neighbour becomes `move_block`
+  (§5.12), and a wider pure reorder of at most 64 blocks — a sort — becomes one
+  `permute` naming the ids in their new order (§5.13). Formatting-only changes,
+  a column insert/remove, a cell merge/split and a reorder wider than 64 blocks
+  are reported as unsupported (they fall back to a command); a pure reorder the
+  primitives cannot name is refused rather than mistaken for a chain of text
+  edits.
 - A column removal, a cell merge and a cell split carry an exact inverse
   (`split_cells`/`merge_cells`/`insert_column` with `restore`): the removed
   bodies, the grid and the session ids travel in the inverse, so undo restores
@@ -113,6 +116,11 @@ missing, and where the next session should start.
   blocks; replicas replay the structural delta instead of the command and the
   step has an exact inverse (§5.12). A wider move keeps the command delta and
   its undo answers `unsupported`.
+- `para.sort` is normalized after the command to one `permute` structural
+  operation over the selected run (at most 64 paragraphs), naming the session
+  ids in their new order; replicas replay the same transaction delta and the
+  inverse puts the old order back in one step (§5.13). A sort wider than 64
+  blocks keeps the command delta and its undo answers `unsupported`.
 
 ### Client and transport (`crates/collab-client`, `crates/collab-ws`)
 
@@ -200,7 +208,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move is an addressable structural operation that undoes and redoes §5.12 |
+| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move and a paragraph sort are addressable structural operations that undo and redo §5.12, §5.13 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -304,8 +312,9 @@ Results at this writing:
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
   `format.enclose`, whose inverse restores the paragraph's body (§5.11), and a
-  paragraph move is an addressable structural operation with an exact inverse
-  (§5.12); every other command still has none and acts as an undo barrier. The
+  paragraph move and a paragraph sort are addressable structural operations
+  with an exact inverse (§5.12, §5.13); every other command still has none and
+  acts as an undo barrier. The
   `opId` dedup window travels with the snapshot (§5.5), so a retry across a
   restart is
   deduplicated; the window is bounded at 10 000 answers, so a retry after more
@@ -319,8 +328,8 @@ Results at this writing:
   caret of a client holding a cell id survives. What still travels as a command
   is a text box, formatting and anything the diff cannot express; a formatting
   command's inverse is a `set_para_format` primitive (§5.10, §5.11), a paragraph
-  move is a `move_block` structural operation (§5.12), the rest
-  stay barriers; a command that
+  move is a `move_block` structural operation (§5.12) and a sort is a `permute`
+  (§5.13), the rest stay barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
   table edits undo exactly (§5.8): an inserted column, a column removal, a merge
@@ -922,9 +931,10 @@ the room version; the step stays on the stack and the session stays `InSync`
 (§5.9). An edit in a paragraph the step did not touch does not block the undo.
 
 **What stays a barrier.** Only commands a paragraph snapshot can name are
-listed; §5.11 lifts the two that rewrite text out of this list, and §5.12 lifts
-the adjacent paragraph move. Commands that reorder blocks in other ways
-(`para.sort`, `para.promote`/`demote`), move text past more than 64 blocks
+listed; §5.11 lifts the two that rewrite text out of this list, §5.12 lifts the
+adjacent paragraph move and §5.13 lifts the paragraph sort. Commands that
+reorder blocks in other ways (`para.promote`/`demote`), move text past more than
+64 blocks
 (`para.moveUp`/`moveDown` over a wider selection), strip text
 (`para.removeBlank`, `para.convertBreaks`, the space/indent text tools),
 allocate numbering definitions (`para.bullets`, `para.numbering`,
@@ -1131,8 +1141,9 @@ block the move did not displace does not block the undo.
 
 **What stays a barrier.** A selection wider than 64 blocks is not captured as a
 move: the command still runs, but the step keeps the command delta and its undo
-answers `unsupported`. `para.sort`, `para.promote`/`demote` and every other
-command that reorders or rewrites blocks remain barriers (§5.10).
+answers `unsupported`. `para.promote`/`demote` and every other command that
+reorders or rewrites blocks remain barriers (§5.10); `para.sort` is lifted out
+of this list by §5.13.
 
 **Tests.**
 
@@ -1174,6 +1185,106 @@ command that reorders or rewrites blocks remain barriers (§5.10).
 **Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app` — 50, 62, 31 and 22 passed; `cargo clippy` on those four
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
+
+### 5.13 A paragraph sort is an addressable permute operation (run 2026-11-09)
+
+§5.12 left `para.sort` (and `para.promote`/`demote`) among the commands whose
+undo is a barrier and whose forward effect every replica had to replay as a
+command. A sort is a reordering of a contiguous run of paragraphs, so it is now
+one structural `permute` operation with an explicit list of session ids:
+**head `828fa107`** on `feature/realtime-collaboration`, with this entry's docs
+commit on top (no push, CI unchanged).
+
+**The operation.** `kind:"structural"`,
+`payload: {"op":"permute","nodeId":<first id in the new order>,"order":[<id>…]}`.
+The order list names the blocks of one container in their new order; together
+the ids must fill one consecutive run of at most 64 paragraphs. The list is the
+whole address: every replica resolves the same ids to the same content and
+performs the same permutation. A duplicate id, an unknown id (`invalid`), a
+retired id (`gone`), ids from different containers or a list with a gap between
+the indexes, a table in the run and a run that leaves the container are refused
+before the document or the id map changes; the room version does not move. A
+direct `permute` wider than 64 blocks is `invalid`; a `para.sort` over a wider
+selection is not normalized at all (see the barrier below).
+
+**One transaction, same JSON at the author and the peer.** The authoritative
+delta wraps the operation in the step's unit:
+
+```json
+{"op":"transaction","ops":[{"op":"permute","nodeId":42,"order":[42,17,9]}]}
+```
+
+Every id below the container follows the block it names
+(`NodeIds::permute_children`), so the caret holder of a sorted paragraph — or of
+a paragraph inside a sorted table, once the run is addressable — keeps its id
+and keeps typing in its own block. The client's `collab-doc::diff` recognizes a
+pure reorder from the `Arc` pointers: when the blocks are the same and only
+their order differs, it emits one `permute` with the ids in the new order. An
+adjacent swap still travels as `move_block` (§5.12); a reorder wider than 64
+blocks stays `Unsupported` and falls back to the command.
+
+**Undo and redo.** A sort's inverse is the same `permute` with the ids in their
+old order. Because the operation handler always emits its delta as a
+`transaction`, both the forward step and its inverse reach every replica as one
+delta — the author applies the answer to its own document and the peer applies
+the same JSON. Redo replays the original operation and the sorted order returns.
+
+**A foreign edit is `undo-conflict`.** The step reports every block of the run
+with its subtree in `Effect::touched`. Any later edit another user makes in one
+of them makes undo answer `undo-conflict`, leaves both documents byte-identical
+and does not move the room version; the step stays on the stack and the session
+stays `InSync` (§5.9).
+
+**The command path and a sort that changes nothing.** `para.sort` runs through
+the engine as before (its natural key, language and selection rules decide the
+order). The adapter captures the selected run before the command and names the
+resulting order by ids after it; a sort that reorders nothing still becomes an
+identity `permute`, so the step is addressable instead of a barrier. A run
+wider than 64 paragraphs, a run that crosses a container or a paragraph without
+a session id is not captured: the command keeps its delta and its undo answers
+`unsupported`. `para.promote`/`demote` change outline levels as well as order
+and stay barriers.
+
+**A fresh node map after a permutation.** `SyncState::set_nodes` used to rebase
+ids one by one; with a permutation that can erase a key another id just wrote
+(one id's old key is another's new key). It now replaces all paths in one pass
+(`NodeIds::rebase_many`), so a move or a sort followed by the server's node map
+leaves the client's map consistent.
+
+**Tests.**
+
+- `crates/collab-doc/src/tests.rs`:
+  `sorting_blocks_is_one_transactional_permute` (delta shape, new order, ids
+  follow their blocks), `undo_of_a_sort_lands_as_one_transaction_and_redo_returns_the_order`,
+  `a_permute_with_an_unknown_or_retired_id_is_refused_before_mutation` (unknown,
+  a gap, a duplicate, another container → `invalid`; retired → `gone`; document
+  and version unchanged every time), `a_permute_with_a_table_in_the_run_is_refused_before_mutation`,
+  `a_foreign_edit_of_a_sorted_block_makes_undo_a_conflict` (the step stays on
+  the stack), `sorting_blocks_diffs_to_one_permute_with_explicit_ids`,
+  `a_sort_wider_than_the_bound_is_refused_instead_of_becoming_text_edits`
+  (67 blocks → `Unsupported`),
+  `a_replica_applies_a_permute_and_keeps_the_ids_of_the_blocks_it_moved`.
+- `crates/collab-engine/src/tests.rs`:
+  `a_paragraph_sort_lands_as_one_structural_operation_and_undoes` (the command
+  yields a transaction `permute`; a replica that never ran it converges, undoes
+  and redoes), `a_sort_that_changes_nothing_is_still_an_addressable_step`,
+  `a_sort_over_more_than_64_blocks_stays_an_undo_barrier`,
+  `a_permute_on_an_unknown_node_is_refused_before_mutation` (document and
+  version unchanged, no undo step).
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s):
+  `a_paragraph_sort_undo_lands_as_one_transaction_at_its_author_and_the_peer`
+  (the plan is one structural `permute`; undo and redo reach the author once and
+  the peer as the same transaction delta),
+  `a_foreign_edit_of_a_sorted_paragraph_refuses_the_undo_without_touching_the_document`
+  (Bob types into a sorted paragraph; both documents byte-identical, room
+  version unchanged).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 50, 70, 35 and 24 passed; `cargo clippy` on those four
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
