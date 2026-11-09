@@ -297,6 +297,9 @@ const MAX_NOTE_ALIGN_BUDGET: u64 = 200_000;
 /// Maximum number of notes in a single run allowed for dynamic programming matrix allocation.
 const MAX_NOTE_ALIGN_RUN: usize = 200;
 
+/// Maximum number of DP matrix cells allowed for note run alignment.
+const MAX_NOTE_ALIGN_CELLS: usize = 40_000;
+
 /// Metadata and content summary for aligning footnote and endnote parts.
 struct NoteInfo {
     /// Note ID.
@@ -346,8 +349,10 @@ fn collect_note_info(doc: &Document, ids: &[u32], kind: wordcraft_doc::PartKind,
         .collect()
 }
 
-/// Computes the length of the longest common subsequence between two slices.
-fn lcs_len<T: PartialEq>(a: &[T], b: &[T]) -> usize {
+/// Computes the length of the longest common subsequence between two slices,
+/// charging dynamic programming cells to `budget` and using a bounded greedy fallback
+/// when the comparison cell budget is exhausted.
+pub(super) fn lcs_len<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> usize {
     if a.is_empty() || b.is_empty() {
         return 0;
     }
@@ -355,29 +360,64 @@ fn lcs_len<T: PartialEq>(a: &[T], b: &[T]) -> usize {
     let a_mid = a.get(pre..).unwrap_or_default();
     let b_mid = b.get(pre..).unwrap_or_default();
     let suf = a_mid.iter().rev().zip(b_mid.iter().rev()).take_while(|(x, y)| x == y).count();
-    let a_core = a_mid.get(..a_mid.len() - suf).unwrap_or_default();
-    let b_core = b_mid.get(..b_mid.len() - suf).unwrap_or_default();
+    let a_core = a_mid.get(..a_mid.len().saturating_sub(suf)).unwrap_or_default();
+    let b_core = b_mid.get(..b_mid.len().saturating_sub(suf)).unwrap_or_default();
     let n = a_core.len();
     let m = b_core.len();
     if n == 0 || m == 0 {
-        return pre + suf;
+        return pre.saturating_add(suf);
     }
-    let mut prev = vec![0u32; m + 1];
-    let mut curr = vec![0u32; m + 1];
-    for x in a_core {
-        for (j, y) in b_core.iter().enumerate() {
-            curr[j + 1] = if x == y { prev[j] + 1 } else { prev[j + 1].max(curr[j]) };
+    let cells = (n as u64).saturating_mul(m as u64);
+    if cells > *budget {
+        // Budget exhausted: use bounded forward and backward greedy subsequence matching
+        // to find a genuine in-order common subsequence in O(n + m) time without allocating DP tables.
+        let mut fwd = 0usize;
+        let mut b_idx = 0usize;
+        for x in a_core {
+            if let Some(pos) = b_core.get(b_idx..).and_then(|s| s.iter().position(|y| x == y)) {
+                fwd = fwd.saturating_add(1);
+                b_idx = b_idx.saturating_add(pos).saturating_add(1);
+                if b_idx >= b_core.len() {
+                    break;
+                }
+            }
         }
-        std::mem::swap(&mut prev, &mut curr);
+        let mut bwd = 0usize;
+        let mut b_rev_idx = 0usize;
+        for x in a_core.iter().rev() {
+            if let Some(pos) = b_core.get(..b_core.len().saturating_sub(b_rev_idx)).and_then(|s| s.iter().rposition(|y| x == y)) {
+                bwd = bwd.saturating_add(1);
+                b_rev_idx = b_core.len().saturating_sub(pos);
+                if b_rev_idx >= b_core.len() {
+                    break;
+                }
+            }
+        }
+        pre.saturating_add(suf).saturating_add(fwd.max(bwd))
+    } else {
+        *budget = budget.saturating_sub(cells);
+        let mut prev = vec![0u32; m.saturating_add(1)];
+        let mut curr = vec![0u32; m.saturating_add(1)];
+        for x in a_core {
+            for (j, y) in b_core.iter().enumerate() {
+                let diag = prev.get(j).copied().unwrap_or(0).saturating_add(1);
+                let up = prev.get(j.saturating_add(1)).copied().unwrap_or(0);
+                let left = curr.get(j).copied().unwrap_or(0);
+                if let Some(c) = curr.get_mut(j.saturating_add(1)) {
+                    *c = if x == y { diag } else { up.max(left) };
+                }
+            }
+            std::mem::swap(&mut prev, &mut curr);
+        }
+        pre.saturating_add(suf).saturating_add(prev.get(m).copied().unwrap_or(0) as usize)
     }
-    pre + suf + prev[m] as usize
 }
 
 /// Scores similarity between an original note and a revised note on a 0..=1000 scale.
 ///
 /// Combines text similarity of the note content with reference location in the body:
 /// - Exact text match: 1000.
-/// - Text LCS similarity: 0..=1000.
+/// - Text LCS similarity: 0..=1000 (falls back to bounded greedy subsequence when budget is exhausted).
 /// - Reference paragraph match bonus: if the body paragraph containing the note reference
 ///   matches between original and revised, gives a substantial bonus or pairs directly.
 fn note_score(a: &NoteInfo, b: &NoteInfo, budget: &mut u64) -> u32 {
@@ -402,14 +442,8 @@ fn note_score(a: &NoteInfo, b: &NoteInfo, budget: &mut u64) -> u32 {
         if max_possible < NOTE_SIMILARITY_THRESHOLD as u64 && !same_ref_para && !same_ref_idx {
             0
         } else {
-            let cells = (a.tokens.len() as u64).saturating_mul(b.tokens.len() as u64);
-            if *budget < cells {
-                0
-            } else {
-                *budget = budget.saturating_sub(cells);
-                let lcs = lcs_len(&a.tokens, &b.tokens);
-                ((2000u64 * lcs as u64) / total_tokens as u64) as u32
-            }
+            let lcs = lcs_len(&a.tokens, &b.tokens, budget);
+            ((2000u64 * lcs as u64) / total_tokens as u64) as u32
         }
     };
 
@@ -432,7 +466,7 @@ fn align_note_run(old_notes: &[NoteInfo], new_notes: &[NoteInfo], budget: &mut u
     if m == 0 {
         return (Vec::new(), Vec::new(), old_notes.iter().map(|info| info.id).collect());
     }
-    if n > MAX_NOTE_ALIGN_RUN || m > MAX_NOTE_ALIGN_RUN {
+    if n > MAX_NOTE_ALIGN_RUN || m > MAX_NOTE_ALIGN_RUN || n.saturating_mul(m) > MAX_NOTE_ALIGN_CELLS {
         if n == m {
             let paired = old_notes.iter().zip(new_notes.iter()).map(|(o, r)| (o.id, r.id)).collect();
             return (paired, Vec::new(), Vec::new());

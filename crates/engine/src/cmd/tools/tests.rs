@@ -569,3 +569,96 @@ fn compare_footnote_docx_roundtrip() {
     assert!(fn_para.runs.iter().any(|r| r.props.del.is_some()), "del preserved in docx footnotes.xml");
     assert!(fn_para.runs.iter().any(|r| r.props.ins.is_some()), "ins preserved in docx footnotes.xml");
 }
+
+/// #5842: Verifies that `lcs_len` returns genuine in-order common subsequences even when
+/// the comparison cell budget is exhausted (`budget = 0`), without allocating DP tables.
+#[test]
+fn lcs_len_exhausted_budget_bounded_fallback() {
+    let mut zero_budget = 0u64;
+
+    // 1. Identical slices: matches completely via prefix/suffix.
+    let identical_a = vec!["alpha", "beta", "gamma", "delta"];
+    let identical_b = vec!["alpha", "beta", "gamma", "delta"];
+    assert_eq!(super::lcs_len(&identical_a, &identical_b, &mut zero_budget), 4);
+    assert_eq!(zero_budget, 0);
+
+    // 2. Single word substitution in middle: prefix and suffix match surrounding tokens.
+    let mid_a = vec!["start", "word_a", "middle", "end"];
+    let mid_b = vec!["start", "word_b", "middle", "end"];
+    assert_eq!(super::lcs_len(&mid_a, &mid_b, &mut zero_budget), 3);
+
+    // 3. Edits at both ends: greedy scan matches unchanged core tokens in order.
+    let core_a = vec!["head1", "core_x", "core_y", "tail1"];
+    let core_b = vec!["head2", "core_x", "core_y", "tail2"];
+    assert_eq!(super::lcs_len(&core_a, &core_b, &mut zero_budget), 2);
+
+    // 4. Unrelated slices: returns 0 matches without false positives.
+    let unrelated_a = vec!["apple", "banana", "cherry"];
+    let unrelated_b = vec!["dog", "elephant", "fox"];
+    assert_eq!(super::lcs_len(&unrelated_a, &unrelated_b, &mut zero_budget), 0);
+
+    // 5. Normal budget debits only core DP cells, not whole sequence length.
+    let mut ample_budget = 100u64;
+    // Prefix 1 ("p"), suffix 1 ("s"), core 1x1 ("a" vs "b"). Cells = 1.
+    let budgeted_a = vec!["p", "a", "s"];
+    let budgeted_b = vec!["p", "b", "s"];
+    assert_eq!(super::lcs_len(&budgeted_a, &budgeted_b, &mut ample_budget), 2);
+    assert_eq!(ample_budget, 99);
+}
+
+/// #5842: CodeRabbit Major finding scenario: when a document has many footnotes (30+)
+/// and both reference paragraphs and note contents are edited, note similarity scoring
+/// falls back to bounded greedy alignment after `MAX_NOTE_ALIGN_BUDGET` is exhausted,
+/// correctly pairing all 30 corresponding notes rather than treating them as whole deletions and insertions.
+#[test]
+fn compare_pairs_many_notes_when_budget_exhausted() {
+    let note_count = 30usize;
+    let mut orig_text = String::new();
+    let mut rev_text = String::new();
+
+    for i in 0..note_count {
+        if i > 0 {
+            orig_text.push('\n');
+            rev_text.push('\n');
+        }
+        orig_text.push_str(&format!("Body paragraph {i} discussing original thesis topic."));
+        rev_text.push_str(&format!("Body paragraph {i} discussing revised thesis subject."));
+    }
+
+    let mut orig = Session::new(Document::from_text(&orig_text));
+    let mut rev = Session::new(Document::from_text(&rev_text));
+
+    for i in 0..note_count {
+        let orig_para_len = orig.doc.body[i].as_para().unwrap().text.len();
+        orig.run("caret.set", &json!({"pos": Pos::body(i, orig_para_len)})).unwrap();
+        orig.run("references.footnote", &json!({"text": format!("Footnote entry {i} citing detailed historical observations and background data.")}))
+            .unwrap();
+
+        let rev_para_len = rev.doc.body[i].as_para().unwrap().text.len();
+        rev.run("caret.set", &json!({"pos": Pos::body(i, rev_para_len)})).unwrap();
+        rev.run("references.footnote", &json!({"text": format!("Footnote entry {i} citing detailed historical commentary and background data.")}))
+            .unwrap();
+    }
+
+    let rev_path = std::env::temp_dir().join(format!("wc-rev-manyfn-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &rev.doc).unwrap();
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&rev_path);
+
+    assert!(r["changes"].as_u64().unwrap() >= note_count as u64);
+
+    // Ensure all 30 footnotes survived as paired footnotes in the result document.
+    let footnotes: Vec<_> = s.doc.parts.values().filter(|p| p.kind == wordcraft_doc::PartKind::Footnote).collect();
+    assert_eq!(footnotes.len(), note_count, "All 30 footnotes must be paired rather than deleted and re-inserted");
+
+    // Verify every note paired with its counterpart and tracked the internal word substitution.
+    for part in &footnotes {
+        let para = part.blocks[0].as_para().unwrap();
+        let has_ins = para.run_ranges().any(|(r, c)| c.ins.is_some() && para.text[r].contains("commentary"));
+        let has_del = para.run_ranges().any(|(r, c)| c.del.is_some() && para.text[r].contains("observations"));
+        assert!(has_ins, "Note tracks insertion of 'commentary': {}", para.plain_text());
+        assert!(has_del, "Note tracks deletion of 'observations': {}", para.plain_text());
+    }
+}
