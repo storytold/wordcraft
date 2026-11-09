@@ -6245,6 +6245,46 @@ fn justified_line_ending_in_line_break_is_stretched() {
     assert!(kept[0] < 400.0, "doNotExpandShiftReturn keeps the line before the break short: {}", kept[0]);
 }
 
+/// Thai Distributed (`thaiDistribute`): a line ending with Shift+Enter is spread across its
+/// character gaps to both margins, Thai text without spaces included, while the paragraph's last
+/// line keeps its natural width (Distributed would stretch that one too).
+#[test]
+fn thai_distributed_line_ending_in_line_break_reaches_both_margins() {
+    let first = "ภาษาไทยไม่มีช่องว่าง";
+    let text = format!("{first}\nบรรทัดสุดท้าย");
+    let edges = |align: Align| {
+        let mut d = Document::from_text("");
+        let mut p = wordcraft_doc::Paragraph::with_text(&text, Default::default());
+        p.props = ParaProps { align: Some(align), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let mut out = Vec::new();
+        for pg in &l.pages {
+            for it in &pg.items {
+                if let Placed::Lines { para, l0, l1, x, .. } = it {
+                    for li in *l0..*l1 {
+                        let line = &para.lines[li];
+                        let content = text[line.start..line.stop].trim_end().len();
+                        out.push((para.x_of(li, line.start).unwrap() + x, para.x_of(li, line.start + content).unwrap() + x));
+                    }
+                }
+            }
+        }
+        out
+    };
+    let left = edges(Align::Left);
+    let thai = edges(Align::ThaiDistribute);
+    assert_eq!(thai.len(), 2, "{thai:?}");
+    assert!((thai[0].0 - left[0].0).abs() < 0.01, "the line starts at the left margin: {thai:?}");
+    assert!(thai[0].1 > left[0].1 + 50.0, "the line before the break is stretched: {thai:?} vs {left:?}");
+    // The break itself takes no gap: the text before it ends at the right margin.
+    let ink = edges(Align::ThaiDistribute)[0].1;
+    assert!(ink > 520.0 && ink <= 540.05, "the line before the break reaches the right margin: {ink}");
+    assert!((thai[1].1 - left[1].1).abs() < 0.01, "the last line is not stretched: {thai:?} vs {left:?}");
+    let dist = edges(Align::Distribute);
+    assert!(dist[1].1 > left[1].1 + 50.0, "Distributed stretches the last line, Thai Distributed doesn't: {dist:?}");
+}
+
 /// A distributed line that ends in a manual line break stretches its characters to the margin, as
 /// in Word (measured with a synthetic `distribute` paragraph): the break itself takes no gap.
 #[test]
