@@ -91,7 +91,7 @@ fn thai_break_positions_are_char_boundaries() {
     let brk = ThWBrk::new();
     for &s in &[
         THAI_HELLO,
-        "\u{0E01}\u{0E32}\u{0E27}",           // กาว (glue)
+        "\u{0E01}\u{0E32}\u{0E27}",                                 // กาว (glue)
         "\u{0E20}\u{0E32}\u{0E29}\u{0E32}\u{0E44}\u{0E17}\u{0E22}", // ภาษาไทย (Thai language)
     ] {
         for pos in brk.find_breaks(s) {
