@@ -205,7 +205,12 @@ pub(super) fn equation_key(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
 /// key) — not Mod+Shift+V (Paste Formatting) or Mod+Alt+V (Paste Special) — so a clipboard
 /// picture may be pasted on it (#45).
 pub(super) fn is_paste_release(key: Key, modifiers: egui::Modifiers) -> bool {
-    (modifiers.command || key == Key::Paste) && !modifiers.alt && !modifiers.shift && !(cfg!(target_os = "macos") && key == Key::V && modifiers.ctrl)
+    // Mod+Ctrl+V on macOS (Ctrl beside Command) is Paste Special, not a plain paste; when
+    // Ctrl alone plays Mod, the same chord is a plain paste.
+    (modifiers.command || key == Key::Paste)
+        && !modifiers.alt
+        && !modifiers.shift
+        && !(cfg!(target_os = "macos") && key == Key::V && modifiers.ctrl && modifiers.mac_cmd)
 }
 
 /// The modifiers a V release stands for: its own, or, when Mod went up before V and no V press
@@ -222,9 +227,10 @@ pub(super) fn is_modifier_key(key: Key) -> bool {
     )
 }
 
-/// Whether `modifiers` ask for Paste Special: Mod+Alt+V, or Mod+Ctrl+V on macOS.
+/// Whether `modifiers` ask for Paste Special: Mod+Alt+V, or Mod+Ctrl+V on macOS (Ctrl held
+/// beside Command, not alone as Mod).
 pub(super) fn is_paste_special_modifiers(modifiers: Modifiers) -> bool {
-    modifiers.alt || (cfg!(target_os = "macos") && modifiers.ctrl)
+    modifiers.alt || (cfg!(target_os = "macos") && modifiers.ctrl && modifiers.mac_cmd)
 }
 
 /// Whether releasing `key` with `modifiers` is Paste Special: Mod+Alt+V, or Mod+Ctrl+V on macOS.
@@ -254,11 +260,9 @@ pub(super) fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
 /// keyboard, or a button or a pane's title bar does. A focused widget in an open dialog or popup
 /// keeps the keys, so Ctrl+Z on a dialog button can't undo the document behind it.
 pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
-    // Customize Keyboard records the keys pressed; they never run commands meanwhile.
-    if app.canvas.focused
-        || ctx.text_edit_focused()
-        || (ctx.egui_wants_keyboard_input() && crate::panes::overlay_open(app, ctx))
-        || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. }))
+    // No shortcuts run while a modal dialog is open (#3859); Customize Keyboard records the keys
+    // pressed meanwhile.
+    if app.canvas.focused || ctx.text_edit_focused() || (ctx.egui_wants_keyboard_input() && crate::panes::overlay_open(app, ctx)) || app.modal_open()
     {
         return;
     }
