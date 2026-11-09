@@ -9002,7 +9002,7 @@ fn long_note_after(body: usize, note: usize, widow: bool) -> (Document, u32) {
 #[test]
 fn a_footnote_continuing_on_the_next_page_ends_on_the_bottom_margin() {
     crate::test_fonts();
-    // Observed in Word for Mac 16.113.4: whatever room the split leaves goes above the
+    // Observed in Word for Mac 16.114.4: whatever room the split leaves goes above the
     // separator, the note's last line on the page sitting on the bottom margin.
     let bottom = Document::default().last_section.page_h - Document::default().last_section.margin_bottom;
     let mut slack = Vec::new();
@@ -9028,7 +9028,7 @@ fn a_footnote_continuing_on_the_next_page_ends_on_the_bottom_margin() {
 #[test]
 fn widow_control_leaves_two_lines_of_a_split_footnote_on_the_next_page() {
     crate::test_fonts();
-    // Observed in Word for Mac 16.113.4: a note that would leave its last line alone on the next
+    // Observed in Word for Mac 16.114.4: a note that would leave its last line alone on the next
     // page takes one more line along when its paragraph has widow control.
     let lines_after = |body: usize, widow: bool| {
         let (d, id) = long_note_after(body, 60, widow);
@@ -9045,7 +9045,7 @@ fn widow_control_leaves_two_lines_of_a_split_footnote_on_the_next_page() {
 #[test]
 fn orphan_control_keeps_two_lines_of_a_split_footnote_with_its_reference() {
     crate::test_fonts();
-    // Observed in Word for Mac 16.113.4: rather than leave a note paragraph's first line alone at
+    // Observed in Word for Mac 16.114.4: rather than leave a note paragraph's first line alone at
     // the bottom of the page, the line with the reference goes on to the next page with it.
     let first_piece = |body: usize, widow: bool| {
         let (mut d, id) = long_note_after(body, 60, widow);

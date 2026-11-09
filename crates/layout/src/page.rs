@@ -207,7 +207,7 @@ impl PageBuilder<'_> {
             break;
         }
         // Notes that continue on the next page still end on the bottom margin, the room left
-        // going above the separator (Word for Mac 16.113.4), unless they go beneath the text.
+        // going above the separator (Word for Mac 16.114.4), unless they go beneath the text.
         if !fits && !self.beneath {
             let shift = (self.orig_bottom - end).max(0.0);
             top += shift;

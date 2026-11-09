@@ -225,7 +225,7 @@ impl NoteBox {
 
     /// Whether widow/orphan control in the note's paragraphs forbids splitting at `cut`: a
     /// paragraph's first line alone above it (an orphan) or its last line alone below it (a
-    /// widow), as in Word for Mac 16.113.4.
+    /// widow), as in Word for Mac 16.114.4.
     pub(crate) fn breaks_widow_control(&self, cut: f32) -> bool {
         self.items.iter().filter(|it| self.splittable(it)).any(|it| {
             let Placed::Lines { para, l0, l1, y, .. } = it else { return false };
