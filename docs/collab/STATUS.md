@@ -3,8 +3,10 @@
 - Date: 2026-11-09
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
-- HEAD at this writing: the two-client host-scenario fix on top of the
-  craft-libs pin (`376231e1`)
+- Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
+- HEAD at this writing: `d39ef64c` plus this status commit — 33 commits over
+  `4b0d3995`; the fork copy still carries the pre-rebase head `a6d6ae90` until
+  it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`.
 
@@ -171,6 +173,7 @@ cargo test -p wordcraft-collab-server -- --ignored   # commit → LibreOffice
 cargo test -p wordcraft-engine collab::              # 5 flag/remote tests
 cargo test -p wordcraft-ui-egui --lib                # 1137 tests
 cargo xtask fmt / clippy / test / doctest / assets / layers / wasm
+CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all 9 steps
 ```
 
 Results at this writing:
@@ -210,6 +213,18 @@ Results at this writing:
   this environment too (French fallback marks text without a French dictionary);
   with `CRAFT_I18N_DIR` pointing at the pinned `craft-i18n` checkout the Swiss
   language test passes.
+- Rebased onto upstream `main` `4b0d3995` (2026-11-09, §5.4): `cargo xtask ci`
+  passed all 9 steps — fmt, clippy (`--workspace --all-targets -D warnings`),
+  test, i18n-report, language, doctest, assets, layers (27 crates), wasm (22
+  crates); 5775 workspace tests passed, 0 failed, 11 ignored. The run needed
+  `CRAFT_I18N_DIR` (`craft-i18n` `1e515422`) **and** `CRAFT_FONTS_DIR`
+  (`craft-fonts` `b076417b`): without the fonts three UI tests that draw
+  Arabic/CJK interface text fail —
+  `panes::tests::navigation_tabs_fit_the_narrowest_pane_in_every_language`,
+  `ribbon::tests::ribbon_groups_fit_above_their_labels` and
+  `theme::tests::interface_symbols_have_glyphs` — and all three live in files
+  unchanged against `main`. `cargo metadata --locked` accepted the rebased lock
+  and the CI run did not modify it.
 
 ## 4. Known limitations
 
@@ -310,9 +325,10 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    app builds with trunk on it; the same revision still has to be used by the
    other four apps. The two-client host run is done (§5.1); the manual parts are
    listed there.
-2. Mark PR #5834 ready once CI has run and the pin is acceptable to the
-   maintainers (GitHub reports `action_required` for fork PRs until a maintainer
-   approves).
+2. Force-push the rebased branch (§5.4), then mark PR #5834 ready once CI has run
+   and the pin is acceptable to the maintainers (GitHub reports
+   `action_required` for fork PRs until a maintainer approves, and the PR shows
+   `CONFLICTING` until the force-push).
 3. Optional hardening: command inverses for the common engine commands, persisting
    the `opId` dedup window across a snapshot restore, table-cell node ids and
    property primitives, offline queue, or a join broadcast that carries the role
@@ -360,6 +376,53 @@ joined earlier receive the sender's raw role (`viewer`, `editor`, `owner`).
 (collab-app: new peer, placeholder replacement, role-less frame) cover the two
 halves without a socket; `an_older_presence_without_a_role_still_parses` (wire)
 pins the frame of a server built before the field.
+
+### 5.4 Rebase onto upstream `main` `4b0d3995` (run 2026-11-09)
+
+GitHub reported PR #5834 as `CONFLICTING`: `main` had moved from the branch's
+merge base `2a0a20ae` to `4b0d3995` (279 files, a new page command API among
+them). The branch was rebased in place, no commit dropped:
+
+| | |
+|---|---|
+| before | `a6d6ae90` — 32 commits over `2a0a20ae` |
+| after | `d39ef64c` — the same 32 commits over `4b0d3995` |
+| backup ref | `backup/pre-rebase-a6d6ae90` (local) |
+| push | not made — the fork needs a manual `--force-with-lease` |
+
+**Conflicts and how they were resolved.**
+
+1. `apps/wordcraft-web/src/web.rs` — `main` added the page command API
+   (`crate::api::install` + `WordApp::with_control`, craft-libs#413) where this
+   branch builds the app and installs `host_commit`. Both are kept: the control
+   channel is installed first, the commit bridge right after it.
+2. `apps/wordcraft-web/Cargo.toml` — `main` now pins `craft-web-api` and
+   `craft-web-host` at `storytold/craft-libs@fd5e2fe`; this branch moves
+   `craft-web-host` to `copoka/craft-libs@7666e2b1` (ADR-0016 §3).
+   `craft-web-api` stays on the storytold revision: the fork revision's
+   `craft-web-host` does not depend on it (its lock entry lists only
+   `wasm-bindgen` and `web-sys`), so the two sources do not yield a second copy
+   of one crate. `git diff 7666e2b1 fd5e2fe -- crates/web-api` is empty as well,
+   so the API crate is the same code on either revision.
+3. `Cargo.lock` — auto-merged everywhere except the `craft-web-host` source
+   line, which now reads
+   `git+https://github.com/copoka/craft-libs?rev=7666e2b1…#7666e2b1…`. The lock
+   was not regenerated by hand: `cargo metadata --locked` on the build host
+   accepted it, and after the whole `cargo xtask ci` run the lock is identical
+   to the committed one (`git status --short` and `git diff --stat Cargo.lock`
+   are empty on the build host).
+
+**Gates on the rebased tree.** Build host `agents`, `scripts/remote-build.sh`:
+
+- `cargo metadata --locked` → `LOCK_OK`, lock unchanged.
+- `cargo xtask ci` → all 9 steps passed (fmt, clippy, test, i18n-report,
+  language, doctest, assets, layers, wasm); 5775 workspace tests passed, 0
+  failed, 11 ignored. Details and the two environment-only failure modes that
+  need `CRAFT_I18N_DIR`/`CRAFT_FONTS_DIR`: §3.
+
+**Still to do by hand:** force-push the rebased branch to `copoka/wordcraft`
+(`git push --force-with-lease fork feature/realtime-collaboration`); the PR page
+stays `CONFLICTING` until then.
 
 ## 6. Where things live
 
