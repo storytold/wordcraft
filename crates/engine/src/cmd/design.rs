@@ -375,7 +375,10 @@ fn gradient_stops(s: &Session, v: &Value) -> Result<Vec<GradStop>, CmdError> {
 
 /// The media key of the page background picture: an existing `media` key, encoded `data`, or a
 /// `path`. The image must be one the app can decode (hostile files are refused before the
-/// document keeps them).
+/// document keeps them). A file past the 200 MB picture limit and base64 past the same limit
+/// decoded are refused before the whole input is held: the read stops past the limit, and the
+/// decode refuses past it (whitespace still ignored, padding optional).
+const MAX_PAGE_PICTURE_BYTES: u64 = 200 << 20;
 fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
     // One check for a file, base64 data and an existing media entry: the renderer can only draw
     // these, so an entry holding anything else (say a DOCX relationship's bytes) is refused
@@ -390,20 +393,38 @@ fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
         };
     }
     let bytes = if let Some(d) = p::str(v, "data") {
-        super::insert::base64_decode(d).ok_or_else(|| CmdError::Params("bad base64 data".into()))?
+        super::insert::base64_decode_bounded(d, MAX_PAGE_PICTURE_BYTES as usize)
+            .ok_or_else(|| CmdError::Params("bad base64 data".into()))?
+            .and_then(|b| (b.len() as u64 <= MAX_PAGE_PICTURE_BYTES).then_some(b))
+            .ok_or_else(|| CmdError::Failed("image is larger than 200 MB".into()))?
     } else if let Some(path) = p::str(v, "path") {
-        crate::io::read_file(path).map_err(CmdError::Failed)?
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = path;
+            return Err(CmdError::Failed("reading files by path isn't available on the web".into()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::io::read_file_capped(path, MAX_PAGE_PICTURE_BYTES, "image")
+                .map_err(|e| map_image_too_large(e))?
+        }
     } else {
         return Err(CmdError::Params("`path`, `data` or `media` is required for a picture fill".into()));
     };
-    if bytes.len() > 200 << 20 {
-        return Err(CmdError::Failed("image is larger than 200 MB".into()));
-    }
     if !supported(&bytes) {
         return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
     }
     let ext = super::insert::image_ext(&bytes);
     Ok(s.doc.add_media(bytes, ext))
+}
+/// `read_file_capped` reports a capped file as larger than N MB with the file's own wording;
+/// a page picture keeps the command's long-standing message.
+fn map_image_too_large(e: String) -> CmdError {
+    if e.contains("is larger than") {
+        CmdError::Failed("image is larger than 200 MB".into())
+    } else {
+        CmdError::Failed(e)
+    }
 }
 
 fn watermark(s: &mut Session, v: &Value) -> CmdResult {

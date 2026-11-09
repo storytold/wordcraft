@@ -13,6 +13,10 @@ use wordcraft_doc::{PagePattern, Rgb};
 
 use crate::WordApp;
 use crate::theme::Tokens;
+/// The most picture bytes the preview reads: past it the pane shows a dashed frame, like the
+/// engine's thumbnail of an oversized picture. The read stops here, so a huge selection is
+/// refused before it is held whole.
+const MAX_PREVIEW_BYTES: u64 = 64 << 20;
 
 /// What the pane will apply, before Apply.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -520,12 +524,16 @@ fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) 
         Some(cached) => cached,
         None => {
             let loaded = (|| {
+                // Past the thumbnail limit the pane shows a dashed frame, not the picture:
+                // a 2 GiB selection is refused after a 64 MiB capped read, not held whole.
                 let bytes = if let Some(path) = path {
-                    wordcraft_engine::io::read_file(path).ok()
+                    wordcraft_engine::io::read_file_capped(path, MAX_PREVIEW_BYTES, "image").ok()
                 } else if let Some(media) = media {
                     app.session.doc.media.get(media).map(|b| b.to_vec())
                 } else {
-                    data.as_deref().and_then(wordcraft_engine::cmd::insert::base64_decode)
+                    data.as_deref().and_then(|d| {
+                        wordcraft_engine::cmd::insert::base64_decode_bounded(d, MAX_PREVIEW_BYTES as usize)?.or(Some(Vec::new()))
+                    })
                 }?;
                 let img = thumbnail(&bytes)?;
                 Some(ui.ctx().load_texture(format!("formatBackground.picture::{key}"), img, egui::TextureOptions::LINEAR))

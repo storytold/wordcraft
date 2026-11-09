@@ -135,3 +135,42 @@ fn hostile_values_are_refused_or_clamped() {
     let g = s.doc.settings.page_gradient.as_ref().expect("gradient");
     assert_eq!(g.stops.iter().map(|s| s.pos).collect::<Vec<_>>(), [0.0, 100.0]);
 }
+
+/// Inputs past the 200 MB picture limit are refused without being held whole: an oversized
+/// file is refused after a capped read, and oversized base64 after a bounded decode.
+#[test]
+fn a_picture_fill_refuses_inputs_past_the_size_limit() {
+    let mut s = s();
+    let before = s.doc.settings.clone();
+    let dir = std::env::temp_dir().join(format!("wc-pagefill-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = dir.join("big.png");
+    std::fs::write(&big, tiny_png()).unwrap();
+    // Sparse: claims past the limit, reads back zeros.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::FileExt;
+        let f = std::fs::OpenOptions::new().append(true).open(&big).unwrap();
+        f.set_len((200 << 20) + 1).unwrap();
+        let _ = FileExt::write_at(&f, &[0], 0);
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::OpenOptions::new().write(true).open(&big).unwrap().set_len((200 << 20) + 1).unwrap();
+    }
+    let err = s
+        .run("design.pageFill", &serde_json::json!({"fill": "picture", "path": big.to_string_lossy()}))
+        .expect_err("an oversized file is refused");
+    assert_eq!(err.to_string(), "image is larger than 200 MB");
+    assert_eq!(s.doc.settings, before, "the previous fill is kept");
+    let _ = std::fs::remove_dir_all(&dir);
+    // Oversized base64: valid alphabet, past the decoded limit.
+    let huge = "QUFB".repeat((209_715_201 + 2) / 3);
+    let err = s
+        .run("design.pageFill", &serde_json::json!({"fill": "picture", "data": huge}))
+        .expect_err("oversized base64 is refused");
+    assert_eq!(err.to_string(), "image is larger than 200 MB");
+    assert_eq!(s.doc.settings, before, "bad base64 keeps the old fill too");
+    assert!(s.run("design.pageFill", &serde_json::json!({"fill": "picture", "data": "!!!not-base64"})).is_err());
+}
