@@ -33,6 +33,13 @@
 //!   forward effect of a formatting command is still the command itself, and
 //!   only its inverse is a primitive (`set_para_format`, see below).
 //!
+//! `move_block` swaps a run of blocks with the block next to it, addressed by
+//! the run's first session id, a block count (at most [`MAX_MOVE_BLOCKS`]) and
+//! the neighbour's session id. The operation is its own inverse, every id below
+//! the container follows the block it names, and a step whose run is wider than
+//! the bound is not a move the adapter normalizes: the client's diff reports it
+//! as unsupported and the engine command path keeps it as a command step.
+//!
 //! `set_para_format` restores one paragraph's body and formatting to a named
 //! earlier value: it is the inverse of a character or paragraph command, whose
 //! forward effect a replica replays as a command (a toggle or a relative step
@@ -54,6 +61,7 @@
 //! overwrite, so an edit made after it is never silently dropped (ADR-0010).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -73,8 +81,206 @@ use wordcraft_doc::{Block, Blocks, Cell, CharProps, Document, InlineObject, Para
 /// an unbounded list.
 pub const MAX_FORMAT_RUNS: usize = 100_000;
 
+/// The most blocks one adjacent move carries. A wider run is not a move the
+/// adapter captures: the client's diff reports the step as unsupported (it
+/// travels as the command), and the command's undo step stays a barrier. The
+/// bound also keeps an inverse small: undoing a move of `count` blocks is
+/// `count` one-block moves in one transaction.
+pub const MAX_MOVE_BLOCKS: usize = 64;
+
 /// Payload key that names the primitive (`insert_text`, `delete_range`, …).
 pub const PAYLOAD_OP: &str = "op";
+
+/// Why an adjacent-block move cannot be addressed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MoveError {
+    /// The id was never issued in this session.
+    Unknown(u32),
+    /// The block was deleted at this version.
+    Gone(u32, u64),
+    /// The addresses exist but do not describe one adjacent move.
+    Bad(String),
+}
+
+impl std::fmt::Display for MoveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MoveError::Unknown(id) => write!(f, "unknown node {id}"),
+            MoveError::Gone(id, version) => write!(f, "node {id} was deleted at version {version}"),
+            MoveError::Bad(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+/// One adjacent-block move, resolved against a document and the session map:
+/// the `count` blocks of the run that starts at `run` and the block at
+/// `neighbour` swap places, so the run ends up above the neighbour (`up`) or
+/// below it. Both addresses are node ids, so the same plan names the same
+/// content on every replica.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MovePlan {
+    pub story: StoryRef,
+    pub story_name: String,
+    pub container: Vec<u32>,
+    pub run: usize,
+    pub count: usize,
+    /// The run's ids, in document order (the inverse moves the neighbour back
+    /// past each of them).
+    pub run_ids: Vec<u32>,
+    pub neighbour: u32,
+    pub neighbour_index: usize,
+    pub up: bool,
+}
+
+/// Resolve `run_id` (the first block of the run), `count` and `neighbour_id`
+/// into one adjacent move, or say why the addresses do not describe one.
+///
+/// Every check runs before the document or the id map is touched: a run that
+/// leaves the container, a block that is not a paragraph (a table, or a
+/// paragraph of a section break, cannot be moved as the command refuses them
+/// too), a neighbour in another container or not directly beside the run, and a
+/// `count` outside `1..=MAX_MOVE_BLOCKS` are all refused here.
+pub fn plan_move(doc: &Document, ids: &NodeIds, run_id: u32, count: usize, neighbour_id: u32) -> Result<MovePlan, MoveError> {
+    if count == 0 || count > MAX_MOVE_BLOCKS {
+        return Err(MoveError::Bad(format!("a move carries 1 to {MAX_MOVE_BLOCKS} blocks, not {count}")));
+    }
+    let run_key = ids.resolve(NodeId(run_id)).map_err(|why| match why {
+        wordcraft_collab::ids::Resolve::Unknown => MoveError::Unknown(run_id),
+        wordcraft_collab::ids::Resolve::Gone(version) => MoveError::Gone(run_id, version),
+    })?;
+    let story_name = run_key.story.clone();
+    let run_path = run_key.path.clone();
+    if run_path.is_empty() {
+        return Err(MoveError::Bad(format!("node {run_id} is not a block")));
+    }
+    let story = parse_story(&story_name).ok_or_else(|| MoveError::Bad(format!("unknown story {story_name:?}")))?;
+    let container = run_path.get(..run_path.len().saturating_sub(1)).unwrap_or_default().to_vec();
+    let run = run_path.last().copied().unwrap_or(0) as usize;
+    let blocks = doc.container(story, &Path(run_path.clone())).ok_or_else(|| MoveError::Bad(format!("node {run_id} is not in a block list")))?;
+    let len = blocks.len();
+    if run.saturating_add(count) > len {
+        return Err(MoveError::Bad("the moved blocks run past the container".to_string()));
+    }
+    for index in run..run.saturating_add(count) {
+        match blocks.get(index).map(|block| &**block) {
+            Some(Block::Para(para)) if para.section.is_none() => {}
+            Some(_) => return Err(MoveError::Bad("only paragraphs that do not carry a section break can be moved".to_string())),
+            None => return Err(MoveError::Bad("the moved blocks run past the container".to_string())),
+        }
+    }
+    let n_key = ids.resolve(NodeId(neighbour_id)).map_err(|why| match why {
+        wordcraft_collab::ids::Resolve::Unknown => MoveError::Unknown(neighbour_id),
+        wordcraft_collab::ids::Resolve::Gone(version) => MoveError::Gone(neighbour_id, version),
+    })?;
+    if n_key.story != story_name
+        || n_key.path.len() != run_path.len()
+        || n_key.path.get(..container.len()).unwrap_or_default() != container.as_slice()
+    {
+        return Err(MoveError::Bad("the neighbour is in another container".to_string()));
+    }
+    if neighbour_id == run_id {
+        return Err(MoveError::Bad("a block cannot be moved past itself".to_string()));
+    }
+    let neighbour_index = n_key.path.last().copied().unwrap_or(0) as usize;
+    let up = if neighbour_index.saturating_add(1) == run {
+        true
+    } else if neighbour_index == run.saturating_add(count) {
+        false
+    } else {
+        return Err(MoveError::Bad("the neighbour is not next to the moved blocks".to_string()));
+    };
+    match blocks.get(neighbour_index).map(|block| &**block) {
+        Some(Block::Para(_)) => {}
+        Some(_) => return Err(MoveError::Bad("a table is in the way".to_string())),
+        None => return Err(MoveError::Bad("the neighbour does not exist".to_string())),
+    }
+    let mut run_ids = Vec::with_capacity(count);
+    for index in run..run.saturating_add(count) {
+        let key = NodeKey::new(story_name.clone(), child_path(&container, index).0);
+        let id = ids.get(&key).ok_or_else(|| MoveError::Bad(format!("a moved block has no session id: {story_name:?} {:?}", key.path)))?;
+        run_ids.push(id.0);
+    }
+    Ok(MovePlan { story, story_name, container, run, count, run_ids, neighbour: neighbour_id, neighbour_index, up })
+}
+
+/// Apply a resolved move: the run and its neighbour swap places in their
+/// container, and every session id below it follows the block it names.
+pub fn apply_move(doc: &mut Document, ids: &mut NodeIds, plan: &MovePlan) -> Result<(), String> {
+    let path = child_path(&plan.container, plan.run);
+    let blocks = doc.container_mut(plan.story, &path).map_err(|err| err.to_string())?;
+    let end = plan.run.saturating_add(plan.count);
+    if plan.up {
+        let start = plan.run.saturating_sub(1);
+        let window = blocks.get_mut(start..end).ok_or_else(|| "the move range is gone".to_string())?;
+        window.rotate_left(1);
+    } else {
+        let window = blocks.get_mut(plan.run..=end).ok_or_else(|| "the move range is gone".to_string())?;
+        window.rotate_right(1);
+    }
+    rebase_ids_after_move(ids, plan);
+    Ok(())
+}
+
+/// Move every session id of the affected container to the block it names after
+/// the swap. The subtree follows: a moved table keeps the ids of its rows, cells
+/// and the paragraphs inside them.
+pub fn rebase_ids_after_move(ids: &mut NodeIds, plan: &MovePlan) {
+    let run = plan.run as u32;
+    let count = plan.count as u32;
+    let neighbour = plan.neighbour_index as u32;
+    ids.permute_children(&plan.story_name, &plan.container, |index| {
+        if plan.up {
+            if index == neighbour {
+                neighbour.saturating_add(count)
+            } else if index > neighbour && index <= neighbour.saturating_add(count) {
+                index.saturating_sub(1)
+            } else {
+                index
+            }
+        } else if index == neighbour {
+            run
+        } else if index >= run && index < neighbour {
+            index.saturating_add(1)
+        } else {
+            index
+        }
+    });
+}
+
+/// The ids whose position the move changes: every block of the run and the
+/// neighbour with their subtrees. An edit another user makes in one of them
+/// after the move makes undo a conflict instead of moving the block back on top
+/// of it.
+pub fn move_touched(ids: &NodeIds, plan: &MovePlan) -> Vec<u32> {
+    let mut touched = Vec::new();
+    for index in plan.run..plan.run.saturating_add(plan.count) {
+        touched.extend(live_ids(ids, &plan.story_name, &[], &child_path(&plan.container, index).0));
+    }
+    touched.extend(live_ids(ids, &plan.story_name, &[], &child_path(&plan.container, plan.neighbour_index).0));
+    touched.sort_unstable();
+    touched.dedup();
+    touched
+}
+
+/// The operations that undo a move: the neighbour crosses the run one block at
+/// a time, in the opposite direction, so each inverse is again one adjacent
+/// move with explicit addresses. Several of them land as one `transaction`
+/// delta (the room wraps a step's deltas), and a one-block move is a single
+/// `move_block`.
+pub fn move_inverse_ops(op: &Op, plan: &MovePlan) -> Vec<Op> {
+    let mut out = Vec::with_capacity(plan.count);
+    for step in 0..plan.count {
+        let neighbour = if plan.up { plan.run_ids.get(plan.count - 1 - step) } else { plan.run_ids.get(step) };
+        let Some(neighbour) = neighbour else { continue };
+        out.push(inverse_op(OpKind::Structural, op, plan.story, plan.neighbour, 0, json!({"op": "move_block", "count": 1, "neighbour": neighbour})));
+    }
+    out
+}
+
+/// The authoritative delta of a move; the inverse carries the same key names.
+pub fn move_delta(run_id: u32, count: usize, neighbour_id: u32) -> Value {
+    json!({"op": "move_block", "nodeId": run_id, "count": count, "neighbour": neighbour_id})
+}
 
 /// The WordCraft half of a room.
 pub struct DocModel {
@@ -117,6 +323,7 @@ impl DocModel {
         match name {
             "insert_block" => self.insert_block(op, ids),
             "remove_block" => self.remove_block(op, ids),
+            "move_block" => self.move_block(op, ids),
             "insert_row" => self.insert_row(op, ids),
             "remove_row" => self.remove_row(op, ids),
             "insert_column" => self.insert_column(op, ids),
@@ -379,6 +586,44 @@ impl DocModel {
             label: "Delete block".into(),
             nodes_changed: true,
             touched: Vec::new(),
+        })
+    }
+
+    /// Move `payload.count` blocks starting at the target past the block named
+    /// by `payload.neighbour`. Both addresses are session ids, so every replica
+    /// names the same content and recomputes the same plan from the same
+    /// document; the operation is its own inverse (the neighbour crosses the run
+    /// instead).
+    ///
+    /// An address that does not describe one adjacent move — an unknown or
+    /// deleted id, a neighbour in another container or not beside the run, a
+    /// non-paragraph in the way, a run that leaves the container or carries more
+    /// than [`MAX_MOVE_BLOCKS`] blocks — is refused before the document or the
+    /// id map changes.
+    fn move_block(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let count = match op.payload.get("count") {
+            Some(value) => usize::try_from(value.as_u64().ok_or_else(|| invalid(op, "`count` must be a number"))?)
+                .map_err(|_| invalid(op, "`count` does not fit"))?,
+            None => 1,
+        };
+        let neighbour = op.payload.get("neighbour").and_then(Value::as_u64).ok_or_else(|| invalid(op, "move_block needs `neighbour`"))?;
+        let neighbour = u32::try_from(neighbour).map_err(|_| invalid(op, "`neighbour` does not fit"))?;
+        let plan = plan_move(&self.doc, ids, op.target.node_id, count, neighbour).map_err(|err| match err {
+            MoveError::Unknown(id) => invalid(op, format!("unknown node {id}")),
+            MoveError::Gone(id, version) => Reject::new(op.op_id.clone(), RejectCode::Gone, format!("node {id} was deleted at version {version}")),
+            MoveError::Bad(why) => invalid(op, why),
+        })?;
+        // Undo swaps the same two sides back, so an edit another user makes in
+        // any block the move displaced must refuse the undo.
+        let touched = move_touched(ids, &plan);
+        apply_move(&mut self.doc, ids, &plan).map_err(|err| invalid(op, err))?;
+        Ok(Effect {
+            delta: Some(move_delta(op.target.node_id, plan.count, plan.neighbour)),
+            inverse: move_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: "Move paragraphs".into(),
+            nodes_changed: true,
+            touched,
         })
     }
 
@@ -1658,6 +1903,19 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             ids.remove_subtree(&name, &target.0, 0);
             ids.shift_children(&name, &container, index + 1, -1);
         }
+        "move_block" => {
+            let node = delta.get("nodeId").and_then(Value::as_u64).ok_or_else(|| "move_block has no `nodeId`".to_string())?;
+            let node = u32::try_from(node).map_err(|_| "`nodeId` does not fit".to_string())?;
+            let count = match delta.get("count") {
+                Some(value) => usize::try_from(value.as_u64().ok_or_else(|| "`count` must be a number".to_string())?)
+                    .map_err(|_| "`count` does not fit".to_string())?,
+                None => 1,
+            };
+            let neighbour = delta.get("neighbour").and_then(Value::as_u64).ok_or_else(|| "move_block has no `neighbour`".to_string())?;
+            let neighbour = u32::try_from(neighbour).map_err(|_| "`neighbour` does not fit".to_string())?;
+            let plan = plan_move(doc, ids, node, count, neighbour).map_err(|err| err.to_string())?;
+            apply_move(doc, ids, &plan)?;
+        }
         "insert_row" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;
             let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "insert_row has no `index`".to_string())?)
@@ -1799,8 +2057,9 @@ impl std::fmt::Display for DiffError {
 /// command's before-image is cheap and untouched blocks are skipped by pointer.
 /// The walk descends into table cells, so typing in a cell is a `replace_range`
 /// on that paragraph's id and a row insert/remove is an `insert_row`/
-/// `remove_row`; formatting-only changes, a cell count or column change and
-/// multi-block rearrangements are reported as unsupported.
+/// `remove_row`; a block that swapped places with its neighbour is a
+/// `move_block`, while formatting-only changes, a cell count or column change and
+/// a wider rearrangement are reported as unsupported.
 pub fn diff(before: &Document, after: &Document, ids: &NodeIds) -> Result<Vec<LocalChange>, DiffError> {
     let mut changes = Vec::new();
     diff_blocks("body", &mut Vec::new(), &before.body, &after.body, ids, &mut changes)?;
@@ -1826,6 +2085,17 @@ fn diff_blocks(
     out: &mut Vec<LocalChange>,
 ) -> Result<(), DiffError> {
     if old.len() == new.len() {
+        // A move leaves every block where it was, so the pointers name it: try
+        // one adjacent move before the per-block walk (which would mistake the
+        // reordered text for an edit). A reorder the primitives cannot express
+        // is refused instead of being sent as a chain of text replacements.
+        if let Some(change) = adjacent_move(story, prefix, old, new, ids)? {
+            out.push(change);
+            return Ok(());
+        }
+        if reordered(old, new) {
+            return Err(DiffError::Unsupported(format!("several blocks were reordered in {}", block_where(story, prefix))));
+        }
         for (block, (a, b)) in old.iter().zip(new).enumerate() {
             if Arc::ptr_eq(a, b) {
                 continue;
@@ -1878,6 +2148,82 @@ fn diff_blocks(
     }
 
     Err(DiffError::Unsupported(format!("{} blocks became {} in {where_}", old.len(), new.len())))
+}
+
+/// One adjacent move in a block list: `count` blocks and the block next to them
+/// swapped places. A move shares every block with the document before it, so
+/// the `Arc` pointers say which block went where and no text has to be compared.
+fn adjacent_move(story: &str, prefix: &[u32], old: &[Arc<Block>], new: &[Arc<Block>], ids: &NodeIds) -> Result<Option<LocalChange>, DiffError> {
+    let Some(first) = (0..old.len()).find(|index| !Arc::ptr_eq(&old[*index], &new[*index])) else { return Ok(None) };
+    let limit = MAX_MOVE_BLOCKS.min(old.len().saturating_sub(first).saturating_sub(1));
+    // The run starts just below the first difference and moved up past it.
+    if limit > 0 && Arc::ptr_eq(&old[first + 1], &new[first]) {
+        for count in 1..=limit {
+            if !Arc::ptr_eq(&old[first], &new[first + count]) || !(1..count).all(|at| Arc::ptr_eq(&old[first + 1 + at], &new[first + at])) {
+                continue;
+            }
+            if !(first + count + 1..old.len()).all(|at| Arc::ptr_eq(&old[at], &new[at])) {
+                continue;
+            }
+            let run = node_id(ids, story, prefix, first + 1)?;
+            let neighbour = node_id(ids, story, prefix, first)?;
+            return Ok(Some(LocalChange {
+                kind: OpKind::Structural,
+                target: Target::new(story, run, 0),
+                payload: json!({"op": "move_block", "count": count, "neighbour": neighbour}),
+            }));
+        }
+    }
+    // The run starts at the first difference and moved down past the block after it.
+    for count in 1..=limit {
+        if !Arc::ptr_eq(&old[first + count], &new[first]) || !(0..count).all(|at| Arc::ptr_eq(&old[first + at], &new[first + 1 + at])) {
+            continue;
+        }
+        if !(first + count + 1..old.len()).all(|at| Arc::ptr_eq(&old[at], &new[at])) {
+            continue;
+        }
+        let run = node_id(ids, story, prefix, first)?;
+        let neighbour = node_id(ids, story, prefix, first + count)?;
+        return Ok(Some(LocalChange {
+            kind: OpKind::Structural,
+            target: Target::new(story, run, 0),
+            payload: json!({"op": "move_block", "count": count, "neighbour": neighbour}),
+        }));
+    }
+    Ok(None)
+}
+
+/// Whether `new` holds the same blocks as `old` in another order: the pointers
+/// are the same, only their positions differ. A reorder the primitives cannot
+/// name must be refused, not sent as a chain of text replacements.
+fn reordered(old: &[Arc<Block>], new: &[Arc<Block>]) -> bool {
+    // A move changes at least two positions; one differing block is an edit.
+    // Checking that first keeps the pointer multiset below off the typing path,
+    // where every keystroke diffs the whole story.
+    let mut differing = 0_usize;
+    for (a, b) in old.iter().zip(new) {
+        if !Arc::ptr_eq(a, b) {
+            differing = differing.saturating_add(1);
+            if differing > 1 {
+                break;
+            }
+        }
+    }
+    if differing < 2 {
+        return false;
+    }
+    let mut counts: HashMap<usize, isize> = HashMap::with_capacity(old.len());
+    for block in old {
+        *counts.entry(Arc::as_ptr(block) as usize).or_default() += 1;
+    }
+    for block in new {
+        let count = counts.entry(Arc::as_ptr(block) as usize).or_default();
+        *count -= 1;
+        if *count < 0 {
+            return false;
+        }
+    }
+    counts.values().all(|count| *count == 0)
 }
 
 /// Diff one block that changed in place: its text, or everything inside it when

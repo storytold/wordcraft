@@ -2,9 +2,9 @@
 
 use serde_json::json;
 use std::sync::Arc;
-use wordcraft_collab::ids::{NodeIds, NodeKey};
+use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
-use wordcraft_collab::wire::{HistoryAction, Op, OpId, OpKind, Target};
+use wordcraft_collab::wire::{HistoryAction, Op, OpId, OpKind, RejectCode, Target};
 use wordcraft_doc::{Block, Cell, CharProps, Document, InlineObject, Paragraph, Path, Pos, StoryRef, Table};
 
 use crate::DocModel;
@@ -1215,4 +1215,208 @@ fn a_format_restore_on_an_unknown_node_is_refused_before_mutation() {
     assert_eq!(err.code, wordcraft_collab::wire::RejectCode::Invalid);
     assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
     assert_eq!(room.version(), 0);
+}
+
+// --- moving blocks past their neighbour ------------------------------------
+
+fn move_doc(texts: &[&str]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for text in texts {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    }
+    doc
+}
+
+fn move_room(texts: &[&str]) -> Room<DocModel> {
+    let mut room = Room::new(DocModel::new(move_doc(texts)));
+    let _ = room.join(None, false);
+    room
+}
+
+fn block_id(room: &Room<DocModel>, index: u32) -> u32 {
+    room.ids().get(&NodeKey::new("body", vec![index])).expect("a block id").0
+}
+
+fn body_texts(room: &Room<DocModel>) -> Vec<String> {
+    (0..paragraphs(room)).map(|index| body_text(room, index)).collect()
+}
+
+#[test]
+fn moving_a_paragraph_past_its_neighbour_is_one_structural_operation() {
+    let mut room = move_room(&["one", "two", "three"]);
+    let (first, second, third) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, third, 0, json!({"op": "move_block", "neighbour": second})))
+        .expect("the move lands");
+
+    assert_eq!(body_texts(&room), ["one", "three", "two"]);
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "move_block", "nodeId": third, "count": 1, "neighbour": second})),
+        "the delta names both blocks by id"
+    );
+    // The ids keep naming their blocks, not their old positions.
+    assert_eq!(room.ids().resolve(NodeId(first)).map(|key| key.path.clone()), Ok(vec![0]));
+    assert_eq!(room.ids().resolve(NodeId(third)).map(|key| key.path.clone()), Ok(vec![1]));
+    assert_eq!(room.ids().resolve(NodeId(second)).map(|key| key.path.clone()), Ok(vec![2]));
+}
+
+#[test]
+fn undo_of_a_two_block_move_lands_as_one_transaction_and_redo_returns_the_order() {
+    let mut room = move_room(&["one", "two", "three", "four"]);
+    let ids: Vec<u32> = (0..4).map(|index| block_id(&room, index)).collect();
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, ids[1], 0, json!({"op": "move_block", "count": 2, "neighbour": ids[0]})))
+        .expect("the move lands");
+    assert_eq!(body_texts(&room), ["two", "three", "one", "four"]);
+
+    let undone = room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the undo lands");
+    let delta = undone.delta.clone().expect("the undo carries a delta");
+    let ops = delta.get("ops").and_then(serde_json::Value::as_array).expect("one transaction");
+    assert_eq!(ops.len(), 2, "the neighbour crosses the run one block at a time");
+    for one in ops {
+        assert_eq!(one["op"], json!("move_block"));
+        assert_eq!(one["count"], json!(1));
+    }
+    assert_eq!(body_texts(&room), ["one", "two", "three", "four"], "the undo restores the order");
+
+    let redo = Op {
+        op_id: OpId::new("alice", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Structural,
+        target: Target::new("body", ids[1], 0),
+        payload: serde_json::Value::Null,
+        history: Some(HistoryAction::Redo { op_id: OpId::new("a", 1) }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(body_texts(&room), ["two", "three", "one", "four"], "redo moves the run again");
+}
+
+#[test]
+fn a_move_with_an_unknown_or_retired_id_is_refused_before_mutation() {
+    let mut room = move_room(&["one", "two", "three"]);
+    let (_first, second, third) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    // An id the session never issued.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, third, 0, json!({"op": "move_block", "neighbour": 999_999})))
+        .expect_err("an unknown neighbour is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "nothing changed");
+    assert_eq!(room.version(), 0, "the version did not move");
+
+    // A neighbour two places above the run is not next to it.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 2, 0, OpKind::Structural, third, 0, json!({"op": "move_block", "neighbour": block_id(&room, 0)})))
+        .expect_err("a non-adjacent neighbour is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // A run that leaves the container.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 3, 0, OpKind::Structural, third, 0, json!({"op": "move_block", "count": 2, "neighbour": second})))
+        .expect_err("a run past the last block is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(paragraphs(&room), 3);
+
+    // A retired id is gone rather than invalid; the document still does not move.
+    room.submit("alice", Role::Editor, op("a", 4, 0, OpKind::Structural, third, 0, json!({"op": "remove_block"}))).expect("remove the last block");
+    let before_retired = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+    let err = room
+        .submit("alice", Role::Editor, op("a", 5, version, OpKind::Structural, second, 0, json!({"op": "move_block", "neighbour": third})))
+        .expect_err("a retired neighbour is refused");
+    assert_eq!(err.code, RejectCode::Gone);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before_retired);
+    assert_eq!(room.version(), version);
+}
+
+#[test]
+fn a_foreign_edit_of_a_moved_block_makes_undo_a_conflict() {
+    let mut room = move_room(&["one", "two", "three"]);
+    let (_first, second, third) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, third, 0, json!({"op": "move_block", "neighbour": second})))
+        .expect("the move lands");
+
+    // Bob types into the block the move displaced (it is not the step's target).
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, second, 0, json!({"op": "insert_text", "text": "X"}))).expect("bob types");
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+
+    let err = room.submit("alice", Role::Editor, undo_request("alice", 2, version, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refusal changed nothing");
+    assert_eq!(room.version(), version, "the version did not move");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step stays on the stack");
+}
+
+#[test]
+fn moving_a_paragraph_diffs_to_move_block() {
+    let room = move_room(&["one", "two", "three"]);
+    let ids = room.ids().clone();
+    let before = room.model().document().clone();
+    let mut after = before.clone();
+    after.body.swap(1, 2);
+
+    let changes = crate::diff(&before, &after, &ids).expect("the diff names the move");
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].kind, OpKind::Structural);
+    assert_eq!(changes[0].target.node_id, block_id(&room, 2), "the block that moved up is the target");
+    assert_eq!(changes[0].payload, json!({"op": "move_block", "count": 1, "neighbour": block_id(&room, 1)}));
+}
+
+#[test]
+fn moving_two_paragraphs_diffs_to_one_move_with_the_same_addresses() {
+    let room = move_room(&["one", "two", "three", "four"]);
+    let ids = room.ids().clone();
+    let before = room.model().document().clone();
+    let mut after = before.clone();
+    let blocks = after.body.clone();
+    after.body = vec![blocks[1].clone(), blocks[2].clone(), blocks[0].clone(), blocks[3].clone()];
+
+    let changes = crate::diff(&before, &after, &ids).expect("the diff names the move");
+    assert_eq!(changes.len(), 1, "one run, one operation");
+    assert_eq!(changes[0].target.node_id, block_id(&room, 1), "the run starts at the block that moved");
+    assert_eq!(changes[0].payload, json!({"op": "move_block", "count": 2, "neighbour": block_id(&room, 0)}));
+}
+
+#[test]
+fn a_reorder_wider_than_the_bound_is_refused_instead_of_becoming_text_edits() {
+    let texts: Vec<String> = (0..70).map(|index| format!("p{index}")).collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let room = move_room(&refs);
+    let ids = room.ids().clone();
+    let before = room.model().document().clone();
+    let mut after = before.clone();
+    let blocks = after.body.clone();
+    let mut order: Vec<Arc<Block>> = blocks.iter().skip(1).take(66).cloned().collect();
+    order.push(blocks[0].clone());
+    order.extend(blocks.iter().skip(67).cloned());
+    after.body = order;
+
+    let err = crate::diff(&before, &after, &ids).expect_err("66 blocks are wider than a move");
+    assert!(matches!(err, crate::DiffError::Unsupported(_)), "{err:?}");
+}
+
+#[test]
+fn a_replica_applies_a_move_and_keeps_the_ids_of_the_blocks_it_moved() {
+    let mut room = move_room(&["one", "two", "three"]);
+    let (_first, second, third) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    let mut replica = room.model().document().clone();
+    let mut replica_ids = room.ids().clone();
+
+    submit_and_mirror(
+        &mut room,
+        op("a", 1, 0, OpKind::Structural, third, 0, json!({"op": "move_block", "neighbour": second})),
+        &mut replica,
+        &mut replica_ids,
+    );
+    assert_eq!(room.ids().resolve(NodeId(third)).map(|key| key.path.clone()), Ok(vec![1]));
+    assert_eq!(replica_ids.resolve(NodeId(third)).map(|key| key.path.clone()), Ok(vec![1]), "the replica follows the block");
+    assert_eq!(replica_ids.resolve(NodeId(second)).map(|key| key.path.clone()), Ok(vec![2]));
 }

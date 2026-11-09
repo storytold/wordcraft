@@ -713,3 +713,71 @@ fn a_foreign_edit_of_a_rewritten_paragraph_refuses_the_undo_without_touching_the
     assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), at_peer, "nothing changed at the peer");
     assert_eq!(pair.room.version(), version, "the room did not advance");
 }
+
+// --- moving paragraphs past their neighbour --------------------------------
+
+/// Alice moves the third paragraph up past the second: her client plans a
+/// structural operation with both ids, Bob applies the delta, and the step's
+/// inverse (one `move_block` back) reaches both. Returns the operation naming
+/// the step and the pair.
+#[allow(clippy::expect_used)]
+fn moved_pair() -> (FormatPair, Op) {
+    let mut pair = FormatPair::new(&["one", "two", "three"]);
+    pair.mine.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(2), off: 0 });
+    let before = pair.mine.doc.clone();
+    pair.mine.run("para.moveUp", &json!({})).expect("the UI moves the paragraph");
+    let plan = pair.alice.plan(&before, &pair.mine, "para.moveUp", &json!({})).expect("a plan").remove(0);
+    assert_eq!(plan.kind, OpKind::Structural, "a move travels as a structural operation");
+    assert_eq!(plan.payload["op"], json!("move_block"));
+    let step = op_from("alice", 1, pair.alice.version, &plan, None);
+    let echo = pair.room.submit("alice", Role::Editor, step.clone()).expect("the move lands");
+    pair.alice.apply(&echo, &mut pair.mine).expect("own echo is skipped");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("the peer applies the move");
+    assert_eq!(para_texts(&pair.mine), ["one", "three", "two"]);
+    assert_eq!(para_texts(&pair.theirs), ["one", "three", "two"]);
+    (pair, step)
+}
+
+#[test]
+fn a_paragraph_move_undo_returns_the_order_at_its_author_and_the_peer() {
+    let (mut pair, step) = moved_pair();
+
+    let undo = history_op("alice", 2, pair.alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(para_texts(&pair.mine), ["one", "two", "three"], "the author is back at the earlier order");
+    assert_eq!(para_texts(&pair.theirs), ["one", "two", "three"], "the peer converged");
+
+    let redo = history_op("alice", 3, pair.alice.version, &step, HistoryAction::Redo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(para_texts(&pair.mine), ["one", "three", "two"], "redo returns the moved order");
+    assert_eq!(para_texts(&pair.theirs), ["one", "three", "two"]);
+}
+
+#[test]
+fn a_foreign_edit_of_a_moved_paragraph_refuses_the_undo_without_touching_the_document() {
+    let (mut pair, step) = moved_pair();
+
+    // Bob types into the block the move displaced (not the step's own target).
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(2), off: 0 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "X"})).expect("bob types");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "X"})).expect("a plan").remove(0);
+    let edit = op_from("bob", 1, pair.peer.version, &plan, None);
+    let echo = pair.room.submit("bob", Role::Editor, edit).expect("bob's edit lands");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("own echo is skipped");
+    pair.alice.apply(&echo, &mut pair.mine).expect("alice applies bob's edit");
+
+    let mine_before = serde_json::to_value(&pair.mine.doc).expect("json");
+    let theirs_before = serde_json::to_value(&pair.theirs.doc).expect("json");
+    let version = pair.alice.version;
+    let undo = history_op("alice", 2, version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), mine_before, "the author's document is unchanged");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
+    assert_eq!(pair.room.version(), version, "the version did not move");
+}

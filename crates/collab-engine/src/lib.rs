@@ -78,10 +78,10 @@ const CHAR_FORMAT_COMMANDS: &[&str] = &[
 
 /// The frequent paragraph-formatting commands with an exact inverse: they only
 /// change paragraph properties (alignment, indents, spacing, keep rules, tabs,
-/// borders, shading, direction, the paragraph style). Commands that move,
-/// reorder or rewrite paragraphs (`para.sort`, `para.promote`, `para.moveUp`),
-/// strip text (`para.removeBlank`) or allocate numbering definitions
-/// (`para.bullets`) stay barriers.
+/// borders, shading, direction, the paragraph style). Commands that reorder
+/// paragraphs (`para.sort`, `para.promote`), move them wider than
+/// [`MOVE_COMMANDS`] captures, strip text (`para.removeBlank`) or allocate
+/// numbering definitions (`para.bullets`) stay barriers.
 const PARA_FORMAT_COMMANDS: &[&str] = &[
     "para.addSpaceBefore",
     "para.align",
@@ -207,6 +207,10 @@ impl SessionModel {
         // refused here, before the document changes.
         let label = spec.label;
         let format = if is_format_command(command) { Some(self.capture_format(op, ids)?) } else { None };
+        // A command that moves blocks is normalized after it runs: the document
+        // difference says whether it was one adjacent move, which every replica
+        // can replay as a structural operation and undo exactly.
+        let before_doc = is_move_command(command).then(|| self.session.doc.clone());
         let before = doc_shape(&self.session.doc);
         let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
@@ -234,8 +238,19 @@ impl SessionModel {
         // parallel history of full document snapshots for every command.
         self.session.reset_history();
 
-        // A step that moved blocks (a command the adapter could not normalize)
-        // cannot be restored by paragraph paths; formatting commands never do.
+        // A block move lands as `move_block`, addressed by ids: replicas apply
+        // the same structural delta instead of replaying the command, and the
+        // step's inverse puts the order back. A move wider than the bound stays
+        // a command step and is reported as `unsupported` by undo.
+        if let Some(before_doc) = before_doc
+            && let Some(effect) = self.normalized_move(op, &before_doc, ids)
+        {
+            return Ok(effect);
+        }
+
+        // A step that moved blocks in a way the adapter could not normalize (a
+        // wider selection, a sort) cannot be restored by paragraph paths;
+        // formatting commands never move blocks.
         let (inverse, touched) = match format {
             Some(Some(captured)) if !nodes_changed => self.format_inverse(op, &captured).unwrap_or_default(),
             _ => (Vec::new(), Vec::new()),
@@ -358,10 +373,53 @@ impl SessionModel {
         }
         Some((inverse, touched))
     }
+
+    /// A block move as one structural operation: the command already reordered
+    /// the document (the engine owns the rules for a selection, a table in the
+    /// way and a section break), so the document difference is read back. When
+    /// it is exactly one adjacent move of at most
+    /// [`MAX_MOVE_BLOCKS`](wordcraft_collab_doc::MAX_MOVE_BLOCKS) blocks, the
+    /// step's delta becomes `move_block` with two explicit ids and its inverse
+    /// is the same move back, one block at a time. Anything else (a wider
+    /// selection, a sort) keeps the command delta and stays a barrier.
+    fn normalized_move(&self, op: &Op, before: &Document, ids: &mut NodeIds) -> Option<Effect> {
+        let changes = wordcraft_collab_doc::diff(before, &self.session.doc, ids).ok()?;
+        if changes.len() != 1 {
+            return None;
+        }
+        let change = changes.first()?;
+        if change.kind != OpKind::Structural || change.payload.get("op").and_then(Value::as_str) != Some("move_block") {
+            return None;
+        }
+        let count = usize::try_from(change.payload.get("count")?.as_u64()?).ok()?;
+        let neighbour = u32::try_from(change.payload.get("neighbour")?.as_u64()?).ok()?;
+        let run = change.target.node_id;
+        let plan = wordcraft_collab_doc::plan_move(before, ids, run, count, neighbour).ok()?;
+        // An edit in any block the move displaced blocks the undo.
+        let touched = wordcraft_collab_doc::move_touched(ids, &plan);
+        wordcraft_collab_doc::rebase_ids_after_move(ids, &plan);
+        Some(Effect {
+            delta: Some(wordcraft_collab_doc::move_delta(run, count, neighbour)),
+            inverse: wordcraft_collab_doc::move_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: "Move paragraphs".into(),
+            nodes_changed: true,
+            touched,
+        })
+    }
 }
 
 fn is_format_command(command: &str) -> bool {
     CHAR_FORMAT_COMMANDS.contains(&command) || PARA_FORMAT_COMMANDS.contains(&command)
+}
+
+/// Commands that reorder blocks. Their effect is normalized to `move_block`
+/// after the run, so replicas converge on a structural delta and the step has an
+/// exact inverse (ADR-0010).
+const MOVE_COMMANDS: &[&str] = &["para.moveUp", "para.moveDown", "outline.moveUp", "outline.moveDown"];
+
+fn is_move_command(command: &str) -> bool {
+    MOVE_COMMANDS.contains(&command)
 }
 
 fn path_key(path: &Path) -> String {

@@ -174,6 +174,41 @@ impl NodeIds {
         }
     }
 
+    /// Rewrite the child index of every node in `story` whose path starts with
+    /// `container`, after the children of that container were reordered.
+    ///
+    /// A move does not insert or remove a child, so [`NodeIds::shift_children`]
+    /// (which shifts everything past an index by the same amount) cannot express
+    /// it: one block goes down while the run it crossed moves up. `index_of`
+    /// maps an old child index to its new one; the trailing indexes below the
+    /// container move with it, so a table that was moved keeps its rows, cells
+    /// and the ids of the paragraphs inside it.
+    pub fn permute_children(&mut self, story: &str, container: &[u32], index_of: impl Fn(u32) -> u32) {
+        let depth = container.len();
+        let moved: Vec<(NodeId, NodeKey, NodeKey)> = self
+            .back
+            .iter()
+            .filter(|(_, key)| key.story == story && key.path.len() > depth && key.path.starts_with(container))
+            .map(|(id, key)| {
+                let mut moved = key.clone();
+                if let Some(index) = moved.path.get_mut(depth) {
+                    *index = index_of(*index);
+                }
+                (*id, key.clone(), moved)
+            })
+            .collect();
+        // The old keys go first: in a swap, one node's new key is another's old
+        // one, so removing and inserting one at a time would erase the entry the
+        // earlier node just wrote.
+        for (_, old, _) in &moved {
+            self.forward.remove(old);
+        }
+        for (id, _, key) in moved {
+            self.back.insert(id, key.clone());
+            self.forward.insert(key, id);
+        }
+    }
+
     /// Delete every id at or below `path` in `story` at version `at`: a removed
     /// block, row or cell takes the nodes it contains with it. Their ids are
     /// tombstoned, so a late operation on any of them is refused as `Gone`
@@ -295,6 +330,31 @@ mod tests {
         assert_eq!(ids.resolve(cell_para).map(|k| k.path.clone()), Ok(vec![2, 1, 1, 0]));
         // The map still answers by path: the moved id owns its new key.
         assert_eq!(ids.get(&NodeKey::new("body", vec![2, 1, 1])), Some(cell));
+    }
+
+    #[test]
+    fn a_permutation_swaps_two_blocks_with_their_subtrees() {
+        let mut ids = NodeIds::new();
+        let first = ids.id_for(&NodeKey::new("body", vec![0]));
+        let table = ids.id_for(&NodeKey::new("body", vec![1]));
+        let row = ids.id_for(&NodeKey::new("body", vec![1, 0]));
+        let cell_para = ids.id_for(&NodeKey::new("body", vec![1, 0, 0, 0]));
+        let last = ids.id_for(&NodeKey::new("body", vec![2]));
+
+        // One block and the table next to it swap places.
+        ids.permute_children("body", &[], |index| match index {
+            0 => 1,
+            1 => 0,
+            other => other,
+        });
+
+        assert_eq!(ids.resolve(first).map(|key| key.path.clone()), Ok(vec![1]));
+        assert_eq!(ids.resolve(table).map(|key| key.path.clone()), Ok(vec![0]));
+        assert_eq!(ids.resolve(row).map(|key| key.path.clone()), Ok(vec![0, 0]));
+        assert_eq!(ids.resolve(cell_para).map(|key| key.path.clone()), Ok(vec![0, 0, 0, 0]));
+        assert_eq!(ids.resolve(last).map(|key| key.path.clone()), Ok(vec![2]));
+        // The map answers by the new path too: the table owns block 0 now.
+        assert_eq!(ids.get(&NodeKey::new("body", vec![0])), Some(table));
     }
 
     #[test]

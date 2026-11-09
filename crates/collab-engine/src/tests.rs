@@ -632,3 +632,114 @@ fn a_formatting_command_over_a_paragraph_without_a_session_id_is_refused_before_
     assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "nothing changed");
     assert_eq!(room.version(), 0, "the room did not advance");
 }
+
+// --- moving paragraphs past their neighbour --------------------------------
+
+fn paragraphs_doc(texts: &[&str]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for text in texts {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    }
+    doc
+}
+
+fn texts(room: &Room<SessionModel>) -> Vec<String> {
+    room.model().session().doc.body.iter().filter_map(|block| block.as_para().map(|para| para.text.clone())).collect()
+}
+
+fn document_json(room: &Room<SessionModel>) -> serde_json::Value {
+    serde_json::to_value(&room.model().session().doc).expect("json")
+}
+
+#[test]
+fn a_paragraph_move_lands_as_one_structural_operation_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["one", "two", "three"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, second) = (node(0), node(1));
+
+    // A replica learns the move and its undo only from the deltas.
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let command = op("a", 1, 0, OpKind::Command, second, 0, json!({"command": "para.moveUp", "params": {}}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the move lands");
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "move_block", "nodeId": second, "count": 1, "neighbour": first})),
+        "the command lands as a structural operation, not as a command"
+    );
+    assert_eq!(texts(&room), ["two", "one", "three"]);
+
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica applies the move");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, second, &command)).expect("the undo lands");
+    assert_eq!(texts(&room), ["one", "two", "three"], "the undo restores the order");
+    crate::apply_delta(&mut replica, &mut ids, undone.delta.as_ref().expect("a delta")).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", second, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(texts(&room), ["two", "one", "three"], "redo moves the paragraph again");
+}
+
+#[test]
+fn a_move_command_at_the_top_of_a_story_is_refused_before_mutation() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["one", "two"])));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let before = document_json(&room);
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.moveUp", "params": {}})))
+        .expect_err("the first paragraph cannot move up");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(document_json(&room), before, "the refusal changed nothing");
+    assert_eq!(room.version(), 0, "the version did not move");
+    assert_eq!(room.model().session().undo_depth(), 0, "no undo step was recorded");
+}
+
+#[test]
+fn a_move_on_an_unknown_node_is_refused_before_mutation() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["one", "two"])));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let before = document_json(&room);
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, 4_242, 0, json!({"op": "move_block", "neighbour": first})))
+        .expect_err("an unknown target is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(document_json(&room), before);
+    assert_eq!(room.version(), 0);
+}
+
+#[test]
+fn a_move_over_more_than_64_blocks_stays_an_undo_barrier() {
+    let names: Vec<String> = (0..67).map(|index| format!("p{index}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&refs)));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, last) = (node(0), node(65));
+
+    // 66 paragraphs move down past the 67th: wider than one captured move.
+    let selection = json!({"anchor": {"nodeId": first, "off": 0}, "focus": {"nodeId": last, "off": 1}});
+    let command = op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.moveDown", "params": {}, "selection": selection}));
+    room.submit("alice", Role::Editor, command.clone()).expect("a wide move still lands");
+    assert_eq!(texts(&room).first().map(String::as_str), Some("p66"), "the last paragraph crossed the run");
+
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("a step this wide has no inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+}
