@@ -687,6 +687,15 @@ fn attach_script(base: Option<MNode>, sup: bool, s: Arg) -> MNode {
     match base {
         Some(MNode::Script { kind: ScriptKind::Sub, base, sub, .. }) if sup => MNode::Script { kind: ScriptKind::SubSup, base, sub, sup: s },
         Some(MNode::Script { kind: ScriptKind::Sup, base, sup: sp, .. }) if !sup => MNode::Script { kind: ScriptKind::SubSup, base, sub: s, sup: sp },
+        // `〖…〗` only groups: as a script base it leaves no delimiter, as Word builds it (#6075).
+        Some(MNode::Delim { beg: None, end: None, mut elems, .. }) if elems.len() == 1 => {
+            let base = elems.pop().unwrap_or_default();
+            if sup {
+                MNode::Script { kind: ScriptKind::Sup, base, sub: Vec::new(), sup: s }
+            } else {
+                MNode::Script { kind: ScriptKind::Sub, base, sub: s, sup: Vec::new() }
+            }
+        }
         b => {
             let base = b.map(|b| vec![b]).unwrap_or_default();
             if sup {
