@@ -18,6 +18,18 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "tanh",
 ];
 
+/// Length of the longest of [`FUNCTION_NAMES`].
+const MAX_NAME: usize = {
+    let (mut max, mut i) = (0, 0);
+    while i < FUNCTION_NAMES.len() {
+        if FUNCTION_NAMES[i].len() > max {
+            max = FUNCTION_NAMES[i].len();
+        }
+        i += 1;
+    }
+    max
+};
+
 /// Function names whose subscripts go underneath (`lim_(n→∞)`).
 const LIMIT_NAMES: &[&str] = &["lim", "liminf", "limsup", "max", "min", "sup", "inf", "det", "gcd", "Pr"];
 
@@ -339,7 +351,7 @@ impl P {
     /// A prefix structure after its character.
     fn prefix(&mut self, c: char, stops: &[char]) -> MNode {
         match c {
-            '√' | '∛' | '∜' => {
+            '√'..='∜' => {
                 let mut deg = match c {
                     '∛' => vec![text('3')],
                     '∜' => vec![text('4')],
@@ -410,10 +422,12 @@ impl P {
     fn word(&mut self, stops: &[char]) -> Arg {
         let start = self.i;
         let mut end = start;
-        while self.c.get(end).is_some_and(|c| c.is_ascii_alphabetic()) {
+        // Look no further than the longest name (and one past it, to see the run is longer): a
+        // scan to the end of every run made a long run of letters quadratic (CWE-407).
+        while end - start <= MAX_NAME && self.c.get(end).is_some_and(char::is_ascii_alphabetic) {
             end += 1;
         }
-        let word: String = self.c.get(start..end).unwrap_or(&[]).iter().collect();
+        let word: String = if end - start > MAX_NAME { String::new() } else { self.c.get(start..end).unwrap_or(&[]).iter().collect() };
         if !FUNCTION_NAMES.contains(&word.as_str()) {
             self.i = start + 1;
             return vec![text(self.c.get(start).copied().unwrap_or(' '))];
@@ -556,7 +570,7 @@ impl P {
                 }
                 out.pop()
             };
-            if !matches!(c, '^' | '_') && !(matches!(c, '┬' | '┴') && self.no_limits == 0) && !is_combining(c) {
+            if !(matches!(c, '^' | '_') || matches!(c, '┬' | '┴') && self.no_limits == 0 || is_combining(c)) {
                 break;
             }
             // The base is already deep: the operator is text (see `too_deep`).
@@ -587,8 +601,8 @@ impl P {
         }
     }
 
-    /// A script or limit: a parenthesised group, a structure, a number, a signed operand or one
-    /// character.
+    /// A script or limit: a parenthesised group, a structure, a number, a signed operand, a run of
+    /// letters (and digits) or one other character.
     fn script_operand(&mut self, stops: &[char]) -> Arg {
         if self.tired() {
             return self.rest();
@@ -612,7 +626,7 @@ impl P {
             Some(c) if is_prefix(c) || closer(c).is_some() => self.atom(stops),
             Some(c) if c.is_ascii_digit() => {
                 let start = self.i;
-                while self.peek().is_some_and(|k| k.is_ascii_digit() || k == '.') {
+                while self.peek().is_some_and(|k| k.is_alphanumeric() || k == '.') {
                     self.i += 1;
                 }
                 let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();
@@ -624,10 +638,16 @@ impl P {
                 v.extend(self.script_operand(stops));
                 v
             }
-            Some(c) if c.is_ascii_alphabetic() => {
-                // A function name as a script (`e^sin x` is rare): one letter.
-                self.i += 1;
-                vec![text(c)]
+            Some(c) if c.is_alphabetic() => {
+                // Word (#1609): the whole run of letters and digits up to a space or operator, so
+                // `V_dd` is V with a subscript `dd`, exactly like `V_(dd)`.
+                let start = self.i;
+                while self.peek().is_some_and(char::is_alphanumeric) {
+                    self.i += 1;
+                }
+                let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();
+                // A known function name stays upright, as Word builds it.
+                vec![MNode::Run(if FUNCTION_NAMES.contains(&t.as_str()) { MRun::plain(t) } else { MRun::new(t) })]
             }
             Some(c) if !stops.contains(&c) && c != ' ' && !is_closer(c) => {
                 self.i += 1;

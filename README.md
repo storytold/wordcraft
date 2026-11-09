@@ -7,14 +7,18 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.wordcraft.png" width="128" height="128" alt="WordCraft icon: a document page and pen on a blue tile">
+</p>
+
 <h1 align="center">WordCraft</h1>
 
 <p align="center">
-  <b>Writing and document design; an open-source, clean-room reimplementation of Microsoft Word, rebuilt in pure Rust.</b>
+  <b>Writing and document design; an open-source, modern word processor, built in pure Rust.</b>
 </p>
 
 <p align="center">
-  A fast, open-source word processor with the Word workflow you already know: the ribbon, styles,
+  A fast, open-source word processor with a familiar workflow: the ribbon, styles,
   tables, track changes, references and mail merge. It reads and writes .docx, runs natively on
   macOS, Windows, Linux and BSD, and in the browser via WebAssembly.<br>
   <i>By the ArtCraft team.</i>
@@ -25,6 +29,9 @@
   <img alt="Runs on macOS, Windows, Linux, BSD and the web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20BSD%20%C2%B7%20Web-3b5bdb?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-2b47b5?style=flat-square">
   <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP%20%C2%B7%20CLI-3b5bdb?style=flat-square">
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=storytold_wordcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/wordcraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -86,10 +93,10 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 
 ## Why WordCraft
 
-- **Familiar.** Word's ribbon tabs, groups, shortcuts and behaviour: Enter continues a list,
+- **Familiar.** Ribbon tabs, groups, shortcuts and behaviour: Enter continues a list,
   Tab demotes it, Ctrl/⌘+B bolds the word under the caret, the Styles gallery previews styles live,
   F4 repeats, F7 checks spelling, F8 extends the selection.
-- **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .tex (LaTeX), .txt; opens Word 97-2003 .doc; exports PDF
+- **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .tex (LaTeX), .txt; opens legacy 97-2003 .doc; exports PDF
   with real, selectable text, links and bookmarks.
 - **Fast.** Paragraph layout is cached, so typing in a 188-page document re-lays it out in about
   1.4 ms; pages render on demand.
@@ -117,8 +124,8 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions (English and Polish, by each run's language), thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어 or Svenska (follows the system language by default) |
-| **Files** | .docx read/write (opens in Word), Word 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski, Nederlands, Dansk, Română, العربية (mirrored) or Slovenščina (follows the system language by default) |
+| **Files** | .docx read/write, legacy 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md), the
 [parity assessment](docs/target-app-parity.md) and the generated
@@ -133,15 +140,64 @@ cargo run --release -p wordcraft -- --sample        # the desktop app with the s
 cargo run --release -p wordcraft -- report.docx     # open a document
 ```
 
+The interface translations and the spelling and hyphenation data come from
+[craft-i18n](https://github.com/storytold/craft-i18n), an optional build input. To build with them,
+check it out at the commit in `craft-i18n.rev` and point `CRAFT_I18N_DIR` at it (an absolute
+path); without it WordCraft builds with an English interface, English spelling falls back to an
+installed Hunspell English or craft-proof's built-in word list, and only Bulgarian, Turkish and
+Russian hyphenate (by rule):
+
+```sh
+git clone https://github.com/storytold/craft-i18n ../craft-i18n
+git -C ../craft-i18n checkout "$(cat craft-i18n.rev)"
+CRAFT_I18N_DIR="$PWD/../craft-i18n" cargo run --release -p wordcraft -- --sample
+```
+
 Command line:
 
 ```sh
 wordcraft-cli convert report.docx report.pdf        # docx, pdf, odt, rtf, html, md, tex, txt, png
+wordcraft-cli convert report.docx report.pdf --strict   # exit 3, no file, if a character or picture would be left out
 wordcraft-cli text report.docx                      # plain text
 wordcraft-cli inspect report.docx                   # structure as JSON
 wordcraft-cli run --template sample \
   --cmd 'select.text={"text":"Membership"}' --cmd format.bold --save out.docx
+wordcraft-cli run --script job.json                 # the same from a file: commands, then save to docx and pdf
 ```
+
+`convert --strict` (a `.pdf` or `.png` output only) and `render --strict` (a PNG of one page) refuse a silently incomplete render: they exit 3
+and write nothing if the output would draw a character no font has (an empty box) or leave out a
+picture. Exit codes are 0 (written), 1 (unreadable input, usage error, or `--strict` with another
+output type, checked before the input is read) and 3 (strict refusal). On exit 3, stderr has one
+`wordcraft-cli: strict: …` line per kind, then one JSON line:
+
+```sh
+wordcraft-cli convert in.docx out.pdf --strict
+# wordcraft-cli: strict: 1 character cannot be drawn: U+2D30 (×3)
+# wordcraft-cli: strict: 1 picture(s) left out: word/media/image2.bin (header2.xml): unsupported format
+# {"schema":1,"strict":"failed","missing_glyphs":[{"cp":"U+2D30","count":3}],"missing_pictures":[{"part":"word/media/image2.bin","source_part":"word/header2.xml","reason":"unsupported_format"}],"truncated":false,"total_missing_glyphs":1,"total_missing_pictures":1,"glyphs_truncated":false,"pictures_truncated":false}
+```
+
+The JSON line (schema 1, also what `file.strictReport` returns) has `schema`, `strict`
+(`"passed"` or `"failed"`), `missing_glyphs` (entries `{"cp", "count"}`, sorted by code point),
+`missing_pictures` (entries `{"part", "source_part", "reason"}`: the picture's part or target, the
+story part it sits in such as `word/header2.xml`, and a reason code; `source_part` is also
+`background` (the page picture), `body`, `header`, `footer`, `footnote`, `endnote`, `comment` or
+`text box` where the part name is not known (a document not opened from a DOCX), or a chunk path such as
+`word/afchunk1.docx > word/header1.xml` for a picture inside an embedded DOCX chunk), `truncated`, the two totals
+`total_missing_glyphs` and `total_missing_pictures`, and `glyphs_truncated` and
+`pictures_truncated` for each list. The reason codes are `missing_part`, `external_target`,
+`link_only`, `undecodable` and `unsupported_format`; the stderr lines use plain words for them. When a list is cut, the stderr line gives the total
+(`300 characters cannot be drawn (first 256 listed)`).
+Each list stops at 256 entries separately; `truncated` is true when either was cut, and the totals
+count every distinct character and picture found, those past the cap included. Only characters the output draws count (not hidden text, or deleted text
+without `--markup`), and a character a fallback font draws is fine. Text inside a WMF or EMF picture counts too, shaped in the font the picture names with no fallback. A Private Use Area character
+fails only if no installed font maps it. The result depends on the fonts installed on the host
+(see #5624 for a fixed font set). An external picture target is never fetched: it is reported, not
+loaded. Pictures dropped when a DOCX is opened (a missing part, an external target, or a `link only` picture with no embedded copy) are reported for DOCX input only. They have no page, so a PNG of any page is also refused for a missing or external picture anywhere in the document, unused headers included. `render --strict` checks only the page it
+writes (`--page`; `--scale` doesn't matter), prints nothing on stdout when it refuses, and reports the
+same way. The engine takes `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and
+`file.exportPng`, and `file.strictReport {markup?, page?}` returns the report without writing.
 
 Web: `cd apps/wordcraft-web && trunk serve`, then open <http://127.0.0.1:8771/?sample>.
 
@@ -186,12 +242,12 @@ covers every target starting with it (`wordcraft*=debug`). The logger is
 | Layer | Crate | Job |
 |---|---|---|
 | L0 | `wordcraft-geom` | units and measurements |
-| L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` | document model and editing; fonts and shaping; spelling, grammar, hyphenation |
+| L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` ([`craft-proof`](https://github.com/storytold/craft-libs/tree/main/crates/proof) from craft-libs) | document model and editing; fonts and shaping; spelling, grammar, hyphenation (data: craft-i18n `language-data/`, `CRAFT_I18N_DIR`) |
 | L2 | `wordcraft-layout`, `wordcraft-docx`, `wordcraft-formats` | line breaking, pagination, tables, notes, hit testing; OOXML; ODT/RTF/HTML/Markdown/TXT |
 | L3 | `wordcraft-render`, `wordcraft-pdf` | rasteriser (vello_cpu); PDF ([craft-pdf](docs/shared-pdf.md), Krilla) |
-| L4 | `wordcraft-engine` | session, undo, 422 commands, Word feature catalog |
+| L4 | `wordcraft-engine` | session, undo, 422 commands, document feature catalog |
 | L5 | `wordcraft-mcp` | MCP server |
-| L6 | `wordcraft-ui-egui` | the Word-style front end (swappable) |
+| L6 | `wordcraft-ui-egui` | the word processor front end (swappable) |
 | apps | `wordcraft`, `wordcraft-cli`, `wordcraft-web` | desktop, command line, browser |
 
 `cargo xtask ci` runs formatting, clippy, ~800 tests, the asset-attribution check, the layering
@@ -199,12 +255,13 @@ check and the wasm build. Contributor and agent instructions: [AGENTS.md](AGENTS
 
 ## Roadmap
 
-WordCraft is in **alpha**. It covers 88% of Word's ribbon features with commands today; counting
-depth, file fidelity, stability and the rest, we estimate it is about 60% of the way to replacing
-all of Word for real work, about 55% for a typical professional's weekly work and about 63% for
-everyday essentials. Beta needs testing against real-world .docx files, keeping charts and SmartArt
-through a round trip, pagination closer to Word's, a stability sweep and native printing. Details
-and estimates: [ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
+WordCraft is in **alpha**. It has commands for 97% of the ribbon and menu features in its feature catalog
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) today; counting
+depth, file fidelity, stability and the rest, we estimate it is about 60% ready for real work,
+about 55% for a typical professional's weekly work and about 63% for everyday essentials. Beta
+needs testing against real-world .docx files, keeping charts and SmartArt through a round trip,
+closer pagination fidelity, a stability sweep and native printing. Details and estimates:
+[ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
 
 ## Downloads
 
@@ -218,7 +275,11 @@ and estimates: [ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
 | arm64 (Snapdragon and other ARM PCs) | `wordcraft-<ver>-windows-arm64.msi` | `wordcraft-<ver>-windows-arm64-portable.zip` |
 | x86 (32-bit) | `wordcraft-<ver>-windows-x86.msi` | `wordcraft-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed.
+The installer is one dual-scope package. By default it installs for your account only,
+into `%LOCALAPPDATA%\Programs\ArtCraft\WordCraft`, and needs no administrator rights; choosing
+"Everyone on this computer" on the first page installs into `C:\Program Files\ArtCraft\WordCraft` (`Program Files (x86)` for the 32-bit build)
+and asks for an administrator. Install only one copy: a copy for another scope is refused, so
+uninstall first to change who WordCraft is installed for. Installers and executables are code-signed.
 
 **If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
 Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
@@ -247,9 +308,10 @@ WordCraft compiles DirectX 12 shaders with FXC, the compiler built into Windows,
 also avoids DirectX 12 altogether.
 
 **If the app is slow on an older Windows PC:** when DirectX 12 finds no graphics card with a
-driver for it (for example Intel 4th-generation graphics on Windows 11), it only offers Microsoft's
-software renderer, which draws every frame on the processor. In that case WordCraft uses OpenGL
-instead, without setting anything. The log file records the choice (lines starting with
+driver for it (for example Intel 4th-generation graphics on Windows 11), it only offers the built-in
+software renderer, which draws every frame on the processor. WordCraft normally uses OpenGL instead,
+without setting anything. If OpenGL has no usable adapter, it can use DirectX 12's WARP software
+adapter. The log file records the choice (lines starting with
 `graphics:`). `WGPU_BACKEND` still overrides it, e.g. `$env:WGPU_BACKEND = "gl"` or `"dx12"`.
 
 ### macOS
@@ -272,10 +334,21 @@ instead, without setting anything. The log file records the choice (lines starti
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
+**Read Aloud** (Review › Read Aloud) speaks through a speech program installed on the system: it
+tries `espeak-ng`, then `espeak`, and when neither is installed it talks to Speech Dispatcher.
+The `.rpm` package recommends `espeak-ng`; the `.deb` recommends `espeak-ng` or
+`speech-dispatcher`, so the package manager installs one of the two by default. With the
+AppImage or the tarball, install one yourself if neither is there (`sudo apt install espeak-ng`,
+`sudo dnf install espeak-ng`, `sudo pacman -S espeak-ng`). The Flatpak doesn't speak yet: it has
+no audio access and doesn't include `espeak-ng`, `espeak` or Speech Dispatcher.
+
 **Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
 winit (the windowing library) supports dragging files into the window only on X11. To use the
 native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
-of file drag-and-drop), start it with `WORDCRAFT_WAYLAND=1`:
+of file drag-and-drop), choose **File › Options › Advanced › Linux display server › Wayland**; it
+applies the next time WordCraft starts, and **X11 (XWayland)** or **Automatic** switches back. The
+`WORDCRAFT_WAYLAND` environment variable overrides the setting: `1` for native Wayland, `0` for
+XWayland:
 
 ```sh
 WORDCRAFT_WAYLAND=1 wordcraft
@@ -331,7 +404,15 @@ stand on its own.
 | <img src="https://raw.githubusercontent.com/storytold/pdfcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.pdfcraft.png" alt="" width="32" height="32"> | **PdfCraft** | Reading, organizing and protecting PDFs | [GitHub](https://github.com/storytold/pdfcraft) | [Website](https://getartcraft.com/apps/pdfcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/effectcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.effectcraft.png" alt="" width="32" height="32"> | **EffectCraft** | Motion graphics and visual effects | [GitHub](https://github.com/storytold/effectcraft) | [Website](https://getartcraft.com/apps/effectcraft) |
 | <img src="https://raw.githubusercontent.com/storytold/designcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.designcraft.png" alt="" width="32" height="32"> | **DesignCraft** | Page layout and publishing | [GitHub](https://github.com/storytold/designcraft) | [Website](https://getartcraft.com/apps/designcraft) |
-| <img src="https://raw.githubusercontent.com/storytold/wordcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png" alt="" width="32" height="32"> | **WordCraft** | **Writing and document design · you are here** | [GitHub](https://github.com/storytold/wordcraft) | [Website](https://getartcraft.com/apps/wordcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/figcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.figcraft.png" alt="" width="32" height="32"> | **FigCraft** | Interface design and prototyping | [GitHub](https://github.com/storytold/figcraft) | [Website](https://getartcraft.com/apps/figcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/wordcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.wordcraft.png" alt="" width="32" height="32"> | **WordCraft** | Word processing and documents | [GitHub](https://github.com/storytold/wordcraft) | [Website](https://getartcraft.com/apps/wordcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/soundcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.soundcraft.png" alt="" width="32" height="32"> | **SoundCraft** | Audio recording and editing | [GitHub](https://github.com/storytold/soundcraft) | [Website](https://getartcraft.com/apps/soundcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/deckcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.deckcraft.png" alt="" width="32" height="32"> | **DeckCraft** | Presentations and slide decks | [GitHub](https://github.com/storytold/deckcraft) | [Website](https://getartcraft.com/apps/deckcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/cadcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.cadcraft.png" alt="" width="32" height="32"> | **CADCraft** | Computer-aided design | [GitHub](https://github.com/storytold/cadcraft) | [Website](https://getartcraft.com/apps/cadcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/gridcraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.gridcraft.png" alt="" width="32" height="32"> | **GridCraft** | Spreadsheets and data | [GitHub](https://github.com/storytold/gridcraft) | [Website](https://getartcraft.com/apps/gridcraft) |
+| <img src="https://raw.githubusercontent.com/storytold/texturecraft/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.texturecraft.png" alt="" width="32" height="32"> | **TextureCraft** | 3D texture painting | [GitHub](https://github.com/storytold/texturecraft) | [Website](https://getartcraft.com/apps/texturecraft) |
+| <img src="https://raw.githubusercontent.com/storytold/craft-anything/main/assets/app-icon/hicolor/64x64/apps/ai.storyteller.craft-anything.png" alt="" width="32" height="32"> | **Craft Anything** | See how any software works, then build your own | [GitHub](https://github.com/storytold/craft-anything) | [Website](https://getartcraft.com/apps/craft-anything) |
+| <img src="https://raw.githubusercontent.com/tangency-labs/solidcraft/main/assets/icons/app/linux/exports/hicolor/64x64/apps/io.tangencylabs.solidcraft.png" alt="" width="32" height="32"> | **SolidCraft** | Parametric 3D CAD by Tangency Labs (community app) | [GitHub](https://github.com/tangency-labs/solidcraft) | |
 
 And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
 
@@ -366,7 +447,9 @@ Bundled fonts, icons, images and other assets keep their own open licenses; each
 with its author, source and license in [ATTRIBUTION.md](ATTRIBUTION.md).
 
 The English spelling dictionary and hyphenation come from Grady Ward's public-domain Moby
-Hyphenator II word list. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled) and
+Hyphenator II word list. Polish spelling reads the Hunspell `pl_PL` dictionary installed on the system (not bundled), as
+do Russian, Portuguese, Czech, Italian, Croatian and Turkish spelling (how to install them:
+[docs/spelling-dictionaries.md](docs/spelling-dictionaries.md)), and
 Polish hyphenation the TeX patterns by Hanna Kołodziejska, Bogusław Jackowski and Marek Ryćko (MIT
 option). The sample documents and templates are original text written for WordCraft.
 
@@ -374,8 +457,6 @@ The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are tradem
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and WordCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
-
-<sub>Microsoft and Microsoft Word are trademarks of the Microsoft group of companies. Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. WordCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Microsoft Corporation or Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>

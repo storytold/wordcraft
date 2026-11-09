@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
 use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
-use crate::theme::{APP_COLOR, Tokens, regular};
+use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
 /// At most this many entries are listed; a bigger folder shows the first ones and says so.
@@ -47,7 +47,8 @@ pub(crate) struct Listing {
 
 /// Whether `path` has one of `exts` (case-insensitive); `*` takes any file.
 pub(crate) fn matches(path: &Path, exts: &[String]) -> bool {
-    exts.iter().any(|e| e == "*") || path.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    exts.iter().any(|e| e == "*")
+        || path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// The subfolders and the files with one of `exts` in `dir`, at most `cap` of them, folders first
@@ -147,11 +148,11 @@ pub(crate) struct FileBrowser {
 impl FileBrowser {
     pub(crate) fn new(req: FileDialogRequest, after: AfterPick, start: PathBuf, unavailable: bool) -> Self {
         let (name, filters) = match &req {
-            FileDialogRequest::Open { purpose } => {
+            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
-            FileDialogRequest::Save { name } => {
-                let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty());
+            FileDialogRequest::Save { name, .. } => {
+                let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
                 let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)
@@ -209,7 +210,7 @@ impl FileBrowser {
             return Step::Stay;
         }
         match self.req {
-            FileDialogRequest::Open { .. } => {
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => {
                 if path.is_file() {
                     return Step::Pick(path);
                 }
@@ -242,14 +243,14 @@ impl FileBrowser {
 
     fn title(&self) -> &'static str {
         match self.req {
-            FileDialogRequest::Open { .. } => "Open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save As",
         }
     }
 
     fn ok_label(&self) -> &'static str {
         match self.req {
-            FileDialogRequest::Open { .. } => "Open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save",
         }
     }
@@ -258,11 +259,13 @@ impl FileBrowser {
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
-        let start = self
-            .file_browser
-            .last_dir
-            .clone()
-            .filter(|d| d.is_dir())
+        // A folder the request names (the user templates folder, #2852) comes first.
+        let asked = match &req {
+            FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
+            _ => None,
+        };
+        let start = asked
+            .or_else(|| self.file_browser.last_dir.clone().filter(|d| d.is_dir()))
             .or_else(|| self.session.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf).filter(|d| d.is_dir()))
             .or_else(home)
             .or_else(|| std::env::current_dir().ok())
@@ -280,8 +283,11 @@ impl WordApp {
         let (req, after) = match purpose {
             "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
             "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
-            "save" => (FileDialogRequest::Save { name: self.default_save_name() }, AfterPick::SaveAs(crate::file_dialogs::AfterSave::Nothing)),
-            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument),
+            "save" => (
+                FileDialogRequest::Save { name: self.default_save_name(), dir: None },
+                AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
+            ),
+            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() }),
         };
         self.show_file_browser(req, after, false);
     }
@@ -294,7 +300,10 @@ impl WordApp {
         if let Err(e) = self.finish_pick(b.after, picked) {
             log::warn!("file browser: {e}");
         }
-        self.canvas.want_focus = true;
+        // A modal dialog (the one that asked for the file, or one the pick opened) keeps the keyboard.
+        if !self.modal_open() {
+            self.canvas.want_focus = true;
+        }
     }
 }
 
@@ -302,23 +311,24 @@ impl WordApp {
 pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut b) = app.file_browser.open.take() else { return };
     let t = Tokens::get(ctx);
-    let mut open = true;
     let mut done: Option<Option<PathBuf>> = None;
-    egui::Window::new(tl!(b.title()))
-        .id(egui::Id::new("builtin_file_browser"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0))
-        .open(&mut open)
-        .show(ctx, |ui| {
-            ui.set_width(620.0);
-            done = body(ui, &mut b, &t);
-        });
-    if !open {
-        done = Some(None);
+    let id = egui::Id::unique("builtin_file_browser");
+    let window = egui::Window::new(tl!(b.title())).id(id).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
+    let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
+        ui.set_width(620.0);
+        done = crate::rtl::root(ui, |ui| body(ui, &mut b, &t));
+    });
+    if let Some(s) = &shown {
+        if crate::window_close::show(ctx, &s.response, &t) {
+            done = Some(None);
+        }
+        if done.is_none() {
+            crate::dialogs::block_behind(app, ctx, &s.response);
+        }
     }
     app.file_browser.open = Some(b);
     if let Some(picked) = done {
+        crate::dialogs::forget_nudge(ctx, id);
         app.close_file_browser(picked);
     }
 }
@@ -344,7 +354,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         {
             b.navigate(h);
         }
-        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY));
+        let r = ui.add(egui::TextEdit::singleline(&mut b.location).desired_width(f32::INFINITY)).accessible_name(tl!("Folder path"));
         if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
             location_done = true;
             let typed = b.location.clone();
@@ -359,11 +369,21 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     let mut clicked: Option<Entry> = None;
     egui::Frame::NONE.fill(t.input).stroke(egui::Stroke::new(1.0, t.input_border)).inner_margin(2.0).show(ui, |ui| {
         let entries: &[Entry] = b.listing.as_ref().map(|l| l.entries.as_slice()).unwrap_or(&[]);
+        // An unreadable folder has its own message below; the hint is for a listing that came back empty.
+        let listed = b.listing.is_ok();
         egui::ScrollArea::vertical().max_height(300.0).min_scrolled_height(300.0).auto_shrink([false, false]).show_rows(
             ui,
             ROW,
             entries.len(),
             |ui, range| {
+                if listed && entries.is_empty() {
+                    // #3037: an empty folder (or a type filter that matches nothing) says so
+                    // instead of showing a blank box.
+                    ui.add_space(140.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(egui::RichText::new(tl!("No items to show.")).small().color(t.text_dim));
+                    });
+                }
                 for e in entries.get(range).unwrap_or(&[]) {
                     let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW), Sense::click());
                     if b.selected.as_ref() == Some(&e.path) {
@@ -371,9 +391,21 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 2.0, t.hover);
                     }
-                    let icon = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(18.0, 18.0));
+                    let rtl = crate::rtl::on();
+                    let icon = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 14.0), r.center().y), vec2(18.0, 18.0));
                     icons::paint(ui.painter(), icon, if e.dir { "folder" } else { "file" }, t.icon, t.accent);
-                    ui.painter().with_clip_rect(r).text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &e.name, regular(13.0), t.text);
+                    // A long name keeps its beginning and ends in an ellipsis inside the row, from the
+                    // side reading starts from; the whole name is the row's tooltip then.
+                    let mut job = egui::text::LayoutJob::simple_singleline(crate::i18n::isolate(&e.name), regular(13.0), t.text);
+                    job.wrap.max_width = (r.width() - 36.0).max(0.0);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    let galley = ui.painter().layout_job(job);
+                    let text_x = crate::rtl::lead_x(rtl, r, 30.0);
+                    let at = pos2(if rtl { text_x - galley.size().x } else { text_x }, r.center().y - galley.size().y / 2.0);
+                    let elided = galley.elided;
+                    ui.painter().galley(at, galley, t.text);
+                    let resp = if elided { resp.on_hover_text(&e.name) } else { resp };
                     if resp.double_clicked() {
                         if e.dir {
                             go = Some(e.path.clone());
@@ -426,11 +458,16 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
         let before = b.filter;
         let current = b.filters.get(b.filter).map(|(l, _)| tl!(l.as_str()).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("builtin_file_browser_type").selected_text(current).width(150.0).show_ui(ui, |ui| {
-            for (i, (l, _)) in b.filters.iter().enumerate() {
-                ui.selectable_value(&mut b.filter, i, tl!(l.as_str()));
-            }
-        });
+        craft_ui::ComboBox::from_id_salt("builtin_file_browser_type")
+            .selected_text(current)
+            .width(150.0)
+            .show_ui(ui, |ui| {
+                for (i, (l, _)) in b.filters.iter().enumerate() {
+                    ui.selectable_value(&mut b.filter, i, tl!(l.as_str()));
+                }
+            })
+            .response
+            .accessible_name(tl!("File type"));
         refilter = b.filter != before;
     });
     if refilter {
@@ -440,9 +477,10 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel |= ui.button(tl!("Cancel")).clicked();
-            let ok = ui.add(egui::Button::new(egui::RichText::new(tl!(b.ok_label())).color(egui::Color32::WHITE)).fill(APP_COLOR));
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+            let (ok, cancelb) =
+                crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
+            cancel |= cancelb.clicked();
             pick |= ok.clicked() || enter;
         });
     });
@@ -514,8 +552,8 @@ mod tests {
         let dir = scratch("save");
         std::fs::create_dir(dir.join("drafts")).unwrap();
         std::fs::write(dir.join("drafts").join("old.docx"), b"x").unwrap();
-        let req = FileDialogRequest::Save { name: "Document1.docx".into() };
-        let mut b = FileBrowser::new(req, AfterPick::OpenDocument, dir.clone(), false);
+        let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
+        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         b.name = "drafts".into();
         assert_eq!(b.accept(), Step::Stay);
         assert_eq!(b.dir, dir.join("drafts"));
@@ -554,6 +592,187 @@ mod tests {
         assert!(!a.session.dirty);
         let saved = wordcraft_engine::io::open_path(&dir.join("novel.docx")).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved without a portal"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: the browser a modal dialog opens (Templates and Add-ins › Attach…) is modal over
+    /// it, frame after frame: the dialog doesn't rise above the browser's backdrop, where it
+    /// would take clicks beside the browser.
+    #[test]
+    fn the_browser_stays_above_the_dialog_that_opened_it() {
+        let dir = scratch("over_dialog");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("templates", &mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let req = FileDialogRequest::Open { purpose: "template".into() };
+        h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
+        let browser = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("builtin_file_browser"));
+        let backdrop = egui::LayerId::new(egui::Order::Middle, browser.id.with("modal_backdrop"));
+        let dialog = egui::LayerId::new(egui::Order::Middle, egui::Id::unique(("dialog", "Templates and Add-ins")));
+        for frame in 0..6 {
+            h.step();
+            if frame > 0 {
+                assert_eq!(h.ctx.memory(|m| m.top_modal_layer()), Some(browser), "frame {frame}");
+                let order: Vec<_> = h.ctx.memory(|m| m.layer_ids().collect());
+                let at = |l| order.iter().position(|o| *o == l).unwrap_or_else(|| panic!("frame {frame}: no {l:?} in {order:?}"));
+                assert!(at(dialog) < at(backdrop) && at(backdrop) < at(browser), "frame {frame}: {order:?}");
+            }
+        }
+        assert!(h.state().dialog.is_some(), "the dialog waits under it");
+        h.state_mut().canvas.want_focus = false;
+        h.state_mut().close_file_browser(None);
+        assert!(!h.state().canvas.want_focus, "the document doesn't ask for the keyboard back");
+        h.step();
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(2);
+        assert!(h.state().dialog.is_some(), "the dialog is back on top");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "it keeps the keyboard");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: Escape in the browser over a dialog (Templates and Add-ins › Attach…) cancels the
+    /// browser only; the dialog under it, drawn first, doesn't take the key too.
+    #[test]
+    fn escape_in_the_browser_leaves_the_dialog_under_it_open() {
+        let dir = scratch("escape_over_dialog");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("templates", &mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let req = FileDialogRequest::Open { purpose: "template".into() };
+        h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().file_browser_open(), "Escape closes the browser");
+        assert!(h.state().dialog.is_some(), "and leaves the dialog open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: a modal dialog that closes as it opens the browser (Save in "Save changes?" as a new
+    /// document closes, with no system dialog) leaves the keyboard in the browser's name box: the
+    /// document doesn't take it back on the next frame.
+    #[test]
+    fn a_dialog_closing_into_the_browser_leaves_it_the_keyboard() {
+        use egui_kittest::kittest::Queryable;
+        let services = Services {
+            file_dialog: Some(Box::new(|_req| {
+                let (tx, rx) = channel();
+                tx.send(Err("no portal".to_string())).unwrap();
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+        let _ = a.run("file.close", json!({}));
+        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_label("Save").click();
+        h.run_steps(4);
+        assert!(h.state().dialog.is_none() && h.state().file_browser_open(), "Save As goes on in the browser");
+        let before = h.state().file_browser.open.as_ref().map(|b| b.name.clone());
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(2);
+        let after = h.state().file_browser.open.as_ref().map(|b| b.name.clone());
+        assert_ne!(after, before, "typing goes into the name box");
+    }
+
+    /// #3859: beside a modeless dialog (Find) the document takes the keyboard back.
+    #[test]
+    fn the_document_takes_the_keyboard_back_beside_a_modeless_dialog() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("find", &mut a);
+        assert!(a.dialog.as_ref().is_some_and(|d| !d.is_modal()));
+        a.show_file_browser(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: a.session.document_id() },
+            false,
+        );
+        a.canvas.want_focus = false;
+        a.close_file_browser(None);
+        assert!(a.canvas.want_focus);
+    }
+
+    /// #3859: the browser is modal on its own too: no keytips run behind it.
+    #[test]
+    fn no_keytips_behind_the_browser() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let ctx = egui::Context::default();
+        assert!(!crate::keytips::suppressed(&a, &ctx));
+        a.show_file_browser(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: a.session.document_id() },
+            false,
+        );
+        assert!(crate::keytips::suppressed(&a, &ctx));
+    }
+
+    /// #3037: an empty folder (or a type filter that matches nothing) says so instead of a blank
+    /// box; a matching file replaces the hint.
+    #[test]
+    fn an_empty_folder_says_there_are_no_items() {
+        let dir = scratch("empty_state");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let mut b =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        b.navigate(dir.clone());
+        assert!(matches!(&b.listing, Ok(l) if l.entries.is_empty()), "the folder starts empty");
+        a.file_browser.open = Some(Box::new(b));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        let texts = |h: &egui_kittest::Harness<'static, WordApp>| -> Vec<String> {
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Text(t) => Some(t.galley.text().to_string()),
+                    _ => None,
+                })
+                .collect()
+        };
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(texts(&h).iter().any(|t| t.contains("No items to show.")), "empty-state hint shown");
+        std::fs::write(dir.join("chapter.docx"), b"x").unwrap();
+        if let Some(b) = &mut h.state_mut().file_browser.open {
+            b.navigate(dir.clone());
+        }
+        for _ in 0..2 {
+            h.step();
+        }
+        assert!(texts(&h).iter().any(|t| t.contains("chapter.docx")), "the file is listed");
+        assert!(!texts(&h).iter().any(|t| t.contains("No items to show.")), "the hint is gone");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
