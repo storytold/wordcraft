@@ -8,6 +8,61 @@ use std::rc::Rc;
 
 use wordcraft_ui_egui::{WordApp, i18n};
 
+/// Most launched files waiting to be read, over every launch; the operating system can pass a
+/// whole folder's selection.
+pub(crate) const MAX_WAITING_FILES: usize = 20;
+
+/// Launched files not read yet, whether a reader is going through them, and how many files the
+/// launches since the last report left out. Generic so tests need no browser file handles.
+pub(crate) struct Launches<T> {
+    waiting: VecDeque<T>,
+    reading: bool,
+    omitted: usize,
+}
+
+impl<T> Default for Launches<T> {
+    fn default() -> Self {
+        Self { waiting: VecDeque::new(), reading: false, omitted: 0 }
+    }
+}
+
+/// Take a launch's files into the queue: at most [`MAX_WAITING_FILES`] wait, in the order they
+/// arrive, over every launch. Returns whether a new reader has to start; while one is running, a
+/// launch only queues behind it, so no second reader can interleave reads.
+pub(crate) fn admit<T>(l: &mut Launches<T>, handles: impl IntoIterator<Item = T>) -> bool {
+    for handle in handles {
+        if l.waiting.len() < MAX_WAITING_FILES {
+            l.waiting.push_back(handle);
+        } else {
+            l.omitted = l.omitted.saturating_add(1);
+        }
+    }
+    let start = !l.reading && (!l.waiting.is_empty() || l.omitted > 0);
+    l.reading |= start;
+    start
+}
+
+/// The reader's next step. Nothing is read while a file waits to be opened, so one launched
+/// file's bytes at most are held at a time; the file after a failed read still gets its turn.
+pub(crate) fn next_step<T>(reading: &mut Launches<T>, drained: bool) -> Step<T> {
+    if !drained {
+        return Step::Wait;
+    }
+    match reading.waiting.pop_front() {
+        Some(handle) => Step::Read(handle),
+        None => {
+            reading.reading = false;
+            Step::Finish(std::mem::take(&mut reading.omitted))
+        }
+    }
+}
+
+pub(crate) enum Step<T> {
+    Wait,
+    Read(T),
+    Finish(usize),
+}
+
 /// Most failed files one report names on the status bar; it counts the rest.
 const MAX_NAMED_FAILURES: usize = 3;
 
@@ -217,5 +272,95 @@ mod tests {
         open_all(&launched, &mut a);
         let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
         assert!(status.contains("broken.docx") && status.ends_with("2 more files weren't opened: WordCraft opens up to 20 at a time."), "{status}");
+    }
+
+    /// A launch during a read queues behind it: no second reader, and reads keep their order,
+    /// over launches too.
+    #[test]
+    fn a_launch_during_a_read_queues_behind_it_in_order() {
+        let mut q = Launches::default();
+        assert!(admit(&mut q, [1, 2]), "the first launch starts a reader");
+        assert!(!admit(&mut q, [3]), "a second launch starts no second reader");
+        for expected in [1, 2, 3] {
+            match next_step(&mut q, true) {
+                Step::Read(n) => assert_eq!(n, expected),
+                _ => panic!("expected file {expected}"),
+            }
+        }
+        assert!(matches!(next_step(&mut q, true), Step::Finish(0)));
+        assert!(admit(&mut q, [4]), "a later launch starts a reader again");
+        assert!(matches!(next_step(&mut q, true), Step::Read(4)));
+    }
+
+    /// Nothing is read while a file is unopened, which is what bounds the bytes held to one file.
+    #[test]
+    fn an_unopened_file_stops_the_next_read() {
+        let mut q = Launches::default();
+        admit(&mut q, [1, 2]);
+        assert!(matches!(next_step(&mut q, false), Step::Wait));
+        assert!(matches!(next_step(&mut q, true), Step::Read(1)));
+        assert!(matches!(next_step(&mut q, false), Step::Wait), "file 2 waits until file 1 opened");
+        assert!(matches!(next_step(&mut q, true), Step::Read(2)));
+        assert!(matches!(next_step(&mut q, true), Step::Finish(0)));
+    }
+
+    /// The files past the limit are counted, per launch, without a file being opened for them.
+    #[test]
+    fn files_past_the_limit_are_counted_and_reported() {
+        let mut q = Launches::default();
+        admit(&mut q, 0..MAX_WAITING_FILES);
+        assert_eq!(q.waiting.len(), MAX_WAITING_FILES);
+        assert_eq!(q.omitted, 0);
+        admit(&mut q, [100, 101, 102]);
+        assert_eq!(q.omitted, 3);
+        assert_eq!(q.waiting.len(), MAX_WAITING_FILES);
+        for n in 0..MAX_WAITING_FILES {
+            assert!(matches!(next_step(&mut q, true), Step::Read(m) if m == n));
+        }
+        assert!(matches!(next_step(&mut q, true), Step::Finish(3)));
+
+        let launched = Shared::default();
+        launched.borrow_mut().start();
+        launched.borrow_mut().finish(3, MAX_WAITING_FILES);
+        let status = Launched::report(std::mem::take(&mut *launched.borrow_mut())).unwrap_or_default();
+        assert_eq!(status, "3 more files weren't opened: WordCraft opens up to 20 at a time.");
+    }
+
+    /// A launch whose files all arrive while the queue is full still ends, so the count is
+    /// reported even when every one of them was left out.
+    #[test]
+    fn a_launch_that_only_overflows_still_finishes() {
+        let mut q = Launches::default();
+        admit(&mut q, 0..MAX_WAITING_FILES);
+        // The reader has taken the first file and is reading it; the queue is still full.
+        assert!(matches!(next_step(&mut q, true), Step::Read(0)));
+        assert!(!admit(&mut q, [100, 101, 102]), "a second launch must not start another reader");
+        assert_eq!(q.omitted, 2, "100 took the slot the first read freed; 101 and 102 were left out");
+        assert!(!admit(&mut q, []), "the running reader keeps going");
+        for n in 1..MAX_WAITING_FILES {
+            assert!(matches!(next_step(&mut q, true), Step::Read(m) if m == n));
+        }
+        assert!(matches!(next_step(&mut q, true), Step::Read(100)), "the file that filled the freed slot opens last");
+        assert!(matches!(next_step(&mut q, true), Step::Finish(2)), "both left-out files are counted");
+    }
+
+    /// While a dialog is up (a launched file asks for its password), the next file waits.
+    #[test]
+    fn an_open_dialog_holds_the_next_file() {
+        let launched = Shared::default();
+        let mut a = app();
+        {
+            let mut l = launched.borrow_mut();
+            l.start();
+            l.push("first.md".into(), b"# First\n".to_vec());
+            l.push("second.md".into(), b"# Second\n".to_vec());
+            l.finish(0, MAX_WAITING_FILES);
+        }
+        a.dialog = Some(wordcraft_ui_egui::dialogs::Dialog::RenameDocument { name: "test".into(), message: String::new(), focus: false });
+        assert!(!open_next(&launched, &mut a));
+        assert_eq!(launched.borrow().ready.len(), 2, "nothing opens while the dialog is up");
+        a.dialog = None;
+        open_all(&launched, &mut a);
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Second"), "the last file opens afterwards");
     }
 }
