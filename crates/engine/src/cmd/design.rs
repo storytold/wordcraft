@@ -405,7 +405,7 @@ fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            crate::io::read_file_capped(path, MAX_PAGE_PICTURE_BYTES, "image").map_err(|e| map_image_too_large(e))?
+            crate::io::read_file_capped(path, MAX_PAGE_PICTURE_BYTES, "image").map_err(map_image_too_large)?
         }
     } else {
         return Err(CmdError::Params("`path`, `data` or `media` is required for a picture fill".into()));

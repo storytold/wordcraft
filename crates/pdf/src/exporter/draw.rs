@@ -346,10 +346,12 @@ impl Exporter<'_> {
         let Some(back) = rect_path(&Rect::new(0.0, 0.0, w, h)) else { return };
         // The back and the marks are one pattern: draw both opaque in a group and fade the group
         // once, so a partly transparent pattern doesn't show its back through its own marks.
+        // Clipped to the page: marks are laid out on whole tiles, which can overhang the page.
         let grouped = alpha < 1.0;
         if grouped {
             s.push_opacity(norm(alpha));
         }
+        s.push_clip_path(&back, &FillRule::NonZero);
         s.set_fill(Some(fill(p.back, 1.0)));
         s.draw_path(&back);
         s.set_fill(None);
@@ -415,6 +417,7 @@ impl Exporter<'_> {
                 }
             }
         }
+        s.pop();
         if grouped {
             s.pop();
         }
