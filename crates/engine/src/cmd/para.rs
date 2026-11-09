@@ -16,6 +16,7 @@ mod lists;
 mod outline;
 mod styles;
 mod tabs_borders;
+mod tools;
 
 use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
 pub use format::{cur as selection_para, fmt, indent, outdent};
@@ -26,6 +27,10 @@ use outline::{move_paras, outline_step, sort};
 use styles::{apply_style, apply_styles, create_style, delete_style, modify_style, set_visibility, style_id, update_to_match};
 pub use tabs_borders::border_sides;
 use tabs_borders::{borders, tabs};
+use tools::{
+    blank_between, convert_breaks, indent_to_spaces, remove_blank, remove_extra_spaces, remove_line_breaks, separate_paragraphs, spaces_to_indent,
+    trim_leading,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -183,9 +188,17 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(if cfg!(target_os = "macos") { "Ctrl+Shift+Right" } else { "Alt+Shift+Right" }),
         CommandSpec::new("para.shading", "Shading", "Home › Paragraph", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
+            // Text selected within one paragraph is shaded itself, as in Word, so No Color takes
+            // off a shading a file gave the text (#4685); a caret or paragraphs shade paragraphs.
+            // `paragraph` (Borders and Shading › Apply to: Paragraph) shades the paragraphs anyway.
+            if p::bool(v, "paragraph") != Some(true) && shades_text(s) {
+                return super::format::apply(s, &|x| x.shading = c);
+            }
             fmt(s, &|p| p.shading = c)
         })
-        .params(r#"{"color": "RRGGBB" | null}"#),
+        .params(
+            r#"{"color": "RRGGBB" | null, "paragraph"?: bool} (text selected inside one paragraph is shaded itself, as in Word; `paragraph: true` shades the paragraphs instead, as Borders and Shading › Apply to: Paragraph)"#,
+        ),
         CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders).params(
             r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`"#,
         ),
@@ -262,5 +275,43 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             sel_result(s)
         }),
+        // Advanced paragraph tools (#5043, as in WPS Office): conversions and cleanup over the
+        // selection, or the whole document with `scope: "all"`. One undo step per command.
+        CommandSpec::new("para.convertBreaks", "Convert Line Breaks to Paragraphs", "Home › Paragraph › Paragraph Tools", convert_breaks)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.blankBetween", "Insert Blank Paragraphs Between", "Home › Paragraph › Paragraph Tools", blank_between)
+            .params(r#"{"scope"?: "selection|all", "after"?: bool (also after the last paragraph)}"#),
+        CommandSpec::new("para.separateParagraphs", "Separate Paragraphs", "Home › Paragraph › Paragraph Tools", separate_paragraphs)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.removeBlank", "Delete Blank Paragraphs", "Home › Paragraph › Paragraph Tools", remove_blank)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.trimLeadingSpaces", "Remove Leading Spaces", "Home › Paragraph › Paragraph Tools", trim_leading)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.removeExtraSpaces", "Remove Extra Spaces", "Home › Paragraph › Paragraph Tools", remove_extra_spaces)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.spacesToIndent", "Convert Spaces to Indentation", "Home › Paragraph › Paragraph Tools", spaces_to_indent)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.indentToSpaces", "Convert Indents to Spaces", "Home › Paragraph › Paragraph Tools", indent_to_spaces)
+            .params(r#"{"scope"?: "selection|all"}"#),
+        CommandSpec::new("para.removeLineBreaks", "Remove Line Breaks", "Home › Paragraph › Paragraph Tools", remove_line_breaks)
+            .params(r#"{"scope"?: "selection|all"}"#),
     ]
+}
+
+/// Whether Shading applies to the selected text rather than to paragraphs: a selection inside one
+/// paragraph, short of its mark. A selection reaching past the mark ends at the next paragraph's
+/// start, so all of a paragraph's text is still text, except in the last paragraph of its story,
+/// cell or box, where it stands for the paragraph with its mark. A selected picture, shape or text
+/// box is its object character, not text (a field's object character is).
+fn shades_text(s: &Session) -> bool {
+    let (a, b) = s.sel.ordered();
+    if a == b || a.story != b.story || a.path != b.path {
+        return false;
+    }
+    let Some(p) = s.doc.para_at(&a) else { return false };
+    if super::objects::object_selection(s).is_some() {
+        return false;
+    }
+    let last = s.doc.next_para(a.story, &a.path).is_none_or(|q| q.parent() != a.path.parent());
+    !(last && a.off == 0 && b.off >= p.len())
 }
