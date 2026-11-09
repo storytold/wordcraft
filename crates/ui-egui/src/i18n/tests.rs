@@ -1129,30 +1129,48 @@ fn slovenian_locales_and_saved_preference_work_without_changing_the_document() {
     assert_eq!(Lang::from_pref(&restored.language), sl);
 }
 
+/// A catalog character the Hebrew face itself must draw: Hebrew letters (final forms included),
+/// Hebrew and other punctuation, and digits. Symbols and emoji stay with the Latin and emoji faces.
+fn hebrew_face_character(c: char) -> bool {
+    if ('\u{0590}'..='\u{05FF}').contains(&c) || c.is_ascii_digit() {
+        return true;
+    }
+    c.is_ascii_punctuation() || matches!(c, '¶' | '·' | '°' | '×' | '–' | '—' | '“' | '”' | '…' | '›' | '−')
+}
+
 #[test]
 fn hebrew_interface_fonts_cover_hebrew_letters() {
     needs_catalogs!();
-    let entries = translations("he");
-    let chars: std::collections::BTreeSet<char> = entries.iter().flat_map(|e| e.chars()).filter(|c| ('\u{0590}'..='\u{05FF}').contains(c)).collect();
-    assert!(chars.len() > 20, "the Hebrew catalog has Hebrew letters");
-    let embedded = !wordcraft_fonts::ui_hebrew_fonts().is_empty();
-    let system = wordcraft_fonts::system_hebrew_ui_font().is_some();
-    if !embedded && !system {
-        eprintln!("skipped: no embedded or installed Hebrew face");
-        return;
+    let Some(_) = Lang::from_code("he") else {
+        panic!("the pinned craft-i18n catalogs include Hebrew");
+    };
+    let faces = wordcraft_fonts::ui_hebrew_fonts();
+    if faces.is_empty() {
+        if wordcraft_fonts::CRAFT_FONTS.is_empty() || cfg!(target_arch = "wasm32") {
+            eprintln!("skipped: built without an embedded Hebrew face (set CRAFT_FONTS_DIR to a checkout)");
+            return;
+        }
+        panic!("craft-fonts is embedded but has no Hebrew face");
     }
-    let ctx = egui::Context::default();
-    ctx.set_fonts(crate::theme::font_definitions_language_arabic(
-        false,
-        false,
-        false,
-        false,
-        crate::theme::InstalledScripts { arabic: false, hebrew: true },
-    ));
-    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
-    let sample: String = chars.into_iter().take(48).collect();
-    let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), &sample));
-    assert!(covered, "a Hebrew face is available but the interface lacks {sample}");
+    let entries = translations("he");
+    let chars: std::collections::BTreeSet<char> = entries.iter().flat_map(|e| e.chars()).filter(|c| hebrew_face_character(*c)).collect();
+    assert!(chars.len() > 20, "the Hebrew catalog has Hebrew letters");
+    assert!(chars.contains(&'ך') && chars.contains(&'ם') && chars.contains(&'ן') && chars.contains(&'ף') && chars.contains(&'ץ'), "final forms");
+    assert!(chars.contains(&'0') && chars.contains(&'9'), "digits");
+    assert!(chars.contains(&'״') || chars.iter().any(|c| c.is_ascii_punctuation()), "punctuation");
+    // The Hebrew face's own cmap, not egui's fallback chain (Inter would hide a missing letter).
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let loaded: Vec<_> = faces
+        .iter()
+        .map(|f| {
+            let face = db.face(f.family, f.style);
+            assert_eq!(face.family, f.family, "must use the embedded Hebrew face");
+            face
+        })
+        .collect();
+    let missing: String = chars.iter().filter(|c| loaded.iter().all(|f| f.glyph_for(**c) == 0)).collect();
+    assert!(missing.is_empty(), "the Hebrew face lacks {missing}");
 }
 
 #[test]

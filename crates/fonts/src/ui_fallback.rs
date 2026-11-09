@@ -249,7 +249,8 @@ pub fn system_arabic_ui_font() -> Option<SystemUiFont> {
 }
 
 /// Hebrew font files to look for, relative to a font folder, best first. A sans-serif UI face
-/// (Segoe UI, Noto Sans Hebrew, Arial), not a document serif such as David.
+/// (Segoe UI, Noto Sans Hebrew, Arial). On Windows, David (`david.ttf`) is the last candidate:
+/// a document serif used only when none of the sans-serif faces is installed.
 fn hebrew_candidates() -> &'static [&'static str] {
     if cfg!(windows) {
         &["segoeui.ttf", "arial.ttf", "tahoma.ttf", "david.ttf"]
@@ -363,6 +364,32 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], region: Region) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A Latin file named like a Hebrew candidate is not taken. When a Hebrew face is embedded,
+    /// the same lookup accepts that file from a directory the test controls.
+    #[test]
+    fn hebrew_lookup_requires_a_face_that_maps_alef() {
+        let dir = std::env::temp_dir().join(format!("wc-uifallback-he-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let name = hebrew_candidates()[0];
+        let path = dir.join(name);
+        std::fs::create_dir_all(path.parent().unwrap_or(&dir)).unwrap();
+        std::fs::write(&path, crate::bundled()[0]).unwrap();
+        assert!(
+            find_ui_font(std::slice::from_ref(&dir), &[name], &['א'], Region::Other).is_none(),
+            "a Latin face is not used as the Hebrew interface font"
+        );
+        if let Some(he) = crate::ui_hebrew_fonts().into_iter().next() {
+            std::fs::write(&path, he.bytes).unwrap();
+            let found = find_ui_font(std::slice::from_ref(&dir), &[name], &['א'], Region::Other).expect("the fixture Hebrew face");
+            assert_eq!(found.family, he.family);
+            let font = skrifa::FontRef::from_index(&found.bytes, found.index).unwrap();
+            assert!(font.charmap().map('א').is_some(), "the chosen face maps alef");
+        } else if !crate::CRAFT_FONTS.is_empty() && !cfg!(target_arch = "wasm32") {
+            panic!("craft-fonts is embedded but has no Hebrew face");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn hebrew_interface_looks_for_a_sans_serif_hebrew_face_first() {

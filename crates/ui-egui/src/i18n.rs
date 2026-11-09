@@ -532,6 +532,68 @@ pub(crate) fn catalogs_embedded() -> bool {
     !CRAFT_I18N.is_empty()
 }
 
+/// The embedded Hebrew language, or `None` when this build has no catalogs (the caller skips).
+/// Panics when catalogs were embedded and Hebrew is not among them.
+#[cfg(test)]
+pub(crate) fn require_hebrew() -> Option<Lang> {
+    if !catalogs_embedded() {
+        return None;
+    }
+    Some(Lang::from_code("he").expect("the pinned craft-i18n catalogs include Hebrew"))
+}
+
+/// Draw `open` once in an English window, then let the next frames install the fonts that screen
+/// asked for. The screen must set the Hebrew font request; the glyphs are then checked.
+#[cfg(test)]
+pub(crate) fn open_english_screen(open: impl FnOnce(&mut crate::WordApp, &mut egui::Ui)) {
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    crate::theme::apply(&ctx, crate::theme::Appearance::Light);
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    assert!(!app.want_system_hebrew && !app.fonts_system_hebrew, "English starts without a Hebrew face");
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 800.0));
+    let mut time = 1.0;
+    let mut open = Some(open);
+    let input = egui::RawInput { screen_rect: Some(screen), time: Some(time), ..Default::default() };
+    let mut out = ctx.run_ui(input, |ui| {
+        if let Some(open) = open.take() {
+            open(&mut app, ui);
+        }
+    });
+    out.textures_delta.clear();
+    for _ in 0..2 {
+        time += 0.1;
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(time), ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| app.logic(ui.ctx()));
+        out.textures_delta.clear();
+    }
+    assert!(app.want_system_hebrew, "the screen asks for a Hebrew face");
+    assert!(app.fonts_system_hebrew, "the following frame installs it");
+    assert_interface_covers_hebrew(&ctx);
+}
+
+/// The interface context can draw Hebrew letters, final forms, a Hebrew punctuation mark and
+/// digits. Skips the glyph check only when this build embedded no fonts and no Hebrew face is
+/// installed. Panics when craft-fonts was embedded and it has no Hebrew face.
+#[cfg(test)]
+pub(crate) fn assert_interface_covers_hebrew(ctx: &egui::Context) {
+    let embedded = wordcraft_fonts::ui_hebrew_fonts();
+    if embedded.is_empty() {
+        if !wordcraft_fonts::CRAFT_FONTS.is_empty() && !cfg!(target_arch = "wasm32") {
+            panic!("craft-fonts is embedded but has no Hebrew face");
+        }
+        if wordcraft_fonts::system_hebrew_ui_font().is_none() {
+            eprintln!("skipped glyph check: built without craft-fonts and no installed Hebrew face");
+            return;
+        }
+    }
+    ctx.run_ui(egui::RawInput::default(), |_| {}).textures_delta.clear();
+    let sample = "עבריתךםןףץ0123456789״";
+    let font = crate::theme::regular(14.0);
+    let missing: String = ctx.fonts_mut(|f| sample.chars().filter(|c| !f.has_glyph(&font, *c)).collect());
+    assert!(missing.is_empty(), "the interface has no Hebrew glyph for {missing}");
+}
+
 #[cfg(test)]
 mod audit;
 #[cfg(test)]

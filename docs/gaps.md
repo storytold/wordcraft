@@ -198,10 +198,10 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | trivial | #4501 refactor regressions restored: per-section header/footer grid, ODT default font, link tooltip (#4683); no ranked gap changed; readiness estimates unchanged |
-| 2026-11-06 | minor | #11: Hebrew interface uses the Arabic mirrored shell; key languages still missing are hi and id (plus pt-PT) |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
 | 2026-11-08 | trivial | #4 narrowed: a cell's last Normal paragraph drops its contextual space after, the end-of-cell mark counting as a Normal paragraph (#5450) |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
+| 2026-11-06 | minor | #11: Hebrew interface uses the Arabic mirrored shell; key languages still missing are hi and id (plus pt-PT) |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
 | 2026-11-04 | trivial | Field argument import and page-format-aware layout/cache follow-ups; no ranked gap changed |
 | 2026-11-03 | trivial | Field argument parsing follows Word quoted backslash escapes; body PAGE formatting follows the active section in paragraphs and tables; no ranked gap changed |

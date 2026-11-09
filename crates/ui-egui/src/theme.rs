@@ -657,18 +657,11 @@ pub fn font_definitions_language_arabic(
     // Hebrew letters are a different script from Arabic. The same rule: an embedded Hebrew face,
     // or, when `system_hebrew` is set and none is embedded, one installed face.
     let hebrew = wordcraft_fonts::ui_hebrew_fonts();
-    for f in &hebrew {
-        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
-    }
     #[cfg(not(target_arch = "wasm32"))]
-    if system_hebrew
-        && hebrew.is_empty()
-        && let Some(f) = system_hebrew_font()
-    {
-        let mut data = FontData::from_static(&f.bytes);
-        data.index = f.index;
-        add_cjk(&mut fonts, format!("system {}", f.family), data);
-    }
+    let installed_hebrew = system_hebrew_font();
+    #[cfg(target_arch = "wasm32")]
+    let installed_hebrew: Option<&wordcraft_fonts::SystemUiFont> = None;
+    add_hebrew_ui_faces(&mut fonts, &hebrew, system_hebrew, installed_hebrew);
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
 }
@@ -685,6 +678,38 @@ fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
 fn system_hebrew_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
     static HEBREW: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
     HEBREW.get_or_init(wordcraft_fonts::system_hebrew_ui_font).as_ref()
+}
+
+/// Add `data` at the end of the proportional interface families.
+fn push_ui_face(fonts: &mut FontDefinitions, name: String, data: FontData) {
+    fonts.font_data.insert(name.clone(), Arc::new(data));
+    for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
+        if let Some(v) = fonts.families.get_mut(&fam) {
+            v.push(name.clone());
+        }
+    }
+}
+
+/// Embedded Regular Hebrew faces, then one installed face when `system_hebrew` is set and nothing
+/// embedded covers Hebrew. An embedded face is added either way: the installed file is the
+/// fallback for a build that has none.
+fn add_hebrew_ui_faces(
+    fonts: &mut FontDefinitions,
+    embedded: &[&wordcraft_fonts::CraftFont],
+    system_hebrew: bool,
+    installed: Option<&wordcraft_fonts::SystemUiFont>,
+) {
+    for f in embedded {
+        push_ui_face(fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    if system_hebrew
+        && embedded.is_empty()
+        && let Some(f) = installed
+    {
+        let mut data = FontData::from_owned(f.bytes.clone());
+        data.index = f.index;
+        push_ui_face(fonts, format!("system {}", f.family), data);
+    }
 }
 
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
@@ -1113,6 +1138,29 @@ mod tests {
         let arabic_named = |defs: &egui::FontDefinitions| defs.font_data.keys().filter(|k| k.starts_with("system ")).count();
         let cjk_font = super::system_cjk_font(false, false).is_some();
         assert_eq!(arabic_named(&cjk_only), usize::from(cjk_font), "the CJK request adds the CJK font and no Arabic or Hebrew one");
+    }
+
+    /// The installed Hebrew face is added only when Hebrew was asked for and no embedded face
+    /// covers the script. The fixture font is this test's, not whatever the machine has installed.
+    #[test]
+    fn the_system_hebrew_face_is_added_only_when_asked_and_nothing_is_embedded() {
+        let bytes = wordcraft_fonts::bundled()[0];
+        let embedded = wordcraft_fonts::CraftFont { family: "Probe Hebrew", style: "Regular", scripts: &["Hebr"], bytes };
+        let installed = wordcraft_fonts::SystemUiFont { family: "Probe Installed Hebrew".into(), bytes: bytes.to_vec(), index: 0 };
+        let names = |embedded: &[&wordcraft_fonts::CraftFont], flag: bool| {
+            let mut fonts = egui::FontDefinitions::default();
+            super::add_hebrew_ui_faces(&mut fonts, embedded, flag, Some(&installed));
+            fonts.font_data.into_keys().collect::<Vec<_>>()
+        };
+        let asked = names(&[], true);
+        assert!(asked.iter().any(|k| k == "system Probe Installed Hebrew"), "{asked:?}");
+        let not_asked = names(&[], false);
+        assert!(not_asked.iter().all(|k| !k.starts_with("system ")), "{not_asked:?}");
+        let embedded_wins = names(&[&embedded], true);
+        assert!(embedded_wins.iter().any(|k| k == "Probe Hebrew Regular"), "{embedded_wins:?}");
+        assert!(embedded_wins.iter().all(|k| !k.starts_with("system ")), "an embedded face replaces the installed one: {embedded_wins:?}");
+        let embedded_without_flag = names(&[&embedded], false);
+        assert!(embedded_without_flag.iter().any(|k| k == "Probe Hebrew Regular"), "embedded faces are added either way");
     }
 
     #[test]
