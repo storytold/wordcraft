@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `722b7ada` plus its status commits — 37 commits over
+- HEAD at this writing: `79019d58` plus this status commit — 40 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -29,7 +29,10 @@ missing, and where the next session should start.
 - Per-user undo/redo as an operation with a `history` field: one version per undo,
   `undoConflict` when the step's target changed, a step of several operations
   replayed as one all-or-nothing transaction (a refused inverse takes back the
-  ones already applied), and commands act as an undo barrier (ADR-0010).
+  ones already applied), and commands act as an undo barrier (ADR-0010). An
+  operation also reports the nodes beside its target whose content its inverse
+  would overwrite (`Effect::touched`): a text edit another user made there after
+  the step makes the undo `undo-conflict` instead of dropping that edit (§5.8).
 - Role gates: viewer cannot write; commenter may only add/resolve comments
   (including the `review.*Comment` commands); owner alone commits (ADR-0008).
 - Presence (ephemeral, never journaled) carries the sender's `role`, stamped by
@@ -61,6 +64,10 @@ missing, and where the next session should start.
   insert/remove and row insert/remove become structural. Formatting-only
   changes, a column insert/remove, a cell merge/split and several moves are
   reported as unsupported (they fall back to a command).
+- A column removal, a cell merge and a cell split carry an exact inverse
+  (`split_cells`/`merge_cells`/`insert_column` with `restore`): the removed
+  bodies, the grid and the session ids travel in the inverse, so undo restores
+  the table instead of reporting the step as unsupported (§5.8).
 - A table command that still arrives as `kind:"command"` (a client that could
   not diff it, or track changes) retires the ids of the tables whose shape it
   changed: their paths mean something else afterwards, so a stale cell id is
@@ -166,7 +173,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room` |
+| Per-user undo/redo | protocol done; the author's own replica does not apply the answer yet (§4) | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -280,15 +287,31 @@ Results at this writing:
   caret of a client holding a cell id survives. What still travels as a command
   is a text box, formatting and anything the diff cannot express; a command that
   changes a table's shape retires that table's ids, so a client holding an old
-  cell id is refused `gone` and resyncs rather than editing a neighbour. A
-  merge, a split and a column removal have no inverse, so undo reports that step
-  as unsupported (an inserted column does undo: its inverse is `remove_column`).
-  The node map is larger: it carries every row, cell and cell paragraph, so a
-  document with a 2000-cell table sends ~3× more `nodes` entries than before;
-  the server bounds the document at 64 MiB and the map is sent on join and after
-  structural operations.
+  cell id is refused `gone` and resyncs rather than editing a neighbour. All four
+  table edits undo exactly (§5.8): an inserted column, a column removal, a merge
+  and a split each carry the data their inverse needs, and the inverse refuses
+  (`undo-conflict`) when the table moved on. The node map is larger: it carries
+  every row, cell and cell paragraph, so a document with a 2000-cell table sends
+  ~3× more `nodes` entries than before; the server bounds the document at 64 MiB
+  and the map is sent on join and after structural operations.
+- An inverse carries the bodies it puts back, so it is bounded: a merge, a split
+  or a column removal whose restore data would pass 256 KiB keeps no inverse and
+  undo reports that step as `unsupported` (§5.8). A structural step still cannot
+  be undone once any later structural operation landed, so two merges in a row
+  can be undone only newest first (§4, ADR-0010).
 - Offline editing is not supported: while a session reconnects, document commands
   pause instead of diverging.
+- **An undo reaches every peer but not the replica that asked for it.** The
+  server applies the step's inverse and journals the answer under the caller's
+  own `opId`, and `SyncState::apply` skips the caller's own deltas (right for an
+  optimistic edit, which the UI already applied: `our_own_answer_is_not_applied_twice`).
+  A `history` operation is never applied optimistically — `WordApp::execute`
+  returns before the engine runs — so the client that undoes keeps the old
+  document until a snapshot or a resync. This is in the client path
+  (`crates/collab-app/src/lib.rs`, `crates/collab-web/src/lib.rs`), not in the
+  adapter's inverses, and it affects text undo as much as a table undo; the fix
+  is to carry `history` on `Applied` (or keep it with the pending operation) and
+  apply the answer of a history operation. Not fixed here.
 - The token is read from the environment on desktop; the cabinet must push a fresh
   token through the host bridge when it arrives.
 - No two-machine manual GUI test; the UI tests are headless.
@@ -366,12 +389,12 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    `action_required` for fork PRs until a maintainer approves, and the PR shows
    `CONFLICTING` until the force-push).
 3. Optional hardening: command inverses for the common engine commands, property
-   primitives, inverses for a merge/split and a column removal, an offline
-   queue, or a join broadcast that carries the role before the first presence
-   frame (presence already carries it, §5.3). (The multi-operation undo
-   transaction is done: `a_step_of_several_operations_lands_as_one_transaction`;
-   the `opId` window survives a snapshot restore: §5.5; table-cell ids are done:
-   §5.6; columns, merges and splits are primitives: §5.7.)
+   primitives, an offline queue, or a join broadcast that carries the role before
+   the first presence frame (presence already carries it, §5.3). (The
+   multi-operation undo transaction is done:
+   `a_step_of_several_operations_lands_as_one_transaction`; the `opId` window
+   survives a snapshot restore: §5.5; table-cell ids are done: §5.6; columns,
+   merges and splits are primitives: §5.7; their inverses are done: §5.8.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
@@ -690,6 +713,85 @@ wordcraft-collab-web` — 29 passed + 1 ignored (the LibreOffice commit gate), 1
 socket test, 5 web tests; `cargo clippy` on both groups with `--all-targets --
 -D warnings` clean; `cargo fmt --all -- --check` clean. No push was made and CI
 is unchanged.
+
+### 5.8 Inverses for a merge, a split and a column removal (run 2026-11-09)
+
+§4 recorded that the three table edits have no inverse, so per-user undo reported
+them as `unsupported`; §5.7 left them as the last undo gap in a table. Each now
+captures what it takes away *before* it changes the document and ships that in
+its inverse operation: **head `79019d58`** on `feature/realtime-collaboration`,
+with this entry's docs commit on top (no push, CI unchanged).
+
+**What each inverse carries.** The inverse is the same structural operation with
+a `restore` object; the forward operation's delta is unchanged, so a client that
+did not understand the inverse still applies the forward edit.
+
+- Merge → `split_cells` with `restore`: per row, the cells the range absorbed
+  (`props` and `blocks`), and the session ids of everything below them. The
+  inverse replaces the merged cell of each row with the row's original cells,
+  moves the cells after it right again and puts the ids back — so the cell a
+  merge absorbed is addressable under its old id again, and the caret holder
+  keeps typing where he was.
+- Split → `merge_cells` with `restore`: the grid before the cut, the cell it cut,
+  how many parts it added, and the props of the cells of the other rows that
+  widened over the refined grid. The inverse merges the parts back, restores the
+  grid (the line the split added is gone) and retires the parts' ids.
+- Column removal → `insert_column` with `restore`: the grid width, the body of
+  every cell that vanished, the props of the cells that only shrank, the rows
+  that disappeared with the column, and their ids. The inverse re-inserts the
+  grid column, puts the cells and rows back at their indexes, shifts the later
+  ones right again and restores the ids.
+
+**Refused before anything changes.** A restore validates the payload and compares
+the table's shape (the spans of every row's cells, captured after the forward
+edit) with the table it is about to edit *before* it touches the document or the
+id map. A mismatch answers `undo-conflict` with the document unchanged; a
+malformed payload answers `invalid`. The forward edits keep refusing an
+unaddressable range before mutating (§5.7).
+
+**No silent loss on undo.** An operation now reports the nodes beside its target
+whose content its inverse would overwrite (`Effect::touched`): the merged cells
+of a merge, the cell and its parts of a split, the cells an insert created (and
+the block or row an insert added). The room keeps the version that last touched
+each of them and refuses a step whose touched ids moved on, so a text edit
+another user made inside a merged cell, a split part, an inserted row or an
+inserted column answers `undo-conflict` instead of vanishing with the undo. An
+edit in a cell the step did not touch does not block it (tested).
+
+**Bounds.** An inverse's restore data is capped at 256 KiB and 16 384 ids: a
+region too large to carry keeps no inverse and undo reports the step as
+`unsupported`, as before. A structural step still cannot be undone once any later
+structural operation landed (ADR-0010), so two merges in a row undo newest first.
+
+**Tests.**
+
+- `crates/collab-doc/src/tests.rs`:
+  `undo_of_a_merge_splits_the_cells_back_with_their_own_text_and_ids` (merge →
+  undo → the cells, their text and their ids come back; the caret holder types in
+  the absorbed cell; the replica converges),
+  `undo_of_a_split_merges_the_parts_back_and_restores_the_grid`,
+  `undo_of_a_column_removal_puts_the_column_back_with_its_text_and_ids`,
+  `undo_of_a_column_removal_restores_a_row_that_disappeared_with_the_column`,
+  `undo_of_a_merge_after_another_users_edit_in_the_cell_is_a_conflict` (the
+  document is byte-identical after the refusal, the version does not move, the
+  step stays on the stack, the other user's text survives),
+  `undo_of_a_merge_lands_after_an_edit_in_another_cell` (the touched set is the
+  region, not the table),
+  `undo_of_a_row_insert_after_an_edit_in_the_new_row_is_a_conflict`.
+  Three of them drive two replicas (merge, split and column removal): the room
+  applies the undo and a replica applies its delta to the same JSON.
+- `crates/collab/src/{room,undo}.rs`: `Effect::touched` and `UndoStep::touched`
+  (serde-default, so a step serialized before the field still loads) are covered
+  through the doc tests above; the undo tests there are unchanged.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine` — 49, 50, 17
+passed; the wider run `-p wordcraft-collab-client -p wordcraft-collab-app -p
+wordcraft-collab-ws` — 13, 10 and 1 (the socket test) passed; `cargo test -p
+wordcraft-collab-server -p wordcraft-collab-web` — 29 passed + 1 ignored (the
+LibreOffice commit gate) and 5 passed; `cargo clippy` on the three crates with
+`--all-targets -- -D warnings` clean; `cargo fmt --all -- --check` clean. No push
+was made and CI is unchanged.
 
 ## 6. Where things live
 
