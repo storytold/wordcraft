@@ -58,10 +58,12 @@ mod ctx;
 mod floats;
 mod flow;
 mod headers;
+mod missing;
 mod notes;
 mod page;
 mod pass;
 mod placed;
+mod strict;
 mod substituted;
 mod table_flow;
 
@@ -82,6 +84,7 @@ use headers::MAX_HEADER_ITEMS;
 #[cfg(test)]
 use headers::placed_cost;
 use headers::placed_cost_by;
+pub use missing::{MAX_MISSING_GLYPHS, MissingGlyphs, metafile_text_run, missing_watermark_glyphs, watermark_run};
 pub use notes::DECOR_STORY;
 pub(crate) use notes::NOTE_SEP_W;
 use notes::{MAX_NOTE_PASSES, footnote_pages};
@@ -91,6 +94,7 @@ use page::item_bottom;
 use pass::layout_pass;
 pub use pass::now_ms;
 pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
+pub use strict::{MAX_PDF_PICTURE_SIDE, MAX_PNG_PICTURE_SIDE, StrictOutput, media_check, undecodable_pictures};
 pub use substituted::MAX_SUBSTITUTED;
 
 /// How the document is viewed.
