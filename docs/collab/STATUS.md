@@ -292,7 +292,9 @@ Results at this writing:
   real cabinet page and its storage, and the visible commit status stay manual.
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
-  and every other command still has none and acts as an undo barrier. The `opId`
+  including the two that rewrite the characters, `format.changeCase` and
+  `format.enclose`, whose inverse restores the paragraph's body (§5.11); every
+  other command still has none and acts as an undo barrier. The `opId`
   dedup window travels with the snapshot (§5.5), so a retry across a restart is
   deduplicated; the window is bounded at 10 000 answers, so a retry after more
   than that (or of an operation accepted after the last snapshot, which the
@@ -304,8 +306,8 @@ Results at this writing:
   structural operations that reindex cell ids instead of retiring them, so the
   caret of a client holding a cell id survives. What still travels as a command
   is a text box, formatting and anything the diff cannot express; a formatting
-  command's inverse is a `set_para_format` primitive (§5.10), the rest stay
-  barriers; a command that
+  command's inverse is a `set_para_format` primitive (§5.10, §5.11), the rest
+  stay barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
   table edits undo exactly (§5.8): an inserted column, a column removal, a merge
@@ -317,9 +319,10 @@ Results at this writing:
 - An inverse carries the bodies it puts back, so it is bounded: a merge, a split
   or a column removal whose restore data would pass 256 KiB keeps no inverse and
   undo reports that step as `unsupported` (§5.8). A formatting step carries the
-  previous runs, mark and paragraph properties of the paragraphs it changed and
-  is bounded at 256 paragraphs, so a formatting action over a wider selection
-  stays a barrier too (§5.10). A structural step still cannot
+  previous runs, mark and paragraph properties of the paragraphs it changed —
+  and, for a case change or an enclosure, their text and inline objects — and is
+  bounded at 256 paragraphs, so a formatting action over a wider selection stays
+  a barrier too (§5.10, §5.11). A structural step still cannot
   be undone once any later structural operation landed, so two merges in a row
   can be undone only newest first (§4, ADR-0010).
 - Offline editing is not supported: while a session reconnects, document commands
@@ -904,15 +907,16 @@ one of those paragraphs — typing or formatting — makes undo answer
 the room version; the step stays on the stack and the session stays `InSync`
 (§5.9). An edit in a paragraph the step did not touch does not block the undo.
 
-**What stays a barrier.** Only property-only commands are listed. Commands that
-move or rewrite text (`format.changeCase`, `format.enclose` with `text`,
-`para.sort`, `para.moveUp`/`moveDown`, `para.promote`/`demote`,
-`para.removeBlank`, `para.convertBreaks`, the space/indent text tools), allocate
-numbering definitions (`para.bullets`, `para.numbering`, `para.multilevel`,
-`para.restartNumbering`) or otherwise change more than `runs`/`mark`/`props`
-still have no inverse, and their undo answers `unsupported` — as do a step over
-more than 256 paragraphs, and a collapsed-caret formatting command that only
-sets the session's pending formatting (no document change to restore).
+**What stays a barrier.** Only commands a paragraph snapshot can name are
+listed; §5.11 lifts the two that rewrite text out of this list. Commands that
+move or reorder blocks or text (`para.sort`, `para.moveUp`/`moveDown`,
+`para.promote`/`demote`, `para.removeBlank`, `para.convertBreaks`, the
+space/indent text tools), allocate numbering definitions (`para.bullets`,
+`para.numbering`, `para.multilevel`, `para.restartNumbering`) or otherwise
+change more than `text`/`objects`/`runs`/`mark`/`props` still have no inverse,
+and their undo answers `unsupported` — as do a step over more than 256
+paragraphs, and a collapsed-caret formatting command that only sets the
+session's pending formatting (no document change to restore).
 
 **Tests.**
 
@@ -948,6 +952,96 @@ sets the session's pending formatting (no document change to restore).
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app -p wordcraft-collab-client -p wordcraft-collab-ws` — 49,
 52, 23, 17, 13 and 0 plus 1 socket test, all passed; `cargo clippy` on those six
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
+
+### 5.11 The body a text-rewriting command changed comes back with it (run 2026-11-09)
+
+§5.10 left `format.changeCase` and `format.enclose` with `text` as undo
+barriers: a formatting-only inverse would put the old `runs` over the new text.
+**Head `79940cc6`** on `feature/realtime-collaboration`, with this entry's docs
+commit on top (no push, CI unchanged).
+
+**The snapshot now includes the body.** A formatting command is still captured
+as every paragraph between the ordered selection ends, but `FormatSnapshot`
+(`crates/collab-engine`) now also keeps the paragraph's `text` and inline
+`objects` beside `runs`, `mark` and `props`. After the command it compares the
+state of each paragraph: a paragraph whose characters changed gets a `set_para_format`
+that carries the previous `text`, the previous `objects` (an enclosed-character
+field lives there), the `runs` of that text, and `expect` — the text the
+paragraph holds **after** the command; `mark` and `props` travel only if they
+changed too. A case change keeps each run's formatting, and the inverse puts
+the exact earlier text/run composition back; un-enclosing removes the field and
+restores the plain characters.
+
+**The primitive validates the body before it mutates.** `set_para_format`
+(`crates/collab-doc`) accepts `text`, `objects` and `expect`. All checks run
+before the document is touched: the address must name a paragraph (a table, a
+row, a cell, an unknown id → `invalid`; an id the room retired → `gone`);
+`expect` must equal the paragraph's current text; `objects` must match the
+number of `U+FFFC` characters in the target text; the runs must cover the target
+text byte for byte and end on character boundaries; and a body restore must
+carry both its `objects` and its `runs`. The adapter keeps the previous body and
+objects as its own inverse, so a rollback of a multi-operation step restores
+them too.
+
+**One transaction, the same JSON at every replica.** Several changed paragraphs
+become several `set_para_format` operations and therefore one
+`{"op":"transaction","ops":[…]}` delta, as a table step already did.
+`apply_delta` replays that delta on the author's and the peer's `Session` from
+the same JSON, so both end at the exact document JSON the room holds; redo still
+replays the original command over the restored text.
+
+**A foreign edit of any captured paragraph is `undo-conflict`.** The step
+reports every captured paragraph in `Effect::touched`. Any later operation by
+another user in one of them — typing, formatting or another rewrite — makes
+undo answer `undo-conflict` without changing the document at any replica and
+without moving the room version; the step stays on the stack and the session
+stays `InSync` (§5.9).
+
+**What stays a barrier.** A step over more than 256 paragraphs is not captured
+at all: the command still runs, but the step has no inverse and its undo answers
+`unsupported` instead of sending an unbounded transaction. Commands that move or
+reorder blocks, allocate numbering definitions or change more than a paragraph's
+body and formatting are unchanged from §5.10. The client's diff fallback is
+unchanged too: a case change planned from the document difference still travels
+as a `replace_range` primitive (whose undo is a text edit); this entry covers
+the command path — track changes on, the CLI/MCP, or any client that submits the
+command itself.
+
+**Tests.**
+
+- `crates/collab-engine/src/tests.rs`:
+  `a_case_change_undo_restores_the_previous_text_and_runs` (two differently
+  formatted runs, undo → the exact earlier JSON, delta is one
+  `set_para_format` naming `text`/`expect`, redo → upper again),
+  `an_enclose_undo_removes_the_field_and_restores_the_text` (one inline object
+  after the command, undo → the exact earlier JSON, `objects: []`),
+  `an_undo_delta_replays_on_a_replica_session` (a second `Session` learns the
+  command and the undo only from deltas and ends at the exact earlier document),
+  `a_step_over_more_than_256_paragraphs_stays_an_undo_barrier` (300 paragraphs:
+  the command lands, undo → `unsupported`, text unchanged),
+  `a_body_restore_on_a_retired_node_is_refused_before_mutation` (retired id →
+  `gone`, document and version unchanged).
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s):
+  `a_two_paragraph_case_change_undo_lands_as_one_transaction_on_both_replicas`
+  (one `transaction` delta with two body restores, author and peer at the exact
+  earlier JSON),
+  `an_enclose_undo_removes_the_field_at_its_author_and_the_peer`,
+  `a_foreign_edit_of_a_rewritten_paragraph_refuses_the_undo_without_touching_the_document`
+  (Bob types into the paragraph, Alice's undo is `undo-conflict`, both documents
+  byte-identical before and after, room version unchanged).
+- `crates/collab-doc/src/tests.rs`:
+  `a_body_restore_rewrites_the_text_and_objects_it_names` (adapter round trip:
+  apply, then the stored inverse restores the exact JSON),
+  `a_body_restore_with_a_stale_expect_is_refused_before_mutation` (stale or
+  missing `expect`, missing `objects`, objects that do not match the text → all
+  `invalid`, nothing written).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 49, 54, 27 and 20 passed; `cargo clippy` on those four
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
