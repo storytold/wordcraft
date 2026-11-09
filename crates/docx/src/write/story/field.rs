@@ -15,7 +15,7 @@ impl Writer<'_> {
         if self.toc_hold_end && is_toc(instr) {
             // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).
             self.toc_hold_end = false;
-            self.toc_field = Some((instr.to_string(), locked, dirty, props.clone()));
+            self.toc_field = Some((instr.to_string(), locked, dirty, form.to_string(), props.clone()));
             return;
         }
         if let Some(e) = wordcraft_doc::eq::Enclosure::parse(instr) {

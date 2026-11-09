@@ -16,6 +16,7 @@ mod find_apostrophes;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod para_tools;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -10802,6 +10803,44 @@ fn insert_picture_takes_a_windows_metafile() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn window_commands_need_the_desktop_and_name_a_window() {
+    use crate::cmd::view::OtherWindow;
+    let mut s = s();
+    // Web, CLI, MCP: one window, so View › Window is disabled.
+    for id in ["view.arrangeAll", "view.sideBySide", "view.syncScroll"] {
+        assert!(s.run(id, &json!({})).is_err(), "{id} without a window host");
+    }
+    s.windows.available = true;
+    run(&mut s, "view.arrangeAll", json!({}));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "arrange"})));
+    assert!(s.run("view.sideBySide", &json!({})).is_err(), "no other window");
+    s.windows.others = vec![OtherWindow { id: 7, title: "Notes".into() }, OtherWindow { id: 9, title: "Draft".into() }];
+    let e = s.run("view.sideBySide", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("7 (Notes)") && e.contains("9 (Draft)"), "several windows: say which: {e}");
+    assert!(s.run("view.sideBySide", &json!({"window": 8})).is_err(), "an unknown window");
+    assert!(s.run("view.sideBySide", &json!({"window": "9"})).is_err());
+    // Side by Side pairs with one window and scrolls together until turned off.
+    assert!(s.run("view.syncScroll", &json!({})).is_err(), "only while Side by Side is on");
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7}));
+    assert_eq!((r["value"].as_bool(), s.windows.side_by_side, s.windows.sync_scroll), (Some(true), Some(7), true));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "with": 7})));
+    run(&mut s, "view.syncScroll", json!({}));
+    assert!(!s.windows.sync_scroll);
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "syncScroll", "with": 7, "value": false})));
+    // Asking again for the partner it already has keeps scrolling off and pairs nothing anew.
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7, "value": true}));
+    assert_eq!((r["syncScroll"].as_bool(), s.windows.sync_scroll), (Some(false), false));
+    assert!(s.ui_requests.is_empty());
+    // Another partner replaces the first; the bare button turns it off.
+    run(&mut s, "view.sideBySide", json!({"window": 9}));
+    assert_eq!(std::mem::take(&mut s.ui_requests), [json!({"windows": "sideBySide", "off": 7}), json!({"windows": "sideBySide", "with": 9})]);
+    run(&mut s, "view.sideBySide", json!({}));
+    assert_eq!((s.windows.side_by_side, s.windows.sync_scroll), (None, false));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "off": 9})));
+    assert!(!s.dirty, "window commands never touch the document");
+}
+
 /// Change Picture must keep the replacement's own format: the part's name and content type
 /// come from the extension, so a JPEG stored as `imageN.png` saves declared `image/png` (Word
 /// and LibreOffice then show a broken picture).
@@ -12582,6 +12621,40 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn screen_paper_color_is_a_persistent_preference_not_document_formatting() {
+    use crate::cmd::view::PaperColor;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Screen paper test", "raw": true}));
+    let before = serde_json::to_value(&s.doc).unwrap();
+    let docx_before = wordcraft_docx::write(&s.doc).unwrap();
+    s.dirty = false;
+    let dirty = s.dirty;
+    s.view.dark_mode = true;
+    for (value, expected) in
+        [("green", PaperColor::Green), ("cream", PaperColor::Cream), ("gray", PaperColor::Gray), ("document", PaperColor::Document)]
+    {
+        run(&mut s, "view.paperColor", json!({"value": value}));
+        assert_eq!(s.prefs.paper_color, expected);
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        assert_eq!(s.dirty, dirty);
+        assert_eq!(wordcraft_docx::write(&s.doc).unwrap(), docx_before);
+        assert!(!s.view.dark_mode, "choosing a tint turns off dark paper");
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        let restored: crate::Prefs = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.paper_color, expected);
+    }
+    for v in [json!({}), json!({"value": "red"}), json!({"value": 42})] {
+        assert!(s.run("view.paperColor", &v).is_err());
+        assert_eq!(s.prefs.paper_color, PaperColor::Document);
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(legacy.paper_color, PaperColor::Document);
+    let future: crate::Prefs = serde_json::from_value(json!({"paperColor":"future", "countNotes":false})).unwrap();
+    assert_eq!(future.paper_color, PaperColor::Document);
+    assert!(!future.count_notes);
+}
+
 /// Font › Emphasis mark puts a mark over (or under) each selected character, and the layout
 /// draws one per character; Format state reports it, and none takes it off.
 #[test]
@@ -13052,4 +13125,66 @@ fn range_field_update_preserves_anchors_and_first_run_formatting_and_handles_seq
 
     let para2 = s.doc.body[2].as_para().unwrap();
     assert!(para2.plain_text().ends_with("Unclosed"), "unclosed range field stays untouched: {}", para2.plain_text());
+}
+
+#[test]
+fn range_field_update_remaps_caret_and_skips_mixed_fmt_change_runs() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::{CharProps, PropChange};
+
+    // 1. Caret placed after a range field stays at the same logical character after F9 lengthens the result.
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "LongerText", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "a", &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), "X", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "b", &CharProps::default()).unwrap();
+    let caret_at_end = p.len();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos {
+        story: StoryRef::Body,
+        path: wordcraft_doc::Path(vec![0]),
+        off: caret_at_end,
+    });
+    run(&mut s, "references.updateFields", json!({"all": false}));
+    let updated = s.doc.body[0].as_para().unwrap();
+    assert_eq!(updated.plain_text(), "LongerTextaLongerTextb");
+    assert_eq!(s.sel.focus.off, updated.len(), "caret at end of paragraph shifts with range-field result growth");
+
+    // 2. Range field whose result runs carry differing fmt_change revisions is not overwritten.
+    let mut fp = wordcraft_doc::Paragraph::new();
+    fp.insert_object(
+        0,
+        InlineObject::FieldStart { instr: r#" DATE \@ "yyyy" "#.into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let fmt_run = CharProps {
+        bold: Some(true),
+        fmt_change: Some(Box::new(PropChange {
+            rev: 0,
+            old: CharProps::default(),
+        })),
+        ..Default::default()
+    };
+    fp.insert_text(fp.len(), "20", &fmt_run).unwrap();
+    fp.insert_text(fp.len(), "25", &CharProps::default()).unwrap();
+    fp.insert_object(fp.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    let mut d2 = wordcraft_doc::Document::new();
+    d2.body = vec![wordcraft_doc::para_block(fp)];
+    crate::cmd::references::refresh_date_fields(&mut d2);
+    let para2 = d2.body[0].as_para().unwrap();
+    assert_eq!(para2.plain_text(), "2025");
+    assert!(para2.run_ranges().any(|(_, pr)| pr.fmt_change.is_some()));
 }

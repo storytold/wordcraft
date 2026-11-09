@@ -112,10 +112,10 @@ impl Writer<'_> {
         }
         // Taken before the content so a nested story (a text box in an entry) can't claim them.
         if std::mem::take(&mut self.toc_begin_here)
-            && let Some((instr, locked, dirty, props)) = self.toc_field.take()
+            && let Some((instr, locked, dirty, form, props)) = self.toc_field.take()
         {
             self.rev_open(w, &props);
-            self.field_start(w, &instr, locked, dirty, "", &props);
+            self.field_start(w, &instr, locked, dirty, &form, &props);
             self.rev_close(w, &props);
         }
         let toc_end = std::mem::take(&mut self.toc_end_here);
