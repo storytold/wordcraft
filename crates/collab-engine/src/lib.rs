@@ -78,8 +78,10 @@ const CHAR_FORMAT_COMMANDS: &[&str] = &[
 
 /// The frequent paragraph-formatting commands with an exact inverse: they only
 /// change paragraph properties (alignment, indents, spacing, keep rules, tabs,
-/// borders, shading, direction, the paragraph style). Commands that strip text
-/// (`para.removeBlank`) stay barriers. `para.sort` is normalized to `permute` by
+/// borders, shading, direction, the paragraph style). Commands that delete
+/// blocks instead (`para.removeBlank`) are normalized to `remove_blank` by
+/// [`SessionModel::normalized_remove_blank`] and are not formatting commands.
+/// `para.sort` is normalized to `permute` by
 /// [`SessionModel::normalized_permute`], the outline level commands
 /// (`para.promote`/`demote` and the Outlining tab's levels) to
 /// `set_para_level` by [`SessionModel::normalized_level`], and the Bullets and
