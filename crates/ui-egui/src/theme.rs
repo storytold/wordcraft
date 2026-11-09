@@ -671,6 +671,11 @@ pub fn font_definitions_language_arabic(
     for f in wordcraft_fonts::georgian_fonts() {
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
+    // Thai likewise: the craft-fonts Thai face, for "ไทย" in the language list and for a Thai
+    // interface when Sarabun isn't installed ([`thai_interface_faces`] puts Sarabun first).
+    for f in wordcraft_fonts::thai_fonts() {
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
     // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
     // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
     // installed CJK font after them, so the menus don't show boxes or `?`.

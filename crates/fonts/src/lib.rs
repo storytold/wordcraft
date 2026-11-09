@@ -78,6 +78,12 @@ pub fn georgian_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Geor") && f.style == "Regular")
 }
 
+/// The craft-fonts Thai (`"Thai"`) Regular face for the interface: Thai menus, and "ไทย" in the
+/// language list, when no Sarabun is installed. Empty without craft-fonts.
+pub fn thai_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Thai") && f.style == "Regular")
+}
+
 /// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,
 /// Chinese, and Korean faces ordered for the selected interface language. Mixing the faces within
 /// a line would mix glyph styles, so the first face should cover the interface language. Empty
