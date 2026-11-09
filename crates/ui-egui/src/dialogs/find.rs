@@ -137,7 +137,7 @@ pub(super) fn find_in_navigation_pane(app: &mut WordApp, ctx: &egui::Context, te
 
 /// Whether `e` is the text of the shortcut that opened a box (see `Dialog::Commands::swallow`):
 /// a plain key press first means the user is typing, and one swallowed text is all there is.
-pub(super) fn swallow_shortcut_text(swallow: &mut bool, e: &egui::Event) -> bool {
+pub(crate) fn swallow_shortcut_text(swallow: &mut bool, e: &egui::Event) -> bool {
     match e {
         egui::Event::Key { pressed: true, modifiers, .. } if !modifiers.alt => {
             *swallow = false;
