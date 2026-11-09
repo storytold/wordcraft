@@ -398,7 +398,7 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     grid
 }
 
-fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
+fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, in_cell: bool, style: Option<&TableStyleProps>) -> TableFrame {
     let ncols = grid_cols(t).max(1);
     let mut grid = preferred_grid(t, avail);
     let mut total: f32 = grid.iter().sum();
@@ -451,7 +451,7 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     }
     colx.push(acc);
     // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
-    // indent); earlier modes line the first cell's text up with it instead.
+    // indent); earlier modes line the first cell's text up with it instead, outside cells.
     let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
     // The style's borders, overlaid by the table's own side by side.
@@ -465,9 +465,13 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // (left) margin and border are on its right.
     let rtl = t.props.bidi_visual;
     // How far in from the start margin the table's edge sits when it is start-aligned.
-    let start_offset = if ctx.doc.settings.compat_mode >= 15 {
+    // Mode 15 puts every table's edge at the margin, and in every mode a table nested in a cell
+    // keeps its edge at the cell's text, so its own margin insets its text (Word's PDFs of
+    // documents in mode 12). Only a table outside cells before mode 15 moves out by its margin.
+    let start_offset = if ctx.doc.settings.compat_mode >= 15 || in_cell {
         // The border is centred on the edge, so half of it sits outside: Word moves the table in
-        // by that half.
+        // by that half. Word for Windows, Nov 2026: a nested table's 1.5pt left line sits 0.75pt
+        // right of its cell's text in mode 14 and in mode 15, whatever its own margins.
         let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
         indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
     } else {
@@ -484,12 +488,12 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x }
 }
 
-pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
+pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize, in_cell: bool) -> TableLayout {
     let style = table_style(ctx, t);
     // Cell text formatting and looks per set of style parts, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();
     let mut looks: Vec<(Region, RegionLook)> = Vec::new();
-    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, style.as_ref());
+    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, in_cell, style.as_ref());
     let nrows = t.rows.len();
     // First pass: lay out every cell's content.
 

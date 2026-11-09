@@ -156,9 +156,11 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     {
         return false;
     }
-    let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
+    let layout = table::layout_table(ctx, story, t, path, width, depth + 1, in_cell);
     let (tx, ty) = match t.props.float {
         Some(float) => {
+            // Unverified in Word: a floating table nested in a cell still moves out by its margin, unlike
+            // an inline one (`table_frame`); left alone until a document shows otherwise.
             let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_margin(ctx, t));
             let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
