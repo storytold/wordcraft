@@ -114,6 +114,10 @@ pub(crate) struct PartScan {
     pub facts: StoryFacts,
     /// Relationship ids named by `w:contentPart` elements in this part.
     pub content_parts: Vec<String>,
+    /// Skipped contentPart ids used only to exempt CT-MISMATCH, never for CONTENTPART-TYPE.
+    pub content_part_exemptions: Vec<String>,
+    /// The fact budget dropped at least one exemption-only id.
+    pub content_part_exemptions_capped: bool,
     /// The fact budget dropped at least one contentPart id in this part.
     pub content_part_capped: bool,
     /// This (settings) part carries `w:uiCompat97to2003`.
@@ -537,6 +541,8 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         refs: Vec::new(),
         facts: StoryFacts::default(),
         content_parts: Vec::new(),
+        content_part_exemptions: Vec::new(),
+        content_part_exemptions_capped: false,
         content_part_capped: false,
         compat_97_2003: false,
         special_notes: Vec::new(),
@@ -592,8 +598,16 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_open(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 } else {
-                    // Suppressed content is skipped by every other check;
-                    // the paraId family is branch-aware and still applies.
+                    // Only exemption ids and the branch-aware paraId family are collected in skipped content.
+                    // Consumption still exempts the pairing, but skipped content must not gain type findings.
+                    collect_content_part(
+                        &id,
+                        &attrs,
+                        reader.resolver(),
+                        &mut out.content_part_exemptions,
+                        acc.limits.facts,
+                        &mut out.content_part_exemptions_capped,
+                    );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 let frame = Frame { alt: is_alt, suppressed: was_suppressed, alt_branch_prev: branch_prev, ..frame_for(&id) };
@@ -623,6 +637,15 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
                     on_empty(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 } else {
+                    // Consumption still exempts the pairing, but skipped content must not gain type findings.
+                    collect_content_part(
+                        &id,
+                        &attrs,
+                        reader.resolver(),
+                        &mut out.content_part_exemptions,
+                        acc.limits.facts,
+                        &mut out.content_part_exemptions_capped,
+                    );
                     check_para_ids(&mut state, &id, &attrs, reader.resolver(), role, part, acc);
                 }
                 if is_alt {

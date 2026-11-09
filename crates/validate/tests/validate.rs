@@ -4494,3 +4494,44 @@ fn ct_mismatch_duplicate_id_exemption_follows_the_resolved_relationship() {
     assert_finding(&report, "CT-MISMATCH", Some("word/media/pic.png"));
     assert!(!has(&report, "CONTENTPART-TYPE"), "findings: {:?}", report.findings);
 }
+
+/// Skipped contentPart references only exempt the customXml pairing; they never gain type findings.
+#[test]
+fn ct_mismatch_skipped_contentpart_is_exemption_only() {
+    for element in [r#"<w:contentPart r:id="rIdCP"/>"#, r#"<w:contentPart r:id="rIdCP"></w:contentPart>"#] {
+        for ct in ["text/xml", "application/octet-stream"] {
+            let markup =
+                format!(r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">{element}</mc:Choice><mc:Fallback/></mc:AlternateContent></w:p>"#);
+            let d = content_part_doc(
+                &markup,
+                r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+                "word/data.xml",
+                ct,
+            );
+            let report = validate(&d);
+            assert!(!has(&report, "CT-MISMATCH"), "{ct}, {element}: {:?}", report.findings);
+            assert!(!has(&report, "CONTENTPART-TYPE"), "{ct}, {element}: {:?}", report.findings);
+            assert_eq!(report.verdict, Verdict::Pass, "{ct}, {element}: {:?}", report.findings);
+            assert!(report.coverage_notes.iter().any(|n| n.contains("AlternateContent")), "{:?}", report.coverage_notes);
+        }
+    }
+}
+
+/// Active and skipped references in the same owner must both survive the pairing exemption index.
+#[test]
+fn ct_mismatch_active_and_skipped_contentparts_are_both_exempt() {
+    let markup = format!(
+        r#"{}<w:p><mc:AlternateContent><mc:Fallback><w:contentPart r:id="rIdSkipped"/></mc:Fallback></mc:AlternateContent></w:p>"#,
+        one_content_part("rIdCP")
+    );
+    let d = content_part_doc(
+        &markup,
+        r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/><Relationship Id="rIdSkipped" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+        "word/data.xml",
+        "text/xml",
+    );
+    let report = validate(&d);
+    assert_eq!(report.verdict, Verdict::Pass, "{:?}", report.findings);
+    assert!(!has(&report, "CT-MISMATCH"), "{:?}", report.findings);
+    assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
+}

@@ -692,7 +692,15 @@ pub(crate) fn validate_bytes_limited(bytes: &[u8], limits: Limits) -> Report {
     };
     check_content_types(&pkg, &mut acc);
     let xml = check_xml(&pkg, &mut acc);
-    check_rels(&pkg, &xml.refs, &xml.content_parts, &xml.content_part_incomplete_owners, &xml.content_part_scanned_owners, &mut acc);
+    check_rels(
+        &pkg,
+        &xml.refs,
+        &xml.content_parts,
+        &xml.content_part_exemptions,
+        &xml.content_part_incomplete_owners,
+        &xml.content_part_scanned_owners,
+        &mut acc,
+    );
     check_content_part_types(&pkg, &xml.content_parts, xml.content_part_capped_any, &mut acc);
     check_story(&pkg, &xml.facts, xml.compat, &mut acc);
     check_note_pr(&xml.facts, &xml, &mut acc);
@@ -819,6 +827,8 @@ struct XmlScan {
     refs: Vec<(String, Vec<RefFact>)>,
     /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
     content_parts: Vec<(String, Vec<String>)>,
+    /// Skipped contentPart ids per owner, used only for the CT-MISMATCH exemption.
+    content_part_exemptions: Vec<(String, Vec<String>)>,
     /// A contentPart collection (per part or pooled) hit the fact budget.
     content_part_capped_any: bool,
     /// Owning parts whose contentPart consumption is NOT fully
@@ -861,6 +871,8 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
     let mut refs: Vec<(String, Vec<RefFact>)> = Vec::new();
     let mut content_parts: Vec<(String, Vec<String>)> = Vec::new();
     let mut content_part_total = 0usize;
+    let mut content_part_exemptions: Vec<(String, Vec<String>)> = Vec::new();
+    let mut content_part_exemptions_total = 0usize;
     let mut content_part_capped_any = false;
     let mut content_part_incomplete_owners: HashSet<String> = HashSet::new();
     let mut content_part_scanned_owners: HashSet<String> = HashSet::new();
@@ -955,6 +967,22 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             content_part_capped_any = true;
             content_part_incomplete_owners.insert(e.name.clone());
         }
+        let exemptions_capped = append_content_parts(
+            &mut content_part_exemptions,
+            &mut content_part_exemptions_total,
+            &e.name,
+            scanned.content_part_exemptions,
+            acc.limits.facts,
+        );
+        if scanned.content_part_exemptions_capped || exemptions_capped {
+            // A lost skipped reference cannot establish non-consumption for this owner's pairing check.
+            content_part_incomplete_owners.insert(e.name.clone());
+            acc.note(format!(
+                "the fact budget stopped collection of contentPart pairing exemptions in {}; its customXml pairing was not checked",
+                e.name
+            ));
+            acc.set_incomplete();
+        }
         if scanned.malformed.is_some() {
             // The contentPart collection is not story-only: any part
             // whose scan stopped early has a partial collection.
@@ -1001,6 +1029,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
         facts,
         refs,
         content_parts,
+        content_part_exemptions,
         content_part_capped_any,
         content_part_incomplete_owners,
         content_part_scanned_owners,
@@ -1264,6 +1293,7 @@ fn check_rels(
     pkg: &Package,
     refs: &[(String, Vec<RefFact>)],
     content_parts: &[(String, Vec<String>)],
+    content_part_exemptions: &[(String, Vec<String>)],
     content_part_incomplete_owners: &HashSet<String>,
     content_part_scanned_owners: &HashSet<String>,
     acc: &mut Acc,
@@ -1292,7 +1322,7 @@ fn check_rels(
     check_typed_targets(pkg, acc);
     check_typed_image_refs(pkg, refs, acc);
     check_part_refs(pkg, refs, acc);
-    check_typed_content(pkg, content_parts, content_part_incomplete_owners, content_part_scanned_owners, acc);
+    check_typed_content(pkg, content_parts, content_part_exemptions, content_part_incomplete_owners, content_part_scanned_owners, acc);
 }
 
 /// Find duplicate relationship IDs within a single `.rels` part and report `REL-DUP-ID` findings.
@@ -1513,10 +1543,12 @@ fn rels_owner_name(rels_name: &str) -> Option<String> {
 /// incomplete (budget-capped or unparseable) the row is not applied at
 /// all — non-consumption is not established there, and the run is
 /// already INCOMPLETE. Owners with complete collections are checked
-/// normally.
+/// normally. Skipped contentPart references also exempt their first relationship,
+/// but remain separate so CONTENTPART-TYPE never validates skipped content.
 fn check_typed_content(
     pkg: &Package,
     content_parts: &[(String, Vec<String>)],
+    content_part_exemptions: &[(String, Vec<String>)],
     content_part_incomplete_owners: &HashSet<String>,
     content_part_scanned_owners: &HashSet<String>,
     acc: &mut Acc,
@@ -1524,8 +1556,10 @@ fn check_typed_content(
     acc.ran("CT-MISMATCH");
     // Relationship ids consumed by a `w:contentPart`, keyed by the
     // owning part's relationships-part name (compared case-insensitively).
-    let consumed: HashMap<String, HashSet<&str>> =
-        content_parts.iter().map(|(owner, ids)| (rels_part_name(owner).to_ascii_lowercase(), ids.iter().map(String::as_str).collect())).collect();
+    let mut consumed: HashMap<String, HashSet<&str>> = HashMap::new();
+    for (owner, ids) in content_parts.iter().chain(content_part_exemptions) {
+        consumed.entry(rels_part_name(owner).to_ascii_lowercase()).or_default().extend(ids.iter().map(String::as_str));
+    }
     // Relationships-part names whose owner's consumption collection is
     // incomplete (budget-capped or unparseable): non-consumption is not
     // established for those owners, so the customXml row is not applied
@@ -2911,6 +2945,42 @@ mod budget_tests {
         let full = validate_bytes(&content_part_zip(6));
         assert_eq!(full.findings.iter().filter(|f| f.rule == "CONTENTPART-TYPE").count(), 6);
         assert!(!full.coverage_notes.iter().any(|n| n.contains("contentPart")));
+    }
+
+    /// Skipped references obey per-part and pooled budgets; incomplete consumption never becomes a pairing error.
+    #[test]
+    fn ct_mismatch_skipped_contentpart_exemptions_honour_fact_budgets() {
+        for (main_count, header_count) in [(3, 0), (1, 1)] {
+            let elements = |count| r#"<w:contentPart r:id="cp"/>"#.repeat(count);
+            let main = format!(
+                r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:mc="{NS_MC}"><w:body><w:p><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:p></w:body></w:document>"#,
+                elements(main_count)
+            );
+            let header = format!(
+                r#"<w:hdr xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:mc="{NS_MC}"><w:p><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:p></w:hdr>"#,
+                elements(header_count)
+            );
+            let cp_rels = rels(
+                r#"<Relationship Id="cp" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+            );
+            let ct = String::from_utf8(content_types_with_override("word/data.xml", "text/xml"))
+                .unwrap()
+                .replace("</Types>", &format!(r#"<Override PartName="/word/header.xml" ContentType="{}"/></Types>"#, package::HEADER_CONTENT_TYPE));
+            let bytes = tiny_zip(&[
+                ("[Content_Types].xml", ct.into_bytes()),
+                ("_rels/.rels", package_rels()),
+                ("word/document.xml", main.into_bytes()),
+                ("word/_rels/document.xml.rels", cp_rels.clone()),
+                ("word/header.xml", header.into_bytes()),
+                ("word/_rels/header.xml.rels", if header_count > 0 { cp_rels } else { doc_rels() }),
+                ("word/data.xml", b"<root/>".to_vec()),
+            ]);
+            let report = validate_bytes_limited(&bytes, Limits { facts: 1, ..Limits::default() });
+            assert_eq!(report.verdict, Verdict::Incomplete, "{main_count}/{header_count}: {:?}", report.findings);
+            assert!(report.findings.is_empty(), "{:?}", report.findings);
+            assert!(report.coverage_notes.iter().any(|n| n.contains("contentPart") && n.contains("fact budget")), "{:?}", report.coverage_notes);
+            assert_eq!(validate_bytes(&bytes).verdict, Verdict::Pass);
+        }
     }
 
     /// The #5982 exemption is per-owner: when the MAIN part's
