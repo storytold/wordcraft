@@ -114,7 +114,8 @@ pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, St
     match place {
         Place::Text(Some(f)) if f.wrap != wordcraft_doc::para::Wrap::Inline => {
             let (a, props, xy) = crate::odt::frames::frame_of(f, w, h);
-            (anchor(a), props, xy)
+            let page = if a == "page" && f.page > 0 { format!(" text:anchor-page-number=\"{}\"", f.page) } else { String::new() };
+            (format!("{}{page}", anchor(a)), props, xy)
         }
         Place::Text(f) => {
             let turn = f.filter(|f| crate::odt::frames::turned(f)).map(|f| crate::odt::frames::transform_attr(0.0, 0.0, w, h, f.rot));
@@ -244,11 +245,19 @@ impl Writer {
             None => self.pictures.push((replacement.clone(), img.data.clone(), mime_of(&img.ext).to_string())),
         }
         let el = if o.ole { "draw:object-ole" } else { "draw:object" };
-        format!(
+        let mut inner = format!(
             "<{el} xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/><draw:image xlink:href=\"./{}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>",
             x(&name),
             x(&replacement)
-        )
+        );
+        // A picture shown that isn't the replacement (one WordCraft can't read) follows it; a
+        // placeholder is WordCraft's own, not the file's.
+        let other = o.replacement.as_ref().is_some_and(|r| r.as_slice() != img.data.as_slice());
+        if other && crate::odt::objects::placeholder(&o.mime).as_deref() != Some(img.data.as_slice()) {
+            let href = self.picture(img);
+            inner.push_str(&format!("<draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>"));
+        }
+        inner
     }
 
     /// Object `o` (a chart as read) in the package under the next object name, with its

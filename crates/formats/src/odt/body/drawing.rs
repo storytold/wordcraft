@@ -61,9 +61,12 @@ pub(in crate::odt) fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
 
 /// A frame being read: its width and height, picture bytes, alt text and the equation read from
 /// an embedded formula object.
-/// A group being read (ODF 1.3 §10.3.15 `draw:g`): its anchor, its style, and its members so far.
+/// A group being read (ODF 1.3 §10.3.15 `draw:g`): its anchor and page, its style, and its members
+/// so far.
 pub(in crate::odt) struct OpenGroup {
     pub(in crate::odt) anchor: Option<String>,
+    /// Its `text:anchor-page-number`.
+    pub(in crate::odt) page: Option<String>,
     pub(in crate::odt) style: Option<String>,
     pub(in crate::odt) members: Vec<model::Member>,
 }
@@ -338,7 +341,9 @@ impl Body<'_> {
         }
         let members = g.members.into_iter().map(|m| model::Member { x: fin(m.x) - x0, y: fin(m.y) - y0, ..m }).collect();
         let graphic = self.styles.shape_graphic(g.style.as_deref());
-        let float = crate::odt::frames::float_of(g.anchor.as_deref(), Some(&crate::odt::writer::pt(x0)), Some(&crate::odt::writer::pt(y0)), &graphic);
+        let mut float =
+            crate::odt::frames::float_of(g.anchor.as_deref(), Some(&crate::odt::writer::pt(x0)), Some(&crate::odt::writer::pt(y0)), &graphic);
+        float.page = crate::odt::frames::page_of(g.anchor.as_deref(), g.page.as_deref(), &graphic);
         let float = (float.wrap != wordcraft_doc::para::Wrap::Inline).then(|| Box::new(float));
         let fit = |v: f32| if v.is_finite() { v.clamp(1.0, MAX_LEN) } else { 1.0 };
         self.push_inline(Inline::Group { w: fit(x1 - x0), h: fit(y1 - y0), float, members });
@@ -358,6 +363,7 @@ impl Body<'_> {
             let at = |v: Option<f32>| v.map(crate::odt::writer::pt);
             let mut f = crate::odt::frames::float_of(get(a, "text:anchor-type"), at(x).as_deref(), at(y).as_deref(), &g);
             f.z = crate::odt::frames::z_of(a);
+            f.page = crate::odt::frames::page_of(get(a, "text:anchor-type"), get(a, "text:anchor-page-number"), &g);
             f
         } else {
             crate::odt::frames::place(a, w, h, &g, self.text_size())
@@ -383,6 +389,11 @@ impl Body<'_> {
             n.text_box = Some(frame);
         }
     }
+}
+
+/// Whether WordCraft can show these bytes as a picture (see the function below).
+pub(in crate::odt) fn readable_picture(data: &[u8]) -> bool {
+    wordcraft_metafile::is_metafile(data) || model::sniff_image(data).is_some()
 }
 
 /// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
