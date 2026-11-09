@@ -128,11 +128,15 @@ fn epub_exports_as_a_copy_through_file_save() {
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("book.epub");
     let mut s = Session::new(crate::sample::sample_document());
+    let own = dir.join("book.docx");
+    s.path = Some(own.clone());
+    s.dirty = true;
     let r = run(&mut s, "file.save", json!({"path": path.to_string_lossy()}));
     assert_eq!(r["saved"], true, "{r}");
     let bytes = std::fs::read(&path).unwrap();
     assert!(bytes.starts_with(b"PK\x03\x04"), "an EPUB is a ZIP package");
-    assert_eq!(s.path, None, "an EPUB copy leaves the document associated with its own file");
+    assert_eq!(s.path, Some(own), "an EPUB copy leaves the document associated with its own file");
+    assert!(s.dirty, "an EPUB copy does not mark the document saved");
     assert!(crate::io::SAVE_EXTS.contains(&"epub"));
     let _ = std::fs::remove_dir_all(&dir);
 }
