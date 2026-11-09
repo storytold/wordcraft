@@ -314,6 +314,8 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
 /// saving it asks where to write, and a protected template's password doesn't come along.
 pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
     let path = p::req_str(v, "path")?;
+    // Before anything is read: the path becomes the attached template (#6101).
+    super::templates::check_from_automation(path)?;
     let (mut doc, _) = read_document(s, path, v)?;
     doc.settings.attached_template = Some(path.to_string());
     if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {

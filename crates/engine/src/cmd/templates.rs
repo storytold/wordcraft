@@ -68,6 +68,7 @@ fn attach(s: &mut Session, v: &Value) -> CmdResult {
     if path.len() > MAX_PATH {
         return Err(CmdError::Params("`path` is too long".into()));
     }
+    check_from_automation(path)?;
     let path = path.to_string();
     s.doc.settings.attached_template = Some(path.clone());
     if let Some(on) = p::bool(v, "linkStyles") {
@@ -243,6 +244,33 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
     };
     // Checked again once joined: the document's own folder may be on another machine (#3698).
     (!is_network_path(&p.to_string_lossy())).then_some(p)
+}
+
+/// Refuse `path` as the template a document is attached to when automation gives it
+/// ([`crate::automation`]) and it isn't a file on this computer: a network or device path in any
+/// spelling [`local_path`] and [`is_network_path`] know (`\\host\share`, `//host`, `\\?\UNC\…`,
+/// `\??\UNC\…`, `file://host/…`), or a URL. The path is written into the saved file as an external
+/// relationship, and Word fetches the attached template when it opens the document: from
+/// another machine, the recipient's computer connects there and can send it their NTLM
+/// credentials (#6101). The person at the keyboard may still attach one, as in Word.
+pub(crate) fn check_from_automation(path: &str) -> Result<(), CmdError> {
+    let path = path.trim();
+    if crate::automation::active() && (has_url_scheme(path) || local_path(path, None).is_none()) {
+        return Err(CmdError::Failed(format!(
+            "automation path rejected: the attached template must be a file on this computer, not a network or device path or a URL: {path}"
+        )));
+    }
+    Ok(())
+}
+
+/// Whether `t` starts with a URL scheme other than `file:` (`https:`, also `http:\\host\…`
+/// without the slashes [`local_path`] looks for). One letter before the colon is a drive.
+fn has_url_scheme(t: &str) -> bool {
+    let Some((scheme, _)) = t.split_once(':') else { return false };
+    scheme.len() > 1
+        && scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        && !scheme.eq_ignore_ascii_case("file")
 }
 
 /// Does `p` name another machine or a device, whatever separators it mixes: `\\host\share`,
@@ -534,6 +562,103 @@ mod tests {
         assert!(err.contains("not a local file"), "{err}");
     }
 
+    /// Template references to another machine, in every spelling the path checks know.
+    const REMOTE: [&str; 11] = [
+        "\\\\evil.example\\share\\T.dotx",
+        "//evil.example/share/T.dotx",
+        "\\\\?\\UNC\\evil.example\\share\\T.dotx",
+        "file://evil.example/share/T.dotx",
+        "file:////evil.example/share/T.dotx",
+        "FILE://Evil.Example/T.dotx",
+        // The NT namespace (#3698), with any separators.
+        "\\??\\UNC\\evil.example\\share\\T.dotx",
+        "/??/UNC/evil.example/share/T.dotx",
+        "\\??/UNC\\evil.example/share/T.dotx",
+        "\\??\\GLOBALROOT\\Device\\Mup\\evil.example\\share\\T.dotx",
+        "\\\\.\\UNC\\evil.example\\share\\T.dotx",
+    ];
+
+    /// What automation may not attach either (#6101): more spellings of another machine (mixed
+    /// and forward slashes, lower case, percent-encoded, padded), devices, and URLs (one without
+    /// the slashes).
+    const NOT_LOCAL: [&str; 10] = [
+        "\\/evil.example/share/T.dotx",
+        "//?/UNC/evil.example/share/T.dotx",
+        "\\\\?\\unc\\evil.example\\share\\T.dotx",
+        "file:%5C%5Cevil.example%5Cshare%5CT.dotx",
+        "  \\\\evil.example\\share\\T.dotx ",
+        "\\\\.\\pipe\\T",
+        "\\\\.\\PhysicalDrive0",
+        "https://evil.example/T.dotx",
+        "HTTP:\\\\evil.example\\T.dotx",
+        "webdav+x:evil.example/T.dotx",
+    ];
+
+    /// Templates on this computer, which automation may still attach.
+    const LOCAL: [&str; 9] = [
+        "Report.dotx",
+        "Templates/Report.dotx",
+        "C:\\Templates\\Report.dotx",
+        "/home/a/Templates/Report.dotx",
+        "file:///C:/Templates/Report.dotx",
+        "file://localhost/home/a/Report.dotx",
+        "\\\\?\\C:\\Templates\\Report.dotx",
+        "//?/C:/Templates/Report.dotx",
+        "\\??\\C:\\Templates\\Report.dotx",
+    ];
+
+    /// #6101: automation (MCP, the control channel, `wordcraft-cli run`) can't attach a template
+    /// that isn't on this computer, with `tools.attachTemplate` or `file.newFromTemplate` (with
+    /// the template's bytes or without): nothing changes, nothing is read, and the saved file
+    /// still names the template the document had.
+    #[test]
+    fn automation_cannot_attach_a_template_on_another_machine() {
+        use crate::automation::from_automation;
+        let data = crate::cmd::insert::base64_encode(&wordcraft_docx::write(&template()).unwrap());
+        for remote in REMOTE.iter().chain(&NOT_LOCAL) {
+            let mut s = Session::new(Document::new());
+            s.run("tools.attachTemplate", &json!({"path": "Local.dotx"})).unwrap();
+            let before = s.documents().len();
+            for (id, params) in [
+                ("tools.attachTemplate", json!({"path": remote, "linkStyles": true, "update": true, "data": data})),
+                ("tools.attachTemplate", json!({"path": remote})),
+                ("file.newFromTemplate", json!({"path": remote, "data": data})),
+                // Refused before the path is read: not a read error.
+                ("file.newFromTemplate", json!({"path": remote})),
+            ] {
+                let e = from_automation(|| s.run(id, &params)).unwrap_err().to_string();
+                assert!(e.starts_with("automation path rejected: the attached template must be a file on this computer"), "{id} {remote}: {e}");
+            }
+            assert_eq!(s.documents().len(), before, "{remote}: no document from the template");
+            assert_eq!(s.doc.settings.attached_template.as_deref(), Some("Local.dotx"), "{remote}");
+            assert!(!s.doc.settings.link_styles, "{remote}");
+            assert_ne!(s.doc.styles.get("Heading1").unwrap().chr.size, Some(31.0), "{remote}: styles not updated");
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+            assert_eq!(saved.settings.attached_template.as_deref(), Some("Local.dotx"), "{remote}");
+        }
+    }
+
+    /// #6101: automation may still attach a template on this computer, in any local spelling, and
+    /// the person at the keyboard may attach one anywhere, as in Word.
+    #[test]
+    fn local_templates_from_automation_and_any_template_from_the_keyboard() {
+        let data = crate::cmd::insert::base64_encode(&wordcraft_docx::write(&template()).unwrap());
+        let cases = LOCAL.iter().map(|p| (*p, true)).chain(REMOTE.iter().chain(&NOT_LOCAL).map(|p| (*p, false)));
+        for (path, automation) in cases {
+            let run = |s: &mut Session, id: &str, v: Value| {
+                if automation { crate::automation::from_automation(|| s.run(id, &v)) } else { s.run(id, &v) }
+            };
+            let mut s = Session::new(Document::new());
+            run(&mut s, "tools.attachTemplate", json!({"path": path, "linkStyles": true})).unwrap();
+            assert_eq!(s.doc.settings.attached_template.as_deref(), Some(path.trim()), "{path}");
+            assert!(s.doc.settings.link_styles, "{path}");
+            run(&mut s, "file.newFromTemplate", json!({"path": path, "data": data})).unwrap();
+            assert_eq!(s.documents().len(), 2, "{path}");
+            assert_eq!(s.doc.settings.attached_template.as_deref(), Some(path), "{path}");
+            assert_eq!(s.doc.styles.get("Heading1").unwrap().chr.size, Some(31.0), "{path}: the template's content");
+        }
+    }
+
     #[test]
     fn template_references_become_local_paths() {
         assert_eq!(local_path("file:///C:/Users/A%20B/T.dotx", None), Some(PathBuf::from("C:/Users/A B/T.dotx")));
@@ -542,20 +667,7 @@ mod tests {
         assert_eq!(local_path("T.dotx", Some(Path::new("/docs/Letter.docx"))), Some(PathBuf::from("/docs/T.dotx")));
         assert_eq!(local_path("file://localhost/home/a/T.dotx", None), Some(PathBuf::from("/home/a/T.dotx")));
         // A hostile document must not send us to another machine (NTLM credential leak over SMB on Windows).
-        for remote in [
-            "\\\\evil.example\\share\\T.dotx",
-            "//evil.example/share/T.dotx",
-            "\\\\?\\UNC\\evil.example\\share\\T.dotx",
-            "file://evil.example/share/T.dotx",
-            "file:////evil.example/share/T.dotx",
-            "FILE://Evil.Example/T.dotx",
-            // The NT namespace (#3698), with any separators.
-            "\\??\\UNC\\evil.example\\share\\T.dotx",
-            "/??/UNC/evil.example/share/T.dotx",
-            "\\??/UNC\\evil.example/share/T.dotx",
-            "\\??\\GLOBALROOT\\Device\\Mup\\evil.example\\share\\T.dotx",
-            "\\\\.\\UNC\\evil.example\\share\\T.dotx",
-        ] {
+        for remote in REMOTE {
             assert_eq!(local_path(remote, Some(Path::new("/docs/Letter.docx"))), None, "{remote}");
             assert_eq!(local_path(remote, None), None, "{remote} without a folder");
         }
