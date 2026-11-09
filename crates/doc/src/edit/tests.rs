@@ -663,13 +663,15 @@ fn removing_a_whole_table_keeps_a_control_the_range_only_partly_covers() {
 
 #[test]
 fn a_table_nested_deeper_than_the_paragraph_walk_is_never_removed_whole() {
-    // 20 tables, each in the first cell of the one around it, ahead of that cell's paragraph:
-    // the innermost paragraphs come first in the document but the paragraph walk stops short.
+    // The deepest nesting allowed, each table in the first cell of the one around it, ahead of
+    // that cell's paragraph: the innermost paragraphs come first in the document but the
+    // paragraph walk stops short.
+    const { assert!(MAX_TABLE_DEPTH > crate::PARA_WALK_DEPTH) };
     let mut t = Table::new(1, 1, 200.0);
     if let Some(cell) = t.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
         cell.blocks = vec![para_block(Paragraph::with_text("deep", CharProps::default()))];
     }
-    for _ in 0..20 {
+    for _ in 1..MAX_TABLE_DEPTH {
         let mut outer = Table::new(1, 1, 200.0);
         if let Some(cell) = outer.rows.get_mut(0).and_then(|r| r.cells.get_mut(0)) {
             cell.blocks.insert(0, Arc::new(Block::Table(t)));
@@ -690,19 +692,19 @@ fn adopting_a_document_renumbers_what_it_refers_to() {
     let mut ours = doc(&["ours"]);
     let our_note = ours.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("our note", CharProps::default()))]);
     ours.comments.insert(0, Comment { part: our_note, ..Comment::default() });
-    let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+    let our_list = Arc::make_mut(&mut ours.numbering).add_list(crate::numbering::ListKind::Bullet);
     ours.revisions.push(Revision { kind: RevisionKind::Insert, ..Revision::default() });
 
     let mut theirs = doc(&["theirs"]);
     let note = theirs.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("their note", CharProps::default()))]);
     let said = theirs.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("their comment", CharProps::default()))]);
     theirs.comments.insert(0, Comment { author: "Them".into(), part: said, durable_id: Some("0A0B0C0D".into()), ..Comment::default() });
-    let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Bullet);
     assert_eq!(list, our_list);
     theirs.revisions.push(Revision { kind: RevisionKind::Delete, ..Revision::default() });
     let mut style = crate::styles::Style { id: "TheirList".into(), name: "Their List".into(), ..Default::default() };
     style.para.numbering = Some(crate::props::NumRef { num: list, level: 0 });
-    theirs.styles.upsert(style);
+    Arc::make_mut(&mut theirs.styles).upsert(style);
     let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     p.props.numbering = Some(crate::props::NumRef { num: list, level: 0 });
     p.runs[0].props.del = Some(0);
@@ -746,11 +748,11 @@ fn a_kept_character_style_leaves_what_it_doesnt_set_to_the_paragraph_style() {
     use crate::styles::{Style, StyleKind, StyleSheet};
     let mut ours = doc(&["ours"]);
     let mut theirs = doc(&["theirs"]);
-    theirs.styles = StyleSheet::empty();
-    theirs.styles.default_chr = CharProps { size: Some(9.0), ..Default::default() };
+    theirs.styles = Arc::new(StyleSheet::empty());
+    Arc::make_mut(&mut theirs.styles).default_chr = CharProps { size: Some(9.0), ..Default::default() };
     let big = CharProps { size: Some(20.0), ..Default::default() };
-    theirs.styles.upsert(Style { id: "Big".into(), name: "Big".into(), chr: big, ..Default::default() });
-    theirs.styles.upsert(Style { id: "Link".into(), name: "Link".into(), kind: StyleKind::Character, ..Default::default() });
+    Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Big".into(), name: "Big".into(), chr: big, ..Default::default() });
+    Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Link".into(), name: "Link".into(), kind: StyleKind::Character, ..Default::default() });
     let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     p.props.style = Some("Big".into());
     p.runs[0].props.style = Some("Link".into());
@@ -764,15 +766,15 @@ fn a_kept_character_style_leaves_what_it_doesnt_set_to_the_paragraph_style() {
 fn kept_styles_renamed_on_adoption_are_renamed_in_list_levels_too() {
     use crate::styles::Style;
     let mut ours = doc(&["ours"]);
-    ours.styles.upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
+    Arc::make_mut(&mut ours.styles).upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
     let mut theirs = doc(&["theirs"]);
-    theirs.styles.upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
-    let list = theirs.numbering.add_list(crate::numbering::ListKind::Numbered);
+    Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Heading1".into(), name: "heading 1".into(), ..Default::default() });
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Numbered);
     let abs = theirs.numbering.nums.iter().find(|n| n.id == list).map(|n| n.abstract_id).unwrap();
-    let a = theirs.numbering.abstracts.iter_mut().find(|a| a.id == abs).unwrap();
+    let a = Arc::make_mut(&mut theirs.numbering).abstracts.iter_mut().find(|a| a.id == abs).unwrap();
     a.levels[0].style = Some("Heading1".into());
     let level = a.levels[0].clone();
-    theirs.numbering.nums.iter_mut().find(|n| n.id == list).unwrap().level_overrides.push((1, level));
+    Arc::make_mut(&mut theirs.numbering).nums.iter_mut().find(|n| n.id == list).unwrap().level_overrides.push((1, level));
 
     let before = ours.numbering.abstracts.len();
     ours.adopt_with(theirs, true);
@@ -812,10 +814,10 @@ fn an_adopted_tracked_format_change_keeps_its_old_styles_and_list() {
     use crate::{Revision, RevisionKind};
     for keep in [false, true] {
         let mut ours = doc(&["ours"]);
-        let our_list = ours.numbering.add_list(crate::numbering::ListKind::Bullet);
+        let our_list = Arc::make_mut(&mut ours.numbering).add_list(crate::numbering::ListKind::Bullet);
         let mut theirs = doc(&["theirs"]);
         theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
-        let list = theirs.numbering.add_list(crate::numbering::ListKind::Bullet);
+        let list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Bullet);
         assert_eq!(list, our_list);
         let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         // Live and old props name the same styles (ours has them too) and their list.
@@ -843,8 +845,8 @@ fn adopted_styles_never_become_our_defaults() {
         let mut ours = doc(&["ours"]);
         let mut theirs = doc(&["theirs"]);
         // A localized default character style, and one whose id we have too.
-        theirs.styles.upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
-        theirs.styles.upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+        Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Absatz".into(), kind: StyleKind::Character, default: true, ..Default::default() });
+        Arc::make_mut(&mut theirs.styles).upsert(Style { id: "Strong".into(), kind: StyleKind::Character, default: true, ..Default::default() });
         ours.adopt_with(theirs, keep);
         assert!(ours.styles.styles.iter().all(|s| !s.default), "keep_styles {keep}");
     }

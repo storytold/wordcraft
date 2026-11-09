@@ -693,9 +693,10 @@ fn end_flags(has_sep: bool, locked: bool, dirty: bool, nested: bool) -> u8 {
 }
 
 /// The field code of a link: `HYPERLINK "url"`, `HYPERLINK \l "bookmark"` for an internal
-/// one, or both for a link into another document's bookmark.
+/// one, or both for a link into another document's bookmark. A quote or backslash in an
+/// argument is escaped with a backslash, as field codes do.
 fn hyperlink_instr(target: &str) -> String {
-    let q = |s: &str| s.replace('"', "%22");
+    let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     match target.split_once('#') {
         Some(("", frag)) => format!("HYPERLINK \\l \"{}\"", q(frag)),
         Some((url, frag)) if !frag.is_empty() && !url.contains("://") => format!("HYPERLINK \"{}\" \\l \"{}\"", q(url), q(frag)),
@@ -722,5 +723,7 @@ mod tests {
         assert_eq!(hyperlink_instr("other.doc#Part"), "HYPERLINK \"other.doc\" \\l \"Part\"");
         assert_eq!(crate::hyperlink_target(&hyperlink_instr("#Intro")).as_deref(), Some("#Intro"));
         assert_eq!(crate::hyperlink_target(&hyperlink_instr("https://example.org/?q=\"x\"")).as_deref(), Some("https://example.org/?q=\"x\""));
+        assert_eq!(crate::hyperlink_target(&hyperlink_instr(r"file:///C:\docs\report.doc")).as_deref(), Some(r"file:///C:\docs\report.doc"));
+        assert_eq!(crate::hyperlink_target(&hyperlink_instr("#a\"b")).as_deref(), Some("#a\"b"));
     }
 }

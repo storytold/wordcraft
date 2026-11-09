@@ -118,7 +118,7 @@ fn paragraph_formatting_round_trips() {
 fn styles_round_trip() {
     let mut d = Document::new();
     let h1 = d.styles.styles.iter().find(|s| s.name == "Heading 1").map(|s| s.id.clone()).expect("a Heading 1 style");
-    d.styles.styles.push(wordcraft_doc::styles::Style {
+    Arc::make_mut(&mut d.styles).styles.push(wordcraft_doc::styles::Style {
         id: "MyQuote".into(),
         name: "My Quote".into(),
         kind: wordcraft_doc::styles::StyleKind::Paragraph,
@@ -322,6 +322,7 @@ fn inline_pictures_round_trip() {
             float: Default::default(),
             crop: [0.0; 4],
             ole: None,
+            fx: Default::default(),
         },
         &CharProps::default(),
     )
@@ -355,8 +356,9 @@ fn lists_round_trip() {
         Level { start: 1, format: NumFormat::LowerLetter, text: "%1.%2)".into(), indent: 72.0, hanging: 18.0, ..Level::default() },
         Level { start: 1, format: NumFormat::Bullet, text: "\u{2022}".into(), indent: 108.0, hanging: 18.0, ..Level::default() },
     ];
-    d.numbering.abstracts = vec![AbstractNum { id: 7, levels, ..Default::default() }];
-    d.numbering.nums = vec![Num { id: 3, abstract_id: 7, start_overrides: vec![(0, 4)], ..Default::default() }];
+    let numbering = Arc::make_mut(&mut d.numbering);
+    numbering.abstracts = vec![AbstractNum { id: 7, levels, ..Default::default() }];
+    numbering.nums = vec![Num { id: 3, abstract_id: 7, start_overrides: vec![(0, 4)], ..Default::default() }];
     let item = |text: &str, level: u8| {
         let mut p = para(text);
         p.props.numbering = Some(NumRef { num: 3, level });
@@ -438,8 +440,16 @@ fn tracked_object_anchors_round_trip() {
     let inserted = CharProps { ins: Some(0), ..Default::default() };
     let deleted = CharProps { del: Some(1), ..Default::default() };
     let mut p = para("a b c d");
-    let picture =
-        InlineObject::Image { media: "pic.png".into(), w: 20.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let picture = InlineObject::Image {
+        media: "pic.png".into(),
+        w: 20.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     let page = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
     let note = InlineObject::NoteRef { kind: NoteKind::Footnote, id: f, custom: String::new() };
     // Inserted back to front so the offsets stay put: picture after "a", note after "b",
@@ -637,4 +647,33 @@ proptest::proptest! {
         let r = round(&d);
         proptest::prop_assert_eq!(texts(&r), texts(&d));
     }
+}
+
+/// The thin/thick compound border lines (`brcType` 0x0B-0x13) keep their style through a save,
+/// rather than coming back as single lines.
+#[test]
+fn compound_border_lines_round_trip() {
+    let styles = [
+        BorderStyle::ThinThickSmallGap,
+        BorderStyle::ThickThinSmallGap,
+        BorderStyle::ThinThickThinSmallGap,
+        BorderStyle::ThinThickMediumGap,
+        BorderStyle::ThickThinMediumGap,
+        BorderStyle::ThinThickThinMediumGap,
+        BorderStyle::ThinThickLargeGap,
+        BorderStyle::ThickThinLargeGap,
+        BorderStyle::ThinThickThinLargeGap,
+    ];
+    let mut d = Document::new();
+    d.body = styles
+        .iter()
+        .map(|&style| {
+            let mut p = para("Bordered");
+            p.props.borders = Some(Borders { bottom: Some(Border { style, width: 3.0, color: None, space: 1.0 }), ..Default::default() });
+            para_block(p)
+        })
+        .collect();
+    let r = round(&d);
+    let got: Vec<_> = r.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.props.borders.as_ref()?.bottom.map(|b| b.style)).collect();
+    assert_eq!(got, styles);
 }

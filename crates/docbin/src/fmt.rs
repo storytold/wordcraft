@@ -122,31 +122,41 @@ pub(crate) fn ico(i: u8) -> Option<Rgb> {
     ICO.get(i as usize).copied()
 }
 
-/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType). Types the model
-/// doesn't carry (the gap variants, 3-D, inset/outset) draw as single lines, as the DOCX
-/// reader maps them.
+/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType; 0x02, thick, is in
+/// the BRC of Microsoft's Word 97-2007 specification); 0x0B-0x13 are the thin/thick compound
+/// lines. Types the model doesn't carry (3-D, inset/outset, art borders) draw as single lines.
 fn brc_style(t: u8) -> BorderStyle {
     match t {
         0x00 => BorderStyle::None,
+        0x02 => BorderStyle::Thick,
         0x03 => BorderStyle::Double,
         0x06 => BorderStyle::Dotted,
         0x07 | 0x16 => BorderStyle::Dashed,
         0x08 | 0x09 => BorderStyle::DotDash,
         0x0A => BorderStyle::Triple,
+        0x0B => BorderStyle::ThinThickSmallGap,
+        0x0C => BorderStyle::ThickThinSmallGap,
+        0x0D => BorderStyle::ThinThickThinSmallGap,
+        0x0E => BorderStyle::ThinThickMediumGap,
+        0x0F => BorderStyle::ThickThinMediumGap,
+        0x10 => BorderStyle::ThinThickThinMediumGap,
+        0x11 => BorderStyle::ThinThickLargeGap,
+        0x12 => BorderStyle::ThickThinLargeGap,
+        0x13 => BorderStyle::ThinThickThinLargeGap,
         0x14 | 0x15 => BorderStyle::Wave,
         _ => BorderStyle::Single,
     }
 }
 
-/// The border width in points: `dptLineWidth` in 1/8-point steps (values below 2 count as 2;
-/// 1-point steps for page borders, which never reach a paragraph property).
+/// The border width in points: `dptLineWidth` in 1/8-point steps from 2 to 96, as DOCX `w:sz`
+/// reads (1-point steps for page borders, which never reach a paragraph property).
 fn brc_width(t: u8, dpt: u8) -> f32 {
-    if t >= 0x40 { f32::from(dpt) } else { f32::from(dpt.max(2)) / 8.0 }
+    if t >= 0x40 { f32::from(dpt) } else { (f32::from(dpt.max(2)) / 8.0).min(12.0) }
 }
 
 /// One border from a Brc80 operand ([MS-DOC] §2.9.18). All bits set means "no border"; a
 /// truncated operand is ignored.
-fn brc80(op: &[u8]) -> Option<Border> {
+pub(crate) fn brc80(op: &[u8]) -> Option<Border> {
     let [dpt, ty, ico_index, tail, ..] = op else { return None };
     if [*dpt, *ty, *ico_index, *tail] == [0xFF; 4] {
         return Some(Border::default());
