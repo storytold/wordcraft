@@ -175,10 +175,11 @@ field's code (#3628). They are refused:
 - in content brought in from elsewhere: a paste (any of the paste commands, the Spike), a file's
   text (`insert.textFromFile`, `insert.object`), a Quick Part or AutoText entry, and a document
   compared or combined with this one (`review.compare`, `review.combine`). A field whose very code
-  the document already has is let through, so moving or copying the document's own fields works;
+  the document already has is let through, so copying the document's own fields works. One cut
+  without Track Changes has left the document, so pasting it back from automation is refused;
 - in a document whose bytes the agent supplies: `file.open` and `file.newFromTemplate` with
-  `data`. Such a document also loses the markup kept from its file for paragraphs with fields:
-  they are written from what WordCraft read.
+  `data`. When markup kept from such a file holds fields, the document loses all of its kept
+  markup and is written from what WordCraft read.
 
 The tool error reads, for example, `not available: DDEAUTO fields can't be inserted from
 automation`. A document opened from a file by its path keeps its fields (the file already has

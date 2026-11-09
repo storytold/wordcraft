@@ -10,7 +10,8 @@
 //! - not by its code ([`check`]: `insert.field`, `fields.setCode`, mail merge fields);
 //! - not with content it brings in from elsewhere ([`check_incoming`]: a paste, another file's
 //!   text, a building block, a compared or combined document), unless the document already has
-//!   a field with that very code, so moving or copying the document's own fields still works;
+//!   a field with that very code, so copying the document's own fields still works (one cut
+//!   without Track Changes has left the document, so pasting it back from automation doesn't);
 //! - not in a document whose bytes it supplies ([`check_supplied`]: `file.open` and
 //!   `file.newFromTemplate` with `data`). A document it opens from a file keeps its fields: the
 //!   file already holds them.
@@ -56,13 +57,13 @@ pub fn from_automation<T>(f: impl FnOnce() -> T) -> T {
 
 /// The first of `instr`'s field types, its own and those of the fields nested in it (`{ … }`),
 /// that is in [`ACTIVE_FIELDS`]. A type ends where a word of the code does for the repo's field
-/// parser (`FieldCode::parse`): at a space, a quote, a switch or the end of a nested field, so
-/// `DDEAUTO"cmd"` is a DDEAUTO field. A quote or `=` before it is skipped, erring towards
-/// finding one.
+/// parser (`FieldCode::parse`): at a space, a quote, a switch or the start or end of a nested
+/// field, so `DDEAUTO"cmd"` and `INCLUDETEXT{ FILENAME }` are active. A quote or `=` before it
+/// is skipped, erring towards finding one.
 pub fn active_field(instr: &str) -> Option<&'static str> {
     std::iter::once(instr).chain(instr.split('{').skip(1)).find_map(|code| {
         let code = code.trim_start_matches(|c: char| c.is_whitespace() || c == '"' || c == '=');
-        let name = code.split(|c: char| c.is_whitespace() || matches!(c, '}' | '\\' | '"')).next().unwrap_or("");
+        let name = code.split(|c: char| c.is_whitespace() || matches!(c, '{' | '}' | '\\' | '"')).next().unwrap_or("");
         ACTIVE_FIELDS.iter().copied().find(|f| f.eq_ignore_ascii_case(name))
     })
 }
@@ -106,10 +107,10 @@ pub fn check_incoming<'a>(incoming: impl IntoIterator<Item = &'a Block>, target:
 }
 
 /// Refuse a document whose bytes automation supplied (`file.open` with `data`) when it holds an
-/// active field, unless the host allows them. Markup kept as read that holds a field is dropped:
-/// it is written back as it was while its paragraph is unchanged, so a field the reader didn't
-/// make an object of (nested too deep, inside an element it skips) would go out unchecked. Those
-/// paragraphs are written from what was read instead.
+/// active field, unless the host allows them. When any markup kept as read holds a field, all of
+/// it is dropped: kept markup is written back as it was while its paragraph is unchanged, so a
+/// field the reader didn't make an object of (nested too deep, inside an element it skips) would
+/// go out unchecked. The document is then written from what was read.
 pub fn check_supplied(doc: &mut Document) -> Result<(), CmdError> {
     if !enforced() {
         return Ok(());
@@ -123,14 +124,21 @@ pub fn check_supplied(doc: &mut Document) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Whether markup kept as read has a field, by its field markup: `instr` (Word's `w:instrText`
-/// and `w:fldSimple w:instr`) or `dde` (OpenDocument's `text:dde-connection`), in any case.
+/// Whether any markup kept as read has a field, by its field markup: `instr` (Word's
+/// `w:instrText` and `w:fldSimple w:instr`) or `dde` (OpenDocument's `text:dde-connection`), in
+/// any case. Every piece is looked at: paragraphs, tables, indexes, the wrappers kept around them
+/// and the definitions they refer to, sealed or not.
 fn kept_fields(k: &KeptXml) -> bool {
     let fields = |xml: &str| {
         let xml = xml.to_ascii_lowercase();
         xml.contains("instr") || xml.contains("dde")
     };
-    k.paras.values().chain(k.tables.values()).chain(k.pending.values()).chain(k.indexes.values().map(|(_, _, xml)| xml)).any(|xml| fields(xml))
+    let wraps = k.wraps.values().chain(k.pending_wraps.values()).chain(k.twin_wraps.values()).chain(k.table_wraps.values());
+    let wraps = wraps.chain(k.pending_table_wraps.iter().map(|(_, w)| w)).flat_map(|(tags, _)| tags.iter());
+    let pieces = k.paras.values().chain(k.tables.values()).chain(k.pending.values()).chain(k.defs.values());
+    let pieces = pieces.chain(k.pending_tables.iter().map(|(_, xml)| xml)).chain(wraps);
+    let mut pieces = pieces.chain(k.indexes.values().map(|(_, _, xml)| xml)).chain(k.pending_indexes.values().map(|(_, xml)| xml));
+    pieces.any(|xml| fields(xml))
 }
 
 /// The blocks of `doc`'s body and of its other stories: headers, footers, notes, comments and
@@ -205,6 +213,9 @@ mod tests {
         assert_eq!(active_field(r#"INCLUDETEXT"\\h\s\t.docx""#), Some("INCLUDETEXT"));
         assert_eq!(active_field(r#"IF 1 = 1 "{INCLUDEPICTURE"\\h\s\x.png"}" """#), Some("INCLUDEPICTURE"));
         assert_eq!(active_field(r#""DDE" excel x"#), Some("DDE"));
+        // So does the start of a nested field.
+        assert_eq!(active_field("INCLUDETEXT{ FILENAME }"), Some("INCLUDETEXT"));
+        assert_eq!(active_field(r#"includepicture{ QUOTE "\\h\s\x.png" } \d"#), Some("INCLUDEPICTURE"));
         // A data source and a referenced document are fetched when the fields update.
         assert_eq!(active_field(r#"DATABASE \d "\\h\s\x.mdb" \s "SELECT * FROM t""#), Some("DATABASE"));
         assert_eq!(active_field(r#"RD "\\h\s\x.docx" \f"#), Some("RD"));
@@ -309,6 +320,24 @@ mod tests {
     }
 
     #[test]
+    fn a_field_cut_by_automation_is_pasted_back_only_under_track_changes() {
+        // Cut without Track Changes, the field has left the document: pasting it is bringing it in.
+        let mut s = with_active_field_copied();
+        from_automation(|| s.run("edit.cut", &json!({}))).unwrap();
+        assert!(codes(&s).is_empty());
+        let r = from_automation(|| s.run("edit.paste", &json!({})));
+        assert!(refused(&r), "{r:?}");
+        assert!(codes(&s).is_empty());
+        // A tracked cut leaves it in the document, marked deleted, so the paste (a move) goes in.
+        let mut s = with_active_field_copied();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        from_automation(|| s.run("edit.cut", &json!({}))).unwrap();
+        s.sel = crate::Selection::caret(s.doc.end_of(wordcraft_doc::StoryRef::Body));
+        from_automation(|| s.run("edit.paste", &json!({}))).unwrap();
+        assert_eq!(codes(&s), [DDE, DDE]);
+    }
+
+    #[test]
     fn automation_cannot_bring_an_active_field_in_from_another_file() {
         let path = saved("text-from-file", &with_active_field_copied().doc);
         let path = path.to_string_lossy().to_string();
@@ -363,20 +392,49 @@ mod tests {
 
     #[test]
     fn a_field_kept_only_as_read_from_supplied_bytes_is_not_written_back() {
-        // A field inside an element the reader skips is no field object, but the paragraph's
-        // markup, kept as read, would be written back as it was.
+        // The OpenDocument reader keeps a paragraph's markup, an element it has no place for
+        // included, and the writer puts it back while the paragraph is unchanged: a field inside
+        // that element is no field object, so it would go out unchecked.
         let mut s = session();
         s.run("text.insert", &json!({"text": "Hello"})).unwrap();
-        let xml = String::from_utf8(crate::io::save_bytes("a.xml", &s.doc).unwrap()).unwrap();
-        let run_end = "Hello</w:t></w:r>";
-        let at = xml.find(run_end).unwrap_or_else(|| panic!("{xml}")) + run_end.len();
-        let hidden = r#"<w:unknownWrapper><w:fldSimple w:instr="DDEAUTO cmd x"><w:r><w:t>x</w:t></w:r></w:fldSimple></w:unknownWrapper>"#;
-        let xml = format!("{}{hidden}{}", &xml[..at], &xml[at..]);
-        let data = crate::cmd::insert::base64_encode(xml.as_bytes());
-        let mut s = session();
-        from_automation(|| s.run("file.open", &json!({"path": "a.xml", "data": data}))).unwrap();
-        assert!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("Hello"), "{:?}", s.doc.plain_text(wordcraft_doc::StoryRef::Body));
-        let out = String::from_utf8_lossy(&crate::io::save_bytes("a.xml", &s.doc).unwrap()).to_string();
-        assert!(out.contains("Hello") && !out.contains("DDEAUTO"), "{out}");
+        let xml = String::from_utf8(crate::io::save_bytes("a.fodt", &s.doc).unwrap()).unwrap();
+        let at = xml.find("Hello").unwrap_or_else(|| panic!("{xml}")) + "Hello".len();
+        let hidden = r#"<x:wrapper xmlns:x="urn:example"><text:dde-connection text:connection-name="Calc">x</text:dde-connection></x:wrapper>"#;
+        let data = crate::cmd::insert::base64_encode(format!("{}{hidden}{}", &xml[..at], &xml[at..]).as_bytes());
+        let saved_again = |automation: bool| {
+            let mut s = session();
+            let open = |s: &mut Session| s.run("file.open", &json!({"path": "a.fodt", "data": data}));
+            if automation { from_automation(|| open(&mut s)) } else { open(&mut s) }.unwrap();
+            let text = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
+            assert!(text.starts_with("Hello"), "{text:?}");
+            String::from_utf8_lossy(&crate::io::save_bytes("a.fodt", &s.doc).unwrap()).to_string()
+        };
+        // Opened by the person at the keyboard, the markup is written back as read…
+        let out = saved_again(false);
+        assert!(out.contains("dde-connection"), "{out}");
+        // …but not when automation supplied the bytes.
+        let out = saved_again(true);
+        assert!(out.contains("Hello") && !out.contains("dde-connection"), "{out}");
+    }
+
+    #[test]
+    fn field_markup_anywhere_in_the_kept_markup_counts() {
+        // Not only a paragraph's or a table's markup is written back as read: so are the wrappers
+        // kept around them and the definitions they refer to.
+        let xml = |x: &str| -> std::sync::Arc<str> { x.into() };
+        let field = r#"<w:fldSimple w:instr="INCLUDETEXT x"/>"#;
+        let kept = [
+            KeptXml { paras: [(1, xml(field))].into(), ..Default::default() },
+            KeptXml { wraps: [(1, (vec![xml(field)], 1))].into(), ..Default::default() },
+            KeptXml { twin_wraps: [((1, 2), (vec![xml(field)], 1))].into(), ..Default::default() },
+            KeptXml { table_wraps: [(1, (vec![xml(field)], 1))].into(), ..Default::default() },
+            KeptXml { pending_tables: vec![(0, xml(field))], ..Default::default() },
+            KeptXml { pending_indexes: [(1, (2, xml(field)))].into(), ..Default::default() },
+            KeptXml { defs: [("auto:P1".to_string(), xml("<text:dde-connection-decl/>"))].into(), ..Default::default() },
+        ];
+        for (i, k) in kept.iter().enumerate() {
+            assert!(kept_fields(k), "{i}");
+        }
+        assert!(!kept_fields(&KeptXml { paras: [(1, xml("<w:p><w:r><w:t>Hi</w:t></w:r></w:p>"))].into(), ..Default::default() }));
     }
 }
