@@ -124,6 +124,31 @@ fn mask_ink_obeys_the_shared_path_extent_guard() {
     assert!(rendered.pixel(4, 4)[3] > 0);
 }
 
+/// White masks retain source opacity on transparent backdrops while remaining neutral on opaque ones.
+#[test]
+fn white_mask_composites_over_transparent_and_translucent_backdrops() {
+    let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+    let segs = vec![PathSeg::Move(2.0, 2.0), PathSeg::Line(18.0, 2.0), PathSeg::Line(18.0, 18.0), PathSeg::Line(2.0, 18.0), PathSeg::Close];
+    let mask = Draw::MaskInk { segs, color: Rgb::WHITE, alpha: 0.5 };
+    for (dark, clear, partial, opaque) in
+        [(false, [255, 255, 255, 127], [255, 85, 85, 191], [255, 0, 0, 255]), (true, [0, 0, 0, 127], [170, 34, 34, 191], [255, 51, 51, 255])]
+    {
+        let opts = RenderOptions { dark, ..Default::default() };
+        for (background, expected) in [(None, clear), (Some(0.5), partial), (Some(1.0), opaque)] {
+            let mut items = Vec::new();
+            if let Some(alpha) = background {
+                items.push(Draw::Fill { rect: area, color: RED, alpha, text_bg: false });
+            }
+            items.push(mask.clone());
+            let pixel = render_items(&Document::new(), &items, area, 1.0, &opts).pixel(10, 10);
+            assert!(
+                pixel.into_iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= PIXEL_TOLERANCE),
+                "dark={dark}, background={background:?}: {pixel:?} != {expected:?}"
+            );
+        }
+    }
+}
+
 /// Dark-page binary masks invert the composited result rather than only the pen color.
 #[test]
 fn binary_mask_dark_mode_inverts_the_composite_not_just_the_pen() {
