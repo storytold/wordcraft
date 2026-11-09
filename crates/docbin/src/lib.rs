@@ -341,6 +341,16 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         for k in 0..6usize {
             let Some(&ab) = stories.get(6 + si * 6 + k) else { break };
             let Some((a, b)) = story(hdd_base, fib.ccp.hdd, ab) else { continue };
+            // A [MS-DOC] §2.8.25 Plcfhdd story ending in \r or cell/row mark \x07 followed by a final \r carries a guard paragraph Word does not show.
+            // Drop exactly one trailing \r; keep single-mark stories and earlier empty paragraphs (Footer\r\r\r becomes Footer, "").
+            let b = if b.saturating_sub(a) >= 2
+                && matches!(pieces.char_at(&word, b.saturating_sub(1)), Ok(('\r', _)))
+                && matches!(pieces.char_at(&word, b.saturating_sub(2)), Ok(('\r' | '\u{7}', _)))
+            {
+                b.saturating_sub(1)
+            } else {
+                b
+            };
             if doc.parts.len() >= MAX_PARTS {
                 continue;
             }

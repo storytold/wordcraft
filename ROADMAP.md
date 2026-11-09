@@ -968,6 +968,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-02 | trivial | Honor page break before at a continuous section's mid-page top (#5287); its later-column case remains unmeasured in Word. Readiness unchanged. |
+| 2026-10-31 | trivial | P0004: `.doc` header/footer imports omit one trailing guard paragraph while preserving intentional empty paragraphs and single-mark stories; readiness unchanged ([MS-DOC] §2.8.25 Plcfhdd) |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
@@ -979,6 +980,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: proofing moved to craft-proof (craft-libs) and its data to craft-i18n `language-data/` (CP1) |
 | 2026-11-01 | trivial | #3915: preserve guarded whole-line ordinary-tab alignment with current main. Existing controls retained; source checks only, primary qualification pending. |
 | 2026-11-01 | trivial | #2437: Preserve finite paragraph-border flow extents and terminal-break keep preflight with current-main changes. Recursive terminal-successor lookahead remains outside scope. Source checks only; primary qualification pending. |
+| 2026-10-31 | trivial | P0004: `.doc` header/footer imports omit one trailing guard paragraph while preserving intentional empty paragraphs and single-mark stories; readiness unchanged |
 | 2026-10-31 | trivial | Progress log: a paragraph naming an undefined DOCX style is formatted as Normal (#5077) |
 | 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |
 | 2026-10-31 | trivial | Progress log: TOC page numbers are PAGEREF fields (#5097) |
