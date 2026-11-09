@@ -162,11 +162,9 @@ list (author, source, license) is in ATTRIBUTION.md.
 - Application-drawn UI icons (crates/ui-egui/src/icons.rs) are original work, MIT OR Apache-2.0;
   the bundled egui font icons have the separate notice below.
 
-- libthai (crates.io: libthai) — GNU Lesser General Public License v2.1 or later (LGPL-2.1-or-later).
-  libthai is a Rust port of the TLWG libthai C library (https://github.com/tlwg/libthai).
-  It is statically linked (Rust rlib). As required by the LGPL for statically linked works,
-  the complete corresponding source code of libthai is available at https://crates.io/crates/libthai
-  so that users may modify it and relink.
+- libthai (crates.io: libthai) — MIT OR Apache-2.0.
+  Copyright (c) 2024 Nanusorn Photpipat. A clean-room Rust implementation of Thai word
+  segmentation; source at https://crates.io/crates/libthai.
 
 Rust dependencies (egui, eframe, vello_cpu, skrifa, harfrust, krilla, quick-xml, zip, image, …)
 are permissively licensed (MIT/Apache-2.0/BSD/ISC/Zlib) and fetched through crates.io or pinned Git sources.
