@@ -126,11 +126,15 @@ fn run_fmt(doc: &Document, para_style: Option<&str>, props: &CharProps, in_code:
 fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
     let set = |v: Option<bool>| v.filter(|b| *b);
     let x = CharProps {
-        underline: e.underline.filter(|u| !matches!(u, Underline::None | Underline::Single)),
+        // What it turns off, over what the style of its paragraph or span turns on, too.
+        bold: e.bold.filter(|b| !*b),
+        italic: e.italic.filter(|b| !*b),
+        strike: e.strike.filter(|b| !*b),
+        underline: e.underline.filter(|u| *u != Underline::Single),
         underline_color: e.underline_color,
         double_strike: set(e.double_strike),
-        caps: set(e.caps),
-        small_caps: set(e.small_caps),
+        caps: e.caps,
+        small_caps: e.small_caps,
         hidden: set(e.hidden),
         spacing: e.spacing.filter(|v| *v != 0.0 && v.is_finite()),
         scale: e.scale.filter(|v| *v != 100.0 && v.is_finite()),
