@@ -80,7 +80,12 @@ fn decode_capped(s: &str, max: usize) -> Option<Vec<u8>> {
             buf &= (1 << n) - 1;
             if out.len() > max {
                 // Past the limit: the rest is only scanned for bad data, not held.
-                return if s.bytes().all(valid) { out.truncate(max + 1); Some(out) } else { None };
+                return if s.bytes().all(valid) {
+                    out.truncate(max + 1);
+                    Some(out)
+                } else {
+                    None
+                };
             }
         }
     }

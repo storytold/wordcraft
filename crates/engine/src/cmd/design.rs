@@ -405,8 +405,7 @@ fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            crate::io::read_file_capped(path, MAX_PAGE_PICTURE_BYTES, "image")
-                .map_err(|e| map_image_too_large(e))?
+            crate::io::read_file_capped(path, MAX_PAGE_PICTURE_BYTES, "image").map_err(|e| map_image_too_large(e))?
         }
     } else {
         return Err(CmdError::Params("`path`, `data` or `media` is required for a picture fill".into()));
@@ -420,11 +419,7 @@ fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
 /// `read_file_capped` reports a capped file as larger than N MB with the file's own wording;
 /// a page picture keeps the command's long-standing message.
 fn map_image_too_large(e: String) -> CmdError {
-    if e.contains("is larger than") {
-        CmdError::Failed("image is larger than 200 MB".into())
-    } else {
-        CmdError::Failed(e)
-    }
+    if e.contains("is larger than") { CmdError::Failed("image is larger than 200 MB".into()) } else { CmdError::Failed(e) }
 }
 
 fn watermark(s: &mut Session, v: &Value) -> CmdResult {

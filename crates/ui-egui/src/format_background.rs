@@ -531,9 +531,8 @@ fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) 
                 } else if let Some(media) = media {
                     app.session.doc.media.get(media).map(|b| b.to_vec())
                 } else {
-                    data.as_deref().and_then(|d| {
-                        wordcraft_engine::cmd::insert::base64_decode_bounded(d, MAX_PREVIEW_BYTES as usize)?.or(Some(Vec::new()))
-                    })
+                    data.as_deref()
+                        .and_then(|d| wordcraft_engine::cmd::insert::base64_decode_bounded(d, MAX_PREVIEW_BYTES as usize)?.or(Some(Vec::new())))
                 }?;
                 let img = thumbnail(&bytes)?;
                 Some(ui.ctx().load_texture(format!("formatBackground.picture::{key}"), img, egui::TextureOptions::LINEAR))

@@ -200,12 +200,20 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
     }
     let colour = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_color.take() };
     let picture = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_picture.take() };
+    let gradient = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_gradient.take() };
+    let pattern = if app.ui.print_backgrounds { None } else { app.session.doc.settings.page_pattern.take() };
     let pdf = app.session.print_job_pdf(&pdf_params).map_err(|error| error.to_string());
     if colour.is_some() {
         app.session.doc.settings.page_color = colour;
     }
     if picture.is_some() {
         app.session.doc.settings.page_picture = picture;
+    }
+    if gradient.is_some() {
+        app.session.doc.settings.page_gradient = gradient;
+    }
+    if pattern.is_some() {
+        app.session.doc.settings.page_pattern = pattern;
     }
     let result = pdf.and_then(|(bytes, plan)| {
         if native && plan.chosen.checked_mul(settings.copies as usize).is_none_or(|pages| pages > wordcraft_engine::print::MAX_PRINT_PAGES) {

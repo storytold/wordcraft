@@ -159,17 +159,14 @@ fn a_picture_fill_refuses_inputs_past_the_size_limit() {
     {
         std::fs::OpenOptions::new().write(true).open(&big).unwrap().set_len((200 << 20) + 1).unwrap();
     }
-    let err = s
-        .run("design.pageFill", &serde_json::json!({"fill": "picture", "path": big.to_string_lossy()}))
-        .expect_err("an oversized file is refused");
+    let err =
+        s.run("design.pageFill", &serde_json::json!({"fill": "picture", "path": big.to_string_lossy()})).expect_err("an oversized file is refused");
     assert_eq!(err.to_string(), "image is larger than 200 MB");
     assert_eq!(s.doc.settings, before, "the previous fill is kept");
     let _ = std::fs::remove_dir_all(&dir);
     // Oversized base64: valid alphabet, past the decoded limit.
     let huge = "QUFB".repeat((209_715_201 + 2) / 3);
-    let err = s
-        .run("design.pageFill", &serde_json::json!({"fill": "picture", "data": huge}))
-        .expect_err("oversized base64 is refused");
+    let err = s.run("design.pageFill", &serde_json::json!({"fill": "picture", "data": huge})).expect_err("oversized base64 is refused");
     assert_eq!(err.to_string(), "image is larger than 200 MB");
     assert_eq!(s.doc.settings, before, "bad base64 keeps the old fill too");
     assert!(s.run("design.pageFill", &serde_json::json!({"fill": "picture", "data": "!!!not-base64"})).is_err());
