@@ -449,7 +449,9 @@ pub(crate) fn one_element(s: &str) -> bool {
     r.config_mut().check_comments = true;
     let (mut depth, mut roots) = (0usize, 0usize);
     loop {
-        let attrs_ok = |e: &BytesStart| e.attributes().all(|a| a.is_ok());
+        // Each attribute parses and its value unescapes: an undeclared entity (`x="&no;"`) isn't
+        // well-formed, and the reader would keep it raw (#6072).
+        let attrs_ok = |e: &BytesStart| e.attributes().all(|a| a.is_ok_and(|a| a.normalized_value(quick_xml::XmlVersion::Explicit1_0).is_ok()));
         match r.read_event() {
             Ok(Event::Start(e)) => {
                 if !attrs_ok(&e) || (depth == 0 && roots > 0) {
@@ -588,6 +590,8 @@ mod tests {
             "<a></a></pkg:xmlData>",
             "<a><!-- x -- y --></a>",
             "<a/><!-- x--->",
+            "<a x=\"&no;\"/>",
+            "<a><b x=\"&no;\"/></a>",
         ] {
             assert!(xml_fragment(ct, bad.as_bytes()).is_none(), "{bad}");
         }

@@ -121,7 +121,8 @@ fn omml_color(omml: &str) -> Option<Rgb> {
 fn kept_omml_ok(omml: &str) -> bool {
     (omml.starts_with("<m:oMath>") || omml.starts_with("<m:oMath "))
         && crate::flat::one_element(omml)
-        && crate::xml::parse_strict(wrap_ns(omml).as_bytes()).is_ok()
+        // Parsed names are canonical by namespace: an `m:` bound to another URI isn't `m:oMath`.
+        && crate::xml::parse_strict(wrap_ns(omml).as_bytes()).is_ok_and(|root| root.child("m:oMath").is_some())
 }
 
 /// The kept XML with namespace declarations, for validating it on its own.

@@ -62,6 +62,9 @@ fn malformed_kept_omml_is_written_from_the_nodes() {
         "<m:oMath></m:oMath><w:r><w:t>INJECTED</w:t></w:r>",
         // Not an m:oMath.
         "<m:r><m:t>INJECTED</m:t></m:r>",
+        // An m:oMath in another namespace, and an unknown entity in an attribute.
+        "<m:oMath xmlns:m=\"urn:other\"><m:r><m:t>INJECTED</m:t></m:r></m:oMath>",
+        "<m:oMath><m:r bad=\"&missing;\"><m:t>INJECTED</m:t></m:r></m:oMath>",
     ] {
         let (xml, back) = save(kept, false);
         assert!(!xml.contains("INJECTED") && !xml.contains("&bad;"), "{kept:?} was written: {xml}");
