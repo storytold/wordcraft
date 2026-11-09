@@ -984,9 +984,23 @@ pub fn enter_text_box(app: &mut WordApp) -> bool {
 
 /// Typing with a shape selected types into it: into its text, or into a new, empty story for a
 /// shape without text (`shape.addText`), so the shape isn't replaced by what is typed (#5911).
-pub fn type_into_shape(app: &mut WordApp) {
-    if selected(app).is_some() && crate::widgets::enabled(app, "shape.addText") {
-        let _ = app.run("shape.addText", json!({}));
+/// False when the typing is dropped: a line or connector holds no text, and Word ignores typing
+/// with one selected.
+pub fn type_into_shape(app: &mut WordApp) -> bool {
+    let open = |o: &InlineObject| matches!(o, InlineObject::Shape { kind, .. } if kind.is_open());
+    let line = match wordcraft_engine::cmd::canvas::selected_member(&app.session) {
+        Some((_, _, o)) => Some(open(o)),
+        None => selected(app).map(|(_, o)| open(o)),
+    };
+    match line {
+        None => true,
+        Some(true) => false,
+        Some(false) => {
+            if crate::widgets::enabled(app, "shape.addText") {
+                let _ = app.run("shape.addText", json!({}));
+            }
+            true
+        }
     }
 }
 

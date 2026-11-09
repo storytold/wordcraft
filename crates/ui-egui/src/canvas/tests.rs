@@ -5286,4 +5286,19 @@ fn typing_with_a_shape_selected_types_into_it() {
         panic!("the shape is gone or has no text; the body reads {:?}", doc.plain_text(StoryRef::Body));
     };
     assert_eq!(doc.plain_text(StoryRef::Part(*id)), "Hallo");
+
+    // A line holds no text: typing with it selected does nothing, as in Word.
+    h.state_mut().run("document.setText", json!({"text": ""})).unwrap();
+    h.state_mut().run("insert.shape", json!({"kind": "line", "width": 200})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    assert!(
+        matches!(doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.object_at(0)), Some(wordcraft_doc::InlineObject::Shape { .. })),
+        "the line must stay; the body reads {:?}",
+        doc.plain_text(StoryRef::Body)
+    );
+    assert!(!doc.plain_text(StoryRef::Body).contains("Hallo"), "nothing was typed");
 }

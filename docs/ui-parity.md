@@ -127,7 +127,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-08 | trivial | Typing with a shape selected types into it, as in Word: a shape without text gets an empty story, centred both ways, instead of being replaced by the typed text (#5911). New command `shape.addText` (Add Text); lines and connectors hold no text. |
+| 2026-11-08 | trivial | Typing with a shape selected types into it, as in Word: a shape without text gets an empty story, centred both ways, instead of being replaced by the typed text (#5911). New command `shape.addText` (Add Text). Lines and connectors hold no text: with one selected, typing does nothing, as in Word. |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-06 | trivial | The document's scroll bars are always drawn, in the room beside the page left for them, with a grey thumb that stands out from its track in both themes; they were invisible until the pointer reached the window's right edge, so without a mouse wheel nothing showed how to reach page 2 (#5746) |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |

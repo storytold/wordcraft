@@ -559,8 +559,10 @@ pub(super) fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key
 /// around the insertion itself: a transformation the engine performs (AutoCorrect, AutoFormat)
 /// makes the frame [`egui::ImeChangeCause::Other`] instead.
 fn type_text(app: &mut WordApp, text: &str, ime: bool) {
-    // Typing with a shape selected types into it.
-    crate::objects::type_into_shape(app);
+    // Typing with a shape selected types into it; with a line selected it does nothing.
+    if !crate::objects::type_into_shape(app) {
+        return;
+    }
     let before = ime.then(|| ime_stamp(app));
     // Where the text lands, so a quote can be checked against what the engine actually inserted.
     let start = app.session.sel.ordered().0;
