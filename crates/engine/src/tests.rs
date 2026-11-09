@@ -13377,3 +13377,47 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
 }
+
+#[test]
+fn multi_selection_survives_a_case_change_that_changes_length() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ŉx two ŉy"}));
+    run(&mut s, "select.text", json!({"text": "ŉx"}));
+    let r = add(&mut s, (0, 8), (0, 11));
+    assert_eq!(r["pieces"], json!(["ŉx", "ŉy"]));
+    run(&mut s, "format.changeCase", json!({"mode": "upper"}));
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "ʼNX two ʼNY");
+    // The pieces still cover the changed words, so deleting takes just those.
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), " two ");
+}
+
+#[test]
+fn multi_selection_remove_link_takes_every_piece() {
+    let mut s = multi_doc();
+    for w in ["one", "three"] {
+        run(&mut s, "select.text", json!({"text": w}));
+        run(&mut s, "insert.link", json!({"url": "https://example.com"}));
+    }
+    let linked = |s: &Session, off: usize| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(off).link.is_some();
+    assert!(linked(&s, 0) && linked(&s, 8));
+    three_pieces(&mut s);
+    run(&mut s, "insert.removeLink", json!({}));
+    assert!(!linked(&s, 0) && !linked(&s, 8));
+    assert!(s.selection_pieces().is_some());
+}
+
+#[test]
+fn refused_select_add_from_points_changes_no_page_hint() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "ab ".repeat(10_001)}));
+    // A selection already holding the most pieces refuses another.
+    let pieces: Vec<(Pos, Pos)> = (0..10_000).map(|i| (Pos::body(0, i * 3), Pos::body(0, i * 3 + 1))).collect();
+    s.sel = crate::Selection { anchor: pieces[0].0.clone(), focus: pieces[9_999].1.clone() };
+    s.column =
+        Some(crate::ColumnBlock { sel: s.sel.clone(), anchor_x: 0.0, focus_x: 0.0, segments: pieces.clone(), cells: None, pieces: Some(pieces) });
+    s.page_hint = 3;
+    let bad = json!({"from": {"page": 0, "x": 80.0, "y": 80.0}, "to": {"page": 0, "x": 120.0, "y": 80.0}});
+    assert!(s.run("select.add", &bad).is_err());
+    assert_eq!(s.page_hint, 3);
+}

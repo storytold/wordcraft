@@ -195,7 +195,17 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
             delete(s, &cut)?;
             super::sel_result(s)
         }
-        "format.changeCase" | "format.clear" | "format.resetChar" => per_row(s, run, v, &segs),
+        // These act on the selection as one range, so once per piece (a plain `run` would act
+        // on the first alone).
+        "format.changeCase"
+        | "format.clear"
+        | "format.resetChar"
+        | "insert.removeLink"
+        | "review.language"
+        | "wordArt.textFill"
+        | "wordArt.textOutline"
+        | "styles.inspectorClear"
+        | "list.multilevelPreset" => per_row(s, run, v, &segs),
         _ if id.starts_with("format.") || id.starts_with("para.") || matches!(id, "select.column" | "select.add") => run(s, v),
         // Pasting formatting (the format painter) leaves the text alone.
         _ if mutates && (id.starts_with("text.") || (id.starts_with("edit.paste") && id != "edit.pasteFormat")) => {
@@ -269,22 +279,54 @@ fn delete(s: &mut Session, segs: &[(Pos, Pos)]) -> Result<(), CmdError> {
     Ok(())
 }
 
-/// Run a selection command once per non-empty row, then restore the block.
+/// Run a selection command once per non-empty row, then restore the block. Rows run bottom up,
+/// so a change of text length (ß to SS) only moves what comes after it in its paragraph; the
+/// pieces are remapped by those changes, and a column block that changed length is dropped.
 fn per_row(s: &mut Session, run: fn(&mut Session, &Value) -> CmdResult, v: &Value, segs: &[(Pos, Pos)]) -> CmdResult {
-    let block = s.column.take();
+    let mut block = s.column.take();
+    // (segment start, change in its paragraph's length)
+    let mut deltas: Vec<(Pos, isize)> = Vec::new();
     for (a, b) in segs.iter().rev() {
         let (a, b) = (s.doc.clamp(a), s.doc.clamp(b));
         if a == b || a.path != b.path {
             continue;
         }
-        s.sel = Selection { anchor: a, focus: b };
+        let len = |s: &Session| s.doc.para(a.story, &a.path).map_or(0, |p| p.len());
+        let before = len(s);
+        s.sel = Selection { anchor: a.clone(), focus: b };
         if let Err(e) = run(s, v) {
             s.column = block;
             return Err(e);
         }
+        let after = len(s);
+        if after != before {
+            deltas.push((a, after as isize - before as isize));
+        }
     }
-    if let Some(c) = &block {
-        s.sel = c.sel.clone();
+    if let Some(c) = &mut block {
+        if deltas.is_empty() {
+            s.sel = c.sel.clone();
+        } else if let Some(pieces) = c.pieces.take() {
+            let shift = |p: &Pos| {
+                let d: isize = deltas.iter().filter(|(x, _)| x.story == p.story && x.path == p.path && x.off < p.off).map(|(_, d)| *d).sum();
+                s.doc.clamp(&Pos { off: p.off.saturating_add_signed(d), ..p.clone() })
+            };
+            let pieces: Vec<(Pos, Pos)> = pieces.iter().map(|(a, b)| (shift(a), shift(b))).filter(|(a, b)| a != b).collect();
+            match (pieces.first(), pieces.last()) {
+                (Some((first, _)), Some((_, last))) => {
+                    let forward = c.sel.anchor <= c.sel.focus;
+                    let (x, y) = (first.clone(), last.clone());
+                    s.sel = if forward { Selection { anchor: x, focus: y } } else { Selection { anchor: y, focus: x } };
+                    c.sel = s.sel.clone();
+                    c.segments = super::multisel::segments(s, &pieces).unwrap_or_default();
+                    c.pieces = Some(pieces);
+                }
+                _ => block = None,
+            }
+        } else {
+            // A column block's rows are measured; they can't be moved by hand.
+            block = None;
+        }
     }
     s.column = block;
     result(s)

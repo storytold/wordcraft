@@ -719,6 +719,7 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
         app.canvas.dragging = false;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
+        app.canvas.multi_drag = None;
     }
     let auto_delta = if !app.session.view.read_mode
         && app.canvas.drag_selecting()

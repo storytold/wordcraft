@@ -40,6 +40,7 @@ fn result(s: &Session) -> CmdResult {
 }
 
 fn select_add(s: &mut Session, v: &Value) -> CmdResult {
+    let mut hint = None;
     let (a, b) = if let (Some(av), Some(fv)) = (v.get("anchor"), v.get("focus")) {
         let a = parse_pos(av).ok_or_else(|| CmdError::Params("bad `anchor`".into()))?;
         let b = parse_pos(fv).ok_or_else(|| CmdError::Params("bad `focus`".into()))?;
@@ -51,7 +52,7 @@ fn select_add(s: &mut Session, v: &Value) -> CmdResult {
         let l = s.layout();
         let a = l.hit(fp, fx, fy, story).ok_or_else(|| CmdError::Params("no text at `from`".into()))?;
         let b = l.hit(tp, tx, ty, story).ok_or_else(|| CmdError::Params("no text at `to`".into()))?;
-        s.page_hint = tp;
+        hint = Some(tp);
         (a, b)
     } else if let Some(wv) = v.get("word") {
         let at = parse_pos(wv).ok_or_else(|| CmdError::Params("bad `word`".into()))?;
@@ -88,6 +89,9 @@ fn select_add(s: &mut Session, v: &Value) -> CmdResult {
     let pieces = normalise(pieces);
     // Split before changing anything, so a refused addition leaves the selection as it was.
     let segments = if pieces.len() > 1 { segments(s, &pieces)? } else { Vec::new() };
+    if let Some(tp) = hint {
+        s.page_hint = tp;
+    }
     s.column_mode = false;
     s.goal_x = None;
     s.pending = None;
@@ -124,7 +128,7 @@ fn normalise(mut pieces: Vec<(Pos, Pos)>) -> Vec<(Pos, Pos)> {
 
 /// Each piece split at paragraph ends: one `(start, end)` per paragraph it covers. More than
 /// [`MAX_SEGMENTS`] in all is a parameter error.
-fn segments(s: &Session, pieces: &[(Pos, Pos)]) -> Result<Vec<(Pos, Pos)>, CmdError> {
+pub(super) fn segments(s: &Session, pieces: &[(Pos, Pos)]) -> Result<Vec<(Pos, Pos)>, CmdError> {
     let too_many = || CmdError::Params(format!("a selection spans at most {MAX_SEGMENTS} paragraphs"));
     let mut out = Vec::new();
     for (a, b) in pieces {
