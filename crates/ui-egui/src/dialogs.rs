@@ -241,21 +241,66 @@ pub enum Dialog {
         #[serde(skip)]
         back: bool,
     },
+    /// Modify Style dialog: change name, character properties (Font tab), and for paragraph
+    /// styles, alignment, indents, and spacing (Paragraph tab).
     ModifyStyle {
+        /// Return to Manage Styles on close.
         #[serde(skip)]
         back: bool,
         /// The dialog that comes back when this closes (Table of Contents › Modify…).
         #[serde(skip)]
         resume: Option<Box<Dialog>>,
+        /// Style id.
         id: String,
+        /// User-visible style name.
         name: String,
+        /// Font family name.
         font: String,
+        /// Font size in points.
         size: f32,
+        /// Bold flag.
         bold: bool,
+        /// Italic flag.
         italic: bool,
+        /// Font color (hex or "auto").
         color: String,
+        /// Space before in points.
         before: f32,
+        /// Space after in points.
         after: f32,
+        /// Visual alignment: left, center, right, justify.
+        #[serde(default)]
+        align: String,
+        /// Left indent in current measurement unit.
+        #[serde(default)]
+        left: f32,
+        /// Right indent in current measurement unit.
+        #[serde(default)]
+        right: f32,
+        /// First-line indent in current measurement unit (negative = hanging).
+        #[serde(default)]
+        first: f32,
+        /// Line spacing as multiple.
+        #[serde(default)]
+        line: f32,
+        /// Initial line spacing as multiple when opened, to detect edits (#5833).
+        #[serde(default)]
+        initial_line: f32,
+        /// Non-multiple line spacing (Exactly or At Least) if the style had one when opened (#5833).
+        #[serde(default)]
+        non_multiple_line: Option<wordcraft_doc::props::LineSpacing>,
+        /// True if this is a character style (paragraph formatting disabled).
+        #[serde(default)]
+        is_char: bool,
+        /// Right-to-left paragraph text direction.
+        #[serde(default)]
+        bidi: bool,
+        /// Current tab index: 0 Font, 1 Paragraph.
+        #[serde(default)]
+        tab: u8,
+        /// Fields as they were when the dialog opened, to send only what changed (#5833).
+        #[serde(skip)]
+        start: serde_json::Map<String, Value>,
     },
     /// Manage Styles: every style with its preview and description; modify, create, delete and
     /// show or hide them.
@@ -871,6 +916,8 @@ impl Dialog {
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
 
+    /// Opens the Modify Style dialog for style `id`, prefilling its character properties and,
+    /// for paragraph styles, its paragraph alignment, indentation, spacing, and line spacing.
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
         let st = app.session.doc.styles.get(id)?;
         let rc = app.session.doc.styles.resolve_char(
@@ -881,6 +928,34 @@ impl Dialog {
             },
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
+        let is_char = st.kind == wordcraft_doc::StyleKind::Character;
+        let (line, non_multiple_line) = match rp.line_spacing {
+            wordcraft_doc::props::LineSpacing::Multiple(m) => (m, None),
+            other => (1.0, Some(other)),
+        };
+        let (vl, vr) = rp.visual_indents();
+        let unit = crate::options::unit().pt_per_unit();
+        let color = match rc.color {
+            wordcraft_doc::TextColor::Rgb(c) => c.hex(),
+            wordcraft_doc::TextColor::Auto => "auto".into(),
+        };
+        let align = format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase();
+        let left = vl / unit;
+        let right = vr / unit;
+        let first = rp.indent_first / unit;
+        let before = rp.space_before;
+        let after = rp.space_after;
+
+        let start = modify_style_start(
+            &st.name,
+            &rc.font,
+            rc.size,
+            rc.bold,
+            rc.italic,
+            &color,
+            (!is_char).then_some((align.as_str(), left, right, first, before, after, line)),
+        );
+
         Some(Dialog::ModifyStyle {
             back: false,
             resume: None,
@@ -890,14 +965,52 @@ impl Dialog {
             size: rc.size,
             bold: rc.bold,
             italic: rc.italic,
-            color: match rc.color {
-                wordcraft_doc::TextColor::Rgb(c) => c.hex(),
-                wordcraft_doc::TextColor::Auto => "auto".into(),
-            },
-            before: rp.space_before,
-            after: rp.space_after,
+            color,
+            before,
+            after,
+            align,
+            left,
+            right,
+            first,
+            line,
+            initial_line: line,
+            non_multiple_line,
+            is_char,
+            bidi: rp.bidi,
+            tab: 0,
+            start,
         })
     }
+}
+
+/// Builds the baseline map of style properties used by the Modify Style dialog
+/// to detect and save only fields that changed on OK (#5833).
+pub(crate) fn modify_style_start(
+    name: &str,
+    font: &str,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    color: &str,
+    para: Option<(&str, f32, f32, f32, f32, f32, f32)>,
+) -> serde_json::Map<String, Value> {
+    let mut start = serde_json::Map::new();
+    start.insert("name".into(), json!(name));
+    start.insert("font".into(), json!(font));
+    start.insert("size".into(), json!(size));
+    start.insert("bold".into(), json!(bold));
+    start.insert("italic".into(), json!(italic));
+    start.insert("color".into(), json!(color));
+    if let Some((align, left, right, first, before, after, line)) = para {
+        start.insert("align".into(), json!(align));
+        start.insert("left".into(), json!(left));
+        start.insert("right".into(), json!(right));
+        start.insert("first".into(), json!(first));
+        start.insert("before".into(), json!(before));
+        start.insert("after".into(), json!(after));
+        start.insert("line".into(), json!(line));
+    }
+    start
 }
 
 pub mod dialogs_chart;

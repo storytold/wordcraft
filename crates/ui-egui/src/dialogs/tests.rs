@@ -882,6 +882,327 @@ fn modify_style_font_box_finds_the_family() {
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
 }
 
+/// #5833: Modify Style offers paragraph formatting (alignment, indents, first line, line spacing)
+/// on its Paragraph tab, allowing footnotes and styles to have indents without manually formatting
+/// each footnote paragraph.
+#[test]
+fn modify_style_configures_paragraph_options_and_indents() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app_with("Body text.");
+    let fn_res = app.run("references.footnote", json!({"text": "Footnote body."})).unwrap();
+    let fn_story = wordcraft_doc::StoryRef::Part(fn_res["id"].as_u64().unwrap() as u32);
+
+    // Initially, FootnoteText has no first-line or left indent.
+    let rp0 = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp0.indent_first, 0.0);
+    assert_eq!(rp0.indent_left, 0.0);
+
+    // Open Modify Style for FootnoteText.
+    let Some(mut d) = Dialog::modify_style(&app, "FootnoteText") else { panic!("no modify style dialog") };
+    let Dialog::ModifyStyle { is_char, tab, first, left, align, .. } = &mut d else { panic!("expected ModifyStyle") };
+    assert!(!*is_char, "FootnoteText is a paragraph style");
+    assert_eq!(*tab, 0);
+
+    // Switch to paragraph tab and set first-line indent, left indent, and alignment.
+    *tab = 1;
+    let unit = crate::options::unit().pt_per_unit();
+    *first = 36.0 / unit; // 36 pt first line indent
+    *left = 18.0 / unit; // 18 pt left indent
+    *align = "center".into();
+
+    // Opening Modify Style for a character style has is_char true.
+    let char_d = Dialog::modify_style(&app, "FootnoteReference").unwrap();
+    let Dialog::ModifyStyle { is_char: char_is_char, .. } = char_d else { panic!() };
+    assert!(char_is_char, "FootnoteReference is a character style");
+
+    // Press OK in the harness to apply the style modifications.
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // Style itself now resolves with updated first-line indent, left indent, and center alignment.
+    let rp1 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp1.indent_first, 36.0);
+    assert_eq!(rp1.indent_left, 18.0);
+    assert_eq!(rp1.align, wordcraft_doc::Align::Center);
+
+    // Footnote paragraph in footnote story automatically inherits these style properties.
+    let foot_para = h.state().session.doc.para(fn_story, &wordcraft_doc::Path::top(0)).unwrap();
+    let foot_rp = h.state().session.doc.styles.resolve_para(&foot_para.props);
+    assert_eq!(foot_rp.indent_first, 36.0);
+    assert_eq!(foot_rp.indent_left, 18.0);
+    assert_eq!(foot_rp.align, wordcraft_doc::Align::Center);
+}
+
+/// #5833: editing a style with non-multiple line spacing (e.g., Exactly or At Least) preserves
+/// that non-multiple line spacing when the user does not change the line spacing box in Modify Style.
+#[test]
+fn modify_style_preserves_non_multiple_line_spacing_when_unchanged() {
+    use egui_kittest::kittest::Queryable;
+    use wordcraft_doc::props::LineSpacing;
+
+    let mut app = app_with("Sample text.");
+
+    // Configure FootnoteText with fixed/exact line spacing (24 pt).
+    let _ = app
+        .run(
+            "styles.modify",
+            json!({
+                "style": "FootnoteText",
+                "para": {
+                    "lineSpacing": {"rule": "exactly", "value": 24.0}
+                }
+            }),
+        )
+        .unwrap();
+
+    let rp0 = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp0.line_spacing, LineSpacing::Exactly(24.0));
+
+    // Open Modify Style for FootnoteText.
+    let Some(mut d) = Dialog::modify_style(&app, "FootnoteText") else { panic!("no modify style dialog") };
+    let Dialog::ModifyStyle { non_multiple_line, line, initial_line, align, .. } = &mut d else {
+        panic!("expected ModifyStyle");
+    };
+
+    assert_eq!(*non_multiple_line, Some(LineSpacing::Exactly(24.0)));
+    assert_eq!(*line, 1.0);
+    assert_eq!(*initial_line, 1.0);
+
+    // Modify only alignment without touching line spacing.
+    *align = "center".into();
+
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // Verify alignment updated but Exactly(24.0) line spacing was preserved.
+    let rp1 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp1.align, wordcraft_doc::Align::Center);
+    assert_eq!(rp1.line_spacing, LineSpacing::Exactly(24.0));
+
+    // When line spacing IS explicitly edited, multiple line spacing replaces the fixed spacing.
+    let Some(mut d2) = Dialog::modify_style(h.state(), "FootnoteText") else { panic!() };
+    if let Dialog::ModifyStyle { line, .. } = &mut d2 {
+        *line = 1.5;
+    }
+    h.state_mut().dialog = Some(d2);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    let rp2 = h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("FootnoteText".into()), ..Default::default() });
+    assert_eq!(rp2.line_spacing, LineSpacing::Multiple(1.5));
+}
+
+/// #5833: opening Modify Style and clicking OK with no edits preserves the style's own properties
+/// without saving unedited values, so derived styles continue inheriting updates from their base style.
+#[test]
+fn modify_style_ok_with_no_edits_preserves_own_properties_and_base_inheritance() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app_with("Some document text.");
+    let _ = app
+        .run(
+            "styles.create",
+            json!({
+                "name": "BaseStyle",
+                "basedOn": "Normal",
+            }),
+        )
+        .unwrap();
+    let _ = app
+        .run(
+            "styles.modify",
+            json!({
+                "style": "BaseStyle",
+                "chr": {"size": 18.0},
+                "para": {"indentLeft": 36.0, "align": "center"},
+            }),
+        )
+        .unwrap();
+
+    let _ = app
+        .run(
+            "styles.create",
+            json!({
+                "name": "DerivedStyle",
+                "basedOn": "BaseStyle",
+            }),
+        )
+        .unwrap();
+
+    // DerivedStyle initially inherits BaseStyle's properties.
+    let rp_init = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("DerivedStyle".into()), ..Default::default() });
+    assert_eq!(rp_init.indent_left, 36.0);
+    assert_eq!(rp_init.align, wordcraft_doc::Align::Center);
+
+    let st_before = app.session.doc.styles.get("DerivedStyle").unwrap().clone();
+    assert!(st_before.para.indent_left.is_none());
+    assert!(st_before.para.align.is_none());
+    assert!(st_before.chr.size.is_none());
+
+    // Open Modify Style for DerivedStyle and click OK with no edits.
+    let d = Dialog::modify_style(&app, "DerivedStyle").expect("modify style dialog");
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // DerivedStyle's own properties remain unset, avoiding shadowing of base style properties.
+    let st_after = h.state().session.doc.styles.get("DerivedStyle").unwrap();
+    assert_eq!(st_after.para.indent_left, None, "DerivedStyle must not store own indentLeft");
+    assert_eq!(st_after.para.align, None, "DerivedStyle must not store own align");
+    assert_eq!(st_after.chr.size, None, "DerivedStyle must not store own size");
+
+    // Later edits to BaseStyle still reach DerivedStyle.
+    let _ = h
+        .state_mut()
+        .run(
+            "styles.modify",
+            json!({
+                "style": "BaseStyle",
+                "para": {"indentLeft": 72.0},
+            }),
+        )
+        .unwrap();
+
+    let rp_propagated =
+        h.state().session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some("DerivedStyle".into()), ..Default::default() });
+    assert_eq!(rp_propagated.indent_left, 72.0, "DerivedStyle must follow BaseStyle updates");
+}
+
+/// #5833: right-to-left styles round-trip unchanged on OK without swapping visual left/right coordinates,
+/// and visual edits convert back to logical values on save.
+#[test]
+fn modify_style_rtl_round_trips_unchanged() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app_with("نص عربي");
+    let _ = app
+        .run(
+            "styles.create",
+            json!({
+                "name": "RtlStyle",
+                "basedOn": "Normal",
+            }),
+        )
+        .unwrap();
+    let _ = app
+        .run(
+            "styles.modify",
+            json!({
+                "style": "RtlStyle",
+                "para": {
+                    "bidi": true,
+                    "indentLeft": 18.0,
+                    "indentRight": 36.0,
+                    "align": "left",
+                },
+            }),
+        )
+        .unwrap();
+
+    let st_orig = app.session.doc.styles.get("RtlStyle").unwrap().clone();
+    assert_eq!(st_orig.para.bidi, Some(true));
+    assert_eq!(st_orig.para.indent_left, Some(18.0));
+    assert_eq!(st_orig.para.indent_right, Some(36.0));
+    assert_eq!(st_orig.para.align, Some(wordcraft_doc::Align::Left));
+
+    // Open Modify Style. In RTL, visual indents and alignment are displayed flipped:
+    // visual Left = logical indent_right (36.0), visual Right = logical indent_left (18.0).
+    // visual align = Align::Left.visual(true) = Align::Right ("right").
+    let mut d = Dialog::modify_style(&app, "RtlStyle").expect("modify style dialog");
+    let Dialog::ModifyStyle { align, left, right, bidi, .. } = &mut d else { panic!() };
+    assert!(*bidi);
+    let unit = crate::options::unit().pt_per_unit();
+    assert!((*left - 36.0 / unit).abs() < 0.001);
+    assert!((*right - 18.0 / unit).abs() < 0.001);
+    assert_eq!(align, "right");
+
+    // Press OK with no edits.
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    // Verify RTL style round-tripped unchanged: left and right indents and alignment did not swap.
+    let st_after = h.state().session.doc.styles.get("RtlStyle").unwrap();
+    assert_eq!(st_after.para.indent_left, Some(18.0));
+    assert_eq!(st_after.para.indent_right, Some(36.0));
+    assert_eq!(st_after.para.align, Some(wordcraft_doc::Align::Left));
+
+    // Edit visual alignment in RTL dialog to visual "left" (which is logical "right").
+    let mut d2 = Dialog::modify_style(h.state(), "RtlStyle").expect("modify style dialog");
+    let Dialog::ModifyStyle { align, tab, .. } = &mut d2 else { panic!() };
+    *tab = 1;
+    *align = "left".into();
+    h.state_mut().dialog = Some(d2);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    let st_align_edit = h.state().session.doc.styles.get("RtlStyle").unwrap();
+    assert_eq!(st_align_edit.para.align, Some(wordcraft_doc::Align::Right));
+}
+
+/// #5833: character-unit indents on a paragraph style survive a font-only edit without
+/// being cleared by cancel_char_indents.
+#[test]
+fn modify_style_character_indents_survive_font_only_edit() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app_with("Sample document.");
+    let _ = app
+        .run(
+            "styles.create",
+            json!({
+                "name": "CharIndentStyle",
+                "basedOn": "Normal",
+            }),
+        )
+        .unwrap();
+    let _ = app
+        .run(
+            "styles.modify",
+            json!({
+                "style": "CharIndentStyle",
+                "para": {
+                    "indentFirstChars": 2.0,
+                    "indentLeftChars": 1.5,
+                },
+            }),
+        )
+        .unwrap();
+
+    let st_orig = app.session.doc.styles.get("CharIndentStyle").unwrap();
+    assert_eq!(st_orig.para.indent_first_chars, Some(2.0));
+    assert_eq!(st_orig.para.indent_left_chars, Some(1.5));
+
+    // Open Modify Style and edit only font size on the Font tab.
+    let mut d = Dialog::modify_style(&app, "CharIndentStyle").expect("modify style dialog");
+    let Dialog::ModifyStyle { size, .. } = &mut d else { panic!() };
+    *size = 16.0;
+
+    let mut h = app_harness(app);
+    h.state_mut().dialog = Some(d);
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+
+    let st_after = h.state().session.doc.styles.get("CharIndentStyle").unwrap();
+    assert_eq!(st_after.chr.size, Some(16.0));
+    assert_eq!(st_after.para.indent_first_chars, Some(2.0), "indent_first_chars must survive font edit");
+    assert_eq!(st_after.para.indent_left_chars, Some(1.5), "indent_left_chars must survive font edit");
+}
+
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).
 #[test]
 fn dragging_a_dialog_title_bar_moves_it() {
