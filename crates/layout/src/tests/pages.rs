@@ -763,7 +763,7 @@ fn a_page_top_after_a_page_break_resumes_like_a_full_layout() {
     d.para_mut(StoryRef::Body, &Path::top(31)).unwrap().props.page_break_before = Some(true);
     let mut c = LayoutCache::new();
     assert_same_as_full(&d, &mut c, "first layout");
-    for at in [33, 34, 100] {
+    for at in [33, 44, 100] {
         d.insert_text(&Pos::body(at, 0), "Edit ", &Default::default()).unwrap();
         assert_same_as_full(&d, &mut c, &format!("edit in paragraph {at}"));
     }
@@ -788,25 +788,28 @@ fn the_lines_between_columns_resume_like_a_full_layout() {
 #[test]
 fn a_chain_of_kept_headings_resumes_like_a_full_layout() {
     // #1284 (review): a heading keeps with the next to a depth of 8 blocks, so an edit to the
-    // space before a later paragraph can pull a heading two blocks up back onto its page.
-    for (filler, space) in (1..130).flat_map(|f| [100.0, 150.0, 250.0, 400.0].map(|s| (f, s))) {
-        let mut body: Vec<_> = paras("Filler line", filler);
-        for (text, keep) in [("Heading one", true), ("Heading two", true), ("Text after the headings", false)] {
-            let mut p = Paragraph::with_text(text, Default::default());
-            p.props.keep_next = keep.then_some(true);
-            if !keep {
-                p.props.space_before = Some(space);
+    // space before a later paragraph can pull a heading up to nine blocks up back onto its page.
+    for (chain, fillers) in [(2usize, 1..130), (9, 1..20)] {
+        for (filler, space) in fillers.flat_map(|f| [100.0, 150.0, 250.0, 400.0].map(|s| (f, s))) {
+            let mut body: Vec<_> = paras("Filler line", filler);
+            for i in 0..=chain {
+                let mut p = Paragraph::with_text(&format!("Heading {i}"), Default::default());
+                if i < chain {
+                    p.props.keep_next = Some(true);
+                } else {
+                    p.props.space_before = Some(space);
+                }
+                body.push(para_block(p));
             }
-            body.push(para_block(p));
+            body.extend(paras("Tail line", 80));
+            let mut d = Document::new();
+            d.body = body;
+            let mut c = LayoutCache::new();
+            assert_same_as_full(&d, &mut c, "first layout");
+            let at = Pos::body(filler + chain, 0);
+            d.format_paragraphs(&at, &at, &|p| p.space_before = Some(0.0)).unwrap();
+            assert_same_as_full(&d, &mut c, &format!("chain {chain}: {filler} filler paragraphs, {space} space before removed"));
         }
-        body.extend(paras("Tail line", 80));
-        let mut d = Document::new();
-        d.body = body;
-        let mut c = LayoutCache::new();
-        assert_same_as_full(&d, &mut c, "first layout");
-        let at = Pos::body(filler + 2, 0);
-        d.format_paragraphs(&at, &at, &|p| p.space_before = Some(0.0)).unwrap();
-        assert_same_as_full(&d, &mut c, &format!("{filler} filler paragraphs, {space} space before removed"));
     }
 }
 

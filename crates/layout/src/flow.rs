@@ -1071,7 +1071,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             };
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own_top };
-            if keep && depth < 8 {
+            if keep && depth < MAX_KEEP_CHAIN {
                 let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own_bottom };
                 whole + top + bottom + next_first_line(ctx, block + 1, width, depth + 1, counters)
             } else {
@@ -1082,5 +1082,8 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
         None => 0.0,
     }
 }
+/// How many keep-with-next paragraphs [`next_first_line`] follows. An incremental pass steps back
+/// past this many blocks before an edit (`incremental::KEEP_CHAIN`).
+pub(crate) const MAX_KEEP_CHAIN: usize = 8;
 /// Bound on [`LayoutCache::lookahead`] (entries are small; it starts over past this).
 const MAX_LOOKAHEAD: usize = 1 << 16;

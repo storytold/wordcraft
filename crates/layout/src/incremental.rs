@@ -316,7 +316,7 @@ impl PassKey {
 
 /// How many blocks before an edited one a paragraph's placement can depend on it: `next_first_line`
 /// follows keep with next to a depth of 8, so a heading 9 blocks up sees the edit.
-const KEEP_CHAIN: usize = 9;
+const KEEP_CHAIN: usize = crate::flow::MAX_KEEP_CHAIN + 1;
 
 /// How the next pass may reuse the previous one.
 pub(crate) struct Plan {
