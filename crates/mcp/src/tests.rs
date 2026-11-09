@@ -452,3 +452,29 @@ fn invalid_utf8_does_not_change_arguments_or_stop_later_requests() {
     assert_eq!(replies[1]["result"]["isError"], false);
     assert_eq!(tool(&mut s, "get_text", json!({}))["text"], "good", "malformed text must never reach the backend");
 }
+
+/// #6101: through the protocol, an agent can't attach a template on another machine (Word would
+/// fetch it when the saved file is opened), in `\\host`, `\\?\UNC\` or forward-slash spelling,
+/// with `tools.attachTemplate` or `file.newFromTemplate`; a template on this computer still goes in.
+#[test]
+fn an_agent_cannot_attach_a_template_on_another_machine() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    let attached = |s: &mut Server| tool(s, "execute", json!({"command": "tools.templates"}))["template"].clone();
+    for remote in [r"\\attacker\share\t.dotm", r"\\?\UNC\attacker\share\t.dotm", "//attacker/share/t.dotm"] {
+        for command in ["tools.attachTemplate", "file.newFromTemplate"] {
+            let args = json!({"command": command, "params": {"path": remote, "data": ""}});
+            let r = call(&mut s, 40, "tools/call", json!({"name": "execute", "arguments": args}));
+            assert_eq!(r["result"]["isError"], true, "{command} {remote}: {r}");
+            let text = r["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("automation path rejected: the attached template must be a file on this computer"), "{text}");
+        }
+        assert_eq!(attached(&mut s), Value::Null, "{remote}");
+    }
+    let local = r"C:\Templates\Report.dotx";
+    for command in ["tools.attachTemplate", "file.newFromTemplate"] {
+        tool(&mut s, "new_document", json!({}));
+        tool(&mut s, "execute", json!({"command": command, "params": {"path": local, "data": ""}}));
+        assert_eq!(attached(&mut s), local, "{command}: a template on this computer still goes in");
+    }
+}

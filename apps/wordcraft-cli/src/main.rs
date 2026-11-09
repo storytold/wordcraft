@@ -12,6 +12,7 @@ use std::process::ExitCode;
 
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
+use wordcraft_engine::automation;
 
 const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
@@ -601,8 +602,10 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 set_author(&mut s, &name)?;
             }
             let print = rest.iter().any(|a| a == "--print");
+            // The script's and `--cmd`'s commands are automation's: a pipeline or an agent may have
+            // written them (#6101).
             for (n, (id, params)) in script.iter().flat_map(|c| c.commands.iter()).enumerate() {
-                let r = s.run(id, params).map_err(|e| engine_error(format!("command {} ({id}): {e}", n + 1)))?;
+                let r = automation::from_automation(|| s.run(id, params)).map_err(|e| engine_error(format!("command {} ({id}): {e}", n + 1)))?;
                 if print {
                     write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                 }
@@ -617,7 +620,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                         }
                         None => (spec.clone(), json!({})),
                     };
-                    let r = s.run(&id, &params).map_err(|e| engine_error(format!("{id}: {e}")))?;
+                    let r = automation::from_automation(|| s.run(&id, &params)).map_err(|e| engine_error(format!("{id}: {e}")))?;
                     if print {
                         write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                     }
@@ -757,7 +760,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     }
                     None => (spec.clone(), json!({})),
                 };
-                s.run(&id, &params).map_err(|e| engine_error(format!("{id}: {e}")))?;
+                // Automation's, as `run`'s `--cmd` (#6101).
+                automation::from_automation(|| s.run(&id, &params)).map_err(|e| engine_error(format!("{id}: {e}")))?;
             }
             let mut opts = wordcraft_zotero::client::Options::default();
             if let Some(p) = arg_value(&rest, "--port") {

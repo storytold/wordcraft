@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-09 · Attached templates (#6101): automation can't attach a template on another machine.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -129,6 +129,22 @@ touching the file system on their own.
 The checks hold for every thread of the server process. A path is checked, then opened: another
 program that swaps a link in between can still win that race, so the roots keep an agent to the
 files it was given rather than guarding against other software on the computer.
+
+## Attached templates
+
+Word fetches a document's attached template when it opens the file. A template on another
+machine makes the recipient's computer connect there, and on Windows that can send it their
+credentials (NTLM). So automation can't attach one (#6101): `tools.attachTemplate` and
+`file.newFromTemplate` refuse a `path` that isn't a file on this computer, before anything is
+read. That covers `\\server\share\...`, `//server/...`, `\\?\UNC\...`, `\??\UNC\...` and other
+device paths, `file://server/...`, and URLs. The error is
+`automation path rejected: the attached template must be a file on this computer, not a network or device path or a URL: …`.
+
+Automation here means MCP (headless or `--connect`), any request on the app's control channel
+(also the web app's `window.wordcraft` page API, which uses it), and the commands
+`wordcraft-cli run` (`--cmd`, `--script`) and `wordcraft-cli zotero` (`--cmd`) run. With no
+roots in force the check still applies. The person at the keyboard can still attach a template on a share, as in Word.
+A template that a document opened by path or from `data` already names is kept as it is.
 
 ## Language packs
 
