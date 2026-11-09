@@ -296,6 +296,8 @@ fn add_custom_styles(doc: &mut Document, named: &[super::styles::NamedStyle], od
             }),
             contextual_spacing: look.contextual,
             bidi: look.rtl.filter(|r| *r),
+            // The document's nine levels; ODF's tenth is the last of them.
+            outline_level: def.outline.map(|o| o.clamp(1, 9) - 1),
             ..Default::default()
         };
         let name = super::writer::generating_style(name).map_or_else(|| def.name.clone(), |(_, n)| n);
@@ -362,7 +364,7 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
 fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     use wordcraft_doc::numbering::{AbstractNum, ListKind, Num, levels_for};
     use wordcraft_doc::props::NumRef;
-    let numbered: Vec<bool> = (0..6).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
+    let numbered: Vec<bool> = (0..9).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
     if !numbered.contains(&true) {
         return;
     }
@@ -395,9 +397,60 @@ fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
     numbering.abstracts.push(AbstractNum { id: aid, name: None, levels: out, ..Default::default() });
     let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
     numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
+    let styles = Arc::make_mut(&mut doc.styles);
     for (i, on) in numbered.iter().enumerate() {
-        if *on && let Some(st) = Arc::make_mut(&mut doc.styles).get_mut(&format!("Heading{}", i + 1)) {
+        if *on && let Some(st) = styles.get_mut(&format!("Heading{}", i + 1)) {
             st.para.numbering = Some(NumRef { num: nid, level: i as u8 });
+        }
+    }
+    // LibreOffice numbers a custom style at an outline level along with that level's headings.
+    for st in &mut styles.styles {
+        if let Some(l) = st.para.outline_level.filter(|l| numbered.get(usize::from(*l)) == Some(&true)) {
+            st.para.numbering = Some(NumRef { num: nid, level: l });
+        }
+    }
+    // A style at a level the outline doesn't number doesn't take its parent's number from it.
+    let of_outline = |st: &wordcraft_doc::styles::Style| {
+        let at = wordcraft_doc::props::ParaProps { style: Some(st.id.clone()), ..Default::default() };
+        st.para.numbering.is_none()
+            && st.para.outline_level.is_some_and(|l| numbered.get(usize::from(l)) != Some(&true))
+            && styles.resolve_para(&at).numbering.is_some_and(|n| n.num == nid)
+    };
+    let unnumbered: Vec<String> = styles.styles.iter().filter(|st| of_outline(st)).map(|st| st.id.clone()).collect();
+    for id in unnumbered {
+        if let Some(st) = styles.get_mut(&id) {
+            // (`num: 0` switches the number off.)
+            st.para.numbering = Some(NumRef { num: 0, level: 0 });
+        }
+    }
+    // A heading's own outline level goes before its style's: LibreOffice numbers it by that level.
+    // A heading in a list is that list's.
+    let styles = doc.styles.clone();
+    each_body_para(&mut doc.body, 0, &mut |p| {
+        let Some(l) = p.props.outline_level.filter(|_| p.props.numbering.is_none()) else { return };
+        let style = styles.resolve_para(&wordcraft_doc::props::ParaProps { style: p.props.style.clone(), ..Default::default() });
+        if style.outline_level.is_none() {
+            return;
+        }
+        let own = (numbered.get(usize::from(l)) == Some(&true)).then_some(NumRef { num: nid, level: l });
+        if own != style.numbering {
+            // (`num: 0` switches the style's number off.)
+            p.props.numbering = Some(own.unwrap_or(NumRef { num: 0, level: 0 }));
+        }
+    });
+}
+
+/// Each paragraph of `blocks`, those in tables too (to 16 levels deep).
+fn each_body_para(blocks: &mut [Arc<wordcraft_doc::Block>], depth: usize, f: &mut dyn FnMut(&mut wordcraft_doc::Paragraph)) {
+    for b in blocks {
+        match Arc::make_mut(b) {
+            wordcraft_doc::Block::Para(p) => f(p),
+            wordcraft_doc::Block::Table(t) if depth < 16 => {
+                for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    each_body_para(&mut cell.blocks, depth + 1, f);
+                }
+            }
+            wordcraft_doc::Block::Table(_) => {}
         }
     }
 }

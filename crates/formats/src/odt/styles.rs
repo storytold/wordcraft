@@ -465,6 +465,8 @@ pub(super) struct NamedStyle {
     /// What it turns off, which a style it is based on may turn on: bold, italic, underline,
     /// strike-through (`fo:font-weight="normal"`…).
     pub(super) off: [bool; 4],
+    /// Its outline level, 1–10 (`style:default-outline-level`).
+    pub(super) outline: Option<u8>,
 }
 
 /// Reads date and time styles (`number:date-style`, `number:time-style`) as Word pictures.
@@ -1560,13 +1562,16 @@ impl Styles {
         };
         let name = s.display.clone().unwrap_or_else(|| odt.replace("_20_", " "));
         let off = [s.fmt.bold, s.fmt.italic, s.fmt.underline, s.fmt.strike].map(|v| v == Some(false));
-        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look, off })
+        let outline = s.outline.filter(|o| (1..=10).contains(o));
+        Some(NamedStyle { name: name.chars().take(super::super::model::MAX_FONT_NAME).collect(), parent, look, off, outline })
     }
 
     pub(super) fn para(&self, name: &str) -> ParaLook {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         let mut kind_at = chain.len();
+        // The nearest outline level; a style with one is no kind's style: its look is its own.
+        let mut outline = None;
         for (i, (n, s)) in chain.iter().enumerate() {
             kind_at = i;
             let dn = s.display.as_deref().unwrap_or(n).to_ascii_lowercase().replace("_20_", " ");
@@ -1585,11 +1590,11 @@ impl Styles {
             if kind != Kind::Normal {
                 break;
             }
-            if let Some(o) = s.outline.filter(|o| (1..=10).contains(o)) {
-                kind = Kind::Heading(o.min(6));
-                break;
-            }
+            outline = outline.or(s.outline.filter(|o| (1..=10).contains(o)));
             kind_at = chain.len();
+        }
+        if let Some(o) = outline {
+            kind = Kind::Heading(o.min(6));
         }
         // The nearest custom style: its formatting stays in it; the automatic styles over it give
         // the paragraph's own.
