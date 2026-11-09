@@ -311,6 +311,13 @@ impl WordApp {
         }
     }
 
+    /// [`Self::default_save_name`] without its extension: what Save As › File name starts with,
+    /// so the field shows the name Browse… would suggest (#5800).
+    pub(crate) fn default_save_stem(&self) -> String {
+        let name = self.default_save_name();
+        name.rsplit_once('.').map_or(name.clone(), |(stem, _)| stem.to_string())
+    }
+
     /// The file name for what was typed in Save As › File name (#5800), or `None` when nothing
     /// usable was typed (Save As then suggests [`Self::default_save_name`]). The extension Save
     /// would use is added unless the name already ends in a format WordCraft saves.

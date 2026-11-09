@@ -757,7 +757,7 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     let document = app.session.document_id();
     let mut name = match &app.ui.save_as_name {
         Some((id, typed)) if *id == document => typed.clone(),
-        _ => app.title_stem(),
+        _ => app.default_save_stem(),
     };
     // The label sits above the field, so the field lines up with the buttons below it.
     let label = ui.label(tl!("File name:"));

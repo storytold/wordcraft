@@ -1160,6 +1160,11 @@ fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
 /// A Save As page whose Browse… asks the host's file dialog, which records the names it is asked
 /// to suggest.
 fn save_as_names() -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
+    save_as_names_for("")
+}
+
+/// [`save_as_names`] for an unnamed document whose body holds `text`.
+fn save_as_names_for(text: &str) -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
     let asked: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
     let log = asked.clone();
     let services = Services {
@@ -1172,6 +1177,9 @@ fn save_as_names() -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std:
         ..Default::default()
     };
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    if !text.is_empty() {
+        a.run("text.insert", json!({"text": text})).unwrap();
+    }
     a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {
@@ -1208,11 +1216,20 @@ fn browse_suggestion(h: &mut egui_kittest::Harness<'static, WordApp>, asked: &st
 #[test]
 fn save_as_file_name_is_what_browse_suggests() {
     let (mut h, asked) = save_as_names();
-    let stem = h.state().title_stem();
+    let stem = h.state().default_save_stem();
     assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name:").value().as_deref(), Some(stem.as_str()));
     assert_eq!(browse_suggestion(&mut h, &asked), format!("{stem}.docx"), "untouched, Browse… suggests what it always did");
     type_file_name(&mut h, "Quarterly review");
     assert_eq!(browse_suggestion(&mut h, &asked), "Quarterly review.docx");
+}
+
+/// An unnamed document is suggested under its first words (#5793), and the field shows that same
+/// name, so the field and Browse… agree until something is typed.
+#[test]
+fn save_as_file_name_follows_the_first_words_of_an_unnamed_document() {
+    let (mut h, asked) = save_as_names_for("Hello world");
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name:").value().as_deref(), Some("Hello world"));
+    assert_eq!(browse_suggestion(&mut h, &asked), "Hello world.docx");
 }
 
 /// A typed extension that WordCraft saves is kept (so it sets the format) and not doubled; any
@@ -1220,7 +1237,7 @@ fn save_as_file_name_is_what_browse_suggests() {
 #[test]
 fn save_as_file_name_keeps_its_extension_and_falls_back_when_unusable() {
     let (mut h, asked) = save_as_names();
-    let stem = h.state().title_stem();
+    let stem = h.state().default_save_stem();
     for (typed, suggested) in
         [("Letter.docx", "Letter.docx"), ("Notes.PDF", "Notes.PDF"), ("Report v1.2", "Report v1.2.docx"), ("a/b\\c", "a b c.docx")]
     {
