@@ -46,6 +46,18 @@ pub(super) fn odf_num_format(f: wordcraft_doc::section::NumFormat) -> &'static s
     }
 }
 
+/// The format readers number `f` in once written: `style:num-format` names only 1, a, A, i, I
+/// and none (§19.500), so every other format (Thai counting, Chicago, text amounts…) is written as
+/// decimal and its notes' citations must be decimal too, or a reader that keeps the citation shows
+/// one format and renumbers in another.
+pub(super) fn odf_shown_format(f: wordcraft_doc::section::NumFormat) -> wordcraft_doc::section::NumFormat {
+    use wordcraft_doc::section::NumFormat as F;
+    match f {
+        F::LowerRoman | F::UpperRoman | F::LowerLetter | F::UpperLetter | F::None => f,
+        _ => F::Decimal,
+    }
+}
+
 pub(super) fn x(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
