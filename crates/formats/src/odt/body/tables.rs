@@ -73,14 +73,67 @@ pub(in crate::odt) struct TableB {
     pub(in crate::odt) hcover: usize,
     /// Widths in points of the `table:table-column`s so far, 0 where the style gives none.
     pub(in crate::odt) widths: Vec<f32>,
+    /// Each column's share of the table (`style:rel-column-width`), 0 where the style gives none.
+    pub(in crate::odt) shares: Vec<f32>,
+    /// The table's width, points: what the shares divide.
+    pub(in crate::odt) room: Option<f32>,
+    /// It is in a cell, a frame or a column narrower than the page, whose width isn't known here.
+    pub(in crate::odt) contained: bool,
     /// Its alignment and width, and each row's height so far (see [`crate::model::TableExtra`]).
     pub(in crate::odt) extra: crate::model::TableExtra,
+    /// The background of each column's default cell style (`table:default-cell-style-name`).
+    pub(in crate::odt) column_backgrounds: Vec<Option<wordcraft_doc::props::Rgb>>,
+    /// The table's background, and the row's being read.
+    pub(in crate::odt) background: Option<wordcraft_doc::props::Rgb>,
+    pub(in crate::odt) row_background: Option<wordcraft_doc::props::Rgb>,
+}
+
+/// The narrowest column the document model keeps (a narrower one would lose the table its grid).
+const MIN_COLUMN: f32 = 6.0;
+
+/// Each column's width out of `room` points, as LibreOffice shares it out: by its share if it has
+/// one, else its stated width, which comes off the room first; none narrower than a column can be
+/// (6 pt). Empty if a column has neither, or no room is left to share.
+fn widths_of_shares(widths: &[f32], shares: &[f32], room: f32) -> Vec<f32> {
+    let columns = || widths.iter().zip(shares);
+    let usable = |v: f32| v.is_finite() && v > 0.0;
+    let left = room - columns().filter(|(_, s)| **s <= 0.0).map(|(w, _)| *w).sum::<f32>();
+    let total: f32 = shares.iter().filter(|s| **s > 0.0).sum();
+    if widths.len() != shares.len() || !usable(left) || !usable(total) || columns().any(|(w, s)| *w <= 0.0 && *s <= 0.0) {
+        return Vec::new();
+    }
+    columns().map(|(w, s)| if *s > 0.0 { (s / total * left).max(MIN_COLUMN) } else { *w }).collect()
 }
 
 impl TableB {
     pub(in crate::odt) fn finish(self) -> FTable {
-        // A column without a width leaves the whole grid to the equal split.
-        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { Vec::new() };
+        // Columns stating their shares (LibreOffice's tables filling the margins, §20.334) divide
+        // the table's width by them; a column with neither leaves the whole grid to the equal split.
+        // An aligned table's shares go before the widths its columns state too, as LibreOffice
+        // reads them. (A table filling the margins is fitted to them whatever its widths say, and
+        // files give it both in proportion; in something narrower than the page, whose width isn't
+        // known here, stated widths are the best guess.)
+        let all_widths = self.widths.iter().all(|w| *w > 0.0);
+        let all_shares = !self.shares.is_empty() && self.shares.iter().all(|s| *s > 0.0);
+        let aligned = self.extra.align.is_some() && !self.contained;
+        let by_shares = self
+            .room
+            .filter(|_| all_shares && (aligned || !all_widths))
+            .map(|room| widths_of_shares(&self.widths, &self.shares, room))
+            .filter(|w| !w.is_empty());
+        let widths = if let Some(w) = by_shares {
+            w
+        } else if all_widths {
+            self.widths
+        } else {
+            // With nothing to divide, or in something narrower than the page with widths stated
+            // too, the shares can't be worked out here: the equal split, as before.
+            let mixed = self.shares.iter().any(|s| *s <= 0.0);
+            match self.room.filter(|_| !(self.contained && mixed)) {
+                Some(room) => widths_of_shares(&self.widths, &self.shares, room),
+                None => Vec::new(),
+            }
+        };
         let mut rows = self.rows;
         share_edges(&mut rows);
         // A table whose cells all say "no line" draws none.
