@@ -4,7 +4,7 @@ use serde_json::json;
 use std::sync::Arc;
 use wordcraft_collab::ids::{NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
-use wordcraft_collab::wire::{Op, OpId, OpKind, Target};
+use wordcraft_collab::wire::{HistoryAction, Op, OpId, OpKind, Target};
 use wordcraft_doc::{Block, Cell, CharProps, Document, Path, Pos, StoryRef, Table};
 
 use crate::DocModel;
@@ -868,4 +868,213 @@ fn a_replica_applies_a_row_insert_and_a_row_removal() {
 
     crate::apply_delta(&mut replica, &mut ids, &json!({"op": "remove_row", "nodeId": table, "index": 1})).expect("the replica removes it");
     assert_same(&replica, &table_doc(2, 2));
+}
+
+// --- undo of the structural table edits ------------------------------------
+
+/// An undo request for `client`'s step, as the app sends it: the step is named
+/// by the id of the operation that created it.
+fn undo_request(client: &str, seq: u64, base: u64, step_client: &str, step_seq: u64) -> Op {
+    Op {
+        op_id: OpId::new(client, seq),
+        base_version: base,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", 0, 0),
+        payload: json!({}),
+        history: Some(HistoryAction::Undo { op_id: OpId::new(step_client, step_seq) }),
+    }
+}
+
+fn grid_len(doc: &Document) -> usize {
+    doc.table(StoryRef::Body, &Path(vec![TABLE])).map_or(0, |table| table.grid.len())
+}
+
+#[test]
+fn undo_of_a_merge_splits_the_cells_back_with_their_own_text_and_ids() {
+    let before = table_doc(2, 2);
+    let (mut replica, mut ids) = replica_of(&before);
+    let mut room = Room::new(DocModel::new(before.clone()));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let absorbed = cell_id(room.ids(), 0, 1);
+    let absorbed_para = cell_para_id(room.ids(), 0, 1);
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "merge_cells", "rows": [0, 1], "cols": [0, 1]})))
+        .expect("the cells merge");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica merges");
+    assert_same(&replica, room.model().document());
+    assert_eq!(cell_paragraphs(room.model().document(), 0, 0), vec!["r0c0", "r0c1", "r1c0", "r1c1"]);
+
+    // The inverse is a split that carries the cells the merge took away.
+    let applied = room.submit("alice", Role::Editor, undo_request("a", 2, 1, "a", 1)).expect("the undo lands");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica splits back");
+
+    assert_same(room.model().document(), &before);
+    assert_same(&replica, &before);
+    // Every cell came back with its own text, not the merged run.
+    assert_eq!(cell_text(room.model().document(), 0, 1), "r0c1");
+    assert_eq!(cell_text(room.model().document(), 1, 0), "r1c0");
+    // The absorbed cell and its paragraph are addressable again under their ids.
+    assert_eq!(resolved(room.ids(), absorbed), vec![TABLE, 0, 1]);
+    assert_eq!(resolved(room.ids(), absorbed_para), vec![TABLE, 0, 1, 0]);
+    assert_eq!(resolved(&ids, absorbed), vec![TABLE, 0, 1], "the replica put the same id back");
+    // The caret holder keeps his cell and types where he was.
+    room.submit("alice", Role::Editor, op("a", 3, 2, OpKind::Primitive, absorbed_para, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("the caret holder still edits his own cell");
+    assert_eq!(cell_text(room.model().document(), 0, 1), "r0c1!");
+}
+
+#[test]
+fn undo_of_a_split_merges_the_parts_back_and_restores_the_grid() {
+    let before = table_doc(2, 2);
+    let (mut replica, mut ids) = replica_of(&before);
+    let mut room = Room::new(DocModel::new(before.clone()));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let cell = cell_id(room.ids(), 0, 0);
+    let para = cell_para_id(room.ids(), 0, 0);
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "split_cells", "row": 0, "cell": 0, "columns": 2})))
+        .expect("the cell splits");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica splits");
+    assert_same(&replica, room.model().document());
+    assert_eq!(table_cells(room.model().document()), vec![3, 2]);
+    assert_eq!(grid_len(room.model().document()), 3, "the split refined the grid inside the cell");
+
+    let applied = room.submit("alice", Role::Editor, undo_request("a", 2, 1, "a", 1)).expect("the undo lands");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica merges back");
+
+    assert_same(room.model().document(), &before);
+    assert_same(&replica, &before);
+    assert_eq!(grid_len(room.model().document()), 2, "the grid line the split added is gone");
+    assert_eq!(resolved(room.ids(), cell), vec![TABLE, 0, 0]);
+    room.submit("alice", Role::Editor, op("a", 3, 2, OpKind::Primitive, para, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("the caret holder still edits his cell");
+    assert_eq!(cell_text(room.model().document(), 0, 0), "r0c0!");
+}
+
+#[test]
+fn undo_of_a_column_removal_puts_the_column_back_with_its_text_and_ids() {
+    let before = table_doc(2, 3);
+    let (mut replica, mut ids) = replica_of(&before);
+    let mut room = Room::new(DocModel::new(before.clone()));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let gone_cell = cell_id(room.ids(), 1, 1);
+    let gone_para = cell_para_id(room.ids(), 1, 1);
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "remove_column", "index": 1})))
+        .expect("the column is removed");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica removes the column");
+    assert_same(&replica, room.model().document());
+    assert_eq!(table_cells(room.model().document()), vec![2, 2]);
+    assert_eq!(cell_text(room.model().document(), 1, 1), "r1c2");
+
+    let applied = room.submit("alice", Role::Editor, undo_request("a", 2, 1, "a", 1)).expect("the undo lands");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica puts the column back");
+
+    assert_same(room.model().document(), &before);
+    assert_same(&replica, &before);
+    assert_eq!(cell_text(room.model().document(), 1, 1), "r1c1", "the removed cell's text is back");
+    // The cells the removal took away are addressable again.
+    assert_eq!(resolved(room.ids(), gone_cell), vec![TABLE, 1, 1]);
+    assert_eq!(resolved(room.ids(), gone_para), vec![TABLE, 1, 1, 0]);
+    assert_eq!(resolved(&ids, gone_para), vec![TABLE, 1, 1, 0], "the replica put the same id back");
+    // The caret holder in the removed column keeps his cell.
+    room.submit("alice", Role::Editor, op("a", 3, 2, OpKind::Primitive, gone_para, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("the caret holder still edits the cell that came back");
+    assert_eq!(cell_text(room.model().document(), 1, 1), "r1c1!");
+}
+
+#[test]
+fn undo_of_a_column_removal_restores_a_row_that_disappeared_with_the_column() {
+    // Row 1 holds a single one-column cell, so removing column 0 drops the whole
+    // row; the inverse has to put the row back, not just the cell.
+    let mut before = table_doc(2, 2);
+    {
+        let table = before.table_mut(StoryRef::Body, &Path(vec![TABLE])).expect("table");
+        table.rows[1].cells.truncate(1);
+        table.rows[1].props.grid_after = 1;
+    }
+    let mut room = Room::new(DocModel::new(before.clone()));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let row = row_id(room.ids(), 1);
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "remove_column", "index": 0})))
+        .expect("the column is removed");
+    assert_eq!(table_rows(room.model().document()), 1, "the row went with its only cell");
+
+    room.submit("alice", Role::Editor, undo_request("a", 2, 1, "a", 1)).expect("the undo lands");
+    assert_same(room.model().document(), &before);
+    assert_eq!(resolved(room.ids(), row), vec![TABLE, 1], "the row's id names the row again");
+}
+
+#[test]
+fn undo_of_a_merge_after_another_users_edit_in_the_cell_is_a_conflict() {
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "merge_cells", "rows": [0, 0], "cols": [0, 1]})))
+        .expect("the cells merge");
+
+    // Bob types into the cell the merge kept; undoing the merge would replace
+    // that body with the captured one and lose his text.
+    let merged_para = cell_para_id(room.ids(), 0, 0);
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, merged_para, 4, json!({"op": "insert_text", "text": "!"}))).expect("bob types");
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    let err = room.submit("alice", Role::Editor, undo_request("a", 2, 2, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, wordcraft_collab::RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refused undo changed nothing");
+    assert_eq!(room.version(), 2, "a refused undo does not advance the room");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step stays on the stack");
+    assert_eq!(cell_paragraphs(room.model().document(), 0, 0), vec!["r0c0!", "r0c1"], "bob's text survived");
+}
+
+#[test]
+fn undo_of_a_merge_lands_after_an_edit_in_another_cell() {
+    // The touched set is the merged region, not the whole table: an edit in a
+    // cell the merge did not take must not block the undo.
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "merge_cells", "rows": [0, 0], "cols": [0, 1]})))
+        .expect("the cells merge");
+    let other = cell_para_id(room.ids(), 1, 1);
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, other, 4, json!({"op": "insert_text", "text": "!"})))
+        .expect("bob types in another row");
+
+    room.submit("alice", Role::Editor, undo_request("a", 2, 2, "a", 1)).expect("the undo lands");
+    assert_eq!(table_cells(room.model().document()), vec![2, 2]);
+    assert_eq!(cell_text(room.model().document(), 0, 1), "r0c1");
+    assert_eq!(cell_text(room.model().document(), 1, 1), "r1c1!", "bob's edit is still there");
+}
+
+#[test]
+fn undo_of_a_row_insert_after_an_edit_in_the_new_row_is_a_conflict() {
+    let mut room = Room::new(DocModel::new(table_doc(2, 2)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, table, 0, json!({"op": "insert_row", "index": 1, "row": json!(Table::new(1, 2, 200.0).rows[0])})),
+    )
+    .expect("the row is inserted");
+
+    // Bob types into the row Alice inserted; undoing the insert would take the
+    // row — and his text — away.
+    let new_cell = cell_para_id(room.ids(), 1, 0);
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, new_cell, 0, json!({"op": "insert_text", "text": "mine"}))).expect("bob types");
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    let err = room.submit("alice", Role::Editor, undo_request("a", 2, 2, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, wordcraft_collab::RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refused undo changed nothing");
+    assert_eq!(cell_text(room.model().document(), 1, 0), "mine");
 }

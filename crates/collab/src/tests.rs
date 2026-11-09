@@ -33,6 +33,7 @@ impl TextModel {
             forward: vec![op.clone()],
             label: "Typing".into(),
             nodes_changed: false,
+            touched: Vec::new(),
         })
     }
 
@@ -60,6 +61,7 @@ impl TextModel {
             forward: vec![op.clone()],
             label: "Delete".into(),
             nodes_changed: false,
+            touched: Vec::new(),
         })
     }
 }
@@ -71,10 +73,17 @@ impl Model for TextModel {
             OpKind::Primitive => self.apply_insert(op),
             OpKind::Structural => {
                 self.text.push('#');
-                Ok(Effect { delta: None, inverse: Vec::new(), forward: vec![op.clone()], label: "Structural".into(), nodes_changed: true })
+                Ok(Effect {
+                    delta: None,
+                    inverse: Vec::new(),
+                    forward: vec![op.clone()],
+                    label: "Structural".into(),
+                    nodes_changed: true,
+                    touched: Vec::new(),
+                })
             }
             OpKind::Command | OpKind::Merge => {
-                Ok(Effect { delta: None, inverse: Vec::new(), forward: Vec::new(), label: "Merge".into(), nodes_changed: false })
+                Ok(Effect { delta: None, inverse: Vec::new(), forward: Vec::new(), label: "Merge".into(), nodes_changed: false, touched: Vec::new() })
             }
         }
     }
@@ -390,6 +399,7 @@ impl Model for MultiStepModel {
                 forward: vec![op.clone()],
                 label: "Typing".into(),
                 nodes_changed: false,
+                touched: Vec::new(),
             });
         }
         let len = usize::try_from(op.payload.get("pop").and_then(serde_json::Value::as_u64).unwrap_or(0)).unwrap_or(usize::MAX);
@@ -410,6 +420,7 @@ impl Model for MultiStepModel {
             forward: vec![op.clone()],
             label: "Delete".into(),
             nodes_changed: false,
+            touched: Vec::new(),
         })
     }
 

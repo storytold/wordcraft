@@ -28,6 +28,13 @@ pub struct Effect {
     /// Whether the operation moved block paths or added a block, so the
     /// server must send a fresh node map (ADR-0002). Text edits leave it false.
     pub nodes_changed: bool,
+    /// Nodes beyond [`Op::target`] whose content this operation's inverse would
+    /// overwrite or delete. A later edit on one of them makes the step
+    /// `undo-conflict` instead of silently losing that edit (ADR-0010): a merge
+    /// reports the merged cells, a split its cell, a column insert the cells it
+    /// created. Empty when the inverse only inserts or removes what the target
+    /// already names.
+    pub touched: Vec<u32>,
 }
 
 /// The application half of a room: applies an operation to the document.
@@ -217,13 +224,17 @@ impl<M: Model> Room<M> {
         let effect = self.model.apply(actor, &op, &mut self.ids)?;
         let has_delta = effect.delta.is_some();
         self.nodes_changed = effect.nodes_changed;
+        let touched = effect.touched.clone();
         let applied = self.journal.accept(&op, actor, effect.delta, effect.inverse.clone());
         self.note_touch(&op, applied.version);
+        for id in &touched {
+            self.last_touch.insert(*id, applied.version);
+        }
         if !effect.inverse.is_empty() || !effect.forward.is_empty() || has_delta {
             // A command has no inverse yet; recording it as an empty step makes
             // it a barrier, so undo cannot silently skip it and take back an
             // older step (ADR-0010).
-            let step = UndoStep::new(effect.label, applied.version, effect.inverse, effect.forward);
+            let step = UndoStep::new(effect.label, applied.version, effect.inverse, effect.forward).with_touched(touched);
             self.undo.record(actor, step);
         }
         Ok(applied)
@@ -261,7 +272,7 @@ impl<M: Model> Room<M> {
         // future command inverse). It is one transaction: every operation lands
         // or none does, and the document moves once (ADR-0010).
         let mut deltas = Vec::with_capacity(operations.len());
-        let mut landed: Vec<Effect> = Vec::with_capacity(operations.len());
+        let mut landed: Vec<(Op, Effect)> = Vec::with_capacity(operations.len());
         for operation in operations {
             let mut replayed = operation.clone();
             // The step's own ids were already used by the journal; the replay is
@@ -278,13 +289,14 @@ impl<M: Model> Room<M> {
                     if let Some(delta) = effect.delta.clone() {
                         deltas.push(delta);
                     }
-                    landed.push(effect);
+                    landed.push((replayed, effect));
                 }
                 Err(mut reject) => {
                     // All or none: take back what already landed before telling
                     // the caller no. The inverses come from the same model, so a
                     // rollback only fails on a broken adapter.
-                    let rolled_back = self.roll_back(actor, &landed);
+                    let effects: Vec<Effect> = landed.into_iter().map(|(_, effect)| effect).collect();
+                    let rolled_back = self.roll_back(actor, &effects);
                     if !rolled_back {
                         reject.message.push_str("; the step could not be rolled back, the room needs a snapshot");
                     }
@@ -299,8 +311,11 @@ impl<M: Model> Room<M> {
         };
 
         let applied = self.journal.accept(op, actor, delta, Vec::new());
-        for operation in operations {
+        for (operation, effect) in &landed {
             self.note_touch(operation, applied.version);
+            for id in &effect.touched {
+                self.last_touch.insert(*id, applied.version);
+            }
         }
         if undo {
             self.undo.finish_undo(actor, applied.version);
@@ -343,14 +358,15 @@ impl<M: Model> Room<M> {
     /// Whether another operation touched what `step` changed after it landed.
     /// Offsets and block indexes make a replayed operation meaningless once a
     /// neighbour moved, so the room refuses instead of guessing (ADR-0010).
+    /// `touched` covers nodes an operation changed beside its target: a text
+    /// edit inside a merged cell makes the merge's inverse unsafe, and undo
+    /// answers `undo-conflict` instead of overwriting that edit.
     fn step_conflicts(&self, step: &UndoStep) -> bool {
-        step.forward.iter().any(|forward| {
-            if forward.kind.is_structural() {
-                self.last_structural > step.version
-            } else {
-                self.last_touch.get(&forward.target.node_id).is_some_and(|version| *version > step.version)
-            }
-        })
+        let touched_later = |id: &u32| self.last_touch.get(id).is_some_and(|version| *version > step.version);
+        step.touched.iter().any(touched_later)
+            || step.forward.iter().any(|forward| {
+                if forward.kind.is_structural() { self.last_structural > step.version } else { touched_later(&forward.target.node_id) }
+            })
     }
 
     fn note_touch(&mut self, op: &Op, version: Version) {

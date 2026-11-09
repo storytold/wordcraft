@@ -113,6 +113,11 @@ impl NodeIds {
 
     /// Move an id to a new path after a structural edit (the server calls this
     /// while applying an operation; clients never see the key).
+    ///
+    /// A tombstoned id is revived by this: an inverse operation that puts the
+    /// node's content back restores the id with it, so a client that held the id
+    /// (the caret holder of a cell a merge absorbed) addresses its own cell
+    /// again.
     pub fn rebase(&mut self, id: NodeId, key: NodeKey) {
         if let Some(old) = self.back.remove(&id) {
             self.forward.remove(&old);

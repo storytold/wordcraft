@@ -16,8 +16,8 @@
 //!
 //! Every applied operation produces an [`Effect`] with the inverse operations
 //! the per-user undo stack stores (ADR-0010). Text inverses are exact
-//! insert/delete pairs; structural inverses carry the removed block or row as
-//! JSON, so undo restores it without a snapshot.
+//! insert/delete pairs; structural inverses carry the removed block, row or cell
+//! as JSON, so undo restores it without a snapshot.
 //!
 //! Structural table edits keep the ids of the cells they do not move: a column
 //! insert shifts the cell ids of the rows that gained a cell and leaves the ones
@@ -30,8 +30,15 @@
 //! - it does not run `CommandSpec` commands (`kind: "command"` is refused);
 //! - it does not touch styles, numbering, comments or track changes;
 //! - it does not normalize formatting, a text box or several rearranged blocks;
-//!   those still fall back to the command path, and a merge, a split and a
-//!   column removal have no inverse, so undo reports them as unsupported.
+//!   those still fall back to the command path.
+//!
+//! A column removal, a merge and a split carry an exact inverse: the removed
+//! bodies, the original cell boundaries, the grid and the session ids of the
+//! cells they took away travel in the inverse operation, so undo restores the
+//! table instead of reporting the step as unsupported. The inverse refuses to
+//! run when the table no longer has the shape the forward operation left
+//! (`undo-conflict`), and a step reports the ids whose content its inverse would
+//! overwrite, so an edit made after it is never silently dropped (ADR-0010).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::sync::Arc;
@@ -41,11 +48,12 @@ use wordcraft_collab::ids::NodeKey;
 use wordcraft_collab::ids::{NodeId, NodeIds};
 use wordcraft_collab::room::{Effect, Model};
 use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
+use wordcraft_doc::props::CellProps;
 use wordcraft_doc::props::VMerge;
 use wordcraft_doc::table::MAX_COLS;
 use wordcraft_doc::table::MAX_ROWS;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
-use wordcraft_doc::{Block, Blocks, CharProps, Document, Paragraph, Path, Pos, Row, StoryRef, Table};
+use wordcraft_doc::{Block, Blocks, Cell, CharProps, Document, Paragraph, Path, Pos, Row, StoryRef, Table};
 
 /// Payload key that names the primitive (`insert_text`, `delete_range`, …).
 pub const PAYLOAD_OP: &str = "op";
@@ -130,6 +138,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Typing".into(),
             nodes_changed: false,
+            touched: Vec::new(),
         })
     }
 
@@ -151,6 +160,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Delete".into(),
             nodes_changed: false,
+            touched: Vec::new(),
         })
     }
 
@@ -173,6 +183,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Paragraph break".into(),
             nodes_changed: true,
+            touched: Vec::new(),
         })
     }
 
@@ -201,6 +212,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Replace".into(),
             nodes_changed: false,
+            touched: Vec::new(),
         })
     }
 
@@ -226,6 +238,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Join paragraphs".into(),
             nodes_changed: true,
+            touched: Vec::new(),
         })
     }
 
@@ -249,6 +262,10 @@ impl DocModel {
             index_block(ids, &name, &mut container.clone(), index, inserted, 0);
         }
         let inverse = inverse_op(OpKind::Structural, op, story, 0, 0, block_payload("remove_block", &container, index, None));
+        // Undoing the insert removes the block again, so an edit another user
+        // made inside it after the insert must block the undo rather than be
+        // dropped with the block.
+        let touched = live_ids(ids, &name, &[], &target.0);
         Ok(Effect {
             delta: Some(json!({
                 "op": "insert_block",
@@ -261,6 +278,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Insert block".into(),
             nodes_changed: true,
+            touched,
         })
     }
 
@@ -282,6 +300,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Delete block".into(),
             nodes_changed: true,
+            touched: Vec::new(),
         })
     }
 
@@ -308,12 +327,18 @@ impl DocModel {
         ids.shift_children(&name, &table_path.0, at, 1);
         index_row(ids, &name, &mut table_path.0.clone(), at, &row, 0);
         let inverse = inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "remove_row", "index": at}));
+        // Undo removes the row again: text another user put into it after the
+        // insert must make the undo a conflict, not vanish with the row.
+        let mut row_path = table_path.0.clone();
+        row_path.push(at as u32);
+        let touched = live_ids(ids, &name, &table_path.0, &row_path);
         Ok(Effect {
             delta: Some(json!({"op": "insert_row", "nodeId": table_node.0, "index": at, "row": row_json})),
             inverse: vec![inverse],
             forward: vec![op.clone()],
             label: "Insert row".into(),
             nodes_changed: true,
+            touched,
         })
     }
 
@@ -338,6 +363,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Delete row".into(),
             nodes_changed: true,
+            touched: Vec::new(),
         })
     }
 
@@ -348,6 +374,19 @@ impl DocModel {
     fn insert_column(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let (story, table_path) = self.table_path(op, ids)?;
         let index = self.column_index(op)?;
+        let name = story_name(story);
+        let table_node = ids.id_for(&NodeKey::new(name.clone(), table_path.0.clone()));
+        if let Some(restore) = op.payload.get("restore").filter(|value| !value.is_null()) {
+            restore_insert_column(&mut self.doc, ids, story, &table_path, index, restore).map_err(|err| err.reject(op))?;
+            return Ok(Effect {
+                delta: Some(json!({"op": "insert_column", "nodeId": table_node.0, "index": index, "restore": restore})),
+                inverse: Vec::new(),
+                forward: vec![op.clone()],
+                label: "Undo column removal".into(),
+                nodes_changed: true,
+                touched: Vec::new(),
+            });
+        }
         let table = self.doc.table(story, &table_path).ok_or_else(|| invalid(op, "the node is not a table"))?;
         if table.grid.len() >= MAX_COLS {
             return Err(invalid(op, "the table is full"));
@@ -355,9 +394,20 @@ impl DocModel {
         if index > table.grid.len() {
             return Err(invalid(op, format!("column {index} is past the grid")));
         }
-        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
         let before_columns = table.grid.len();
+        let plan = column_insert_plan(table, index);
         insert_column_at(&mut self.doc, ids, story, &table_path, index).map_err(|err| invalid(op, err))?;
+        // The cells the insert created are what its inverse (the same column
+        // taken out again) would delete: typing into one of them after the
+        // insert makes the undo `undo-conflict` instead of losing that text.
+        let mut touched = Vec::new();
+        for (r, at) in plan.into_iter().enumerate() {
+            let Some(at) = at else { continue };
+            let mut cell = table_path.0.clone();
+            cell.push(r as u32);
+            cell.push(at as u32);
+            touched.extend(live_ids(ids, &name, &table_path.0, &cell));
+        }
         // Undo of an insert is the same column taken out again; it is exact
         // because nothing existed there before. A one-column table cannot lose
         // its column, so such an insert carries no inverse.
@@ -372,6 +422,7 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Insert column".into(),
             nodes_changed: true,
+            touched,
         })
     }
 
@@ -381,17 +432,25 @@ impl DocModel {
     fn remove_column(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let (story, table_path) = self.table_path(op, ids)?;
         let index = self.column_index(op)?;
-        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        let name = story_name(story);
+        let table_node = ids.id_for(&NodeKey::new(name.clone(), table_path.0.clone()));
+        // The bodies the column takes away travel in the inverse, with their
+        // session ids and the grid width, so undo puts the column back with its
+        // content instead of reporting the step as unsupported.
+        let restore = remove_column_restore(&self.doc, ids, story, &table_path, index).map_err(|err| invalid(op, err))?;
         remove_column_at(&mut self.doc, ids, story, &table_path, index, op.base_version).map_err(|err| invalid(op, err))?;
+        let table = self.doc.table(story, &table_path).ok_or_else(|| invalid(op, "the table vanished"))?;
+        let inverse = restore.map(|mut restore| {
+            restore["shape"] = json!(table_shape(table));
+            inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "insert_column", "index": index, "restore": restore}))
+        });
         Ok(Effect {
-            // The removed cells' content is gone with them, so there is no
-            // inverse that would bring it back; undo reports the step as
-            // unsupported (ADR-0010) instead of restoring a wrong table.
             delta: Some(json!({"op": "remove_column", "nodeId": table_node.0, "index": index})),
-            inverse: Vec::new(),
+            inverse: inverse.into_iter().collect(),
             forward: vec![op.clone()],
             label: "Delete column".into(),
             nodes_changed: true,
+            touched: Vec::new(),
         })
     }
 
@@ -401,38 +460,97 @@ impl DocModel {
     /// content of the continued rows moves into the first row's cell.
     fn merge_cells(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let (story, table_path) = self.table_path(op, ids)?;
+        let name = story_name(story);
+        let table_node = ids.id_for(&NodeKey::new(name.clone(), table_path.0.clone()));
+        if let Some(restore) = op.payload.get("restore").filter(|value| !value.is_null()) {
+            restore_merge(&mut self.doc, ids, story, &table_path, restore, op.base_version).map_err(|err| err.reject(op))?;
+            return Ok(Effect {
+                delta: Some(json!({"op": "merge_cells", "nodeId": table_node.0, "restore": restore})),
+                inverse: Vec::new(),
+                forward: vec![op.clone()],
+                label: "Undo split".into(),
+                nodes_changed: true,
+                touched: Vec::new(),
+            });
+        }
         let (r0, r1, g0, g1) = self.merge_range(op)?;
-        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        let plan = {
+            let table = self.doc.table(story, &table_path).ok_or_else(|| invalid(op, "the node is not a table"))?;
+            merge_plan(table, (r0, r1, g0, g1)).map_err(|err| invalid(op, err))?
+        };
+        let restore = merge_restore(&self.doc, ids, story, &table_path, r0, &plan).map_err(|err| invalid(op, err))?;
         merge_cells_at(&mut self.doc, ids, story, &table_path, (r0, r1, g0, g1), op.base_version).map_err(|err| invalid(op, err))?;
+        let table = self.doc.table(story, &table_path).ok_or_else(|| invalid(op, "the table vanished"))?;
+        // The merged cells and their blocks are what the inverse rewrites: an
+        // edit inside the merged cell after the merge makes undo a conflict.
+        let mut touched = Vec::new();
+        for (i, (at, _)) in plan.iter().enumerate() {
+            let mut cell = table_path.0.clone();
+            cell.push((r0 + i) as u32);
+            cell.push(*at as u32);
+            touched.extend(live_ids(ids, &name, &table_path.0, &cell));
+        }
+        let inverse = restore.map(|mut restore| {
+            restore["shape"] = json!(table_shape(table));
+            inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "split_cells", "restore": restore}))
+        });
         Ok(Effect {
-            // A merge rewrites the cells it absorbs; the removed bodies are not
-            // carried, so undo reports the step as unsupported.
             delta: Some(json!({"op": "merge_cells", "nodeId": table_node.0, "rows": [r0, r1], "cols": [g0, g1]})),
-            inverse: Vec::new(),
+            inverse: inverse.into_iter().collect(),
             forward: vec![op.clone()],
             label: "Merge cells".into(),
             nodes_changed: true,
+            touched,
         })
     }
 
     /// Split cell `payload.cell` of row `payload.row` into `payload.columns`
     /// cells. The cell keeps its id and its content; the parts to its right are
     /// new cells, and the cells after it move right by that many.
+    ///
+    /// With `payload.restore` the operation is an inverse instead: it puts the
+    /// cells a merge absorbed back with their original boundaries, grid and ids.
     fn split_cells(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let (story, table_path) = self.table_path(op, ids)?;
+        let name = story_name(story);
+        let table_node = ids.id_for(&NodeKey::new(name.clone(), table_path.0.clone()));
+        if let Some(restore) = op.payload.get("restore").filter(|value| !value.is_null()) {
+            restore_split(&mut self.doc, ids, story, &table_path, restore, op.base_version).map_err(|err| err.reject(op))?;
+            return Ok(Effect {
+                delta: Some(json!({"op": "split_cells", "nodeId": table_node.0, "restore": restore})),
+                inverse: Vec::new(),
+                forward: vec![op.clone()],
+                label: "Undo merge".into(),
+                nodes_changed: true,
+                touched: Vec::new(),
+            });
+        }
         let row = self.small_index(op, "row")?;
         let cell = self.small_index(op, "cell")?;
         let columns = self.small_index(op, "columns")?;
-        let table_node = ids.id_for(&NodeKey::new(story_name(story), table_path.0.clone()));
+        let (added, restore) = split_restore(&self.doc, story, &table_path, row, cell, columns).map_err(|err| invalid(op, err))?;
         split_cells_at(&mut self.doc, ids, story, &table_path, row, cell, columns).map_err(|err| invalid(op, err))?;
+        let table = self.doc.table(story, &table_path).ok_or_else(|| invalid(op, "the table vanished"))?;
+        // The cell and the parts cut from it are what the inverse merges back:
+        // text typed into either after the split makes undo a conflict.
+        let mut touched = Vec::new();
+        for k in 0..=added {
+            let mut path = table_path.0.clone();
+            path.push(row as u32);
+            path.push((cell + k) as u32);
+            touched.extend(live_ids(ids, &name, &table_path.0, &path));
+        }
+        let inverse = restore.map(|mut restore| {
+            restore["shape"] = json!(table_shape(table));
+            inverse_op(OpKind::Structural, op, story, table_node.0, 0, json!({"op": "merge_cells", "restore": restore}))
+        });
         Ok(Effect {
-            // Splitting loses no content but the grid it may refine is not
-            // undone by a merge, so the step has no inverse.
             delta: Some(json!({"op": "split_cells", "nodeId": table_node.0, "row": row, "cell": cell, "columns": columns})),
-            inverse: Vec::new(),
+            inverse: inverse.into_iter().collect(),
             forward: vec![op.clone()],
             label: "Split cells".into(),
             nodes_changed: true,
+            touched,
         })
     }
 
@@ -629,7 +747,7 @@ enum ColumnRemoval {
     /// The row does not reach the column.
     Kept,
     /// A cell spanning the column shrinks and keeps its id.
-    Shrunk,
+    Shrunk(usize),
     /// The cell at this index disappears.
     Removed(usize),
 }
@@ -642,7 +760,7 @@ fn column_removal_plan(table: &Table, g: usize) -> Vec<ColumnRemoval> {
             let mut x = 0usize;
             for (i, cell) in row.cells.iter().enumerate() {
                 if g < x.saturating_add(cell.span()) {
-                    return if cell.span() > 1 { ColumnRemoval::Shrunk } else { ColumnRemoval::Removed(i) };
+                    return if cell.span() > 1 { ColumnRemoval::Shrunk(i) } else { ColumnRemoval::Removed(i) };
                 }
                 x = x.saturating_add(cell.span());
             }
@@ -739,6 +857,39 @@ fn vmerge_at(table: &Table, r: usize, g: usize) -> Option<VMerge> {
     table.cell_at_grid(r, g).and_then(|c| table.rows.get(r)?.cells.get(c)).map(|cell| cell.props.vmerge)
 }
 
+/// The row and cell indexes a merge of `range` takes on: per row, the first cell
+/// (`a`) and the last one (`b`) the range covers. Every refusal happens here,
+/// before the document is touched.
+fn merge_plan(table: &Table, range: (usize, usize, usize, usize)) -> Result<Vec<(usize, usize)>, String> {
+    let (r0, r1, g0, g1) = range;
+    if r0 > r1 || g0 > g1 {
+        return Err("the range is inverted".to_string());
+    }
+    if r1 >= table.rows.len() {
+        return Err(format!("row {r1} does not exist"));
+    }
+    if g1 >= table.grid.len() {
+        return Err(format!("column {g1} does not exist"));
+    }
+    let mut plan = Vec::with_capacity(r1.saturating_sub(r0).saturating_add(1));
+    for r in r0..=r1 {
+        let (Some(a), Some(b)) = (cell_at_grid(table, r, g0), cell_at_grid(table, r, g1)) else {
+            return Err(format!("row {r} has no cell at the range's edge"));
+        };
+        plan.push((a, b));
+    }
+    if vmerge_at(table, r0, g0) == Some(VMerge::Continue) {
+        return Err("the range starts inside a vertical merge".to_string());
+    }
+    if r1.saturating_add(1) < table.rows.len() && vmerge_at(table, r1 + 1, g0) == Some(VMerge::Continue) {
+        return Err("the range ends inside a vertical merge".to_string());
+    }
+    if r0 == r1 && plan.first().is_some_and(|(a, b)| a == b) {
+        return Err("the range is one cell".to_string());
+    }
+    Ok(plan)
+}
+
 /// Merge the rectangle `rows r0..=r1 × grid columns g0..=g1` with `Table::merge`,
 /// which keeps the first cell of each merged row. That cell keeps its id; the
 /// cells it absorbs are tombstoned; a continued row's content moves into the
@@ -759,32 +910,7 @@ fn merge_cells_at(
     let name = story_name(story);
     let plan: Vec<(usize, usize)> = {
         let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
-        if r0 > r1 || g0 > g1 {
-            return Err("the range is inverted".to_string());
-        }
-        if r1 >= table.rows.len() {
-            return Err(format!("row {r1} does not exist"));
-        }
-        if g1 >= table.grid.len() {
-            return Err(format!("column {g1} does not exist"));
-        }
-        let mut plan = Vec::with_capacity(r1.saturating_sub(r0).saturating_add(1));
-        for r in r0..=r1 {
-            let (Some(a), Some(b)) = (cell_at_grid(table, r, g0), cell_at_grid(table, r, g1)) else {
-                return Err(format!("row {r} has no cell at the range's edge"));
-            };
-            plan.push((a, b));
-        }
-        if vmerge_at(table, r0, g0) == Some(VMerge::Continue) {
-            return Err("the range starts inside a vertical merge".to_string());
-        }
-        if r1.saturating_add(1) < table.rows.len() && vmerge_at(table, r1 + 1, g0) == Some(VMerge::Continue) {
-            return Err("the range ends inside a vertical merge".to_string());
-        }
-        if r0 == r1 && plan.first().is_some_and(|(a, b)| a == b) {
-            return Err("the range is one cell".to_string());
-        }
-        plan
+        merge_plan(table, range)?
     };
     let before: Vec<Vec<Arc<Block>>> = plan
         .iter()
@@ -896,6 +1022,442 @@ fn split_cells_at(
 /// The path of a child of `container` (a block list, a row list or a cell list).
 fn child_path(container: &[u32], index: usize) -> Path {
     Path(container.iter().copied().chain(std::iter::once(index as u32)).collect())
+}
+
+// --- inverses of the structural table edits -------------------------------
+//
+// A merge, a split and a column removal change the table's shape, so the
+// operations that put them back cannot be computed from the table as it is
+// afterwards: the removed bodies and the original boundaries are gone. Each of
+// the three therefore carries its inverse's data — the cells, their props, the
+// grid and the session ids — captured before the forward edit, and the inverse
+// refuses to run when the table no longer has the shape the forward edit left.
+
+/// Most bytes an inverse's restore data may take. A region too large to carry
+/// keeps no inverse (undo reports the step as unsupported), so a hostile or huge
+/// table cannot grow the undo stack and the journal without bound.
+const MAX_RESTORE_BYTES: usize = 256 * 1024;
+
+/// Most node ids one inverse may put back (a merge of a very tall table).
+const MAX_RESTORE_IDS: usize = 16_384;
+
+/// Why a restore was not applied: the payload is wrong, or the table moved on.
+enum RestoreRefusal {
+    /// The payload itself is malformed or out of range.
+    Bad(String),
+    /// The table no longer has the shape the forward edit left, so the inverse
+    /// would land on something else. The room answers `undo-conflict`.
+    Changed(String),
+}
+
+impl RestoreRefusal {
+    /// The refusal as a `Reject` for an operation a client sent.
+    fn reject(self, op: &Op) -> Reject {
+        match self {
+            RestoreRefusal::Bad(message) => invalid(op, message),
+            RestoreRefusal::Changed(message) => Reject::new(op.op_id.clone(), RejectCode::UndoConflict, message),
+        }
+    }
+}
+
+/// The spans of every row's cells: the shape guard an inverse compares the
+/// table against before it puts anything back.
+fn table_shape(table: &Table) -> Vec<Vec<u32>> {
+    table.rows.iter().map(|row| row.cells.iter().map(|cell| u32::try_from(cell.span()).unwrap_or(u32::MAX)).collect()).collect()
+}
+
+fn parse_shape(value: Option<&Value>) -> Result<Vec<Vec<u32>>, RestoreRefusal> {
+    let rows = value.and_then(Value::as_array).ok_or_else(|| RestoreRefusal::Bad("`restore.shape` is missing".to_string()))?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let spans = row.as_array().ok_or_else(|| RestoreRefusal::Bad("`restore.shape` is malformed".to_string()))?;
+        let mut cells = Vec::with_capacity(spans.len());
+        for span in spans {
+            let span = span.as_u64().ok_or_else(|| RestoreRefusal::Bad("`restore.shape` holds a non-number".to_string()))?;
+            cells.push(u32::try_from(span).map_err(|_| RestoreRefusal::Bad("a span does not fit".to_string()))?);
+        }
+        out.push(cells);
+    }
+    Ok(out)
+}
+
+/// A small non-negative field of a restore payload.
+fn restore_index(entry: &Value, key: &str) -> Result<usize, RestoreRefusal> {
+    let value = entry.get(key).and_then(Value::as_u64).ok_or_else(|| RestoreRefusal::Bad(format!("a restore entry needs `{key}`")))?;
+    usize::try_from(value).map_err(|_| RestoreRefusal::Bad(format!("`{key}` does not fit")))
+}
+
+/// Every live id at or below `path`, as `(relative path, id)` and sorted, so an
+/// inverse's payload is deterministic.
+fn live_id_pairs(ids: &NodeIds, story: &str, base: &[u32], path: &[u32]) -> Vec<(Vec<u32>, u32)> {
+    let mut found: Vec<(Vec<u32>, u32)> = ids
+        .iter()
+        .filter(|(_, key)| key.story == story && key.path.len() >= path.len() && key.path.starts_with(path))
+        .map(|(id, key)| (key.path.iter().skip(base.len()).copied().collect(), id.0))
+        .collect();
+    found.sort();
+    found
+}
+
+/// The ids of a subtree, for [`Effect::touched`].
+fn live_ids(ids: &NodeIds, story: &str, base: &[u32], path: &[u32]) -> Vec<u32> {
+    live_id_pairs(ids, story, base, path).into_iter().map(|(_, id)| id).collect()
+}
+
+/// The ids of a subtree as restore entries (`{"path": [relative…], "id": n}`).
+fn id_entries(ids: &NodeIds, story: &str, base: &[u32], path: &[u32]) -> Vec<Value> {
+    live_id_pairs(ids, story, base, path).into_iter().map(|(path, id)| json!({"path": path, "id": id})).collect()
+}
+
+/// Put captured ids back on their paths. An id the room tombstoned is revived —
+/// the node's content comes back with it — so a client that held the id (the
+/// caret holder of a cell a merge absorbed) addresses its own cell again.
+fn restore_ids(ids: &mut NodeIds, story: &str, base: &[u32], entries: Option<&Value>) -> Result<(), RestoreRefusal> {
+    let Some(items) = entries.and_then(Value::as_array) else { return Ok(()) };
+    if items.len() > MAX_RESTORE_IDS {
+        return Err(RestoreRefusal::Bad("too many ids to restore".to_string()));
+    }
+    for item in items {
+        let path = item.get("path").and_then(Value::as_array).ok_or_else(|| RestoreRefusal::Bad("an id entry has no `path`".to_string()))?;
+        let id = item.get("id").and_then(Value::as_u64).ok_or_else(|| RestoreRefusal::Bad("an id entry has no `id`".to_string()))?;
+        let id = u32::try_from(id).map_err(|_| RestoreRefusal::Bad("an id does not fit".to_string()))?;
+        let mut key_path = base.to_vec();
+        for index in path {
+            let index = index.as_u64().ok_or_else(|| RestoreRefusal::Bad("a path index is not a number".to_string()))?;
+            key_path.push(u32::try_from(index).map_err(|_| RestoreRefusal::Bad("a path index does not fit".to_string()))?);
+        }
+        let key = NodeKey::new(story, key_path);
+        // A replica whose map diverged keeps its own id; the fresh map the
+        // server sends after a structural operation corrects it.
+        if ids.get(&key).is_some_and(|existing| existing != NodeId(id)) {
+            continue;
+        }
+        ids.rebase(NodeId(id), key);
+    }
+    Ok(())
+}
+
+/// Whether a restore payload still fits the bound above.
+fn fits(restore: &Value) -> bool {
+    serde_json::to_vec(restore).is_ok_and(|bytes| bytes.len() <= MAX_RESTORE_BYTES)
+}
+
+/// What a merge takes away, as the payload of its inverse (`split_cells` with
+/// `restore`): per row, the cells it absorbs with their props and bodies, and
+/// the session ids of everything below them. `None` when the region is too large
+/// to carry.
+fn merge_restore(
+    doc: &Document,
+    ids: &NodeIds,
+    story: StoryRef,
+    table_path: &Path,
+    first_row: usize,
+    plan: &[(usize, usize)],
+) -> Result<Option<Value>, String> {
+    let name = story_name(story);
+    let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+    let mut rows = Vec::with_capacity(plan.len());
+    let mut entries = Vec::new();
+    for (i, (a, b)) in plan.iter().enumerate() {
+        let r = first_row + i;
+        let Some(cells) = table.rows.get(r).and_then(|row| row.cells.get(*a..=*b)) else { return Ok(None) };
+        rows.push(json!({"row": r, "at": a, "cells": cells}));
+        for c in *a..=*b {
+            let mut path = table_path.0.clone();
+            path.push(r as u32);
+            path.push(c as u32);
+            entries.extend(id_entries(ids, &name, &table_path.0, &path));
+        }
+    }
+    let restore = json!({"rows": rows, "ids": entries});
+    Ok(fits(&restore).then_some(restore))
+}
+
+/// What a split takes away, as the payload of its inverse (`merge_cells` with
+/// `restore`): the grid and the cell before the cut, plus the props of the cells
+/// of the other rows that widened over the refined grid. Returns how many parts
+/// the split adds and, when the payload fits, the restore data.
+fn split_restore(doc: &Document, story: StoryRef, table_path: &Path, r: usize, c: usize, columns: usize) -> Result<(usize, Option<Value>), String> {
+    let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+    if !(2..=MAX_COLS).contains(&columns) {
+        return Ok((0, None));
+    }
+    if r >= table.rows.len() || table.rows.get(r).is_none_or(|row| c >= row.cells.len()) {
+        return Ok((0, None));
+    }
+    let mut probe = table.clone();
+    let parts = probe.split_cell(r, c, columns);
+    if parts.len() < 2 {
+        return Ok((0, None));
+    }
+    let cell = table.rows.get(r).and_then(|row| row.cells.get(c)).cloned();
+    let mut props = Vec::new();
+    for (rr, row) in table.rows.iter().enumerate() {
+        if rr == r {
+            continue;
+        }
+        let Some(after) = probe.rows.get(rr) else { continue };
+        for (ci, cell) in row.cells.iter().enumerate() {
+            if after.cells.get(ci).is_some_and(|wider| wider.props != cell.props) {
+                props.push(json!({"row": rr, "at": ci, "props": cell.props}));
+            }
+        }
+    }
+    let added = parts.len().saturating_sub(1);
+    let restore = json!({"grid": table.grid, "cell": {"row": r, "at": c, "cell": cell}, "added": added, "cells": props});
+    Ok((added, fits(&restore).then_some(restore)))
+}
+
+/// What a column removal takes away, as the payload of its inverse
+/// (`insert_column` with `restore`): the grid width, the body of every cell that
+/// vanished, the props of the cells that only shrank, the rows that disappeared
+/// with the column, and the session ids of all of it. `None` when the region is
+/// too large to carry.
+fn remove_column_restore(doc: &Document, ids: &NodeIds, story: StoryRef, table_path: &Path, g: usize) -> Result<Option<Value>, String> {
+    let name = story_name(story);
+    let table = doc.table(story, table_path).ok_or_else(|| "the target is not a table".to_string())?;
+    if g >= table.grid.len() {
+        return Ok(None);
+    }
+    let plan = column_removal_plan(table, g);
+    let dropped: Vec<usize> = plan
+        .iter()
+        .enumerate()
+        .filter(|(r, step)| matches!(step, ColumnRemoval::Removed(0)) && table.rows.get(*r).is_some_and(|row| row.cells.len() == 1))
+        .map(|(r, _)| r)
+        .collect();
+    let mut rows = Vec::new();
+    let mut entries = Vec::new();
+    for (r, step) in plan.iter().enumerate() {
+        let Some(row) = table.rows.get(r) else { continue };
+        let mut row_path = table_path.0.clone();
+        row_path.push(r as u32);
+        if dropped.contains(&r) {
+            rows.push(json!({"row": r, "kind": "dropped", "body": row}));
+            entries.extend(id_entries(ids, &name, &table_path.0, &row_path));
+            continue;
+        }
+        match step {
+            ColumnRemoval::Removed(c) => {
+                let Some(cell) = row.cells.get(*c) else { continue };
+                rows.push(json!({"row": r, "kind": "removed", "at": c, "cell": cell}));
+                row_path.push(*c as u32);
+                entries.extend(id_entries(ids, &name, &table_path.0, &row_path));
+            }
+            ColumnRemoval::Shrunk(c) => {
+                let Some(cell) = row.cells.get(*c) else { continue };
+                rows.push(json!({"row": r, "kind": "shrunk", "at": c, "props": cell.props}));
+            }
+            ColumnRemoval::Kept => {}
+        }
+    }
+    let width = table.grid.get(g).copied().unwrap_or(72.0);
+    let restore = json!({"width": width, "rows": rows, "ids": entries});
+    Ok(fits(&restore).then_some(restore))
+}
+
+/// The inverse of a merge: put the cells it absorbed back, with their original
+/// boundaries, bodies and ids. The merged cell of each row is replaced by the
+/// list of cells that row had before, and the cells after it move right again.
+fn restore_split(
+    doc: &mut Document,
+    ids: &mut NodeIds,
+    story: StoryRef,
+    table_path: &Path,
+    restore: &Value,
+    version: u64,
+) -> Result<(), RestoreRefusal> {
+    let name = story_name(story);
+    let table = doc.table(story, table_path).ok_or_else(|| RestoreRefusal::Changed("the table is gone".to_string()))?;
+    if table_shape(table) != parse_shape(restore.get("shape"))? {
+        return Err(RestoreRefusal::Changed("the table changed after the merge landed".to_string()));
+    }
+    let entries = restore.get("rows").and_then(Value::as_array).ok_or_else(|| RestoreRefusal::Bad("`restore.rows` is missing".to_string()))?;
+    if entries.is_empty() || entries.len() > MAX_ROWS {
+        return Err(RestoreRefusal::Bad("`restore.rows` is empty or too long".to_string()));
+    }
+    let mut probe = table.clone();
+    let mut plan: Vec<(usize, usize, Vec<Cell>)> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let r = restore_index(entry, "row")?;
+        let at = restore_index(entry, "at")?;
+        let cells: Vec<Cell> = serde_json::from_value(entry.get("cells").cloned().unwrap_or(Value::Null))
+            .map_err(|err| RestoreRefusal::Bad(format!("bad cells: {err}")))?;
+        if cells.is_empty() || cells.len() > MAX_COLS {
+            return Err(RestoreRefusal::Bad("a restored row holds no cells or too many".to_string()));
+        }
+        let row = probe.rows.get_mut(r).ok_or_else(|| RestoreRefusal::Changed(format!("row {r} does not exist")))?;
+        if at >= row.cells.len() {
+            return Err(RestoreRefusal::Changed(format!("row {r} has no cell {at}")));
+        }
+        row.cells.splice(at..=at, cells.clone());
+        plan.push((r, at, cells));
+    }
+    *doc.table_mut(story, table_path).map_err(|err| RestoreRefusal::Changed(err.to_string()))? = probe;
+    for (r, at, cells) in &plan {
+        let mut container = table_path.0.clone();
+        container.push(*r as u32);
+        // The cells after the merged one moved left when it absorbed them; they
+        // go back to their own indexes first, so their ids name them again.
+        ids.shift_children(&name, &container, at + 1, i32::try_from(cells.len().saturating_sub(1)).unwrap_or(i32::MAX));
+        let mut merged = container;
+        merged.push(*at as u32);
+        // The merged cell kept its own id; the blocks it gained from the rows it
+        // drained are new, so they are retired before the originals come back.
+        ids.remove_descendants(&name, &merged, version);
+    }
+    restore_ids(ids, &name, &table_path.0, restore.get("ids"))
+}
+
+/// The inverse of a split: merge the parts back into the cell it was cut from,
+/// with the grid and the props of the widened cells of the other rows restored.
+fn restore_merge(
+    doc: &mut Document,
+    ids: &mut NodeIds,
+    story: StoryRef,
+    table_path: &Path,
+    restore: &Value,
+    version: u64,
+) -> Result<(), RestoreRefusal> {
+    let name = story_name(story);
+    let table = doc.table(story, table_path).ok_or_else(|| RestoreRefusal::Changed("the table is gone".to_string()))?;
+    if table_shape(table) != parse_shape(restore.get("shape"))? {
+        return Err(RestoreRefusal::Changed("the table changed after the split landed".to_string()));
+    }
+    let grid: Vec<f32> =
+        serde_json::from_value(restore.get("grid").cloned().unwrap_or(Value::Null)).map_err(|err| RestoreRefusal::Bad(format!("bad grid: {err}")))?;
+    if grid.len() > MAX_COLS {
+        return Err(RestoreRefusal::Bad("the restored grid is too wide".to_string()));
+    }
+    let cell = restore.get("cell").ok_or_else(|| RestoreRefusal::Bad("`restore.cell` is missing".to_string()))?;
+    let r = restore_index(cell, "row")?;
+    let at = restore_index(cell, "at")?;
+    let added = restore_index(restore, "added")?;
+    if added >= MAX_COLS {
+        return Err(RestoreRefusal::Bad("`restore.added` is out of range".to_string()));
+    }
+    let body: Cell =
+        serde_json::from_value(cell.get("cell").cloned().unwrap_or(Value::Null)).map_err(|err| RestoreRefusal::Bad(format!("bad cell: {err}")))?;
+    let widened = restore.get("cells").and_then(Value::as_array).cloned().unwrap_or_default();
+    if widened.len() > MAX_ROWS {
+        return Err(RestoreRefusal::Bad("`restore.cells` is too long".to_string()));
+    }
+    let mut probe = table.clone();
+    probe.grid = grid;
+    for entry in &widened {
+        let row = restore_index(entry, "row")?;
+        let at = restore_index(entry, "at")?;
+        let props: CellProps = serde_json::from_value(entry.get("props").cloned().unwrap_or(Value::Null))
+            .map_err(|err| RestoreRefusal::Bad(format!("bad cell props: {err}")))?;
+        let cell = probe
+            .rows
+            .get_mut(row)
+            .and_then(|row| row.cells.get_mut(at))
+            .ok_or_else(|| RestoreRefusal::Changed(format!("row {row} has no cell {at}")))?;
+        cell.props = props;
+    }
+    let row = probe.rows.get_mut(r).ok_or_else(|| RestoreRefusal::Changed(format!("row {r} does not exist")))?;
+    if at.saturating_add(added) >= row.cells.len() {
+        return Err(RestoreRefusal::Changed(format!("row {r} has no cells {at}..{}", at.saturating_add(added))));
+    }
+    row.cells.splice(at..=at + added, [body]);
+    *doc.table_mut(story, table_path).map_err(|err| RestoreRefusal::Changed(err.to_string()))? = probe;
+    // The parts the split cut are new cells: they never existed before, so their
+    // ids are retired rather than reused for the cell that takes them back.
+    let mut container = table_path.0.clone();
+    container.push(r as u32);
+    for k in 1..=added {
+        let mut part = container.clone();
+        part.push((at + k) as u32);
+        ids.remove_subtree(&name, &part, version);
+    }
+    restore_ids(ids, &name, &table_path.0, restore.get("ids"))
+}
+
+/// The inverse of a column removal: put the grid column back with the bodies it
+/// took away, the rows that vanished with it, and the ids of all of them. The
+/// cells that only shrank get their props back.
+fn restore_insert_column(
+    doc: &mut Document,
+    ids: &mut NodeIds,
+    story: StoryRef,
+    table_path: &Path,
+    index: usize,
+    restore: &Value,
+) -> Result<(), RestoreRefusal> {
+    let name = story_name(story);
+    let table = doc.table(story, table_path).ok_or_else(|| RestoreRefusal::Changed("the table is gone".to_string()))?;
+    if table_shape(table) != parse_shape(restore.get("shape"))? {
+        return Err(RestoreRefusal::Changed("the table changed after the column was removed".to_string()));
+    }
+    let width = restore.get("width").and_then(Value::as_f64).ok_or_else(|| RestoreRefusal::Bad("`restore.width` is missing".to_string()))?;
+    let entries = restore.get("rows").and_then(Value::as_array).ok_or_else(|| RestoreRefusal::Bad("`restore.rows` is missing".to_string()))?;
+    if entries.len() > MAX_ROWS {
+        return Err(RestoreRefusal::Bad("`restore.rows` is too long".to_string()));
+    }
+    if index > table.grid.len() || table.grid.len() >= MAX_COLS {
+        return Err(RestoreRefusal::Changed(format!("column {index} does not fit the grid")));
+    }
+    let mut probe = table.clone();
+    probe.grid.insert(index, width as f32);
+    enum Step {
+        Row(usize),
+        Cell(usize, usize),
+    }
+    let mut steps = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let r = restore_index(entry, "row")?;
+        match entry.get("kind").and_then(Value::as_str) {
+            Some("dropped") => {
+                let body: Row = serde_json::from_value(entry.get("body").cloned().unwrap_or(Value::Null))
+                    .map_err(|err| RestoreRefusal::Bad(format!("bad row: {err}")))?;
+                if r > probe.rows.len() {
+                    return Err(RestoreRefusal::Changed(format!("row {r} does not fit the table")));
+                }
+                probe.rows.insert(r, body);
+                steps.push(Step::Row(r));
+            }
+            Some("removed") => {
+                let at = restore_index(entry, "at")?;
+                let body: Cell = serde_json::from_value(entry.get("cell").cloned().unwrap_or(Value::Null))
+                    .map_err(|err| RestoreRefusal::Bad(format!("bad cell: {err}")))?;
+                let row = probe.rows.get_mut(r).ok_or_else(|| RestoreRefusal::Changed(format!("row {r} does not exist")))?;
+                if at > row.cells.len() {
+                    return Err(RestoreRefusal::Changed(format!("row {r} has no place for cell {at}")));
+                }
+                row.cells.insert(at, body);
+                steps.push(Step::Cell(r, at));
+            }
+            Some("shrunk") => {
+                let at = restore_index(entry, "at")?;
+                let props: CellProps = serde_json::from_value(entry.get("props").cloned().unwrap_or(Value::Null))
+                    .map_err(|err| RestoreRefusal::Bad(format!("bad cell props: {err}")))?;
+                let cell = probe
+                    .rows
+                    .get_mut(r)
+                    .and_then(|row| row.cells.get_mut(at))
+                    .ok_or_else(|| RestoreRefusal::Changed(format!("row {r} has no cell {at}")))?;
+                cell.props = props;
+            }
+            _ => return Err(RestoreRefusal::Bad("a restore entry has no known `kind`".to_string())),
+        }
+    }
+    *doc.table_mut(story, table_path).map_err(|err| RestoreRefusal::Changed(err.to_string()))? = probe;
+    for step in steps {
+        match step {
+            Step::Row(r) => {
+                // The rows the removal dropped moved the ones below up; they go
+                // back down before the restored row's ids are put back.
+                ids.shift_children(&name, &table_path.0, r, 1);
+            }
+            Step::Cell(r, at) => {
+                let mut container = table_path.0.clone();
+                container.push(r as u32);
+                ids.shift_children(&name, &container, at, 1);
+            }
+        }
+    }
+    restore_ids(ids, &name, &table_path.0, restore.get("ids"))
 }
 
 /// The table that encloses `path`, one level up: a row id `[b, r]` and a cell id
@@ -1048,7 +1610,12 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             let (story, table_path) = delta_table(delta, doc, ids)?;
             let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "insert_column has no `index`".to_string())?)
                 .map_err(|_| "`index` does not fit".to_string())?;
-            insert_column_at(doc, ids, story, &table_path, index)?;
+            match delta.get("restore").filter(|value| !value.is_null()) {
+                Some(restore) => restore_insert_column(doc, ids, story, &table_path, index, restore).map_err(|err| match err {
+                    RestoreRefusal::Bad(message) | RestoreRefusal::Changed(message) => message,
+                })?,
+                None => insert_column_at(doc, ids, story, &table_path, index)?,
+            }
         }
         "remove_column" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;
@@ -1058,6 +1625,12 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
         }
         "merge_cells" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;
+            if let Some(restore) = delta.get("restore").filter(|value| !value.is_null()) {
+                restore_merge(doc, ids, story, &table_path, restore, 0).map_err(|err| match err {
+                    RestoreRefusal::Bad(message) | RestoreRefusal::Changed(message) => message,
+                })?;
+                return Ok(());
+            }
             let pair = |key: &str| -> Result<(usize, usize), String> {
                 let items = delta.get(key).and_then(Value::as_array).ok_or_else(|| format!("merge_cells has no `{key}`"))?;
                 let first = items.first().and_then(Value::as_u64).ok_or_else(|| format!("`{key}` must hold two indexes"))?;
@@ -1073,6 +1646,12 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
         }
         "split_cells" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;
+            if let Some(restore) = delta.get("restore").filter(|value| !value.is_null()) {
+                restore_split(doc, ids, story, &table_path, restore, 0).map_err(|err| match err {
+                    RestoreRefusal::Bad(message) | RestoreRefusal::Changed(message) => message,
+                })?;
+                return Ok(());
+            }
             let field = |key: &str| -> Result<usize, String> {
                 let value = delta.get(key).and_then(Value::as_u64).ok_or_else(|| format!("split_cells has no `{key}`"))?;
                 usize::try_from(value).map_err(|_| format!("`{key}` does not fit"))

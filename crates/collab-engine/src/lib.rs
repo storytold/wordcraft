@@ -132,6 +132,7 @@ impl SessionModel {
             forward: vec![op.clone()],
             label: format!("Command {command}"),
             nodes_changed,
+            touched: Vec::new(),
         })
     }
 }

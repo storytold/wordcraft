@@ -29,11 +29,22 @@ pub struct UndoStep {
     pub inverse: Vec<Op>,
     /// Operations that redo it (the originals), kept for the redo stack.
     pub forward: Vec<Op>,
+    /// Nodes beside the operations' targets whose content this step changed,
+    /// and which its inverse would overwrite (see `Effect::touched`). A later
+    /// edit on one of them makes the undo `undo-conflict` (ADR-0010).
+    #[serde(default)]
+    pub touched: Vec<u32>,
 }
 
 impl UndoStep {
     pub fn new(label: impl Into<String>, version: crate::wire::Version, inverse: Vec<Op>, forward: Vec<Op>) -> UndoStep {
-        UndoStep { label: label.into(), version, inverse, forward }
+        UndoStep { label: label.into(), version, inverse, forward, touched: Vec::new() }
+    }
+
+    /// Record the nodes this step changed beside its operations' targets.
+    pub fn with_touched(mut self, touched: Vec<u32>) -> UndoStep {
+        self.touched = touched;
+        self
     }
 }
 
