@@ -1,5 +1,7 @@
 # MCP server
 
+> **Last updated:** 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
 
@@ -17,6 +19,22 @@ loopback addresses; see [Keys](control-protocol.md#keys). The bridge serves even
 isn't open yet: tool calls return "not reachable … will retry on each call" and succeed once the
 app's port opens (#4078), so a client that starts before WordCraft doesn't lose the server for
 its whole session.
+
+## Delivery failures
+
+The connected bridge retries a request once if no write was attempted (for example, a failed
+connection). Once sending starts, a write or flush failure can mean the app already received
+the complete JSON body, even if its newline was not delivered. A lost reply has the same
+uncertainty. Mutations then return an `outcome unknown` error and are never automatically
+resent; inspect the document before deciding whether to repeat the operation yourself.
+
+Read-only inspection and in-memory `ui.render` / `ui.screenshot` calls may retry once. With a
+string `path`, rendering or taking a screenshot writes a file and is not retried after an
+unknown outcome. Unreadable replies are reported as errors without replaying the request.
+
+On stdio, an invalid UTF-8 request line returns JSON-RPC parse error `-32700`. It never reaches
+the backend, and the server continues with the next line instead of substituting characters
+in text or paths.
 
 ## Scripts from the command line
 
@@ -149,7 +167,8 @@ test source in File › Options › Language and on the bar's Install.
 | Tool | What it does |
 |---|---|
 | `list_commands` | every command (filter with `query`) — over 270 of them |
-| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` |
+| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` (an empty table; for a filled one use `insert_table`) |
+| `insert_table` | insert a filled table in one call: `{values: [["Month", "Cases"], ["January", 12]], header: true, style?}` (same as `insert.spreadsheet`) |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report; opens beside the open documents |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
@@ -172,7 +191,7 @@ document beside the ones already open and make it the active one; their reply ca
 active again (`alreadyOpen`). `list_documents` lists the open documents with their ids.
 
 Tools work on the active document. `execute`, `batch`, `type_text`, `select_text`, `get_text`,
-`inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
+`insert_table`, `inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
 document: the tool works on that document and the active one stays active.
 
 ```json

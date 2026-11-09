@@ -164,8 +164,7 @@ pub fn is_custom_style(doc: &Document, id: &str) -> bool {
 }
 
 /// Whether `doc`'s tab stops are measured from each paragraph's indent (an ODF document whose
-/// file says so, or that was opened with a profile saying so): [`Para::extra`]'s tab stops then
-/// are too.
+/// file says so): [`Para::extra`]'s tab stops then are too.
 pub fn tabs_from_indent(doc: &Document) -> bool {
     doc.settings.odf.is_some_and(|o| o.tabs_from_indent)
 }
@@ -1123,6 +1122,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
             width: t.props.width,
             width_pct: t.props.width_pct,
             heights,
+            keep_rows: t.rows.iter().map(|r| r.props.cant_split).collect(),
             fixed: t.props.fixed,
             space: [t.props.space_before, t.props.space_after],
             header_rows: t.rows.iter().take_while(|r| r.props.header).count(),

@@ -244,11 +244,14 @@ impl Session {
             clipboard: _,
             clipboard_text: _,
             clipboard_html: _,
+            clipboard_rtf: _,
             clip_history: _,
             registry: _,
             author: _,
             initials: _,
             painter: _,
+            // What the drawn window knows of the others: its front end sets it as it draws.
+            windows: _,
             status: _,
             last_command: _,
             recording: _,
@@ -275,6 +278,8 @@ impl Session {
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
             ime_origin: _,
+            // A picked Drawing Canvas member is cleared by a switch, not kept per document.
+            member: _,
             others: _,
             order: _,
             untitled_count: _,
@@ -375,6 +380,8 @@ impl Session {
         swap(&mut self.widened, widened);
         swap(&mut self.edit_marks, edit_marks);
         swap(&mut self.go_back_step, go_back_step);
+        // A picked Drawing Canvas member (#2637) belongs to the document left behind.
+        self.member = None;
     }
 
     /// Make document `id` active without anything else a switch by the user does.
@@ -385,7 +392,7 @@ impl Session {
         let at = self.others.iter().position(|d| d.document_id == id).ok_or_else(|| unknown(id))?;
         let mut d = self.others.swap_remove(at);
         self.swap_doc(&mut d);
-        self.view.read_page_color = self.prefs.read_page_color;
+        self.view.follow_prefs(&self.prefs);
         self.others.push(d);
         Ok(())
     }
@@ -402,6 +409,12 @@ impl Session {
     /// Whether document `id` is open in this session (active or not).
     pub fn is_open(&self, id: u64) -> bool {
         id == self.document_id || self.others.iter().any(|d| d.document_id == id)
+    }
+
+    /// Whether the open document `id` has changes that aren't written to a file yet: the
+    /// active document's own flag, or a background document's.
+    pub fn document_dirty(&self, id: u64) -> bool {
+        if id == self.document_id { self.dirty } else { self.others.iter().any(|d| d.document_id == id && d.dirty) }
     }
 
     /// Every open document in the order they were opened, the active one included.
@@ -460,7 +473,7 @@ impl Session {
         doc.ensure_nonempty();
         let mut view = self.view.clone();
         view.outline.collapsed.clear();
-        view.read_page_color = self.prefs.read_page_color;
+        view.follow_prefs(&self.prefs);
         let mut d = DocState::new(doc, untitled, view);
         let id = d.document_id;
         self.order.push(id);
