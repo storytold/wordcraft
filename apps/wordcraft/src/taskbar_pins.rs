@@ -143,9 +143,11 @@ fn link_info(exe: &str) -> Vec<u8> {
 }
 
 /// Replace each pinned copy of the old advertised shortcut in `folder` with a plain one to `exe`,
-/// under the same name. The number replaced.
+/// under the same name. The number replaced; a pin that can't be replaced doesn't stop the
+/// others, and the first such error is returned once all have been tried.
 pub(crate) fn repair_folder(folder: &Path, exe: &str) -> std::io::Result<usize> {
     let mut mended = 0;
+    let mut first_error = None;
     let entries = match std::fs::read_dir(folder) {
         Ok(e) => e,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -166,14 +168,20 @@ pub(crate) fn repair_folder(folder: &Path, exe: &str) -> std::io::Result<usize> 
         // Written beside it, then moved over it: a pin is never left half written.
         let mut temp = path.clone().into_os_string();
         temp.push(".new");
-        std::fs::write(&temp, plain_link(exe))?;
-        if let Err(e) = std::fs::rename(&temp, &path) {
-            let _ = std::fs::remove_file(&temp);
-            return Err(e);
+        let replaced = std::fs::write(&temp, plain_link(exe)).and_then(|()| {
+            // Only the file just written is cleaned up, never something else of that name.
+            std::fs::rename(&temp, &path).inspect_err(|_| {
+                let _ = std::fs::remove_file(&temp);
+            })
+        });
+        match replaced {
+            Ok(()) => mended += 1,
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
         }
-        mended += 1;
     }
-    Ok(mended)
+    first_error.map_or(Ok(mended), Err)
 }
 
 /// Mend this account's taskbar and Start pins of the old shortcut, pointing them at the running exe.
@@ -184,10 +192,17 @@ pub(crate) fn repair() -> std::io::Result<usize> {
     let Some(exe) = exe.to_str() else { return Ok(0) };
     let pinned = Path::new(&appdata).join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned");
     let mut mended = 0;
+    let mut first_error = None;
+    // A failure in one folder doesn't keep the other from being mended.
     for place in ["TaskBar", "StartMenu"] {
-        mended += repair_folder(&pinned.join(place), exe)?;
+        match repair_folder(&pinned.join(place), exe) {
+            Ok(n) => mended += n,
+            Err(e) => {
+                first_error.get_or_insert(e);
+            }
+        }
     }
-    Ok(mended)
+    first_error.map_or(Ok(mended), Err)
 }
 
 #[cfg(test)]
@@ -267,6 +282,24 @@ mod tests {
         assert_eq!(repair_folder(&dir, EXE).unwrap(), 0, "nothing left to mend");
         assert!(!dir.join("WordCraft.lnk.new").exists());
         assert_eq!(repair_folder(&dir.join("missing"), EXE).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One pin that can't be replaced doesn't stop the next, and what stood in its way stays.
+    #[test]
+    fn a_pin_that_cannot_be_replaced_does_not_stop_the_others() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-pins-stuck-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in ["A.lnk", "B.lnk"] {
+            std::fs::write(dir.join(name), advertised(DESCRIPTION)).unwrap();
+        }
+        // A folder where A's new shortcut would be written: that write fails.
+        std::fs::create_dir(dir.join("A.lnk.new")).unwrap();
+        assert!(repair_folder(&dir, EXE).is_err(), "the failure is reported");
+        assert_eq!(std::fs::read(dir.join("A.lnk")).unwrap(), advertised(DESCRIPTION), "A is left as it was");
+        assert_eq!(std::fs::read(dir.join("B.lnk")).unwrap(), plain_link(EXE), "B is still mended");
+        assert!(dir.join("A.lnk.new").is_dir(), "a folder it didn't write isn't removed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
