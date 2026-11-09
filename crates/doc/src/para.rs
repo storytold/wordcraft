@@ -231,7 +231,7 @@ impl Paragraph {
 
     /// Number of objects in `text[..off]`.
     fn objects_before(&self, off: usize) -> usize {
-        self.text.get(..off).map(|t| t.chars().filter(|c| *c == OBJ).count()).unwrap_or(0)
+        self.text.get(..off).map(|t| t.chars().inspect(|_| crate::work::steps(1)).filter(|c| *c == OBJ).count()).unwrap_or(0)
     }
 
     /// The object at byte `off` (which must hold U+FFFC).
@@ -250,13 +250,13 @@ impl Paragraph {
     }
     /// Byte offsets of all objects, in order.
     pub fn object_offsets(&self) -> Vec<usize> {
-        self.text.char_indices().filter(|(_, c)| *c == OBJ).map(|(i, _)| i).collect()
+        self.text.char_indices().inspect(|_| crate::work::steps(1)).filter(|(_, c)| *c == OBJ).map(|(i, _)| i).collect()
     }
     /// (byte offset, object) for every object, in text order, in one pass. Prefer it to
     /// [`Paragraph::object_offsets`] + [`Paragraph::object_at`], which counts the objects before
     /// each offset again, so a loop over a paragraph's objects is quadratic (#3614).
     pub fn objects_with_offsets(&self) -> impl Iterator<Item = (usize, &InlineObject)> + '_ {
-        self.text.char_indices().filter(|(_, c)| *c == OBJ).map(|(i, _)| i).zip(self.objects.iter())
+        self.text.char_indices().inspect(|_| crate::work::steps(1)).filter(|(_, c)| *c == OBJ).map(|(i, _)| i).zip(self.objects.iter())
     }
 
     /// Insert plain text (U+FFFC is dropped) at `off` with `props`. Returns the inserted length.
@@ -501,9 +501,8 @@ impl Paragraph {
     pub fn next_boundary(&self, off: usize) -> usize {
         crate::cluster::next_cluster(&self.text, self.clamp(off))
     }
-    /// Where Backspace at `off` deletes from: the previous character in the Brahmic scripts
-    /// (Myanmar, Khmer, Devanagari, Thai…), where it removes one vowel sign or stacked consonant
-    /// at a time, otherwise the previous caret stop.
+    /// Where Backspace at `off` deletes from: one Arabic combining mark or one character in the
+    /// Brahmic scripts (Myanmar, Khmer, Devanagari, Thai…), otherwise the previous caret stop.
     pub fn backspace_from(&self, off: usize) -> usize {
         let off = self.clamp(off);
         match self.text.get(..off).and_then(|t| t.char_indices().next_back()) {
@@ -808,10 +807,11 @@ mod tests {
         }
     }
 
-    /// Pasting renames media; a Drawing Canvas's picture background is renamed with the rest
-    /// rather than left pointing at the source document's picture.
+    /// Pasting renames media; a Drawing Canvas's picture background and a picture-filled shape
+    /// inside it are renamed with the rest rather than left pointing at the source document's
+    /// picture.
     #[test]
-    fn remap_media_reaches_a_canvas_picture_background() {
+    fn adopt_renames_picture_fill_media() {
         use crate::fill::{Fill, PictureFill};
         let pic = |media: &str| {
             Some(Fill::Picture(std::sync::Arc::new(PictureFill {
@@ -823,18 +823,48 @@ mod tests {
                 tile: None,
             })))
         };
-        let mut canvas = InlineObject::Group {
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 5.0,
+            h: 5.0,
+            fill: pic("shape.png"),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let canvas = InlineObject::Group {
             w: 10.0,
             h: 10.0,
             float: Default::default(),
             ch_w: 10.0,
             ch_h: 10.0,
-            children: Vec::new(),
-            canvas: Some(CanvasStyle { fill: pic("source.png"), stroke: None, stroke_width: 0.0 }),
+            children: vec![GroupChild { x: 0.0, y: 0.0, obj: shape }],
+            canvas: Some(CanvasStyle { fill: pic("canvas.png"), stroke: None, stroke_width: 0.0 }),
         };
-        canvas.remap_media(&|key| (key == "source.png").then(|| "pasted.png".to_string()));
-        let InlineObject::Group { canvas: Some(c), .. } = &canvas else { panic!() };
-        let Some(Fill::Picture(p)) = &c.fill else { panic!("{:?}", c.fill) };
-        assert_eq!(p.media, "pasted.png");
+        let mut src = crate::Document::from_text("x");
+        src.media.insert("canvas.png".into(), std::sync::Arc::new(vec![1u8, 2]));
+        src.media.insert("shape.png".into(), std::sync::Arc::new(vec![3u8, 4]));
+        src.insert_object(&crate::Pos::body(0, 0), canvas, &Default::default()).unwrap();
+        let mut dest = crate::Document::from_text("y");
+        let frag = dest.adopt(src);
+        let mut seen = Vec::new();
+        for b in &frag.blocks {
+            crate::edit::each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    let InlineObject::Group { canvas: Some(c), children, .. } = o else { continue };
+                    let InlineObject::Shape { fill, .. } = &children[0].obj else { panic!("{:?}", children[0].obj) };
+                    for f in [&c.fill, fill] {
+                        let Some(Fill::Picture(p)) = f else { panic!("{f:?}") };
+                        seen.push(p.media.clone());
+                    }
+                }
+            });
+        }
+        assert_eq!(seen.len(), 2, "{seen:?}");
+        assert!(seen.iter().all(|k| k != "canvas.png" && k != "shape.png" && dest.media.contains_key(k)), "{seen:?}");
     }
 }

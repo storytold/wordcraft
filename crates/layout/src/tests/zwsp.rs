@@ -11,6 +11,7 @@ const FAMILY: &str = "Nozws";
 /// name "Nozws". Built from the bundled font so the test needs no installed font; every face
 /// that could stand in for U+200B has taller lines.
 fn no_zwsp_family() -> &'static str {
+    crate::test_fonts();
     static ADDED: std::sync::Once = std::sync::Once::new();
     ADDED.call_once(|| {
         let inter = wordcraft_fonts::word::resolve("Inter", false, false).face;

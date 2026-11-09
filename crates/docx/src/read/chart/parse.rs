@@ -179,8 +179,11 @@ impl Chart {
         self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK)
     }
 
+    /// Colour of series `j`: its own, else the accent its `c:idx` picks (as Word does; `c:order`
+    /// doesn't matter), else the one its place in the file picks.
     pub(super) fn series_colour(&self, j: usize) -> Rgb {
-        self.series.get(j).and_then(|s| s.color).unwrap_or_else(|| self.accent(j))
+        let s = self.series.get(j);
+        s.and_then(|s| s.color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
     }
 
     /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent (pie) or
@@ -324,6 +327,7 @@ pub(super) fn text_size(space: &El) -> f32 {
 impl Series {
     fn parse(ser: &El, scatter: bool, theme: &[Rgb], cap: usize) -> Series {
         let name = ser.child("c:tx").and_then(|t| t.find("c:v")).map(|v| label(v.text().trim())).unwrap_or_default();
+        let idx = ser.child("c:idx").and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<u32>().ok()).and_then(|v| usize::try_from(v).ok());
         let sp = ser.child("c:spPr");
         let ln = sp.and_then(|p| p.child("a:ln"));
         let marker = ser.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme));
@@ -345,9 +349,8 @@ impl Series {
         }
         let labels = show_values(ser.child("c:dLbls"));
         let mk = ser.child("c:marker");
-        let idx = ser.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
         let shape = match mk.and_then(|m| m.child("c:symbol")).and_then(|e| e.attr("val")) {
-            Some("auto") | None => Some(MarkerShape::auto(idx)),
+            Some("auto") | None => Some(MarkerShape::auto(idx.unwrap_or(0))),
             Some(symbol) => MarkerShape::of(symbol),
         };
         let marker_sp = mk.and_then(|m| m.child("c:spPr"));
@@ -358,7 +361,7 @@ impl Series {
             line: marker_sp.and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
         });
         let shading = sp.and_then(|p| p.child("a:gradFill")).and_then(|g| read_fill(g, theme, None)).filter(|f| matches!(f, Fill::Gradient(_)));
-        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new(), kind: Kind::Bar, marker, shading }
+        Series { name, idx, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new(), kind: Kind::Bar, marker, shading }
     }
 }
 

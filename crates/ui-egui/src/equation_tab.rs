@@ -124,7 +124,7 @@ fn math_menu_button(ui: &mut Ui, app: &mut WordApp, picture: &str, label: &str, 
         y += LABEL_PITCH;
     }
     let resp = resp.on_hover_text(label.replace('\n', " "));
-    egui::Popup::menu(&resp).show(|ui| {
+    crate::rtl::menu(&resp).show(|ui| {
         ui.set_min_width(260.0);
         menu(ui, app);
     });
@@ -239,7 +239,7 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
         let _ = app.run("insert.equation", json!({}));
         app.canvas.want_focus = true;
     }
-    egui::Popup::menu(&rb).show(|ui| builtin_menu(ui, app));
+    crate::rtl::menu(&rb).show(|ui| builtin_menu(ui, app));
 }
 
 /// The Symbols group: a strip of the current set's symbols, and a menu with every set.
@@ -253,7 +253,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
     let all: Vec<char> = chars.chars().collect();
     let start = ui.data(|d| d.get_temp::<usize>(start_id)).unwrap_or(0).min(all.len().saturating_sub(1));
     let t = Tokens::get(ui.ctx());
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
         for row in 0..rows {
             ui.horizontal(|ui| {
@@ -272,7 +272,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
             });
         }
     });
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
         let page = per_row * rows;
         if ui.add_enabled(start > 0, egui::Button::new("▲").min_size(vec2(16.0, 22.0))).clicked() {
@@ -282,7 +282,7 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
             ui.data_mut(|d| d.insert_temp(start_id, start + per_row));
         }
         let resp = ui.add(egui::Button::new("…").min_size(vec2(16.0, 22.0))).on_hover_text(tl!("All symbol sets"));
-        egui::Popup::menu(&resp).show(|ui| {
+        crate::rtl::menu(&resp).show(|ui| {
             ui.set_width(420.0);
             ui.horizontal_wrapped(|ui| {
                 for (i, (name, _)) in SYMBOL_SETS.iter().enumerate() {
@@ -325,16 +325,23 @@ fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
     let nodes = vec![wordcraft_doc::math::MNode::Run(wordcraft_doc::math::MRun { text: s.clone(), lit: true, ..Default::default() })];
     paint_math(app, ui, MathPreview { rect: r, key: &format!("sym:{s}"), linear: &s, nodes: Some(nodes), display: false, points: 11.0 });
     let display = math_placeholder(ui, &s);
-    let name =
-        wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{display}  \\{n}")).unwrap_or_else(|| format!("{display}  U+{:04X}", c as u32));
-    resp.on_hover_text(name).clicked()
+    resp.on_hover_text(symbol_tooltip(c, &display)).clicked()
+}
+
+/// Append the symbol name or codepoint only when the display is the glyph itself.
+fn symbol_tooltip(c: char, display: &str) -> String {
+    if display != c.to_string() {
+        // Missing glyphs already display their linear name or codepoint.
+        return display.to_owned();
+    }
+    wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{display}  \\{n}")).unwrap_or_else(|| format!("{display}  U+{:04X}", c as u32))
 }
 
 /// The Equation tab.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Tools", None, app, |ui, app| {
         math_menu_button(ui, app, EQUATION_PICTURE, "Equation", builtin_menu);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let latex = app.session.math_latex;
             small(
@@ -379,7 +386,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 },
             );
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let normal = app.session.math_normal_text;
             small(
@@ -400,7 +407,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     group(ui, "Equation Options", None, app, |ui, app| {
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let info = app.session.run("equation.get", &json!({})).ok();
             let display = info.as_ref().and_then(|v| v.get("display")).and_then(|v| v.as_bool()).unwrap_or(false);
@@ -430,7 +437,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::ButtonAction::new("equation.number", json!({}), numbered),
             );
         });
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             crate::widgets::menu_button(
                 ui,
@@ -461,6 +468,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
 
 #[cfg(test)]
 mod placeholder_tests {
+    /// Named and unnamed missing glyphs appear once; covered glyphs retain their suffix.
+    #[test]
+    fn symbol_tooltips_do_not_repeat_missing_glyph_fallbacks() {
+        for c in ['α', '\u{0378}'] {
+            let display = super::math_placeholder_with(&c.to_string(), |_| false);
+            assert_eq!(super::symbol_tooltip(c, &display), display);
+        }
+        assert_eq!(super::symbol_tooltip('α', "α"), "α  \\alpha");
+        assert_eq!(super::symbol_tooltip('\u{0378}', "\u{0378}"), "\u{0378}  U+0378");
+    }
+
     /// `∁` falls back to `\complement` in the placeholder while covered `x+y` is unchanged.
     #[test]
     fn a_missing_math_glyph_has_a_readable_linear_placeholder() {

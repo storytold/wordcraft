@@ -7,7 +7,10 @@ use super::{
     Block, Border, ClKind, DeleteMark, Document, Draw, InlineObject, InsertMark, LineEnd, MItem, ParaLayout, Path, Rect, Rgb, SectionStart, Spin,
     StoryRef, TextColor, Underline,
 };
+use crate::display::Paint;
 use wordcraft_doc::Paragraph;
+use wordcraft_doc::graphic::PathSeg;
+use wordcraft_doc::para::ShapeKind;
 
 /// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
 /// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
@@ -222,9 +225,43 @@ fn style_parts<'a>(
     parts
 }
 
+/// The colour a run is drawn in, given its shown insertion and deletion and whether each is a move.
+fn run_color(
+    ctx: &LineContext<'_, '_, '_>,
+    rc: &wordcraft_doc::resolve::ResolvedChar,
+    marks: (Option<u32>, Option<u32>),
+    moved: (bool, bool),
+) -> Rgb {
+    let m = &ctx.opts.revisions;
+    let (ins, del) = marks;
+    let (moved_to, moved_from) = moved;
+    let author = |r: u32| ctx.authors.color(r);
+    // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
+    let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
+    match (ins, del) {
+        _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
+        (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
+        (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
+        (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
+        (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
+        _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight)),
+    }
+}
+
+/// A caret on the baseline at `at` (x, baseline), where deleted text was.
+fn push_deletion_caret(out: &mut Vec<Draw>, at: (f32, f32), size: f32, color: Rgb, alpha: f32, text_bg: Option<Rgb>) {
+    let (cx, base) = at;
+    let h = size * 0.3;
+    let width = (size / 18.0).max(0.6);
+    let y0 = base + 1.0;
+    let y1 = y0 - h;
+    let stroke = |x0, y0, x1, y1| Draw::Line { x0, y0, x1, y1, width, color, stroke: Stroke::Solid, alpha, text_bg };
+    out.push(stroke(cx - h * 0.6, y0, cx, y1));
+    out.push(stroke(cx, y1, cx + h * 0.6, y0));
+}
+
 fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let (doc, pl, line, x, base, opts, authors, alpha, down) =
-        (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.base, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
+    let (doc, pl, line, x, base, opts, alpha, down) = (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.base, ctx.opts, ctx.alpha, ctx.down);
     let mut k = line.c0;
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
@@ -246,21 +283,11 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let shown = opts.markup && m.insertions_deletions;
         let del = rc.del.filter(|_| shown);
         let ins = rc.ins.filter(|_| shown && del.is_none());
-        let author = |r: u32| authors.color(r);
         // Moved text: the Moves marks and colours (by default green, double strikethrough
         // where it was, double underline where it went).
         let moved_to = doc.move_name(ins).is_some();
         let moved_from = del.is_some() && doc.move_name(del).is_some();
-        // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
-        let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
-        let color = match (ins, del) {
-            _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
-            (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
-            (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
-            (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
-            (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
-            _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight)),
-        };
+        let color = run_color(ctx, rc, (ins, del), (moved_to, moved_from));
         // The highlight or shading drawn under this run (as filled in the backgrounds pass).
         let text_bg = rc.highlight.or(rc.shading);
         let ins_mark = ins.map(|_| if moved_to { m.move_to_mark } else { m.insert_mark });
@@ -268,30 +295,7 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         if del_mark == Some(DeleteMark::Caret) {
             // A caret where the text was, instead of the text.
             if let Some(cx) = line.cl_left(run_start).map(|c| x + c) {
-                let h = st.size * 0.3;
-                let w = (st.size / 18.0).max(0.6);
-                out.push(Draw::Line {
-                    x0: cx - h * 0.6,
-                    y0: base + 1.0,
-                    x1: cx,
-                    y1: base + 1.0 - h,
-                    width: w,
-                    color,
-                    stroke: Stroke::Solid,
-                    alpha,
-                    text_bg,
-                });
-                out.push(Draw::Line {
-                    x0: cx,
-                    y0: base + 1.0 - h,
-                    x1: cx + h * 0.6,
-                    y1: base + 1.0,
-                    width: w,
-                    color,
-                    stroke: Stroke::Solid,
-                    alpha,
-                    text_bg,
-                });
+                push_deletion_caret(out, (cx, base), st.size, color, alpha, text_bg);
             }
             continue;
         }
@@ -400,6 +404,57 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 out.push(Draw::Line { x0, y0: sy, x1, y1: sy, width: thick, color, stroke, alpha, text_bg });
             }
         }
+        // Emphasis marks (Font › Emphasis mark): one over (or under) each character.
+        if rc.emphasis != wordcraft_doc::props::EmphasisMark::None {
+            for kk in run_start..end_k {
+                if pl.clusters.get(kk).is_none_or(|c| c.kind != ClKind::Text) {
+                    continue;
+                }
+                let a = x + line.cl_left(kk).unwrap_or(0.0);
+                let b = x + line.cl_right(kk).unwrap_or(a - x);
+                out.push(emphasis_mark(rc.emphasis, (a + b) / 2.0, base - st.shift, st.size, color));
+            }
+        }
+    }
+}
+
+/// An emphasis mark `mark` for a character centred at `cx` on baseline `base`, in a font of
+/// `size` points: a dot or a hollow circle above, a comma (sesame) above, or a dot below.
+fn emphasis_mark(mark: wordcraft_doc::props::EmphasisMark, cx: f32, base: f32, size: f32, color: Rgb) -> Draw {
+    use wordcraft_doc::props::EmphasisMark as E;
+    let size = if size.is_finite() { size.clamp(1.0, 1638.0) } else { 12.0 };
+    let r = size * 0.07;
+    // Above the tallest letters, or below the descenders.
+    // Clear of full-height (East Asian) characters, inside the room the line makes for them.
+    let cy = if mark == E::UnderDot { base + size * 0.32 } else { base - size * 1.2 };
+    let disc = |r: f32, fill: bool| Draw::Shape {
+        rect: Rect::new(cx - r, cy - r, r * 2.0, r * 2.0),
+        kind: ShapeKind::Ellipse,
+        fill: fill.then_some(Paint::Solid(color, 1.0)),
+        stroke: (!fill).then_some(color),
+        stroke_width: size * 0.03,
+        dash: Vec::new(),
+        cap: Default::default(),
+        effects: Default::default(),
+        corner: None,
+    };
+    match mark {
+        E::Circle => disc(r * 1.3, false),
+        // A teardrop leaning right, as the sesame mark is drawn.
+        E::Comma => Draw::Path {
+            segs: vec![
+                PathSeg::Move(cx - r * 0.4, cy - r * 1.4),
+                PathSeg::Cubic(cx + r * 1.2, cy - r * 0.6, cx + r * 1.0, cy + r * 1.0, cx - r * 0.2, cy + r * 1.4),
+                PathSeg::Cubic(cx + r * 0.2, cy + r * 0.4, cx - r * 0.6, cy - r * 0.4, cx - r * 0.4, cy - r * 1.4),
+                PathSeg::Close,
+            ],
+            fill: Some(Paint::Solid(color, 1.0)),
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Vec::new(),
+            cap: Default::default(),
+        },
+        _ => disc(r, true),
     }
 }
 
@@ -628,7 +683,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     for k in line.c0..line.c1 {
         let Some(c) = pl.clusters.get(k) else { continue };
         let ClKind::Object(oi) = c.kind else { continue };
-        if c.obj_h <= 0.0 {
+        if c.obj_h + c.obj_d <= 0.0 {
             continue;
         }
         // A dragged inline object is left out too: its preview stands in for it.
@@ -637,9 +692,20 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
         let obj = para.and_then(|p| p.objects.get(oi));
-        let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
+        let modern = doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+        let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern);
         let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
         match obj {
+            // A turn its line keeps no room for overhangs the line; Word cuts it at the line's top
+            // and bottom, not at its sides.
+            Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. }))
+                if o.frame().is_some_and(|(w, h, f)| f.is_bare_turn() && f.spin_pad(w, h).1 > f.line_pad(w, h, modern).1 + 0.01) =>
+            {
+                let mut items = Vec::new();
+                object_draws(o, rect, Spin::default(), alpha, opts, &mut items);
+                let band = Rect::new(rect.x - 4000.0, ctx.top, rect.w + 8000.0, (ctx.bottom - ctx.top).max(0.0));
+                out.push(Draw::Clip { rect: band, items });
+            }
             Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
                 object_draws(o, rect, Spin::default(), alpha, opts, out)
             }
@@ -656,7 +722,7 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             Some(o @ InlineObject::Field { .. }) => {
                 if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { checked, .. }) = o.legacy_form() {
                     let color = pl.styles.get(c.style as usize).map_or(Rgb::BLACK, |st| text_color(&st.rc.color, None));
-                    let frame = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h + c.obj_d);
+                    let frame = Rect::new(cx, base - c.obj_h.max(0.0), c.adv, c.obj_h + c.obj_d);
                     check_box(frame, checked, color, alpha, out);
                 }
             }
@@ -697,14 +763,8 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
         let Some(ch) = leader.char() else { continue };
         let gid = style.face.glyph_for(ch);
-        let advance = (style.face.advance(gid) as f32 * style.size / style.face.upem.max(1.0) as f32).max(1.0);
-        let (mut gx, end) = (ctx.x + left + advance * 0.5, ctx.x + right - advance * 1.2);
-        let mut glyphs = Vec::new();
-        gx = (gx / advance).ceil() * advance;
-        while gx < end && glyphs.len() < 2000 {
-            glyphs.push((gid, gx, ctx.base));
-            gx += advance;
-        }
+        let advance = leader_pitch(style.face.advance(gid) as f32, style.face.upem as f32, style.size);
+        let glyphs = leader_xs(ctx.x + left, ctx.x + right, advance).into_iter().map(|gx| (gid, gx, ctx.base)).collect();
         out.push(Draw::Glyphs {
             face: style.face,
             size: style.size,
@@ -720,6 +780,43 @@ fn tab_leaders(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             x_scale: 1.0,
         });
     }
+}
+
+/// Where a tab leader's glyphs go between page x `left` (the end of the text before the tab) and
+/// `right` (the start of the text after it), `pitch` apart: on the page's grid of that pitch, from
+/// the first place at or after `left` to the last glyph that ends by `right`, as Word draws them.
+/// Each place is worked out from its grid index, so a long leader doesn't drift and lose its last
+/// glyph to rounding.
+pub(crate) fn leader_xs(left: f32, right: f32, pitch: f32) -> Vec<f32> {
+    if !(left.is_finite() && right.is_finite() && pitch.is_finite() && pitch > 0.0) {
+        return Vec::new();
+    }
+    let first = (left / pitch - LEADER_GRID_SLACK).ceil() as i64;
+    (first..first.saturating_add(MAX_LEADER_GLYPHS)).map(|k| k as f32 * pitch).take_while(|x| x + pitch <= right + LEADER_FIT_SLACK).collect()
+}
+
+/// How far, in grid places, `left` may be past a place and still start the leader there: so text
+/// ending on a grid place, give or take float rounding, doesn't lose the first glyph.
+const LEADER_GRID_SLACK: f32 = 0.001;
+
+/// How far, in points, a leader's last glyph may end past `right` and still be drawn: the same
+/// allowance for rounding at the other end.
+const LEADER_FIT_SLACK: f32 = 0.001;
+
+/// The most glyphs one leader draws, so a hostile tab position can't make it loop for long.
+const MAX_LEADER_GLYPHS: i64 = 2000;
+
+/// How far apart a tab leader's glyphs are drawn, as measured in Word: the glyph's advance (`units`
+/// of the font's `upem`) at the font size rounded to whole 600-dpi pixels, rounded to a whole
+/// pixel. So a TH SarabunPSK dot at 16 pt (133 px, 162/1000 em: 21.5 px) is drawn every 22 px,
+/// 2.64 pt rather than 2.59, a Tahoma one at 22 pt (183 px, 620/2048 em: 55.4 px) every 55 px,
+/// 6.6 pt, and an Arial one at 14 pt (116.7 px, so 117; 569/2048 em: 32.5 px) every 33 px,
+/// 3.96 pt. At least 1 pt.
+pub(crate) fn leader_pitch(units: f32, upem: f32, size: f32) -> f32 {
+    const DPI: f32 = 600.0;
+    let ppem = (size * DPI / 72.0).round();
+    let px = (units * ppem / upem.max(1.0)).round();
+    (px * 72.0 / DPI).max(1.0)
 }
 
 fn enclosures(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
@@ -773,6 +870,8 @@ pub fn section_break_label(start: SectionStart) -> &'static str {
 
 /// Width of a [`Draw::MarkText`] label.
 pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    #[cfg(test)]
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let k = size / face.upem.max(1.0) as f32;
     text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
