@@ -504,6 +504,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-28 | trivial | Gap 19 narrowed: RTF reads and writes WMF and EMF pictures, chosen by their bytes (#4259); ranking unchanged |
 | 2026-10-27 | trivial | 2026-10-27 · #4533 review: numeric REF updates lazily index body bookmarks once per update, retaining the first body bookmark for duplicate names. Unsupported switches and ordinary REF/PAGEREF behavior are unchanged; a synthetic 64-reference regression covers repeated updates and duplicate names. Estimates unchanged. |
 | 2026-10-27 | trivial | 2026-10-27 · #4533: numeric REF fields use paragraph list numbers for no/full/relative context, reusing bounded numbering. Shared context already embedded in a level label is removed; merged-away cells do not count. Unsupported separator/text/position switches and ambiguous contexts or delimiter-free joins retain cached results. Synthetic OOXML regressions; no native Word or real-document validation, estimates unchanged. |
+| 2026-11-09 | trivial | Compare: sequences longer than the 4,000-block comparison table are aligned with a shortest-edit search (cost by the number of edits, bounded) instead of pairing the blocks past the window position by position, so a block moved across the window no longer marks the tail as changed (#6110); no ranked gap changed, readiness estimates unchanged |
 
 ## Layout validation fonts
 

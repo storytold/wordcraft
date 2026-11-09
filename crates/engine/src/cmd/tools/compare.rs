@@ -222,6 +222,18 @@ pub(super) fn lcs_ops<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Vec<O
     let suf = ra.iter().rev().zip(rb.iter().rev()).take_while(|(x, y)| x == y).count();
     let (a, b) = (ra.get(..ra.len() - suf).unwrap_or_default(), rb.get(..rb.len() - suf).unwrap_or_default());
     let mut ops = vec![Op::Same; pre];
+    if a.len() > MAX_LCS || b.len() > MAX_LCS {
+        // The table below only covers the first MAX_LCS of each side, and what lies past it
+        // would be paired position by position: after a move that crosses the window, every
+        // block there is off by one and comes out as a revision (#6110). A search that costs
+        // by the number of edits aligns the whole sequence when the two are alike, as two
+        // versions of a long document are.
+        if let Some(middle) = shortest_script(a, b, budget) {
+            ops.extend(middle);
+            ops.extend(std::iter::repeat_n(Op::Same, suf));
+            return ops;
+        }
+    }
     let (mut n, mut m) = (a.len().min(MAX_LCS), b.len().min(MAX_LCS));
     let cells = (n as u64).saturating_mul(m as u64);
     if cells > *budget {
@@ -260,6 +272,84 @@ pub(super) fn lcs_ops<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Vec<O
     ops.extend(std::iter::repeat_n(Op::Ins, b.len() - j));
     ops.extend(std::iter::repeat_n(Op::Same, suf));
     ops
+}
+
+/// Most edits (deleted plus inserted elements) the search for a shortest script follows. Its
+/// history takes about the square of this, so it also bounds the memory.
+const MAX_EDITS: usize = 2500;
+
+/// The shortest edit script from `a` to `b` (Myers' O(ND) search), for sequences longer than the
+/// comparison table. `None` when they differ by more than [`MAX_EDITS`], or the work would pass
+/// `budget`; the caller then falls back to the table. The work done is charged to `budget`.
+pub(super) fn shortest_script<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Option<Vec<Op>> {
+    let (n, m) = (a.len(), b.len());
+    let max_d = MAX_EDITS.min(n.saturating_add(m)).min(usize::try_from(budget.isqrt()).unwrap_or(usize::MAX));
+    let base = max_d + 1;
+    // `v[base + k]` is the furthest x reached on diagonal k = x - y. The history keeps, per
+    // round d, diagonals -d..=d, to walk the script back from the end.
+    let mut v = vec![0usize; 2 * max_d + 3];
+    let mut history: Vec<Vec<usize>> = Vec::new();
+    let mut steps = 0u64;
+    let mut found = None;
+    'rounds: for d in 0..=max_d {
+        let di = isize::try_from(d).ok()?;
+        let mut k = -di;
+        while k <= di {
+            steps += 1;
+            if steps > *budget {
+                break 'rounds;
+            }
+            let lo = *v.get(base.checked_add_signed(k - 1)?)?;
+            let hi = *v.get(base.checked_add_signed(k + 1)?)?;
+            let mut x = if k == -di || (k != di && lo < hi) { hi } else { lo + 1 };
+            let mut y = x.checked_add_signed(-k)?;
+            while x < n && y < m && a.get(x) == b.get(y) {
+                x += 1;
+                y += 1;
+                steps += 1;
+            }
+            *v.get_mut(base.checked_add_signed(k)?)? = x;
+            if (x, y) == (n, m) {
+                found = Some(d);
+                break 'rounds;
+            }
+            k += 2;
+        }
+        history.push(v.get(base.checked_add_signed(-di)?..=base.checked_add_signed(di)?)?.to_vec());
+    }
+    *budget -= steps.min(*budget);
+    let rounds = found?;
+    // Walk back from the end: the diagonal run before each edit is matches, then the edit.
+    let (mut x, mut y) = (n, m);
+    let mut script = Vec::new();
+    for d in (1..=rounds).rev() {
+        let prev = history.get(d - 1)?;
+        let di = isize::try_from(d).ok()?;
+        let at = |k: isize| prev.get(usize::try_from(k + di - 1).ok()?).copied();
+        let k = isize::try_from(x).ok()? - isize::try_from(y).ok()?;
+        let insert = k == -di || (k != di && at(k - 1)? < at(k + 1)?);
+        let prev_k = if insert { k + 1 } else { k - 1 };
+        let (px, py) = (at(prev_k)?, at(prev_k)?.checked_add_signed(-prev_k)?);
+        let (ex, ey) = if insert { (px, py + 1) } else { (px + 1, py) };
+        while x > ex && y > ey {
+            script.push(Op::Same);
+            x -= 1;
+            y -= 1;
+        }
+        if (x, y) != (ex, ey) {
+            return None;
+        }
+        script.push(if insert { Op::Ins } else { Op::Del });
+        (x, y) = (px, py);
+    }
+    if x != y {
+        return None;
+    }
+    script.extend(std::iter::repeat_n(Op::Same, x));
+    script.reverse();
+    // A script that doesn't consume both sequences is a bug here, not an answer.
+    let (kept, dels) = (script.iter().filter(|o| **o == Op::Same).count(), script.iter().filter(|o| **o == Op::Del).count());
+    (kept + dels == n && script.len() - dels == m).then_some(script)
 }
 
 /// How short an interior match can be, inside a run of edits, before it's folded into the
