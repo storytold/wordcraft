@@ -151,6 +151,7 @@ mod tests {
                 delta: Some(serde_json::json!({"op": "insert_text", "text": "x"})),
                 conflict: false,
                 history: None,
+                nodes: None,
             }],
         };
         let snapshot =
@@ -191,6 +192,7 @@ mod tests {
                     delta: None,
                     conflict: seq == 3,
                     history: None,
+                    nodes: None,
                 })
                 .collect(),
         };

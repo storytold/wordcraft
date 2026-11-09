@@ -75,7 +75,7 @@ async fn an_unconfirmed_operation_is_resent_after_a_reconnect() {
         send_server_msg(
             &mut socket,
             &ServerMsg::Applied {
-                applied: Applied { op_id: second.op_id.clone(), version: 1, epoch: 0, delta: None, conflict: false, history: None },
+                applied: Applied { op_id: second.op_id.clone(), version: 1, epoch: 0, delta: None, nodes: None, conflict: false, history: None },
             },
         )
         .await;

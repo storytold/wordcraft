@@ -116,6 +116,15 @@ pub struct Applied {
     /// Authoritative delta of the touched state; the client never derives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta: Option<serde_json::Value>,
+    /// The session node ids this operation issued, moved or retired (ADR-0002).
+    /// A command the document adapter cannot name as primitives replays on the
+    /// replica, but the ids it allocates (a comment, a text box, a footnote, a
+    /// table) are the server's: this delta lets the replica keep addressing the
+    /// new nodes without asking for a snapshot. It is attached to the live
+    /// answer only; a reconnecting replica still receives the whole map with
+    /// `ServerMsg::Nodes`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nodes: Option<NodeDelta>,
     /// `true` when `base_version` was behind `head` and the operation landed on
     /// a newer state (ADR-0004).
     #[serde(default)]
@@ -254,6 +263,41 @@ pub struct NodeRef {
     pub path: Vec<u32>,
 }
 
+/// The node-map change one accepted operation made (ADR-0002).
+///
+/// It carries only what moved, so a command that allocates ids stays cheap on
+/// the wire; a full map is still sent on join and after a structural primitive.
+/// An operation whose change set passes [`MAX_NODE_DELTA`] reports
+/// `overflow: true` instead, and the replica takes a snapshot: that is the
+/// fallback when a delta would be larger than sending the map it replaces.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeDelta {
+    /// Ids the operation issued or moved, in id order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub changed: Vec<NodeRef>,
+    /// Ids the operation retired; a late operation on one is answered `gone`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<u32>,
+    /// The change set passed [`MAX_NODE_DELTA`]; the replica must take a
+    /// snapshot instead of applying a partial map.
+    #[serde(default)]
+    pub overflow: bool,
+}
+
+/// The most node changes one delta may carry. A command that inserts a large
+/// table can allocate thousands of ids; past this bound the replica snapshots
+/// rather than trust a delta that was cut short.
+pub const MAX_NODE_DELTA: usize = 4096;
+
+/// Whether a command can allocate session ids (a new part, a table's rows and
+/// cells, a comment, a shape). Such a command always travels with a
+/// [`NodeDelta`] so replicas need no snapshot; a command outside this list
+/// either changes no node map or is a primitive the replica derives itself.
+pub fn may_allocate_ids(command: &str) -> bool {
+    ["review.", "insert.", "table.", "shape.", "chart.", "equation.", "references.", "mailings."].iter().any(|prefix| command.starts_with(prefix))
+}
+
 /// Messages the server sends.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -351,6 +395,28 @@ mod tests {
         let text = serde_json::to_string(&op).expect("serialize");
         let back: Op = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(op, back);
+    }
+
+    #[test]
+    fn an_applied_carries_a_node_delta_and_an_old_answer_still_parses() {
+        let applied = Applied {
+            op_id: OpId::new("c1", 9),
+            version: 12,
+            epoch: 1,
+            delta: Some(serde_json::json!({"op": "command", "command": "review.newComment"})),
+            nodes: Some(NodeDelta { changed: vec![NodeRef { id: 7, story: "part:5".into(), path: vec![0] }], removed: vec![3], overflow: false }),
+            conflict: false,
+            history: None,
+        };
+        let text = serde_json::to_string(&applied).expect("serialize");
+        assert!(text.contains("part:5"), "{text}");
+        let back: Applied = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(applied, back);
+
+        // A server built before the node delta sent no `nodes`: the field defaults.
+        let old = r#"{"opId":{"client":"c1","seq":1},"version":1,"epoch":0,"conflict":false}"#;
+        let back: Applied = serde_json::from_str(old).expect("an older answer parses");
+        assert!(back.nodes.is_none());
     }
 
     #[test]

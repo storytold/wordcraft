@@ -577,11 +577,14 @@ async fn handle_op(
     match result {
         Ok(applied) => {
             Metrics::inc(&state.metrics.ops);
+            // A command that allocates ids carries them on the answer; peers
+            // apply the delta instead of replacing the whole map.
+            let delta_sent = applied.nodes.is_some();
             broadcast(room, client_id, ServerMsg::Applied { applied }, sink).await;
             let nodes = {
                 let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
                 let moved = guard.room.take_nodes_changed();
-                if structural || moved { Some(guard.room.nodes()) } else { None }
+                if !delta_sent && (structural || moved) { Some(guard.room.nodes()) } else { None }
             };
             if let Some(nodes) = nodes {
                 broadcast(room, "", ServerMsg::Nodes { nodes }, sink).await;

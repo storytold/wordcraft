@@ -2807,6 +2807,21 @@ impl Model for DocModel {
             index_blocks(ids, &name, &mut Vec::new(), &story.blocks, 0);
         }
     }
+
+    fn story_shape(&self) -> Vec<(String, usize)> {
+        story_shape(&self.doc)
+    }
+}
+
+/// Top-level block count per story, in a stable order: `body` first, then the
+/// parts by id. A room compares it before and after a command to tell an
+/// appended story (whose ids can be added without moving anything) from a
+/// change inside a story (where every later path shifted).
+pub fn story_shape(doc: &Document) -> Vec<(String, usize)> {
+    let mut shape = Vec::with_capacity(doc.parts.len() + 1);
+    shape.push(("body".to_string(), doc.body.len()));
+    shape.extend(doc.parts.iter().map(|(id, part)| (format!("part:{id}"), part.blocks.len())));
+    shape
 }
 
 /// Issue ids for a block list and everything it contains. The walk is bounded

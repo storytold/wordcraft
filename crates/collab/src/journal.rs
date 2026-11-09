@@ -175,7 +175,8 @@ impl Journal {
         if op.kind.is_structural() {
             self.epoch += 1;
         }
-        let applied = Applied { op_id: op.op_id.clone(), version: self.head, epoch: self.epoch, delta, conflict, history: op.history.clone() };
+        let applied =
+            Applied { op_id: op.op_id.clone(), version: self.head, epoch: self.epoch, delta, nodes: None, conflict, history: op.history.clone() };
         self.remember(&applied);
         self.entries.push_back(Entry { actor: actor.to_string(), kind: op.kind, applied: applied.clone(), inverse });
         while self.entries.len() > self.max_entries {

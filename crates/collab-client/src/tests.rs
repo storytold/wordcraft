@@ -10,7 +10,7 @@ use wordcraft_doc::Document;
 use crate::{Client, Event, State, session_client_id};
 
 fn applied(op_id: OpId, version: Version, epoch: u64) -> ServerMsg {
-    ServerMsg::Applied { applied: Applied { op_id, version, epoch, delta: None, conflict: false, history: None } }
+    ServerMsg::Applied { applied: Applied { op_id, version, epoch, delta: None, nodes: None, conflict: false, history: None } }
 }
 
 /// Two windows on the same document must not share an op id space: with one id

@@ -51,6 +51,15 @@ pub trait Model {
 
     /// Issue session ids for nodes that do not have one yet (called on join).
     fn index_nodes(&self, ids: &mut crate::ids::NodeIds);
+
+    /// Top-level block count per story (`body`, `part:N`). A room uses it to
+    /// tell a command that only appended a new story — safe to index for an id
+    /// delta — from one that changed an existing story, where every later path
+    /// shifted and only a snapshot can rebuild the map. The default suits a
+    /// model with no stories.
+    fn story_shape(&self) -> Vec<(String, usize)> {
+        Vec::new()
+    }
 }
 
 /// `owner | editor | commenter | viewer` (ADR-0008).
@@ -221,11 +230,56 @@ impl<M: Model> Room<M> {
         if let Some(history) = op.history.clone() {
             return self.submit_history(actor, &op, history);
         }
-        let effect = self.model.apply(actor, &op, &mut self.ids)?;
+        // A command that allocates ids must land on the head: the author ran it
+        // optimistically on its own state, and only when both states are the
+        // same do the comment/part ids it minted locally match the server's.
+        // Otherwise the author asks for a snapshot instead of diverging.
+        let allocates =
+            op.kind == crate::wire::OpKind::Command && op.payload.get("command").and_then(Value::as_str).is_some_and(crate::wire::may_allocate_ids);
+        if allocates && op.base_version != self.journal.head() {
+            return Err(Reject::new(op.op_id.clone(), RejectCode::Stale, "a command that allocates ids needs baseVersion == head; resync"));
+        }
+        let shape_before = allocates.then(|| self.model.story_shape());
+        if allocates {
+            self.ids.start_delta();
+        }
+        let effect = match self.model.apply(actor, &op, &mut self.ids) {
+            Ok(effect) => effect,
+            Err(reject) => {
+                if allocates {
+                    self.ids.cancel_delta();
+                }
+                return Err(reject);
+            }
+        };
+        // The delta names the ids the command issued. It is only safe when no
+        // existing story changed size: a block inserted into a story shifts
+        // every later path, and indexing on top of that would leave two ids
+        // naming the same node. Such a command keeps the snapshot path.
+        let node_delta = if allocates {
+            let appended_only = shape_before.as_deref().is_some_and(|before| stories_appended_only(before, &self.model.story_shape()));
+            if appended_only {
+                if effect.nodes_changed {
+                    self.model.index_nodes(&mut self.ids);
+                }
+                // An empty delta is still an answer: it certifies the map did
+                // not move, so the replica does not take a snapshot.
+                Some(self.ids.take_delta().unwrap_or_default())
+            } else {
+                self.ids.cancel_delta();
+                None
+            }
+        } else {
+            None
+        };
         let has_delta = effect.delta.is_some();
         self.nodes_changed = effect.nodes_changed;
         let touched = effect.touched.clone();
-        let applied = self.journal.accept(&op, actor, effect.delta, effect.inverse.clone());
+        let mut applied = self.journal.accept(&op, actor, effect.delta, effect.inverse.clone());
+        // Only the live answer carries the delta: a reconnecting replica gets
+        // the whole map with `ServerMsg::Nodes`, so the journal and the `opId`
+        // window store no node lists.
+        applied.nodes = node_delta;
         self.note_touch(&op, applied.version);
         for id in &touched {
             self.last_touch.insert(*id, applied.version);
@@ -403,4 +457,10 @@ impl<M: Model> Room<M> {
         self.journal.compact(upto);
         self.ids.compact(upto);
     }
+}
+
+/// Whether every story the room already knew kept its size: only new stories
+/// appeared, so indexing their blocks cannot move an existing node's path.
+fn stories_appended_only(before: &[(String, usize)], after: &[(String, usize)]) -> bool {
+    before.iter().all(|(story, count)| after.iter().any(|(name, now)| name == story && now == count))
 }

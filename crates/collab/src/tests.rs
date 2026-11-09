@@ -473,3 +473,95 @@ fn a_refused_operation_takes_back_the_whole_step() {
     assert_eq!(room.version(), 1, "a transaction that did not land moves no version");
     assert_eq!(room.undo_depth("alice"), (1, 0), "the step is still undoable");
 }
+
+/// A model that allocates a story id on one command and grows the body on
+/// another, so the room's id-delta decision is exercised without the engine.
+#[derive(Default)]
+struct IdModel {
+    body: usize,
+    parts: Vec<String>,
+}
+
+impl Model for IdModel {
+    fn apply(&mut self, _actor: &str, op: &Op, _ids: &mut crate::ids::NodeIds) -> Result<Effect, crate::wire::Reject> {
+        let command = op.payload.get("command").and_then(serde_json::Value::as_str).unwrap_or_default();
+        let mut effect = Effect { delta: Some(json!({"op": "command", "command": command})), forward: vec![op.clone()], ..Effect::default() };
+        match command {
+            "review.newComment" => {
+                self.parts.push("part:5".to_string());
+                effect.nodes_changed = true;
+            }
+            "insert.pageBreak" => {
+                self.body += 1;
+                effect.nodes_changed = true;
+            }
+            _ => {}
+        }
+        Ok(effect)
+    }
+
+    fn snapshot(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    fn index_nodes(&self, ids: &mut crate::ids::NodeIds) {
+        for index in 0..self.body {
+            ids.id_for(&crate::ids::NodeKey::new("body", vec![index as u32]));
+        }
+        for part in &self.parts {
+            ids.id_for(&crate::ids::NodeKey::new(part.clone(), vec![0]));
+        }
+    }
+
+    fn story_shape(&self) -> Vec<(String, usize)> {
+        let mut shape = vec![("body".to_string(), self.body)];
+        shape.extend(self.parts.iter().map(|part| (part.clone(), 1)));
+        shape
+    }
+}
+
+fn command(client: &str, seq: u64, base: u64, name: &str) -> Op {
+    Op {
+        op_id: OpId::new(client, seq),
+        base_version: base,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", 0, 0),
+        payload: json!({"command": name}),
+        history: None,
+    }
+}
+
+#[test]
+fn a_command_that_appends_a_story_answers_with_the_new_ids() {
+    let mut room = Room::new(IdModel::default());
+    let applied = room.submit("alice", Role::Editor, command("a", 1, 0, "review.newComment")).expect("the command lands");
+
+    let nodes = applied.nodes.as_ref().expect("the answer carries the node delta");
+    assert!(!nodes.overflow);
+    assert_eq!(nodes.changed.iter().map(|node| (node.story.as_str(), node.path.clone())).collect::<Vec<_>>(), vec![("part:5", vec![0])]);
+    assert!(nodes.removed.is_empty());
+
+    // The journal keeps no node lists: a reconnect gets the whole map instead.
+    let tail = room.join(Some(0), false).replay.expect("the tail is still there");
+    assert!(tail.iter().all(|applied| applied.nodes.is_none()), "{tail:?}");
+    assert!(room.join(None, false).nodes.iter().any(|node| node.story == "part:5"), "the map has the new story");
+}
+
+#[test]
+fn an_id_allocating_command_needs_the_head_version() {
+    let mut room = Room::new(IdModel::default());
+    room.submit("alice", Role::Editor, command("a", 1, 0, "text.insert")).expect("a plain command lands");
+    let err = room.submit("bob", Role::Editor, command("b", 1, 0, "review.newComment")).expect_err("a stale id allocation is refused");
+    assert_eq!(err.code, RejectCode::Stale, "the client resyncs instead of minting ids on an old state");
+    assert_eq!(room.version(), 1);
+    assert!(room.model().parts.is_empty(), "the refused command changed nothing");
+}
+
+#[test]
+fn a_command_that_grows_an_existing_story_keeps_the_snapshot_path() {
+    let mut room = Room::new(IdModel::default());
+    let applied = room.submit("alice", Role::Editor, command("a", 1, 0, "insert.pageBreak")).expect("the command lands");
+    assert!(applied.nodes.is_none(), "a shifted story cannot be described by new ids alone");
+    assert!(room.take_nodes_changed(), "the full map is still broadcast for it");
+}

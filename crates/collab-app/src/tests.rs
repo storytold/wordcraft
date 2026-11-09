@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use serde_json::json;
 
-use wordcraft_collab::ids::NodeKey;
+use wordcraft_collab::ids::{NodeId, NodeKey};
 use wordcraft_collab::room::{Role, Room};
-use wordcraft_collab::wire::{Applied, HistoryAction, NodeRef, Op, OpId, OpKind, Reject, RejectCode, Target};
+use wordcraft_collab::wire::{Applied, HistoryAction, NodeDelta, NodeRef, Op, OpId, OpKind, Reject, RejectCode, Target};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_collab_engine::SessionModel;
 use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
 use wordcraft_engine::Session;
 
-use crate::{CopyBuffer, Outgoing, Status, SyncState};
+use crate::{CopyBuffer, Outcome, Outgoing, Status, SyncState};
 
 fn server() -> (Room<DocModel>, Vec<NodeRef>) {
     let mut room = Room::new(DocModel::new(Document::new()));
@@ -124,6 +124,7 @@ fn our_own_answer_is_not_applied_twice() {
         version: 1,
         epoch: 0,
         delta: Some(json!({"op": "insert_text", "nodeId": node, "off": 0, "text": "once"})),
+        nodes: None,
         conflict: false,
         history: None,
     };
@@ -145,6 +146,40 @@ fn track_changes_forces_the_command_path_so_revisions_keep_their_author() {
     assert_eq!(plans.len(), 1);
     assert!(matches!(plans[0].kind, OpKind::Command), "a primitive would lose the revision");
     assert_eq!(plans[0].payload["command"], "text.insert");
+}
+
+#[test]
+fn a_command_that_may_allocate_ids_without_a_delta_resyncs() {
+    let (_room, nodes) = server();
+    let mut state = state_with(&nodes);
+    let mut session = Session::new(Document::new());
+    let applied = Applied {
+        op_id: OpId::new("b", 1),
+        version: 1,
+        epoch: 0,
+        delta: Some(json!({"op": "command", "command": "review.newComment"})),
+        nodes: None,
+        conflict: false,
+        history: None,
+    };
+    assert_eq!(state.apply(&applied, &mut session).expect("no error"), Outcome::Resync, "an older server asks for the snapshot");
+}
+
+#[test]
+fn a_node_delta_that_overflowed_resyncs_instead_of_applying_a_partial_map() {
+    let (_room, nodes) = server();
+    let mut state = state_with(&nodes);
+    let mut session = Session::new(Document::new());
+    let applied = Applied {
+        op_id: OpId::new("b", 1),
+        version: 1,
+        epoch: 0,
+        delta: Some(json!({"op": "command", "command": "review.newComment"})),
+        nodes: Some(NodeDelta { overflow: true, ..NodeDelta::default() }),
+        conflict: false,
+        history: None,
+    };
+    assert_eq!(state.apply(&applied, &mut session).expect("no error"), Outcome::Resync);
 }
 
 #[test]
@@ -520,6 +555,67 @@ impl FormatPair {
         self.peer.apply(&echo, &mut self.theirs).expect("the peer replays the step");
         (step, echo)
     }
+}
+
+#[test]
+fn a_comment_id_allocation_keeps_both_replicas_editing_without_a_snapshot() {
+    let mut pair = FormatPair::new(&["Hello world"]);
+    pair.mine.author = "Alice".into();
+    pair.theirs.author = "Alice".into();
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(0), off: 5 },
+    };
+    let before = pair.mine.doc.clone();
+    let params = json!({"text": "note"});
+    pair.mine.run("review.newComment", &params).expect("the UI adds the comment");
+    let plan = pair.alice.plan(&before, &pair.mine, "review.newComment", &params).expect("a plan").remove(0);
+    assert_eq!(plan.kind, OpKind::Command, "a new comment part is not a primitive");
+
+    let step = op_from("alice", 1, pair.alice.version, &plan, None);
+    let echo = pair.room.submit("Alice", Role::Editor, step).expect("the comment lands");
+    let delta = echo.nodes.clone().expect("the answer carries the ids of the new story");
+    let new_node = delta.changed.iter().find(|node| node.story.starts_with("part:")).expect("a comment paragraph").clone();
+
+    // Neither replica asks for a snapshot: the author adopts only the ids, the
+    // peer replays the command and adopts the same ids.
+    assert_eq!(pair.alice.apply(&echo, &mut pair.mine).expect("own answer"), Outcome::Quiet);
+    assert_eq!(pair.peer.apply(&echo, &mut pair.theirs).expect("the peer applies"), Outcome::Quiet);
+    assert!(pair.alice.ids.resolve(NodeId(new_node.id)).is_ok(), "the author can address the comment");
+    assert!(pair.peer.ids.resolve(NodeId(new_node.id)).is_ok(), "the peer can address the comment");
+    let part: u32 = new_node.story.trim_start_matches("part:").parse().expect("a part id");
+    for session in [&pair.mine, &pair.theirs] {
+        assert_eq!(session.doc.comments.len(), 1, "both replicas made one comment");
+        let comment = session.doc.comments.values().next().expect("a comment");
+        assert_eq!(comment.part, part, "both replicas name the same part");
+    }
+
+    // Bob types into the comment paragraph; the server accepts the id it sent,
+    // so the conversation continues without a resync.
+    let text = |session: &Session| {
+        session
+            .doc
+            .parts
+            .get(&part)
+            .and_then(|story| story.blocks.first())
+            .and_then(|block| block.as_para())
+            .map(|para| para.text.clone())
+            .unwrap_or_default()
+    };
+    assert_eq!(text(&pair.mine), "note", "the author's comment text");
+    assert_eq!(text(&pair.theirs), "note", "the peer's replayed comment text");
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Part(part), path: Path::top(0), off: 4 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "!"})).expect("bob types in the comment");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "!"})).expect("a plan").remove(0);
+    assert_eq!(plan.target.story, new_node.story, "the primitive addresses the comment story");
+    assert_eq!(plan.target.node_id, new_node.id, "the id is the server's");
+    let step = op_from("bob", 1, pair.peer.version, &plan, None);
+    let echo = pair.room.submit("Bob", Role::Editor, step).expect("the edit lands");
+    assert_eq!(pair.peer.apply(&echo, &mut pair.theirs).expect("own echo is skipped"), Outcome::Quiet);
+    assert_eq!(pair.alice.apply(&echo, &mut pair.mine).expect("the author applies bob's edit"), Outcome::Quiet);
+    assert_eq!(text(&pair.theirs), "Note!", "the peer shows its edit");
+    assert_eq!(text(&pair.mine), "Note!", "the author converged on it");
 }
 
 #[test]

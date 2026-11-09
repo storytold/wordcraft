@@ -4,7 +4,7 @@
 use serde_json::json;
 
 use std::sync::Arc;
-use wordcraft_collab::ids::{NodeIds, NodeKey};
+use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{Op, OpId, OpKind, RejectCode, Target};
 
@@ -172,6 +172,60 @@ fn a_primitive_delta_replays_on_a_replica_session() {
     crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica applies the delta");
     let text = replica.doc.body.first().and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default();
     assert_eq!(text, "Hi");
+}
+
+#[test]
+fn a_comment_command_carries_the_ids_of_the_new_story_and_a_replica_can_address_them() {
+    let mut room = room();
+    let node = node(&mut room);
+    let typed = room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, node, 0, json!({"op": "insert_text", "text": "Hello"})));
+    let typed = typed.expect("type");
+    let comment = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op(
+                "a",
+                2,
+                1,
+                OpKind::Command,
+                node,
+                0,
+                json!({
+                    "command": "review.newComment",
+                    "params": {"text": "note"},
+                    "selection": {"anchor": {"nodeId": node, "off": 0}, "focus": {"nodeId": node, "off": 5}},
+                }),
+            ),
+        )
+        .expect("the comment lands");
+
+    let delta = comment.nodes.as_ref().expect("an id-allocating command carries its node delta");
+    assert!(!delta.overflow);
+    let new_node = delta.changed.iter().find(|node| node.story.starts_with("part:")).expect("the comment story's paragraph");
+
+    // A replica replays the same two answers and adopts the server's ids: the
+    // paragraph in the new comment part is addressable without a snapshot.
+    let (mut replica, mut ids) = replica_session();
+    crate::apply_delta(&mut replica, &mut ids, typed.delta.as_ref().expect("a delta")).expect("the replica applies the typing");
+    crate::apply_delta(&mut replica, &mut ids, comment.delta.as_ref().expect("a delta")).expect("the replica replays the comment");
+    ids.rebase_many(delta.changed.iter().map(|node| (NodeId(node.id), NodeKey::new(node.story.clone(), node.path.clone()))));
+    assert_eq!(ids.resolve(NodeId(new_node.id)).map(|key| key.story.clone()), Ok(new_node.story.clone()));
+    let part: u32 = new_node.story.trim_start_matches("part:").parse().expect("a part id");
+    assert!(replica.doc.parts.contains_key(&part), "the replica made the same comment part");
+
+    // The server accepts an operation that addresses the new paragraph by the
+    // id it sent, so peers keep editing instead of resyncing.
+    let insert = Op {
+        op_id: OpId::new("bob", 1),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new(new_node.story.clone(), new_node.id, 0),
+        payload: json!({"op": "insert_text", "text": "!"}),
+        history: None,
+    };
+    room.submit("bob", Role::Editor, insert).expect("the new node is addressable");
 }
 
 #[test]

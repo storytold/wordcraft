@@ -732,6 +732,66 @@ async fn a_command_operation_runs_on_the_server() {
 }
 
 #[tokio::test]
+async fn a_comment_allocation_reaches_a_peer_as_a_node_delta_and_it_keeps_editing() {
+    let (url, cfg) = spawn_server().await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+    assert!(send_op(&mut alice, insert("alice", 1, 0, node, 0, "Hello")).await);
+    assert_eq!(next_applied(&mut alice).await.version, 1);
+
+    let mut bob = connect(&url, &cfg, "editor", "bob").await;
+    let _ = next_msg(&mut bob).await;
+    let body = loop {
+        if let ServerMsg::Nodes { nodes } = next_msg(&mut bob).await {
+            break nodes.iter().find(|node| node.story == "body").expect("a body node").id;
+        }
+    };
+
+    let comment = Op {
+        op_id: OpId::new("alice", 2),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", body, 0),
+        payload: json!({
+            "command": "review.newComment",
+            "params": {"text": "note"},
+            "selection": {"anchor": {"nodeId": body, "off": 0}, "focus": {"nodeId": body, "off": 5}},
+        }),
+        history: None,
+    };
+    assert!(send_op(&mut alice, comment).await);
+    let applied = next_applied(&mut alice).await;
+    assert_eq!(applied.version, 2);
+    let delta = applied.nodes.clone().expect("the answer carries the new ids");
+    let new_node = delta.changed.iter().find(|node| node.story.starts_with("part:")).expect("a comment paragraph").clone();
+
+    // Bob receives the same answer with the delta and edits the comment
+    // paragraph by the id it names: no snapshot is needed to continue.
+    let peer = loop {
+        if let ServerMsg::Applied { applied } = next_msg(&mut bob).await
+            && applied.version == 2
+        {
+            break applied;
+        }
+    };
+    assert!(peer.nodes.is_some(), "the broadcast carries the id delta too");
+    let edit = Op {
+        op_id: OpId::new("bob", 1),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new(new_node.story.clone(), new_node.id, 0),
+        payload: json!({"op": "insert_text", "text": "!"}),
+        history: None,
+    };
+    assert!(send_op(&mut bob, edit).await);
+    assert_eq!(next_applied(&mut bob).await.version, 3, "bob's own answer");
+    assert_eq!(next_applied(&mut alice).await.version, 3, "alice applies it too");
+}
+
+#[tokio::test]
 async fn the_transport_client_edits_through_the_server() {
     use wordcraft_collab_ws::{Event, TransportEvent};
 

@@ -16,11 +16,11 @@
 //! A deleted id is tombstoned rather than reused: an operation that arrives
 //! late is refused as `Gone` instead of resurrecting a node under a new path.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::wire::Version;
+use crate::wire::{NodeDelta, NodeRef, Version};
 
 /// The id clients put in [`crate::wire::Target`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -59,6 +59,18 @@ pub struct NodeIds {
     back: HashMap<NodeId, NodeKey>,
     tombstones: HashMap<NodeId, Version>,
     next: u32,
+    /// Set while a room applies one operation: the ids it touches, for the
+    /// delta that goes back with the answer (ADR-0002).
+    delta: Option<Delta>,
+}
+
+/// What one operation did to the map, recorded while it applies.
+#[derive(Clone, Debug, Default)]
+struct Delta {
+    changed: HashMap<NodeId, NodeKey>,
+    removed: BTreeSet<NodeId>,
+    /// The change set passed [`crate::wire::MAX_NODE_DELTA`]; stop recording.
+    overflow: bool,
 }
 
 impl Default for NodeIds {
@@ -70,7 +82,59 @@ impl Default for NodeIds {
 impl NodeIds {
     /// Ids start at 1 so that `0` in a target means "no node".
     pub fn new() -> NodeIds {
-        NodeIds { forward: HashMap::new(), back: HashMap::new(), tombstones: HashMap::new(), next: 1 }
+        NodeIds { forward: HashMap::new(), back: HashMap::new(), tombstones: HashMap::new(), next: 1, delta: None }
+    }
+
+    /// Start recording the ids an operation issues, moves or retires.
+    pub fn start_delta(&mut self) {
+        self.delta = Some(Delta::default());
+    }
+
+    /// Drop the recording: the delta is not going on the wire.
+    pub fn cancel_delta(&mut self) {
+        self.delta = None;
+    }
+
+    /// End the recording. `None` when the operation did not touch the map;
+    /// `overflow` when it touched more ids than [`crate::wire::MAX_NODE_DELTA`].
+    pub fn take_delta(&mut self) -> Option<NodeDelta> {
+        let delta = self.delta.take()?;
+        let Delta { changed, removed, overflow } = delta;
+        if overflow {
+            return Some(NodeDelta { overflow: true, ..NodeDelta::default() });
+        }
+        if changed.is_empty() && removed.is_empty() {
+            return None;
+        }
+        // Skip an id that was retired and then put back by the same operation.
+        let mut changed: Vec<(NodeId, NodeKey)> = changed.into_iter().filter(|(id, _)| !removed.contains(id)).collect();
+        changed.sort_by_key(|(id, _)| *id);
+        let changed = changed.into_iter().map(|(id, key)| NodeRef { id: id.0, story: key.story, path: key.path }).collect();
+        Some(NodeDelta { changed, removed: removed.into_iter().map(|id| id.0).collect(), overflow: false })
+    }
+
+    fn record_changed(&mut self, id: NodeId, key: &NodeKey) {
+        let Some(delta) = self.delta.as_mut() else { return };
+        if delta.overflow {
+            return;
+        }
+        delta.changed.insert(id, key.clone());
+        delta.removed.remove(&id);
+        if delta.changed.len() + delta.removed.len() > crate::wire::MAX_NODE_DELTA {
+            // The partial map would be a lie: tell the replica to snapshot.
+            *delta = Delta { overflow: true, ..Delta::default() };
+        }
+    }
+
+    fn record_removed(&mut self, id: NodeId) {
+        let Some(delta) = self.delta.as_mut() else { return };
+        if delta.overflow {
+            return;
+        }
+        delta.changed.remove(&id);
+        if delta.removed.insert(id) && delta.changed.len() + delta.removed.len() > crate::wire::MAX_NODE_DELTA {
+            *delta = Delta { overflow: true, ..Delta::default() };
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -100,6 +164,7 @@ impl NodeIds {
         self.next = self.next.saturating_add(1);
         self.forward.insert(key.clone(), id);
         self.back.insert(id, key.clone());
+        self.record_changed(id, key);
         id
     }
 
@@ -124,7 +189,8 @@ impl NodeIds {
         }
         self.tombstones.remove(&id);
         self.forward.insert(key.clone(), id);
-        self.back.insert(id, key);
+        self.back.insert(id, key.clone());
+        self.record_changed(id, &key);
     }
 
     /// Replace the paths of several ids at once. Unlike calling [`NodeIds::rebase`]
@@ -141,7 +207,9 @@ impl NodeIds {
         for (id, key) in pairs {
             self.tombstones.remove(&id);
             self.forward.insert(key.clone(), id);
-            self.back.insert(id, key);
+            self.back.insert(id, key.clone());
+            self.next = self.next.max(id.0.saturating_add(1));
+            self.record_changed(id, &key);
         }
     }
 
@@ -151,6 +219,7 @@ impl NodeIds {
             self.forward.remove(&key);
         }
         self.tombstones.insert(id, at);
+        self.record_removed(id);
     }
 
     pub fn is_tombstoned(&self, id: NodeId) -> bool {
@@ -192,7 +261,8 @@ impl NodeIds {
                 *index = u32::try_from(shifted.max(0)).unwrap_or(u32::MAX);
             }
             self.back.insert(id, key.clone());
-            self.forward.insert(key, id);
+            self.forward.insert(key.clone(), id);
+            self.record_changed(id, &key);
         }
     }
 
@@ -227,7 +297,8 @@ impl NodeIds {
         }
         for (id, _, key) in moved {
             self.back.insert(id, key.clone());
-            self.forward.insert(key, id);
+            self.forward.insert(key.clone(), id);
+            self.record_changed(id, &key);
         }
     }
 
@@ -442,5 +513,61 @@ mod tests {
         assert_eq!(ids.resolve(table).map(|k| k.path.clone()), Ok(vec![1]));
         assert_eq!(ids.resolve(cell_a).map(|k| k.path.clone()), Ok(vec![1, 0, 0, 1]));
         assert_eq!(ids.resolve(cell_b).map(|k| k.path.clone()), Ok(vec![1, 0, 1, 0]));
+    }
+
+    #[test]
+    fn a_delta_names_the_ids_an_operation_issued_moved_and_retired() {
+        let mut ids = NodeIds::new();
+        let old = ids.id_for(&NodeKey::new("body", vec![0]));
+        let moved = ids.id_for(&NodeKey::new("body", vec![1]));
+        // Work before the operation is not part of its delta.
+        ids.start_delta();
+        let fresh = ids.id_for(&NodeKey::new("part:5", vec![0]));
+        ids.rebase(moved, NodeKey::new("body", vec![7]));
+        ids.remove(old, 4);
+        let delta = ids.take_delta().expect("the operation touched the map");
+
+        assert!(!delta.overflow);
+        assert_eq!(
+            delta.changed.iter().find(|node| node.id == fresh.0).map(|node| (node.story.as_str(), node.path.clone())),
+            Some(("part:5", vec![0]))
+        );
+        assert_eq!(delta.changed.iter().find(|node| node.id == moved.0).map(|node| node.path.clone()), Some(vec![7]));
+        assert_eq!(delta.removed, vec![old.0]);
+        // The recording is over: the next operation starts clean.
+        assert!(ids.take_delta().is_none());
+    }
+
+    #[test]
+    fn an_id_retired_and_restored_by_one_operation_is_not_reported_removed() {
+        let mut ids = NodeIds::new();
+        let id = ids.id_for(&NodeKey::new("body", vec![0]));
+        ids.start_delta();
+        ids.remove(id, 1);
+        ids.rebase(id, NodeKey::new("body", vec![3]));
+        let delta = ids.take_delta().expect("the operation changed the map");
+        assert!(delta.removed.is_empty(), "{delta:?}");
+        assert_eq!(delta.changed.iter().find(|node| node.id == id.0).map(|node| node.path.clone()), Some(vec![3]));
+    }
+
+    #[test]
+    fn a_delta_that_passes_the_bound_reports_overflow_instead_of_a_partial_map() {
+        let mut ids = NodeIds::new();
+        ids.start_delta();
+        for index in 0..=crate::wire::MAX_NODE_DELTA {
+            ids.id_for(&NodeKey::new("body", vec![index as u32]));
+        }
+        let delta = ids.take_delta().expect("an overflow is still a delta");
+        assert!(delta.overflow);
+        assert!(delta.changed.is_empty(), "a cut-short map is never sent");
+        assert!(delta.removed.is_empty());
+    }
+
+    #[test]
+    fn rebasing_an_id_above_the_counter_makes_the_next_id_free() {
+        let mut ids = NodeIds::new();
+        ids.rebase_many([(NodeId(40), NodeKey::new("body", vec![0]))]);
+        let fresh = ids.id_for(&NodeKey::new("body", vec![1]));
+        assert!(fresh.0 > 40, "a locally issued id must not collide with the server's");
     }
 }

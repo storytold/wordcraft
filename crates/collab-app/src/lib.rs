@@ -20,7 +20,7 @@ use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::Role;
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab::wire::Participant;
-use wordcraft_collab::wire::{Applied, CabinetCommit, NodeRef, OpKind, Reject, RejectCode, Target, Version};
+use wordcraft_collab::wire::{Applied, CabinetCommit, NodeRef, OpKind, Reject, RejectCode, Target, Version, may_allocate_ids};
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab_client::Event;
 #[cfg(not(target_arch = "wasm32"))]
@@ -188,17 +188,42 @@ impl SyncState {
     /// applied exactly once (ADR-0010). Everything else is replayed.
     pub fn apply(&mut self, applied: &Applied, session: &mut Session) -> Result<Outcome, String> {
         self.version = self.version.max(applied.version);
-        let command = applied.delta.as_ref().and_then(|delta| delta.get("command")).and_then(Value::as_str);
-        // A command that creates parts/objects allocates ids on the server that
-        // this replica cannot derive; only the authoritative snapshot has them.
-        if command.is_some_and(allocates_ids) {
+        // A delta that passed the wire bound is not applied: the snapshot that
+        // follows replaces both the document and the map.
+        if applied.nodes.as_ref().is_some_and(|nodes| nodes.overflow) {
             return Ok(Outcome::Resync);
         }
+        let command = applied.delta.as_ref().and_then(|delta| delta.get("command")).and_then(Value::as_str);
         if applied.op_id.client == self.client_id && applied.history.is_none() {
-            return Ok(Outcome::Quiet);
+            // Our own command already ran in this document; only its node ids
+            // are new here. A duplicate answer from the retry window carries no
+            // node list, but the join that preceded the retry sent the whole map.
+            return self.apply_nodes(applied);
+        }
+        // A command that allocates ids carries the server's node delta: those
+        // ids cannot be derived from the replica's own state. Without the delta
+        // there is nothing to address the new nodes with, so the replica takes
+        // the snapshot path instead.
+        if command.is_some_and(may_allocate_ids) && applied.nodes.is_none() {
+            return Ok(Outcome::Resync);
         }
         if let Some(delta) = &applied.delta {
             wordcraft_collab_engine::apply_delta(session, &mut self.ids, delta)?;
+        }
+        self.apply_nodes(applied)
+    }
+
+    /// Adopt the ids an accepted operation issued, moved or retired. A delta
+    /// that overflows the wire bound is not applied: the replica asks for a
+    /// snapshot instead of trusting a map that was cut short.
+    fn apply_nodes(&mut self, applied: &Applied) -> Result<Outcome, String> {
+        let Some(nodes) = &applied.nodes else { return Ok(Outcome::Quiet) };
+        if nodes.overflow {
+            return Ok(Outcome::Resync);
+        }
+        self.ids.rebase_many(nodes.changed.iter().map(|node| (NodeId(node.id), NodeKey::new(node.story.clone(), node.path.clone()))));
+        for id in &nodes.removed {
+            self.ids.remove(NodeId(*id), applied.version);
         }
         Ok(Outcome::Quiet)
     }
@@ -584,12 +609,6 @@ pub fn apply_presence(participants: &mut Vec<ParticipantView>, client_id: &str, 
         selection,
         active: true,
     });
-}
-
-/// Commands whose result includes ids the protocol does not carry (comment
-/// parts, footnotes, shapes, tables). A replica takes a snapshot after them.
-fn allocates_ids(command: &str) -> bool {
-    ["review.", "insert.", "table.", "shape.", "chart.", "equation.", "references.", "mailings."].iter().any(|prefix| command.starts_with(prefix))
 }
 
 fn parse_cursor(value: &Value) -> Option<Cursor> {

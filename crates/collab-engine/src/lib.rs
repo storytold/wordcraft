@@ -1120,6 +1120,10 @@ impl Model for SessionModel {
     fn index_nodes(&self, ids: &mut NodeIds) {
         DocModel::new(self.session.doc.clone()).index_nodes(ids);
     }
+
+    fn story_shape(&self) -> Vec<(String, usize)> {
+        wordcraft_collab_doc::story_shape(&self.session.doc)
+    }
 }
 
 fn allowed_command(command: &str) -> bool {
