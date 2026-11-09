@@ -1,5 +1,5 @@
 use super::inlines::parse_inlines;
-use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, Para, model};
+use super::{Align, Arc, Cell, Document, FBlock, FTable, Fmt, HashMap, Kind, ListInfo, MAX_COLS, MAX_ROWS, Para, model};
 
 /// Nesting limit for block containers (quotes, list items) and inline links.
 pub(super) const MAX_NEST: usize = 32;
@@ -143,7 +143,8 @@ pub fn parse(text: &str) -> model::Flow {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
     let refs = take_definitions(&mut lines);
-    let mut blocks = parse_blocks(&lines, 0, 0, &refs);
+    let budget = std::cell::Cell::new(super::MAX_TABLE_CELLS);
+    let mut blocks = parse_blocks(&lines, 0, 0, &refs, &budget);
     // A leading "Title" from front matter isn't supported; a first-level heading stays a heading.
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
@@ -271,47 +272,69 @@ fn list_marker(t: &str) -> Option<Marker> {
     if rest.is_empty() || rest.starts_with([' ', '\t']) { Some(m) } else { None }
 }
 
-fn split_row(l: &str) -> Vec<String> {
+/// A table row without its leading and trailing pipes (an escaped last pipe stays).
+fn row_body(l: &str) -> &str {
     let t = l.trim();
     let t = t.strip_prefix('|').unwrap_or(t);
-    let t = if let Some(before) = t.strip_suffix('|') {
+    if let Some(before) = t.strip_suffix('|') {
         let num_bs = before.chars().rev().take_while(|&c| c == '\\').count();
         if num_bs % 2 == 0 { before } else { t }
     } else {
         t
-    };
+    }
+}
+
+/// The first `keep` cells of a table row, and how many cells it has: the rest are only counted.
+pub(super) fn split_row(l: &str, keep: usize) -> (Vec<String>, usize) {
     let mut cells = Vec::new();
+    let mut count = 0usize;
     let mut cur = String::new();
-    let mut chars = t.chars().peekable();
+    let mut chars = row_body(l).chars().peekable();
     while let Some(c) = chars.next() {
+        let full = cells.len() >= keep;
         match c {
             '\\' => match chars.peek() {
                 Some(&'|') => {
-                    cur.push('|');
+                    if !full {
+                        cur.push('|');
+                    }
                     chars.next();
                 }
                 Some(&'\\') => {
-                    cur.push('\\');
-                    cur.push('\\');
+                    if !full {
+                        cur.push_str("\\\\");
+                    }
                     chars.next();
                 }
-                _ => cur.push('\\'),
+                _ if !full => cur.push('\\'),
+                _ => {}
             },
-            '|' => cells.push(std::mem::take(&mut cur).trim().to_string()),
-            _ => cur.push(c),
+            '|' => {
+                if !full {
+                    cells.push(std::mem::take(&mut cur).trim().to_string());
+                }
+                count += 1;
+            }
+            _ if !full => cur.push(c),
+            _ => {}
         }
     }
-    cells.push(cur.trim().to_string());
-    cells
+    if cells.len() < keep {
+        cells.push(cur.trim().to_string());
+    }
+    (cells, count + 1)
 }
 
-fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
+/// The alignments of the first `keep` cells of a delimiter row, and how many cells it has; every
+/// cell is checked, so a bad one past `keep` still means it isn't a delimiter row.
+fn delimiter_row(l: &str, keep: usize) -> Option<(Vec<Option<Align>>, usize)> {
     if !l.contains('-') {
         return None;
     }
-    let cells = split_row(l);
     let mut out = Vec::new();
-    for c in cells {
+    let mut count = 0usize;
+    // A valid cell is only dashes, colons and spaces, so an escaped pipe can't be in one.
+    for c in row_body(l).split('|') {
         let c = c.trim();
         let left = c.starts_with(':');
         let right = c.ends_with(':');
@@ -319,14 +342,17 @@ fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
         if core.is_empty() || !core.chars().all(|x| x == '-') {
             return None;
         }
-        out.push(match (left, right) {
-            (true, true) => Some(Align::Center),
-            (false, true) => Some(Align::Right),
-            (true, false) => Some(Align::Left),
-            _ => None,
-        });
+        if out.len() < keep {
+            out.push(match (left, right) {
+                (true, true) => Some(Align::Center),
+                (false, true) => Some(Align::Right),
+                (true, false) => Some(Align::Left),
+                _ => None,
+            });
+        }
+        count += 1;
     }
-    Some(out)
+    Some((out, count))
 }
 
 /// Does this line start a block that interrupts a paragraph?
@@ -386,7 +412,8 @@ fn code_para(line: &str) -> FBlock {
 }
 
 /// Parse block structure. `level` is the list nesting level for lists found here.
-fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<FBlock> {
+/// `budget`: the table cells the document may still make ([`super::MAX_TABLE_CELLS`]).
+fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs, budget: &std::cell::Cell<usize>) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
     let mut i = 0;
@@ -460,32 +487,52 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
         }
         if t.starts_with('>') {
             flush_para(&mut para, &mut out, depth, refs);
-            parse_quote(lines, &mut i, depth, level, refs, &mut out);
+            parse_quote(lines, &mut i, depth, level, refs, budget, &mut out);
             continue;
         }
         if para.is_empty()
             && t.contains('|')
-            && let Some(aligns) = lines.get(i + 1).and_then(|l| delimiter_row(l))
+            && let Some((aligns, width)) = lines.get(i + 1).and_then(|l| delimiter_row(l, MAX_COLS))
         {
-            let head = split_row(t);
-            if head.len() == aligns.len() {
+            let (head, head_width) = split_row(t, MAX_COLS);
+            if head_width == width {
                 let mut table = FTable::default();
                 let cell = |s: &str, header: bool, a: Option<Align>| {
                     let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth, refs), ..Default::default() };
                     Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
                 };
-                table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
+                // The document keeps no more columns or rows than this, nor cells past its budget,
+                // so those aren't built; their lines are still the table's.
+                let cols = aligns.len();
+                let fits = |rows: usize| rows < MAX_ROWS && budget.get() >= cols;
+                let mut cut = head_width > cols;
+                if fits(0) {
+                    budget.set(budget.get() - cols);
+                    table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
+                } else {
+                    cut = true;
+                }
                 i += 2;
                 while let Some(l) = lines.get(i) {
                     if is_blank(l) || !l.contains('|') || interrupts(l) {
                         break;
                     }
-                    let mut cells = split_row(l);
-                    cells.resize(aligns.len(), String::new());
-                    table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
+                    if !table.rows.is_empty() && fits(table.rows.len()) {
+                        budget.set(budget.get() - cols);
+                        let (mut cells, _) = split_row(l, cols);
+                        cells.resize(cols, String::new());
+                        table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
+                    } else {
+                        cut = true;
+                    }
                     i += 1;
                 }
-                out.push(FBlock::Table(table));
+                if cut {
+                    model::dropped(model::Dropped::TableCells);
+                }
+                if !table.rows.is_empty() {
+                    out.push(FBlock::Table(table));
+                }
                 continue;
             }
         }
@@ -493,7 +540,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
             && (para.is_empty() || ((!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or(""))))
         {
             flush_para(&mut para, &mut out, depth, refs);
-            i = parse_list(lines, i, depth, level, &mut out, refs);
+            i = parse_list(lines, i, depth, level, &mut out, refs, budget);
             continue;
         }
         para.push(line.clone());
@@ -521,7 +568,7 @@ fn parse_indented_code(lines: &[String], i: &mut usize, out: &mut Vec<FBlock>) {
     out.extend(code.into_iter().map(code_para));
 }
 
-fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &Refs, out: &mut Vec<FBlock>) {
+fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &Refs, budget: &std::cell::Cell<usize>, out: &mut Vec<FBlock>) {
     let mut inner = Vec::new();
     while let Some(line) = lines.get(*i) {
         let trimmed = line.trim_start_matches([' ', '\t']);
@@ -541,7 +588,7 @@ fn parse_quote(lines: &[String], i: &mut usize, depth: usize, level: u8, refs: &
         out.push(FBlock::Para(p));
         return;
     }
-    for mut block in parse_blocks(&inner, depth + 1, level, refs) {
+    for mut block in parse_blocks(&inner, depth + 1, level, refs, budget) {
         if let FBlock::Para(p) = &mut block
             && p.kind == Kind::Normal
         {
@@ -579,7 +626,7 @@ fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
 }
 
 /// Parse a list starting at `lines[i]`; returns the index after it.
-fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>, refs: &Refs) -> usize {
+fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>, refs: &Refs, budget: &std::cell::Cell<usize>) -> usize {
     let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start_matches([' ', '\t']))) else { return i + 1 };
     while let Some(line) = lines.get(i) {
         let ind = indent(line);
@@ -620,13 +667,13 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         while item.len() > 1 && item.last().is_some_and(String::is_empty) {
             item.pop();
         }
-        let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start };
+        let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start, ..Default::default() };
         let inner = if depth >= MAX_NEST {
             let mut p = Para::default();
             p.push_text(&item.join(" "), &Fmt::default());
             vec![FBlock::Para(p)]
         } else {
-            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), refs)
+            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), refs, budget)
         };
         let mut placed = false;
         if inner.is_empty() {

@@ -132,8 +132,21 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
                 let safe: String = a.chars().filter(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '.' | ':')).collect();
                 pieces.push((String::new(), Fmt::default(), Some(format!("<a id=\"{safe}\"></a>"))));
             }
-            Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => {
+                pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt)))))
+            }
             Inline::Equation { .. } => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => pieces.push((result.clone(), fmt.clone(), None)),
+            Inline::Note { .. }
+            | Inline::Comment { .. }
+            | Inline::CommentEnd(_)
+            | Inline::Shape { .. }
+            | Inline::Group { .. }
+            | Inline::FieldStart(_)
+            | Inline::FieldEnd
+            | Inline::AnchorEnd(_) => {}
             // Read as its base text by `ruby_as_text` above.
             Inline::Ruby { .. } => {}
         }
@@ -317,6 +330,18 @@ pub fn export(doc: &Document) -> String {
     s
 }
 
+/// A heading's text on one line, with a trailing run of '#' escaped so a reader does not take it
+/// for the optional closing sequence (`## Item #` reads back as "Item").
+fn heading_text(body: &str) -> String {
+    let mut s = body.replace("\\\n", " ");
+    let t = s.trim_end();
+    let core = t.trim_end_matches('#');
+    if core.len() != t.len() && (core.is_empty() || core.ends_with([' ', '\t'])) {
+        s.insert(core.len(), '\\');
+    }
+    s
+}
+
 pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     let mut i = 0;
     let mut counters = [0u32; 9];
@@ -380,9 +405,16 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             // The bullet marker can turn a short run of hyphens into a rule.
                             if thematic_break(&format!("{marker} {body}")) { format!("\\{body}") } else { body }
                         };
-                        out.push(format!("{pad}{marker} {body}").trim_end().to_string());
+                        let line = format!("{pad}{marker} {body}").trim_end().to_string();
+                        // A list inside a block quote stays in it: every line of the item, its
+                        // continuation lines included, takes the quote marker.
+                        let line = if p.kind == Kind::Quote { format!("> {}", line.replace('\n', "\n> ")) } else { line };
+                        out.push(line);
                         prev_list = true;
-                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some());
+                        // A list going into or out of a block quote is a new block: without the
+                        // blank line, an unquoted item would be read back into the quote.
+                        let quoted = |k: Kind| k == Kind::Quote;
+                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some() && quoted(q.kind) == quoted(p.kind));
                         if !next_is_list {
                             out.push(String::new());
                         }
@@ -390,8 +422,8 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                     None => {
                         prev_list = false;
                         let line = match p.kind {
-                            Kind::Heading(n) => format!("{} {}", "#".repeat(n.clamp(1, 6) as usize), body.replace("\\\n", " ")),
-                            Kind::Title => format!("# {}", body.replace("\\\n", " ")),
+                            Kind::Heading(n) => format!("{} {}", "#".repeat(n.clamp(1, 6) as usize), heading_text(&body)),
+                            Kind::Title => format!("# {}", heading_text(&body)),
                             Kind::Rule => "---".to_string(),
                             Kind::Quote => {
                                 let b = escape_lines(body);
