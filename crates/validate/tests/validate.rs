@@ -4495,11 +4495,11 @@ fn ct_mismatch_duplicate_id_exemption_follows_the_resolved_relationship() {
     assert!(!has(&report, "CONTENTPART-TYPE"), "findings: {:?}", report.findings);
 }
 
-/// Skipped contentPart references only exempt the customXml pairing; they never gain type findings.
+/// Skipped text/xml references exempt the customXml pairing; application/xml needs no exemption.
 #[test]
 fn ct_mismatch_skipped_contentpart_is_exemption_only() {
     for element in [r#"<w:contentPart r:id="rIdCP"/>"#, r#"<w:contentPart r:id="rIdCP"></w:contentPart>"#] {
-        for ct in ["text/xml", "application/octet-stream"] {
+        for ct in ["text/xml", "application/xml"] {
             let markup =
                 format!(r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">{element}</mc:Choice><mc:Fallback/></mc:AlternateContent></w:p>"#);
             let d = content_part_doc(
@@ -4512,6 +4512,28 @@ fn ct_mismatch_skipped_contentpart_is_exemption_only() {
             assert!(!has(&report, "CT-MISMATCH"), "{ct}, {element}: {:?}", report.findings);
             assert!(!has(&report, "CONTENTPART-TYPE"), "{ct}, {element}: {:?}", report.findings);
             assert_eq!(report.verdict, Verdict::Pass, "{ct}, {element}: {:?}", report.findings);
+            assert!(report.coverage_notes.iter().any(|n| n.contains("AlternateContent")), "{:?}", report.coverage_notes);
+        }
+    }
+}
+
+/// Skipped references to other declared types retain CT-MISMATCH without gaining CONTENTPART-TYPE.
+#[test]
+fn ct_mismatch_skipped_contentpart_wrong_type_is_not_exempt() {
+    for element in [r#"<w:contentPart r:id="rIdCP"/>"#, r#"<w:contentPart r:id="rIdCP"></w:contentPart>"#] {
+        for ct in ["application/octet-stream", "application/inkml+xml", "image/png"] {
+            let markup =
+                format!(r#"<w:p><mc:AlternateContent><mc:Choice Requires="w">{element}</mc:Choice><mc:Fallback/></mc:AlternateContent></w:p>"#);
+            let d = content_part_doc(
+                &markup,
+                r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+                "word/data.xml",
+                ct,
+            );
+            let report = validate(&d);
+            assert_finding(&report, "CT-MISMATCH", Some("word/data.xml"));
+            assert!(!has(&report, "CONTENTPART-TYPE"), "{ct}, {element}: {:?}", report.findings);
+            assert_eq!(report.verdict, Verdict::Fail, "{ct}, {element}: {:?}", report.findings);
             assert!(report.coverage_notes.iter().any(|n| n.contains("AlternateContent")), "{:?}", report.coverage_notes);
         }
     }

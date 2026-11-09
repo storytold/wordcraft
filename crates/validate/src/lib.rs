@@ -827,7 +827,7 @@ struct XmlScan {
     refs: Vec<(String, Vec<RefFact>)>,
     /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
     content_parts: Vec<(String, Vec<String>)>,
-    /// Skipped contentPart and native InkML ids per owner, used only for the CT-MISMATCH exemption.
+    /// Skipped text/xml contentPart and native InkML ids per owner, used only for the CT-MISMATCH exemption.
     content_part_exemptions: Vec<(String, Vec<String>)>,
     /// A contentPart collection (per part or pooled) hit the fact budget.
     content_part_capped_any: bool,
@@ -967,6 +967,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             content_part_capped_any = true;
             content_part_incomplete_owners.insert(e.name.clone());
         }
+        retain_skipped_text_xml_refs(pkg, &e.name, &mut scanned.content_part_exemptions);
         let ink_targets = retain_native_ink_refs(pkg, &e.name, &mut scanned.ink_content_parts, scanned.ink_content_part_capped);
         let mut exemptions_capped = append_content_parts(
             &mut content_part_exemptions,
@@ -1096,6 +1097,31 @@ fn append_content_parts(content_parts: &mut Vec<(String, Vec<String>)>, total: &
         content_parts.push((part.to_string(), ids));
     }
     capped
+}
+
+/// Retain only skipped references whose first-wins relationship resolves to text/xml.
+/// Word for the web opens that pairing but refuses editing an application/octet-stream target;
+/// skipped content must retain CT-MISMATCH for other types without gaining CONTENTPART-TYPE.
+fn retain_skipped_text_xml_refs(pkg: &Package, owner: &str, ids: &mut Vec<String>) {
+    if ids.is_empty() {
+        return;
+    }
+    let rels_name = rels_part_name(owner);
+    let Some(rp) = pkg.rels.iter().find(|rp| rp.name.eq_ignore_ascii_case(&rels_name)) else {
+        ids.clear();
+        return;
+    };
+    let mut by_id = HashMap::new();
+    for rel in &rp.rels {
+        by_id.entry(rel.id.as_str()).or_insert(rel);
+    }
+    ids.retain(|id| {
+        by_id
+            .get(id.as_str())
+            .and_then(|rel| rel.target_abs.as_deref())
+            .and_then(|target| pkg.content_types.of(target))
+            .is_some_and(|ct| ct.eq_ignore_ascii_case("text/xml"))
+    });
 }
 
 /// Retain first-wins native references to InkML (MS-ODRAWXML §2.1.4) and report whether this owner has any InkML target.
@@ -1574,8 +1600,8 @@ fn rels_owner_name(rels_name: &str) -> Option<String> {
 /// incomplete (budget-capped or unparseable) the row is not applied at
 /// all — non-consumption is not established there, and the run is
 /// already INCOMPLETE. Owners with complete collections are checked
-/// normally. Skipped contentPart references also exempt their first relationship,
-/// but remain separate so CONTENTPART-TYPE never validates skipped content. Native
+/// normally. Skipped contentPart references exempt their first relationship only when
+/// its target is text/xml, and remain separate so CONTENTPART-TYPE never validates skipped content. Native
 /// w14:contentPart references to InkML join only this exemption collection (MS-ODRAWXML §2.1.4).
 fn check_typed_content(
     pkg: &Package,
