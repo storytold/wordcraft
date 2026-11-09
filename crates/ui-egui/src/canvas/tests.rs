@@ -5301,6 +5301,22 @@ fn typing_with_a_shape_selected_types_into_it() {
         doc.plain_text(StoryRef::Body)
     );
     assert!(!doc.plain_text(StoryRef::Body).contains("Hallo"), "nothing was typed");
+
+    // A line with text (a file can give it some) is typed into, as before.
+    let app = h.state_mut();
+    let id = app.session.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())]);
+    app.session.doc.objects_mut(&|o| matches!(o, wordcraft_doc::InlineObject::Shape { .. }), &mut |o| {
+        if let wordcraft_doc::InlineObject::Shape { story, .. } = o {
+            *story = Some(id);
+        }
+    });
+    app.run("select.objects", json!({"index": 0})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    assert_eq!(doc.plain_text(StoryRef::Part(id)), "Hallo", "the body reads {:?}", doc.plain_text(StoryRef::Body));
 }
 
 /// #5911: when the shape can't take text (here: read-only protection whose exception covers only
