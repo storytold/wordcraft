@@ -156,7 +156,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 let (mut left, mut before) = (None, None);
                 r.cell(|ui| left = Some(ui.label(egui::RichText::new(tl!("Left:")).small())));
                 r.cell(|ui| {
-                    let field = ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+                    let field =
+                        ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
                     if let Some(label) = &left {
                         labelled_by(&field, &[&indent, label]);
                     }
@@ -181,8 +182,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 let (mut right_label, mut after) = (None, None);
                 r.cell(|ui| right_label = Some(ui.label(egui::RichText::new(tl!("Right:")).small())));
                 r.cell(|ui| {
-                    let field =
-                        ui.add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+                    let field = ui
+                        .add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
                     if let Some(label) = &right_label {
                         labelled_by(&field, &[&indent, label]);
                     }
