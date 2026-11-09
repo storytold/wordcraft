@@ -360,11 +360,20 @@ fn test_compound_forward(word: &str, partner: &str, lang: wordcraft_proof::Proof
     let word_is_upper = word.chars().next().is_some_and(|c| c.is_uppercase());
     let word_upper = uppercase_first(word);
 
-    for (k, _) in partner.char_indices() {
-        let Some(suffix) = partner.get(k..) else {
+    let mut window_start = partner.len().saturating_sub(40);
+    while !partner.is_char_boundary(window_start) {
+        window_start = window_start.saturating_add(1);
+    }
+    let Some(window) = partner.get(window_start..) else {
+        return false;
+    };
+
+    for (k, _) in window.char_indices() {
+        crate::work::steps(1);
+        let Some(suffix) = window.get(k..) else {
             continue;
         };
-        if suffix.len() > 40 || suffix.chars().count() < 2 {
+        if suffix.chars().count() < 2 {
             continue;
         }
 
@@ -588,8 +597,9 @@ fn test_compound_backward(partner: &str, word: &str, lang: wordcraft_proof::Proo
     let word_lower = lowercase_first(word);
     let word_upper = uppercase_first(word);
 
-    for (k, _) in partner.char_indices() {
-        if !(2..=40).contains(&k) {
+    for (k, _) in partner.char_indices().take_while(|&(k, _)| k <= 40) {
+        crate::work::steps(1);
+        if k < 2 {
             continue;
         }
         let Some(prefix) = partner.get(..k) else {
@@ -724,8 +734,6 @@ mod tests {
         assert!(skipped_ranges(&[run(0..5, false)]).is_empty());
     }
 
-    static TEST_DICT_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     struct TestDictGuard {
         temp_dir: std::path::PathBuf,
         _lock: std::sync::MutexGuard<'static, ()>,
@@ -744,7 +752,7 @@ mod tests {
     #[test]
     fn german_coordinated_compounds_with_ellipsis_are_accepted() {
         let temp_dir = std::env::temp_dir().join(format!("wordcraft-test-de-{}", std::process::id()));
-        let lock = TEST_DICT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = crate::test_dict_lock();
         let _guard = TestDictGuard { temp_dir: temp_dir.clone(), _lock: lock };
 
         let _ = std::fs::create_dir_all(&temp_dir);
@@ -853,25 +861,26 @@ mod tests {
     #[test]
     fn repeated_rejected_hyphenated_tokens_stay_linear() {
         let temp_dir = std::env::temp_dir().join(format!("wordcraft-test-linear-{}", std::process::id()));
-        let lock = TEST_DICT_MUTEX.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = crate::test_dict_lock();
         let _guard = TestDictGuard { temp_dir: temp_dir.clone(), _lock: lock };
 
         let _ = std::fs::create_dir_all(&temp_dir);
         let aff = "SET UTF-8\n";
-        let dic = "0\n";
+        let long_partner = "Donaudampfschiffahrtsgesellschaftskapitaenswitwenrentenversicherungsgrundgesetzabwicklungsabteilungsleiter";
+        let dic = format!("2\nund\n{long_partner}\n");
         let _ = std::fs::write(temp_dir.join("de_DE.aff"), aff);
         let _ = std::fs::write(temp_dir.join("de_DE.dic"), dic);
         wordcraft_proof::set_dictionaries_folder(Some(temp_dir));
 
         let make_doc_forward = |n: usize| {
-            let text = "Xyzq- ".repeat(n);
+            let text = format!("{}und {long_partner}", "Xyzq- ".repeat(n));
             let mut d = Document::from_text(&text);
             d.format_range(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, text.len()), &|c| c.lang = Some("de-DE".into())).unwrap();
             d
         };
 
         let make_doc_backward = |n: usize| {
-            let text = format!("Wasser und {}", "-Xyzq ".repeat(n));
+            let text = format!("{long_partner} und {}", "-Xyzq ".repeat(n));
             let mut d = Document::from_text(&text);
             d.format_range(&wordcraft_doc::Pos::body(0, 0), &wordcraft_doc::Pos::body(0, text.len()), &|c| c.lang = Some("de-DE".into())).unwrap();
             d
@@ -887,10 +896,12 @@ mod tests {
         let (small_f, big_f) = (make_doc_forward(50), make_doc_forward(400));
         let (sf, bf) = (
             crate::work::count(|| {
-                run_proof(&small_f);
+                let issues = run_proof(&small_f);
+                assert_eq!(issues.len(), 50, "expected 50 rejected forward issues for small document");
             }),
             crate::work::count(|| {
-                run_proof(&big_f);
+                let issues = run_proof(&big_f);
+                assert_eq!(issues.len(), 400, "expected 400 rejected forward issues for big document");
             }),
         );
         let ratio_f = bf as f64 / sf.max(1) as f64;
@@ -901,14 +912,55 @@ mod tests {
         let (small_b, big_b) = (make_doc_backward(50), make_doc_backward(400));
         let (sb, bb) = (
             crate::work::count(|| {
-                run_proof(&small_b);
+                let issues = run_proof(&small_b);
+                assert_eq!(issues.len(), 50, "expected 50 rejected backward issues for small document");
             }),
             crate::work::count(|| {
-                run_proof(&big_b);
+                let issues = run_proof(&big_b);
+                assert_eq!(issues.len(), 400, "expected 400 rejected backward issues for big document");
             }),
         );
         let ratio_b = bb as f64 / sb.max(1) as f64;
         assert!(sb > 0, "no steps counted, so work is not being measured");
         assert!(ratio_b <= 12.0, "repeated backward rejected hyphenated tokens took {ratio_b:.1}x steps (8x input: {sb} -> {bb}), not linear");
+    }
+
+    /// Candidate loops in [`test_compound_forward`] and [`test_compound_backward`] must remain bounded
+    /// to the 40-byte window rather than scanning the full length of a long partner.
+    #[test]
+    fn partner_candidate_loops_stay_bounded_on_long_partners() {
+        let temp_dir = std::env::temp_dir().join(format!("wordcraft-test-bounded-{}", std::process::id()));
+        let lock = crate::test_dict_lock();
+        let _guard = TestDictGuard { temp_dir: temp_dir.clone(), _lock: lock };
+
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let aff = "SET UTF-8\n";
+        let short_partner = "Rechtsanwalt";
+        let long_partner = "Donaudampfschiffahrtsgesellschaftskapitaenswitwenrentenversicherungsgrundgesetzabwicklungsabteilungsleiter";
+        let dic = format!("3\nund\n{short_partner}\n{long_partner}\n");
+        let _ = std::fs::write(temp_dir.join("de_DE.aff"), aff);
+        let _ = std::fs::write(temp_dir.join("de_DE.dic"), dic);
+        wordcraft_proof::set_dictionaries_folder(Some(temp_dir));
+
+        let opts = wordcraft_proof::Options::default();
+        let lang = wordcraft_proof::ProofLang::De;
+
+        let steps_short_b = crate::work::count(|| {
+            assert!(!test_compound_backward(short_partner, "Xyzq", lang, &opts));
+        });
+        let steps_long_b = crate::work::count(|| {
+            assert!(!test_compound_backward(long_partner, "Xyzq", lang, &opts));
+        });
+        assert!(steps_short_b > 0, "work must be counted in test_compound_backward");
+        assert!(steps_long_b <= 45, "test_compound_backward scanned beyond the 40-byte candidate window: {steps_long_b} steps");
+
+        let steps_short_f = crate::work::count(|| {
+            assert!(!test_compound_forward("Xyzq", short_partner, lang, &opts));
+        });
+        let steps_long_f = crate::work::count(|| {
+            assert!(!test_compound_forward("Xyzq", long_partner, lang, &opts));
+        });
+        assert!(steps_short_f > 0, "work must be counted in test_compound_forward");
+        assert!(steps_long_f <= 45, "test_compound_forward scanned beyond the 40-byte candidate window: {steps_long_f} steps");
     }
 }

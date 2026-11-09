@@ -9858,6 +9858,7 @@ fn endnotes_at_section_end_and_footnotes_below_text() {
 #[test]
 fn hyphenation_and_proofing_follow_each_runs_language() {
     crate::test_fonts();
+    let _dict_lock = crate::test_dict_lock();
     // A tiny synthetic Polish dictionary (real ones are installed on the system, not bundled).
     wordcraft_proof::pl::install_dictionary("SET UTF-8\nSFX B Y 1\nSFX B y ego y\n", "2\nkonstytucyjny/B\npłynie\n").unwrap();
     let text = "Konstytucyjnego żeka typography beautifull";
@@ -9930,6 +9931,7 @@ fn list_item_first_word_gets_no_capital_squiggle() {
 #[test]
 fn unproofed_languages_and_no_proof_runs_are_not_marked() {
     crate::test_fonts();
+    let _dict_lock = crate::test_dict_lock();
     // A tiny synthetic Polish dictionary (real ones are installed on the system, not bundled).
     wordcraft_proof::pl::install_dictionary("SET UTF-8\nSFX B Y 1\nSFX B y ego y\n", "2\nkonstytucyjny/B\npłynie\n").unwrap();
     let opts = LayoutOptions { proofing: true, ..LayoutOptions::default() };
