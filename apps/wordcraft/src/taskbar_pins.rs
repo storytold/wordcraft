@@ -144,20 +144,52 @@ fn link_info(exe: &str) -> Vec<u8> {
 }
 
 /// Where the new shortcut for `pin` is written before it replaces it: beside it, under a name
-/// of this process's own (`WordCraft.lnk.1234.new`).
-fn temp_path(pin: &Path) -> std::ffi::OsString {
+/// of this process's own and a try number (`WordCraft.lnk.1234.0.new`).
+fn temp_path(pin: &Path, attempt: u32) -> std::ffi::OsString {
     let mut temp = pin.as_os_str().to_owned();
-    temp.push(format!(".{}.new", std::process::id()));
+    temp.push(format!(".{}.{attempt}.new", std::process::id()));
     temp
 }
 
-/// Whether `exe` is where the installer puts WordCraft (`…\ArtCraft\WordCraft\wordcraft.exe`,
-/// under Program Files or the per-user Programs folder). The repair at startup runs only then,
-/// so a build run from elsewhere (a developer's `target` folder) never takes over the pin.
-pub(crate) fn is_installed_exe(exe: &Path) -> bool {
-    let folder = exe.parent();
-    let name = |p: Option<&Path>| p.and_then(Path::file_name).and_then(|n| n.to_str()).map(str::to_ascii_lowercase);
-    name(folder).as_deref() == Some("wordcraft") && name(folder.and_then(Path::parent)).as_deref() == Some("artcraft")
+/// Tries this many names before giving a pin up: Windows reuses process numbers, so a file left
+/// by an interrupted run may hold the first.
+const TEMP_ATTEMPTS: u32 = 8;
+
+/// A new, empty file beside `pin` that nothing else has: the first free [`temp_path`].
+fn create_temp(pin: &Path) -> std::io::Result<(std::fs::File, std::ffi::OsString)> {
+    let mut last = None;
+    for attempt in 0..TEMP_ATTEMPTS {
+        let temp = temp_path(pin, attempt);
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(f) => return Ok((f, temp)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| std::io::Error::from(std::io::ErrorKind::AlreadyExists)))
+}
+
+/// The folders the installer can put WordCraft in: `ArtCraft\WordCraft` under Program Files
+/// (per machine) or under `%LOCALAPPDATA%\Programs` (per user, where Windows Installer sends
+/// Program Files for a per-user install).
+#[cfg(windows)]
+pub(crate) fn install_folders() -> Vec<std::path::PathBuf> {
+    let mut roots: Vec<std::path::PathBuf> =
+        ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"].into_iter().filter_map(std::env::var_os).map(std::path::PathBuf::from).collect();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        roots.push(Path::new(&local).join("Programs"));
+    }
+    roots.into_iter().map(|r| r.join("ArtCraft").join("WordCraft")).collect()
+}
+
+/// Whether `exe` sits directly in one of `install_folders`, compared without regard to case as
+/// Windows does. The repair at startup runs only then, so a build run from anywhere else (a
+/// developer's `target` folder, or a copy in another `ArtCraft\WordCraft`) never takes over the pin.
+pub(crate) fn is_installed_exe(exe: &Path, install_folders: &[std::path::PathBuf]) -> bool {
+    // Compared as text, so the test runs the same off Windows, where `\` isn't a separator.
+    let key = |p: &Path| p.to_string_lossy().replace('/', "\\").trim_end_matches('\\').to_lowercase();
+    let exe = key(exe);
+    exe.rsplit_once('\\').is_some_and(|(folder, _)| install_folders.iter().any(|f| key(f) == folder))
 }
 
 /// Replace each pinned copy of the old advertised shortcut in `folder` with a plain one to `exe`,
@@ -185,8 +217,7 @@ pub(crate) fn repair_folder(folder: &Path, exe: &str) -> std::io::Result<usize> 
         }
         // Written beside it, then moved over it: a pin is never left half written. The new file
         // is created afresh under a name of this run's own, so nothing already there is touched.
-        let temp = temp_path(&path);
-        let replaced = std::fs::OpenOptions::new().write(true).create_new(true).open(&temp).and_then(|mut f| {
+        let replaced = create_temp(&path).and_then(|(mut f, temp)| {
             // Only the file just created is cleaned up, never something else of that name.
             let written = f.write_all(&plain_link(exe)).and_then(|()| f.sync_all());
             drop(f);
@@ -287,65 +318,92 @@ mod tests {
         assert_eq!(&link[at..], &[0, 0, 0, 0], "ends with the terminal block");
     }
 
+    /// A folder for one test, removed when it ends, even when an assertion fails.
+    fn scratch() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    fn temp_file(pin: &Path, attempt: u32) -> std::path::PathBuf {
+        std::path::PathBuf::from(temp_path(pin, attempt))
+    }
+
     #[test]
     fn repair_replaces_only_the_old_pin_and_keeps_its_name() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-pins-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = scratch();
+        let dir = scratch.path();
         std::fs::write(dir.join("WordCraft.lnk"), advertised(DESCRIPTION)).unwrap();
         std::fs::write(dir.join("Acrobat.lnk"), advertised("Adobe Acrobat")).unwrap();
         std::fs::write(dir.join("notes.txt"), advertised(DESCRIPTION)).unwrap();
-        assert_eq!(repair_folder(&dir, EXE).unwrap(), 1);
+        assert_eq!(repair_folder(dir, EXE).unwrap(), 1);
         assert_eq!(std::fs::read(dir.join("WordCraft.lnk")).unwrap(), plain_link(EXE));
         assert_eq!(std::fs::read(dir.join("Acrobat.lnk")).unwrap(), advertised("Adobe Acrobat"));
         assert_eq!(std::fs::read(dir.join("notes.txt")).unwrap(), advertised(DESCRIPTION), "not a shortcut file");
-        assert_eq!(repair_folder(&dir, EXE).unwrap(), 0, "nothing left to mend");
-        assert!(!std::path::PathBuf::from(temp_path(&dir.join("WordCraft.lnk"))).exists());
+        assert_eq!(repair_folder(dir, EXE).unwrap(), 0, "nothing left to mend");
+        assert!(!temp_file(&dir.join("WordCraft.lnk"), 0).exists(), "no temporary file is left");
         assert_eq!(repair_folder(&dir.join("missing"), EXE).unwrap(), 0);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A file already at the temporary name is left as it was, and the pin with it.
+    /// A file already at the temporary name is left as it was, and the next name is used.
     #[test]
-    fn a_file_in_the_way_is_not_overwritten() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-pins-taken-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+    fn a_file_in_the_way_is_not_overwritten_and_another_name_is_used() {
+        let scratch = scratch();
+        let dir = scratch.path();
         std::fs::write(dir.join("A.lnk"), advertised(DESCRIPTION)).unwrap();
-        let taken = std::path::PathBuf::from(temp_path(&dir.join("A.lnk")));
+        let taken = temp_file(&dir.join("A.lnk"), 0);
         std::fs::write(&taken, b"someone else's").unwrap();
-        assert!(repair_folder(&dir, EXE).is_err());
+        assert_eq!(repair_folder(dir, EXE).unwrap(), 1, "a reused process number doesn't block the repair");
         assert_eq!(std::fs::read(&taken).unwrap(), b"someone else's");
+        assert_eq!(std::fs::read(dir.join("A.lnk")).unwrap(), plain_link(EXE));
+    }
+
+    /// Only when every name is taken is the pin given up, and none of those files is touched.
+    #[test]
+    fn a_pin_is_given_up_only_when_every_temporary_name_is_taken() {
+        let scratch = scratch();
+        let dir = scratch.path();
+        std::fs::write(dir.join("A.lnk"), advertised(DESCRIPTION)).unwrap();
+        for attempt in 0..TEMP_ATTEMPTS {
+            std::fs::write(temp_file(&dir.join("A.lnk"), attempt), b"taken").unwrap();
+        }
+        assert!(repair_folder(dir, EXE).is_err());
         assert_eq!(std::fs::read(dir.join("A.lnk")).unwrap(), advertised(DESCRIPTION));
-        let _ = std::fs::remove_dir_all(&dir);
+        for attempt in 0..TEMP_ATTEMPTS {
+            assert_eq!(std::fs::read(temp_file(&dir.join("A.lnk"), attempt)).unwrap(), b"taken");
+        }
     }
 
     #[test]
     fn only_the_installed_exe_mends_pins_at_startup() {
-        let installed = Path::new("Programs").join("ArtCraft").join("WordCraft").join("wordcraft.exe");
-        assert!(is_installed_exe(&installed));
-        assert!(is_installed_exe(&Path::new("Program Files").join("artcraft").join("WORDCRAFT").join("wordcraft.exe")));
-        assert!(!is_installed_exe(&Path::new("wordcraft").join("target").join("release").join("wordcraft.exe")));
-        assert!(!is_installed_exe(&Path::new("Downloads").join("WordCraft").join("wordcraft.exe")));
-        assert!(!is_installed_exe(Path::new("wordcraft.exe")));
+        let folders = [
+            std::path::PathBuf::from(r"C:\Program Files\ArtCraft\WordCraft"),
+            std::path::PathBuf::from(r"C:\Users\יונתן\AppData\Local\Programs\ArtCraft\WordCraft"),
+        ];
+        let at = |p: &str| is_installed_exe(Path::new(p), &folders);
+        assert!(at(r"C:\Program Files\ArtCraft\WordCraft\wordcraft.exe"));
+        assert!(at(r"c:\program files\artcraft\WORDCRAFT\wordcraft.exe"), "case doesn't matter, as on Windows");
+        assert!(at(EXE));
+        assert!(!at(r"C:\work\ArtCraft\WordCraft\wordcraft.exe"), "same folder names, not installed");
+        assert!(!at(r"C:\src\wordcraft\target\release\wordcraft.exe"));
+        assert!(!at(r"C:\Program Files\ArtCraft\WordCraft\bin\wordcraft.exe"));
+        assert!(!at("wordcraft.exe"));
     }
 
     /// One pin that can't be replaced doesn't stop the next, and what stood in its way stays.
     #[test]
     fn a_pin_that_cannot_be_replaced_does_not_stop_the_others() {
-        let dir = std::env::temp_dir().join(format!("wordcraft-pins-stuck-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let scratch = scratch();
+        let dir = scratch.path();
         for name in ["A.lnk", "B.lnk"] {
             std::fs::write(dir.join(name), advertised(DESCRIPTION)).unwrap();
         }
-        // A folder where A's new shortcut would be written: that write fails.
-        let blocked = std::path::PathBuf::from(temp_path(&dir.join("A.lnk")));
-        std::fs::create_dir(&blocked).unwrap();
-        assert!(repair_folder(&dir, EXE).is_err(), "the failure is reported");
+        // Folders at every name A's new shortcut could take: those writes fail.
+        let blocked: Vec<_> = (0..TEMP_ATTEMPTS).map(|a| temp_file(&dir.join("A.lnk"), a)).collect();
+        for b in &blocked {
+            std::fs::create_dir(b).unwrap();
+        }
+        assert!(repair_folder(dir, EXE).is_err(), "the failure is reported");
         assert_eq!(std::fs::read(dir.join("A.lnk")).unwrap(), advertised(DESCRIPTION), "A is left as it was");
         assert_eq!(std::fs::read(dir.join("B.lnk")).unwrap(), plain_link(EXE), "B is still mended");
-        assert!(blocked.is_dir(), "a folder it didn't write isn't removed");
-        let _ = std::fs::remove_dir_all(&dir);
+        assert!(blocked.iter().all(|b| b.is_dir()), "folders it didn't make aren't removed");
     }
 }
