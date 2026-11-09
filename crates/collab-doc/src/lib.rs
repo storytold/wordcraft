@@ -29,9 +29,10 @@
 //! What this adapter deliberately does not do (v1):
 //! - it does not run `CommandSpec` commands (`kind: "command"` is refused);
 //! - it does not touch styles, numbering, comments or track changes;
-//! - it does not normalize formatting or several rearranged blocks; the
-//!   forward effect of a formatting command is still the command itself, and
-//!   only its inverse is a primitive (`set_para_format`, see below).
+//! - it does not normalize formatting or a rearrangement wider than
+//!   [`MAX_PERMUTE_BLOCKS`]; the forward effect of a formatting command is
+//!   still the command itself, and only its inverse is a primitive
+//!   (`set_para_format`, see below).
 //!
 //! `move_block` swaps a run of blocks with the block next to it, addressed by
 //! the run's first session id, a block count (at most [`MAX_MOVE_BLOCKS`]) and
@@ -39,6 +40,16 @@
 //! the container follows the block it names, and a step whose run is wider than
 //! the bound is not a move the adapter normalizes: the client's diff reports it
 //! as unsupported and the engine command path keeps it as a command step.
+//!
+//! `permute` reorders a contiguous run of paragraphs by an explicit list of
+//! session ids in their new order (`payload.order`). The ids must fill one
+//! consecutive run of at most [`MAX_PERMUTE_BLOCKS`] blocks of the same
+//! container; duplicates, an unknown or retired id, an id from another
+//! container, a table in the way and a run that leaves the container are
+//! refused before anything changes. The inverse is the same operation with the
+//! ids in their old order, and the authoritative delta wraps the operation in a
+//! `transaction`, so a sort lands on every replica as one delta and undo puts
+//! the earlier order back in one step.
 //!
 //! `set_para_format` restores one paragraph's body and formatting to a named
 //! earlier value: it is the inverse of a character or paragraph command, whose
@@ -88,6 +99,11 @@ pub const MAX_FORMAT_RUNS: usize = 100_000;
 /// `count` one-block moves in one transaction.
 pub const MAX_MOVE_BLOCKS: usize = 64;
 
+/// The most blocks one `permute` reorders. `para.sort` over a wider selection
+/// still runs, but the command path cannot name the order on every replica, so
+/// the step stays a command and its undo answers `unsupported`.
+pub const MAX_PERMUTE_BLOCKS: usize = MAX_MOVE_BLOCKS;
+
 /// Payload key that names the primitive (`insert_text`, `delete_range`, …).
 pub const PAYLOAD_OP: &str = "op";
 
@@ -130,6 +146,26 @@ pub struct MovePlan {
     pub neighbour: u32,
     pub neighbour_index: usize,
     pub up: bool,
+}
+
+/// One reorder of a contiguous run of blocks, resolved against a document and
+/// the session map: the blocks named by `order_ids` currently fill the
+/// consecutive run `start..start + count` of their container, and the operation
+/// puts them in the order the list names. Every address is a session id, so the
+/// same plan names the same content on every replica.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PermutePlan {
+    pub story: StoryRef,
+    pub story_name: String,
+    pub container: Vec<u32>,
+    pub start: usize,
+    pub count: usize,
+    /// The old block indexes in the new order.
+    pub order: Vec<usize>,
+    /// The ids in the new order (the operation's `order`).
+    pub order_ids: Vec<u32>,
+    /// The ids in their old order (the inverse's `order`).
+    pub before_ids: Vec<u32>,
 }
 
 /// Resolve `run_id` (the first block of the run), `count` and `neighbour_id`
@@ -282,6 +318,146 @@ pub fn move_delta(run_id: u32, count: usize, neighbour_id: u32) -> Value {
     json!({"op": "move_block", "nodeId": run_id, "count": count, "neighbour": neighbour_id})
 }
 
+/// Resolve an explicit order of session ids into one reorder of a contiguous
+/// run, or say why the addresses do not describe one. The ids must belong to
+/// one container and fill a consecutive run `start..start + count` there;
+/// duplicates, an id from another container or from outside the run, a table
+/// in the way, an unknown or deleted id and a list outside
+/// `1..=MAX_PERMUTE_BLOCKS` are refused before the document or the id map is
+/// touched.
+pub fn plan_permute(doc: &Document, ids: &NodeIds, order_ids: &[u32]) -> Result<PermutePlan, MoveError> {
+    if order_ids.is_empty() || order_ids.len() > MAX_PERMUTE_BLOCKS {
+        return Err(MoveError::Bad(format!("a permute carries 1 to {MAX_PERMUTE_BLOCKS} blocks, not {}", order_ids.len())));
+    }
+    let mut entries: Vec<(usize, u32, NodeKey)> = Vec::with_capacity(order_ids.len());
+    for id in order_ids {
+        let key = ids.resolve(NodeId(*id)).map_err(|why| match why {
+            wordcraft_collab::ids::Resolve::Unknown => MoveError::Unknown(*id),
+            wordcraft_collab::ids::Resolve::Gone(version) => MoveError::Gone(*id, version),
+        })?;
+        let Some(index) = key.path.last() else {
+            return Err(MoveError::Bad(format!("node {id} is not a block")));
+        };
+        entries.push((*index as usize, *id, key.clone()));
+    }
+    let (_, _, first_key) = entries.first().ok_or_else(|| MoveError::Bad("a permute carries no blocks".to_string()))?;
+    let story_name = first_key.story.clone();
+    let story = parse_story(&story_name).ok_or_else(|| MoveError::Bad(format!("unknown story {story_name:?}")))?;
+    let container = first_key.path.get(..first_key.path.len().saturating_sub(1)).unwrap_or_default().to_vec();
+    for (_, id, key) in &entries {
+        if key.story != story_name
+            || key.path.len() != first_key.path.len()
+            || key.path.get(..container.len()).unwrap_or_default() != container.as_slice()
+        {
+            return Err(MoveError::Bad(format!("node {id} is in another container")));
+        }
+    }
+    let mut indexes: Vec<usize> = entries.iter().map(|(index, _, _)| *index).collect();
+    indexes.sort_unstable();
+    for pair in indexes.windows(2) {
+        if pair.first() == pair.get(1) {
+            return Err(MoveError::Bad("the order names one block twice".to_string()));
+        }
+    }
+    let start = indexes.first().copied().unwrap_or(0);
+    let Some(end) = indexes.last().copied() else {
+        return Err(MoveError::Bad("a permute carries no blocks".to_string()));
+    };
+    let count = end.saturating_sub(start).saturating_add(1);
+    if count != order_ids.len() {
+        return Err(MoveError::Bad("the order is not one contiguous run of blocks".to_string()));
+    }
+    let blocks = doc.container(story, &child_path(&container, start)).ok_or_else(|| MoveError::Bad("the run is not in a block list".to_string()))?;
+    if end >= blocks.len() {
+        return Err(MoveError::Bad("the run leaves the container".to_string()));
+    }
+    for index in start..=end {
+        match blocks.get(index).map(|block| &**block) {
+            Some(Block::Para(_)) => {}
+            Some(_) => return Err(MoveError::Bad("only paragraphs can be reordered".to_string())),
+            None => return Err(MoveError::Bad("the run leaves the container".to_string())),
+        }
+    }
+    let mut before_ids = Vec::with_capacity(count);
+    for index in start..=end {
+        let key = NodeKey::new(story_name.clone(), child_path(&container, index).0);
+        let id = ids.get(&key).ok_or_else(|| MoveError::Bad(format!("a reordered block has no session id: {story_name:?} {:?}", key.path)))?;
+        before_ids.push(id.0);
+    }
+    let order: Vec<usize> = entries.iter().map(|(index, _, _)| index.saturating_sub(start)).collect();
+    Ok(PermutePlan { story, story_name, container, start, count, order, order_ids: order_ids.to_vec(), before_ids })
+}
+
+/// Apply a resolved reorder: the blocks of the run take the positions the plan
+/// names, and every session id below the container follows the block it names.
+pub fn apply_permute(doc: &mut Document, ids: &mut NodeIds, plan: &PermutePlan) -> Result<(), String> {
+    let path = child_path(&plan.container, plan.start);
+    let blocks = doc.container_mut(plan.story, &path).map_err(|err| err.to_string())?;
+    let window: Vec<Arc<Block>> =
+        blocks.get(plan.start..plan.start.saturating_add(plan.count)).ok_or_else(|| "the run is gone".to_string())?.to_vec();
+    for (position, from) in plan.order.iter().enumerate() {
+        let block = window.get(*from).cloned().ok_or_else(|| "the order names a block outside the run".to_string())?;
+        if let Some(slot) = blocks.get_mut(plan.start.saturating_add(position)) {
+            *slot = block;
+        }
+    }
+    rebase_ids_after_permute(ids, plan);
+    Ok(())
+}
+
+/// Move every session id of the affected container to the block it names after
+/// the reorder. The subtree follows: a reordered table keeps the ids of its
+/// rows, cells and the paragraphs inside them.
+pub fn rebase_ids_after_permute(ids: &mut NodeIds, plan: &PermutePlan) {
+    let start = plan.start;
+    let mut new_index = vec![0_u32; plan.count];
+    for (position, old) in plan.order.iter().enumerate() {
+        if let Some(slot) = new_index.get_mut(*old) {
+            *slot = u32::try_from(start.saturating_add(position)).unwrap_or(u32::MAX);
+        }
+    }
+    ids.permute_children(&plan.story_name, &plan.container, |index| {
+        let offset = (index as usize).wrapping_sub(start);
+        new_index.get(offset).copied().unwrap_or(index)
+    });
+}
+
+/// The ids whose position the reorder changes: every block of the run with its
+/// subtree. An edit another user makes in one of them after the reorder makes
+/// undo a conflict instead of reordering over it.
+pub fn permute_touched(ids: &NodeIds, plan: &PermutePlan) -> Vec<u32> {
+    let mut touched = Vec::new();
+    for index in plan.start..plan.start.saturating_add(plan.count) {
+        touched.extend(live_ids(ids, &plan.story_name, &[], &child_path(&plan.container, index).0));
+    }
+    touched.sort_unstable();
+    touched.dedup();
+    touched
+}
+
+/// The operations that undo a reorder: one `permute` carrying the ids in their
+/// old order. The room wraps the step's deltas, so undo lands as one
+/// `transaction` delta on every replica.
+pub fn permute_inverse_ops(op: &Op, plan: &PermutePlan) -> Vec<Op> {
+    let node = plan.before_ids.first().copied().unwrap_or(0);
+    vec![inverse_op(OpKind::Structural, op, plan.story, node, 0, json!({"op": "permute", "nodeId": node, "order": plan.before_ids}))]
+}
+
+/// The operation payload a client sends for a reorder; the server repeats it in
+/// the authoritative delta, wrapped in a transaction so an undo step lands as
+/// one unit.
+pub fn permute_payload(order_ids: &[u32]) -> Value {
+    let node = order_ids.first().copied().unwrap_or(0);
+    json!({"op": "permute", "nodeId": node, "order": order_ids})
+}
+
+/// The authoritative delta of a reorder: one `permute` inside a transaction.
+/// Both forward and inverse use it, so the author and every peer apply the same
+/// JSON and the step is one delta.
+pub fn permute_delta(order_ids: &[u32]) -> Value {
+    json!({"op": "transaction", "ops": [permute_payload(order_ids)]})
+}
+
 /// The WordCraft half of a room.
 pub struct DocModel {
     doc: Document,
@@ -324,6 +500,7 @@ impl DocModel {
             "insert_block" => self.insert_block(op, ids),
             "remove_block" => self.remove_block(op, ids),
             "move_block" => self.move_block(op, ids),
+            "permute" => self.permute(op, ids),
             "insert_row" => self.insert_row(op, ids),
             "remove_row" => self.remove_row(op, ids),
             "insert_column" => self.insert_column(op, ids),
@@ -622,6 +799,48 @@ impl DocModel {
             inverse: move_inverse_ops(op, &plan),
             forward: vec![op.clone()],
             label: "Move paragraphs".into(),
+            nodes_changed: true,
+            touched,
+        })
+    }
+
+    /// Reorder a contiguous run of blocks. `payload.order` lists the ids in
+    /// their new order; every id names one block of the same container and
+    /// together they must fill a consecutive run of at most
+    /// [`MAX_PERMUTE_BLOCKS`] paragraphs. Duplicates, a missing or retired id,
+    /// an id from another container, a table in the way and a run that leaves
+    /// the container are refused before the document or the id map changes.
+    ///
+    /// The authoritative delta is one `permute` inside a `transaction`; the
+    /// inverse is the same operation with the ids in their old order, so undo
+    /// and redo reach every replica as one delta.
+    fn permute(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let items = op.payload.get("order").and_then(Value::as_array).ok_or_else(|| invalid(op, "permute needs an `order` list"))?;
+        if items.is_empty() {
+            return Err(invalid(op, "`order` is empty"));
+        }
+        if items.len() > MAX_PERMUTE_BLOCKS {
+            return Err(invalid(op, format!("a permute carries at most {MAX_PERMUTE_BLOCKS} blocks")));
+        }
+        let mut order = Vec::with_capacity(items.len());
+        for item in items {
+            let id = item.as_u64().ok_or_else(|| invalid(op, "`order` must be a list of ids"))?;
+            order.push(u32::try_from(id).map_err(|_| invalid(op, "an id does not fit"))?);
+        }
+        let plan = plan_permute(&self.doc, ids, &order).map_err(|err| match err {
+            MoveError::Unknown(id) => invalid(op, format!("unknown node {id}")),
+            MoveError::Gone(id, version) => Reject::new(op.op_id.clone(), RejectCode::Gone, format!("node {id} was deleted at version {version}")),
+            MoveError::Bad(why) => invalid(op, why),
+        })?;
+        // Undo puts the old order back, so an edit another user makes in any
+        // block the reorder moved must refuse the undo.
+        let touched = permute_touched(ids, &plan);
+        apply_permute(&mut self.doc, ids, &plan).map_err(|err| invalid(op, err))?;
+        Ok(Effect {
+            delta: Some(permute_delta(&plan.order_ids)),
+            inverse: permute_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: "Sort paragraphs".into(),
             nodes_changed: true,
             touched,
         })
@@ -1916,6 +2135,16 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             let plan = plan_move(doc, ids, node, count, neighbour).map_err(|err| err.to_string())?;
             apply_move(doc, ids, &plan)?;
         }
+        "permute" => {
+            let items = delta.get("order").and_then(Value::as_array).ok_or_else(|| "permute has no `order`".to_string())?;
+            let mut order = Vec::with_capacity(items.len());
+            for item in items {
+                let id = item.as_u64().ok_or_else(|| "`order` must be a list of ids".to_string())?;
+                order.push(u32::try_from(id).map_err(|_| "an id does not fit".to_string())?);
+            }
+            let plan = plan_permute(doc, ids, &order).map_err(|err| err.to_string())?;
+            apply_permute(doc, ids, &plan)?;
+        }
         "insert_row" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;
             let index = usize::try_from(delta.get("index").and_then(Value::as_u64).ok_or_else(|| "insert_row has no `index`".to_string())?)
@@ -2093,8 +2322,9 @@ fn diff_blocks(
             out.push(change);
             return Ok(());
         }
-        if reordered(old, new) {
-            return Err(DiffError::Unsupported(format!("several blocks were reordered in {}", block_where(story, prefix))));
+        if let Some(change) = permutation(story, prefix, old, new, ids)? {
+            out.push(change);
+            return Ok(());
         }
         for (block, (a, b)) in old.iter().zip(new).enumerate() {
             if Arc::ptr_eq(a, b) {
@@ -2193,37 +2423,56 @@ fn adjacent_move(story: &str, prefix: &[u32], old: &[Arc<Block>], new: &[Arc<Blo
     Ok(None)
 }
 
-/// Whether `new` holds the same blocks as `old` in another order: the pointers
-/// are the same, only their positions differ. A reorder the primitives cannot
-/// name must be refused, not sent as a chain of text replacements.
-fn reordered(old: &[Arc<Block>], new: &[Arc<Block>]) -> bool {
-    // A move changes at least two positions; one differing block is an edit.
-    // Checking that first keeps the pointer multiset below off the typing path,
-    // where every keystroke diffs the whole story.
-    let mut differing = 0_usize;
-    for (a, b) in old.iter().zip(new) {
-        if !Arc::ptr_eq(a, b) {
-            differing = differing.saturating_add(1);
-            if differing > 1 {
-                break;
-            }
-        }
+/// One reorder of a contiguous run in a block list, named by session ids.
+///
+/// A reorder leaves every block where it was, so the pointers name it: the
+/// blocks of the run are the same `Arc`s in another order and every block
+/// outside the run is untouched. `None` means the change is not a pure reorder
+/// (the caller walks the blocks one by one); a reorder wider than
+/// [`MAX_PERMUTE_BLOCKS`] is [`DiffError::Unsupported`] instead of a chain of
+/// text replacements.
+fn permutation(story: &str, prefix: &[u32], old: &[Arc<Block>], new: &[Arc<Block>], ids: &NodeIds) -> Result<Option<LocalChange>, DiffError> {
+    let Some(first) = (0..old.len()).find(|index| !Arc::ptr_eq(&old[*index], &new[*index])) else { return Ok(None) };
+    let last = (first..old.len()).rev().find(|index| !Arc::ptr_eq(&old[*index], &new[*index])).unwrap_or(first);
+    let count = last.saturating_sub(first).saturating_add(1);
+    // One differing block is an edit, not a reorder. Checking that first keeps
+    // the pointer multiset below off the typing path.
+    if count < 2 {
+        return Ok(None);
     }
-    if differing < 2 {
-        return false;
-    }
-    let mut counts: HashMap<usize, isize> = HashMap::with_capacity(old.len());
-    for block in old {
+    let mut counts: HashMap<usize, isize> = HashMap::with_capacity(count);
+    for block in old.iter().take(last.saturating_add(1)).skip(first) {
         *counts.entry(Arc::as_ptr(block) as usize).or_default() += 1;
     }
-    for block in new {
+    for block in new.iter().take(last.saturating_add(1)).skip(first) {
         let count = counts.entry(Arc::as_ptr(block) as usize).or_default();
         *count -= 1;
         if *count < 0 {
-            return false;
+            return Ok(None);
         }
     }
-    counts.values().all(|count| *count == 0)
+    if counts.values().any(|count| *count != 0) {
+        return Ok(None);
+    }
+    if count > MAX_PERMUTE_BLOCKS {
+        return Err(DiffError::Unsupported(format!("several blocks were reordered in {}", block_where(story, prefix))));
+    }
+    let mut by_ptr: HashMap<usize, u32> = HashMap::with_capacity(count);
+    for (index, block) in old.iter().enumerate().take(last.saturating_add(1)).skip(first) {
+        let id = node_id(ids, story, prefix, index)?;
+        if by_ptr.insert(Arc::as_ptr(block) as usize, id).is_some() {
+            // The same block is twice in the run: the addresses cannot name
+            // which copy is which, so the change is not one addressable reorder.
+            return Ok(None);
+        }
+    }
+    let mut order = Vec::with_capacity(count);
+    for block in new.iter().take(last.saturating_add(1)).skip(first) {
+        let Some(id) = by_ptr.get(&(Arc::as_ptr(block) as usize)).copied() else { return Ok(None) };
+        order.push(id);
+    }
+    let node = order.first().copied().unwrap_or(0);
+    Ok(Some(LocalChange { kind: OpKind::Structural, target: Target::new(story, node, 0), payload: permute_payload(&order) }))
 }
 
 /// Diff one block that changed in place: its text, or everything inside it when

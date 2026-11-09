@@ -127,6 +127,24 @@ impl NodeIds {
         self.back.insert(id, key);
     }
 
+    /// Replace the paths of several ids at once. Unlike calling [`NodeIds::rebase`]
+    /// in a loop, this is safe for a permutation: all old forward keys are
+    /// dropped before any new one is inserted, so one id's new key cannot erase
+    /// another's. A fresh node map after a move or a sort uses this.
+    pub fn rebase_many(&mut self, nodes: impl IntoIterator<Item = (NodeId, NodeKey)>) {
+        let pairs: Vec<(NodeId, NodeKey)> = nodes.into_iter().collect();
+        for (id, _) in &pairs {
+            if let Some(old) = self.back.remove(id) {
+                self.forward.remove(&old);
+            }
+        }
+        for (id, key) in pairs {
+            self.tombstones.remove(&id);
+            self.forward.insert(key.clone(), id);
+            self.back.insert(id, key);
+        }
+    }
+
     /// Delete an id: it is not reused for the rest of the tombstone window.
     pub fn remove(&mut self, id: NodeId, at: Version) {
         if let Some(key) = self.back.remove(&id) {

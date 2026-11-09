@@ -79,9 +79,11 @@ const CHAR_FORMAT_COMMANDS: &[&str] = &[
 /// The frequent paragraph-formatting commands with an exact inverse: they only
 /// change paragraph properties (alignment, indents, spacing, keep rules, tabs,
 /// borders, shading, direction, the paragraph style). Commands that reorder
-/// paragraphs (`para.sort`, `para.promote`), move them wider than
-/// [`MOVE_COMMANDS`] captures, strip text (`para.removeBlank`) or allocate
-/// numbering definitions (`para.bullets`) stay barriers.
+/// paragraphs wider than [`MOVE_COMMANDS`] captures, move them wider than the
+/// bound, strip text (`para.removeBlank`) or allocate numbering definitions
+/// (`para.bullets`) stay barriers. `para.sort` is normalized to `permute` by
+/// [`SessionModel::normalized_permute`]; `para.promote`/`demote` change outline
+/// levels as well as order and stay barriers.
 const PARA_FORMAT_COMMANDS: &[&str] = &[
     "para.addSpaceBefore",
     "para.align",
@@ -140,6 +142,20 @@ struct FormatSnapshot {
     runs: Vec<Run>,
     mark: CharProps,
     props: ParaProps,
+}
+
+/// The contiguous run of paragraphs `para.sort` is about to reorder, captured
+/// before it runs so the result can be named by session ids even when the sort
+/// changes nothing. `None` when the run is wider than
+/// [`MAX_PERMUTE_BLOCKS`](wordcraft_collab_doc::MAX_PERMUTE_BLOCKS), crosses a
+/// container, is not made of paragraphs or has a block without a session id:
+/// such a step stays a command and its undo answers `unsupported`.
+struct SortRange {
+    story: StoryRef,
+    container: Vec<u32>,
+    start: usize,
+    count: usize,
+    ids: Vec<u32>,
 }
 
 /// A room model backed by the engine.
@@ -209,8 +225,11 @@ impl SessionModel {
         let format = if is_format_command(command) { Some(self.capture_format(op, ids)?) } else { None };
         // A command that moves blocks is normalized after it runs: the document
         // difference says whether it was one adjacent move, which every replica
-        // can replay as a structural operation and undo exactly.
-        let before_doc = is_move_command(command).then(|| self.session.doc.clone());
+        // can replay as a structural operation and undo exactly. A sort is
+        // normalized from the selected run it ran over, so even a sort that
+        // changes nothing is an addressable step.
+        let sort_range = if command == "para.sort" { self.sort_range(ids) } else { None };
+        let before_doc = (is_move_command(command) || command == "para.sort").then(|| self.session.doc.clone());
         let before = doc_shape(&self.session.doc);
         let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
@@ -242,15 +261,23 @@ impl SessionModel {
         // the same structural delta instead of replaying the command, and the
         // step's inverse puts the order back. A move wider than the bound stays
         // a command step and is reported as `unsupported` by undo.
-        if let Some(before_doc) = before_doc
-            && let Some(effect) = self.normalized_move(op, &before_doc, ids)
-        {
-            return Ok(effect);
+        if let Some(before_doc) = before_doc {
+            // A sort is always a `permute`, even when its result happens to be
+            // one adjacent move: the order list is what the user asked for and
+            // the undo step stays one transaction.
+            if let Some(range) = sort_range.as_ref()
+                && let Some(effect) = self.normalized_permute(op, &before_doc, range, ids)
+            {
+                return Ok(effect);
+            }
+            if let Some(effect) = self.normalized_move(op, &before_doc, ids) {
+                return Ok(effect);
+            }
         }
 
         // A step that moved blocks in a way the adapter could not normalize (a
-        // wider selection, a sort) cannot be restored by paragraph paths;
-        // formatting commands never move blocks.
+        // selection wider than the bound) cannot be restored by paragraph
+        // paths; formatting commands never move blocks.
         let (inverse, touched) = match format {
             Some(Some(captured)) if !nodes_changed => self.format_inverse(op, &captured).unwrap_or_default(),
             _ => (Vec::new(), Vec::new()),
@@ -380,8 +407,8 @@ impl SessionModel {
     /// it is exactly one adjacent move of at most
     /// [`MAX_MOVE_BLOCKS`](wordcraft_collab_doc::MAX_MOVE_BLOCKS) blocks, the
     /// step's delta becomes `move_block` with two explicit ids and its inverse
-    /// is the same move back, one block at a time. Anything else (a wider
-    /// selection, a sort) keeps the command delta and stays a barrier.
+    /// is the same move back, one block at a time. Anything else (a selection
+    /// wider than the bound) keeps the command delta and stays a barrier.
     fn normalized_move(&self, op: &Op, before: &Document, ids: &mut NodeIds) -> Option<Effect> {
         let changes = wordcraft_collab_doc::diff(before, &self.session.doc, ids).ok()?;
         if changes.len() != 1 {
@@ -407,6 +434,76 @@ impl SessionModel {
             touched,
         })
     }
+
+    /// The run `para.sort` will reorder: the paragraphs between the selection
+    /// ends in one container, with their session ids.
+    fn sort_range(&self, ids: &NodeIds) -> Option<SortRange> {
+        let (a, b) = self.session.sel.ordered();
+        if a.story != b.story || a.path.parent() != b.path.parent() {
+            return None;
+        }
+        let container = a.path.parent().to_vec();
+        let first = a.path.last();
+        let last = b.path.last();
+        let (start, end) = (first.min(last), first.max(last));
+        let count = end.checked_sub(start)?.checked_add(1)?;
+        if count == 0 || count > wordcraft_collab_doc::MAX_PERMUTE_BLOCKS {
+            return None;
+        }
+        let blocks = self.session.doc.container(a.story, &Path(block_path(&container, start)))?;
+        let story_name = story_name(a.story);
+        let mut range_ids = Vec::with_capacity(count);
+        for index in start..=end {
+            match blocks.get(index).map(|block| &**block) {
+                Some(Block::Para(_)) => {}
+                _ => return None,
+            }
+            let key = NodeKey::new(story_name.clone(), block_path(&container, index));
+            range_ids.push(ids.get(&key)?.0);
+        }
+        Some(SortRange { story: a.story, container, start, count, ids: range_ids })
+    }
+
+    /// A `para.sort` as one structural `permute`: the command already reordered
+    /// the document, so the run is named by the ids of the blocks in their new
+    /// order. The inverse carries the old order; both travel as one
+    /// `transaction` delta, and an edit in any block of the run blocks the undo.
+    fn normalized_permute(&self, op: &Op, before: &Document, range: &SortRange, ids: &mut NodeIds) -> Option<Effect> {
+        let before_blocks = before.container(range.story, &Path(block_path(&range.container, range.start)))?;
+        let after_blocks = self.session.doc.container(range.story, &Path(block_path(&range.container, range.start)))?;
+        if before_blocks.len() < range.start.saturating_add(range.count) || after_blocks.len() < range.start.saturating_add(range.count) {
+            return None;
+        }
+        let mut order = Vec::with_capacity(range.count);
+        for position in 0..range.count {
+            let block = after_blocks.get(range.start.saturating_add(position))?;
+            let mut found = None;
+            for old in 0..range.count {
+                if std::sync::Arc::ptr_eq(before_blocks.get(range.start.saturating_add(old))?, block) {
+                    found = range.ids.get(old).copied();
+                    break;
+                }
+            }
+            order.push(found?);
+        }
+        let plan = wordcraft_collab_doc::plan_permute(before, ids, &order).ok()?;
+        // An edit in any block the sort moved blocks the undo.
+        let touched = wordcraft_collab_doc::permute_touched(ids, &plan);
+        wordcraft_collab_doc::rebase_ids_after_permute(ids, &plan);
+        Some(Effect {
+            delta: Some(wordcraft_collab_doc::permute_delta(&plan.order_ids)),
+            inverse: wordcraft_collab_doc::permute_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: "Sort paragraphs".into(),
+            nodes_changed: true,
+            touched,
+        })
+    }
+}
+
+/// The path of a child of `container`.
+fn block_path(container: &[u32], index: usize) -> Vec<u32> {
+    container.iter().copied().chain(std::iter::once(index as u32)).collect()
 }
 
 fn is_format_command(command: &str) -> bool {

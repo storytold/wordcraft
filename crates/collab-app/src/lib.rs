@@ -111,9 +111,9 @@ impl SyncState {
     /// Replace the map with the server's session ids. Ids that disappeared are
     /// left alone: the delta path tombstones them when the removal is applied.
     pub fn set_nodes(&mut self, nodes: &[NodeRef]) {
-        for node in nodes {
-            self.ids.rebase(NodeId(node.id), NodeKey::new(node.story.clone(), node.path.clone()));
-        }
+        // The map may reorder ids (a move, a sort): replace all paths in one
+        // pass so one id's new key cannot erase another's old one.
+        self.ids.rebase_many(nodes.iter().map(|node| (NodeId(node.id), NodeKey::new(node.story.clone(), node.path.clone()))));
     }
 
     /// Apply an authoritative answer. Our own operations are already in the

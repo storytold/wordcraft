@@ -1420,3 +1420,194 @@ fn a_replica_applies_a_move_and_keeps_the_ids_of_the_blocks_it_moved() {
     assert_eq!(replica_ids.resolve(NodeId(third)).map(|key| key.path.clone()), Ok(vec![1]), "the replica follows the block");
     assert_eq!(replica_ids.resolve(NodeId(second)).map(|key| key.path.clone()), Ok(vec![2]));
 }
+
+// --- sorting a run of paragraphs by an explicit id order --------------------
+
+fn permute_payload(order: &[u32]) -> serde_json::Value {
+    json!({"op": "permute", "nodeId": order.first().copied().unwrap_or(0), "order": order})
+}
+
+#[test]
+fn sorting_blocks_is_one_transactional_permute() {
+    let mut room = move_room(&["gamma", "alpha", "beta"]);
+    let (gamma, alpha, beta) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, alpha, 0, permute_payload(&[alpha, beta, gamma])))
+        .expect("the sort lands");
+
+    assert_eq!(body_texts(&room), ["alpha", "beta", "gamma"]);
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "permute", "nodeId": alpha, "order": [alpha, beta, gamma]}]})),
+        "the sort lands as one permute inside the step's transaction"
+    );
+    // The ids keep naming their blocks, not their old positions.
+    assert_eq!(room.ids().resolve(NodeId(alpha)).map(|key| key.path.clone()), Ok(vec![0]));
+    assert_eq!(room.ids().resolve(NodeId(beta)).map(|key| key.path.clone()), Ok(vec![1]));
+    assert_eq!(room.ids().resolve(NodeId(gamma)).map(|key| key.path.clone()), Ok(vec![2]));
+}
+
+#[test]
+fn undo_of_a_sort_lands_as_one_transaction_and_redo_returns_the_order() {
+    let mut room = move_room(&["gamma", "alpha", "beta"]);
+    let (gamma, alpha, beta) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, alpha, 0, permute_payload(&[alpha, beta, gamma]))).expect("the sort lands");
+
+    let undone = room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the undo lands");
+    assert_eq!(
+        undone.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "permute", "nodeId": gamma, "order": [gamma, alpha, beta]}]})),
+        "the inverse is one permute with the old order"
+    );
+    assert_eq!(body_texts(&room), ["gamma", "alpha", "beta"], "the undo restores the order");
+
+    let redo = Op {
+        op_id: OpId::new("alice", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Structural,
+        target: Target::new("body", alpha, 0),
+        payload: serde_json::Value::Null,
+        history: Some(HistoryAction::Redo { op_id: OpId::new("a", 1) }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(body_texts(&room), ["alpha", "beta", "gamma"], "redo sorts again");
+}
+
+#[test]
+fn a_permute_with_an_unknown_or_retired_id_is_refused_before_mutation() {
+    let mut room = move_room(&["one", "two", "three"]);
+    let (first, _second, third) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    // An id the session never issued.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, first, 0, permute_payload(&[first, 999_999])))
+        .expect_err("an unknown id is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "nothing changed");
+    assert_eq!(room.version(), 0, "the version did not move");
+
+    // A list that skips a block names no contiguous run.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 2, 0, OpKind::Structural, first, 0, permute_payload(&[third, first])))
+        .expect_err("a gap is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // The same id twice.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 3, 0, OpKind::Structural, first, 0, permute_payload(&[first, first])))
+        .expect_err("a duplicate is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // A block from another container.
+    let mut other = table_doc(1, 1);
+    other.body.insert(0, Arc::new(Block::Para(Paragraph::with_text("gap", CharProps::default()))));
+    let mut room_other = Room::new(DocModel::new(other));
+    let _ = room_other.join(None, false);
+    let cell_para = room_other.ids().iter().find(|(_, key)| key.path.len() == 4).map(|(id, _)| id.0).expect("a cell paragraph id");
+    let outer = block_id(&room_other, 0);
+    let before_other = serde_json::to_value(room_other.model().document()).expect("json");
+    let err = room_other
+        .submit("alice", Role::Editor, op("a", 4, 0, OpKind::Structural, outer, 0, permute_payload(&[outer, cell_para])))
+        .expect_err("blocks in different containers are refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room_other.model().document()).expect("json"), before_other);
+
+    // A retired id is gone rather than invalid; the document still does not move.
+    room.submit("alice", Role::Editor, op("a", 5, 0, OpKind::Structural, third, 0, json!({"op": "remove_block"}))).expect("remove the last block");
+    let before_retired = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+    let err = room
+        .submit("alice", Role::Editor, op("a", 6, version, OpKind::Structural, first, 0, permute_payload(&[third, first])))
+        .expect_err("a retired id is refused");
+    assert_eq!(err.code, RejectCode::Gone);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before_retired);
+    assert_eq!(room.version(), version);
+}
+
+#[test]
+fn a_permute_with_a_table_in_the_run_is_refused_before_mutation() {
+    let mut room = Room::new(DocModel::new(table_doc(1, 1)));
+    let _ = room.join(None, false);
+    let paragraph = block_id(&room, 0);
+    let table = table_id(room.ids());
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, paragraph, 0, permute_payload(&[table, paragraph])))
+        .expect_err("a table cannot be reordered as a paragraph");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(room.version(), 0);
+    assert_eq!(paragraphs(&room), 2, "the table is still there");
+}
+
+#[test]
+fn a_foreign_edit_of_a_sorted_block_makes_undo_a_conflict() {
+    let mut room = move_room(&["gamma", "alpha", "beta"]);
+    let (gamma, alpha, beta) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, alpha, 0, permute_payload(&[alpha, beta, gamma]))).expect("the sort lands");
+
+    // Bob types into the block the sort moved to the front (not the step's address).
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, alpha, 0, json!({"op": "insert_text", "text": "X"}))).expect("bob types");
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+
+    let err = room.submit("alice", Role::Editor, undo_request("alice", 2, version, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refusal changed nothing");
+    assert_eq!(room.version(), version, "the version did not move");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step stays on the stack");
+}
+
+#[test]
+fn sorting_blocks_diffs_to_one_permute_with_explicit_ids() {
+    let room = move_room(&["delta", "bravo", "alpha", "charlie"]);
+    let (delta, bravo, alpha, charlie) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2), block_id(&room, 3));
+    let ids = room.ids().clone();
+    let before = room.model().document().clone();
+    let mut after = before.clone();
+    let blocks = after.body.clone();
+    after.body = vec![blocks[2].clone(), blocks[1].clone(), blocks[3].clone(), blocks[0].clone()];
+
+    let changes = crate::diff(&before, &after, &ids).expect("the diff names the sort");
+    assert_eq!(changes.len(), 1, "one run, one operation");
+    assert_eq!(changes[0].kind, OpKind::Structural);
+    assert_eq!(changes[0].target.node_id, alpha, "the block now at the front is the address");
+    assert_eq!(changes[0].payload, permute_payload(&[alpha, bravo, charlie, delta]));
+}
+
+#[test]
+fn a_sort_wider_than_the_bound_is_refused_instead_of_becoming_text_edits() {
+    let texts: Vec<String> = (0..70).map(|index| format!("p{index:02}")).collect();
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let room = move_room(&refs);
+    let ids = room.ids().clone();
+    let before = room.model().document().clone();
+    let mut after = before.clone();
+    let blocks = after.body.clone();
+    let mut reversed: Vec<Arc<Block>> = blocks.iter().take(67).rev().cloned().collect();
+    reversed.extend(blocks.iter().skip(67).cloned());
+    after.body = reversed;
+
+    let err = crate::diff(&before, &after, &ids).expect_err("67 blocks are wider than a permute");
+    assert!(matches!(err, crate::DiffError::Unsupported(_)), "{err:?}");
+}
+
+#[test]
+fn a_replica_applies_a_permute_and_keeps_the_ids_of_the_blocks_it_moved() {
+    let mut room = move_room(&["gamma", "alpha", "beta"]);
+    let (gamma, alpha, beta) = (block_id(&room, 0), block_id(&room, 1), block_id(&room, 2));
+    let mut replica = room.model().document().clone();
+    let mut replica_ids = room.ids().clone();
+
+    submit_and_mirror(&mut room, op("a", 1, 0, OpKind::Structural, alpha, 0, permute_payload(&[alpha, beta, gamma])), &mut replica, &mut replica_ids);
+    assert_eq!(body_texts(&room), ["alpha", "beta", "gamma"]);
+    assert_eq!(replica_ids.resolve(NodeId(alpha)).map(|key| key.path.clone()), Ok(vec![0]), "the replica follows the block");
+    assert_eq!(replica_ids.resolve(NodeId(beta)).map(|key| key.path.clone()), Ok(vec![1]));
+    assert_eq!(replica_ids.resolve(NodeId(gamma)).map(|key| key.path.clone()), Ok(vec![2]));
+}

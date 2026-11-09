@@ -743,3 +743,101 @@ fn a_move_over_more_than_64_blocks_stays_an_undo_barrier() {
     let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("a step this wide has no inverse");
     assert_eq!(err.code, RejectCode::Unsupported);
 }
+
+// --- sorting a run of paragraphs --------------------------------------------
+
+fn sort_command(first: u32, last: u32) -> Op {
+    let selection = json!({"anchor": {"nodeId": first, "off": 0}, "focus": {"nodeId": last, "off": 1}});
+    op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.sort", "params": {}, "selection": selection}))
+}
+
+#[test]
+fn a_paragraph_sort_lands_as_one_structural_operation_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["gamma", "alpha", "beta"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (gamma, alpha, beta) = (node(0), node(1), node(2));
+
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let command = sort_command(gamma, beta);
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the sort lands");
+    assert_eq!(texts(&room), ["alpha", "beta", "gamma"]);
+    assert_eq!(
+        applied.delta,
+        Some(json!({"op": "transaction", "ops": [{"op": "permute", "nodeId": alpha, "order": [alpha, beta, gamma]}]})),
+        "the sort lands as one permute inside the step's transaction"
+    );
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica applies the sort");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, gamma, &command)).expect("the undo lands");
+    assert_eq!(texts(&room), ["gamma", "alpha", "beta"], "the undo restores the order");
+    crate::apply_delta(&mut replica, &mut ids, undone.delta.as_ref().expect("a delta")).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", gamma, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(texts(&room), ["alpha", "beta", "gamma"], "redo sorts again");
+}
+
+#[test]
+fn a_sort_that_changes_nothing_is_still_an_addressable_step() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["alpha", "beta", "gamma"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, last) = (node(0), node(2));
+
+    let command = sort_command(first, last);
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the sort lands");
+    let delta = applied.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "the step is still one transaction");
+    assert_eq!(delta["ops"][0]["op"], json!("permute"));
+    assert_eq!(texts(&room), ["alpha", "beta", "gamma"]);
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect("the no-op undo lands");
+    assert_eq!(undone.delta.as_ref().and_then(|delta| delta.get("op")), Some(&json!("transaction")));
+    assert_eq!(texts(&room), ["alpha", "beta", "gamma"]);
+}
+
+#[test]
+fn a_sort_over_more_than_64_blocks_stays_an_undo_barrier() {
+    let names: Vec<String> = (0..67).map(|index| format!("p{index:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&refs)));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, last) = (node(0), node(66));
+
+    // The run is already in order: the command changes nothing, but it is wider
+    // than a permute may name, so the step stays a command barrier.
+    let command = sort_command(first, last);
+    room.submit("alice", Role::Editor, command.clone()).expect("a wide sort still lands");
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("a step this wide has no inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+}
+
+#[test]
+fn a_permute_on_an_unknown_node_is_refused_before_mutation() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["one", "two"])));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let before = document_json(&room);
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, 4_242, 0, json!({"op": "permute", "order": [4_242, first]})))
+        .expect_err("an unknown target is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(document_json(&room), before);
+    assert_eq!(room.version(), 0);
+}

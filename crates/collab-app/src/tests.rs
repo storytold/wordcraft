@@ -781,3 +781,78 @@ fn a_foreign_edit_of_a_moved_paragraph_refuses_the_undo_without_touching_the_doc
     assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
     assert_eq!(pair.room.version(), version, "the version did not move");
 }
+
+// --- sorting a run of paragraphs --------------------------------------------
+
+/// Alice sorts three paragraphs: her client plans one structural `permute` with
+/// the ids in their new order, Bob applies the authoritative transaction delta,
+/// and the step's inverse (the old order) reaches both.
+#[allow(clippy::expect_used)]
+fn sorted_pair() -> (FormatPair, Op) {
+    let mut pair = FormatPair::new(&["delta", "bravo", "alpha", "charlie"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(3), off: 0 },
+    };
+    let before = pair.mine.doc.clone();
+    pair.mine.run("para.sort", &json!({})).expect("the UI sorts the paragraphs");
+    let plan = pair.alice.plan(&before, &pair.mine, "para.sort", &json!({})).expect("a plan").remove(0);
+    assert_eq!(plan.kind, OpKind::Structural, "a sort travels as a structural operation");
+    assert_eq!(plan.payload["op"], json!("permute"), "the plan names the ids in their new order");
+    let step = op_from("alice", 1, pair.alice.version, &plan, None);
+    let echo = pair.room.submit("alice", Role::Editor, step.clone()).expect("the sort lands");
+    pair.alice.apply(&echo, &mut pair.mine).expect("own echo is skipped");
+    // A structural answer makes the server broadcast a fresh node map (ADR-0002).
+    pair.alice.set_nodes(&pair.room.nodes());
+    pair.peer.apply(&echo, &mut pair.theirs).expect("the peer applies the sort");
+    assert_eq!(para_texts(&pair.mine), ["alpha", "bravo", "charlie", "delta"]);
+    assert_eq!(para_texts(&pair.theirs), ["alpha", "bravo", "charlie", "delta"]);
+    (pair, step)
+}
+
+#[test]
+fn a_paragraph_sort_undo_lands_as_one_transaction_at_its_author_and_the_peer() {
+    let (mut pair, step) = sorted_pair();
+
+    let undo = history_op("alice", 2, pair.alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    let delta = answer.delta.clone().expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("permute"), "the inverse is the old order");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(para_texts(&pair.mine), ["delta", "bravo", "alpha", "charlie"], "the author is back at the earlier order");
+    assert_eq!(para_texts(&pair.theirs), ["delta", "bravo", "alpha", "charlie"], "the peer converged");
+
+    let redo = history_op("alice", 3, pair.alice.version, &step, HistoryAction::Redo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(para_texts(&pair.mine), ["alpha", "bravo", "charlie", "delta"], "redo sorts again");
+    assert_eq!(para_texts(&pair.theirs), ["alpha", "bravo", "charlie", "delta"]);
+}
+
+#[test]
+fn a_foreign_edit_of_a_sorted_paragraph_refuses_the_undo_without_touching_the_document() {
+    let (mut pair, step) = sorted_pair();
+
+    // Bob types into the block the sort moved to the front (not the step's address).
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "X"})).expect("bob types");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "X"})).expect("a plan").remove(0);
+    let edit = op_from("bob", 1, pair.peer.version, &plan, None);
+    let echo = pair.room.submit("bob", Role::Editor, edit).expect("bob's edit lands");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("own echo is skipped");
+    pair.alice.apply(&echo, &mut pair.mine).expect("alice applies bob's edit");
+
+    let mine_before = serde_json::to_value(&pair.mine.doc).expect("json");
+    let theirs_before = serde_json::to_value(&pair.theirs.doc).expect("json");
+    let version = pair.alice.version;
+    let undo = history_op("alice", 2, version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), mine_before, "the author's document is unchanged");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
+    assert_eq!(pair.room.version(), version, "the version did not move");
+}
