@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::{
     Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
     para_block,
@@ -65,6 +67,24 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
+    // Adopt the revised document's media into the original document: media with identical
+    // bytes reuses the original's key (deduplicated by content), while replaced or new media
+    // receives a fresh key in s.doc.media so both media parts are preserved in the result (#6086).
+    let mut media_map = std::collections::BTreeMap::new();
+    for (key, data) in &revised.media {
+        let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("bin");
+        let new_key = s.doc.add_media((**data).clone(), ext);
+        media_map.insert(key.clone(), new_key);
+    }
+    let mut revised = revised;
+    for b in &mut revised.body {
+        remap_block_media(Arc::make_mut(b), &media_map);
+    }
+    for part in revised.parts.values_mut() {
+        for b in &mut part.blocks {
+            remap_block_media(Arc::make_mut(b), &media_map);
+        }
+    }
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
         // The revised document's text boxes get stories of their own in the result, so its
@@ -164,6 +184,64 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
     Ok(json!({"changes": changes, "author": author, "notHonoured": not_honoured}))
+}
+
+/// Rewrites media keys in an inline object and all nested group children according to `media_map`.
+pub(super) fn remap_object_media(root: &mut InlineObject, media_map: &BTreeMap<String, String>) {
+    let mut todo = vec![root];
+    while let Some(o) = todo.pop() {
+        match o {
+            InlineObject::Image { media, .. } => {
+                if let Some(k) = media_map.get(media) {
+                    *media = k.clone();
+                }
+            }
+            InlineObject::Graphic { graphic, .. } => {
+                let mapped = |m: &str| media_map.get(m).filter(|k| *k != m);
+                if graphic.items.iter().any(|i| matches!(i, wordcraft_doc::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                    for i in &mut Arc::make_mut(graphic).items {
+                        if let wordcraft_doc::graphic::GraphicItem::Image { media, .. } = i
+                            && let Some(k) = media_map.get(media.as_str())
+                        {
+                            *media = k.clone();
+                        }
+                    }
+                }
+            }
+            InlineObject::Group { children, .. } => {
+                for c in children {
+                    todo.push(&mut c.obj);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Rewrites media keys in all paragraphs and table cells within `b` according to `media_map`.
+fn remap_block_media(b: &mut Block, media_map: &BTreeMap<String, String>) {
+    let mut todo = vec![b];
+    while let Some(b) = todo.pop() {
+        match b {
+            Block::Para(p) => {
+                for o in &mut p.objects {
+                    remap_object_media(o, media_map);
+                }
+            }
+            Block::Table(t) => {
+                for row in &mut t.rows {
+                    for cell in &mut row.cells {
+                        if let Some(pic) = &mut cell.props.picture
+                            && let Some(k) = media_map.get(&pic.media)
+                        {
+                            pic.media = k.clone();
+                        }
+                        todo.extend(cell.blocks.iter_mut().map(Arc::make_mut));
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A block's text (a table's cells in order), for matching blocks.

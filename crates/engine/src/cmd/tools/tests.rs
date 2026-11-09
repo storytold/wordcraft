@@ -114,6 +114,142 @@ fn compare_keeps_text_boxes_of_the_original() {
     }
 }
 
+/// #6086: When base and revised have an embedded image at identical size and extents,
+/// but the media bytes were replaced, Compare must emit a tracked deletion of the base
+/// image and tracked insertion of the revised image, and keep both media parts in the
+/// result package.
+#[test]
+fn compare_detects_replaced_image_bytes_with_unchanged_extents() {
+    let make_doc = |bytes: Vec<u8>| -> Document {
+        let mut d = Document::new();
+        let key = d.add_media(bytes, "png");
+        let mut p = Paragraph::new();
+        let img = InlineObject::Image {
+            media: key,
+            w: 120.0,
+            h: 80.0,
+            alt: "photo".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(0, img, &CharProps::default()).unwrap();
+        d.body = vec![Arc::new(Block::Para(p))];
+        d
+    };
+    let base_png = vec![0x89, b'P', b'N', b'G', 1, 1, 1, 1];
+    let rev_png = vec![0x89, b'P', b'N', b'G', 2, 2, 2, 2];
+    let base_doc = make_doc(base_png.clone());
+    let rev_doc = make_doc(rev_png.clone());
+
+    let path = std::env::temp_dir().join(format!("wc-compare-img-replace-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev_doc).unwrap();
+
+    let mut s = Session::new(base_doc);
+    let r = s.run("review.compare", &json!({"path": path.to_string_lossy(), "showIn": "new"})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert!(r["changes"].as_u64().unwrap() >= 1, "an image byte change must be detected as a change");
+    let p = s.doc.body[0].as_para().expect("body has paragraph");
+    assert_eq!(p.objects.len(), 2, "paragraph must have both deleted and inserted images");
+    let objs: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+    assert_eq!(objs.len(), 2, "paragraph must have two objects with offsets");
+    let (off_del, del_img) = objs[0];
+    let (off_ins, ins_img) = objs[1];
+    let (InlineObject::Image { media: m_del, .. }, InlineObject::Image { media: m_ins, .. }) = (del_img, ins_img) else {
+        panic!("both objects must be images");
+    };
+    assert_ne!(m_del, m_ins, "deleted and inserted images must have distinct media keys");
+    assert!(p.props_of_char(off_del).del.is_some(), "base image must have del revision mark");
+    assert!(p.props_of_char(off_ins).ins.is_some(), "revised image must have ins revision mark");
+    assert_eq!(s.doc.media.get(m_del).map(|b| &**b), Some(&base_png));
+    assert_eq!(s.doc.media.get(m_ins).map(|b| &**b), Some(&rev_png));
+
+    // And saving to DOCX and reading back preserves both media files in the package.
+    let out_path = std::env::temp_dir().join(format!("wc-compare-img-out-{}.docx", std::process::id()));
+    crate::io::save_path(&out_path, &s.doc).unwrap();
+    let back = crate::io::open_path(&out_path).unwrap();
+    let _ = std::fs::remove_file(&out_path);
+    assert!(back.media.values().any(|b| **b == base_png), "result package must contain base image bytes");
+    assert!(back.media.values().any(|b| **b == rev_png), "result package must contain revised image bytes");
+
+    // Identical image bytes at identical size: no changes emitted.
+    let base_doc_same = make_doc(base_png.clone());
+    let same_path = std::env::temp_dir().join(format!("wc-compare-img-same-{}.docx", std::process::id()));
+    crate::io::save_path(&same_path, &make_doc(base_png.clone())).unwrap();
+    let mut s_same = Session::new(base_doc_same);
+    let r_same = s_same.run("review.compare", &json!({"path": same_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    let _ = std::fs::remove_file(&same_path);
+    assert_eq!(r_same["changes"], 0, "comparing identical image bytes must emit no changes");
+
+    // Extensionless media in revised document adopts with .bin extension fallback and preserves payload.
+    let extless_bytes = vec![0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];
+    let mut rev_doc_extless = Document::new();
+    rev_doc_extless.media.insert("rawimage".into(), Arc::new(extless_bytes.clone()));
+    let mut p_extless = Paragraph::new();
+    p_extless
+        .insert_object(
+            0,
+            InlineObject::Image {
+                media: "rawimage".into(),
+                w: 120.0,
+                h: 80.0,
+                alt: "photo".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    rev_doc_extless.body = vec![Arc::new(Block::Para(p_extless))];
+    let extless_path = std::env::temp_dir().join(format!("wc-compare-img-extless-{}.json", std::process::id()));
+    crate::io::save_path(&extless_path, &rev_doc_extless).unwrap();
+    let mut s_extless = Session::new(make_doc(base_png));
+    let _ = s_extless.run("review.compare", &json!({"path": extless_path.to_string_lossy(), "showIn": "new"})).unwrap();
+    let _ = std::fs::remove_file(&extless_path);
+    let bin_entry = s_extless.doc.media.iter().find(|(k, _)| k.ends_with(".bin"));
+    assert!(bin_entry.is_some(), "extensionless media falls back to bin extension");
+    assert_eq!(bin_entry.map(|(_, b)| &***b), Some(&extless_bytes[..]));
+
+    // Media inside deeply nested groups is remapped iteratively without recursion limits.
+    let mut deep_obj = InlineObject::Image {
+        media: "deep_img.png".into(),
+        w: 50.0,
+        h: 50.0,
+        alt: "".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    for _ in 0..20 {
+        deep_obj = InlineObject::Group {
+            w: 50.0,
+            h: 50.0,
+            float: Default::default(),
+            ch_w: 50.0,
+            ch_h: 50.0,
+            children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: deep_obj }],
+            canvas: None,
+        };
+    }
+    let mut map = std::collections::BTreeMap::new();
+    map.insert("deep_img.png".into(), "image99.png".into());
+    super::compare::remap_object_media(&mut deep_obj, &map);
+    let mut cur = &deep_obj;
+    while let InlineObject::Group { children, .. } = cur {
+        cur = &children[0].obj;
+    }
+    if let InlineObject::Image { media, .. } = cur {
+        assert_eq!(media, "image99.png", "media inside 20-level group must be remapped");
+    } else {
+        panic!("innermost object must be Image");
+    }
+}
+
 #[test]
 fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
     // Text boxes in both documents, the revised one from a file: every anchor in the result
