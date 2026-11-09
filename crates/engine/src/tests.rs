@@ -5077,7 +5077,7 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
-fn hostile_junk() -> [serde_json::Value; 8] {
+fn hostile_junk() -> [serde_json::Value; 10] {
     [
         json!(null),
         json!({}),
@@ -5087,6 +5087,9 @@ fn hostile_junk() -> [serde_json::Value; 8] {
         json!({"page": 0, "x": 1e30, "y": -1e30, "extend": 1}),
         json!({"width": 1e-9, "height": 1e30, "top": -1e9, "left": 1e9}),
         json!({"section": {"pageW": -1e308, "pageH": 0, "marginTop": 1e30, "header": -5, "columns": {"count": 1000000, "space": -1e300, "widths": [[0, 0]]}}}),
+        // Strict export (#6005): the flag, and file.strictReport's `page`, with junk.
+        json!({"strict": true, "page": 0, "scale": 0, "markup": true}),
+        json!({"strict": "x", "page": 1e30, "scale": 1e-9, "markup": "x"}),
     ]
 }
 
@@ -5183,6 +5186,9 @@ fn hostile_file_params_never_panic() {
             json!({"path": path, "password": "x", "format": "wordml2003", "markup": "x", "confirmDamaged": 1}),
             json!({"path": path, "password": 5, "format": 5, "markup": true}),
             json!({"path": path, "page": 0, "scale": 0, "width": -1e308, "alt": 5}),
+            json!({"path": path, "strict": true, "page": 1, "scale": 0.1}),
+            json!({"path": path, "strict": true, "page": 1e30, "markup": true, "format": "flatopc"}),
+            json!({"path": path, "strict": 5, "page": -1}),
             json!({"path": path, "data": "not base64!"}),
             json!({"path": path, "data": "AAAA"}),
             json!({"path": path, "pagesPerSheet": 7, "range": "x", "pages": "9-1,,", "parity": "x", "copies": 3, "paper": "x"}),
