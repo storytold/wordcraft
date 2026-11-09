@@ -421,6 +421,17 @@ impl DocLayout {
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        if let Some((_story, table, row, cell)) = self.cell_at(page, x, y).filter(|(s, ..)| *s == story) {
+            let in_cell = |p: &Path| {
+                p.0.starts_with(&table.0) && p.0.get(table.0.len()) == Some(&(row as u32)) && p.0.get(table.0.len() + 1) == Some(&(cell as u32))
+            };
+            if let Some(best) = lines.iter().filter(|l| in_cell(l.path)).min_by(nearest) {
+                return Some(at(best));
+            }
+            if let Some(pos) = nearest_turned(p, story, x, y, &|p| !in_cell(p)) {
+                return Some(pos);
+            }
+        }
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
             return Some(at(best));
         }

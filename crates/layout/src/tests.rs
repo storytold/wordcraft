@@ -2302,6 +2302,69 @@ fn tables_lay_out_cells() {
 }
 
 #[test]
+fn clicking_in_a_table_cell_stays_in_that_cell_even_away_from_center() {
+    use wordcraft_doc::props::VAlign;
+    crate::test_fonts();
+    let mut d = Document::from_text("before\nafter");
+    let mut t = Table::new(2, 3, 468.0);
+    // Row 0, Cell 0 has one short line:
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Short", Default::default()))];
+    // Row 0, Cell 1 has multiple lines, making the row tall:
+    t.rows[0].cells[1].blocks =
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6", Default::default()))];
+    // Row 0, Cell 2 is empty:
+    t.rows[0].cells[2].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+
+    // Row 1, Cell 0 is vertically centered:
+    t.rows[1].cells[0].props.valign = Some(VAlign::Center);
+    t.rows[1].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Centered", Default::default()))];
+    // Row 1, Cell 1 is tall:
+    t.rows[1].cells[1].blocks =
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("R1 L1\nR1 L2\nR1 L3\nR1 L4\nR1 L5", Default::default()))];
+    // Row 1, Cell 2 has turned text:
+    t.rows[1].cells[2].props.text_direction = TextDirection::Down;
+    t.rows[1].cells[2].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Turned", Default::default()))];
+
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+
+    let cell_rect = |r: usize, c: usize| {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Cell { rect, row, cell, .. } if *row == r && *cell == c => Some(*rect),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let r00 = cell_rect(0, 0);
+    let r02 = cell_rect(0, 2);
+    let r10 = cell_rect(1, 0);
+    let r12 = cell_rect(1, 2);
+
+    // 1. Click near the bottom of Row 0, Cell 0 (away from its short text, near row boundary):
+    let click00 = l.hit(0, r00.x + 10.0, r00.bottom() - 4.0, StoryRef::Body).unwrap();
+    assert_eq!(click00.path, Path(vec![1, 0, 0, 0]), "click in (0, 0) must stay in (0, 0), got {:?}", click00.path);
+
+    // 2. Click in the middle/bottom of empty Row 0, Cell 2:
+    let click02 = l.hit(0, r02.x + 20.0, r02.y + r02.h * 0.75, StoryRef::Body).unwrap();
+    assert_eq!(click02.path, Path(vec![1, 0, 2, 0]), "click in empty (0, 2) must stay in (0, 2), got {:?}", click02.path);
+
+    // 3. Click near top of vertically centered Row 1, Cell 0 (above centered text):
+    let click10_top = l.hit(0, r10.x + 15.0, r10.y + 4.0, StoryRef::Body).unwrap();
+    assert_eq!(click10_top.path, Path(vec![1, 1, 0, 0]), "click near top of centered (1, 0) must stay in (1, 0), got {:?}", click10_top.path);
+
+    // 4. Click near bottom of vertically centered Row 1, Cell 0 (below centered text):
+    let click10_bot = l.hit(0, r10.x + 15.0, r10.bottom() - 4.0, StoryRef::Body).unwrap();
+    assert_eq!(click10_bot.path, Path(vec![1, 1, 0, 0]), "click near bottom of centered (1, 0) must stay in (1, 0), got {:?}", click10_bot.path);
+
+    // 5. Click in turned text Row 1, Cell 2 (away from text edge, inside cell):
+    let click12 = l.hit(0, r12.x + 10.0, r12.bottom() - 6.0, StoryRef::Body).unwrap();
+    assert_eq!(click12.path, Path(vec![1, 1, 2, 0]), "click in turned cell (1, 2) must stay in (1, 2), got {:?}", click12.path);
+}
+
+#[test]
 fn a_tables_own_space_above_and_below_moves_the_text() {
     // ODT tables' `fo:margin-top`/`fo:margin-bottom`: added to the spacing around the table.
     let lay_with = |space: Option<(f32, f32)>| {
