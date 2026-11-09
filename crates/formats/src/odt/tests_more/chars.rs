@@ -285,6 +285,168 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
 
+/// `default` as a document's default paragraph style's text properties, with `standard` as its
+/// Standard style's.
+fn with_default_text(default: &str, standard: &str) -> Vec<u8> {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties {default}/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties {standard}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hallo</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::odt::tests::package(&content, Some(&styles))
+}
+
+/// `styles`' default paragraph style.
+fn default_style(styles: &str) -> &str {
+    let at = styles.find(r#"<style:default-style style:family="paragraph">"#).expect("a default paragraph style");
+    styles[at..].split("</style:default-style>").next().unwrap_or_default()
+}
+
+/// A document's language is the one its file states, and a model-written save says it.
+#[test]
+fn the_default_language_is_the_files_and_written_back_from_the_model() {
+    let d = import(&with_default_text(r#"fo:language="de" fo:country="DE""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).lang.as_deref(), Some("de-DE"));
+    // Written from the model (a style or list definition changed), it is still the file's: without
+    // it LibreOffice shows the document in its own default language.
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="de" fo:country="DE""#), "{styles}");
+    assert!(!styles.contains(r#"fo:language="en""#), "no style says English: {styles}");
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang.as_deref(), Some("de-DE"));
+    // Saved as read, the styles WordCraft adds beside the file's don't say English either.
+    let styles = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    assert!(!styles.contains(r#"fo:language="en""#), "{styles}");
+}
+
+/// The document's language as WordCraft has it is Normal's (a Word file's Normal may state
+/// another than its defaults): that is what the default style says when written from the model.
+#[test]
+fn the_documents_language_written_is_normals() {
+    use std::sync::Arc;
+    let mut d = Document::new();
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("en-US".into());
+    Arc::make_mut(&mut d.styles).get_mut("Normal").unwrap().chr.lang = Some("fr-FR".into());
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    let def = s.split(r#"<style:default-style style:family="paragraph""#).nth(1).and_then(|t| t.split("</style:default-style>").next()).unwrap();
+    assert!(def.contains(r#"fo:language="fr""#) && def.contains(r#"fo:country="FR""#), "{def}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.styles.resolve_char(None, &Default::default()).lang.as_deref(), Some("fr-FR"));
+}
+
+/// A file stating no language, or `none` or `zxx`, has none: not the English of new documents.
+#[test]
+fn a_file_stating_no_language_has_none_and_writes_none() {
+    let d = import(&with_default_text("", "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang, None, "not the English of WordCraft's new documents");
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    assert!(!crate::odt::tests::entry(&saved, "styles.xml").contains("fo:language"));
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang, None);
+    // `none` and `zxx` are no language.
+    for none in ["none", "zxx"] {
+        let d = import(&with_default_text(&format!(r#"fo:language="{none}" fo:country="none""#), "")).unwrap();
+        assert_eq!(d.styles.default_chr.lang, None, "{none}");
+    }
+}
+
+/// A language only Standard states is the document's, and a model-written save says it in the
+/// default style.
+#[test]
+fn a_language_only_the_standard_style_states_survives_a_rewrite() {
+    let d = import(&with_default_text("", r#"fo:language="nb" fo:country="NO""#)).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="nb" fo:country="NO""#), "{styles}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+    let p = back.body[0].as_para().unwrap();
+    let lang =
+        p.runs.first().and_then(|r| r.props.lang.clone()).or_else(|| back.styles.resolve_char(p.props.style.as_deref(), &Default::default()).lang);
+    assert_eq!(lang.as_deref(), Some("nb-NO"), "{}", crate::odt::tests::entry(&saved, "styles.xml"));
+}
+
+/// A language with a script keeps it, read and written: the document's, a style's for each kind
+/// of text, and a run's.
+#[test]
+fn a_language_with_a_script_keeps_it() {
+    let d = import(&with_default_text(r#"fo:language="sr" fo:script="Latn" fo:country="RS""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("sr-Latn-RS"));
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="sr" fo:script="Latn" fo:country="RS""#), "{styles}");
+    assert!(!styles.contains(r#"fo:country="Latn""#), "{styles}");
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang.as_deref(), Some("sr-Latn-RS"));
+
+    let (latin, asian, complex) = (
+        r#"fo:language="sr" fo:script="Cyrl" fo:country="BA""#,
+        r#"style:language-asian="zh" style:script-asian="Hant" style:country-asian="TW""#,
+        r#"style:language-complex="az" style:script-complex="Arab" style:country-complex="IR""#,
+    );
+    let run = r#"fo:language="bs" fo:script="Latn" fo:country="BA""#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties {latin} {asian} {complex}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties {run}/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="Eigen">Own <text:span text:style-name="T1">span</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &wordcraft_doc::Document| {
+        let chr = &d.styles.get("Eigen").unwrap().chr;
+        assert_eq!(
+            (chr.lang.as_deref(), chr.lang_ea.as_deref(), chr.lang_bidi.as_deref()),
+            (Some("sr-Cyrl-BA"), Some("zh-Hant-TW"), Some("az-Arab-IR"))
+        );
+        assert_eq!(d.body[0].as_para().unwrap().runs.iter().find_map(|r| r.props.lang.as_deref()), Some("bs-Latn-BA"));
+    };
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    check(&d);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let written = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(written.contains(latin) && written.contains(asian) && written.contains(complex), "{written}");
+    assert!(crate::odt::tests::entry(&saved, "content.xml").contains(run));
+    check(&import(&saved).unwrap());
+
+    // No country, a region of digits, and what isn't a script.
+    let attrs = crate::odt::writer::lang_attrs;
+    assert_eq!(attrs("zh-Hant", ""), r#" fo:language="zh" fo:script="Hant""#);
+    assert_eq!(attrs("es-419", ""), r#" fo:language="es" fo:country="419""#);
+    assert_eq!(attrs("de-DE", "-asian"), r#" style:language-asian="de" style:country-asian="DE""#);
+    let d = import(&with_default_text(r#"fo:language="sr" fo:script="Latin1" fo:country="RS""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("sr-RS"));
+}
+
+/// A style with no parent inherits the default style's language, not Standard's (the document's
+/// here), and one based on Standard takes Standard's.
+#[test]
+fn a_style_with_no_parent_has_the_default_styles_language() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="en" fo:country="US"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:language="de" fo:country="DE"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph"/><style:style style:name="Gesagt" style:display-name="Gesagt" style:family="paragraph"><style:text-properties fo:language="fr" fo:country="FR"/></style:style><style:style style:name="Kind" style:display-name="Kind" style:family="paragraph" style:parent-style-name="Standard"/></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Eigen">a</text:p><text:p text:style-name="Gesagt">b</text:p><text:p text:style-name="Kind">c</text:p></office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &wordcraft_doc::Document| {
+        assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
+        let lang = |id: &str| d.styles.resolve_char(Some(id), &Default::default()).lang;
+        assert_eq!(lang("Eigen").as_deref(), Some("en-US"), "no parent: the default style's");
+        assert_eq!(lang("Gesagt").as_deref(), Some("fr-FR"), "its own");
+        assert_eq!(lang("Kind").as_deref(), Some("de-DE"), "based on Standard");
+    };
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    check(&d);
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap());
+}
+
+/// WordCraft's own documents say their language, so a reader doesn't use its own default.
+#[test]
+fn a_new_documents_language_is_stated() {
+    let styles = crate::odt::tests::entry(&export(&wordcraft_doc::Document::new()).unwrap(), "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="en" fo:country="US""#), "{styles}");
+}
+
 #[test]
 fn a_size_is_every_scripts_size() {
     // Chinese text set to 24 pt stayed at the default size in LibreOffice: only the Latin size was
