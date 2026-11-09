@@ -121,7 +121,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
-        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
+        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
         let Some(rp) = rp else { return };
         // #654: header + two rows of 20 px fields fit the content height above the group title
         // (1.5 pt between rows; 3 ran 2.5 pt into it); labels and fields sit on shared columns,
@@ -139,44 +139,68 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         };
         // Each field is named by its column and row ("Indent Left:") for screen readers.
         use crate::widgets::labelled_by;
-        egui::Grid::new("layout_para").spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |ui| {
-            let indent = ui.label(egui::RichText::new(tl!("Indent")).small().strong());
-            ui.label("");
-            let spacing = spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong());
-            ui.end_row();
+        crate::rtl::Table::new("layout_para").columns(0).spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |t| {
+            let (mut indent, mut spacing) = (None, None);
+            t.row(|r| {
+                r.cell(|ui| indent = Some(ui.label(egui::RichText::new(tl!("Indent")).small().strong())));
+                r.cell(|ui| ui.label(""));
+                r.cell(|ui| spacing = Some(spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong())));
+            });
+            let (Some(indent), Some(spacing)) = (indent, spacing) else { return };
             // Indents in the File › Options unit.
             let u = crate::options::unit();
             let k = u.pt_per_unit();
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
-            let label = ui.label(egui::RichText::new(tl!("Left:")).small());
-            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
-            labelled_by(&field, &[&indent, &label]);
-            if field.changed() {
-                let _ = app.run("para.indents", json!({"left": l * k}));
-            }
-            let label = spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
-            labelled_by(&field, &[&spacing, &label]);
-            if field.changed() {
-                let _ = app.run("para.spacing", json!({"before": b}));
-            }
-            ui.end_row();
-            let mut r = rp.indent_right / k;
+            t.row(|r| {
+                let (mut left, mut before) = (None, None);
+                r.cell(|ui| left = Some(ui.label(egui::RichText::new(tl!("Left:")).small())));
+                r.cell(|ui| {
+                    let field = ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+                    if let Some(label) = &left {
+                        labelled_by(&field, &[&indent, label]);
+                    }
+                    if field.changed() {
+                        let _ = app.run("para.indents", json!({"left": l * k}));
+                    }
+                });
+                r.cell(|ui| before = Some(spaced(ui, egui::RichText::new(tl!("Before:")).small())));
+                r.cell(|ui| {
+                    let field = ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+                    if let Some(label) = &before {
+                        labelled_by(&field, &[&spacing, label]);
+                    }
+                    if field.changed() {
+                        let _ = app.run("para.spacing", json!({"before": b}));
+                    }
+                });
+            });
+            let mut right = rp.indent_right / k;
             let mut a = rp.space_after;
-            let label = ui.label(egui::RichText::new(tl!("Right:")).small());
-            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
-            labelled_by(&field, &[&indent, &label]);
-            if field.changed() {
-                let _ = app.run("para.indents", json!({"right": r * k}));
-            }
-            let label = spaced(ui, egui::RichText::new(tl!("After:")).small());
-            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
-            labelled_by(&field, &[&spacing, &label]);
-            if field.changed() {
-                let _ = app.run("para.spacing", json!({"after": a}));
-            }
-            ui.end_row();
+            t.row(|r| {
+                let (mut right_label, mut after) = (None, None);
+                r.cell(|ui| right_label = Some(ui.label(egui::RichText::new(tl!("Right:")).small())));
+                r.cell(|ui| {
+                    let field =
+                        ui.add_sized(FIELD, egui::DragValue::new(&mut right).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+                    if let Some(label) = &right_label {
+                        labelled_by(&field, &[&indent, label]);
+                    }
+                    if field.changed() {
+                        let _ = app.run("para.indents", json!({"right": right * k}));
+                    }
+                });
+                r.cell(|ui| after = Some(spaced(ui, egui::RichText::new(tl!("After:")).small())));
+                r.cell(|ui| {
+                    let field = ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+                    if let Some(label) = &after {
+                        labelled_by(&field, &[&spacing, label]);
+                    }
+                    if field.changed() {
+                        let _ = app.run("para.spacing", json!({"after": a}));
+                    }
+                });
+            });
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {

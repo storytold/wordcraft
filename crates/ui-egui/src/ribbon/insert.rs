@@ -2,6 +2,48 @@ use super::common::{mi, mi_icon, stack};
 use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
 
+/// The basic shapes of Insert › Shapes: tooltip and `insert.shape` kind.
+pub(super) const SHAPE_TILES: [(&str, &str); 9] = [
+    ("Rectangle", "rectangle"),
+    ("Rounded Rectangle", "roundedRectangle"),
+    ("Oval", "ellipse"),
+    ("Triangle", "triangle"),
+    ("Diamond", "diamond"),
+    ("Line", "line"),
+    ("Arrow", "arrow"),
+    ("Star", "star"),
+    ("Heart", "heart"),
+];
+
+/// Shapes per row of the Insert › Shapes grid.
+const SHAPE_TILES_PER_ROW: usize = 5;
+
+/// The basic shapes as a grid of drawn tiles (#4349), each named by its tooltip; a click inserts it.
+pub(super) fn shape_gallery(ui: &mut Ui, app: &mut WordApp) {
+    use crate::{icons, theme::Tokens};
+    use egui::{Rect, Sense, vec2};
+    let t = Tokens::get(ui.ctx());
+    let enabled = crate::widgets::enabled(app, "insert.shape");
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+        for row in SHAPE_TILES.chunks(SHAPE_TILES_PER_ROW) {
+            ui.horizontal(|ui| {
+                for (label, kind) in row {
+                    let (r, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
+                    let name = crate::tl!(label);
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
+                    crate::widgets::bg(ui, r, &resp, false, &t);
+                    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(24.0, 24.0)), &format!("shape.{kind}"), t.icon, t.accent);
+                    if resp.on_hover_text(name).clicked() {
+                        crate::widgets::run_from_ribbon(app, "insert.shape", json!({"kind": kind}));
+                        ui.close();
+                    }
+                }
+            });
+        }
+    });
+}
+
 pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
         stack(ui, |ui| {
@@ -26,28 +68,18 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
             mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
             mi(ui, app, "Convert Text to Table…", "table.fromText", json!({}));
             ui.menu_button(tl!("Quick Tables"), |ui| {
-                mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
-                mi(ui, app, "Matrix", "table.quick", json!({"kind": "matrix"}));
-                mi(ui, app, "Calendar", "table.quick", json!({"kind": "calendar"}));
+                crate::rtl::root(ui, |ui| {
+                    mi(ui, app, "Tabular List", "table.quick", json!({"kind": "tabular"}));
+                    mi(ui, app, "Matrix", "table.quick", json!({"kind": "matrix"}));
+                    mi(ui, app, "Calendar", "table.quick", json!({"kind": "calendar"}));
+                })
             });
         });
     });
     group(ui, "Illustrations", None, app, |ui, app| {
         big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"), |ui, app| {
-            for (l, k) in [
-                ("Rectangle", "rectangle"),
-                ("Rounded Rectangle", "roundedRectangle"),
-                ("Oval", "ellipse"),
-                ("Triangle", "triangle"),
-                ("Diamond", "diamond"),
-                ("Line", "line"),
-                ("Arrow", "arrow"),
-                ("Star", "star"),
-                ("Heart", "heart"),
-            ] {
-                mi_icon(ui, app, &format!("shape.{k}"), l, "insert.shape", json!({"kind": k}));
-            }
+            shape_gallery(ui, app);
             ui.separator();
             mi_icon(ui, app, "canvas", "New Drawing Canvas", "insert.canvas", json!({}));
             // Connectors: glue their ends to shapes by dragging them (shape.connect).
@@ -175,7 +207,7 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             items.truncate(30);
-            egui::Grid::new("syms").show(ui, |ui| {
+            crate::rtl::grid(ui, egui::Grid::new("syms"), |ui| {
                 for (i, (c, font)) in items.iter().enumerate() {
                     let b = ui.button(egui::RichText::new(c).size(16.0));
                     let b = if font.is_empty() { b } else { b.on_hover_text(font) };
@@ -197,12 +229,18 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What a Drop Cap menu choice sends: the position, and `keep` so each selected paragraph that has
+/// a drop cap keeps its own lines, distance and font (None takes it all away).
+pub(super) fn drop_cap_payload(position: &str) -> serde_json::Value {
+    if position == "none" { json!({"position": position}) } else { json!({"position": position, "keep": true}) }
+}
+
 /// Insert › Drop Cap's menu (#2601): None, Dropped and In margin (the current one checked),
 /// then the Drop Cap dialog.
 fn drop_cap_items(ui: &mut Ui, app: &mut WordApp) {
-    let current = wordcraft_engine::cmd::insert::drop_cap_state(&app.session).position;
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
     for (label, v) in [("None", "none"), ("Dropped", "dropped"), ("In margin", "margin")] {
-        mi_check(ui, app, label, current == v, "insert.dropCap", json!({"position": v}));
+        mi_check(ui, app, label, state.position == v, "insert.dropCap", drop_cap_payload(v));
     }
     ui.separator();
     mi(ui, app, "Drop Cap Options…", "ui.dialog", json!({"name": "dropCap"}));
