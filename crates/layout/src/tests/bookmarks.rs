@@ -162,6 +162,8 @@ fn a_bookmark_across_paragraphs_opens_in_one_and_closes_in_the_other() {
     assert!(b[1].top > b[0].bottom, "the end is on the next paragraph's line");
 }
 
+/// Hidden text that isn't shown takes no room, so a bookmark round only that marks a place: an
+/// I-beam, as in Word, and its two brackets again once hidden text is shown.
 #[test]
 fn a_bookmark_round_hidden_text_is_an_i_beam_until_the_text_is_shown() {
     let mut d = Document::from_text("Hello secret world");
@@ -181,6 +183,8 @@ fn a_bookmark_round_hidden_text_is_an_i_beam_until_the_text_is_shown() {
     at_caret(&shown, &b[1], Pos::body(0, 15));
 }
 
+/// The P3 on #5422, checked in Word 16: brackets round tracked-deleted text in markup view, an
+/// I-beam where it was in No Markup.
 #[test]
 fn a_bookmark_round_tracked_deleted_text_is_bracketed_in_markup_and_an_i_beam_without() {
     // As Word 16 shows it: in All Markup the struck-through text is on screen and the brackets go
@@ -205,6 +209,7 @@ fn a_bookmark_round_tracked_deleted_text_is_bracketed_in_markup_and_an_i_beam_wi
     }
 }
 
+/// A paragraph that takes no room at all shows no bookmark mark either, not even one of no height.
 #[test]
 fn a_bookmark_in_a_paragraph_left_out_altogether_shows_nothing() {
     // A paragraph whose text and mark are all a tracked deletion takes no room in No Markup.
@@ -235,6 +240,7 @@ fn right_to_left_text_turns_the_brackets_round() {
     assert!(b[0].x > b[1].x);
 }
 
+/// Many bookmarks over many lines of one paragraph: each line draws its own, in place (#3614).
 #[test]
 fn every_bookmark_of_a_long_paragraph_shows_on_its_own_line() {
     // 300 words over many lines, each its own bookmark.
