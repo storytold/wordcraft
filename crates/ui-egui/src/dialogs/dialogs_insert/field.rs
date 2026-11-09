@@ -311,7 +311,9 @@ impl FieldForm {
     pub fn toggle_codes(&mut self) {
         if !self.codes {
             self.code = self.instruction();
-        } else if takes_text_format(&self.name) && wordcraft_layout::fields::field_name(&self.code) == self.name {
+        } else if takes_text_format(&self.name)
+            && (wordcraft_layout::fields::field_name(&self.code) == self.name || self.name == "MERGEFIELD" && is_merge_field(&self.code))
+        {
             self.typed_text_formats = text_formats(&self.code);
             self.text_format = self.typed_text_formats.last().copied().unwrap_or_default().to_string();
         }
@@ -325,13 +327,29 @@ impl FieldForm {
             return None;
         }
         let name = wordcraft_layout::fields::field_name(&code);
-        Some(if name == "MERGEFIELD" { json!({"instr": code, "result": format!("«{}»", merge_field_name(&code))}) } else { json!({"instr": code}) })
+        Some(if name == "MERGEFIELD" || is_merge_field(&code) {
+            json!({"instr": code, "result": format!("«{}»", merge_field_name(&code))})
+        } else {
+            json!({"instr": code})
+        })
     }
+}
+
+/// The byte where a field code's type ends: at a space or a quote, as mail merge reads it.
+fn field_type_end(code: &str) -> usize {
+    code.find(|c: char| c.is_whitespace() || c == '"').unwrap_or(code.len())
+}
+
+/// Whether a typed code is a `MERGEFIELD`, including one with no space before its quoted name.
+fn is_merge_field(code: &str) -> bool {
+    let code = code.trim_start();
+    code[..field_type_end(code)].eq_ignore_ascii_case("MERGEFIELD")
 }
 
 /// The merge field a `MERGEFIELD` code names (quoted names may hold spaces).
 fn merge_field_name(code: &str) -> String {
-    let rest = code.trim_start().split_once(char::is_whitespace).map(|x| x.1.trim_start()).unwrap_or("");
+    let code = code.trim_start();
+    let rest = code[field_type_end(code)..].trim_start();
     match rest.strip_prefix('"') {
         Some(q) => q.split('"').next().unwrap_or("").to_string(),
         None => rest.split_whitespace().next().unwrap_or("").to_string(),

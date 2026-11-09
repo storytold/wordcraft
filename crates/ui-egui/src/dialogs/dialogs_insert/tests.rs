@@ -265,6 +265,25 @@ fn field_dialog_text_format_keeps_every_typed_case_switch() {
     assert_eq!(f.final_code(), r"SUBJECT \* Caps \* MERGEFORMAT");
 }
 
+/// A typed `MERGEFIELD` code's type ends at a quote as well as a space, as mail merge reads it.
+#[test]
+fn field_dialog_reads_a_typed_merge_field_with_no_space_before_its_quote() {
+    let a = app();
+    let mut f = FieldForm::new(&a);
+    f.select("MERGEFIELD");
+    f.toggle_codes();
+    f.code = r#"MERGEFIELD"City" \* Lower"#.into();
+    assert_eq!(f.params().unwrap()["result"], "«City»");
+    f.toggle_codes();
+    assert_eq!(f.text_format, "Lower");
+    // Another field whose name only starts the same way is not this one.
+    f.choose_text_format("");
+    f.toggle_codes();
+    f.code = r"MERGEFIELDX \* Lower".into();
+    f.toggle_codes();
+    assert_eq!(f.text_format, "");
+}
+
 /// The Field dialog lists Word's document information fields, and the counts take a number
 /// format.
 #[test]
