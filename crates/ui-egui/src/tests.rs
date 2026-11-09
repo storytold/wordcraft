@@ -1803,9 +1803,8 @@ fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
 }
 
 /// A pointer zoom stretches the pages' last rasters rather than rendering each in-between
-/// size: a notch (22 %) renders nothing until it stops, then the page once; a long zoom renders
-/// again only when a raster would be stretched past half again its size. A zoom that isn't a
-/// gesture (View › Zoom) renders at once.
+/// size: a notch (22 %) or a long zoom renders nothing while it moves, then the page once when
+/// it holds still. A zoom that isn't a gesture (View › Zoom) renders at once.
 #[test]
 fn a_pointer_zoom_stretches_pages_until_it_stops() {
     let ctx = egui::Context::default();
@@ -1837,7 +1836,7 @@ fn a_pointer_zoom_stretches_pages_until_it_stops() {
         modifiers: egui::Modifiers::COMMAND,
     };
     // Frames until the zoom stops; returns (frames with a new scale, rasters rendered in them,
-    // rasters rendered in the frame it stopped).
+    // rasters rendered in the second after it stopped).
     let ease = |a: &mut WordApp, frame: &mut dyn FnMut(&mut WordApp, Vec<egui::Event>), notches: &[usize]| {
         let before = a.canvas.rasters;
         let (mut moving, mut last, mut f) = (0, a.canvas.scale, 0);
@@ -1846,6 +1845,9 @@ fn a_pointer_zoom_stretches_pages_until_it_stops() {
             frame(a, if notches.contains(&f) { vec![wheel()] } else { Vec::new() });
             f += 1;
             if a.canvas.scale == last && f > notches.iter().max().copied().unwrap_or(0) {
+                for _ in 0..60 {
+                    frame(a, Vec::new());
+                }
                 return (moving, ahead - before, a.canvas.rasters - ahead);
             }
             moving += usize::from(a.canvas.scale != last);
@@ -1856,13 +1858,12 @@ fn a_pointer_zoom_stretches_pages_until_it_stops() {
     let start = a.canvas.scale;
     let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0]);
     assert!(moving >= 3 && a.canvas.scale / start > 1.2, "a notch eases in: {moving} frames");
-    assert_eq!((while_moving, at_rest), (0, 1), "no raster while it moves ({moving} frames), one the frame it stops");
-    // A long zoom (three notches, about 1.8x): rendered again only every half again.
+    assert_eq!((while_moving, at_rest), (0, 1), "no raster while it moves ({moving} frames), one once it stops");
+    // A long zoom (three notches, about 1.8x): the same.
     let start = a.canvas.scale;
     let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0, 3, 6]);
-    let rasters = while_moving + at_rest;
     assert!(a.canvas.scale / start > 1.7, "{}", a.canvas.scale / start);
-    assert!((2..=3).contains(&rasters) && rasters < moving as u64, "{rasters} rasters over {moving} frames");
+    assert_eq!((while_moving, at_rest), (0, 1), "no raster while it moves ({moving} frames), one once it stops");
     // View › Zoom isn't a gesture: the page is rendered at the new size in that frame.
     let before = a.canvas.rasters;
     a.run("view.zoom", json!({"value": 100.0})).unwrap();

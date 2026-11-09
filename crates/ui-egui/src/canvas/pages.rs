@@ -4,10 +4,8 @@ use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, Wo
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
+pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
-    hinted.hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
@@ -84,18 +82,10 @@ impl PageKeys {
     }
 }
 
-/// What page `i` shows, whatever its size: its content and the view (`view_key` with the
-/// hinting fixed). A raster that showed this may be stretched to stand in for the page.
-pub(super) fn page_shows(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
+/// The raster cache key of page `i`: its content and the view, at any raster scale.
+pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (view, app.canvas.page_keys.content(layout, i)).hash(&mut h);
-    h.finish()
-}
-
-/// The texture cache key of page `i`: its content, the view, and the raster scale.
-pub(super) fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, scale_px.to_bits(), app.canvas.page_keys.content(layout, i)).hash(&mut h);
     h.finish()
 }
 
@@ -116,24 +106,32 @@ pub(super) fn texel_aligned_rect(layout: Rect, texture_px: egui::Vec2, ppp: f32)
     Rect::from_min_size(pos2(snap(layout.min.x), snap(layout.min.y)), texture_px / ppp)
 }
 
-/// Tile indices intersecting the view, in a fixed grid of raster pixels. The grid follows the
-/// document, not the viewport, so scrolling never changes tile contents or their cache keys.
-pub(super) fn visible_tiles(page_rect: Rect, clip: Rect, screen_scale: f32, raster_scale: f32, tile_height_px: usize) -> std::ops::Range<usize> {
+/// The rows and columns of tiles intersecting `clip`, in a fixed grid of `tile_px` raster pixels
+/// over the page. The grid follows the document, not the viewport, so scrolling never changes
+/// tile contents or their cache keys.
+pub(super) fn visible_tiles(
+    page_rect: Rect,
+    clip: Rect,
+    screen_scale: f32,
+    raster_scale: f32,
+    tile_px: usize,
+) -> (std::ops::Range<usize>, std::ops::Range<usize>) {
     if !page_rect.intersects(clip)
         || !screen_scale.is_finite()
         || !raster_scale.is_finite()
         || screen_scale <= 0.0
         || raster_scale <= 0.0
-        || tile_height_px == 0
+        || tile_px == 0
     {
-        return 0..0;
+        return (0..0, 0..0);
     }
-    let total_px = (page_rect.height() / screen_scale * raster_scale).ceil() as usize;
-    let count = total_px.div_ceil(tile_height_px);
-    let at = |y: f32| ((y - page_rect.min.y).clamp(0.0, page_rect.height()) / screen_scale * raster_scale) / tile_height_px as f32;
-    let first = (at(clip.top()).floor() as usize).min(count);
-    let last = (at(clip.bottom()).ceil() as usize).min(count);
-    first..last.max(first)
+    let span = |lo: f32, len: f32, from: f32, to: f32| {
+        let count = ((len / screen_scale * raster_scale).ceil() as usize).div_ceil(tile_px);
+        let at = |v: f32| ((v - lo).clamp(0.0, len) / screen_scale * raster_scale) / tile_px as f32;
+        let first = (at(from).floor() as usize).min(count);
+        first..(at(to).ceil() as usize).min(count).max(first)
+    };
+    (span(page_rect.min.y, page_rect.height(), clip.top(), clip.bottom()), span(page_rect.min.x, page_rect.width(), clip.left(), clip.right()))
 }
 
 pub(crate) fn page_screen_scale(rect: Rect, page: &Page, fallback: f32) -> f32 {

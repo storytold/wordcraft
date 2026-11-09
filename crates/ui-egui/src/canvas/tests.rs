@@ -1,5 +1,7 @@
+use super::pages::{page_image, texel_aligned_rect};
 use super::*;
 use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+use std::collections::HashSet;
 
 /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
 /// table; the document, its revision and undo history stay as they were, and without a
@@ -345,7 +347,7 @@ fn caret_contrasts_with_what_lies_under_it() {
     let at = |a: &mut WordApp, off: usize| {
         let layout = a.session.layout();
         let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-        let view = view_key(a, false, None, true);
+        let view = view_key(a, false, None);
         caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
     };
     assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -372,19 +374,19 @@ fn read_mode_page_color_sets_the_reading_paper() {
     a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
     let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-    let print_key = view_key(&a, false, None, true);
+    let print_key = view_key(&a, false, None);
     a.run("view.readMode", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-    let none_key = view_key(&a, false, None, true);
+    let none_key = view_key(&a, false, None);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
     assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-    let sepia_key = view_key(&a, false, None, true);
+    let sepia_key = view_key(&a, false, None);
     a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
     assert!(page_render_options(&a, false).dark);
     let d = wordcraft_render::DARK_PAPER;
     assert_eq!(paper(&a), Rgb(d, d, d));
-    let inverse_key = view_key(&a, false, None, true);
+    let inverse_key = view_key(&a, false, None);
     let keys = [print_key, none_key, sepia_key, inverse_key];
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[..i].contains(k), "each paper has its own view key");
@@ -3210,20 +3212,26 @@ fn long_web_page_uses_only_visible_native_resolution_tiles() {
     let viewport = Rect::from_min_size(pos2(0.0, 100.0), vec2(1440.0, 700.0));
     assert!(17_843.0 * raster_scale > 8192.0);
     assert!(800.0 * raster_scale < 8192.0);
-    let tiles = visible_tiles(page, viewport, screen_scale, raster_scale, TILE_HEIGHT_PX);
-    assert!(!tiles.is_empty());
-    assert!(tiles.len() <= 3, "only the viewport should be rasterized: {tiles:?}");
+    let (rows, cols) = visible_tiles(page, viewport, screen_scale, raster_scale, TILE_PX);
+    assert!(!rows.is_empty());
+    assert!(rows.len() <= 3, "only the viewport should be rasterized: {rows:?}");
+    assert_eq!(cols, 0..3, "the page is 2134 px wide: three columns of tiles");
     let total_px = (17_843.0 * raster_scale).ceil() as usize;
-    for tile in tiles {
-        let start = tile * TILE_HEIGHT_PX;
+    for tile in rows {
+        let start = tile * TILE_PX;
         assert!(start < total_px);
-        assert!(total_px.saturating_sub(start).min(TILE_HEIGHT_PX) <= TILE_HEIGHT_PX);
+        assert!(total_px.saturating_sub(start).min(TILE_PX) <= TILE_PX);
     }
-    assert_eq!(visible_tiles(page, Rect::from_min_size(pos2(1500.0, 0.0), vec2(300.0, 500.0)), screen_scale, raster_scale, TILE_HEIGHT_PX), 0..0);
-    assert_eq!(visible_tiles(page, viewport, 0.0, raster_scale, TILE_HEIGHT_PX), 0..0);
-    assert_eq!(visible_tiles(page, viewport, screen_scale, f32::NAN, TILE_HEIGHT_PX), 0..0);
-    assert_eq!(visible_tiles(page, viewport, screen_scale, raster_scale, 0), 0..0);
-    assert!(visible_tiles(page, viewport, screen_scale, raster_scale, 512).len() <= 5);
+    let none = (0..0, 0..0);
+    assert_eq!(visible_tiles(page, Rect::from_min_size(pos2(1500.0, 0.0), vec2(300.0, 500.0)), screen_scale, raster_scale, TILE_PX), none);
+    assert_eq!(visible_tiles(page, viewport, 0.0, raster_scale, TILE_PX), none);
+    assert_eq!(visible_tiles(page, viewport, screen_scale, f32::NAN, TILE_PX), none);
+    assert_eq!(visible_tiles(page, viewport, screen_scale, raster_scale, 0), none);
+    assert!(visible_tiles(page, viewport, screen_scale, raster_scale, 512).0.len() <= 5);
+    // Zoomed in, only the columns in view: a 500% page on a 2x display is 6,000 px wide.
+    let wide = Rect::from_min_size(pos2(-2000.0, -1000.0), vec2(612.0 * 5.0 * PX_PER_PT, 792.0 * 5.0 * PX_PER_PT));
+    let (rows, cols) = visible_tiles(wide, viewport, 5.0 * PX_PER_PT, 10.0 * PX_PER_PT, TILE_PX);
+    assert_eq!((rows, cols), (2..4, 3..7));
 }
 
 #[test]
@@ -4930,14 +4938,14 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
     let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     let object = Pos::body(0, 5);
-    let hidden = view_key(&app, false, Some(&object), true);
-    assert_ne!(hidden, view_key(&app, false, None, true), "the page without the dragged object is rendered again");
-    assert_eq!(hidden, view_key(&app, false, Some(&object), true), "the same drag keeps the key: no re-render every frame");
+    let hidden = view_key(&app, false, Some(&object));
+    assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
+    assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
 }
 
 /// A zoom easing in (or a pinch) shows a new size every frame for a moment: those pages are
 /// drawn unhinted, so they fill no hint caches with sizes nobody rests on. The first frame
-/// without zooming draws the page hinted again, even at the size the last zoom frame drew.
+/// without zooming draws pages hinted again.
 #[test]
 fn pages_are_hinted_again_once_a_zoom_stops() {
     let platform = screen_render_options().hinting;
@@ -4948,24 +4956,6 @@ fn pages_are_hinted_again_once_a_zoom_stops() {
         assert_eq!(hint_pages(zoom, true, false), platform, "{zoom}: a wheel step with animation effects off lands finished");
     }
     assert_eq!(hint_pages(1.0, true, true), platform, "the Zoom dialog or slider, a fit zoom: hinted at once");
-    // The hinting is part of the page's key: the last zoom frame's raster is replaced.
-    let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
-    let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
-    assert_ne!(view_key(&app, false, None, true), view_key(&app, false, None, false));
-}
-
-/// While a zoom goes on, a page raster stands in for one up to half again larger or smaller.
-#[test]
-fn a_raster_is_stretched_at_most_half_again_during_a_zoom() {
-    // A 612 pt page rendered 816 px wide (100 % at 1x): 1.333 px per point.
-    assert!(stretch_fits(816, 612.0, 816.0 / 612.0));
-    assert!(stretch_fits(816, 612.0, 1.9), "zoomed in 43 %");
-    assert!(!stretch_fits(816, 612.0, 2.1), "zoomed in 58 %: rendered again");
-    assert!(stretch_fits(816, 612.0, 0.95), "zoomed out to 71 %");
-    assert!(!stretch_fits(816, 612.0, 0.85), "zoomed out to 64 %: rendered again");
-    for hostile in [(0, 612.0, 1.0), (816, 0.0, 1.0), (816, 612.0, f32::NAN), (816, 612.0, f32::INFINITY), (816, f32::NAN, 1.0)] {
-        assert!(!stretch_fits(hostile.0, hostile.1, hostile.2), "{hostile:?}");
-    }
 }
 
 #[test]
@@ -4975,10 +4965,10 @@ fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
     let layout = app.session.layout();
     let page = &layout.pages[0];
     let print_before = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
-    let mut keys = vec![view_key(&app, false, None, true)];
+    let mut keys = vec![view_key(&app, false, None)];
     for (value, expected) in [("green", Rgb(0xCC, 0xE8, 0xCF)), ("cream", Rgb(0xFA, 0xF0, 0xDC)), ("gray", Rgb(0xE8, 0xEA, 0xED))] {
         app.run("view.paperColor", json!({"value":value})).unwrap();
-        let key = view_key(&app, false, None, true);
+        let key = view_key(&app, false, None);
         assert!(!keys.contains(&key), "each preset invalidates page and tile caches");
         keys.push(key);
         let opts = page_render_options(&app, false);
@@ -5146,6 +5136,130 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
     let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
     assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
+}
+
+/// One frame of `a` at 1280×800 and time `t` (seconds); whether it asked to be drawn again at once.
+fn frame_at(ctx: &egui::Context, a: &mut WordApp, t: f64, events: Vec<egui::Event>) -> bool {
+    let screen = Rect::from_min_size(Pos2::ZERO, vec2(1280.0, 800.0));
+    let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+    let out = ctx.run_ui(input, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    });
+    let again = out.viewport_output.values().any(|v| v.repaint_delay.is_zero());
+    out.drop_without_applying_deltas();
+    again
+}
+
+/// A pinch zoom stretches the page rasters it has and renders none while it goes on, so every
+/// frame is as cheap as a scroll; once the zoom holds still the pages are rendered sharp at the
+/// zoom they ended at, and then nothing is left to do.
+#[test]
+fn a_pinch_zoom_renders_nothing_until_it_holds_still() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 120.0;
+        frame_at(&ctx, a, t, events)
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let pointer = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
+    while frame(&mut a, Vec::new()) {}
+    let before = a.canvas.scale;
+    for n in 0..30 {
+        frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+        assert_eq!(a.canvas.rendered, 0, "frame {n} of the pinch rendered a page");
+    }
+    let zoomed = a.canvas.scale;
+    assert!(zoomed > before * 2.0, "the pinch zoomed in: {before} -> {zoomed}");
+    let mut renders = 0;
+    for _ in 0..240 {
+        frame(&mut a, Vec::new());
+        renders += a.canvas.rendered;
+    }
+    assert!(renders > 0, "the pages were rendered again once the zoom held still");
+    assert!(!frame(&mut a, Vec::new()) && a.canvas.rendered == 0, "and then nothing was left to do");
+    let (whole, tiles) = a.canvas.raster_sizes();
+    let sharp = |(scale, _): &(f32, [usize; 2])| (scale - zoomed).abs() < 1e-4;
+    assert!(whole.iter().any(sharp) || tiles.iter().any(sharp), "sharp at the zoom it ended at: {whole:?} {tiles:?}");
+    assert_eq!(a.canvas.scale, zoomed);
+}
+
+/// An edit during a pinch zoom is drawn in the next frame, never left stale under the stretch,
+/// and a zoom from the Zoom box just after a pinch renders at once, not within a budget.
+#[test]
+fn edits_and_discrete_zooms_render_at_once_around_a_pinch() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 120.0;
+        frame_at(&ctx, a, t, events)
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let pointer = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
+    while frame(&mut a, Vec::new()) {}
+    for _ in 0..5 {
+        frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+    }
+    a.run("text.insert", json!({"text": "x"})).unwrap();
+    frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+    assert!(a.canvas.rendered > 0, "the edit was rendered during the pinch");
+    for n in 0..5 {
+        frame(&mut a, vec![egui::Event::Zoom(1.03)]);
+        assert_eq!(a.canvas.rendered, 0, "frame {n} after the edit had stale pages left");
+    }
+    a.run("view.zoom", json!({"value": 300})).unwrap();
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.zoom_gesture_at, f64::NEG_INFINITY, "the Zoom box ends the pinch's sharpening budget");
+    let scale = a.canvas.scale;
+    let (_, tiles) = a.canvas.raster_sizes();
+    assert!(tiles.iter().any(|(s, _)| (s - scale).abs() < 1e-4), "sharp in the frame of the zoom: {tiles:?}");
+}
+
+/// Zoomed far in, a page is tiles over the part in view: what is rendered (and kept on the GPU)
+/// is bounded by the window, not the zoom. A Letter page at 500% would be 4080×5280 px.
+#[test]
+fn zoomed_in_pages_render_only_tiles_in_view() {
+    let ctx = egui::Context::default();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        frame_at(&ctx, &mut a, t, Vec::new());
+    }
+    a.run("view.zoom", json!({"value": 500})).unwrap();
+    t += 1.0 / 60.0;
+    frame_at(&ctx, &mut a, t, Vec::new());
+    let (whole, tiles) = a.canvas.raster_sizes();
+    let scale = a.canvas.scale;
+    let sharp: Vec<_> = tiles.iter().filter(|(s, _)| (s - scale).abs() < 1e-4).collect();
+    assert!(!sharp.is_empty(), "the view is sharp in the frame of the zoom: {tiles:?}");
+    assert!(sharp.iter().all(|(_, [w, h])| *w <= TILE_PX && *h <= TILE_PX), "{sharp:?}");
+    let pixels: usize = sharp.iter().map(|(_, [w, h])| w * h).sum();
+    assert!(pixels <= 4 * 1280 * 800, "about the window's worth of pixels: {pixels}");
+    assert!(whole.iter().all(|(_, [w, h])| w * h <= 4_500_000), "no whole-page raster at 500%: {whole:?}");
+}
+
+/// A tiled page's underlay fits a texture whatever the page's size: rounding the scale's pixel
+/// size up (as render_page does) never passes the GPU's largest side, at the height clamp too.
+#[test]
+fn a_tiled_pages_underlay_fits_a_texture() {
+    for max_tex in [2048.0_f32, 7814.0, 8192.0, 16384.0] {
+        for (w, h) in [(612.0, 792.0), (600.0, 17_843.0), (600.0, 1e6), (1e6, 1e6), (1.0, 1e6), (0.5, 3e7)] {
+            let page = Page { w, h, ..Default::default() };
+            let s = underlay_scale(&page, max_tex);
+            let side = |len: f32| (len.clamp(1.0, 1e6) * s).ceil();
+            assert!(s > 0.0 && side(w) <= max_tex && side(h) <= max_tex, "{w}×{h} at {max_tex}: scale {s}");
+        }
+    }
 }
 
 /// #5267: a picture linked from its context menu (Link…) keeps the link, shows it on hover and
