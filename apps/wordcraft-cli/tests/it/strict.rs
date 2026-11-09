@@ -465,3 +465,31 @@ fn a_character_in_a_metafile_pictures_text_fails_strict_like_the_pages_own() {
     assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
     std::fs::remove_dir_all(d).unwrap();
 }
+
+/// The page raster leaves out a metafile page background (it only draws raster ones), so a PNG
+/// would silently lack it: strict refuses that output, and a PDF, which draws it as vector, passes.
+#[test]
+fn a_metafile_page_background_fails_strict_for_png_but_not_for_pdf() {
+    if without_fonts() {
+        return;
+    }
+    let d = dir("emf-background");
+    let mut doc = Document::from_text("text");
+    doc.media.insert("bg.emf".into(), std::sync::Arc::new(emf_with_text("abc")));
+    doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.emf".into(), fill_type: "frame".into(), title: String::new() });
+    let input = d.join("in.json");
+    std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
+    let png = d.join("out.png");
+    let r = convert(&input, &png, true);
+    assert_eq!(r.status.code(), Some(3), "{}", stderr(&r));
+    let json = report_json(&r);
+    assert_eq!(json["missing_pictures"][0]["part"], "bg.emf", "{}", stderr(&r));
+    assert_eq!(json["missing_pictures"][0]["source_part"], "background");
+    assert_eq!(json["missing_pictures"][0]["reason"], "unsupported_format");
+    assert!(!png.exists());
+    let pdf = d.join("out.pdf");
+    let r = convert(&input, &pdf, true);
+    assert_eq!(r.status.code(), Some(0), "{}", stderr(&r));
+    assert!(pdf.exists());
+    std::fs::remove_dir_all(d).unwrap();
+}

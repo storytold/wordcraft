@@ -69,6 +69,8 @@ pub fn undecodable_pictures(
     let mut total: u64 = 0;
     // Hashes of the distinct ones past the cap, so the total counts each once.
     let mut unlisted: HashSet<u64> = HashSet::new();
+    // What `out` holds, for an O(1) test of "already listed".
+    let mut listed: HashSet<MissingPicture> = HashSet::new();
     let mut verdicts: HashMap<String, Option<DrawFailure>> = HashMap::new();
     let range = pages.unwrap_or(0..=usize::MAX);
     for (n, page) in layout.pages.iter().enumerate() {
@@ -95,7 +97,7 @@ pub fn undecodable_pictures(
                     };
                     let part = doc.missing_pictures.media_parts.get(&key).cloned().unwrap_or(key);
                     let item = MissingPicture { part, story: story_name(doc, region, it), reason };
-                    if out.contains(&item) {
+                    if listed.contains(&item) {
                         continue;
                     }
                     if out.len() >= MAX_MISSING_PICTURES {
@@ -106,6 +108,7 @@ pub fn undecodable_pictures(
                         continue;
                     }
                     total = total.saturating_add(1);
+                    listed.insert(item.clone());
                     out.push(item);
                 }
             }
@@ -115,8 +118,12 @@ pub fn undecodable_pictures(
     if let Some(pic) = &doc.settings.page_picture
         && layout.pages.iter().enumerate().any(|(n, _)| range.contains(&n))
     {
+        // The page raster leaves out a background it can't read as a raster picture (a metafile),
+        // which the PDF draws as vector.
         let failure = match doc.media.get(&pic.media) {
-            Some(bytes) => media_check(bytes, output).err(),
+            Some(bytes) => media_check(bytes, output).err().or_else(|| {
+                (output == StrictOutput::Png && wordcraft_geom::picture::background_size(bytes).is_none()).then_some(DrawFailure::UnsupportedFormat)
+            }),
             None => Some(DrawFailure::Undecodable),
         };
         if let Some(failure) = failure {
@@ -126,7 +133,7 @@ pub fn undecodable_pictures(
             };
             let part = doc.missing_pictures.media_parts.get(&pic.media).cloned().unwrap_or_else(|| pic.media.clone());
             let item = MissingPicture { part, story: "background".into(), reason };
-            if !out.contains(&item) {
+            if !listed.contains(&item) {
                 if out.len() >= MAX_MISSING_PICTURES {
                     truncated = true;
                     if unlisted.insert(picture_hash(&item)) {
@@ -134,6 +141,7 @@ pub fn undecodable_pictures(
                     }
                 } else {
                     total = total.saturating_add(1);
+                    listed.insert(item.clone());
                     out.push(item);
                 }
             }

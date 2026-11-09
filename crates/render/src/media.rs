@@ -309,18 +309,12 @@ fn device_pixel(view: Affine) -> f64 {
     if scale.is_finite() && scale > 1e-9 { 1.0 / scale } else { 1.0 }
 }
 
-/// Largest page-background picture decoded, in pixels (hostile files).
-const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
-
 /// Draw the page's picture or texture fill (Design › Page Color › Fill Effects) behind the content:
 /// tiled at its natural size (96 dpi) for a `tile` fill, stretched over the page otherwise.
 pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
     let Some(pic) = &doc.settings.page_picture else { return };
     let Some(bytes) = doc.media.get(&pic.media) else { return };
-    let (nw, nh) = match image_size(bytes) {
-        Some((w, h)) if w > 0 && h > 0 && (w as u64) * (h as u64) <= MAX_BACKGROUND_PIXELS => (w as f64, h as f64),
-        _ => return,
-    };
+    let Some((nw, nh)) = wordcraft_geom::picture::background_size(bytes).map(|(w, h)| (f64::from(w), f64::from(h))) else { return };
     let Some(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));

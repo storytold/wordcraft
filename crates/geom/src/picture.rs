@@ -253,6 +253,18 @@ pub fn decode_for_drawing(bytes: &[u8], budget: u64, max_side: u32) -> Result<Dy
     Ok(img)
 }
 
+/// Largest page-background picture the page raster draws, in pixels (hostile files).
+pub const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// The pixel size of a page-background picture the page raster draws (Design > Page Color > Fill
+/// Effects), or None when it leaves the background out: not a raster picture it can read (a
+/// metafile is not) or one with no pixels or more than [`MAX_BACKGROUND_PIXELS`]. The raster and
+/// the strict check both ask this, so they can't drift.
+pub fn background_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    (w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_BACKGROUND_PIXELS).then_some((w, h))
+}
+
 /// Whether a raster picture decodes for drawing, by the rule the exporters use ([`probe`] within
 /// [`crate::MAX_DECODED_BYTES`], then [`decode_for_drawing`] with `max_side`).
 pub fn check_for_drawing(bytes: &[u8], max_side: u32) -> Result<(), DrawFailure> {
