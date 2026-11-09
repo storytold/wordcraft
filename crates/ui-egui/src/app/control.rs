@@ -39,6 +39,11 @@ impl WordApp {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
             let reply = req.reply.clone();
+            if !req.start() {
+                // The caller timed out while this waited in the queue and was told it did not run.
+                log::debug!("control request {} dropped: its caller gave up", req.method);
+                continue;
+            }
             // A control request is automation: no active fields (#3628).
             match wordcraft_engine::active_fields::from_automation(|| control::handle(self, ctx, &req)) {
                 control::Outcome::Done(v) => {
