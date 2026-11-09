@@ -66,10 +66,15 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, 
             }
         }
     }
-    if !word_wrap || force_char_break {
-        // Between any two letters or digits that are not East Asian (whole graphemes, so accents
-        // stay with their letters); when force_char_break Thai is included too.
-        let latin = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c) && (force_char_break || !wordcraft_doc::cluster::is_thai_lao(c)));
+    if force_char_break {
+        // Stacked/vertical text: every grapheme boundary is a break opportunity.
+        for (i, _) in text.grapheme_indices(true).skip(1) {
+            opps.push(i);
+        }
+    } else if !word_wrap {
+        // Latin word-wrap off: break between any two adjacent alphanumeric non-East-Asian
+        // graphemes (whole graphemes so accents stay with their letters).
+        let latin = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c) && !wordcraft_doc::cluster::is_thai(c));
         let mut prev: Option<&str> = None;
         for (i, g) in text.grapheme_indices(true) {
             if prev.is_some_and(latin) && latin(g) {

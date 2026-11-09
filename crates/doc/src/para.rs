@@ -514,14 +514,14 @@ impl Paragraph {
     pub fn word_start(&self, off: usize) -> usize {
         let off = self.clamp(off);
         // Thai: use dictionary-based word boundaries.
-        if self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai_lao) {
+        if self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai) {
             return crate::cluster::thai_word_start(&self.text, off);
         }
         let Some(before) = self.text.get(..off) else { return 0 };
         let mut idx = off;
         let mut seen_word = false;
         for (i, c) in before.char_indices().rev() {
-            if crate::cluster::is_thai_lao(c) {
+            if crate::cluster::is_thai(c) {
                 // Crossed into Thai territory while scanning left.  If we haven't found a
                 // Latin word yet, delegate to Thai word navigation from the right edge of
                 // that Thai run; otherwise the Latin word we found is the target.
@@ -546,16 +546,16 @@ impl Paragraph {
     pub fn word_end(&self, off: usize) -> usize {
         let off = self.clamp(off);
         // Thai: use dictionary-based word boundaries.
-        if self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai_lao) {
+        if self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai) {
             return crate::cluster::thai_word_end(&self.text, off);
         }
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
-        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c) && c != '\'');
+        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && !crate::cluster::is_thai(c) && c != '\'');
         let mut in_space = false;
         for (i, c) in it {
-            let w = crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
+            let w = crate::bidi::is_word_char(c) && !crate::cluster::is_thai(c);
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
@@ -571,12 +571,12 @@ impl Paragraph {
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
         // Thai: use dictionary-based word boundaries.
-        let at_thai = self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai_lao);
-        let before_thai = off > 0 && self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai_lao);
+        let at_thai = self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai);
+        let before_thai = off > 0 && self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai);
         if at_thai || before_thai {
             return crate::cluster::thai_word_at(&self.text, off);
         }
-        let is_w = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
+        let is_w = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
             if !is_w(c) {

@@ -141,10 +141,10 @@ pub fn backspaces_by_char(c: char) -> bool {
         | 0xAA60..=0xAA7F) // Myanmar Extended-A
 }
 
-/// Thai or Lao character (U+0E00–U+0E7F / U+0E80–U+0EFF). libthai only handles Thai; Lao is
-/// excluded from the libthai path but grouped here because they share the UAX #14 SA class.
-pub fn is_thai_lao(c: char) -> bool {
-    matches!(u32::from(c), 0x0E00..=0x0EFF)
+/// Thai character (U+0E00–U+0E7F), the range libthai segments. Lao (U+0E80–U+0EFF) uses the
+/// generic Unicode word scan; both scripts share the UAX #14 SA class for line breaking.
+pub fn is_thai(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0E7F)
 }
 
 /// Singleton Thai word-breaker (built once per process).

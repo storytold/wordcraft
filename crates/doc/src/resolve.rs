@@ -223,6 +223,7 @@ pub struct ResolvedPara {
     /// Lines snap to the document grid, when the section has one.
     pub snap_to_grid: bool,
     /// Force a break opportunity between every character (stacked/vertical text, synthetic).
+    #[serde(default)]
     pub force_char_break: bool,
     /// Indents in characters (left, right, first line; 0 = in points), which win over the
     /// point values; see [`ResolvedPara::set_char_unit`].
