@@ -500,6 +500,26 @@ impl FormatPair {
         self.peer.apply(&echo, &mut self.theirs).expect("the peer replays the command");
         step
     }
+
+    /// Run `para.removeBlank` over the whole document on Alice's replica and
+    /// send it as her client plans it: a multi-block removal is not a primitive,
+    /// so the plan is the command and the server normalizes it to one
+    /// `remove_blank` step. A structural answer makes the server broadcast a
+    /// fresh node map, as the transport does.
+    #[allow(clippy::expect_used)]
+    fn remove_blank(&mut self, seq: u64) -> (Op, Applied) {
+        let before = self.mine.doc.clone();
+        let params = json!({"scope": "all"});
+        self.mine.run("para.removeBlank", &params).expect("the UI removes the blanks");
+        let plan = self.alice.plan(&before, &self.mine, "para.removeBlank", &params).expect("a plan").remove(0);
+        assert_eq!(plan.kind, OpKind::Command, "the command path is what the server normalizes");
+        let step = op_from("alice", seq, self.alice.version, &plan, None);
+        let echo = self.room.submit("alice", Role::Editor, step.clone()).expect("the command lands");
+        self.alice.apply(&echo, &mut self.mine).expect("own echo is skipped");
+        self.alice.set_nodes(&self.room.nodes());
+        self.peer.apply(&echo, &mut self.theirs).expect("the peer replays the step");
+        (step, echo)
+    }
 }
 
 #[test]
@@ -1148,6 +1168,81 @@ fn a_foreign_edit_of_a_multilevel_paragraph_refuses_the_undo_without_touching_th
     };
     let (step, _echo) = pair.list(1, "para.multilevel", json!({}));
 
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "X"})).expect("bob types");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "X"})).expect("a plan").remove(0);
+    let edit = op_from("bob", 1, pair.peer.version, &plan, None);
+    let echo = pair.room.submit("bob", Role::Editor, edit).expect("bob's edit lands");
+    pair.peer.apply(&echo, &mut pair.theirs).expect("own echo is skipped");
+    pair.alice.apply(&echo, &mut pair.mine).expect("alice applies bob's edit");
+
+    let mine_before = serde_json::to_value(&pair.mine.doc).expect("json");
+    let theirs_before = serde_json::to_value(&pair.theirs.doc).expect("json");
+    let version = pair.alice.version;
+    let undo = history_op("alice", 2, version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), mine_before, "the author's document is unchanged");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), theirs_before, "the peer's document is unchanged");
+    assert_eq!(pair.room.version(), version, "the version did not move");
+}
+
+// --- deleting blank paragraphs ----------------------------------------------
+
+#[test]
+fn a_blank_undo_lands_as_one_transaction_at_its_author_and_the_peer() {
+    let mut pair = FormatPair::new(&["One", "", "Two", "", "Three"]);
+    let before = serde_json::to_value(&pair.mine.doc).expect("json");
+
+    let (step, echo) = pair.remove_blank(1);
+    let delta = echo.delta.clone().expect("the step carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("remove_blank"), "the forward effect is a blank step");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "both empty paragraphs are named");
+    let blank1 = items[1]["id"].as_u64().expect("an id") as u32;
+    assert_eq!(items[1]["index"], json!(1));
+    let blank2 = items[0]["id"].as_u64().expect("an id") as u32;
+    assert_eq!(items[0]["index"], json!(3));
+
+    let listed = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), listed, "the author and the peer hold the same document");
+    assert_eq!(para_texts(&pair.mine), ["One", "Two", "Three"]);
+    assert_eq!(para_texts(&pair.theirs), ["One", "Two", "Three"]);
+
+    let undo = history_op("alice", 2, pair.alice.version, &step, HistoryAction::Undo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    let delta = answer.delta.clone().expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("remove_blank"), "the inverse names the bodies it puts back");
+    assert_eq!(delta["ops"][0]["restore"].as_array().expect("restore").len(), 2);
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the exact earlier paragraphs are back at the author");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the exact earlier paragraphs are back at the peer");
+    pair.alice.set_nodes(&pair.room.nodes());
+    pair.peer.set_nodes(&pair.room.nodes());
+    for (state, who) in [(&pair.alice, "the author"), (&pair.peer, "the peer")] {
+        assert_eq!(state.ids.get(&NodeKey::new("body", vec![1])).map(|id| id.0), Some(blank1), "{who} revived the blank paragraph's id");
+        assert_eq!(state.ids.get(&NodeKey::new("body", vec![3])).map(|id| id.0), Some(blank2), "{who} revived the second id");
+    }
+
+    let redo = history_op("alice", 3, pair.alice.version, &step, HistoryAction::Redo { op_id: step.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), listed, "redo removes the same paragraphs again");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), listed);
+}
+
+#[test]
+fn a_foreign_edit_of_a_neighbouring_paragraph_refuses_the_blank_undo_without_touching_the_document() {
+    let mut pair = FormatPair::new(&["One", "", "Two", "", "Three"]);
+    let (step, _echo) = pair.remove_blank(1);
+    assert_eq!(para_texts(&pair.mine), ["One", "Two", "Three"]);
+
+    // Bob types into a paragraph the inverse would put a blank beside.
     pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(1), off: 0 });
     let before = pair.theirs.doc.clone();
     pair.theirs.run("text.insert", &json!({"text": "X"})).expect("bob types");

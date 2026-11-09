@@ -230,8 +230,12 @@ impl SessionModel {
         // normalized from the selected run it ran over, so even a sort that
         // changes nothing is an addressable step.
         let sort_range = if command == "para.sort" { self.sort_range(ids) } else { None };
-        let before_doc = (is_move_command(command) || command == "para.sort" || is_level_command(command) || is_list_command(command))
-            .then(|| self.session.doc.clone());
+        let before_doc = (is_move_command(command)
+            || command == "para.sort"
+            || is_level_command(command)
+            || is_list_command(command)
+            || is_blank_command(command))
+        .then(|| self.session.doc.clone());
         let before = doc_shape(&self.session.doc);
         let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
@@ -290,6 +294,15 @@ impl SessionModel {
             // `set_para_list` instead of a command every replica replays.
             if is_list_command(command)
                 && let Some(effect) = self.normalized_list(op, &before_doc, ids, label, list_op_name(command))
+            {
+                return Ok(effect);
+            }
+            // `para.removeBlank` names the empty paragraphs it took out, so its
+            // forward effect travels as `remove_blank` instead of a command
+            // every replica replays, and undo puts the paragraphs back with
+            // their own ids.
+            if is_blank_command(command)
+                && let Some(effect) = self.normalized_remove_blank(op, &before_doc, ids)
             {
                 return Ok(effect);
             }
@@ -591,6 +604,92 @@ impl SessionModel {
             touched,
         })
     }
+
+    /// A `para.removeBlank` command as one addressable `remove_blank` step. The
+    /// command already changed the document, so the difference is read back: the
+    /// after list must be the before list minus empty paragraphs — nothing else
+    /// moved and no kept block changed. The removed paragraphs are named by
+    /// session id (at most
+    /// [`MAX_BLANK_PARAGRAPHS`](wordcraft_collab_doc::MAX_BLANK_PARAGRAPHS)),
+    /// the adapter checks each one again and the step's delta names every id it
+    /// takes out; the inverse carries the bodies, so undo returns exactly the
+    /// earlier paragraphs with their own ids, runs and properties.
+    ///
+    /// A command that removed nothing is an identity: no delta and no undo step,
+    /// so it is not a barrier either. A command that also changed text, runs, a
+    /// kept block, a block order, a table, another story, or that removed a
+    /// paragraph inside a table or one without a session id, or that removed
+    /// more than the bound, is not captured: the step keeps its command delta
+    /// and stays a barrier.
+    fn normalized_remove_blank(&self, op: &Op, before: &Document, ids: &mut NodeIds) -> Option<Effect> {
+        let targets = removed_blank_targets(before, &self.session.doc, ids)?;
+        if targets.is_empty() {
+            // The command took nothing out: the replica needs no delta, and
+            // there is no step to undo.
+            return Some(Effect { label: "Delete blank paragraphs".into(), ..Effect::default() });
+        }
+        if targets.len() > wordcraft_collab_doc::MAX_BLANK_PARAGRAPHS {
+            return None;
+        }
+        let plan = wordcraft_collab_doc::plan_remove_blank(before, ids, &targets).ok()?;
+        wordcraft_collab_doc::remove_blank_ids(ids, &plan, op.base_version);
+        Some(Effect {
+            delta: Some(wordcraft_collab_doc::blank_delta(&plan)),
+            inverse: wordcraft_collab_doc::blank_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: "Delete blank paragraphs".into(),
+            nodes_changed: true,
+            touched: plan.touched.clone(),
+        })
+    }
+}
+
+/// The session ids of the paragraphs a `para.removeBlank` command took out, or
+/// `None` when the difference is more than a removal of empty paragraphs: a
+/// kept block that changed, a block that was inserted or reordered, a table, a
+/// part added or removed, a removed block that is not an empty paragraph, or a
+/// removed paragraph the session map cannot name.
+fn removed_blank_targets(before: &Document, after: &Document, ids: &NodeIds) -> Option<Vec<u32>> {
+    if before.parts.len() != after.parts.len() {
+        return None;
+    }
+    let mut targets = Vec::new();
+    if !collect_removed_blank("body", &before.body, &after.body, ids, &mut targets) {
+        return None;
+    }
+    for (part, old) in &before.parts {
+        let new = after.parts.get(part)?;
+        if !collect_removed_blank(&format!("part:{part}"), &old.blocks, &new.blocks, ids, &mut targets) {
+            return None;
+        }
+    }
+    Some(targets)
+}
+
+/// Whether `new` is exactly `old` minus empty paragraphs of one story, adding
+/// the removed paragraphs' ids to `targets`. Every kept block must be the same
+/// block (the command did not touch it), and every removed one an empty
+/// paragraph of the story's own block list.
+fn collect_removed_blank(story: &str, old: &Blocks, new: &Blocks, ids: &NodeIds, targets: &mut Vec<u32>) -> bool {
+    if new.len() >= old.len() {
+        return new.len() == old.len() && old.iter().zip(new).all(|(a, b)| std::sync::Arc::ptr_eq(a, b) || a.as_ref() == b.as_ref());
+    }
+    let mut next = 0;
+    for (index, block) in old.iter().enumerate() {
+        if next < new.len() && (std::sync::Arc::ptr_eq(block, &new[next]) || block.as_ref() == new[next].as_ref()) {
+            next += 1;
+            continue;
+        }
+        // A removed block: the command only deletes empty paragraphs, so the
+        // step names it only if it is one and the map can address it.
+        let Some(para) = block.as_para() else { return false };
+        if !para.is_empty() || para.section.is_some() {
+            return false;
+        }
+        let Some(id) = ids.get(&NodeKey::new(story.to_string(), vec![index as u32])) else { return false };
+        targets.push(id.0);
+    }
+    next == new.len()
 }
 
 /// One paragraph a level command changed: where it lives and the level, style
@@ -860,6 +959,15 @@ const LIST_COMMANDS: &[&str] = &["para.bullets", "para.numbering", "para.multile
 
 fn is_list_command(command: &str) -> bool {
     LIST_COMMANDS.contains(&command)
+}
+
+/// The paragraph tool whose only document effect is deleting empty paragraphs:
+/// its step travels as `remove_blank`, so it is addressable and undoes with the
+/// paragraphs' own ids (ADR-0010).
+const BLANK_COMMANDS: &[&str] = &["para.removeBlank"];
+
+fn is_blank_command(command: &str) -> bool {
+    BLANK_COMMANDS.contains(&command)
 }
 
 /// The structural operation a list command normalizes to. The Multilevel button

@@ -2594,3 +2594,191 @@ fn a_foreign_edit_of_a_restarted_block_makes_undo_a_conflict() {
     assert_eq!(room.version(), version, "the version did not move");
     assert_eq!(room.undo_depth("alice"), (2, 0), "the restart step stays on the stack above the listing");
 }
+
+// --- deleting blank paragraphs ----------------------------------------------
+
+/// A body of top-level paragraphs, empty ones included.
+fn blank_doc(texts: &[&str]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for text in texts {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    }
+    doc
+}
+
+fn blank_texts(doc: &Document) -> Vec<String> {
+    doc.body.iter().filter_map(|block| block.as_para()).map(|para| para.text.clone()).collect()
+}
+
+/// The id of one body block of `room`, indexing the map first.
+fn blank_id(room: &mut Room<DocModel>, block: u32) -> u32 {
+    let _ = room.join(None, false);
+    room.ids().get(&NodeKey::new("body", vec![block])).expect("the block has an id").0
+}
+
+fn body_path(room: &Room<DocModel>, id: u32) -> Vec<u32> {
+    room.ids().resolve(NodeId(id)).expect("a live id").path.clone()
+}
+
+/// Submit a `remove_blank` operation, assert it is refused as `code` and that
+/// the document and the version did not move.
+fn blank_refusal(room: &mut Room<DocModel>, seq: u64, payload: serde_json::Value, code: RejectCode) {
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+    let err = room.submit("alice", Role::Editor, op("a", seq, version, OpKind::Structural, 0, 0, payload)).expect_err("refused");
+    assert_eq!(err.code, code, "{}", err.message);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refusal changed the document");
+    assert_eq!(room.version(), version, "the refusal moved the version");
+}
+
+#[test]
+fn removing_blank_paragraphs_is_one_transactional_blank_step() {
+    let mut room = Room::new(DocModel::new(blank_doc(&["One", "", "Two", "", "Three"])));
+    let one = blank_id(&mut room, 0);
+    let blank1 = blank_id(&mut room, 1);
+    let two = blank_id(&mut room, 2);
+    let blank2 = blank_id(&mut room, 3);
+    let three = blank_id(&mut room, 4);
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, 0, 0, json!({"op": "remove_blank", "ids": [blank1, blank2]})))
+        .expect("the step lands");
+    let delta = applied.delta.clone().expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("remove_blank"), "the forward effect is a blank step");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "both empty paragraphs are named");
+    assert_eq!(items[0], json!({"id": blank2, "index": 3}), "the highest index comes first");
+    assert_eq!(items[1], json!({"id": blank1, "index": 1}));
+    assert_eq!(blank_texts(room.model().document()), ["One", "Two", "Three"]);
+    assert_eq!(room.version(), 1);
+
+    // The paragraphs that stay keep their ids, at their new paths.
+    assert_eq!(body_path(&room, one), vec![0]);
+    assert_eq!(body_path(&room, two), vec![1]);
+    assert_eq!(body_path(&room, three), vec![2]);
+    // The removed ones are retired, so a late edit on one is refused.
+    assert!(matches!(room.ids().resolve(NodeId(blank1)), Err(wordcraft_collab::ids::Resolve::Gone(_))));
+}
+
+#[test]
+fn a_replica_applies_a_blank_step_and_keeps_the_survivors_ids() {
+    let mut room = Room::new(DocModel::new(blank_doc(&["One", "", "Two", "", "Three"])));
+    let _ = room.join(None, false);
+    let blank1 = blank_id(&mut room, 1);
+    let blank2 = blank_id(&mut room, 3);
+
+    let mut replica = blank_doc(&["One", "", "Two", "", "Three"]);
+    let mut replica_ids = NodeIds::new();
+    DocModel::new(replica.clone()).index_nodes(&mut replica_ids);
+
+    submit_and_mirror(
+        &mut room,
+        op("a", 1, 0, OpKind::Structural, 0, 0, json!({"op": "remove_blank", "ids": [blank1, blank2]})),
+        &mut replica,
+        &mut replica_ids,
+    );
+    assert_eq!(blank_texts(&replica), ["One", "Two", "Three"], "the replica removed exactly the empty paragraphs");
+    assert!(replica_ids.resolve(NodeId(blank1)).is_err(), "the replica retired the removed id too");
+}
+
+#[test]
+fn undo_of_a_blank_step_lands_as_one_transaction_and_restores_the_paragraphs_and_their_ids() {
+    let mut room = Room::new(DocModel::new(blank_doc(&["One", "", "Two", "", "Three"])));
+    let blank1 = blank_id(&mut room, 1);
+    let blank2 = blank_id(&mut room, 3);
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, 0, 0, json!({"op": "remove_blank", "ids": [blank1, blank2]})))
+        .expect("the step lands");
+
+    let step = room.undo("alice").expect("an undo step");
+    let mut undo = step.inverse.first().expect("an inverse").clone();
+    undo.base_version = room.version();
+    let applied = room.submit("alice", Role::Editor, undo).expect("the undo lands");
+    let delta = applied.delta.clone().expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("remove_blank"), "the inverse is the same operation with `restore`");
+    let restore = delta["ops"][0]["restore"].as_array().expect("restore");
+    assert_eq!(restore.len(), 2);
+    assert_eq!(restore[0]["id"], json!(blank2), "the highest index comes first");
+    assert_eq!(restore[0]["index"], json!(2), "the index it goes back to");
+    assert_eq!(restore[0]["block"]["text"], json!(""), "the body travels with the inverse");
+    assert_eq!(restore[1]["id"], json!(blank1));
+    assert_eq!(restore[1]["index"], json!(1));
+
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the exact earlier paragraphs are back");
+    assert_eq!(body_path(&room, blank1), vec![1], "the paragraph is revived with its own id");
+    assert_eq!(body_path(&room, blank2), vec![3]);
+}
+
+#[test]
+fn a_blank_step_with_a_bad_address_or_a_non_empty_paragraph_is_refused_before_mutation() {
+    let mut room = Room::new(DocModel::new(blank_doc(&["One", "", "Two"])));
+    let one = blank_id(&mut room, 0);
+    let blank = blank_id(&mut room, 1);
+
+    blank_refusal(&mut room, 1, json!({"op": "remove_blank", "ids": []}), RejectCode::Invalid);
+    blank_refusal(&mut room, 2, json!({"op": "remove_blank", "ids": [blank, blank]}), RejectCode::Invalid);
+    blank_refusal(&mut room, 3, json!({"op": "remove_blank", "ids": [999]}), RejectCode::Invalid);
+    blank_refusal(&mut room, 4, json!({"op": "remove_blank", "ids": [one]}), RejectCode::Invalid);
+    blank_refusal(&mut room, 5, json!({"op": "remove_blank", "ids": [0]}), RejectCode::Invalid);
+    blank_refusal(&mut room, 6, json!({"op": "remove_blank"}), RejectCode::Invalid);
+
+    // The last block of a story has no paragraph after it.
+    let mut tail = Room::new(DocModel::new(blank_doc(&["One", ""])));
+    let last = blank_id(&mut tail, 1);
+    blank_refusal(&mut tail, 1, json!({"op": "remove_blank", "ids": [last]}), RejectCode::Invalid);
+}
+
+#[test]
+fn a_blank_step_on_a_paragraph_inside_a_table_is_refused_before_mutation() {
+    let mut room = Room::new(DocModel::new(table_doc(1, 1)));
+    let _ = room.join(None, false);
+    let para = cell_para_id(room.ids(), 0, 0);
+    let table = table_id(room.ids());
+    blank_refusal(&mut room, 1, json!({"op": "remove_blank", "ids": [para]}), RejectCode::Invalid);
+    blank_refusal(&mut room, 2, json!({"op": "remove_blank", "ids": [table]}), RejectCode::Invalid);
+}
+
+#[test]
+fn a_blank_step_naming_a_retired_id_is_gone() {
+    let mut room = Room::new(DocModel::new(blank_doc(&["One", "", "Two"])));
+    let blank = blank_id(&mut room, 1);
+    room.submit("bob", Role::Editor, op("b", 1, 0, OpKind::Structural, 0, 0, json!({"op": "remove_block", "index": 1})))
+        .expect("bob removes the blank paragraph");
+    blank_refusal(&mut room, 1, json!({"op": "remove_blank", "ids": [blank]}), RejectCode::Gone);
+}
+
+#[test]
+fn a_blank_step_wider_than_the_bound_is_refused_before_mutation() {
+    let mut texts: Vec<&str> = Vec::new();
+    for _ in 0..65 {
+        texts.push("keep");
+        texts.push("");
+    }
+    texts.push("end");
+    let mut room = Room::new(DocModel::new(blank_doc(&texts)));
+    let ids: Vec<u32> = (0..65).map(|n| blank_id(&mut room, 2 * n + 1)).collect();
+    blank_refusal(&mut room, 1, json!({"op": "remove_blank", "ids": ids}), RejectCode::Invalid);
+}
+
+#[test]
+fn a_foreign_edit_of_a_neighbouring_paragraph_makes_undo_a_conflict() {
+    let mut room = Room::new(DocModel::new(blank_doc(&["One", "", "Two"])));
+    let blank = blank_id(&mut room, 1);
+    let two = blank_id(&mut room, 2);
+
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, 0, 0, json!({"op": "remove_blank", "ids": [blank]})))
+        .expect("the step lands");
+    // Bob types into the paragraph the inverse would put the blank before.
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, two, 3, json!({"op": "insert_text", "text": "!"}))).expect("bob types");
+
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+    let err = room.submit("alice", Role::Editor, undo_request("alice", 2, version, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refusal changed nothing");
+    assert_eq!(room.version(), version, "the version did not move");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step stays on the stack");
+}

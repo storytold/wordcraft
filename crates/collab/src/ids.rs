@@ -180,14 +180,18 @@ impl NodeIds {
             })
             .map(|(id, key)| (*id, key.clone()))
             .collect();
+        // Every old key goes first: consecutive children shift into each
+        // other's keys, so removing and inserting one at a time would erase the
+        // forward entry a child just wrote and leave a live node unaddressable.
+        for (_, key) in &moved {
+            self.forward.remove(key);
+        }
         for (id, mut key) in moved {
             if let Some(index) = key.path.get_mut(depth) {
                 let shifted = i64::from(*index) + i64::from(delta);
                 *index = u32::try_from(shifted.max(0)).unwrap_or(u32::MAX);
             }
-            if let Some(old) = self.back.insert(id, key.clone()) {
-                self.forward.remove(&old);
-            }
+            self.back.insert(id, key.clone());
             self.forward.insert(key, id);
         }
     }
@@ -306,6 +310,23 @@ mod tests {
         // A new node at the same path gets a new id: ids are never reused.
         let again = ids.id_for(&NodeKey::new("body", vec![2]));
         assert_ne!(id, again);
+    }
+
+    #[test]
+    fn shifting_a_run_of_children_leaves_every_forward_key_in_place() {
+        // Consecutive children shift into each other's paths: the forward map
+        // must still name every live child at its new path.
+        let mut ids = NodeIds::new();
+        let children: Vec<(NodeId, u32)> = (2..9).map(|index| (ids.id_for(&NodeKey::new("body", vec![index])), index)).collect();
+        ids.shift_children("body", &[], 2, 1);
+        for (id, old) in &children {
+            assert_eq!(ids.resolve(*id), Ok(&NodeKey::new("body", vec![old + 1])), "child {old} moved one place");
+            assert_eq!(ids.get(&NodeKey::new("body", vec![old + 1])), Some(*id), "the forward key names child {old}");
+        }
+        ids.shift_children("body", &[], 3, -1);
+        for (id, old) in &children {
+            assert_eq!(ids.get(&NodeKey::new("body", vec![*old])), Some(*id), "the forward key is back for child {old}");
+        }
     }
 
     #[test]

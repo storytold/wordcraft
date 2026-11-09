@@ -4,11 +4,11 @@
 use serde_json::json;
 
 use std::sync::Arc;
-use wordcraft_collab::ids::NodeIds;
+use wordcraft_collab::ids::{NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{Op, OpId, OpKind, RejectCode, Target};
 
-use wordcraft_doc::{Block, CharProps, Document, Paragraph, Path, StoryRef};
+use wordcraft_doc::{Block, CharProps, Document, Paragraph, Path, StoryRef, Table};
 use wordcraft_engine::Session;
 
 use crate::SessionModel;
@@ -1339,5 +1339,120 @@ fn a_restart_step_with_a_zero_start_is_refused_before_mutation() {
         assert_eq!(err.code, RejectCode::Invalid);
         assert_eq!(document_json(&room), before, "the refusal changed nothing");
         assert_eq!(room.version(), 1, "the version did not move");
+    }
+}
+
+// --- deleting blank paragraphs ----------------------------------------------
+
+#[test]
+fn a_remove_blank_command_lands_as_one_blank_step_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "", "Two", "", "Three"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, blank1, blank2) = (node(0), node(1), node(3));
+
+    // A replica learns the step and its undo only from the deltas.
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let command = op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.removeBlank", "params": {"scope": "all"}}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the command lands");
+    let delta = applied.delta.clone().expect("the step carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("remove_blank"), "the forward effect is a blank step");
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "both empty paragraphs are named");
+    assert_eq!(items[0], json!({"id": blank2, "index": 3}), "the highest index comes first");
+    assert_eq!(items[1], json!({"id": blank1, "index": 1}));
+    assert_eq!(texts(&room), ["One", "Two", "Three"]);
+    crate::apply_delta(&mut replica, &mut ids, &delta).expect("the replica applies the step");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect("the undo lands");
+    let delta = undone.delta.as_ref().expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("remove_blank"), "the inverse names the bodies it puts back");
+    assert_eq!(delta["ops"][0]["restore"].as_array().expect("restore").len(), 2);
+    assert_eq!(texts(&room), ["One", "", "Two", "", "Three"], "the paragraphs are back");
+    crate::apply_delta(&mut replica, &mut ids, delta).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+    for (path, wanted) in [(1, blank1), (3, blank2)] {
+        assert_eq!(ids.get(&NodeKey::new("body", vec![path])).map(|id| id.0), Some(wanted), "the replica revived the id at its own path");
+        assert_eq!(room.ids().get(&NodeKey::new("body", vec![path])).map(|id| id.0), Some(wanted), "the room revived it too");
+    }
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", first, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    let applied = room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(texts(&room), ["One", "Two", "Three"], "redo removes the same paragraphs again");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica redoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica redid too");
+}
+
+#[test]
+fn a_remove_blank_command_with_no_blank_paragraph_changes_nothing_and_is_no_barrier() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    let before = document_json(&room);
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.removeBlank", "params": {"scope": "all"}})))
+        .expect("the command lands");
+    assert_eq!(document_json(&room), before, "the document did not change");
+    assert!(applied.delta.is_none(), "there is nothing for a replica to apply");
+    assert!(room.undo("alice").is_none(), "a no-op step is not a barrier either");
+}
+
+#[test]
+fn a_remove_blank_command_over_more_than_64_paragraphs_stays_an_undo_barrier() {
+    let mut texts: Vec<String> = Vec::new();
+    for _ in 0..65 {
+        texts.push("keep".to_string());
+        texts.push(String::new());
+    }
+    texts.push("end".to_string());
+    let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&refs)));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+
+    let command = op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.removeBlank", "params": {"scope": "all"}}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the command lands");
+    let delta = applied.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("command"), "a wider step keeps the command delta");
+
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("the undo is unsupported");
+    assert_eq!(err.code, RejectCode::Unsupported);
+}
+
+#[test]
+fn a_blank_step_on_a_table_is_refused_before_mutation() {
+    // A body paragraph whose next block is a table cannot be removed (the
+    // engine leaves it alone), and a paragraph inside a cell is not addressable.
+    let mut doc = paragraphs_doc(&["One", ""]);
+    doc.body.push(Arc::new(Block::Table(Table::new(1, 1, 200.0))));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let blank = plan.nodes.iter().find(|node| node.path == vec![1]).expect("a block").id;
+    let cell = plan.nodes.iter().find(|node| node.path == vec![2, 0, 0, 0]).expect("a cell paragraph").id;
+
+    for (seq, id) in [(1, blank), (2, cell)] {
+        let before = document_json(&room);
+        let version = room.version();
+        let err = room
+            .submit("alice", Role::Editor, op("a", seq, version, OpKind::Structural, 0, 0, json!({"op": "remove_blank", "ids": [id]})))
+            .expect_err("the step is refused");
+        assert_eq!(err.code, RejectCode::Invalid, "{}", err.message);
+        assert_eq!(document_json(&room), before, "the refusal changed nothing");
+        assert_eq!(room.version(), version, "the version did not move");
     }
 }

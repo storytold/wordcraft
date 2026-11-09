@@ -99,6 +99,20 @@
 //! inverse names the earlier numbering references and drops the instance the
 //! step created.
 //!
+//! `remove_blank` makes `para.removeBlank` addressable: the payload names the
+//! paragraphs by session id, and the operation takes out only empty ones — a
+//! top-level paragraph of one story with no section break and a paragraph after
+//! it. Duplicates, an empty set, a non-empty paragraph, a paragraph inside a
+//! table, one that is the last block of its container or carries a section
+//! break, and a step wider than [`MAX_BLANK_PARAGRAPHS`] are refused before the
+//! document or the id map changes. The authoritative delta is one `remove_blank`
+//! inside a `transaction`, and the inverse is the same operation with `restore`:
+//! it puts each paragraph back with its body, its runs and properties and its
+//! own session id, so undo returns exactly the earlier sequence of paragraphs
+//! and a client that held the id addresses the same paragraph again. The step
+//! names the surviving paragraphs beside each removal in `Effect::touched`, so
+//! an edit another user makes there makes undo `undo-conflict`.
+//!
 //! `set_para_format` restores one paragraph's body and formatting to a named
 //! earlier value: it is the inverse of a character or paragraph command, whose
 //! forward effect a replica replays as a command (a toggle or a relative step
@@ -167,6 +181,11 @@ pub const MAX_LIST_PARAGRAPHS: usize = MAX_MOVE_BLOCKS;
 /// A bullet or numbering command creates at most one; the bound keeps a hostile
 /// payload small.
 pub const MAX_LIST_DEFINITIONS: usize = 4;
+
+/// The most paragraphs one `remove_blank` step takes out. A `para.removeBlank`
+/// command that deletes more still runs, but the command path does not capture
+/// it: the step keeps its command delta and its undo answers `unsupported`.
+pub const MAX_BLANK_PARAGRAPHS: usize = MAX_MOVE_BLOCKS;
 
 /// The most levels one numbering definition may carry: OOXML numbers list
 /// levels 0–8.
@@ -1675,6 +1694,238 @@ fn restart_step(payload: &Value) -> Result<ListStep, String> {
     Ok(ListStep::Restart { start, ids })
 }
 
+/// One paragraph an exact `remove_blank` step takes out or puts back: the
+/// session id, the index in its container and — for a restore — the body it
+/// carries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlankItem {
+    pub id: u32,
+    pub index: usize,
+    pub block: Option<Block>,
+}
+
+/// One paragraph a resolved `remove_blank` step takes out: where it was before
+/// the step, where it goes back to and its body.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlankRemoval {
+    pub id: u32,
+    /// The index in the story's block list before the step.
+    pub index: usize,
+    /// The index in the same list after the step: every removal before it
+    /// shifts it down by one.
+    pub final_index: usize,
+    pub block: Block,
+}
+
+/// A resolved `remove_blank` step.
+#[derive(Clone, Debug, Default)]
+pub struct BlankPlan {
+    pub story: StoryRef,
+    /// The removals, ascending by the index they had before the step.
+    pub removals: Vec<BlankRemoval>,
+    /// The surviving paragraphs beside a removal: the inverse puts the
+    /// paragraph back between them, so an edit another user makes in one of
+    /// them makes the undo `undo-conflict` instead of moving the blank to a
+    /// place nobody asked for.
+    pub touched: Vec<u32>,
+}
+
+/// The block list of a story, the body's or a part's.
+fn story_blocks(doc: &Document, story: StoryRef) -> Option<&Blocks> {
+    match story {
+        StoryRef::Body => Some(&doc.body),
+        StoryRef::Part(id) => doc.parts.get(&id).map(|part| &part.blocks),
+    }
+}
+
+/// Resolve a `remove_blank` step: every named id must be a top-level, empty
+/// paragraph of one story, with no section break and a paragraph after it in
+/// its container (a story's last mark cannot be removed, and a paragraph before
+/// a table cannot be joined across it).
+///
+/// Every check runs before the document or the id map changes: an unknown id
+/// (`invalid`), a retired id (`gone`), a block that is not a top-level
+/// paragraph (a table, a row, a cell, a paragraph inside a table), a paragraph
+/// that is not empty, carries a section break or has no paragraph after it, two
+/// stories in one step, a duplicate id, an empty set and a step wider than
+/// [`MAX_BLANK_PARAGRAPHS`] are refused here.
+pub fn plan_remove_blank(doc: &Document, ids: &NodeIds, targets: &[u32]) -> Result<BlankPlan, MoveError> {
+    if targets.is_empty() || targets.len() > MAX_BLANK_PARAGRAPHS {
+        return Err(MoveError::Bad(format!("a blank step removes 1 to {MAX_BLANK_PARAGRAPHS} paragraphs, not {}", targets.len())));
+    }
+    let mut seen: Vec<u32> = Vec::with_capacity(targets.len());
+    let mut story: Option<StoryRef> = None;
+    let mut resolved: Vec<(u32, Path)> = Vec::with_capacity(targets.len());
+    for id in targets {
+        if seen.contains(id) {
+            return Err(MoveError::Bad(format!("the step names node {id} twice")));
+        }
+        seen.push(*id);
+        let key = ids.resolve(NodeId(*id)).map_err(|why| match why {
+            wordcraft_collab::ids::Resolve::Unknown => MoveError::Unknown(*id),
+            wordcraft_collab::ids::Resolve::Gone(version) => MoveError::Gone(*id, version),
+        })?;
+        if key.path.is_empty() {
+            return Err(MoveError::Bad(format!("node {id} is not a block")));
+        }
+        if key.path.len() != 1 {
+            return Err(MoveError::Bad(format!("node {id} is inside a table")));
+        }
+        let this = parse_story(&key.story).ok_or_else(|| MoveError::Bad(format!("unknown story {:?}", key.story)))?;
+        match story {
+            Some(first) if first != this => return Err(MoveError::Bad("a blank step removes paragraphs of one story".into())),
+            _ => story = Some(this),
+        }
+        resolved.push((*id, Path(key.path.clone())));
+    }
+    let story = story.ok_or_else(|| MoveError::Bad("a blank step needs a paragraph".into()))?;
+    let blocks = story_blocks(doc, story).ok_or_else(|| MoveError::Bad(format!("story {} does not exist", story_name(story))))?;
+    let mut removals: Vec<BlankRemoval> = Vec::with_capacity(resolved.len());
+    for (id, path) in resolved {
+        let index = path.last();
+        let Some(block) = blocks.get(index) else {
+            return Err(MoveError::Bad(format!("node {id} does not name a block")));
+        };
+        let Block::Para(para) = &**block else {
+            return Err(MoveError::Bad(format!("node {id} is not a paragraph")));
+        };
+        if !para.is_empty() {
+            return Err(MoveError::Bad(format!("node {id} is not empty")));
+        }
+        if para.section.is_some() {
+            return Err(MoveError::Bad(format!("node {id} carries a section break")));
+        }
+        if !matches!(blocks.get(index + 1).map(|block| &**block), Some(Block::Para(_))) {
+            return Err(MoveError::Bad(format!("node {id} has no paragraph after it")));
+        }
+        removals.push(BlankRemoval { id, index, final_index: 0, block: block.as_ref().clone() });
+    }
+    removals.sort_by_key(|removal| removal.index);
+    let removed: Vec<usize> = removals.iter().map(|removal| removal.index).collect();
+    for (position, removal) in removals.iter_mut().enumerate() {
+        removal.final_index = removal.index - position;
+    }
+    // The neighbours that stay are what the inverse lands between.
+    let mut touched = Vec::new();
+    for removal in &removals {
+        for index in [removal.index.checked_sub(1), Some(removal.index + 1)].into_iter().flatten() {
+            if removed.contains(&index) {
+                continue;
+            }
+            if !matches!(blocks.get(index).map(|block| &**block), Some(Block::Para(_))) {
+                continue;
+            }
+            if let Some(id) = ids.get(&NodeKey::new(story_name(story), vec![index as u32])) {
+                touched.push(id.0);
+            }
+        }
+    }
+    touched.sort_unstable();
+    touched.dedup();
+    Ok(BlankPlan { story, removals, touched })
+}
+
+/// Take the plan's paragraphs out of the document and tombstone their ids. The
+/// removals run from the highest index down, so the indexes before them stay as
+/// they were; `at` is the version the ids are retired at.
+pub fn apply_remove_blank(doc: &mut Document, ids: &mut NodeIds, plan: &BlankPlan, at: u64) -> Result<(), String> {
+    let name = story_name(plan.story);
+    for removal in plan.removals.iter().rev() {
+        let path = Path(vec![removal.index as u32]);
+        doc.remove_block(plan.story, &path).map_err(|err| err.to_string())?;
+        ids.remove_subtree(&name, &path.0, at);
+        ids.shift_children(&name, &[], removal.index + 1, -1);
+    }
+    Ok(())
+}
+
+/// The id-map half of the step, for a command that already changed the
+/// document: the removed ids are retired and the blocks after them move down.
+pub fn remove_blank_ids(ids: &mut NodeIds, plan: &BlankPlan, at: u64) {
+    let name = story_name(plan.story);
+    for removal in plan.removals.iter().rev() {
+        let path = [removal.index as u32];
+        ids.remove_subtree(&name, &path, at);
+        ids.shift_children(&name, &[], removal.index + 1, -1);
+    }
+}
+
+/// Put the paragraphs of a `restore` back: each item carries the body, the id
+/// and the index the paragraph goes back to, highest index first, so every
+/// index stays valid as the paragraphs land. An id the step retired is revived
+/// — the paragraph comes back with it — so a client that held the id addresses
+/// the same paragraph again.
+pub fn apply_restore_blank(doc: &mut Document, ids: &mut NodeIds, story: StoryRef, items: &[BlankItem]) -> Result<(), String> {
+    let name = story_name(story);
+    for item in items {
+        let block = item.block.clone().ok_or_else(|| "a restore item needs a `block`".to_string())?;
+        let path = Path(vec![item.index as u32]);
+        doc.insert_block(story, &path, block).map_err(|err| err.to_string())?;
+        ids.shift_children(&name, &[], item.index, 1);
+        ids.rebase(NodeId(item.id), NodeKey::new(name.clone(), vec![item.index as u32]));
+    }
+    Ok(())
+}
+
+/// Read a `remove_blank` payload: `items` is a forward removal (each names the
+/// id and the index it comes out of), `restore` the inverse (each also carries
+/// the body). Returns the story, the items in the order they are applied
+/// (highest index first) and whether they go back.
+fn blank_payload(payload: &Value) -> Result<(StoryRef, Vec<BlankItem>, bool), String> {
+    let story = payload.get("story").and_then(Value::as_str).and_then(parse_story).ok_or_else(|| "remove_blank needs a known `story`".to_string())?;
+    let restoring = payload.get("restore").is_some_and(|value| !value.is_null());
+    let entries = payload
+        .get(if restoring { "restore" } else { "items" })
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("remove_blank needs `{}`", if restoring { "restore" } else { "items" }))?;
+    if entries.is_empty() || entries.len() > MAX_BLANK_PARAGRAPHS {
+        return Err(format!("a blank step carries 1 to {MAX_BLANK_PARAGRAPHS} paragraphs, not {}", entries.len()));
+    }
+    let mut items = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let id = entry.get("id").and_then(Value::as_u64).ok_or_else(|| "a blank item needs an `id`".to_string())?;
+        let id = u32::try_from(id).map_err(|_| "an id does not fit".to_string())?;
+        let index = entry.get("index").and_then(Value::as_u64).ok_or_else(|| "a blank item needs an `index`".to_string())?;
+        let index = usize::try_from(index).map_err(|_| "an index does not fit".to_string())?;
+        let block = match entry.get("block") {
+            Some(value) if !value.is_null() => Some(serde_json::from_value::<Block>(value.clone()).map_err(|err| format!("bad block: {err}"))?),
+            _ if restoring => return Err("a restore item needs a `block`".to_string()),
+            _ => None,
+        };
+        if block.as_ref().is_some_and(|block| !matches!(block, Block::Para(_))) {
+            return Err("a blank item carries something that is not a paragraph".to_string());
+        }
+        items.push(BlankItem { id, index, block });
+    }
+    // The highest index first, whatever order the payload names them in.
+    items.sort_by_key(|item| std::cmp::Reverse(item.index));
+    Ok((story, items, restoring))
+}
+
+/// The authoritative delta of a blank step: one `remove_blank` naming each
+/// paragraph it takes out, inside the step's `transaction`.
+pub fn blank_delta(plan: &BlankPlan) -> Value {
+    let items: Vec<Value> = plan.removals.iter().rev().map(|removal| json!({"id": removal.id, "index": removal.index})).collect();
+    json!({"op": "transaction", "ops": [{"op": "remove_blank", "story": story_name(plan.story), "items": items}]})
+}
+
+/// The authoritative delta of a restore: the same operation with `restore`,
+/// inside a `transaction`, so undo lands on every replica as one delta.
+pub fn blank_restore_delta(story: StoryRef, restore: &[Value]) -> Value {
+    json!({"op": "transaction", "ops": [{"op": "remove_blank", "story": story_name(story), "restore": restore}]})
+}
+
+/// The operations that undo a blank step: the same operation with `restore`
+/// naming the body, the id and the index each paragraph goes back to. The room
+/// wraps the delta, so undo lands as one `transaction` on every replica and the
+/// paragraphs come back with their own ids, runs and properties.
+pub fn blank_inverse_ops(op: &Op, plan: &BlankPlan) -> Vec<Op> {
+    let restore: Vec<Value> =
+        plan.removals.iter().rev().map(|removal| json!({"id": removal.id, "index": removal.final_index, "block": removal.block})).collect();
+    let payload = json!({"op": "remove_blank", "story": story_name(plan.story), "restore": restore});
+    vec![inverse_op(OpKind::Structural, op, plan.story, 0, 0, payload)]
+}
+
 /// The WordCraft half of a room.
 pub struct DocModel {
     doc: Document,
@@ -1722,6 +1973,7 @@ impl DocModel {
             "set_para_list" => self.list_op(op, ids, "set_para_list", "List"),
             "set_para_multilevel" => self.list_op(op, ids, "set_para_multilevel", "Multilevel list"),
             "set_para_restart_numbering" => self.list_op(op, ids, "set_para_restart_numbering", "Restart numbering"),
+            "remove_blank" => self.remove_blank(op, ids),
             "insert_row" => self.insert_row(op, ids),
             "remove_row" => self.remove_row(op, ids),
             "insert_column" => self.insert_column(op, ids),
@@ -2145,6 +2397,45 @@ impl DocModel {
             nodes_changed: false,
             touched,
         })
+    }
+
+    /// Remove a list of empty paragraphs. `payload.ids` names them; every one
+    /// must be a top-level paragraph of one story that is empty, carries no
+    /// section break and has a paragraph after it (`plan_remove_blank`). With
+    /// `payload.restore` the operation is the inverse instead: it puts each
+    /// paragraph back with the body, the id and the index the item names, so
+    /// undo returns the earlier paragraphs and their ids.
+    fn remove_blank(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        if op.payload.get("restore").is_some_and(|value| !value.is_null()) {
+            let (story, items, _) = blank_payload(&op.payload).map_err(|why| invalid(op, why))?;
+            apply_restore_blank(&mut self.doc, ids, story, &items).map_err(|err| invalid(op, err))?;
+            let restore = op.payload.get("restore").cloned().unwrap_or(Value::Array(Vec::new()));
+            let restore = restore.as_array().cloned().unwrap_or_default();
+            return Ok(Effect {
+                delta: Some(blank_restore_delta(story, &restore)),
+                inverse: Vec::new(),
+                forward: vec![op.clone()],
+                label: "Undo delete blank paragraphs".into(),
+                nodes_changed: true,
+                touched: Vec::new(),
+            });
+        }
+        let entries = op.payload.get("ids").and_then(Value::as_array).ok_or_else(|| invalid(op, "remove_blank needs `ids`"))?;
+        let mut targets = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let id = entry.as_u64().ok_or_else(|| invalid(op, "`ids` must be a list of ids"))?;
+            targets.push(u32::try_from(id).map_err(|_| invalid(op, "an id does not fit"))?);
+        }
+        let plan = plan_remove_blank(&self.doc, ids, &targets).map_err(|err| match err {
+            MoveError::Unknown(id) => invalid(op, format!("unknown node {id}")),
+            MoveError::Gone(id, version) => Reject::new(op.op_id.clone(), RejectCode::Gone, format!("node {id} was deleted at version {version}")),
+            MoveError::Bad(why) => invalid(op, why),
+        })?;
+        let inverse = blank_inverse_ops(op, &plan);
+        let delta = blank_delta(&plan);
+        let touched = plan.touched.clone();
+        apply_remove_blank(&mut self.doc, ids, &plan, op.base_version).map_err(|err| invalid(op, err))?;
+        Ok(Effect { delta: Some(delta), inverse, forward: vec![op.clone()], label: "Delete blank paragraphs".into(), nodes_changed: true, touched })
     }
 
     /// Insert a row into the table the operation addresses. `payload.index` is
@@ -3455,6 +3746,20 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             let step = list_step(delta)?;
             let plan = plan_list(doc, ids, &step).map_err(|err| err.to_string())?;
             apply_list(doc, &plan)?;
+        }
+        "remove_blank" => {
+            let (story, items, restoring) = blank_payload(delta)?;
+            if restoring {
+                apply_restore_blank(doc, ids, story, &items)?;
+            } else {
+                let name = story_name(story);
+                for item in &items {
+                    let path = Path(vec![item.index as u32]);
+                    doc.remove_block(story, &path).map_err(|err| err.to_string())?;
+                    ids.remove_subtree(&name, &path.0, 0);
+                    ids.shift_children(&name, &[], item.index + 1, -1);
+                }
+            }
         }
         "insert_row" => {
             let (story, table_path) = delta_table(delta, doc, ids)?;
