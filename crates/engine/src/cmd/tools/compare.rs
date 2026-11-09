@@ -177,13 +177,14 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// A copy of the block with every run (in tables, every cell's) changed by `f`.
+/// Returns a copy of `b` with all text runs and paragraph marks (or nested table cells) updated by `f`.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
             let mut p = p.clone();
             let len = p.len();
             let _ = p.format(0, len, f);
+            f(&mut p.mark);
             Block::Para(p)
         }
         Block::Table(t) => {
@@ -205,59 +206,96 @@ pub(super) enum Op {
     Ins,
 }
 
-/// Longest sequence the comparison table is built for; the rest of a longer sequence is
-/// compared as deleted and inserted, never dropped.
+/// Longest sequence window per LCS comparison table chunk; sequences longer than this are
+/// aligned in successive chunked windows rather than truncated, preserving tail alignment.
 const MAX_LCS: usize = 4000;
 
 /// Comparison table cells one compare may fill over all its tables (blocks and every changed
 /// paragraph pair); once spent, the remaining middles are compared as deleted and inserted.
 const MAX_COMPARE_CELLS: u64 = 50_000_000;
 
-/// LCS edit script between two sequences: the common start and end are matched first, then the
-/// middle (bounded size). The middle's table is charged to `budget`; when it doesn't fit, the
-/// middle is deleted and inserted whole.
+/// Computes the longest common subsequence (LCS) edit script (`Op::Same`, `Op::Del`, `Op::Ins`)
+/// between sequences `a` and `b`.
+///
+/// Strips common prefix and suffix first, then iterates over windows capped at [`MAX_LCS`],
+/// charging comparison cells against `budget`. Between windows, intermediate common prefixes
+/// are trimmed to re-anchor alignment without table allocations. When the remaining cells
+/// exceed `budget`, the unaligned tail degrades honestly as whole deletions and insertions.
 pub(super) fn lcs_ops<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Vec<Op> {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let (ra, rb) = (a.get(pre..).unwrap_or_default(), b.get(pre..).unwrap_or_default());
     let suf = ra.iter().rev().zip(rb.iter().rev()).take_while(|(x, y)| x == y).count();
-    let (a, b) = (ra.get(..ra.len() - suf).unwrap_or_default(), rb.get(..rb.len() - suf).unwrap_or_default());
+    let mut rem_a = ra.get(..ra.len().saturating_sub(suf)).unwrap_or_default();
+    let mut rem_b = rb.get(..rb.len().saturating_sub(suf)).unwrap_or_default();
     let mut ops = vec![Op::Same; pre];
-    let (mut n, mut m) = (a.len().min(MAX_LCS), b.len().min(MAX_LCS));
-    let cells = (n as u64).saturating_mul(m as u64);
-    if cells > *budget {
-        (n, m) = (0, 0);
-    } else {
-        *budget -= cells;
-    }
-    let mut t = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            let v = if a.get(i) == b.get(j) {
-                t.get(i + 1).and_then(|r| r.get(j + 1)).copied().unwrap_or(0) + 1
-            } else {
-                t.get(i + 1).and_then(|r| r.get(j)).copied().unwrap_or(0).max(t.get(i).and_then(|r| r.get(j + 1)).copied().unwrap_or(0))
-            };
-            if let Some(c) = t.get_mut(i).and_then(|r| r.get_mut(j)) {
-                *c = v;
+
+    while !rem_a.is_empty() && !rem_b.is_empty() {
+        let p = rem_a.iter().zip(rem_b).take_while(|(x, y)| x == y).count();
+        if p > 0 {
+            ops.extend(std::iter::repeat_n(Op::Same, p));
+            rem_a = rem_a.get(p..).unwrap_or_default();
+            rem_b = rem_b.get(p..).unwrap_or_default();
+            if rem_a.is_empty() || rem_b.is_empty() {
+                break;
             }
         }
-    }
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if a.get(i) == b.get(j) {
-            ops.push(Op::Same);
-            i += 1;
-            j += 1;
-        } else if t.get(i + 1).and_then(|r| r.get(j)) >= t.get(i).and_then(|r| r.get(j + 1)) {
-            ops.push(Op::Del);
-            i += 1;
-        } else {
-            ops.push(Op::Ins);
-            j += 1;
+
+        let n = rem_a.len().min(MAX_LCS);
+        let m = rem_b.len().min(MAX_LCS);
+        let cells = (n as u64).saturating_mul(m as u64);
+        if cells > *budget || n == 0 || m == 0 {
+            break;
         }
+        *budget = budget.saturating_sub(cells);
+
+        let stride = m.saturating_add(1);
+        let table_len = n.saturating_add(1).saturating_mul(stride);
+        let mut t = vec![0u32; table_len];
+
+        for i in (0..n).rev() {
+            let row = i.saturating_mul(stride);
+            let next_row = i.saturating_add(1).saturating_mul(stride);
+            for j in (0..m).rev() {
+                let v = if rem_a.get(i) == rem_b.get(j) {
+                    t.get(next_row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0).saturating_add(1)
+                } else {
+                    let down = t.get(next_row.saturating_add(j)).copied().unwrap_or(0);
+                    let right = t.get(row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0);
+                    down.max(right)
+                };
+                if let Some(c) = t.get_mut(row.saturating_add(j)) {
+                    *c = v;
+                }
+            }
+        }
+
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < n && j < m {
+            let row = i.saturating_mul(stride);
+            let next_row = i.saturating_add(1).saturating_mul(stride);
+            if rem_a.get(i) == rem_b.get(j) {
+                ops.push(Op::Same);
+                i = i.saturating_add(1);
+                j = j.saturating_add(1);
+            } else {
+                let down = t.get(next_row.saturating_add(j)).copied().unwrap_or(0);
+                let right = t.get(row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0);
+                if down >= right {
+                    ops.push(Op::Del);
+                    i = i.saturating_add(1);
+                } else {
+                    ops.push(Op::Ins);
+                    j = j.saturating_add(1);
+                }
+            }
+        }
+
+        rem_a = rem_a.get(i..).unwrap_or_default();
+        rem_b = rem_b.get(j..).unwrap_or_default();
     }
-    ops.extend(std::iter::repeat_n(Op::Del, a.len() - i));
-    ops.extend(std::iter::repeat_n(Op::Ins, b.len() - j));
+
+    ops.extend(std::iter::repeat_n(Op::Del, rem_a.len()));
+    ops.extend(std::iter::repeat_n(Op::Ins, rem_b.len()));
     ops.extend(std::iter::repeat_n(Op::Same, suf));
     ops
 }
