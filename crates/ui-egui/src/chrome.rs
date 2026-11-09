@@ -600,15 +600,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     );
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
-    paint_text(
-        ui.painter(),
-        pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y - TypeRung::Control.line_height() / 2.0),
-        crate::rtl::lead_top(rtl),
-        ph,
-        &pfont,
-        ptrack,
-        t.text_dim,
-    );
+    paint_text(ui.painter(), pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y), crate::rtl::lead_center(rtl), ph, &pfont, ptrack, t.text_dim);
     if app.ui.keytips == crate::keytips::Phase::Tabs {
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
