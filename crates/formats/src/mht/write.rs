@@ -4,11 +4,13 @@
 //!
 //! - The page is the root part, `text/html` in UTF-8, quoted-printable (RFC 2045 §6.7), with
 //!   the `Content-Location` [`PAGE_LOCATION`].
-//! - Each distinct picture is a part of its own, base64 (RFC 2045 §6.8), at
-//!   `file:///document_files/imageNNN.ext`; the page names it relative to its own location
-//!   (`document_files/imageNNN.ext`), which RFC 2557 §5 resolves against the page's
-//!   `Content-Location`, as a browser or Word saves a page with its pictures in a folder beside
-//!   it. A picture shown twice is stored once.
+//! - Each distinct picture is a part of its own, base64 (RFC 2045 §6.8), with the
+//!   `Content-ID` `<imageNNN.ext>` and the `Content-Location`
+//!   `file:///document_files/imageNNN.ext`. The page names it by its ID (`cid:imageNNN.ext`,
+//!   RFC 2392), not by its location: Chrome and Edge show no picture whose part has a `file:`
+//!   location, and Word turns a picture found only by a location at the root of `file:///` into
+//!   a link to a missing file instead of keeping it. Both load `cid:` pictures, and Word keeps
+//!   the file name the ID gives (`image1.png`). A picture shown twice is stored once.
 //! - The document's title is the message's `Subject` in RFC 2047 encoded words.
 //!
 //! The output is the same bytes for the same document: no date, and a fixed boundary that no
@@ -22,10 +24,9 @@ use wordcraft_doc::Document;
 /// quoted-printable an `=` is always followed by two hex digits or a line break, and base64 has
 /// no `_` (RFC 2045 §6.7 and RFC 2046 §5.1.1 suggest this), so no part's content can contain it.
 pub(super) const BOUNDARY: &str = "----=_WordCraft_Part_0";
-/// Where the page is (its `Content-Location`), which its pictures' relative names resolve
-/// against.
+/// Where the page is (its `Content-Location`).
 pub(super) const PAGE_LOCATION: &str = "file:///document.htm";
-/// The folder beside the page that its pictures are in, named relative to the page.
+/// The folder beside the page that its pictures' locations put them in.
 pub(super) const FILES: &str = "document_files";
 /// Longest encoded line, line break not counted (RFC 2045 §6.7 rule 5, §6.8).
 const MAX_LINE: usize = 76;
@@ -44,7 +45,7 @@ struct Picture<'a> {
     mime: &'a str,
     /// Its bytes in base64, as the page held them.
     base64: &'a str,
-    /// Its file name in [`FILES`].
+    /// Its file name in [`FILES`], which is also its `Content-ID`.
     name: String,
 }
 
@@ -56,10 +57,10 @@ pub fn export(doc: &Document) -> Vec<u8> {
 
 /// `html`, a page written by [`crate::html::export`] (with Print Markup's comment list, say), as
 /// a Single File Web Page whose subject is `title`. Every picture the page holds as a base64
-/// `data:` URI becomes a part the page names by its location; anything else stays as it is.
+/// `data:` URI becomes a part the page names by its `Content-ID`; anything else stays as it is.
 pub fn export_html(html: &str, title: &str) -> Vec<u8> {
     let (page, pictures) = take_pictures(html);
-    let pictures_len: usize = pictures.iter().map(|p| p.base64.len() + p.base64.len() / MAX_LINE * 2 + 160).sum();
+    let pictures_len: usize = pictures.iter().map(|p| p.base64.len() + p.base64.len() / MAX_LINE * 2 + 192).sum();
     let mut out = String::with_capacity(page.len() + page.len() / 4 + pictures_len + 512);
     out.push_str("MIME-Version: 1.0\r\n");
     if let Some(subject) = subject(title) {
@@ -68,23 +69,27 @@ pub fn export_html(html: &str, title: &str) -> Vec<u8> {
     out.push_str(&format!("Content-Type: multipart/related; type=\"text/html\";\r\n\tboundary=\"{BOUNDARY}\"\r\n\r\n"));
     // No preamble: the first delimiter starts the body.
     out.push_str(&format!("--{BOUNDARY}\r\n"));
-    part_headers(&mut out, "text/html; charset=\"utf-8\"", "quoted-printable", PAGE_LOCATION);
+    part_headers(&mut out, "text/html; charset=\"utf-8\"", "quoted-printable", None, PAGE_LOCATION);
     quoted_printable(page.as_bytes(), &mut out);
     for p in &pictures {
         out.push_str(&format!("\r\n--{BOUNDARY}\r\n"));
-        part_headers(&mut out, p.mime, "base64", &format!("file:///{FILES}/{}", p.name));
+        part_headers(&mut out, p.mime, "base64", Some(&p.name), &format!("file:///{FILES}/{}", p.name));
         wrap(p.base64, &mut out);
     }
     out.push_str(&format!("\r\n--{BOUNDARY}--\r\n"));
     out.into_bytes()
 }
 
-/// A part's headers and the empty line that ends them.
-fn part_headers(out: &mut String, content_type: &str, encoding: &str, location: &str) {
-    out.push_str(&format!("Content-Type: {content_type}\r\nContent-Transfer-Encoding: {encoding}\r\nContent-Location: {location}\r\n\r\n"));
+/// A part's headers, its `Content-ID` (`<id>`) when it has one, and the empty line that ends them.
+fn part_headers(out: &mut String, content_type: &str, encoding: &str, id: Option<&str>, location: &str) {
+    out.push_str(&format!("Content-Type: {content_type}\r\nContent-Transfer-Encoding: {encoding}\r\n"));
+    if let Some(id) = id {
+        out.push_str(&format!("Content-ID: <{id}>\r\n"));
+    }
+    out.push_str(&format!("Content-Location: {location}\r\n\r\n"));
 }
 
-/// The page with each base64 `data:` picture replaced by its name in [`FILES`], and the
+/// The page with each base64 `data:` picture replaced by `cid:` and its name, and the
 /// pictures, each distinct one once, in the order the page first shows them.
 ///
 /// Only [`crate::html::export`]'s own markup can hold `<img src="data:`: it escapes `<` and `"`
@@ -106,9 +111,7 @@ fn take_pictures(html: &str) -> (String, Vec<Picture<'_>>) {
                     pictures.push(Picture { mime, base64, name });
                     pictures.len() - 1
                 });
-                page.push_str("<img src=\"");
-                page.push_str(FILES);
-                page.push('/');
+                page.push_str("<img src=\"cid:");
                 page.push_str(pictures.get(i).map(|p| p.name.as_str()).unwrap_or(""));
                 // The closing quote and the rest of the tag follow.
                 rest = uri_and_after.get(end..).unwrap_or("");

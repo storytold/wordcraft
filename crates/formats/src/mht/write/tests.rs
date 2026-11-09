@@ -83,12 +83,16 @@ fn the_page_is_the_first_part_and_each_picture_a_part_beside_it_once() {
     assert_eq!(page.location.as_deref(), Some(PAGE_LOCATION));
     let html = text(page);
     assert!(!html.contains("data:"), "no picture left in the page: {html}");
-    assert_eq!(html.matches("<img src=\"document_files/image001.png\"").count(), 2, "{html}");
-    assert_eq!(html.matches("<img src=\"document_files/image002.png\"").count(), 1, "{html}");
+    // Named by Content-ID: Chrome and Edge show no `file:` part, Word links rather than keeps one
+    // at the root of `file:///`.
+    assert_eq!(html.matches("<img src=\"cid:image001.png\"").count(), 2, "{html}");
+    assert_eq!(html.matches("<img src=\"cid:image002.png\"").count(), 1, "{html}");
+    assert!(!html.contains("document_files"), "{html}");
     // The picture's other attributes stay.
-    assert!(html.contains("<img src=\"document_files/image002.png\" alt=\"picture 1\" width=\"16\" height=\"8\">"), "{html}");
+    assert!(html.contains("<img src=\"cid:image002.png\" alt=\"picture 1\" width=\"16\" height=\"8\">"), "{html}");
     for (part, name, bytes) in [(&parts[1], "image001.png", &png), (&parts[2], "image002.png", &dot)] {
         assert_eq!(part.content_type, "image/png");
+        assert_eq!(part.id.as_deref(), Some(name), "the Content-ID the page names");
         assert_eq!(part.location.as_deref(), Some(format!("file:///document_files/{name}").as_str()));
         assert_eq!(part.body.as_slice(), bytes.as_slice(), "{name}");
     }
@@ -206,7 +210,7 @@ fn only_base64_data_pictures_become_parts() {
     assert_eq!(parts.len(), 2, "the page and the one well-formed picture");
     let page = text(&parts[0]);
     assert!(page.contains("<img src=\"https://example.test/a.png\"><img src=\"data:image/png,%89PNG\">"), "{page}");
-    assert!(page.contains("<img src=\"document_files/image001.png\" alt=\"dot\">"), "{page}");
+    assert!(page.contains("<img src=\"cid:image001.png\" alt=\"dot\">"), "{page}");
     assert!(page.ends_with(&format!("<img src=\"data:image/png;base64,{DOT}")), "{page}");
     assert_eq!(extension("image/jpeg"), "jpg");
     assert_eq!(extension("application/octet-stream"), "bin");
