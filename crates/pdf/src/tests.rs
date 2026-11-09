@@ -2395,7 +2395,16 @@ fn svg_pictures_are_drawn_as_vector_paths() {
     let media = d.add_media(svg.to_vec(), "svg");
     let mut p = Paragraph::with_text("Figure: ", CharProps::default());
     let n = p.len();
-    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "red".into(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
+    let obj = InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: "red".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     p.insert_object(n, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
@@ -2411,7 +2420,16 @@ fn unreadable_svg_picture_is_the_grey_box() {
     let mut d = Document::new();
     let media = d.add_media(b"<svg xmlns=\"http://www.w3.org/2000/svg\"".to_vec(), "svg");
     let mut p = Paragraph::new();
-    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
+    let obj = InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     p.insert_object(0, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
@@ -2428,7 +2446,8 @@ fn pdf_with_svg(svg: &[u8], w: f32) -> String {
     let mut d = Document::new();
     let media = d.add_media(svg.to_vec(), "svg");
     let mut p = Paragraph::new();
-    let obj = InlineObject::Image { media, w, h: w, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
+    let obj =
+        InlineObject::Image { media, w, h: w, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
     p.insert_object(0, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();

@@ -177,7 +177,16 @@ fn svg_doc() -> Document {
     let mut d = Document::new();
     let key = d.add_media(SVG.to_vec(), "svg");
     let mut p = Paragraph::new();
-    let obj = InlineObject::Image { media: key, w: 30.0, h: 15.0, alt: "logo".into(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
+    let obj = InlineObject::Image {
+        media: key,
+        w: 30.0,
+        h: 15.0,
+        alt: "logo".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![para_block(p)];
     d

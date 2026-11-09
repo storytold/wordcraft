@@ -1172,7 +1172,16 @@ mod svg_pictures {
         let media = d.add_media(SVG.to_vec(), "svg");
         let mut p = Paragraph::with_text("Logo: ", CharProps::default());
         let n = p.len();
-        let obj = InlineObject::Image { media, w: 30.0, h: 15.0, alt: "logo".into(), float: Default::default(), crop: [0.0; 4], ole: None, fx: Default::default() };
+        let obj = InlineObject::Image {
+            media,
+            w: 30.0,
+            h: 15.0,
+            alt: "logo".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
         d.body = vec![para_block(p)];
         d
