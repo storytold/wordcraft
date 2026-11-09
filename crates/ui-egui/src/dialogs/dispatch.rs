@@ -274,7 +274,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
-    let names = ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].map(|n| tl!(n).to_string());
+    let names = [tl!("Indents and Spacing").to_string(), tl!("Line and Page Breaks").to_string(), tl!("Asian Typography").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = k as u8;
     }
@@ -1161,7 +1161,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     ui.set_width(820.0);
-    let names = ["About", "Contributors", "Models", "Language data"].map(|n| tl!(n).to_string());
+    let names = [tl!("About").to_string(), tl!("Contributors").to_string(), tl!("Models").to_string(), tl!("Language data").to_string()];
     if let Some(i) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = i as u8;
     }
