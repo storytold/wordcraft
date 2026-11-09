@@ -133,6 +133,8 @@ fn set<T>(slots: &mut Vec<(u8, T)>, c: u8, v: T) {
     }
 }
 
+/// Decode table membership and row properties from a paragraph mark's PAPX.
+/// Cell indices still refer to the source cells; assembly applies overrides before merges.
 pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
@@ -305,6 +307,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
         cells.push(Cell { props: CellProps { span: 1, ..Default::default() }, blocks, controls: Default::default() });
     }
+    /// Apply source-cell properties, then combine horizontally merged cells without
+    /// discarding their non-empty content. Spans retain the source column count.
     fn build_row(mut cells: Vec<Cell>, info: &RowInfo) -> Row {
         // Per-cell overrides first (sprm cell indices count pre-merge cells), then merges.
         for (i, c) in cells.iter_mut().enumerate() {
@@ -468,6 +472,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
 }
 
 /// Binary DOC defines cell edges per row; the model uses one grid with column spans.
+/// Keep the original grid and rows if the boundaries do not match the source cells,
+/// are not strictly increasing, or would require more than `MAX_COLS` columns.
 fn apply_row_edges(rows: &mut [Row], row_edges: &[Vec<f32>], grid: &mut Vec<f32>) {
     let mut edges = Vec::new();
     for (row, boundaries) in rows.iter().zip(row_edges) {
