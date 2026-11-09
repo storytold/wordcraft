@@ -60,7 +60,13 @@
     <ComponentGroup Id="WordcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="WordcraftApp" Guid="855DCEC6-9285-444F-9382-9654B83B34F6">
         <File Id="WordcraftExe" Source="$(var.BinDir)\wordcraft.exe" KeyPath="yes">
-          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="WordCraft" Description="WordCraft word processor" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="WordcraftIcon.ico" IconIndex="0" />
+          <!-- A plain shortcut to wordcraft.exe, its icon the exe's own. An advertised shortcut
+               points at the package (its ProductCode) and takes its icon from the MSI's Icon table,
+               which Windows keeps under %WINDIR%\Installer\{ProductCode}. Every update is a major
+               upgrade with a new ProductCode, so the old folder went away with the old version and
+               a taskbar or Start pin lost its icon and had to be pinned again. The exe's path and
+               icon stay the same from one version to the next, so a pin keeps working. -->
+          <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="WordCraft" Description="WordCraft word processor" WorkingDirectory="INSTALLFOLDER" Advertise="no" />
         </File>
 
         <RegistryValue Root="HKMU" Key="Software\Microsoft\Windows\CurrentVersion\App Paths\wordcraft.exe" Value="[#WordcraftExe]" Type="string" />
