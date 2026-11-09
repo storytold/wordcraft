@@ -1092,3 +1092,20 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// As in Word, a shape inserted from the ribbon brings up Shape Format, where its Shape Fill and
+/// Shape Outline colours are; a failed insert leaves the tab alone.
+#[test]
+fn inserting_a_shape_from_the_ribbon_opens_shape_format() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
+    crate::widgets::run_from_ribbon(&mut a, "insert.shape", json!({"kind": "nonsense"}));
+    assert_eq!(a.ui.tab, "Insert", "nothing inserted");
+    crate::widgets::run_from_ribbon(&mut a, "insert.shape", json!({"kind": "rectangle"}));
+    assert_eq!(a.ui.tab, "Shape Format");
+    a.run("shape.fill", json!({"color": "FF0000"})).unwrap();
+    assert!(
+        matches!(wordcraft_engine::cmd::objects::selected(&a.session), Some((_, wordcraft_doc::para::InlineObject::Shape { fill: Some(_), .. }))),
+        "Shape Fill colours the shape just inserted"
+    );
+}
