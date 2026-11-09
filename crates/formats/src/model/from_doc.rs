@@ -1122,6 +1122,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
             width: t.props.width,
             width_pct: t.props.width_pct,
             heights,
+            keep_rows: t.rows.iter().map(|r| r.props.cant_split).collect(),
             fixed: t.props.fixed,
             space: [t.props.space_before, t.props.space_after],
             header_rows: t.rows.iter().take_while(|r| r.props.header).count(),
