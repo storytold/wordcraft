@@ -94,3 +94,20 @@ fn character_grid_places_east_asian_text_on_the_pitch() {
         }
     }
 }
+
+/// An exactly spaced paragraph on a document grid that ends in a line break: the empty line after
+/// the break puts its baseline 0.8 of its height down, as the line before it does.
+#[test]
+fn an_exact_empty_last_line_on_a_grid_keeps_the_exact_baseline() {
+    let mut d = with_grid("Hxg", DocGridType::Lines, 0);
+    if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+        let at = p.len();
+        p.insert_text(at, &wordcraft_doc::para::LINE_BREAK.to_string(), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let offsets: Vec<f32> = para.lines.iter().map(|l| l.baseline - l.top).collect();
+    assert_eq!(offsets.len(), 2, "{offsets:?}");
+    assert!(offsets.iter().all(|o| (o - 24.0).abs() < 0.01), "{offsets:?}");
+}

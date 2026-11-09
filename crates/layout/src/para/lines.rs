@@ -637,7 +637,13 @@ impl<'e> Breaker<'e> {
         self.lines.push(Line {
             top: self.top,
             height: h,
-            baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+            // An exact line ignores the grid (`measure`): 0.8 down, as the line before the break.
+            baseline: self.top
+                + if grid.is_some() && !matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+                    h - desc
+                } else {
+                    baseline_offset(rp.line_spacing, asc, h, desc)
+                },
             text_asc: asc,
             text_desc: desc,
             c0: self.n,
