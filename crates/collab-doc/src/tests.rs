@@ -5,7 +5,7 @@ use std::sync::Arc;
 use wordcraft_collab::ids::{NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{HistoryAction, Op, OpId, OpKind, Target};
-use wordcraft_doc::{Block, Cell, CharProps, Document, Path, Pos, StoryRef, Table};
+use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
 
 use crate::DocModel;
 
@@ -1077,4 +1077,57 @@ fn undo_of_a_row_insert_after_an_edit_in_the_new_row_is_a_conflict() {
     assert_eq!(err.code, wordcraft_collab::RejectCode::UndoConflict);
     assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refused undo changed nothing");
     assert_eq!(cell_text(room.model().document(), 1, 0), "mine");
+}
+
+#[test]
+fn a_format_restore_rewrites_the_runs_and_properties_it_names() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text("Hello", CharProps::default()))));
+    let mut room = Room::new(DocModel::new(doc));
+    let first = node(room.ids_mut(), 0);
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    room.submit(
+        "alice",
+        Role::Editor,
+        op(
+            "a",
+            1,
+            0,
+            OpKind::Primitive,
+            first,
+            0,
+            json!({
+                "op": "set_para_format",
+                "runs": [{"len": 2, "props": {"bold": true}}, {"len": 3, "props": {}}],
+                "mark": {"bold": true},
+                "props": {"align": "center"},
+            }),
+        ),
+    )
+    .expect("the restore lands");
+    let para = || room.model().document().para(StoryRef::Body, &Path::top(0)).cloned().expect("a paragraph");
+    assert_eq!(para().runs.first().map(|run| run.props.bold), Some(Some(true)));
+    assert_eq!(para().props.align, Some(wordcraft_doc::Align::Center));
+
+    // The adapter keeps the previous runs and properties as its own inverse.
+    let step = room.undo("alice").expect("an undo step");
+    assert_eq!(step.label, "Formatting");
+    let mut inverse = step.inverse.first().expect("an inverse operation").clone();
+    inverse.base_version = room.version();
+    room.submit("alice", Role::Editor, inverse).expect("the inverse lands");
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the paragraph is back");
+}
+
+#[test]
+fn a_format_restore_on_an_unknown_node_is_refused_before_mutation() {
+    let mut room = room();
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, 999, 0, json!({"op": "set_para_format", "props": {"align": "center"}})))
+        .expect_err("an id the room never issued is refused");
+    assert_eq!(err.code, wordcraft_collab::wire::RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(room.version(), 0);
 }

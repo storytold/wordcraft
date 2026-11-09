@@ -14,18 +14,125 @@
 
 use serde_json::{Value, json};
 
-use wordcraft_collab::ids::{NodeId, NodeIds};
+use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::{Effect, Model};
-use wordcraft_collab::wire::{Op, OpKind, Reject, RejectCode};
+use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
-use wordcraft_doc::{Block, Blocks, Document, Path, Pos, StoryRef};
+use wordcraft_doc::{Block, Blocks, Document, ParaProps, Path, Pos, Run, StoryRef};
 use wordcraft_engine::{Selection, Session};
 
 /// Command areas that must never run from a network operation.
 const DENIED_PREFIXES: &[&str] =
     &["file.", "tools.", "ui.", "view.", "caret.", "select.", "collab.", "edit.undo", "edit.redo", "edit.repeat", "review.readAloud"];
+
+/// The frequent character-formatting commands whose result can be undone
+/// exactly (ADR-0010). Every one of them only changes character properties —
+/// a direct property, a character style, or a rebuild of the cleared ones. A
+/// command that also moves text (`format.changeCase`) or replaces it
+/// (`format.enclose` with `text`) is deliberately absent: its `set_para_format`
+/// inverse would put formatting back over different text, so it stays an undo
+/// barrier instead.
+const CHAR_FORMAT_COMMANDS: &[&str] = &[
+    "format.allCaps",
+    "format.bold",
+    "format.border",
+    "format.charStyle",
+    "format.clear",
+    "format.color",
+    "format.doubleStrikethrough",
+    "format.doubleUnderline",
+    "format.emboss",
+    "format.emphasisMark",
+    "format.engrave",
+    "format.font",
+    "format.growFont",
+    "format.growFont1",
+    "format.hidden",
+    "format.highlight",
+    "format.italic",
+    "format.outline",
+    "format.position",
+    "format.resetChar",
+    "format.scale",
+    "format.set",
+    "format.shading",
+    "format.shadow",
+    "format.shrinkFont",
+    "format.shrinkFont1",
+    "format.size",
+    "format.smallCaps",
+    "format.spacing",
+    "format.strikethrough",
+    "format.subscript",
+    "format.superscript",
+    "format.underline",
+    "format.underlineColor",
+    "format.wordUnderline",
+];
+
+/// The frequent paragraph-formatting commands with an exact inverse: they only
+/// change paragraph properties (alignment, indents, spacing, keep rules, tabs,
+/// borders, shading, direction, the paragraph style). Commands that move,
+/// reorder or rewrite paragraphs (`para.sort`, `para.promote`, `para.moveUp`),
+/// strip text (`para.removeBlank`) or allocate numbering definitions
+/// (`para.bullets`) stay barriers.
+const PARA_FORMAT_COMMANDS: &[&str] = &[
+    "para.addSpaceBefore",
+    "para.align",
+    "para.alignCenter",
+    "para.alignLeft",
+    "para.alignRight",
+    "para.asianTypography",
+    "para.borders",
+    "para.distribute",
+    "para.double",
+    "para.hangingIndent",
+    "para.heading1",
+    "para.heading2",
+    "para.heading3",
+    "para.indent",
+    "para.indents",
+    "para.justify",
+    "para.keepLines",
+    "para.keepNext",
+    "para.lineSpacing",
+    "para.listLevel",
+    "para.ltr",
+    "para.normal",
+    "para.oneAndHalf",
+    "para.outdent",
+    "para.outlineLevel",
+    "para.pageBreakBefore",
+    "para.removeHanging",
+    "para.reset",
+    "para.rtl",
+    "para.set",
+    "para.shading",
+    "para.single",
+    "para.spacing",
+    "para.style",
+    "para.tabs",
+    "para.widowControl",
+];
+
+/// The most paragraphs one formatting step restores in its inverse. A wider
+/// selection is not carried as primitives: the step stays a barrier instead of
+/// sending an unbounded transaction to every replica.
+const MAX_FORMAT_PARAGRAPHS: usize = 256;
+
+/// The formatting of one paragraph before a formatting command, captured so
+/// the command's inverse can name the previous value exactly.
+struct FormatSnapshot {
+    story: StoryRef,
+    path: Path,
+    node_id: u32,
+    text_len: usize,
+    runs: Vec<Run>,
+    mark: CharProps,
+    props: ParaProps,
+}
 
 /// A room model backed by the engine.
 pub struct SessionModel {
@@ -86,6 +193,12 @@ impl SessionModel {
         self.session.pending = pending.clone();
 
         let params = op.payload.get("params").cloned().unwrap_or(Value::Null);
+        // A formatting command gets the previous value of every paragraph it may
+        // touch before it runs: its inverse is a primitive naming that value, not
+        // a second command (ADR-0010). A paragraph the inverse cannot address is
+        // refused here, before the document changes.
+        let label = spec.label;
+        let format = if is_format_command(command) { Some(self.capture_format(op, ids)?) } else { None };
         let before = doc_shape(&self.session.doc);
         let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
@@ -113,6 +226,13 @@ impl SessionModel {
         // parallel history of full document snapshots for every command.
         self.session.reset_history();
 
+        // A step that moved blocks (a command the adapter could not normalize)
+        // cannot be restored by paragraph paths; formatting commands never do.
+        let (inverse, touched) = match format {
+            Some(captured) if !nodes_changed => self.format_inverse(op, &captured).unwrap_or_default(),
+            _ => (Vec::new(), Vec::new()),
+        };
+
         Ok(Effect {
             delta: Some(json!({
                 "op": "command",
@@ -124,16 +244,111 @@ impl SessionModel {
                 "pending": pending,
                 "selection": op.payload.get("selection").cloned(),
             })),
-            // Engine commands have no inverse here; per-user undo covers
-            // primitives and structural operations (ADR-0010). The forward
-            // operation names the step so undo reports `unsupported` instead of
-            // skipping over it to an older step.
-            inverse: Vec::new(),
+            // A primitive (text, table, structural) has an exact inverse, and a
+            // formatting command names its previous value field by field. Any
+            // other command has none here, so the step is a barrier: undo
+            // reports `unsupported` instead of skipping to an older step.
+            inverse,
             forward: vec![op.clone()],
-            label: format!("Command {command}"),
+            label: if is_format_command(command) { label.to_string() } else { format!("Command {command}") },
             nodes_changed,
-            touched: Vec::new(),
+            touched,
         })
+    }
+
+    /// The formatting of every paragraph a formatting command may change,
+    /// captured before it runs (ADR-0010). The command formats the selection,
+    /// or the word at a collapsed caret, or the paragraph mark of an empty
+    /// paragraph: all of them live in the paragraphs between the selection
+    /// ends, so that range is the capture. A paragraph that has no session id
+    /// cannot be named by the inverse, so the command is refused before it
+    /// touches the document.
+    fn capture_format(&self, op: &Op, ids: &NodeIds) -> Result<Vec<FormatSnapshot>, Reject> {
+        let (a, b) = self.session.sel.ordered();
+        if a.story != b.story {
+            return Ok(Vec::new());
+        }
+        let name = story_name(a.story);
+        let mut out = Vec::new();
+        for path in self.session.doc.paths_between(&a, &b) {
+            let Some(para) = self.session.doc.para(a.story, &path) else { continue };
+            let node = ids
+                .get(&NodeKey::new(name.clone(), path.0.clone()))
+                .ok_or_else(|| invalid(op, format!("the paragraph {} has no session id, so its formatting cannot be undone", path_key(&path))))?;
+            if out.len() >= MAX_FORMAT_PARAGRAPHS {
+                return Err(invalid(op, "the selection covers too many paragraphs to undo its formatting"));
+            }
+            out.push(FormatSnapshot {
+                story: a.story,
+                path,
+                node_id: node.0,
+                text_len: para.text.len(),
+                runs: para.runs.clone(),
+                mark: para.mark.clone(),
+                props: para.props.clone(),
+            });
+        }
+        Ok(out)
+    }
+
+    /// The inverse of a formatting command: one `set_para_format` per paragraph
+    /// whose formatting changed, carrying only the changed fields' previous
+    /// values. `None` when the change cannot be restored exactly — the command
+    /// moved text or the capture is too wide — so the step stays a barrier.
+    fn format_inverse(&self, op: &Op, captured: &[FormatSnapshot]) -> Option<(Vec<Op>, Vec<u32>)> {
+        let mut inverse = Vec::new();
+        let mut touched = Vec::new();
+        for before in captured {
+            let para = self.session.doc.para(before.story, &before.path)?;
+            if para.text.len() != before.text_len {
+                return None;
+            }
+            let runs = para.runs != before.runs;
+            let mark = para.mark != before.mark;
+            let props = para.props != before.props;
+            if !(runs || mark || props) {
+                continue;
+            }
+            if inverse.len() >= MAX_FORMAT_PARAGRAPHS {
+                return None;
+            }
+            let mut payload = json!({"op": "set_para_format"});
+            if runs {
+                payload["runs"] = serde_json::to_value(&before.runs).unwrap_or(Value::Null);
+            }
+            if mark {
+                payload["mark"] = serde_json::to_value(&before.mark).unwrap_or(Value::Null);
+            }
+            if props {
+                payload["props"] = serde_json::to_value(&before.props).unwrap_or(Value::Null);
+            }
+            inverse.push(Op {
+                op_id: OpId::new(format!("inverse:{}", op.op_id.client), op.op_id.seq),
+                base_version: 0,
+                epoch: None,
+                kind: OpKind::Primitive,
+                target: Target::new(story_name(before.story), before.node_id, 0),
+                payload,
+                history: None,
+            });
+            touched.push(before.node_id);
+        }
+        Some((inverse, touched))
+    }
+}
+
+fn is_format_command(command: &str) -> bool {
+    CHAR_FORMAT_COMMANDS.contains(&command) || PARA_FORMAT_COMMANDS.contains(&command)
+}
+
+fn path_key(path: &Path) -> String {
+    path.0.iter().map(u32::to_string).collect::<Vec<_>>().join(".")
+}
+
+fn story_name(story: StoryRef) -> String {
+    match story {
+        StoryRef::Body => "body".to_string(),
+        StoryRef::Part(id) => format!("part:{id}"),
     }
 }
 

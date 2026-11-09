@@ -318,3 +318,145 @@ fn a_hundred_page_document_keeps_up_with_edits() {
     assert_eq!(room.version(), 100);
     assert!(!room.model().snapshot().is_empty());
 }
+
+fn format_room(text: &str) -> (Room<SessionModel>, u32) {
+    let mut doc = Document::new();
+    doc.body.clear();
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let node = node(&mut room);
+    (room, node)
+}
+
+fn selection(node: u32, from: usize, to: usize) -> serde_json::Value {
+    json!({"anchor": {"nodeId": node, "off": from}, "focus": {"nodeId": node, "off": to}})
+}
+
+fn runs(room: &Room<SessionModel>) -> Vec<wordcraft_doc::Run> {
+    room.model().session().doc.body.first().and_then(|b| b.as_para()).map(|p| p.runs.clone()).unwrap_or_default()
+}
+
+fn format_op(client: &str, seq: u64, base: u64, node: u32, command: &str, params: serde_json::Value, selected: serde_json::Value) -> Op {
+    op(client, seq, base, OpKind::Command, node, 0, json!({"command": command, "params": params, "selection": selected}))
+}
+
+fn undo_op(seq: u64, base: u64, node: u32, step: &Op) -> Op {
+    Op {
+        op_id: OpId::new("a", seq),
+        base_version: base,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Undo { op_id: step.op_id.clone() }),
+    }
+}
+
+#[test]
+fn a_formatting_command_carries_the_previous_value_as_its_inverse() {
+    let (mut room, node) = format_room("Hello");
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    let bold = format_op("a", 1, 0, node, "format.bold", json!({"value": true}), selection(node, 0, 5));
+    room.submit("alice", Role::Editor, bold.clone()).expect("bold lands");
+    assert_eq!(runs(&room)[0].props.bold, Some(true), "{:?}", runs(&room));
+
+    // The inverse is a primitive naming the previous value, not the command
+    // again: a toggle would flip twice.
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, node, &bold)).expect("the inverse lands");
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "the author is back at the value it had");
+    assert_eq!(undone.version, 2);
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: bold.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("redo replays the command");
+    assert_eq!(runs(&room)[0].props.bold, Some(true), "redo restores the formatted value");
+}
+
+#[test]
+fn a_paragraph_align_undo_restores_every_covered_paragraph() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text("alpha", CharProps::default()))));
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text("beta", CharProps::default()))));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|n| n.path == vec![0]).expect("first node").id;
+    let second = plan.nodes.iter().find(|n| n.path == vec![1]).expect("second node").id;
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    // The selection ends inside the second paragraph, so both are covered.
+    let align = op(
+        "a",
+        1,
+        0,
+        OpKind::Command,
+        first,
+        0,
+        json!({
+            "command": "para.alignCenter",
+            "params": {},
+            "selection": {"anchor": {"nodeId": first, "off": 0}, "focus": {"nodeId": second, "off": 2}},
+        }),
+    );
+    room.submit("alice", Role::Editor, align.clone()).expect("align lands");
+    let aligned = |room: &Room<SessionModel>, path: usize| room.model().session().doc.para(StoryRef::Body, &Path::top(path)).map(|p| p.props.align);
+    assert_eq!(aligned(&room, 0), Some(Some(wordcraft_doc::Align::Center)));
+    assert_eq!(aligned(&room, 1), Some(Some(wordcraft_doc::Align::Center)));
+
+    room.submit("alice", Role::Editor, undo_op(2, 1, first, &align)).expect("both inverses land as one step");
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "the paragraph properties are back");
+}
+
+#[test]
+fn a_command_that_moves_text_is_still_an_undo_barrier() {
+    let (mut room, node) = format_room("hello");
+    let change = format_op("a", 1, 0, node, "format.changeCase", json!({"mode": "upper"}), selection(node, 0, 5));
+    room.submit("alice", Role::Editor, change.clone()).expect("change case lands");
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, node, &change)).expect_err("no exact inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+    assert_eq!(body_text(&room), "HELLO", "the refused undo changed nothing");
+}
+
+#[test]
+fn a_format_restore_on_a_node_that_is_not_a_paragraph_is_refused_before_mutation() {
+    let mut doc = Document::new();
+    let mut table = wordcraft_doc::Table::new(1, 1, 200.0);
+    table.rows[0].cells[0] = wordcraft_doc::Cell::with_text("cell");
+    doc.body.push(Arc::new(Block::Table(table)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let table_node = plan.nodes.iter().find(|n| n.path == vec![1]).expect("the table has an id").id;
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    let err = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op("a", 1, 0, OpKind::Primitive, table_node, 0, json!({"op": "set_para_format", "props": {"align": "center"}})),
+        )
+        .expect_err("a table is not a paragraph");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "nothing changed");
+    assert_eq!(room.version(), 0, "the room did not advance");
+}
+
+#[test]
+fn a_format_restore_that_does_not_cover_the_text_is_refused_before_mutation() {
+    let (mut room, node) = format_room("Hello");
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+    for runs in [json!([{"len": 999, "props": {"bold": true}}]), json!([{"len": 2, "props": {"bold": true}}])] {
+        let err = room
+            .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, node, 0, json!({"op": "set_para_format", "runs": runs})))
+            .expect_err("the runs do not cover the paragraph");
+        assert_eq!(err.code, RejectCode::Invalid, "{runs}");
+        assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "nothing changed");
+    }
+}

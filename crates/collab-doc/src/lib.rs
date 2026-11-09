@@ -29,8 +29,17 @@
 //! What this adapter deliberately does not do (v1):
 //! - it does not run `CommandSpec` commands (`kind: "command"` is refused);
 //! - it does not touch styles, numbering, comments or track changes;
-//! - it does not normalize formatting, a text box or several rearranged blocks;
-//!   those still fall back to the command path.
+//! - it does not normalize formatting or several rearranged blocks; the
+//!   forward effect of a formatting command is still the command itself, and
+//!   only its inverse is a primitive (`set_para_format`, see below).
+//!
+//! `set_para_format` restores one paragraph's `runs`, `mark` and paragraph
+//! `props` to a named earlier value: it is the inverse of a character or
+//! paragraph formatting command, whose forward effect a replica replays as a
+//! command (a toggle or a relative step cannot be replayed backwards). The
+//! payload names only the fields the command changed; the address must be a
+//! paragraph and a run list must cover the current text on character
+//! boundaries, or the operation is refused before the document is touched.
 //!
 //! A column removal, a merge and a split carry an exact inverse: the removed
 //! bodies, the original cell boundaries, the grid and the session ids of the
@@ -53,7 +62,12 @@ use wordcraft_doc::props::VMerge;
 use wordcraft_doc::table::MAX_COLS;
 use wordcraft_doc::table::MAX_ROWS;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
-use wordcraft_doc::{Block, Blocks, Cell, CharProps, Document, Paragraph, Path, Pos, Row, StoryRef, Table};
+use wordcraft_doc::{Block, Blocks, Cell, CharProps, Document, ParaProps, Paragraph, Path, Pos, Row, Run, StoryRef, Table};
+
+/// The most runs one `set_para_format` restores. A longer paragraph is refused
+/// before the document changes: a hostile payload cannot make the adapter walk
+/// an unbounded list.
+pub const MAX_FORMAT_RUNS: usize = 100_000;
 
 /// Payload key that names the primitive (`insert_text`, `delete_range`, …).
 pub const PAYLOAD_OP: &str = "op";
@@ -89,6 +103,7 @@ impl DocModel {
             "replace_range" => self.replace_range(op, ids),
             "split_para" => self.split_para(op, ids),
             "merge_para" => self.merge_para(op, ids),
+            "set_para_format" => self.set_para_format(op, ids),
             other => Err(invalid(op, format!("unknown primitive {other:?}"))),
         }
     }
@@ -238,6 +253,52 @@ impl DocModel {
             forward: vec![op.clone()],
             label: "Join paragraphs".into(),
             nodes_changed: true,
+            touched: Vec::new(),
+        })
+    }
+
+    /// Restore the character and paragraph formatting of one paragraph to an
+    /// exact earlier value: the inverse of a formatting command (ADR-0010).
+    ///
+    /// The command itself travels as `kind:"command"` and every replica replays
+    /// it, but no command can be replayed backwards: a toggle would flip again
+    /// and a relative step (grow font) would move twice. The inverse is
+    /// therefore a primitive that names the previous value byte for byte. The
+    /// payload may carry the paragraph's `runs`, its `mark` (the formatting of
+    /// the paragraph mark) and its paragraph `props`; a field that is absent is
+    /// left as it is, so the inverse carries only what the command changed.
+    ///
+    /// The address must name a paragraph. Anything else — a table, a row, a
+    /// cell, an unknown or deleted node — is refused before the document is
+    /// touched, and so is a run list that does not cover the current text on
+    /// character boundaries.
+    fn set_para_format(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
+        let (story, path, _) = self.resolve_pos(op, ids)?;
+        let Paragraph { text, runs, mark, props, .. } =
+            self.doc.para(story, &path).cloned().ok_or_else(|| invalid(op, format!("node {} does not name a paragraph", op.target.node_id)))?;
+        let patch = format_patch(&op.payload, &text).map_err(|why| invalid(op, why))?;
+        let inverse_payload = json!({
+            "op": "set_para_format",
+            "runs": patch.runs.as_ref().map(|_| json!(runs)),
+            "mark": patch.mark.as_ref().map(|_| json!(mark)),
+            "props": patch.props.as_ref().map(|_| json!(props)),
+        });
+        let delta = json!({
+            "op": "set_para_format",
+            "nodeId": op.target.node_id,
+            "runs": patch.runs.as_ref().map(|runs| json!(runs)),
+            "mark": patch.mark.as_ref().map(|mark| json!(mark)),
+            "props": patch.props.as_ref().map(|props| json!(props)),
+        });
+        let para = self.doc.para_mut(story, &path).map_err(|err| invalid(op, err.to_string()))?;
+        apply_format_patch(para, patch);
+        let inverse = inverse_op(OpKind::Primitive, op, story, op.target.node_id, 0, inverse_payload);
+        Ok(Effect {
+            delta: Some(delta),
+            inverse: vec![inverse],
+            forward: vec![op.clone()],
+            label: "Formatting".into(),
+            nodes_changed: false,
             touched: Vec::new(),
         })
     }
@@ -1542,6 +1603,12 @@ pub fn apply_delta(doc: &mut Document, ids: &mut NodeIds, delta: &Value) -> Resu
             ids.remove_subtree(&story_name(story), &next.0, 0);
             ids.shift_children(&story_name(story), path.parent(), next.last(), -1);
         }
+        "set_para_format" => {
+            let (story, path, _) = delta_pos(delta, ids)?;
+            let text = doc.para(story, &path).map(|para| para.text.clone()).ok_or_else(|| "set_para_format addresses no paragraph".to_string())?;
+            let patch = format_patch(delta, &text)?;
+            apply_format_patch(doc.para_mut(story, &path).map_err(|err| err.to_string())?, patch);
+        }
         "insert_block" => {
             let story =
                 delta.get("story").and_then(Value::as_str).and_then(parse_story).ok_or_else(|| "insert_block has no known `story`".to_string())?;
@@ -2130,6 +2197,73 @@ fn story_name(story: StoryRef) -> String {
 
 fn invalid(op: &Op, message: impl Into<String>) -> Reject {
     Reject::new(op.op_id.clone(), RejectCode::Invalid, message)
+}
+
+/// The formatting fields a `set_para_format` restores. Each is optional so an
+/// inverse carries only what the forward command changed; `None` = leave it.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct FormatPatch {
+    runs: Option<Vec<Run>>,
+    mark: Option<CharProps>,
+    props: Option<ParaProps>,
+}
+
+/// Parse and validate a `set_para_format` payload (or delta) against the
+/// paragraph's current text. Every check runs before the caller mutates
+/// anything: a run list that does not cover the text exactly, or ends inside a
+/// character, is refused, not normalized.
+fn format_patch(payload: &Value, text: &str) -> Result<FormatPatch, String> {
+    let runs = match payload.get("runs") {
+        Some(value) if !value.is_null() => {
+            let runs: Vec<Run> = serde_json::from_value(value.clone()).map_err(|err| format!("bad `runs`: {err}"))?;
+            if runs.len() > MAX_FORMAT_RUNS {
+                return Err(format!("more than {MAX_FORMAT_RUNS} runs to restore"));
+            }
+            let mut end = 0usize;
+            for run in &runs {
+                if run.len == 0 {
+                    return Err("a restored run is empty".to_string());
+                }
+                end = end.checked_add(run.len).ok_or_else(|| "the restored runs are too long".to_string())?;
+                if end > text.len() {
+                    return Err("the restored runs are longer than the paragraph".to_string());
+                }
+                if !text.is_char_boundary(end) {
+                    return Err("a restored run ends inside a character".to_string());
+                }
+            }
+            if end != text.len() {
+                return Err(format!("the restored runs cover {end} of {} bytes", text.len()));
+            }
+            Some(runs)
+        }
+        _ => None,
+    };
+    let mark = match payload.get("mark") {
+        Some(value) if !value.is_null() => Some(serde_json::from_value::<CharProps>(value.clone()).map_err(|err| format!("bad `mark`: {err}"))?),
+        _ => None,
+    };
+    let props = match payload.get("props") {
+        Some(value) if !value.is_null() => Some(serde_json::from_value::<ParaProps>(value.clone()).map_err(|err| format!("bad `props`: {err}"))?),
+        _ => None,
+    };
+    if runs.is_none() && mark.is_none() && props.is_none() {
+        return Err("set_para_format changes nothing".to_string());
+    }
+    Ok(FormatPatch { runs, mark, props })
+}
+
+fn apply_format_patch(para: &mut Paragraph, patch: FormatPatch) {
+    if let Some(runs) = patch.runs {
+        para.runs = runs;
+    }
+    if let Some(mark) = patch.mark {
+        para.mark = mark;
+    }
+    if let Some(props) = patch.props {
+        para.props = props;
+    }
+    para.touch();
 }
 
 /// An inverse operation issued by the server, not by a client.

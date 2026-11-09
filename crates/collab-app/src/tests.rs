@@ -8,7 +8,8 @@ use wordcraft_collab::ids::NodeKey;
 use wordcraft_collab::room::{Role, Room};
 use wordcraft_collab::wire::{Applied, HistoryAction, NodeRef, Op, OpId, OpKind, Reject, RejectCode, Target};
 use wordcraft_collab_doc::DocModel;
-use wordcraft_doc::{Block, Cell, Document, Path, Pos, StoryRef, Table};
+use wordcraft_collab_engine::SessionModel;
+use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
 use wordcraft_engine::Session;
 
 use crate::{Outgoing, Status, SyncState};
@@ -417,4 +418,160 @@ fn a_table_undo_reaches_its_author_and_the_peer_like_a_text_undo() {
         assert_eq!(serde_json::to_value(&mine.doc).expect("json"), serde_json::to_value(&doc).expect("json"), "{name}: the author is back");
         assert_eq!(serde_json::to_value(&theirs.doc).expect("json"), serde_json::to_value(&doc).expect("json"), "{name}: the peer converged");
     }
+}
+
+/// A room and a plain document with one paragraph per text.
+fn format_doc(texts: &[&str]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for text in texts {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    }
+    doc
+}
+
+fn selection(anchor: u32, from: usize, focus: u32, to: usize) -> serde_json::Value {
+    json!({"anchor": {"nodeId": anchor, "off": from}, "focus": {"nodeId": focus, "off": to}})
+}
+
+/// Two replicas and the room between them, for the formatting tests: Alice
+/// edits locally and sends what her client plans, Bob gets the authoritative
+/// delta.
+struct FormatPair {
+    room: Room<SessionModel>,
+    alice: SyncState,
+    peer: SyncState,
+    mine: Session,
+    theirs: Session,
+}
+
+impl FormatPair {
+    fn new(texts: &[&str]) -> FormatPair {
+        let doc = format_doc(texts);
+        let mut room = Room::new(SessionModel::from_document(doc.clone()));
+        let nodes = room.join(None, false).nodes;
+        let mut peer = SyncState::new("bob", "Bob", Role::Editor);
+        peer.set_nodes(&nodes);
+        FormatPair { room, alice: state_with(&nodes), peer, mine: Session::new(doc.clone()), theirs: Session::new(doc) }
+    }
+
+    /// Run a formatting command on Alice's replica, send it as her client plans
+    /// it, and let the peer replay the delta. Returns the operation naming the
+    /// step.
+    #[allow(clippy::expect_used)]
+    fn format(&mut self, seq: u64, command: &str, params: serde_json::Value) -> Op {
+        let before = self.mine.doc.clone();
+        self.mine.run(command, &params).expect("the UI applies the formatting");
+        let plan = self.alice.plan(&before, &self.mine, command, &params).expect("a plan").remove(0);
+        assert_eq!(plan.kind, OpKind::Command, "{command} travels as a command");
+        let step = op_from("alice", seq, self.alice.version, &plan, None);
+        let echo = self.room.submit("alice", Role::Editor, step.clone()).expect("the command lands");
+        self.alice.apply(&echo, &mut self.mine).expect("own echo is skipped");
+        self.peer.apply(&echo, &mut self.theirs).expect("the peer replays the command");
+        step
+    }
+}
+
+#[test]
+fn a_char_format_undo_returns_the_previous_value_at_its_author_and_the_peer() {
+    let mut pair = FormatPair::new(&["Hello"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(0), off: 5 },
+    };
+    let before = serde_json::to_value(&pair.mine.doc).expect("json");
+
+    let bold = pair.format(1, "format.bold", json!({"value": true}));
+    let formatted = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), formatted, "both replicas are bold");
+    assert_ne!(formatted, before, "the bold is in the document");
+
+    // Undo: the answer is a primitive naming the previous value, so the author
+    // applies its own inverse (ADR-0010) instead of waiting for a snapshot.
+    let undo = history_op("alice", 2, pair.alice.version, &bold, HistoryAction::Undo { op_id: bold.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the inverse lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the author is back at the previous value");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the peer is back at the previous value");
+
+    // Redo replays the command itself, as before.
+    let redo = history_op("alice", 3, pair.alice.version, &bold, HistoryAction::Redo { op_id: bold.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies the redo");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the redo");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), formatted, "the author is bold again");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), formatted, "the peer converged");
+}
+
+#[test]
+fn a_foreign_format_change_refuses_the_undo_without_touching_the_document() {
+    let mut pair = FormatPair::new(&["Hello"]);
+    let node = pair.alice.ids.get(&NodeKey::new("body", vec![0])).expect("a body node").0;
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(0), off: 5 },
+    };
+    let bold = pair.format(1, "format.bold", json!({"value": true}));
+
+    // Bob formats the same fields; his replica applies it optimistically.
+    pair.theirs.sel = pair.mine.sel.clone();
+    pair.theirs.run("format.italic", &json!({"value": true})).expect("bob's UI applies the italic");
+    let italic = Op {
+        op_id: OpId::new("bob", 1),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: json!({
+            "command": "format.italic",
+            "params": {"value": true},
+            "selection": selection(node, 0, node, 5),
+        }),
+        history: None,
+    };
+    let answer = pair.room.submit("bob", Role::Editor, italic).expect("bob's formatting lands");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("bob's own echo is skipped");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies bob's change");
+    let at_author = serde_json::to_value(&pair.mine.doc).expect("json");
+    let at_peer = serde_json::to_value(&pair.theirs.doc).expect("json");
+    assert_eq!(at_author, at_peer, "both replicas hold bob's change");
+
+    // Alice's undo would overwrite bob's formatting of the same paragraph: the
+    // room refuses it before changing anything.
+    let version = pair.room.version();
+    let undo = history_op("alice", 2, pair.alice.version, &bold, HistoryAction::Undo { op_id: bold.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("a later format change blocks the undo");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(crate::refusal_status(&err), (Status::InSync, false), "the session stays usable");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), at_author, "nothing changed at the author");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), at_peer, "nothing changed at the peer");
+    assert_eq!(pair.room.version(), version, "the room did not advance");
+}
+
+#[test]
+fn a_two_paragraph_align_undo_lands_as_one_transaction_on_both_replicas() {
+    let mut pair = FormatPair::new(&["alpha", "beta"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(1), off: 2 },
+    };
+    let before = serde_json::to_value(&pair.mine.doc).expect("json");
+
+    let align = pair.format(1, "para.alignCenter", json!({}));
+    let aligned = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), aligned, "both replicas are aligned");
+    assert_ne!(aligned, before);
+
+    let undo = history_op("alice", 2, pair.alice.version, &align, HistoryAction::Undo { op_id: align.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the inverses land");
+    assert_eq!(
+        answer.delta.as_ref().and_then(|delta| delta.get("op")).and_then(|op| op.as_str()),
+        Some("transaction"),
+        "one step, several paragraphs"
+    );
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverses");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverses");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the author's paragraph properties are back");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the peer's paragraph properties are back");
 }
