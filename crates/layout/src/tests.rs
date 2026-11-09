@@ -8685,6 +8685,108 @@ fn a_percentage_width_past_the_text_column_is_kept() {
 }
 
 #[test]
+fn a_percentage_table_before_word_2013_adds_its_outer_cell_margins() {
+    // Measured in Word for Windows on tables of two auto columns: in compatibility mode 14 and
+    // earlier (Word reads a file naming no mode as mode 12) a percentage is a share of the text
+    // width plus the first cell's left and the last cell's right margin, those margins added
+    // before the share is taken; in mode 15 it is a share of the text width (Word reads mode 16
+    // as 15).
+    let gap_at = |pct: f32, mode: u32, table_margins: (f32, f32), own: Option<f32>| {
+        let mut t = Table::new(1, 2, 225.0);
+        t.props.width_pct = Some(pct);
+        t.props.cell_margins = Some([0.0, table_margins.0, 0.0, table_margins.1]);
+        for (i, c) in t.rows[0].cells.iter_mut().enumerate() {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+            if let Some(m) = own {
+                c.props.margins = Some(if i == 0 { [0.0, m, 0.0, table_margins.1] } else { [0.0, table_margins.0, 0.0, m] });
+            }
+        }
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = mode;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let text_width = d.sections().first().map_or(0.0, |(_, s)| s.text_width());
+        let l = lay(&d);
+        let [(x0, _, _)] = para_at(&l, &[0, 0, 0, 0])[..] else { panic!("first cell missing") };
+        let [(x1, _, _)] = para_at(&l, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+        (x1 - x0, text_width)
+    };
+    let gap = |mode: u32, table_margins: (f32, f32), own: Option<f32>| gap_at(100.0, mode, table_margins, own);
+    let close =
+        |got: f32, want: f32, case: &str| assert!((got - want).abs() < 0.3, "{case}: second cell's text is {got} pt after the first's, Word {want}");
+    // Half the width: Word's table is 229.5pt with 3.75pt margins and 235.75pt with 10pt margins.
+    // Adding the margins after taking the share would make them 233.2pt and 245.7pt.
+    let (g, tw) = gap_at(50.0, 14, (3.75, 3.75), None);
+    close(g, (tw + 7.5) / 4.0, "mode 14, 50%, 3.75pt margins");
+    let (g, tw) = gap_at(50.0, 14, (10.0, 10.0), None);
+    close(g, (tw + 20.0) / 4.0, "mode 14, 50%, 10pt margins");
+    let (g, tw) = gap_at(50.0, 15, (10.0, 10.0), None);
+    close(g, tw / 4.0, "mode 15, 50%");
+    // A file naming no mode is read as the legacy mode, and a mode above 15 sizes as 15.
+    let (g, tw) = gap(wordcraft_doc::LEGACY_COMPAT_MODE, (3.75, 3.75), None);
+    close(g, (tw + 7.5) / 2.0, "no mode named");
+    let (g, tw) = gap(16, (10.0, 10.0), None);
+    close(g, tw / 2.0, "mode 16");
+    let (g, tw) = gap(14, (3.75, 3.75), None);
+    close(g, (tw + 7.5) / 2.0, "mode 14, 3.75pt margins");
+    let (g, tw) = gap(14, (2.5, 10.0), None);
+    close(g, (tw + 12.5) / 2.0, "mode 14, 2.5pt and 10pt margins");
+    // Cells' own margins: the first cell's left and the last cell's right count.
+    let (g, tw) = gap(14, (3.75, 3.75), Some(15.0));
+    close(g, (tw + 30.0) / 2.0 - 15.0 + 3.75, "mode 14, 15pt outer cell margins");
+    let (g, tw) = gap(15, (3.75, 3.75), Some(15.0));
+    close(g, tw / 2.0 - 15.0 + 3.75, "mode 15");
+    // Only the first row's outer cells count: measured in Word with own margins in each row.
+    let rows = |first: Option<f32>, second: Option<f32>| {
+        let mut t = Table::new(2, 2, 225.0);
+        t.props.width_pct = Some(100.0);
+        t.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        for (r, right) in [first, second].into_iter().enumerate() {
+            for c in &mut t.rows[r].cells {
+                c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+            }
+            t.rows[r].cells[1].props.margins = right.map(|m| [0.0, 3.75, 0.0, m]);
+        }
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = 14;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let tw = d.sections().first().map_or(0.0, |(_, s)| s.text_width());
+        let l = lay(&d);
+        let [(x0, _, _)] = para_at(&l, &[0, 0, 0, 0])[..] else { panic!("first cell missing") };
+        let [(x1, _, _)] = para_at(&l, &[0, 0, 1, 0])[..] else { panic!("second cell missing") };
+        (x1 - x0, tw)
+    };
+    let (g, tw) = rows(None, Some(15.0));
+    close(g, (tw + 7.5) / 2.0, "the second row's right margin");
+    let (g, tw) = rows(Some(15.0), None);
+    close(g, (tw + 3.75 + 15.0) / 2.0, "the first row's right margin");
+    let (g, tw) = rows(Some(15.0), Some(30.0));
+    close(g, (tw + 3.75 + 15.0) / 2.0, "both rows' right margins");
+    // A table in a cell: a share of the cell's room alone in every mode, measured in Word on a 100%
+    // table of two columns in a 200pt cell with 3.75pt margins.
+    for mode in [14, 15] {
+        let mut inner = Table::new(1, 2, 96.0);
+        inner.props.width_pct = Some(100.0);
+        inner.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        for c in &mut inner.rows[0].cells {
+            c.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("x", Default::default()))];
+        }
+        let mut outer = Table::new(1, 2, 400.0);
+        outer.props.width = Some(400.0);
+        outer.props.fixed = true;
+        outer.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        outer.rows[0].cells[0].blocks =
+            vec![Arc::new(wordcraft_doc::Block::Table(inner)), wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+        let mut d = Document::from_text("After");
+        d.settings.compat_mode = mode;
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(outer)).unwrap();
+        let l = lay(&d);
+        let [(x0, _, _)] = para_at(&l, &[0, 0, 0, 0, 0, 0, 0])[..] else { panic!("the nested first cell is missing") };
+        let [(x1, _, _)] = para_at(&l, &[0, 0, 0, 0, 0, 1, 0])[..] else { panic!("the nested second cell is missing") };
+        close(x1 - x0, 192.5 / 2.0, &format!("in a cell, mode {mode}"));
+    }
+}
+
+#[test]
 fn a_floating_table_in_the_footer_leaves_the_footer_where_it_is() {
     crate::test_fonts();
     use wordcraft_doc::para::Anchor;

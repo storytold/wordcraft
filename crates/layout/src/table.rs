@@ -320,6 +320,11 @@ fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
     t.rows.first().and_then(|r| r.cells.first()).map_or(def, |cell| cell.props.resolved_margins(def))[1]
 }
 
+/// The right margin of the first row's last cell (the table's default without a row).
+fn last_cell_right_margin_in(t: &Table, def: [f32; 4]) -> f32 {
+    t.rows.first().and_then(|r| r.cells.last()).map_or(def, |cell| cell.props.resolved_margins(def))[3]
+}
+
 /// What a table style gives the cells in one set of parts: shading, vertical alignment and each
 /// part's cell borders, lowest precedence first.
 struct RegionLook {
@@ -398,13 +403,24 @@ fn preferred_grid(t: &Table, avail: f32) -> Vec<f32> {
     grid
 }
 
-fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option<&TableStyleProps>) -> TableFrame {
+fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, in_cell: bool, style: Option<&TableStyleProps>) -> TableFrame {
     let ncols = grid_cols(t).max(1);
     let mut grid = preferred_grid(t, avail);
     let mut total: f32 = grid.iter().sum();
     // A top-level table in an inherited header or footer takes its share of the defining
     // section's width (`Ctx::pct_base`).
     let pct_base = if depth <= 1 { ctx.pct_base.unwrap_or(avail) } else { avail };
+    let margins_def = default_margins(t, style);
+    // Before Word 2013 (compatibility mode 14 and earlier) a table's edges stand outside the text
+    // by its outer cells' margins, and a percentage is a share of the text width with those
+    // margins added: 100% with 3.75pt margins is the text width plus 7.5pt (measured in Word for
+    // Windows). From mode 15 it is a share of the text width alone, as it is in a cell in every
+    // mode, where the table's edges don't stand out.
+    let pct_base = if ctx.doc.settings.compat_mode >= 15 || in_cell {
+        pct_base
+    } else {
+        pct_base + (first_cell_left_margin_in(t, margins_def) + last_cell_right_margin_in(t, margins_def)).max(0.0)
+    };
     let target = match (t.props.width_pct, t.props.width) {
         // Word keeps a percentage past 100%; the cap only bounds hostile input.
         (Some(p), _) if p > 0.0 => Some(pct_base * (p / 100.0).min(MAX_WIDTH_SHARE)),
@@ -452,7 +468,6 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     colx.push(acc);
     // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
     // indent); earlier modes line the first cell's text up with it instead.
-    let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
     // The style's borders, overlaid by the table's own side by side.
     let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
@@ -484,12 +499,12 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x }
 }
 
-pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize) -> TableLayout {
+pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], avail: f32, depth: usize, in_cell: bool) -> TableLayout {
     let style = table_style(ctx, t);
     // Cell text formatting and looks per set of style parts, built once per table.
     let mut cell_text: Vec<(Region, CellText)> = Vec::new();
     let mut looks: Vec<(Region, RegionLook)> = Vec::new();
-    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, style.as_ref());
+    let TableFrame { ncols, colx, acc, total, margins_def, tborders, rtl, x } = table_frame(ctx, t, avail, depth, in_cell, style.as_ref());
     let nrows = t.rows.len();
     // First pass: lay out every cell's content.
 
