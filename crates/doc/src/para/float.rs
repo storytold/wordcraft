@@ -186,6 +186,16 @@ pub struct Float {
     /// top. 0 = unknown, drawn in document order (objects inserted here, or from other formats).
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub z: u32,
+    /// The page a drawing anchored to a page is on, from 1 (ODF's `text:anchor-page-number`,
+    /// §19.872); 0 = anchored to its paragraph or not said. Kept for saving: the layout places a
+    /// drawing on its anchor paragraph's page.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub page: u32,
+    /// Turned, but the file keeps no room for the turn (`wp:effectExtent` missing or zero, as
+    /// files from other tools have): Word then keeps an inline one's line to its frame and lets
+    /// the turned object overhang it (see [`Float::line_pad`]). Cleared by [`Float::set_spin`].
+    #[serde(skip_serializing_if = "is_false")]
+    pub bare_turn: bool,
 }
 
 /// Longest alternative text kept (characters): hostile files and commands are capped.
@@ -241,6 +251,7 @@ impl Float {
         self.rot = wordcraft_geom::normalize_degrees(s.deg);
         self.flip_h = s.flip_h;
         self.flip_v = s.flip_v;
+        self.bare_turn = false;
     }
     /// How far a `w` × `h` frame's rotated bounds reach past it on each side (x, y): the room a
     /// rotated object takes beyond its frame (zero unrotated; negative where the turned object
@@ -249,6 +260,23 @@ impl Float {
         let (w, h) = (wordcraft_geom::finite(w).clamp(0.0, 4000.0), wordcraft_geom::finite(h).clamp(0.0, 4000.0));
         let (bw, bh) = self.spin().extent(w, h);
         ((bw - w) / 2.0, (bh - h) / 2.0)
+    }
+    /// A [`Float::bare_turn`] still inline and without effects room: made floating, or given room
+    /// for a shadow or glow since, it saves, and so lays out, with the turn's room again.
+    pub fn is_bare_turn(&self) -> bool {
+        self.bare_turn && self.wrap == Wrap::Inline && self.effect_extent() == [0.0; 4]
+    }
+    /// The room an inline `w` × `h` object's line keeps past its frame on each side (x, y) for its
+    /// turn: its rotated bounds ([`Float::spin_pad`]) — or, for a [`Float::is_bare_turn`], none, except
+    /// that Word 2013+ layout (`modern`) exchanges the frame's width and height from 45° up to 135°
+    /// and from 225° up to 315°.
+    pub fn line_pad(&self, w: f32, h: f32, modern: bool) -> (f32, f32) {
+        if !self.is_bare_turn() {
+            return self.spin_pad(w, h);
+        }
+        let (w, h) = (wordcraft_geom::finite(w).clamp(0.0, 4000.0), wordcraft_geom::finite(h).clamp(0.0, 4000.0));
+        let deg = wordcraft_geom::normalize_degrees(self.rot);
+        if modern && ((45.0..135.0).contains(&deg) || (225.0..315.0).contains(&deg)) { ((h - w) / 2.0, (w - h) / 2.0) } else { (0.0, 0.0) }
     }
     /// The effect extents, finite and clamped (left, top, right, bottom).
     pub fn effect_extent(&self) -> [f32; 4] {
