@@ -414,11 +414,18 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
         let mut pct = opacity.unwrap_or(style_opacity);
         let slider = ui.add(egui::Slider::new(&mut pct, 0..=100).suffix("%").text(tl!("Opacity")));
         if slider.changed() {
-            if !slider.drag_started() {
+            // Only the frames after a drag's first change join its undo step; a key press or a typed
+            // value starts its own.
+            let gesture = egui::Id::unique(("smart_art_opacity_gesture", i));
+            if ui.data(|d| d.get_temp::<bool>(gesture)).unwrap_or(false) {
                 app.session.join_next_undo();
             }
+            ui.data_mut(|d| d.insert_temp(gesture, slider.dragged()));
             let hex = own.unwrap_or(Rgb(solid.r(), solid.g(), solid.b())).hex();
             let _ = app.run("smartArt.itemColor", json!({"index": i, "color": hex, "opacity": pct}));
+        }
+        if !slider.dragged() {
+            ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(("smart_art_opacity_gesture", i))));
         }
         ui.separator();
         if ui.add_enabled(own.is_some(), egui::Button::new(tl!("Style Color")).frame(false)).clicked() {
