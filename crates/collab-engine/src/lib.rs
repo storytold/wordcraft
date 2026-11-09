@@ -78,13 +78,13 @@ const CHAR_FORMAT_COMMANDS: &[&str] = &[
 
 /// The frequent paragraph-formatting commands with an exact inverse: they only
 /// change paragraph properties (alignment, indents, spacing, keep rules, tabs,
-/// borders, shading, direction, the paragraph style). Commands that reorder
-/// paragraphs wider than [`MOVE_COMMANDS`] captures, move them wider than the
-/// bound, strip text (`para.removeBlank`) or allocate numbering definitions
-/// (`para.bullets`) stay barriers. `para.sort` is normalized to `permute` by
-/// [`SessionModel::normalized_permute`], and the outline level commands
+/// borders, shading, direction, the paragraph style). Commands that strip text
+/// (`para.removeBlank`) stay barriers. `para.sort` is normalized to `permute` by
+/// [`SessionModel::normalized_permute`], the outline level commands
 /// (`para.promote`/`demote` and the Outlining tab's levels) to
-/// `set_para_level` by [`SessionModel::normalized_level`].
+/// `set_para_level` by [`SessionModel::normalized_level`], and the Bullets and
+/// Numbering buttons (`para.bullets`/`para.numbering`) to `set_para_list` by
+/// [`SessionModel::normalized_list`].
 const PARA_FORMAT_COMMANDS: &[&str] = &[
     "para.addSpaceBefore",
     "para.align",
@@ -230,7 +230,8 @@ impl SessionModel {
         // normalized from the selected run it ran over, so even a sort that
         // changes nothing is an addressable step.
         let sort_range = if command == "para.sort" { self.sort_range(ids) } else { None };
-        let before_doc = (is_move_command(command) || command == "para.sort" || is_level_command(command)).then(|| self.session.doc.clone());
+        let before_doc = (is_move_command(command) || command == "para.sort" || is_level_command(command) || is_list_command(command))
+            .then(|| self.session.doc.clone());
         let before = doc_shape(&self.session.doc);
         let tables_before = touch_tables(command).then(|| table_shapes(&self.session.doc));
         self.session.run(command, &params).map_err(|err| invalid(op, err.to_string()))?;
@@ -281,6 +282,14 @@ impl SessionModel {
             // command every replica replays.
             if is_level_command(command)
                 && let Some(effect) = self.normalized_level(op, &before_doc, ids, label)
+            {
+                return Ok(effect);
+            }
+            // The Bullets and Numbering buttons name the exact list state of
+            // every paragraph they changed, so their forward effect travels as
+            // `set_para_list` instead of a command every replica replays.
+            if is_list_command(command)
+                && let Some(effect) = self.normalized_list(op, &before_doc, ids, label)
             {
                 return Ok(effect);
             }
@@ -550,6 +559,38 @@ impl SessionModel {
             touched,
         })
     }
+
+    /// A list command as one structural `set_para_list`: the command already
+    /// changed the document, so the difference is read back. When the only
+    /// change is the list-facing state of at most
+    /// [`MAX_LIST_PARAGRAPHS`](wordcraft_collab_doc::MAX_LIST_PARAGRAPHS)
+    /// paragraphs — the numbering reference, the paragraph style and the four
+    /// indents the list commands clear — the step's delta names every changed
+    /// paragraph by session id with its exact state, and the definitions the
+    /// command allocated travel with it. The inverse names the state before the
+    /// step and drops the definitions the step created (only when nothing uses
+    /// them any more), so undo and redo land on the same document at every
+    /// replica. A command that also changed text, runs, objects, the mark, the
+    /// section, another paragraph property or the block order — or a changed
+    /// paragraph inside a table or without a session id — is not captured: the
+    /// step keeps its command delta and stays a barrier.
+    fn normalized_list(&self, op: &Op, before: &Document, ids: &NodeIds, label: &str) -> Option<Effect> {
+        let (items, define) = list_changes(before, &self.session.doc, ids)?;
+        if items.is_empty() || items.len() > wordcraft_collab_doc::MAX_LIST_PARAGRAPHS {
+            return None;
+        }
+        let step = wordcraft_collab_doc::ListStep::Exact { items, define, undefine: Vec::new() };
+        let plan = wordcraft_collab_doc::plan_list(before, ids, &step).ok()?;
+        let touched = wordcraft_collab_doc::list_touched(&plan);
+        Some(Effect {
+            delta: Some(wordcraft_collab_doc::list_delta(&plan)),
+            inverse: wordcraft_collab_doc::list_inverse_ops(op, &plan),
+            forward: vec![op.clone()],
+            label: label.to_string(),
+            nodes_changed: false,
+            touched,
+        })
+    }
 }
 
 /// One paragraph a level command changed: where it lives and the level, style
@@ -665,6 +706,122 @@ fn block_path(container: &[u32], index: usize) -> Vec<u32> {
     container.iter().copied().chain(std::iter::once(index as u32)).collect()
 }
 
+/// The paragraphs whose list-facing state changed between two documents, with
+/// the numbering definitions the change added, or `None` when the difference is
+/// more than a list: a different number of blocks or parts, a table that
+/// changed (a list inside a cell cannot be addressed by `set_para_list`), a
+/// paragraph whose text, runs, mark, objects, section or other properties
+/// changed, or a paragraph the session map cannot name. A list command leaves
+/// every path in place, so the two documents are walked side by side; blocks
+/// the command did not touch share their `Arc` and are skipped by pointer.
+fn list_changes(
+    before: &Document,
+    after: &Document,
+    ids: &NodeIds,
+) -> Option<(Vec<wordcraft_collab_doc::ListItem>, Vec<wordcraft_collab_doc::ListDefinition>)> {
+    if before.parts.len() != after.parts.len() {
+        return None;
+    }
+    let mut out = Vec::new();
+    if !collect_list_changes("body", &before.body, &after.body, ids, &mut out) {
+        return None;
+    }
+    for (part, old) in &before.parts {
+        let new = after.parts.get(part)?;
+        if !collect_list_changes(&format!("part:{part}"), &old.blocks, &new.blocks, ids, &mut out) {
+            return None;
+        }
+    }
+    let define = list_definitions_of(before, after)?;
+    Some((out, define))
+}
+
+fn collect_list_changes(story: &str, old: &Blocks, new: &Blocks, ids: &NodeIds, out: &mut Vec<wordcraft_collab_doc::ListItem>) -> bool {
+    if old.len() != new.len() {
+        return false;
+    }
+    for (index, (a, b)) in old.iter().zip(new.iter()).enumerate() {
+        if std::sync::Arc::ptr_eq(a, b) {
+            continue;
+        }
+        let ok = match (a.as_ref(), b.as_ref()) {
+            (Block::Para(old_para), Block::Para(new_para)) => {
+                if !same_para_except_list(old_para, new_para) {
+                    false
+                } else {
+                    let before = wordcraft_collab_doc::ListState::of(&old_para.props);
+                    let after = wordcraft_collab_doc::ListState::of(&new_para.props);
+                    if before == after {
+                        // Touched but unchanged (a command that set the list
+                        // it already had): not part of the step's address.
+                        true
+                    } else {
+                        // A paragraph inside a table has a deeper path; the
+                        // list step does not address it, so the step stays a
+                        // command barrier.
+                        let key = NodeKey::new(story.to_string(), vec![index as u32]);
+                        match ids.get(&key) {
+                            Some(id) => {
+                                out.push(wordcraft_collab_doc::ListItem { id: id.0, state: after });
+                                true
+                            }
+                            None => false,
+                        }
+                    }
+                }
+            }
+            _ => false,
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether two paragraphs differ only in the fields a list command writes: the
+/// numbering reference, the style and the four indents it clears.
+fn same_para_except_list(old: &Paragraph, new: &Paragraph) -> bool {
+    if old.text != new.text || old.objects != new.objects || old.runs != new.runs || old.mark != new.mark || old.section != new.section {
+        return false;
+    }
+    let strip = |props: &ParaProps| ParaProps {
+        style: None,
+        numbering: None,
+        indent_left: None,
+        indent_first: None,
+        indent_left_chars: None,
+        indent_first_chars: None,
+        ..props.clone()
+    };
+    strip(&old.props) == strip(&new.props)
+}
+
+/// The numbering definitions a command added. A list command only adds a
+/// definition; a change to an existing one (or a removal) is not a list step,
+/// so the command stays a barrier.
+fn list_definitions_of(before: &Document, after: &Document) -> Option<Vec<wordcraft_collab_doc::ListDefinition>> {
+    let old_abstracts = &before.numbering.abstracts;
+    let new_abstracts = &after.numbering.abstracts;
+    if old_abstracts.iter().any(|old| new_abstracts.iter().find(|new| new.id == old.id).is_none_or(|new| new != old)) {
+        return None;
+    }
+    let old_nums = &before.numbering.nums;
+    let new_nums = &after.numbering.nums;
+    if old_nums.iter().any(|old| new_nums.iter().find(|new| new.id == old.id).is_none_or(|new| new != old)) {
+        return None;
+    }
+    let mut out = Vec::new();
+    for num in new_nums.iter().filter(|num| old_nums.iter().all(|old| old.id != num.id)) {
+        let abstract_num = new_abstracts.iter().find(|abstract_num| abstract_num.id == num.abstract_id)?.clone();
+        out.push(wordcraft_collab_doc::ListDefinition { abstract_num, num: num.clone() });
+    }
+    if out.len() > wordcraft_collab_doc::MAX_LIST_DEFINITIONS {
+        return None;
+    }
+    Some(out)
+}
+
 fn is_format_command(command: &str) -> bool {
     CHAR_FORMAT_COMMANDS.contains(&command) || PARA_FORMAT_COMMANDS.contains(&command)
 }
@@ -689,6 +846,20 @@ const LEVEL_COMMANDS: &[&str] =
 
 fn is_level_command(command: &str) -> bool {
     LEVEL_COMMANDS.contains(&command)
+}
+
+/// Commands whose only document effect is list membership: the Home ›
+/// Paragraph Bullets and Numbering buttons. They are normalized to
+/// `set_para_list` after the run — the exact list state the command left, named
+/// by session ids — so every replica applies the same structural delta and the
+/// step's inverse puts the earlier list references and definitions back
+/// (ADR-0010). A command that also changed a list definition another way, a
+/// paragraph inside a table or a step wider than the bound stays a command
+/// barrier.
+const LIST_COMMANDS: &[&str] = &["para.bullets", "para.numbering"];
+
+fn is_list_command(command: &str) -> bool {
+    LIST_COMMANDS.contains(&command)
 }
 
 fn path_key(path: &Path) -> String {

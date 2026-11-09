@@ -1910,3 +1910,267 @@ fn a_replica_applies_a_level_step_and_keeps_the_styles() {
     assert_eq!(para.props.style.as_deref(), Some("Heading1"), "the replica applied the same level");
     assert_eq!(replica_ids.resolve(NodeId(body)).map(|key| key.path.clone()), Ok(vec![1]), "the id still names its paragraph");
 }
+
+// --- bullets and numbering ---------------------------------------------------
+
+/// A document of plain paragraphs, the kind the Bullets and Numbering buttons
+/// are pressed on.
+fn list_doc(texts: &[&str]) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for text in texts {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    }
+    doc
+}
+
+fn list_room(texts: &[&str]) -> Room<DocModel> {
+    let mut room = Room::new(DocModel::new(list_doc(texts)));
+    let _ = room.join(None, false);
+    room
+}
+
+fn list_request(ids: &[u32], kind: &str, level: u8) -> serde_json::Value {
+    json!({"op": "set_para_list", "ids": ids, "kind": kind, "level": level})
+}
+
+fn para_numbering(room: &Room<DocModel>, block: usize) -> Option<wordcraft_doc::props::NumRef> {
+    room.model().document().body.get(block).and_then(|b| b.as_para()).and_then(|p| p.props.numbering)
+}
+
+fn list_style(room: &Room<DocModel>, block: usize) -> Option<String> {
+    room.model().document().body.get(block).and_then(|b| b.as_para()).and_then(|p| p.props.style.clone())
+}
+
+#[test]
+fn listing_paragraphs_is_one_transactional_list_step() {
+    let mut room = list_room(&["One", "Two"]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, two], "bullets", 1)))
+        .expect("the list step lands");
+
+    let delta = applied.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_list"));
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2);
+    let num = items[0]["num"].as_u64().expect("a list id");
+    assert_eq!(items[1]["num"], json!(num), "both paragraphs join the same list");
+    assert_eq!(items[0]["level"], json!(1), "the level is explicit");
+    assert_eq!(items[1]["level"], json!(1));
+    assert_eq!(items[0]["style"], json!("ListParagraph"));
+    assert_eq!(items[0]["indentLeft"], serde_json::Value::Null, "the list command clears the indents");
+    assert_eq!(delta["ops"][0]["define"][0]["num"]["id"], json!(num), "the definition the step created travels with the delta");
+    let num = u32::try_from(num).expect("a list id");
+    assert_eq!(para_numbering(&room, 0), Some(wordcraft_doc::props::NumRef { num, level: 1 }));
+    assert_eq!(para_numbering(&room, 1), Some(wordcraft_doc::props::NumRef { num, level: 1 }));
+    assert_eq!(list_style(&room, 0).as_deref(), Some("ListParagraph"));
+    let level = room.model().document().numbering.level(num, 1).expect("the definition has level 1");
+    assert_eq!(level.format, wordcraft_doc::section::NumFormat::Bullet);
+    // A list change moves no block: the ids keep naming their paragraphs.
+    assert_eq!(room.ids().resolve(NodeId(one)).map(|key| key.path.clone()), Ok(vec![0]));
+    assert_eq!(room.ids().resolve(NodeId(two)).map(|key| key.path.clone()), Ok(vec![1]));
+}
+
+#[test]
+fn two_replicas_that_apply_the_same_list_payload_allocate_the_same_numbering_id() {
+    let mut first = list_room(&["One", "Two"]);
+    let mut second = list_room(&["One", "Two"]);
+    let ids = |room: &Room<DocModel>| (block_id(room, 0), block_id(room, 1));
+    let (one, two) = ids(&first);
+
+    first
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, two], "numbering", 0)))
+        .expect("the first replica lists");
+    second
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, two], "numbering", 0)))
+        .expect("the second replica lists");
+
+    assert_eq!(
+        serde_json::to_value(first.model().document()).expect("json"),
+        serde_json::to_value(second.model().document()).expect("json"),
+        "the same payload on the same document creates the same definition"
+    );
+    assert_eq!(para_numbering(&first, 0), para_numbering(&second, 0), "the paragraphs name the same numbering id");
+    assert_eq!(para_numbering(&first, 0).map(|n| n.num), Some(1), "the first free list id");
+}
+
+#[test]
+fn a_repeated_list_step_is_an_identity_step() {
+    let mut room = list_room(&["One"]);
+    let one = block_id(&room, 0);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one], "bullets", 0)))
+        .expect("the first list step lands");
+    let listed = serde_json::to_value(room.model().document()).expect("json");
+    let definitions = room.model().document().numbering.nums.len();
+
+    let applied = room
+        .submit("alice", Role::Editor, op("a", 2, 1, OpKind::Structural, one, 0, list_request(&[one], "bullets", 0)))
+        .expect("a repeated step still lands");
+    let delta = applied.delta.expect("a delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_list"), "the step stays addressable");
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), listed, "a repeated step changes nothing");
+    assert_eq!(room.model().document().numbering.nums.len(), definitions, "no second definition is allocated");
+}
+
+#[test]
+fn undo_of_a_list_step_lands_as_one_transaction_and_redo_returns_the_list() {
+    let mut room = list_room(&["One", "Two"]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, two], "numbering", 2)))
+        .expect("the list step lands");
+    let listed = serde_json::to_value(room.model().document()).expect("json");
+    let num = para_numbering(&room, 0).expect("a list reference").num;
+
+    let undone = room.submit("alice", Role::Editor, undo_request("alice", 2, 1, "a", 1)).expect("the undo lands");
+    let delta = undone.delta.expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"));
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_list"));
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items[0]["num"], serde_json::Value::Null, "the previous state was no list");
+    assert_eq!(items[1]["num"], serde_json::Value::Null);
+    assert_eq!(delta["ops"][0]["undefine"], json!([num]), "the definition the step created is dropped");
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "undo returns the exact earlier document, definitions included");
+
+    let redo = Op {
+        op_id: OpId::new("alice", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Structural,
+        target: Target::new("body", one, 0),
+        payload: serde_json::Value::Null,
+        history: Some(HistoryAction::Redo { op_id: OpId::new("a", 1) }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), listed, "redo lists again with the same numbering id");
+}
+
+#[test]
+fn a_list_step_with_an_unknown_retired_or_unaddressable_id_is_refused_before_mutation() {
+    let mut room = list_room(&["One", "Two"]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    // An id the session never issued.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, 999_999], "bullets", 0)))
+        .expect_err("an unknown id is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(room.version(), 0);
+
+    // The same id twice.
+    let err = room
+        .submit("alice", Role::Editor, op("a", 2, 0, OpKind::Structural, one, 0, list_request(&[one, one], "bullets", 0)))
+        .expect_err("a duplicate is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // An empty set, a level outside 0–8 and an unknown kind.
+    for payload in [
+        list_request(&[], "bullets", 0),
+        list_request(&[one], "bullets", 9),
+        list_request(&[one], "outline", 0),
+        json!({"op": "set_para_list", "items": []}),
+    ] {
+        let err =
+            room.submit("alice", Role::Editor, op("a", 3, 0, OpKind::Structural, one, 0, payload)).expect_err("a malformed list step is refused");
+        assert_eq!(err.code, RejectCode::Invalid);
+        assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    }
+
+    // A stale id that names a path outside the container (a map from an older
+    // document): there is no paragraph there, so the step is refused.
+    let stale = room.ids_mut().id_for(&NodeKey::new("body", vec![9])).0;
+    let err = room
+        .submit("alice", Role::Editor, op("a", 4, 0, OpKind::Structural, stale, 0, list_request(&[stale], "bullets", 0)))
+        .expect_err("a path outside the container is refused");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+
+    // A retired id is gone rather than invalid; the document still does not move.
+    room.submit("alice", Role::Editor, op("a", 5, 0, OpKind::Structural, two, 0, json!({"op": "remove_block", "index": 1})))
+        .expect("remove the last block");
+    let before_retired = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+    let err = room
+        .submit("alice", Role::Editor, op("a", 6, version, OpKind::Structural, two, 0, list_request(&[two], "bullets", 0)))
+        .expect_err("a retired id is refused");
+    assert_eq!(err.code, RejectCode::Gone);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before_retired);
+    assert_eq!(room.version(), version);
+}
+
+#[test]
+fn a_list_step_on_a_table_or_inside_one_is_refused_before_mutation() {
+    let mut room = Room::new(DocModel::new(table_doc(1, 1)));
+    let _ = room.join(None, false);
+    let table = table_id(room.ids());
+    let cell = cell_para_id(room.ids(), 0, 0);
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    for id in [table, cell] {
+        let err = room
+            .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, id, 0, list_request(&[id], "numbering", 0)))
+            .expect_err("a table or a paragraph inside one is refused");
+        assert_eq!(err.code, RejectCode::Invalid);
+        assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+        assert_eq!(room.version(), 0);
+    }
+}
+
+#[test]
+fn a_list_step_wider_than_the_bound_is_refused_before_mutation() {
+    let names: Vec<String> = (0..65).map(|index| format!("p{index:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut room = list_room(&refs);
+    let ids: Vec<u32> = (0..65).map(|index| block_id(&room, index)).collect();
+    let before = serde_json::to_value(room.model().document()).expect("json");
+
+    let err = room
+        .submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, ids[0], 0, list_request(&ids, "bullets", 0)))
+        .expect_err("65 paragraphs are wider than a list step");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before);
+    assert_eq!(room.version(), 0);
+}
+
+#[test]
+fn a_foreign_edit_of_a_listed_block_makes_undo_a_conflict() {
+    let mut room = list_room(&["One", "Two"]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, two], "bullets", 0)))
+        .expect("the list step lands");
+
+    // Bob types into the second paragraph, which the step listed.
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, two, 0, json!({"op": "insert_text", "text": "X"}))).expect("bob types");
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let version = room.version();
+
+    let err = room.submit("alice", Role::Editor, undo_request("alice", 2, version, "a", 1)).expect_err("the undo is refused");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the refusal changed nothing");
+    assert_eq!(room.version(), version, "the version did not move");
+    assert_eq!(room.undo_depth("alice"), (1, 0), "the step stays on the stack");
+}
+
+#[test]
+fn a_replica_applies_a_list_step_and_creates_the_definition() {
+    let mut room = list_room(&["One", "Two"]);
+    let (one, two) = (block_id(&room, 0), block_id(&room, 1));
+    let mut replica = room.model().document().clone();
+    let mut replica_ids = room.ids().clone();
+    assert!(replica.numbering.nums.is_empty(), "the replica starts without the definition");
+
+    submit_and_mirror(
+        &mut room,
+        op("a", 1, 0, OpKind::Structural, one, 0, list_request(&[one, two], "numbering", 1)),
+        &mut replica,
+        &mut replica_ids,
+    );
+    assert_eq!(replica.numbering.nums.len(), 1, "the replica created the definition from the delta");
+    assert_eq!(replica.numbering.nums[0].id, para_numbering(&room, 0).expect("a list").num);
+}

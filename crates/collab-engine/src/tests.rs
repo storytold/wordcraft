@@ -1016,3 +1016,142 @@ fn a_level_step_and_a_permute_land_as_one_transaction_on_a_replica() {
     assert!(err.contains("unknown node"), "{err}");
     assert_eq!(serde_json::to_value(&replica.doc).expect("json"), before, "a refused transaction changes nothing");
 }
+
+// --- bullets and numbering ---------------------------------------------------
+
+fn para_numbering(session: &Session, block: usize) -> Option<wordcraft_doc::props::NumRef> {
+    session.doc.body.get(block).and_then(|block| block.as_para()).and_then(|para| para.props.numbering)
+}
+
+#[test]
+fn a_bullets_command_lands_as_one_list_operation_and_undoes() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let one = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+
+    // A replica learns the step and its undo only from the deltas.
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let command = op("a", 1, 0, OpKind::Command, one, 0, json!({"command": "para.bullets", "params": {}}));
+    let applied = room.submit("alice", Role::Editor, command.clone()).expect("the bullets land");
+    let delta = applied.delta.clone().expect("the step carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_list"), "the forward effect is a list operation");
+    assert_eq!(delta["ops"][0]["items"][0]["id"], json!(one));
+    let num = delta["ops"][0]["items"][0]["num"].as_u64().expect("a list id");
+    assert_eq!(delta["ops"][0]["define"][0]["num"]["id"], json!(num), "the definition the command allocated travels with the delta");
+    assert_eq!(para_numbering(room.model().session(), 0), Some(wordcraft_doc::props::NumRef { num: num as u32, level: 0 }));
+    crate::apply_delta(&mut replica, &mut ids, &delta).expect("the replica applies the list");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica converged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, one, &command)).expect("the undo lands");
+    let delta = undone.delta.as_ref().expect("the undo carries a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_list"), "the inverse names the earlier list state");
+    assert_eq!(delta["ops"][0]["items"][0]["num"], serde_json::Value::Null);
+    assert_eq!(delta["ops"][0]["undefine"], json!([num]));
+    assert_eq!(para_numbering(room.model().session(), 0), None, "the paragraph is not a list item any more");
+    crate::apply_delta(&mut replica, &mut ids, delta).expect("the replica undoes");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), document_json(&room), "the replica undid too");
+
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", one, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: command.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("the redo lands");
+    assert_eq!(para_numbering(room.model().session(), 0), Some(wordcraft_doc::props::NumRef { num: num as u32, level: 0 }), "redo lists again");
+}
+
+#[test]
+fn a_numbering_command_over_a_selection_lists_every_paragraph_in_one_transaction() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One", "Two"])));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (one, two) = (node(0), node(1));
+
+    let command = op("a", 1, 0, OpKind::Command, one, 0, json!({"command": "para.numbering", "params": {}, "selection": selected(one, two)}));
+    let applied = room.submit("alice", Role::Editor, command).expect("the numbering lands");
+    let delta = applied.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, one delta");
+    assert_eq!(delta["ops"][0]["op"], json!("set_para_list"));
+    let items = delta["ops"][0]["items"].as_array().expect("items");
+    assert_eq!(items.len(), 2, "every selected paragraph is named, in document order");
+    assert_eq!(items[0]["id"], json!(one));
+    assert_eq!(items[1]["id"], json!(two));
+    assert_eq!(items[0]["num"], items[1]["num"], "one list instance for the step");
+    assert_eq!(items[0]["level"], json!(0));
+}
+
+#[test]
+fn a_list_command_over_more_than_64_paragraphs_stays_an_undo_barrier() {
+    let names: Vec<String> = (0..65).map(|index| format!("p{index:02}")).collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&refs)));
+    let plan = room.join(None, false);
+    let node = |path: u32| plan.nodes.iter().find(|node| node.path == vec![path]).expect("a block").id;
+    let (first, last) = (node(0), node(64));
+
+    let command = op("a", 1, 0, OpKind::Command, first, 0, json!({"command": "para.bullets", "params": {}, "selection": selected(first, last)}));
+    room.submit("alice", Role::Editor, command.clone()).expect("a wide list step still lands");
+    assert!(para_numbering(room.model().session(), 64).is_some(), "the last paragraph was listed too");
+
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &command)).expect_err("a step this wide has no inverse");
+    assert_eq!(err.code, RejectCode::Unsupported);
+}
+
+#[test]
+fn a_list_step_on_a_table_is_refused_before_mutation() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    let mut table = wordcraft_doc::Table::new(1, 1, 200.0);
+    table.rows[0].cells[0] = wordcraft_doc::Cell::with_text("cell");
+    doc.body.push(Arc::new(Block::Table(table)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let table_node = plan.nodes.iter().find(|node| node.path == vec![0]).expect("the table has an id").id;
+    let cell_node = plan.nodes.iter().find(|node| node.path == vec![0, 0, 0, 0]).expect("the cell paragraph has an id").id;
+    let before = document_json(&room);
+
+    for id in [table_node, cell_node] {
+        let err = room
+            .submit(
+                "alice",
+                Role::Editor,
+                op("a", 1, 0, OpKind::Structural, id, 0, json!({"op": "set_para_list", "ids": [id], "kind": "bullets", "level": 0})),
+            )
+            .expect_err("a table or a paragraph inside one has no list step");
+        assert_eq!(err.code, RejectCode::Invalid);
+        assert_eq!(document_json(&room), before, "the refusal changed nothing");
+        assert_eq!(room.version(), 0, "the version did not move");
+    }
+}
+
+#[test]
+fn a_list_step_that_names_the_current_list_is_an_identity_step() {
+    let mut room = Room::new(SessionModel::from_document(paragraphs_doc(&["One"])));
+    let plan = room.join(None, false);
+    let one = plan.nodes.iter().find(|node| node.path == vec![0]).expect("a block").id;
+    room.submit(
+        "alice",
+        Role::Editor,
+        op("a", 1, 0, OpKind::Structural, one, 0, json!({"op": "set_para_list", "ids": [one], "kind": "bullets", "level": 0})),
+    )
+    .expect("the first list step lands");
+    let listed = document_json(&room);
+
+    let step = op("a", 2, 1, OpKind::Structural, one, 0, json!({"op": "set_para_list", "ids": [one], "kind": "bullets", "level": 0}));
+    let applied = room.submit("alice", Role::Editor, step.clone()).expect("an identity list step still lands");
+    assert_eq!(applied.delta.as_ref().and_then(|delta| delta.get("op")).and_then(|op| op.as_str()), Some("transaction"));
+    assert_eq!(document_json(&room), listed, "the document is unchanged");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(3, 2, one, &step)).expect("the identity undo lands");
+    assert!(undone.delta.is_some(), "the undo carries a delta too");
+    assert_eq!(document_json(&room), listed, "the undo changes nothing either");
+}
