@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::para::{InlineObject, Run};
 use crate::props::{CharProps, ParaProps};
-use crate::{Block, Blocks, Cell, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
+use crate::{Block, Blocks, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
 use crate::{Table, table::MAX_TABLE_DEPTH};
 
 /// A copied piece of a document: blocks, where the first and last paragraphs may be partial.
@@ -614,86 +614,6 @@ fn trim_para(para: &Paragraph, from: usize, to: usize, clear_section: bool) -> P
     p
 }
 
-/// Return the inclusive grid column bounds `(g0, g1)` covered by cell `(r, c)` in `table`.
-///
-/// Coordinate systems:
-/// - `r` is a 0-based row index into `table.rows`.
-/// - `c` is a 0-based cell index within `table.rows[r].cells`.
-/// - `g0` and `g1` are 0-based grid column indices into `table.grid`.
-///
-/// If `(r, c)` falls outside the table (e.g. missing row or out-of-range cell), `grid_col`
-/// clamps to the available cells, and `span` falls back to 1 via `map_or(1, Cell::span)`
-/// with saturating arithmetic so bounds never underflow or panic.
-fn cell_grid_span(table: &Table, r: usize, c: usize) -> (usize, usize) {
-    let g0 = table.grid_col(r, c);
-    let span = table.rows.get(r).and_then(|row| row.cells.get(c)).map_or(1, Cell::span);
-    let g1 = g0.saturating_add(span).saturating_sub(1);
-    (g0, g1)
-}
-
-/// Calculate row and grid column slicing bounds for a selection between cells `(ra, ca)` and `(rb, cb)`.
-///
-/// Coordinate systems:
-/// - Input coordinates `(ra, ca)` and `(rb, cb)` are `(row_index, cell_index)` in `table`.
-/// - Output `rows` is an inclusive range of row indices `(r_min, r_max)`.
-/// - Output `cols` is an inclusive range of grid column indices `(g_min, g_max)`, computed from
-///   the union of grid column spans of the two endpoint cells via [`cell_grid_span`].
-///
-/// This forms the minimal bounding rectangle covering both endpoints, ensuring merged or
-/// multi-column spanning cells within the selection endpoints are fully enclosed.
-fn table_slice_bounds(table: &Table, ra: usize, ca: usize, rb: usize, cb: usize) -> ((usize, usize), (usize, usize)) {
-    let g_a = cell_grid_span(table, ra, ca);
-    let g_b = cell_grid_span(table, rb, cb);
-    let rows = (ra.min(rb), ra.max(rb));
-    let cols = (g_a.0.min(g_b.0), g_a.1.max(g_b.1));
-    (rows, cols)
-}
-
-/// Trim a table selection endpoint within `table` before slicing.
-///
-/// Expected path shape:
-/// `path` must identify a block directly inside a table cell at depth `c_depth + 4`:
-/// `[container_prefix..., table_idx, row_idx, cell_idx, block_idx]`.
-/// If `path.0.len() != c_depth + 4`, the path points elsewhere (e.g. an ancestor container
-/// or deeply nested child) and the function returns early without modifying `table`.
-///
-/// Modes and side effects:
-/// - **Start trim** (`end_off == None`): Trims the start paragraph at `b_idx` to `off..len`,
-///   and drains any preceding sibling blocks in `0..b_idx` that lie before the selection start.
-/// - **End trim** (`end_off == Some(end)`): Trims the end paragraph at `b_idx` to `0..end`,
-///   and truncates any trailing sibling blocks after `b_idx` that lie after the selection end.
-/// - Non-paragraph blocks (e.g. nested tables or drawings) are left intact without text trimming.
-fn trim_table_endpoint(table: &mut Table, path: &Path, c_depth: usize, off: usize, end_off: Option<usize>) {
-    if path.0.len() != c_depth + 4 {
-        return;
-    }
-    let r_idx = path.0.get(c_depth + 1).copied().unwrap_or(0) as usize;
-    let c_idx = path.0.get(c_depth + 2).copied().unwrap_or(0) as usize;
-    let b_idx = path.0.get(c_depth + 3).copied().unwrap_or(0) as usize;
-    if let Some(row) = table.rows.get_mut(r_idx)
-        && let Some(cell) = row.cells.get_mut(c_idx)
-    {
-        if let Some(end) = end_off {
-            if let Some(blk) = cell.blocks.get_mut(b_idx)
-                && let Block::Para(p) = Arc::make_mut(blk)
-            {
-                *p = trim_para(p, 0, end, false);
-            }
-            if cell.blocks.len() > b_idx + 1 {
-                cell.blocks.truncate(b_idx + 1);
-            }
-        } else {
-            if let Some(blk) = cell.blocks.get_mut(b_idx)
-                && let Block::Para(p) = Arc::make_mut(blk)
-            {
-                *p = trim_para(p, off, p.len(), false);
-            }
-            if b_idx > 0 && b_idx < cell.blocks.len() {
-                cell.blocks.drain(0..b_idx);
-            }
-        }
-    }
-}
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -1424,13 +1344,45 @@ impl Document {
         out
     }
 
-    /// Copy blocks spanning `a..b`, preserving table and paragraph structure across containers (#5906).
+    /// Copy paragraphs in linear document order between `a` and `b` inclusive (#5906).
+    fn copy_para_range(&self, a: &Pos, b: &Pos) -> Vec<Block> {
+        let (a, b) = order(a, b);
+        let mut out = Vec::new();
+        for p in self.paths_between(&a, &b) {
+            if let Some(para) = self.para(a.story, &p) {
+                let from = if p == a.path { a.off } else { 0 };
+                let to = if p == b.path { b.off } else { para.len() };
+                let clear = p == b.path && b.off < para.len();
+                out.push(Block::Para(trim_para(para, from, to, clear)));
+            }
+        }
+        out
+    }
+
+    /// Copy blocks spanning `a..b`, preserving whole tables when covered across containers (#5906).
     fn copy_blocks(&self, a: &Pos, b: &Pos) -> Vec<Block> {
         let (a, b) = order(a, b);
         let mut out = Vec::new();
         if a.story != b.story {
             return out;
         }
+        if a.path.parent() == b.path.parent() {
+            let Some(bl) = self.container(a.story, &a.path) else { return out };
+            for i in a.path.last()..=b.path.last() {
+                let Some(blk) = bl.get(i) else { break };
+                match &**blk {
+                    Block::Para(p) => {
+                        let to = if i == b.path.last() { b.off } else { p.len() };
+                        let from = if i == a.path.last() { a.off } else { 0 };
+                        let clear = i == b.path.last() && to < p.len();
+                        out.push(Block::Para(trim_para(p, from, to, clear)));
+                    }
+                    Block::Table(_) => out.push((**blk).clone()),
+                }
+            }
+            return out;
+        }
+
         // Across the cells of a whole table: the table itself, not its cells' paragraphs (#1744).
         if let Some(tp) = self.whole_table(&a, &b)
             && let Some(blk) = self.block(a.story, &tp)
@@ -1440,143 +1392,87 @@ impl Document {
         }
 
         // Find the lowest common ancestor container.
-        // Document paths encode container hierarchy in triplets:
-        // - Top-level story block: `[block_idx]` (depth 0).
-        // - Inside a table cell: `[table_idx, row_idx, cell_idx, block_idx]` (depth 3).
-        // - Nested table levels add 3 segments per level: `[..., table, row, cell, block]`.
-        // Rounding down `common_len` to a multiple of 3 aligns to the nearest enclosing container boundary
-        // (`c_depth`). At this depth, `c_depth + 1` is row index, `c_depth + 2` is cell index, and
-        // `c_depth + 3` is block index within the cell. A direct paragraph in a cell therefore has
-        // length `c_depth + 4`.
-        let common_len = a.path.0.iter().zip(&b.path.0).take_while(|(x, y)| x == y).count();
-        let c_depth = (common_len / 3) * 3;
-        let c_path = Path(a.path.0.get(..c_depth + 1).map(<[u32]>::to_vec).unwrap_or_default());
-        if let Some(bl) = self.container(a.story, &c_path) {
-            let ia = a.path.0.get(c_depth).copied().unwrap_or(0) as usize;
-            let ib = b.path.0.get(c_depth).copied().unwrap_or(0) as usize;
-            if ia == ib {
-                if let Some(blk) = bl.get(ia) {
-                    match &**blk {
-                        Block::Para(p) => {
-                            let clear = b.off < self.para(a.story, &b.path).map_or(0, Paragraph::len);
-                            out.push(Block::Para(trim_para(p, a.off, b.off, clear)));
-                            return out;
-                        }
-                        Block::Table(t) => {
-                            let ra = a.path.0.get(c_depth + 1).copied().unwrap_or(0) as usize;
-                            let ca = a.path.0.get(c_depth + 2).copied().unwrap_or(0) as usize;
-                            let rb = b.path.0.get(c_depth + 1).copied().unwrap_or(0) as usize;
-                            let cb = b.path.0.get(c_depth + 2).copied().unwrap_or(0) as usize;
-                            let (rows, cols) = table_slice_bounds(t, ra, ca, rb, cb);
-                            let last_row = t.rows.len().saturating_sub(1);
-                            let last_col = t.rows.get(last_row).map_or(0, |r| r.cells.len().saturating_sub(1));
-                            let last_cell_blocks =
-                                t.rows.get(last_row).and_then(|r| r.cells.get(last_col)).map_or(0, |c| c.blocks.len().saturating_sub(1));
-                            let end_len = self.para(a.story, &b.path).map_or(0, Paragraph::len);
-                            let is_whole = ra == 0
-                                && ca == 0
-                                && rb == last_row
-                                && cb == last_col
-                                && a.path.0.len() == c_depth + 4
-                                && a.path.0.get(c_depth + 3) == Some(&0)
-                                && a.off == 0
-                                && b.path.0.len() == c_depth + 4
-                                && b.path.0.get(c_depth + 3) == Some(&(last_cell_blocks as u32))
-                                && b.off >= end_len;
-                            if is_whole {
-                                out.push(Block::Table(t.clone()));
-                                return out;
-                            }
-                            let mut cloned = t.clone();
-                            trim_table_endpoint(&mut cloned, &a.path, c_depth, a.off, None);
-                            trim_table_endpoint(&mut cloned, &b.path, c_depth, 0, Some(b.off));
-                            let sliced = cloned.slice(rows, cols);
-                            if !sliced.rows.is_empty() {
-                                out.push(Block::Table(sliced));
-                                return out;
-                            }
-                        }
-                    }
-                }
-            } else {
-                for i in ia..=ib {
-                    let Some(blk) = bl.get(i) else { break };
-                    if i == ia {
-                        match &**blk {
-                            Block::Para(p) => {
-                                out.push(Block::Para(trim_para(p, a.off, p.len(), false)));
-                            }
-                            Block::Table(t) => {
-                                let ra = a.path.0.get(c_depth + 1).copied().unwrap_or(0) as usize;
-                                let ca = a.path.0.get(c_depth + 2).copied().unwrap_or(0) as usize;
-                                let last_row = t.rows.len().saturating_sub(1);
-                                let last_col = t.cols().saturating_sub(1);
-                                if ra == 0 && ca == 0 && a.path.0.len() == c_depth + 4 && a.path.0.get(c_depth + 3) == Some(&0) && a.off == 0 {
-                                    out.push(Block::Table(t.clone()));
-                                } else {
-                                    let mut cloned = t.clone();
-                                    trim_table_endpoint(&mut cloned, &a.path, c_depth, a.off, None);
-                                    let sliced = cloned.slice((ra, last_row), (0, last_col));
-                                    if !sliced.rows.is_empty() {
-                                        out.push(Block::Table(sliced));
-                                    }
-                                }
-                            }
-                        }
-                    } else if i < ib {
-                        out.push((**blk).clone());
-                    } else {
-                        // i == ib
-                        match &**blk {
-                            Block::Para(p) => {
-                                let clear = b.off < self.para(a.story, &b.path).map_or(0, Paragraph::len);
-                                out.push(Block::Para(trim_para(p, 0, b.off, clear)));
-                            }
-                            Block::Table(t) => {
-                                let rb = b.path.0.get(c_depth + 1).copied().unwrap_or(0) as usize;
-                                let cb = b.path.0.get(c_depth + 2).copied().unwrap_or(0) as usize;
-                                let last_row = t.rows.len().saturating_sub(1);
-                                let last_col = t.cols().saturating_sub(1);
-                                let end_len = self.para(a.story, &b.path).map_or(0, Paragraph::len);
-                                let row_last_cell = t.rows.get(rb).map_or(0, |r| r.cells.len().saturating_sub(1));
-                                let last_cell_blocks = t.rows.get(rb).and_then(|r| r.cells.get(cb)).map_or(0, |c| c.blocks.len().saturating_sub(1));
-                                if rb == last_row
-                                    && cb >= row_last_cell
-                                    && b.path.0.len() == c_depth + 4
-                                    && b.path.0.get(c_depth + 3) == Some(&(last_cell_blocks as u32))
-                                    && b.off >= end_len
-                                {
-                                    out.push(Block::Table(t.clone()));
-                                } else {
-                                    let mut cloned = t.clone();
-                                    trim_table_endpoint(&mut cloned, &b.path, c_depth, 0, Some(b.off));
-                                    let sliced = cloned.slice((0, rb), (0, last_col));
-                                    if !sliced.rows.is_empty() {
-                                        out.push(Block::Table(sliced));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                if !out.is_empty() {
-                    return out;
-                }
+        let common = a.path.0.iter().zip(&b.path.0).take_while(|(x, y)| x == y).count();
+        let level = common.saturating_sub(common % 3);
+        let prefix = a.path.0.get(..level).unwrap_or_default().to_vec();
+        let block_path = |i: usize| {
+            let mut v = prefix.clone();
+            v.push(i as u32);
+            Path(v)
+        };
+
+        let (Some(&ia), Some(&ib)) = (a.path.0.get(level), b.path.0.get(level)) else {
+            return self.copy_para_range(&a, &b);
+        };
+        let (ia, ib) = (ia as usize, ib as usize);
+        if ia >= ib {
+            return self.copy_para_range(&a, &b);
+        }
+
+        let Some(bl) = self.container(a.story, &block_path(ia)) else {
+            return self.copy_para_range(&a, &b);
+        };
+
+        let paths = self.para_paths(a.story);
+        let inside = |i: usize| -> Vec<&Path> {
+            let pre = block_path(i);
+            paths.iter().filter(|q| q.0.len() > pre.0.len() && q.0.starts_with(&pre.0)).collect()
+        };
+        let walked = |i: usize| bl.get(i).is_some_and(|b| !deeper_than_walk(b, level / 3));
+
+        let a_covers = if a.path.0.len() == level + 1 {
+            a.off == 0
+        } else {
+            a.path.0.len() > level + 1 && a.off == 0 && walked(ia) && inside(ia).first() == Some(&&a.path)
+        };
+
+        let b_at_end = self.para(b.story, &b.path).is_some_and(|p| p.len() == b.off);
+        let b_covers = if b.path.0.len() == level + 1 {
+            b_at_end
+        } else {
+            b.path.0.len() > level + 1 && walked(ib) && inside(ib).last() == Some(&&b.path) && b_at_end
+        };
+
+        // Start block ia:
+        if a_covers {
+            if let Some(blk) = bl.get(ia) {
+                out.push((**blk).clone());
+            }
+        } else if a.path.0.len() == level + 1 {
+            if let Some(blk) = bl.get(ia)
+                && let Block::Para(p) = &**blk
+            {
+                out.push(Block::Para(trim_para(p, a.off, p.len(), false)));
+            }
+        } else if let Some(last_in_a) = inside(ia).last().copied() {
+            let end_pos = Pos { story: a.story, path: last_in_a.clone(), off: self.para(a.story, last_in_a).map_or(0, Paragraph::len) };
+            out.extend(self.copy_para_range(&a, &end_pos));
+        }
+
+        // Blocks strictly between ia and ib: whole blocks
+        for i in ia + 1..ib {
+            if let Some(blk) = bl.get(i) {
+                out.push((**blk).clone());
             }
         }
 
-        // Fallback for paths outside normal block containers.
-        for p in self.paths_between(&a, &b) {
-            if let Some(para) = self.para(a.story, &p) {
-                let mut q = para.clone();
-                let to = if p == b.path { b.off } else { q.len() };
-                let from = if p == a.path { a.off } else { 0 };
-                let _ = q.delete(to.min(q.len()), q.len());
-                let _ = q.delete(0, from.min(q.len()));
-                q.section = None;
-                out.push(Block::Para(q));
+        // End block ib:
+        if b_covers {
+            if let Some(blk) = bl.get(ib) {
+                out.push((**blk).clone());
             }
+        } else if b.path.0.len() == level + 1 {
+            if let Some(blk) = bl.get(ib)
+                && let Block::Para(p) = &**blk
+            {
+                let clear = b.off < p.len();
+                out.push(Block::Para(trim_para(p, 0, b.off, clear)));
+            }
+        } else if let Some(first_in_b) = inside(ib).first().copied() {
+            let start_pos = Pos { story: b.story, path: first_in_b.clone(), off: 0 };
+            out.extend(self.copy_para_range(&start_pos, &b));
         }
+
         out
     }
 

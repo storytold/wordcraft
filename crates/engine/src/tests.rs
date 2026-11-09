@@ -2153,6 +2153,91 @@ fn select_all_in_document_starting_with_table_preserves_table() {
     assert_eq!(c00, Some("A1"), "cell (0, 0) text");
 }
 
+/// #5906: Cut and Spike across table cells with non-corner endpoints must preserve every removed character.
+#[test]
+fn cut_and_spike_across_table_cells_preserves_every_removed_character() {
+    // 1. Test Spike then insertSpike
+    {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+        for (i, text) in ["R0C0", "R0C1", "R0C2", "R1C0", "R1C1", "R1C2", "R2C0", "R2C1", "R2C2"].iter().enumerate() {
+            if i > 0 {
+                run(&mut s, "text.tab", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": text}));
+        }
+
+        // Set linear text range across non-corner cells: (0, 1) off 1 ("0C1") through (1, 1) off 3 ("R1C").
+        // Traversed in linear document order: (0, 1) "0C1", (0, 2) "R0C2", (1, 0) "R1C0", (1, 1) "R1C".
+        s.sel = crate::Selection {
+            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
+            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+        };
+        s.column = None;
+
+        run(&mut s, "edit.spike", json!({}));
+
+        // Verify the table content after spike:
+        // (0, 1) has "R" remaining, (0, 2) emptied, (1, 0) emptied, (1, 1) has "1" remaining.
+        let cells_after = body_table_cells(&s);
+        assert_eq!(
+            cells_after,
+            vec![vec!["R0C0".to_string(), "R".into(), "".into(), "".into(), "1".into(), "R1C2".into(), "R2C0".into(), "R2C1".into(), "R2C2".into(),]]
+        );
+
+        // Paste the spike at the end of the document: all 4 removed pieces must be present.
+        run(&mut s, "caret.docEnd", json!({}));
+        run(&mut s, "edit.insertSpike", json!({}));
+        let texts = body_texts(&s);
+        assert!(
+            texts.iter().any(|t| t == "0C1")
+                && texts.iter().any(|t| t == "R0C2")
+                && texts.iter().any(|t| t == "R1C0")
+                && texts.iter().any(|t| t == "R1C"),
+            "every removed character must be preserved and inserted from spike, got: {:?}",
+            texts
+        );
+    }
+
+    // 2. Test Cut then paste
+    {
+        let mut s = s();
+        run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+        for (i, text) in ["R0C0", "R0C1", "R0C2", "R1C0", "R1C1", "R1C2", "R2C0", "R2C1", "R2C2"].iter().enumerate() {
+            if i > 0 {
+                run(&mut s, "text.tab", json!({}));
+            }
+            run(&mut s, "text.insert", json!({"text": text}));
+        }
+
+        s.sel = crate::Selection {
+            anchor: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, 1, 0]), off: 1 },
+            focus: wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path(vec![0, 1, 1, 0]), off: 3 },
+        };
+        s.column = None;
+
+        run(&mut s, "edit.cut", json!({}));
+
+        let cells_after_cut = body_table_cells(&s);
+        assert_eq!(
+            cells_after_cut,
+            vec![vec!["R0C0".to_string(), "R".into(), "".into(), "".into(), "1".into(), "R1C2".into(), "R2C0".into(), "R2C1".into(), "R2C2".into(),]]
+        );
+
+        run(&mut s, "caret.docEnd", json!({}));
+        run(&mut s, "edit.paste", json!({}));
+        let texts_cut = body_texts(&s);
+        assert!(
+            texts_cut.iter().any(|t| t == "0C1")
+                && texts_cut.iter().any(|t| t == "R0C2")
+                && texts_cut.iter().any(|t| t == "R1C0")
+                && texts_cut.iter().any(|t| t == "R1C"),
+            "every removed character must be preserved and inserted from cut, got: {:?}",
+            texts_cut
+        );
+    }
+}
+
 /// #1744: Select Table → Cut removes the whole table, and one Undo brings it back.
 #[test]
 fn cut_whole_table_removes_it_and_undoes() {
