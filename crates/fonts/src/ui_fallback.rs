@@ -248,6 +248,33 @@ pub fn system_arabic_ui_font() -> Option<SystemUiFont> {
     find_ui_font(&crate::system_font_dirs(), arabic_candidates(), &['ع'], Region::Other)
 }
 
+/// Hebrew font files to look for, relative to a font folder, best first. A sans-serif UI face
+/// (Segoe UI, Noto Sans Hebrew, Arial), not a document serif such as David.
+fn hebrew_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["segoeui.ttf", "arial.ttf", "tahoma.ttf", "david.ttf"]
+    } else if cfg!(target_os = "macos") {
+        &["ArialHB.ttc", "Supplemental/ArialHB.ttc", "Supplemental/Arial Unicode.ttf", "Supplemental/Arial.ttf", "Helvetica.ttc"]
+    } else {
+        &[
+            "truetype/noto/NotoSansHebrew-Regular.ttf",
+            "noto/NotoSansHebrew-Regular.ttf",
+            "opentype/noto/NotoSansHebrew-Regular.ttf",
+            "google-noto/NotoSansHebrew-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "TTF/DejaVuSans.ttf",
+        ]
+    }
+}
+
+/// An installed font with Hebrew letters, for a Hebrew interface in a build whose craft-fonts
+/// input has no Hebrew face. Reads at most one font file per candidate; never panics on damaged
+/// files.
+pub fn system_hebrew_ui_font() -> Option<SystemUiFont> {
+    find_ui_font(&crate::system_font_dirs(), hebrew_candidates(), &['א'], Region::Other)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`
@@ -336,6 +363,20 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], region: Region) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hebrew_interface_looks_for_a_sans_serif_hebrew_face_first() {
+        assert_eq!(
+            hebrew_candidates().first().copied(),
+            Some(if cfg!(windows) {
+                "segoeui.ttf"
+            } else if cfg!(target_os = "macos") {
+                "ArialHB.ttc"
+            } else {
+                "truetype/noto/NotoSansHebrew-Regular.ttf"
+            })
+        );
+    }
 
     #[test]
     fn korean_interface_uses_korean_first_system_font_candidates() {

@@ -681,6 +681,9 @@ pub struct WordApp {
     /// Whether the installed UI fonts were asked to include an installed Arabic font (an Arabic
     /// interface; used when no embedded face has Arabic letters).
     fonts_system_arabic: bool,
+    /// Whether the installed UI fonts were asked to include an installed Hebrew font (a Hebrew
+    /// interface; used when no embedded face has Hebrew letters).
+    fonts_system_hebrew: bool,
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
     /// File ▸ Options: load the installed CJK fallback font if no embedded face covers it.
     pub(crate) want_system_cjk: bool,
@@ -688,6 +691,10 @@ pub struct WordApp {
     /// language picker or Language packs list: load an installed Arabic font when no embedded face
     /// covers it (dev builds without craft-fonts).
     pub(crate) want_system_arabic: bool,
+    /// Hebrew text is (about to be) on screen in a non-Hebrew interface, e.g. "עברית" in the
+    /// language picker or Language packs list: load an installed Hebrew font when no embedded face
+    /// covers it.
+    pub(crate) want_system_hebrew: bool,
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,

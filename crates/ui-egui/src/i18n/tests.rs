@@ -1130,6 +1130,32 @@ fn slovenian_locales_and_saved_preference_work_without_changing_the_document() {
 }
 
 #[test]
+fn hebrew_interface_fonts_cover_hebrew_letters() {
+    needs_catalogs!();
+    let entries = translations("he");
+    let chars: std::collections::BTreeSet<char> = entries.iter().flat_map(|e| e.chars()).filter(|c| ('\u{0590}'..='\u{05FF}').contains(c)).collect();
+    assert!(chars.len() > 20, "the Hebrew catalog has Hebrew letters");
+    let embedded = !wordcraft_fonts::ui_hebrew_fonts().is_empty();
+    let system = wordcraft_fonts::system_hebrew_ui_font().is_some();
+    if !embedded && !system {
+        eprintln!("skipped: no embedded or installed Hebrew face");
+        return;
+    }
+    let ctx = egui::Context::default();
+    ctx.set_fonts(crate::theme::font_definitions_language_arabic(
+        false,
+        false,
+        false,
+        false,
+        crate::theme::InstalledScripts { arabic: false, hebrew: true },
+    ));
+    ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+    let sample: String = chars.into_iter().take(48).collect();
+    let covered = ctx.fonts_mut(|f| f.has_glyphs(&egui::FontId::proportional(14.0), &sample));
+    assert!(covered, "a Hebrew face is available but the interface lacks {sample}");
+}
+
+#[test]
 fn bundled_interface_fonts_cover_slovenian_letters() {
     needs_catalogs!();
     let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
@@ -1190,6 +1216,65 @@ fn the_flatpak_manifest_pins_the_craft_i18n_rev() {
     assert!(manifest.contains("CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n"), "the build embeds the catalogs");
 }
 
+#[test]
+fn hebrew_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let Some(he) = Lang::from_code("he") else {
+        panic!("the pinned craft-i18n catalogs include Hebrew");
+    };
+    for tag in ["he", "he-IL", "he_IL.UTF-8", "HE-il", "he-Hebr-IL"] {
+        assert_eq!(lang_from_tag(tag), Some(he), "{tag}");
+    }
+    // Yiddish is its own language; a Hebrew catalog must not claim it.
+    assert_eq!(lang_from_tag("yi"), None);
+    assert_eq!(lang_from_tag("yi-001"), None);
+    assert_eq!(first_supported(["xx-XX", "he-IL", "en-US"]), Some(he));
+    assert_eq!(normalize_pref("HE"), Some("he"));
+    assert!(he.rtl());
+    assert!(!he.uses_cjk());
+    assert_eq!(he.editing_lang(), None, "Hebrew has no proofing language for new documents");
+    assert_eq!(he.name(), "עברית");
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "HE"})).unwrap();
+    assert_eq!(result["effective"], "he");
+    assert_eq!(app.ui.language, "he");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), he);
+    assert!(app.run("ui.language", serde_json::json!({"value": "he-unknown"})).is_err());
+    assert_eq!(app.ui.language, "he", "invalid preferences must keep the saved language");
+}
+
+/// Hebrew comes back from the lookups exactly as the catalog has it, in typing order, the same
+/// as Arabic: egui orders each line.
+#[test]
+fn hebrew_lookups_keep_typing_order() {
+    let he = fixture_lang(
+        "he",
+        concat!(
+            "\tTable of Contents\tתוכן העניינים\n",
+            "\tPaste Special…\tהדבקה מיוחדת…\n",
+            "\tAbout WordCraft\tאודות WordCraft\n",
+            "\tPage {page} of {pages}\tעמוד {page} מתוך {pages}\n",
+            "\tHome\tבית\n",
+            "\tFont\tגופן\n",
+        ),
+    );
+    set_current(he);
+    assert!(he.rtl());
+    assert_eq!(tr(he, "Table of Contents"), "תוכן העניינים");
+    assert_eq!(tr(he, "Paste Special…"), "הדבקה מיוחדת…");
+    assert_eq!(tr(he, "About WordCraft"), "אודות WordCraft");
+    let page = fmt_plain(tr(he, "Page {page} of {pages}"), &[("page", "3"), ("pages", "9")]);
+    assert_eq!(page, "עמוד 3 מתוך 9");
+    assert_eq!(location("Home › Font"), "בית ‹ גופן");
+    assert!(lowercase(t("Table of Contents")).contains("תוכן העניינים"));
+    set_current(Lang::EN);
+    assert_eq!(location("Home › Font"), "Home › Font");
+}
+
 /// A right-to-left test language whose catalog is `source`, selected as the current language.
 fn arabic_fixture(source: &'static str) -> Lang {
     let ar = fixture_lang("ar", source);
@@ -1210,7 +1295,9 @@ fn arabic_locales_and_saved_preference_work_without_changing_the_document() {
     assert_eq!(first_supported(["xx-XX", "ar-MA", "en-US"]), Some(ar));
     assert_eq!(normalize_pref("AR"), Some("ar"));
     assert!(ar.rtl());
-    assert!(Lang::all().filter(|l| l.rtl()).eq([ar]), "Arabic is the only right-to-left language");
+    let he = lang("he");
+    assert!(he.rtl());
+    assert!(Lang::all().filter(|l| l.rtl()).eq([ar, he]), "Arabic and Hebrew are the right-to-left languages");
     assert!(!ar.uses_cjk());
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
     let before = serde_json::to_value(&app.session.doc).unwrap();

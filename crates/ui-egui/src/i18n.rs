@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 28] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -127,6 +127,9 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // Arabic (Modern Standard); `ar` and every `ar-*` locale (`ar-MA`, `ar-EG`, `ar-SA` …) resolve
     // here. Right to left: see [`RTL_LANGUAGES`] and [`Lang::rtl`].
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
+    // Hebrew; `he`, `he-IL` and `he_IL.UTF-8` resolve here. The same right-to-left window as
+    // Arabic ([`RTL_LANGUAGES`]). No Hebrew proofing, so new documents stay in the default language.
+    LangInfo { code: "he", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
 ];
@@ -134,7 +137,7 @@ pub static LANGUAGES: [LangInfo; 28] = [
 /// Interface languages written right to left. Their catalogs are written in typing order and
 /// egui's text layout orders each line itself, so the lookups return them as they are; the window
 /// is mirrored ([`crate::rtl`]).
-const RTL_LANGUAGES: [&str; 1] = ["ar"];
+const RTL_LANGUAGES: [&str; 2] = ["ar", "he"];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
 #[derive(Clone, Copy)]
@@ -261,7 +264,7 @@ impl Lang {
     /// Every registered language in the order a picker lists them: English first (the source
     /// language and the fallback), then the rest by their own name with accents folded, so
     /// Čeština sits under C rather than after Z. Names in other scripts follow the Latin ones in
-    /// code point order: Greek, Cyrillic, Arabic, then the CJK languages.
+    /// code point order: Greek, Cyrillic, Hebrew, Arabic, then the CJK languages.
     pub fn for_picker() -> Vec<Lang> {
         let mut rest: Vec<Lang> = Lang::all().filter(|l| l.code() != Lang::EN.code()).collect();
         rest.sort_by_cached_key(|l| name_sort_key(l.name()));

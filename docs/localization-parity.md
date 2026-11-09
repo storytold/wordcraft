@@ -1,6 +1,6 @@
 # Localization parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** trivial (Arabic: the Home tab's Styles gallery reads from the right, its arrows at the left (#5566); readiness unchanged); previously trivial (table sort and formulas read the Panamanian balboa's `B/.` around a number (`B/. 1,250.50`, `1,250.50 B/.`), as Word does, matched only at the ends of the text so `1/.5` stays a fraction); previously trivial (Arabic: the dialogs of the mirrored Arabic interface read right to left: label-and-field rows, tables (list columns, the Models table), tile galleries and the Add/Remove arrows follow the reading direction, through one `rtl::Table` helper that draws exactly as before in English; no ranked gap closed, readiness estimates unchanged); previously minor (Options › Language redesign: Your languages, Add a language…, Set as default; the Dictionaries folder moved from Proofing); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language lists: every installed and available Language pack's language can be chosen in Set Proofing Language, installed ones in Review › Language and the status bar; craft-i18n.rev at 9d6d54d: region names and the Language (Region) template in 35 locales, craft-i18n#145); previously trivial (craft-i18n.rev at cde4900: rows for Options › Language, the missing-pack bar and 28 Language pack language names in 35 locales, craft-i18n#136); previously trivial (craft-proof pin: French elision suggestions first, ca-ES-valencia reads the ca-valencia pack); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-09 · **Change:** minor (Hebrew (`he`) interface: craft-i18n catalog, `he`/`he-IL` locales, mirrored shell through the Arabic right-to-left layout, Hebrew UI font fallback; no Hebrew proofing); previously trivial (Arabic: the Home tab's Styles gallery reads from the right, its arrows at the left (#5566); readiness unchanged); previously trivial (table sort and formulas read the Panamanian balboa's `B/.` around a number (`B/. 1,250.50`, `1,250.50 B/.`), as Word does, matched only at the ends of the text so `1/.5` stays a fraction); previously trivial (Arabic: the dialogs of the mirrored Arabic interface read right to left: label-and-field rows, tables (list columns, the Models table), tile galleries and the Add/Remove arrows follow the reading direction, through one `rtl::Table` helper that draws exactly as before in English; no ranked gap closed, readiness estimates unchanged); previously minor (Options › Language redesign: Your languages, Add a language…, Set as default; the Dictionaries folder moved from Proofing); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language lists: every installed and available Language pack's language can be chosen in Set Proofing Language, installed ones in Review › Language and the status bar; craft-i18n.rev at 9d6d54d: region names and the Language (Region) template in 35 locales, craft-i18n#145); previously trivial (craft-i18n.rev at cde4900: rows for Options › Language, the missing-pack bar and 28 Language pack language names in 35 locales, craft-i18n#136); previously trivial (craft-proof pin: French elision suggestions first, ca-ES-valencia reads the ca-valencia pack); previously minor (Arabic `ar` interface: craft-i18n catalog, mirrored shell, font fallback, #1195; 28 languages); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland)); previously trivial (Language packs: language-packs-1 is published and pinned, 61 packs; the language requests it covers); previously minor (Language packs: languages beyond English install their spelling dictionary and hyphenation as a pack from File › Options › Language or the missing-pack bar; the default build embeds English Language data only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Interface languages, script support and proofing per language. How translation works (adding a
 language, the embedded catalogs): `crates/ui-egui/src/i18n.rs`. The catalogs, their format and
@@ -21,8 +21,8 @@ native-speaker review (human).
 
 ## What WordCraft ships (measured)
 
-- **28 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, Korean `ko` (#1216), `uk`, `es`, `pt-br`,
-  Serbian `sr`/`sr-latn` (#250), Estonian `et`, Turkish `tr`, Russian `ru`, Italian `it` (#594), German `de` (#574), Polish `pl`, Czech `cs`, Hungarian `hu`, French `fr`, Bulgarian `bg`, Vietnamese `vi` (#1434), Swedish `sv` (#1219), Croatian `hr` (#1271), Romanian `ro`, Slovenian `sl`, Dutch `nl`, Danish `da` (#2722) and Arabic `ar` (#1195). Catalogs have 2,061–2,730 entries
+- **29 interface languages**: English plus `zh-hans`, `zh-hant`, `ja`, Korean `ko` (#1216), `uk`, `es`, `pt-br`,
+  Serbian `sr`/`sr-latn` (#250), Estonian `et`, Turkish `tr`, Russian `ru`, Italian `it` (#594), German `de` (#574), Polish `pl`, Czech `cs`, Hungarian `hu`, French `fr`, Bulgarian `bg`, Vietnamese `vi` (#1434), Swedish `sv` (#1219), Croatian `hr` (#1271), Romanian `ro`, Slovenian `sl`, Dutch `nl`, Danish `da` (#2722), Arabic `ar` (#1195) and Hebrew `he`. Catalogs have 2,061–2,730 entries
   each; Polish has every key of every other catalog, including the built-in style names and the equation gallery, except the citation style names only Hungarian, Bulgarian, Swedish, Romanian and Slovenian translate so far. A missing translation falls back to English and never fails a test or
   build. `cargo xtask i18n-report`, part of `cargo xtask ci`, prints per language the interface
   strings its catalog lacks: everything the interface audit saw looked up, the ribbon tabs, command
@@ -35,13 +35,14 @@ native-speaker review (human).
   the per-thread language, command search) use small inline catalogs or the pseudo-language, so
   rewording a translation never fails a test.
   `pl`, `pl-PL` and `pl_PL.UTF-8` system locales pick Polish automatically. `ar` and every `ar-*`
-  locale pick Arabic; the shell mirrors for it (ribbon, panes, File page, dialogs, menus), while the
-  document canvas keeps its own direction.
+  locale pick Arabic; `he`, `he-IL` and `he_IL.UTF-8` pick Hebrew. Both mirror the shell (ribbon,
+  panes, File page, dialogs, menus) through the same right-to-left layout, while the document
+  canvas keeps its own direction.
 - Of the 675 English strings a scan extracts from `tl!(…)` calls and command labels/locations, each
   catalog covers **661 (98%)**. Some newer dialog and pane strings (Equation tab tooltips, Zotero,
   Read Aloud) aren't wrapped in `tl!` yet, so they show in English in every
   language: the true share of visible strings is **~93–95%** (estimated).
-- Pending PRs: Norwegian Bokmål (#208) and Nynorsk (#210), Hebrew with RTL (#20). Arabic UI landed (#1195).
+- Pending PRs: Norwegian Bokmål (#208) and Nynorsk (#210). Arabic UI landed (#1195). Hebrew UI uses that same mirrored shell; the older in-repo catalog draft is #20 and the frame-mirror draft is #1303.
 - **Proofing: English, Polish, Portuguese, Italian, Russian, Czech, Indonesian and Spanish**, chosen per run from its language (`w:lang`, resolved through
   the styles; Review › Language and the status bar set it: a short list, plus Set Proofing
   Language… for every built-in language and every installed or available Language pack language, and Set As Default for the document and future blank documents). Languages without proofing tools get
@@ -63,6 +64,7 @@ shared items below.
 | Spanish | es | ~930; 98% / ~95% | most | Latin ✅ | no | partial | 1–2 |
 | Hindi | hi | 0 | ❌ | Devanagari shaping via HarfRust, untested; no hyphenation | no | none | 4–6 |
 | Arabic | ar | ~2,730 entries (craft-i18n `locales/ar/wordcraft.tsv`); 98% / ~95% | most; newer panes English | shaping, joining, lam-alef, bidi ✅ (#207); letters join across a change of formatting and past hidden or deleted text ✅ (#4093); mirrored UI ✅ (#1195; dialogs, tables and galleries read right to left); Arabic UI font fallback; no kashida; no proofing | no | partial | 2–4 (review + kashida/proofing elsewhere) |
+| Hebrew | he | 2,572 rows (craft-i18n `locales/he/wordcraft.tsv`) | most; newer panes English | bidi ✅ (#207); mirrored UI ✅ (same `rtl` layout as Arabic); Hebrew UI font fallback (embedded craft-fonts `Hebr` face, else an installed sans-serif); no proofing | no | partial | 1–2 (second-speaker review + proofing elsewhere) |
 | French | fr | 2,615 entries (complete catalog) | all | Latin ✅ | no | partial (spelling and suggestions from the French Language pack, elided forms first: `Jadore` → `J'adore`; no grammar marks) | 1–2 (grammar) |
 | Portuguese | pt-br (pt-PT none) | ~930; 98% / ~95% (pt-BR) | most | Latin ✅ | no | partial | 2–4 (pt-BR finish + pt-PT) |
 | Indonesian | id | 0 | ❌ | Latin ✅ | no | none | 3–4 |
@@ -266,7 +268,7 @@ WordCraft keeps 2,54 cm).
 | Item | Hours | Notes |
 |---|---|---|
 | Wrap the remaining English literals in `tl!` and translate them in every catalog | 4–6 | Makes the six partial languages full except script items |
-| Mirrored (right-to-left) interface for Arabic and Hebrew | 8–12 (Arabic done #1195; Hebrew remains) | Ribbon, panes, dialogs, rulers |
+| Mirrored (right-to-left) interface for Arabic and Hebrew | done for the shell (Arabic #1195; Hebrew on the same layout) | Ribbon, panes, dialogs; the document ruler keeps the document's direction |
 | Vertical text, ruby, document grid (Chinese, Japanese, Korean) | counted in [layout-parity.md](layout-parity.md) | |
 | Proofing dictionaries, grammar and hyphenation for the 11 non-English key languages | 20–40 | Open dictionaries only (licence check per dictionary); issues #25, #40, #100. Per-run languages, the Hunspell-style affix engine and the TeX pattern reader landed with Polish, so a language with an open Hunspell dictionary and hyphenation patterns is mostly data plus grammar rules |
 | Native-speaker review of every catalog | human | Swedish: terminology and the running app reviewed (2026-10-13); Italian reviewed (2026-10-14); the others not yet |
@@ -275,6 +277,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Hebrew (`he`) interface: 2,572 catalog rows already in craft-i18n `locales/he/` (Chagai Wild, @WildChagai, with Claude Code; not yet reviewed by a second speaker), `he`/`he-IL` locales, mirrored shell through the Arabic `rtl` layout, Hebrew UI font fallback; document canvas keeps its own direction; no Hebrew proofing |
 | 2026-11-06 | trivial | Arabic: the Home tab's Styles gallery reads from the right: Normal is the rightmost tile and the scroll arrows and More sit at the gallery's left end, as the rest of the mirrored ribbon (#5566); left to right is unchanged; regression test `the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface` |
 | 2026-11-05 | trivial | Arabic letters join across a change of formatting and past hidden or deleted text (#4093) |
 | 2026-11-04 | trivial | Table sort and formulas read the Panamanian balboa's `B/.` around a number (`B/. 1,250.50`, `1,250.50 B/.`), as Word does; `B/.1,250.50` and `B/ 1,250.50` stay text, matching Word 16.0, and the sign is matched only at the ends of the text, so `1/.5` is unchanged |

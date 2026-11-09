@@ -842,3 +842,114 @@ fn the_arabic_interface_is_mirrored_and_never_panics() {
     }
     super::set_current(super::Lang::EN);
 }
+
+/// Ruler digits "1" and "2" as (digit, x, y). The page's own text is an image, so these are the
+/// ruler (and any status-bar count that happens to be a single digit).
+fn ruler_digits(ctx: &egui::Context, app: &mut WordApp, width: f32) -> Vec<(u8, f32, f32)> {
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+    let mut out = Vec::new();
+    for _ in 0..4 {
+        TIME.set(TIME.get() + 0.1);
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(TIME.get()), ..Default::default() };
+        let mut frame = ctx.run_ui(input, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        fn collect(shape: &egui::Shape, out: &mut Vec<(u8, f32, f32)>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == "1" || t.galley.text() == "2" => {
+                    let digit = if t.galley.text() == "1" { 1 } else { 2 };
+                    out.push((digit, t.pos.x, t.pos.y));
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        out.clear();
+        for s in &frame.shapes {
+            collect(&s.shape, &mut out);
+        }
+        frame.textures_delta.clear();
+    }
+    out
+}
+
+/// Hebrew uses the same mirrored layout as Arabic: tabs, the Navigation pane and a dialog read
+/// from the right, and the document ruler (an LTR sample) still numbers left to right.
+#[test]
+fn the_hebrew_interface_is_mirrored_and_the_page_is_not() {
+    let Some(he) = super::Lang::from_code("he") else {
+        eprintln!("skipped: built without the craft-i18n Hebrew catalog (set CRAFT_I18N_DIR to a checkout)");
+        return;
+    };
+    let ctx = egui::Context::default();
+    let mut app = fresh_app(&ctx);
+    app.ui.language = "he".into();
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    assert!(crate::rtl::on());
+    let x_of = |english: &str| {
+        let label = super::tr(he, english);
+        drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap_or_else(|| panic!("{english} is not drawn"))
+    };
+    let (file, home, insert, share) = (x_of("File"), x_of("Home"), x_of("Insert"), x_of("Share"));
+    assert!(file > home && home > insert && insert > 800.0, "tabs: {file} {home} {insert}");
+    assert!(share < 200.0, "Share: {share}");
+    assert!(x_of("Clipboard") > x_of("Font"));
+    // The sample document is left to right. Digits that share a baseline are one ruler. On that
+    // ruler, 1 sits left of 2; a page mirrored with the window would swap them.
+    let marks = ruler_digits(&ctx, &mut app, 1600.0);
+    let pair = marks.iter().find_map(|&(d1, x1, y1)| {
+        if d1 != 1 {
+            return None;
+        }
+        marks.iter().find(|&&(d2, x2, y2)| d2 == 2 && (y1 - y2).abs() < 2.0 && x2 > x1 + 8.0).map(|&(_, x2, _)| (x1, x2))
+    });
+    let Some((one, two)) = pair else {
+        panic!("the ruler did not draw 1 to the left of 2: {marks:?}");
+    };
+    assert!(one < two, "the page ruler reads left to right: 1 at {one}, 2 at {two}");
+    let _ = app.run("view.navigationPane", json!({"value": true}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let nav = drawn.iter().find(|(t, _)| t == super::tr(he, "Navigation")).map(|(_, x)| *x).unwrap();
+    assert!(nav > 1300.0, "Navigation: {nav}");
+    let _ = app.run("view.navigationPane", json!({"value": false}));
+    let _ = app.run("ui.dialog", json!({"name": "paragraph"}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    assert!(drawn.iter().any(|(t, _)| t.contains(super::tr(he, "Paragraph"))), "the Paragraph dialog is drawn in Hebrew");
+    app.dialog = None;
+    let _ = app.run("ui.dialog", json!({"name": "goto"}));
+    let drawn = frame_at(&ctx, &mut app, 1600.0);
+    let x_of = |english: &str| {
+        let label = super::tr(he, english);
+        drawn.iter().find(|(t, _)| t == label).map(|(_, x)| *x).unwrap_or_else(|| panic!("{english} is not drawn"))
+    };
+    assert!(x_of("Go to what:") > x_of("Enter page number:"), "Go To reads from the right");
+    app.dialog = None;
+    super::set_current(super::Lang::EN);
+}
+
+/// A `ui.language` command is applied in the same `logic` pass that then draws. Hebrew faces
+/// have to be installed for that pass: the previous frame's fonts have no Hebrew letters.
+#[test]
+fn hebrew_selected_through_the_control_channel_is_drawn_with_hebrew_faces() {
+    let Some(_) = super::Lang::from_code("he") else {
+        eprintln!("skipped: built without the craft-i18n Hebrew catalog (set CRAFT_I18N_DIR to a checkout)");
+        return;
+    };
+    if wordcraft_fonts::ui_hebrew_fonts().is_empty() && wordcraft_fonts::system_hebrew_ui_font().is_none() {
+        eprintln!("skipped: no embedded or installed Hebrew face");
+        return;
+    }
+    let ctx = egui::Context::default();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut app = fresh_app(&ctx).with_control(rx);
+    frame(&ctx, &mut app);
+    let (req, reply) = crate::control::ControlRequest::new("engine.execute", json!({"command": "ui.language", "params": {"value": "he"}}));
+    tx.send(req).unwrap();
+    let drawn = frame(&ctx, &mut app);
+    assert!(app.fonts_system_hebrew, "the frame that switches to Hebrew installs a Hebrew face");
+    assert!(crate::rtl::on());
+    assert!(drawn.iter().any(|t| t.contains("קובץ")), "File is drawn in Hebrew");
+    let _ = reply.try_recv();
+    super::set_current(super::Lang::EN);
+}
