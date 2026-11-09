@@ -195,20 +195,34 @@ pub(super) fn gridline_segments(page: &Page, all: bool, editing: Option<StoryRef
             rules.entry((horizontal, key(c0))).or_default().push((c0, s0.min(s1), s0.max(s1)));
         }
     }
+    // The rules covering the line at `at`, sorted and merged into disjoint spans. Cells share their
+    // edges, so each distinct line is sorted once (not once per cell edge) and every edge then
+    // binary-searches its start.
+    let mut merged: std::collections::HashMap<(bool, u32), Vec<(f32, f32)>> = std::collections::HashMap::new();
     // The parts of [a, b] along a line at `at` that no rule on the same line covers; `horizontal`
     // picks rules running along x at y = `at`, otherwise along y at x = `at`.
-    let uncovered = |horizontal: bool, at: f32, a: f32, b: f32| -> Vec<(f32, f32)> {
-        let k = key(at);
-        let mut covers: Vec<(f32, f32)> = (k - 1..=k + 1)
-            .filter_map(|k| rules.get(&(horizontal, k)))
-            .flatten()
-            .filter(|(c, _, _)| (c - at).abs() <= ON_EDGE)
-            .map(|&(_, s0, s1)| (s0, s1))
-            .collect();
-        covers.sort_by(|p, q| p.0.total_cmp(&q.0));
+    let mut uncovered = |horizontal: bool, at: f32, a: f32, b: f32| -> Vec<(f32, f32)> {
+        let covers = merged.entry((horizontal, at.to_bits())).or_insert_with(|| {
+            let k = key(at);
+            let mut covers: Vec<(f32, f32)> = (k - 1..=k + 1)
+                .filter_map(|k| rules.get(&(horizontal, k)))
+                .flatten()
+                .filter(|(c, _, _)| (c - at).abs() <= ON_EDGE)
+                .map(|&(_, s0, s1)| (s0, s1))
+                .collect();
+            covers.sort_by(|p, q| p.0.total_cmp(&q.0));
+            let mut spans: Vec<(f32, f32)> = Vec::with_capacity(covers.len());
+            for (c0, c1) in covers {
+                match spans.last_mut() {
+                    Some(last) if c0 <= last.1 + ON_EDGE => last.1 = last.1.max(c1),
+                    _ => spans.push((c0, c1)),
+                }
+            }
+            spans
+        });
         let mut out = Vec::new();
         let mut from = a;
-        for (c0, c1) in covers {
+        for &(c0, c1) in &covers[covers.partition_point(|s| s.1 < a)..] {
             if c0 > from + ON_EDGE {
                 out.push((from, c0.min(b)));
             }
