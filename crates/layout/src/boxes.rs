@@ -632,22 +632,6 @@ pub(crate) fn push_para(
     // The outer edges of the side borders.
     let sides = pl.rp.borders.unwrap_or_default();
     let (lx, rx) = (left - border_room(sides.left), right + border_room(sides.right));
-    // Beside a float, top and bottom borders stop at the line's edges (Word); `start_of` mirrors
-    // the line breaker's edges without floats.
-    let first_left = pl.rp.indent_left + pl.rp.indent_first;
-    let beside = |k: usize| pl.lines.get(k).is_some_and(|l| l.beside);
-    let row0_end = (1..pl.lines.len()).find(|&k| !beside(k)).unwrap_or(pl.lines.len());
-    let start_of = |k: usize| match pl.drop_cap {
-        Some((_, dl, dw)) if dw > 0.0 && k < usize::from(dl) => first_left.max(pl.rp.indent_left) + dw,
-        _ if k < row0_end => first_left,
-        _ => pl.rp.indent_left,
-    };
-    let along = |k: usize, line: &para::Line| {
-        let (lmin, rmax) = if pl.rp.bidi { (pl.rp.indent_right, width - start_of(k)) } else { (start_of(k), width - pl.rp.indent_right) };
-        let l = if line.left > lmin + 0.01 { lx.max(x + line.left) } else { lx };
-        let r = if line.right < rmax - 0.01 { rx.min(x + line.right) } else { rx };
-        if r > l { (l, r) } else { (lx, rx) }
-    };
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
         let (sl, sr) = (lx.min(left - pad), rx.max(right + pad));
@@ -655,6 +639,22 @@ pub(crate) fn push_para(
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
+        // Beside a float, top and bottom borders stop at the line's edges (Word); `start_of` mirrors
+        // the line breaker's edges without floats.
+        let first_left = pl.rp.indent_left + pl.rp.indent_first;
+        let beside = |k: usize| pl.lines.get(k).is_some_and(|l| l.beside);
+        let row0_end = (1..pl.lines.len()).find(|&k| !beside(k)).unwrap_or(pl.lines.len());
+        let start_of = |k: usize| match pl.drop_cap {
+            Some((_, dl, dw)) if dw > 0.0 && k < usize::from(dl) => first_left.max(pl.rp.indent_left) + dw,
+            _ if k < row0_end => first_left,
+            _ => pl.rp.indent_left,
+        };
+        let along = |k: usize, line: &para::Line| {
+            let (lmin, rmax) = if pl.rp.bidi { (pl.rp.indent_right, width - start_of(k)) } else { (start_of(k), width - pl.rp.indent_right) };
+            let l = if line.left > lmin + 0.01 { lx.max(x + line.left) } else { lx };
+            let r = if line.right < rmax - 0.01 { rx.min(x + line.right) } else { rx };
+            if r > l { (l, r) } else { (lx, rx) }
+        };
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         // A row split by a float is several lines; the rule runs along each.
         let first_row = l0..(l0 + 1..l1).find(|&k| !beside(k)).unwrap_or(l1);
