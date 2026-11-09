@@ -51,7 +51,7 @@ macro_rules! style_params {
             "{",
             $head,
             r#", "basedOn"?: string, "<part>"?: Part for each part name (wholeTable, headerRow|firstRow, lastRow|totalRow, firstColumn|firstCol, lastColumn|lastCol, bandedRows|band1Horz, band2Horz, bandedColumns|band1Vert, band2Vert, nwCell, neCell, swCell, seCell), "part"?: part name (the Part fields then sit at the top level), "parts"?: [Part & {"part": name}], "bandSize"?: n (rows per band), "para"?: ParaProps, "apply"?: bool}"#,
-            r#" where Part = {"fill"?: "RRGGBB" | null, "font"?: string | null (null or "": inherited), "size"?: pt, "bold"?: bool, "italic"?: bool, "underline"?: bool | "single" | "double" | "thick" | "words" | "dotted" | "dash" | "wave" | "none", "color"?: "RRGGBB" | null, "align"?: "left" | "center" | "right" | "justify" | null, "vAlign"?: "top" | "center" | "bottom" | null, "cellAlign"?: "topLeft" | "topCenter" | "topRight" | "centerLeft" | "center" | "centerRight" | "bottomLeft" | "bottomCenter" | "bottomRight" | null (both alignments), "borders"?: bool | null (true: single lines on every edge, false: none, null: inherit) | Edges | [Edges], "borderColor"?: "RRGGBB", "borderWidth"?: pt}"#,
+            r#" where Part = {"fill"?: "RRGGBB" | null (no colour, covering a based-on style's) | "inherit" (the based-on style's),"font"?: string | null (null or "": inherited), "size"?: pt, "bold"?: bool, "italic"?: bool, "underline"?: bool | "single" | "double" | "thick" | "words" | "dotted" | "dash" | "wave" | "none", "color"?: "RRGGBB" | null, "align"?: "left" | "center" | "right" | "justify" | null, "vAlign"?: "top" | "center" | "bottom" | null, "cellAlign"?: "topLeft" | "topCenter" | "topRight" | "centerLeft" | "center" | "centerRight" | "bottomLeft" | "bottomCenter" | "bottomRight" | null (both alignments), "borders"?: bool | null (true: single lines on every edge, false: none, null: inherit) | Edges | [Edges], "borderColor"?: "RRGGBB", "borderWidth"?: pt}"#,
             r#" and Edges = {"edges"?: "all" | "none" | "outside" | "inside" | "top" | "bottom" | "left" | "right" | "insideH" | "insideV" (default all), "style"?: "single" | "double" | "dotted" | "dashed" | "dotDash" | "thick" | "triple" | "wave" | "none", "width"?: pt, "color"?: "RRGGBB" | null}"#
         )
     };
@@ -342,12 +342,19 @@ const PART_FIELDS: [&str; 13] =
 /// Apply one part's params `r` to part `part` of `st`.
 fn edit_part(st: &mut Style, part: TablePart, r: &Value) -> Result<(), CmdError> {
     let mut f = st.table_part(part);
+    let inherit = r.get("fill").and_then(Value::as_str) == Some("inherit");
     region(r, &mut f)?;
-    let no_colour = r.get("fill").is_some() && f.fill.is_none();
+    let no_colour = r.get("fill").is_some() && f.fill.is_none() && !inherit;
     st.set_table_part(part, f);
     // No Color covers a based-on style's colour, and the parts below this one, as in Word.
     if no_colour {
         st.table.get_or_insert_default().fills_off.insert(part, FillOff::Auto);
+    }
+    // Inherit gives up the part's own colour or No Color, so the based-on style's shows again.
+    if inherit {
+        let mut parts = st.table.take().unwrap_or_default();
+        parts.fills_off.remove(&part);
+        st.table = (parts != TableStyleParts::default()).then_some(parts);
     }
     Ok(())
 }
@@ -462,8 +469,10 @@ fn region(r: &Value, f: &mut PartFormat) -> Result<(), CmdError> {
         return Err(CmdError::Params("a part is an object".into()));
     }
     let chr = &mut f.chr;
-    if r.get("fill").is_some() {
-        f.fill = color_param(r, "fill")?;
+    match r.get("fill") {
+        None => {}
+        Some(Value::String(s)) if s == "inherit" => f.fill = None,
+        Some(_) => f.fill = color_param(r, "fill")?,
     }
     if r.get("color").is_some() {
         chr.color = color_param(r, "color")?.map(TextColor::Rgb);

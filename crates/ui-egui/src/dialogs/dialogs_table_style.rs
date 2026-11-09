@@ -11,7 +11,7 @@ use wordcraft_doc::styles::{FillOff, PartFormat, PartSet, TablePart, TableStyleP
 use wordcraft_doc::{CharProps, Rgb, TextColor};
 use wordcraft_engine::cmd::table_style::CELL_ALIGNS;
 
-use super::chrome::color_field;
+use super::chrome::color_field_with;
 use crate::WordApp;
 use crate::dialogs::{Dialog, buttons, color_menu};
 use crate::theme::Tokens;
@@ -20,8 +20,12 @@ use crate::theme::Tokens;
 /// the parts below show, this covers them.
 const NO_FILL: &str = "none";
 
+/// A part's fill in the dialog when Inherit was chosen: the part gives up its own colour or No
+/// Color, and takes what the based-on style gives it.
+const INHERIT_FILL: &str = "inherit";
+
 /// One table style part in the dialog, as it resolves through the based-on chain: colours are
-/// hex, empty for none; a fill can also be [`NO_FILL`].
+/// hex, empty for none; a fill can also be [`NO_FILL`] or [`INHERIT_FILL`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRegion {
@@ -195,7 +199,11 @@ pub fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
         v["color"] = color(&r.color);
     }
     if r.fill != basis.fill {
-        v["fill"] = if r.fill == NO_FILL { Value::Null } else { color(&r.fill) };
+        v["fill"] = match r.fill.as_str() {
+            NO_FILL => Value::Null,
+            INHERIT_FILL => json!(INHERIT_FILL),
+            c => color(c),
+        };
     }
     if r.align != basis.align {
         v["cellAlign"] = if r.align.is_empty() { Value::Null } else { json!(r.align) };
@@ -579,7 +587,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         ui.horizontal(|ui| {
             ui.push_id("tstyle_fill", |ui| {
                 ui.label(tl!("Fill color:"));
-                color_field(ui, &theme, &mut r.fill, "No Color", NO_FILL);
+                color_field_with(ui, &theme, &mut r.fill, &[("No Color", NO_FILL), ("Inherit", INHERIT_FILL)]);
             });
             ui.add_space(12.0);
             ui.label(tl!("Alignment:"));
@@ -735,6 +743,30 @@ mod tests {
         let again = table_regions(&app, "Parts");
         assert_eq!(again[part_index(TablePart::FirstRow)].fill, NO_FILL);
         assert!(table_style_params(Some("Parts"), "Parts", "Table Grid", &again, &again).get("firstRow").is_none());
+    }
+
+    /// Inherit gives up a derived style's own colour, or its No Color, for the based-on style's.
+    #[test]
+    fn inherit_takes_the_based_on_styles_colour_again() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("table.newStyle", json!({"name": "Base", "apply": false, "firstRow": {"fill": "FF0000"}})).unwrap();
+        app.run("table.newStyle", json!({"name": "Child", "apply": false, "basedOn": "Base", "firstRow": {"fill": "00AA00"}})).unwrap();
+        let header = |app: &WordApp| app.session.doc.styles.table_style("Child").unwrap().parts.fill_over(TablePart::FirstRow, None);
+        let pick = |app: &mut WordApp, fill: &str| {
+            let basis = table_regions(app, "Child");
+            let mut regions = basis.clone();
+            regions[part_index(TablePart::FirstRow)].fill = fill.to_string();
+            app.run("table.modifyStyle", table_style_params(Some("Child"), "Child", "Base", &regions, &basis)).unwrap();
+        };
+        let (red, green) = (Some(Rgb(0xFF, 0, 0)), Some(Rgb(0, 0xAA, 0)));
+        assert_eq!(header(&app), green);
+        pick(&mut app, INHERIT_FILL);
+        assert_eq!(header(&app), red, "its own colour given up");
+        pick(&mut app, NO_FILL);
+        assert_eq!(header(&app), None, "No Color covers the based-on style's");
+        pick(&mut app, INHERIT_FILL);
+        assert_eq!(header(&app), red, "its No Color given up");
+        assert!(!app.session.doc.styles.get("Child").unwrap().table.as_ref().is_some_and(|t| t.fills_off.contains_key(&TablePart::FirstRow)));
     }
 
     /// The border picker sets and toggles edges with the pen, and only changed edges are sent.

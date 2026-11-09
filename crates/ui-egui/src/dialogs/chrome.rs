@@ -9,6 +9,12 @@ pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut 
 /// A colour field: a swatch and a drop-down with `none_label` (which sets `none_value`), the
 /// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`.
 pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_label: &str, none_value: &str) {
+    color_field_with(ui, theme, value, &[(none_label, none_value)]);
+}
+
+/// A colour field with several choices that aren't colours, as (label, value). A `value` that isn't
+/// a colour shows its choice's label, or the first choice's when it has none.
+pub(crate) fn color_field_with(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, choices: &[(&str, &str)]) {
     ui.horizontal(|ui| {
         let id = ui.scope_id().with("colorField");
         crate::colors::take_field(ui.ctx(), id, value);
@@ -24,11 +30,18 @@ pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut
             }
         }
         ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let label = if c.is_some() { value.clone() } else { tl!(none_label).to_string() };
+        let label = if c.is_some() {
+            value.clone()
+        } else {
+            let shown = choices.iter().find(|(_, v)| *v == value.as_str()).or(choices.first());
+            shown.map(|(l, _)| tl!(*l).to_string()).unwrap_or_default()
+        };
         ui.menu_button(label, |ui| {
-            if ui.button(tl!(none_label)).clicked() {
-                *value = none_value.to_string();
-                ui.close();
+            for (label, choice) in choices {
+                if ui.button(tl!(*label)).clicked() {
+                    *value = choice.to_string();
+                    ui.close();
+                }
             }
             crate::colors::field_menu(ui, theme, id, value);
         });
