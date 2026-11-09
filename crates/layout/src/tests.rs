@@ -15039,6 +15039,44 @@ fn header_margin_tracks_body_bottom() {
     }
 }
 
+/// A tall picture bottom-aligned on the Margin in the header: the rendered body bottom (a footer
+/// taller than its margin) lifts it into the header's lines. The body top was measured with the
+/// declared margins, where it stays clear of them, so a picture that wraps text keeps that
+/// placement and the header's lines stay above the body; one behind the text follows the body.
+#[test]
+fn header_margin_wrap_keeps_measured_header_height() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    for wrap in [Wrap::BehindText, Wrap::Square] {
+        let mut doc = Document::from_text("Body");
+        let s = &mut doc.last_section;
+        s.margin_top = 20.0;
+        s.margin_bottom = 20.0;
+        s.header = 36.0;
+        s.footer = 36.0;
+        let (pw, ph) = (s.page_w, s.page_h);
+        // Five 10 pt header lines from 36 to 86; the footer's five lines top at ph - 86. Bottom
+        // on the declared margin the picture's top is 116, below the lines; on the footer's top
+        // it is 50, across them.
+        let h = ph - 136.0;
+        let mut hp = boundary_header_para();
+        let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Margin, v_align: Some(FloatAlign::End), ..Default::default() };
+        hp.insert_object(0, rect_shape(pw, h, float), &Default::default()).unwrap();
+        let header = doc.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        doc.last_section.headers.default = Some(header);
+        let footer = doc.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(boundary_header_para())]);
+        doc.last_section.footers.default = Some(footer);
+        let laid = lay(&doc);
+        let page = &laid.pages[0];
+        assert_eq!((page.body.y, page.body.bottom()), (86.0, ph - 86.0), "{wrap:?}: body {:?}", page.body);
+        let tops: Vec<f32> = page.header.iter().filter_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).collect();
+        assert_eq!(tops, [36.0], "{wrap:?}: the header's lines stay where the body top was measured");
+        let expected = if wrap == Wrap::Square { ph - 20.0 - h } else { page.body.bottom() - h };
+        let rects = shapes(&page.header);
+        assert_eq!(rects.len(), 1);
+        assert!((rects[0].y - expected).abs() < 0.01, "{wrap:?}: {:?}, expected {expected}", rects[0]);
+    }
+}
+
 #[test]
 fn header_boundary_obstacle() {
     use wordcraft_doc::para::Anchor;

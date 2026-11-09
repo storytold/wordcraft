@@ -361,9 +361,22 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
                 mirror: ctx.mirror,
             };
             let base = hf.defining_width(false, page.section, hid);
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, frame.margin_area, |ctx| {
-                with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))).items)
-            });
+            let lay_header = |ctx: &mut Ctx, frame: PageFrame| {
+                with_pin(ctx, id, sect, page.number, frame.margin_area, |ctx| {
+                    with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))))
+                })
+            };
+            let (mut laid, mut behind, mut front) = lay_header(ctx, frame);
+            // The body top was measured with the declared margins (`body_top_for`). If the rendered
+            // area moves a wrapping Margin-anchored object into the header's text and the header
+            // grows past that body top, keep the measured layout: its text can't run into the body.
+            if sect.header + laid.height > page.body.y + 0.01 {
+                let measured = lay_header(ctx, PageFrame { margin_area: None, ..frame });
+                if measured.0.height < laid.height - 0.01 {
+                    (laid, behind, front) = measured;
+                }
+            }
+            let mut items = laid.items;
             for it in &mut items {
                 it.translate(x, sect.header);
             }
