@@ -8,6 +8,8 @@ static site in `wordcraft-web-<version>/`:
 | `index.html` | The page. It loads everything through relative URLs. |
 | `wordcraft-web-<hash>.js` | wasm-bindgen glue (generated, ES module) |
 | `wordcraft-web-<hash>_bg.wasm` | The app, about 13 MB, or 5 MB with compression |
+| `manifest.webmanifest` | Install metadata and the document types the installed app opens |
+| `icons/256x256/`, `icons/512x512/` | The app icons the manifest names |
 | `_headers`, `.htaccess` | Sample header rules for Netlify/Cloudflare Pages and Apache |
 
 There is no server-side code. Upload the folder's contents anywhere that serves static files.
@@ -16,19 +18,23 @@ There is no server-side code. Upload the folder's contents anywhere that serves 
 
 All URLs in `index.html` are relative (`public_url = "./"` in `apps/wordcraft-web/Trunk.toml`),
 so the site works at a domain root (`https://example.com/`), under a prefix
-(`https://example.com/tools/wordcraft/`) and from a CDN bucket. The asset names carry a content
-hash, so they can be cached forever. Only `index.html` needs revalidation.
+(`https://example.com/tools/wordcraft/`) and from a CDN bucket. Most asset names carry a content
+hash, so they can be cached forever. Only `index.html`, `manifest.webmanifest` and the icons in
+`icons/` (fixed names, so a release that redraws them reuses the path) need revalidation. The
+manifest has no `id`, so its relative `start_url` names the app: copies under different prefixes
+install as different apps.
 
 ## Required server settings
 
 - **MIME type:** serve `.wasm` as `application/wasm`. Browsers refuse to stream-compile it under
-  any other type, and the app then loads slowly or not at all. Serve `.js` as `text/javascript`.
-  Most hosts already do both. For nginx, check that `mime.types` has `application/wasm wasm;`.
+  any other type, and the app then loads slowly or not at all. Serve `.js` as `text/javascript`
+  and `.webmanifest` as `application/manifest+json`. Most hosts already do all three. For nginx,
+  check that `mime.types` has `application/wasm wasm;` and `application/manifest+json webmanifest;`.
 - **Compression:** turn on gzip or Brotli for `.wasm`, `.js` and `.html`. That takes the
   download from about 13 MB to about 5 MB. You can also precompress (`brotli -k *.wasm`) and let
   the server send `Content-Encoding: br`.
 - **Caching:** `Cache-Control: public, max-age=31536000, immutable` on the hashed `.wasm` and
-  `.js` files, and `no-cache` on `index.html`.
+  `.js` files, and `no-cache` on `index.html`, `manifest.webmanifest` and `icons/`.
 - **HTTPS:** WebGPU (and the clipboard) only work in a secure context, which means `https://`
   or `http://localhost`. Over plain HTTP elsewhere, the app falls back to WebGL2.
 - **No special isolation headers:** WordCraft doesn't use `SharedArrayBuffer`, so it doesn't
@@ -40,15 +46,36 @@ nginx example:
 
 ```nginx
 location /wordcraft/ {
-    types { application/wasm wasm; text/javascript js; text/html html; }
+    types { application/wasm wasm; text/javascript js; text/html html; application/manifest+json webmanifest; image/png png; image/x-icon ico; }
     gzip on;
     gzip_types application/wasm text/javascript text/html;
     location ~* \.(wasm|js)$ { add_header Cache-Control "public, max-age=31536000, immutable"; }
-    location ~* index\.html$ { add_header Cache-Control "no-cache"; }
+    location ~* (index\.html|manifest\.webmanifest|/icons/.*\.png)$ { add_header Cache-Control "no-cache"; }
 }
 ```
 
 Local test: `python3 -m http.server 8765` inside the folder, then open http://localhost:8765/.
+
+The sample `_headers` rules start at the site root (`/manifest.webmanifest`), as Netlify and
+Cloudflare Pages match them against the request path. Under a prefix, put the prefix in front of
+each path (`/tools/wordcraft/manifest.webmanifest`).
+
+## Installing it as an app
+
+Over HTTPS, Chrome and Edge offer to install the page as an app (the install icon in the address
+bar, or the menu's Install WordCraft). On ChromeOS it then sits in the launcher, and on Windows,
+macOS and Linux in the system's app list, and opens in a window of its own.
+
+The installed app opens Word, OpenDocument, RTF, Markdown, LaTeX and HTML documents from the
+system's file manager (Open with › WordCraft). Each file opens beside the documents already open,
+as a dropped file does; none replaces unsaved work. The app reads the file but can't write to it:
+Save asks where to save, as it does for any document opened in the browser. Files open one at a
+time, each up to 256 MB; at most 20 wait to be opened. Once the last has opened, the status bar
+names the files that couldn't be read or opened and says how many were left out.
+
+Browsers without installable apps or file handling (Firefox, Safari) run the page as before. An
+app run by a host page (`?host=parent` in an iframe, or `data-host="page"`) doesn't take files
+from the system: its host page sends them.
 
 ## Embedding in a page (iframe)
 

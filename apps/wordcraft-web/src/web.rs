@@ -14,9 +14,12 @@ const DOC_EXTS: &[&str] =
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
 mod font_store;
+mod launch;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
 
+/// Start the app on the page's canvas: preferences, the unsaved-changes guard, the host bridge
+/// or (standalone) files the system launches the app with, then the eframe runner.
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
     wasm_bindgen_futures::spawn_local(async {
@@ -77,6 +80,14 @@ pub fn start() {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
                     let control = crate::api::install(cc.egui_ctx.clone());
+                    // A host page decides which documents its frame edits, so only a standalone
+                    // (installed) app takes files from the operating system.
+                    let launched = crate::launched::Shared::default();
+                    if app_bridge.is_none()
+                        && let Err(e) = launch::listen(launched.clone(), cc.egui_ctx.clone())
+                    {
+                        log::error!("opening files from the system is unavailable: {e}");
+                    }
                     let mut app = WordApp::new(session, services).with_control(control);
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
@@ -104,7 +115,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, launched, messages, prefs }))
                 }),
             )
             .await;
@@ -133,10 +144,11 @@ fn query_param(key: &str) -> Option<String> {
 }
 
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
-/// and feed them through the inbox.
+/// and feed them through the inbox, and to open the files the system launched it with.
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
+    launched: crate::launched::Shared,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
 }
@@ -151,13 +163,16 @@ fn stored_prefs() -> Option<String> {
 }
 
 impl eframe::App for WebShell {
-    /// Runs one browser frame: forwards queued host messages to the status bar, advances the app,
-    /// then writes changed preferences to browser storage immediately, because a reload or closed
-    /// tab never runs the exit path.
+    /// Runs one browser frame: forwards queued host messages to the status bar, opens the next
+    /// launched file, advances the app, then writes changed preferences to browser storage
+    /// immediately, because a reload or closed tab never runs the exit path.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
             self.app.status(msg);
+        }
+        if crate::launched::open_next(&self.launched, &mut self.app) {
+            ctx.request_repaint();
         }
         self.app.logic(ctx);
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
