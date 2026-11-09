@@ -106,10 +106,14 @@ impl Server {
     /// the protocol stream).
     pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         loop {
-            let reply = match read_bounded_line(&mut input, MAX_REQUEST_LINE)? {
-                BoundedLine::Eof => break,
-                BoundedLine::Line(line) => self.handle_line(&line),
-                BoundedLine::TooLong => Some(error(Value::Null, INVALID_REQUEST, "request line too long").to_string()),
+            let reply = match read_bounded_line(&mut input, MAX_REQUEST_LINE) {
+                Ok(BoundedLine::Eof) => break,
+                Ok(BoundedLine::Line(line)) => self.handle_line(&line),
+                Ok(BoundedLine::TooLong) => Some(error(Value::Null, INVALID_REQUEST, "request line too long").to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                    Some(error(Value::Null, PARSE_ERROR, "request line is not UTF-8").to_string())
+                }
+                Err(e) => return Err(e),
             };
             if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;

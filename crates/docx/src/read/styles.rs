@@ -2,6 +2,7 @@ use super::{
     AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, Style, StyleKind, StyleSheet, TablePart, TableStyleParts,
     VAlign, flag, int, props, tw, u32_of,
 };
+use crate::units::tw_i16;
 use std::sync::Arc;
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
@@ -317,12 +318,12 @@ impl Reader<'_> {
             lv.align = props::align(j);
         }
         if let Some(ind) = l.child("w:pPr").and_then(|p| p.child("w:ind")) {
-            if let Some(v) = tw(ind, "w:left").or_else(|| tw(ind, "w:start")) {
+            if let Some(v) = tw_i16(ind, "w:left").or_else(|| tw_i16(ind, "w:start")) {
                 lv.indent = v;
             }
-            if let Some(h) = tw(ind, "w:hanging") {
+            if let Some(h) = tw_i16(ind, "w:hanging") {
                 lv.hanging = h;
-            } else if let Some(f) = tw(ind, "w:firstLine") {
+            } else if let Some(f) = tw_i16(ind, "w:firstLine") {
                 lv.hanging = -f;
             }
         }
