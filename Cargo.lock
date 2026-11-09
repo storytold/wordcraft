@@ -3059,9 +3059,9 @@ dependencies = [
 
 [[package]]
 name = "libthai"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "389875fad597b2a311057b674ac9cf16070d8732fae0b4e1f20762d44ccd44a6"
+checksum = "05c3daf7ed676b6bed645b0c6ae2c238e2bad1e1c1ab09f9cf745d1ee8a16ee0"
 
 [[package]]
 name = "linebender_resource_handle"
