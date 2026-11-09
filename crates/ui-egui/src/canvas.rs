@@ -1774,12 +1774,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 );
                 if !new.is_empty() {
                     app.canvas.ime_faces.extend(new);
-                    crate::theme::install_fonts_language_extra(
+                    // The same interface fonts as the last install, the composition's faces added.
+                    crate::theme::install_fonts_language_thai(
                         ui.ctx(),
-                        app.fonts_hans,
-                        app.fonts_korean,
-                        app.fonts_hant,
+                        (app.fonts_hans, app.fonts_korean, app.fonts_hant),
                         app.fonts_system_cjk,
+                        app.fonts_system_arabic,
+                        app.fonts_thai,
                         &app.canvas.ime_faces,
                     );
                     ui.ctx().request_repaint();

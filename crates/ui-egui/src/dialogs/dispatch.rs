@@ -1,7 +1,7 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
-use super::font::{apply_font, font_box, font_sample_box, font_sample_props, sample_paper};
+use super::font::{apply_font, char_spacing_field, font_box, font_sample_box, font_sample_props, sample_paper};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
@@ -175,8 +175,8 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
         });
         t.row(|r| {
-            let spacing_label = r.cell(|ui| ui.label(tl!("Spacing (pt):")));
-            r.cell(|ui| ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0)).labelled_by(spacing_label.id));
+            let spacing_label = r.cell(|ui| ui.label(tl!("Spacing:")));
+            r.cell(|ui| char_spacing_field(ui, spacing, &spacing_label));
         });
         t.row(|r| {
             let label = tl!("Kerning for fonts:");
@@ -293,7 +293,14 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     }
                 }
             });
-            const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+            const ALIGNS: [(&str, &str); 6] = [
+                ("left", "Left"),
+                ("center", "Center"),
+                ("right", "Right"),
+                ("justify", "Justify"),
+                ("distribute", "Distributed"),
+                ("thaiDistribute", "Thai Distributed"),
+            ];
             ui.horizontal(|ui| {
                 let align_label = ui.label(tl!("Alignment:"));
                 let shown =

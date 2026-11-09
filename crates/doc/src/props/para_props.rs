@@ -11,6 +11,10 @@ pub enum Align {
     Right,
     Justify,
     Distribute,
+    /// Thai Distributed (`w:jc="thaiDistribute"`): every line that wraps, or ends with a manual
+    /// line break (Shift+Enter), is spread across the gaps between its characters to reach both
+    /// margins; the paragraph's last line keeps its natural spacing.
+    ThaiDistribute,
 }
 
 impl Align {

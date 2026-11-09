@@ -500,9 +500,68 @@ pub fn install_fonts_language_arabic(
     system_arabic: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
+    install_fonts_language_thai(ctx, (prefer_hans, prefer_korean, prefer_hant), system_cjk, system_arabic, false, faces);
+}
+
+/// [`install_fonts_language_arabic`], with `thai` for a Thai interface: the Thai interface faces
+/// ([`thai_interface_faces`]) go first, so Sarabun draws the whole interface when it is installed.
+pub fn install_fonts_language_thai(
+    ctx: &egui::Context,
+    (prefer_hans, prefer_korean, prefer_hant): (bool, bool, bool),
+    system_cjk: bool,
+    system_arabic: bool,
+    thai: bool,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+) {
     let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
+    if thai && let Some((regular, heading)) = thai_interface_faces(wordcraft_fonts::FontDb::global()) {
+        add_primary_faces(&mut fonts, &regular, &heading);
+    }
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
+}
+
+/// The family a Thai interface is drawn in when it is installed: Sarabun (Cadson Demak, OFL), a
+/// Thai and Latin family made for screen and documents alike. Not bundled: font files belong in
+/// craft-fonts, so it is used from the system.
+pub const THAI_UI_FAMILY: &str = "Sarabun";
+
+/// Faces for a Thai interface: (text, headings). Sarabun's Regular and its SemiBold (else Medium,
+/// else Bold, else Regular) when Sarabun is installed; `None` otherwise. Only Sarabun goes first:
+/// the first face sets every row's height, and Sarabun's line (1.30 em) is close to Inter's, while
+/// Noto Sans Thai's (1.51 em, room for stacked marks) made ribbon groups run into their labels.
+/// Without Sarabun the craft-fonts Thai face and the document fallbacks draw Thai after Inter.
+pub fn thai_interface_faces(db: &wordcraft_fonts::FontDb) -> Option<(Arc<wordcraft_fonts::FontFace>, Arc<wordcraft_fonts::FontFace>)> {
+    if db.has_family(THAI_UI_FAMILY) {
+        let regular = db.face(THAI_UI_FAMILY, "Regular");
+        if regular.named(THAI_UI_FAMILY) && regular.covers('ก') {
+            let heading = ["SemiBold", "Medium", "Bold"]
+                .into_iter()
+                .map(|style| (style, db.face(THAI_UI_FAMILY, style)))
+                .find(|(style, f)| f.named(THAI_UI_FAMILY) && f.style.replace(' ', "").eq_ignore_ascii_case(style))
+                .map_or_else(|| regular.clone(), |(_, f)| f);
+            return Some((regular, heading));
+        }
+    }
+    None
+}
+
+/// Put `regular` first in the interface's text families and `heading` first in the semibold one.
+pub fn add_primary_faces(fonts: &mut FontDefinitions, regular: &Arc<wordcraft_fonts::FontFace>, heading: &Arc<wordcraft_fonts::FontFace>) {
+    let mut add = |f: &Arc<wordcraft_fonts::FontFace>| {
+        let name = format!("primary {} {} {}", f.family, f.style, f.id());
+        let mut data = FontData::from_owned(f.data().to_vec());
+        data.index = f.index();
+        fonts.font_data.insert(name.clone(), Arc::new(data));
+        name
+    };
+    let (text, head) = (add(regular), add(heading));
+    for (fam, name) in [(FontFamily::Proportional, &text), (FontFamily::Name("medium".into()), &text), (FontFamily::Name("semibold".into()), &head)] {
+        if let Some(v) = fonts.families.get_mut(&fam) {
+            v.retain(|n| n != name);
+            v.insert(0, name.clone());
+        }
+    }
 }
 
 /// Add `faces` after every other font of the interface families.
@@ -612,6 +671,11 @@ pub fn font_definitions_language_arabic(
     }
     // Georgian has no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts Geor face.
     for f in wordcraft_fonts::georgian_fonts() {
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    // Thai likewise: the craft-fonts Thai face, for "ไทย" in the language list and for a Thai
+    // interface when Sarabun isn't installed ([`thai_interface_faces`] puts Sarabun first).
+    for f in wordcraft_fonts::thai_fonts() {
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
     // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
@@ -903,6 +967,28 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 
 #[cfg(test)]
 mod tests {
+    /// A Thai interface's faces go first in every interface text family, ahead of Inter, so an
+    /// installed Sarabun draws the whole interface; the headings family takes the heading face.
+    #[test]
+    fn thai_interface_faces_come_first() {
+        let db = wordcraft_fonts::FontDb::global();
+        let regular = db.face("Source Sans 3", "Regular");
+        let heading = db.face("Source Sans 3", "Bold");
+        use super::{FontFamily, add_primary_faces, font_definitions};
+        let mut fonts = font_definitions(false, false);
+        add_primary_faces(&mut fonts, &regular, &heading);
+        add_primary_faces(&mut fonts, &regular, &heading);
+        let first = |fam: FontFamily| fonts.families.get(&fam).and_then(|v| v.first().cloned()).unwrap_or_default();
+        let text = format!("primary {} {} {}", regular.family, regular.style, regular.id());
+        let head = format!("primary {} {} {}", heading.family, heading.style, heading.id());
+        assert_eq!(first(FontFamily::Proportional), text);
+        assert_eq!(first(FontFamily::Name("medium".into())), text);
+        assert_eq!(first(FontFamily::Name("semibold".into())), head);
+        let count = fonts.families.get(&FontFamily::Proportional).map_or(0, |v| v.iter().filter(|n| **n == text).count());
+        assert_eq!(count, 1, "installing twice lists the face once");
+        assert!(fonts.font_data.contains_key(&text) && fonts.font_data.contains_key(&head));
+    }
+
     use std::collections::BTreeSet;
 
     /// Ink of a line of interface text at 1.45x (a 145 % desktop) in `appearance`, drawn in the

@@ -698,6 +698,7 @@ impl Writer {
             Some(Align::Right) => out.push_str("\\qr"),
             Some(Align::Justify) => out.push_str("\\qj"),
             Some(Align::Distribute) => out.push_str("\\qd"),
+            Some(Align::ThaiDistribute) => out.push_str("\\qt"),
             _ => out.push_str("\\ql"),
         }
         if p.page_break {

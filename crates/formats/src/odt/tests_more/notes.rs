@@ -191,3 +191,25 @@ fn citations_are_numbered_as_the_document_numbers_its_notes() {
     // The numbering changed: its notes' paragraph written from the model, numbered anew.
     assert_eq!(citations(&d, false), ["C", "D", "1"]);
 }
+
+#[test]
+fn citations_agree_with_a_numbering_odf_cannot_name() {
+    // `style:num-format` has no Thai counting (§19.500), so the notes are declared decimal and
+    // their citations must say 1, 2, not หนึ่ง, สอง: a reader keeping the citation would otherwise
+    // show Thai words and renumber in digits. Reopened, the file numbers its notes as it said.
+    use wordcraft_doc::section::NumFormat;
+    let mut d = import(&body(r#"<text:p>One<text:note text:note-class="footnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>a</text:p></text:note-body></text:note> two<text:note text:note-class="footnote"><text:note-citation>x</text:note-citation><text:note-body><text:p>b</text:p></text:note-body></text:note></text:p>"#)).unwrap();
+    d.settings.footnote_format = NumFormat::ThaiCounting;
+    let saved = export(&d).unwrap();
+    let content = crate::odt::tests::entry(&saved, "content.xml");
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    let citations: Vec<_> = content.split("<text:note-citation>").skip(1).filter_map(|s| s.split('<').next()).collect();
+    assert_eq!(citations, ["1", "2"], "{content}");
+    assert!(styles.contains(r#"<text:notes-configuration text:note-class="footnote" style:num-format="1""#), "{styles}");
+    // The round trip: read back, the notes are decimal and written again with the same citations.
+    let back = import(&saved).unwrap();
+    assert_eq!(back.settings.footnote_format, NumFormat::Decimal);
+    let again = crate::odt::tests::entry(&crate::odt::tests::export_model(&back).unwrap(), "content.xml");
+    let again: Vec<_> = again.split("<text:note-citation>").skip(1).filter_map(|s| s.split('<').next()).collect();
+    assert_eq!(again, citations);
+}

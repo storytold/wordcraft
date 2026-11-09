@@ -289,14 +289,16 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai letters
-    /// and counting, Vietnamese, text amounts) show decimal, as do values past a sequence's end
-    /// (the 21st item of ①…⑳). Thai numbers are the decimal number in Thai digits (๑, ๒ … ๑๐).
+    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai letters,
+    /// Vietnamese, text amounts) show decimal, as do values past a sequence's end (the 21st item
+    /// of ①…⑳). Thai numbers are the decimal number in Thai digits (๑, ๒ … ๑๐); Thai counting is
+    /// the number in Thai words (หนึ่ง, สอง … สิบเอ็ด, ยี่สิบ).
     pub fn format(self, n: u32) -> String {
         use crate::cjk_numbers as cjk;
         match self {
             NumFormat::DecimalZero => format!("{n:02}"),
             NumFormat::ThaiNumbers => thai_digits(n),
+            NumFormat::ThaiCounting => thai_counting(n),
             NumFormat::UpperRoman => roman(n).to_uppercase(),
             NumFormat::LowerRoman => roman(n),
             NumFormat::UpperLetter => letters(n).to_uppercase(),
@@ -350,7 +352,6 @@ impl NumFormat {
             | NumFormat::HindiNumbers
             | NumFormat::HindiCounting
             | NumFormat::ThaiLetters
-            | NumFormat::ThaiCounting
             | NumFormat::BahtText
             | NumFormat::DollarText => n.to_string(),
         }
@@ -360,6 +361,49 @@ impl NumFormat {
 /// `n` in Thai digits, ๐ (U+0E50) to ๙ (#5757).
 fn thai_digits(n: u32) -> String {
     n.to_string().chars().filter_map(|c| c.to_digit(10).and_then(|d| char::from_u32(0x0E50 + d))).collect()
+}
+
+/// `n` in Thai words (`thaiCounting`): หนึ่ง, สอง … สิบ, สิบเอ็ด, ยี่สิบ, ยี่สิบเอ็ด, หนึ่งร้อย,
+/// หนึ่งร้อยเอ็ด, หนึ่งพัน … หนึ่งล้าน. A final one after a higher digit is เอ็ด, two tens are ยี่สิบ
+/// and one ten is สิบ; groups of six digits repeat before ล้าน (สิบเอ็ดล้าน). Zero is ศูนย์.
+pub fn thai_counting(n: u32) -> String {
+    const DIGITS: [&str; 10] = ["", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
+    const PLACES: [&str; 6] = ["", "สิบ", "ร้อย", "พัน", "หมื่น", "แสน"];
+    /// Words for 0 < n < 1,000,000; `higher` when a digit (a million) comes before it.
+    fn below_million(n: u32, higher: bool) -> String {
+        let mut out = String::new();
+        let digits: Vec<u32> = n.to_string().chars().filter_map(|c| c.to_digit(10)).collect();
+        let len = digits.len();
+        for (i, &d) in digits.iter().enumerate() {
+            let place = len - 1 - i;
+            if d == 0 {
+                continue;
+            }
+            match (place, d) {
+                (0, 1) if n > 9 || higher => out.push_str("เอ็ด"),
+                (1, 1) => out.push_str("สิบ"),
+                (1, 2) => out.push_str("ยี่สิบ"),
+                _ => {
+                    out.push_str(DIGITS.get(d as usize).copied().unwrap_or(""));
+                    out.push_str(PLACES.get(place).copied().unwrap_or(""));
+                }
+            }
+        }
+        out
+    }
+    if n == 0 {
+        return "ศูนย์".to_string();
+    }
+    let (millions, rest) = (n / 1_000_000, n % 1_000_000);
+    let mut out = String::new();
+    if millions > 0 {
+        out.push_str(&thai_counting(millions));
+        out.push_str("ล้าน");
+    }
+    if rest > 0 {
+        out.push_str(&below_million(rest, millions > 0));
+    }
+    out
 }
 
 /// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
@@ -974,6 +1018,38 @@ impl SectionProps {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn thai_counting_spells_numbers_in_thai_words() {
+        let cases = [
+            (1, "หนึ่ง"),
+            (2, "สอง"),
+            (9, "เก้า"),
+            (10, "สิบ"),
+            (11, "สิบเอ็ด"),
+            (12, "สิบสอง"),
+            (20, "ยี่สิบ"),
+            (21, "ยี่สิบเอ็ด"),
+            (25, "ยี่สิบห้า"),
+            (99, "เก้าสิบเก้า"),
+            (100, "หนึ่งร้อย"),
+            (101, "หนึ่งร้อยเอ็ด"),
+            (110, "หนึ่งร้อยสิบ"),
+            (111, "หนึ่งร้อยสิบเอ็ด"),
+            (1000, "หนึ่งพัน"),
+            (2564, "สองพันห้าร้อยหกสิบสี่"),
+            (10_001, "หนึ่งหมื่นเอ็ด"),
+            (1_000_000, "หนึ่งล้าน"),
+            (1_000_001, "หนึ่งล้านเอ็ด"),
+            (11_000_000, "สิบเอ็ดล้าน"),
+            (21_000_021, "ยี่สิบเอ็ดล้านยี่สิบเอ็ด"),
+        ];
+        for (n, want) in cases {
+            assert_eq!(super::NumFormat::ThaiCounting.format(n), want, "{n}");
+        }
+        assert_eq!(super::thai_counting(0), "ศูนย์");
+        assert!(!super::thai_counting(u32::MAX).is_empty());
+    }
+
     use super::*;
 
     #[test]

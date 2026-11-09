@@ -574,13 +574,17 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        // Thai Distributed spreads a line across its character gaps as Distributed does, but like
+        // Justify leaves the paragraph's last line alone (and stretches one ending with Shift+Enter).
+        let by_chars = matches!(rp.align, Align::Distribute | Align::ThaiDistribute);
+        let justify =
+            display.is_none() && (matches!(rp.align, Align::Justify | Align::ThaiDistribute) && stretch_end || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), by_chars);
         }
     }
 
@@ -747,14 +751,24 @@ fn justify_line(pl: &ParaLayout, xs: &mut [f32], (c0, c1, align_from): (usize, u
         .collect();
     if distribute || spaces.is_empty() {
         // Distributed across the gaps between the first and last characters: spaces hanging at
-        // the line's end take none, so the last character reaches the margin.
+        // the line's end take none, so the last character reaches the margin. A gap is a
+        // grapheme boundary: when formatting or font fallback splits one grapheme (a Thai letter
+        // and its vowel or tone mark) into drawing segments, its segments move together.
         let text_to = (text_from..c1).rev().find(|k| !blank(*k)).map_or(text_from, |k| k + 1);
-        let cnt = (text_to - text_from).saturating_sub(1).max(1) as f32;
+        let gap_before = |k: usize| pl.clusters.get(k).is_some_and(|c| pl.is_edit_boundary(c.start));
+        let gaps = (text_from + 1..text_to).filter(|&k| gap_before(k)).count();
+        let cnt = gaps.max(1) as f32;
         if distribute {
             let per = slack / cnt;
+            let mut seen = 0usize;
             for (q, v) in xs.iter_mut().enumerate().skip(text_from - c0) {
-                let k = (q + c0 - text_from) as f32;
-                *v += per * k.min(cnt);
+                let k = q + c0;
+                if k >= text_to {
+                    seen = gaps.max(1);
+                } else if k > text_from && gap_before(k) {
+                    seen += 1;
+                }
+                *v += per * seen as f32;
             }
         }
         return;

@@ -1708,6 +1708,17 @@ fn distributed_alignment_round_trips() {
     assert!(exported.contains("\\qj"), "expected \\qj in: {exported}");
 }
 
+/// `\qt` is Thai distributed justification (`thaiDistribute`), kept apart from `\qd`.
+#[test]
+fn thai_distributed_alignment_round_trips() {
+    let doc = import(br"{\rtf1\ansi\pard\qt Thai\par\pard\qd Distributed\par}").unwrap();
+    let aligns: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.props.align).collect();
+    assert_eq!(aligns, [Some(Align::ThaiDistribute), Some(Align::Distribute)]);
+    let exported = export(&doc);
+    assert!(exported.contains("\\qt"), "expected \\qt in: {exported}");
+    assert!(exported.contains("\\qd"), "expected \\qd in: {exported}");
+}
+
 #[test]
 fn table_cell_vertical_alignment() {
     let rtf = br"{\rtf1\ansi\trowd\clvertalt\cellx1000\clvertalc\cellx2000\clvertalb\cellx3000\intbl top\cell center\cell bottom\cell\row}";

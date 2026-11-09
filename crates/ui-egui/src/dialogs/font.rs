@@ -1,5 +1,97 @@
 use super::{Dialog, Ui, Value, WordApp, json, vec2};
 
+/// The most a character may be expanded or condensed, in points (Word's limit, and `w:spacing`'s
+/// on reading).
+pub(super) const MAX_CHAR_SPACING: f32 = 1584.0;
+
+/// One click of the Spacing box's arrows, in points.
+pub(super) const CHAR_SPACING_STEP: f32 = 0.5;
+
+/// The Spacing box's choices: Normal, Expanded (positive spacing) and Condensed (negative).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SpacingKind {
+    Normal,
+    Expanded,
+    Condensed,
+}
+
+impl SpacingKind {
+    pub(super) const ALL: [(SpacingKind, &'static str); 3] =
+        [(SpacingKind::Normal, "Normal"), (SpacingKind::Expanded, "Expanded"), (SpacingKind::Condensed, "Condensed")];
+
+    /// The choice a character spacing in points shows.
+    pub(super) fn of(points: f32) -> SpacingKind {
+        if points > 0.0 {
+            SpacingKind::Expanded
+        } else if points < 0.0 {
+            SpacingKind::Condensed
+        } else {
+            SpacingKind::Normal
+        }
+    }
+
+    /// The character spacing for this choice and a By: amount, 0 to [`MAX_CHAR_SPACING`].
+    pub(super) fn points(self, by: f32) -> f32 {
+        let by = if by.is_finite() { by.clamp(0.0, MAX_CHAR_SPACING) } else { 0.0 };
+        match self {
+            SpacingKind::Normal => 0.0,
+            SpacingKind::Expanded => by,
+            SpacingKind::Condensed => -by,
+        }
+    }
+}
+
+/// The By: amount after an arrow click (`up` or down): half a point, kept within 0 to 1584 pt
+/// and on the half-point grid, so 1.3 steps to 1.5 or 1.0.
+pub(super) fn step_char_spacing(by: f32, up: bool) -> f32 {
+    let by = if by.is_finite() { by.clamp(0.0, MAX_CHAR_SPACING) } else { 0.0 };
+    let units = by / CHAR_SPACING_STEP;
+    let next = if up { (units + 1e-4).floor() + 1.0 } else { (units - 1e-4).ceil() - 1.0 };
+    (next * CHAR_SPACING_STEP).clamp(0.0, MAX_CHAR_SPACING)
+}
+
+/// The Font dialog's Spacing box (Advanced): Normal, Expanded or Condensed, then By: the amount
+/// in points (0 to 1584) with ▲ and ▼ arrows that step it by half a point. `spacing` is the
+/// signed character spacing the dialog applies.
+pub(super) fn char_spacing_field(ui: &mut Ui, spacing: &mut f32, label: &egui::Response) {
+    let mut kind = SpacingKind::of(*spacing);
+    let mut by = spacing.abs().min(MAX_CHAR_SPACING);
+    ui.horizontal(|ui| {
+        let shown = SpacingKind::ALL.iter().find(|(k, _)| *k == kind).map_or("Normal", |(_, l)| l);
+        let combo = craft_ui::ComboBox::from_id_salt("fontdlg_spacing").selected_text(tl!(shown)).show_ui(ui, |ui| {
+            for (k, l) in SpacingKind::ALL {
+                if ui.selectable_label(kind == k, tl!(l)).clicked() && kind != k {
+                    // Word starts Expanded and Condensed at 1 pt when the text had none.
+                    if kind == SpacingKind::Normal && by == 0.0 {
+                        by = 1.0;
+                    }
+                    kind = k;
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+        let enabled = kind != SpacingKind::Normal;
+        let by_label = ui.label(tl!("By:"));
+        let field = egui::DragValue::new(&mut by).speed(CHAR_SPACING_STEP).range(0.0..=MAX_CHAR_SPACING).max_decimals(2).suffix(" pt");
+        ui.add_enabled(enabled, field).labelled_by(by_label.id);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            let arrow = |ui: &mut Ui, text: &str, hint: &str| {
+                ui.add_enabled(enabled, egui::Button::new(egui::RichText::new(text).size(7.0)).min_size(vec2(16.0, 10.0)))
+                    .on_hover_text(tl!(hint))
+                    .clicked()
+            };
+            if arrow(ui, "▲", "Increase by 0.5 pt") {
+                by = step_char_spacing(by, true);
+            }
+            if arrow(ui, "▼", "Decrease by 0.5 pt") {
+                by = step_char_spacing(by, false);
+            }
+        });
+    });
+    *spacing = kind.points(by);
+}
+
 /// The Font dialog preview's size: the Size box's points between 6 and 72, else 12. `"NaN"` and
 /// `"inf"` parse as floats too, and a NaN font size trips epaint's glyph assertion (#3663).
 pub(super) fn preview_size(size: &str) -> f32 {
@@ -183,5 +275,36 @@ pub(super) fn apply_font(app: &mut WordApp, d: &Dialog) {
     }
     if !changed.is_empty() {
         let _ = app.run("format.set", json!({"props": changed}));
+    }
+}
+
+#[cfg(test)]
+mod char_spacing_tests {
+    use super::{SpacingKind, step_char_spacing};
+
+    #[test]
+    fn the_spacing_arrows_step_half_a_point_within_0_to_1584() {
+        assert_eq!(step_char_spacing(0.0, true), 0.5);
+        assert_eq!(step_char_spacing(0.5, true), 1.0);
+        assert_eq!(step_char_spacing(1.0, false), 0.5);
+        assert_eq!(step_char_spacing(0.0, false), 0.0);
+        assert_eq!(step_char_spacing(1.3, true), 1.5);
+        assert_eq!(step_char_spacing(1.3, false), 1.0);
+        assert_eq!(step_char_spacing(1584.0, true), 1584.0);
+        assert_eq!(step_char_spacing(1583.5, true), 1584.0);
+        assert_eq!(step_char_spacing(f32::NAN, true), 0.5);
+        assert_eq!(step_char_spacing(5000.0, false), 1583.5);
+    }
+
+    #[test]
+    fn expanded_and_condensed_set_the_sign_of_the_spacing() {
+        assert_eq!(SpacingKind::of(2.0), SpacingKind::Expanded);
+        assert_eq!(SpacingKind::of(-2.0), SpacingKind::Condensed);
+        assert_eq!(SpacingKind::of(0.0), SpacingKind::Normal);
+        assert_eq!(SpacingKind::Expanded.points(1584.0), 1584.0);
+        assert_eq!(SpacingKind::Condensed.points(1584.0), -1584.0);
+        assert_eq!(SpacingKind::Condensed.points(9999.0), -1584.0);
+        assert_eq!(SpacingKind::Normal.points(3.0), 0.0);
+        assert_eq!(SpacingKind::Expanded.points(f32::INFINITY), 0.0);
     }
 }

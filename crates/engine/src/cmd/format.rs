@@ -124,7 +124,8 @@ pub fn specs() -> Vec<CommandSpec> {
         // Word's Ctrl+Space; ⌘Space is Spotlight, so Word for Mac uses ⌃Space.
         CommandSpec::new("format.resetChar", "Reset Character Formatting", "Home › Font", reset_char).key(super::mac_or("Ctrl+Space", "Mod+Space")),
         CommandSpec::new("format.spacing", "Character Spacing", "Home › Font › Font › Advanced", |s, v| {
-            let x = p::req_f32(v, "points")?.clamp(-100.0, 100.0);
+            // Word expands or condenses by up to 1584 pt, as `w:spacing` is read.
+            let x = p::req_f32(v, "points")?.clamp(-1584.0, 1584.0);
             apply(s, &|c| c.spacing = Some(x))
         })
         .params(r#"{"points": number}"#),

@@ -184,6 +184,7 @@ impl WordApp {
             fonts_hans: _,
             fonts_korean: _,
             fonts_hant: _,
+            fonts_thai: _,
             fonts_system_cjk: _,
             fonts_system_arabic: _,
             want_system_cjk: _,

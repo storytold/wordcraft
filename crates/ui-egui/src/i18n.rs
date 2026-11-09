@@ -70,7 +70,7 @@ pub struct LangInfo {
 
 /// The languages WordCraft offers, when their catalogs are embedded. English first: it is the
 /// fallback and the source language.
-pub static LANGUAGES: [LangInfo; 28] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", prefer_hans: false, editing_lang: None },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (the crate's matching).
     LangInfo { code: "zh-hans", prefer_hans: true, editing_lang: None },
@@ -129,6 +129,10 @@ pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Thai; `th`, `th-TH` and `th_TH.UTF-8` resolve here. Offered once craft-i18n has
+    // `locales/th/wordcraft.tsv`; drawn in Sarabun when it is installed. No editing language:
+    // WordCraft doesn't proof Thai yet.
+    LangInfo { code: "th", prefer_hans: false, editing_lang: None },
 ];
 
 /// Interface languages written right to left. Their catalogs are written in typing order and
@@ -195,6 +199,11 @@ impl Lang {
 
     pub fn prefers_hant(self) -> bool {
         self.code() == "zh-hant"
+    }
+
+    /// A Thai interface, drawn in Sarabun when it is installed ([`crate::theme::thai_interface_faces`]).
+    pub fn prefers_thai(self) -> bool {
+        self.code() == "th"
     }
 
     /// The language new blank documents are written in with this interface ([`LangInfo::editing_lang`]).
