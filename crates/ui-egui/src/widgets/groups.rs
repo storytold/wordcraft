@@ -44,7 +44,7 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
             let _ = content;
         });
         let r = inner.response.rect;
-        let area = Rect::from_min_max(start, pos2(r.max.x, start.y + CONTENT_H + LABEL_H));
+        let area = group_area(rtl, start, r);
         let over = ui.rect_contains_pointer(area);
         // Position is part of identity because duplicate custom group names can appear in tabs.
         let lit = ui.ctx().animate_bool_responsive(ui.scope_id().with(("group_glow", id_title, position)), over);
@@ -65,6 +65,13 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
     ui.painter().line_segment([pos2(x, start.y + 4.0), pos2(x, start.y + CONTENT_H + LABEL_H - 4.0)], Stroke::new(1.0, t.border));
     ui.add_space(6.0);
     crate::ribbon_fit::record(ui.ctx(), id_title, level, group_width(rtl, start_cursor, ui.cursor()));
+}
+
+/// The hover area of a group. A right-to-left row has no finite left edge at the cursor, so the
+/// area starts at the content's own left edge there.
+fn group_area(rtl: bool, start: egui::Pos2, content: Rect) -> Rect {
+    let left = if rtl { content.min.x } else { start.x };
+    Rect::from_min_max(pos2(left, start.y), pos2(content.max.x, start.y + CONTENT_H + LABEL_H))
 }
 
 /// The width a group took: the cursor's way along the row, from `before` to `after`. A
@@ -291,5 +298,16 @@ mod tests {
         let before = Rect::from_min_max(pos2(20.0, 0.0), pos2(f32::INFINITY, 90.0));
         let after = Rect::from_min_max(pos2(180.0, 0.0), pos2(f32::INFINITY, 90.0));
         assert_eq!(group_width(false, before, after), 160.0);
+    }
+
+    #[test]
+    fn a_group_in_a_right_to_left_row_has_a_finite_hover_area() {
+        let start = pos2(f32::NEG_INFINITY, 10.0);
+        let content = Rect::from_min_max(pos2(600.0, 10.0), pos2(740.0, 80.0));
+        let area = group_area(true, start, content);
+        assert!(area.min.x.is_finite() && area.max.x.is_finite());
+        assert_eq!((area.min.x, area.max.x), (600.0, 740.0));
+        let next = group_area(true, start, Rect::from_min_max(pos2(450.0, 10.0), pos2(590.0, 80.0)));
+        assert!(!area.intersects(next), "neighbouring groups do not overlap");
     }
 }
