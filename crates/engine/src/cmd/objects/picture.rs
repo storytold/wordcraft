@@ -76,9 +76,11 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
 pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
-    let (mut w, mut h) = obj_size(&o);
+    let (w0, h0) = obj_size(&o);
+    let (mut w, mut h) = (w0, h0);
     let scale = p::f32(v, "scale");
-    if p::bool(v, "original").unwrap_or(false) {
+    let original = p::bool(v, "original").unwrap_or(false);
+    if original {
         let (ow, oh) =
             cropped_original_size(s, &o).ok_or_else(|| CmdError::Disabled("only a picture whose image can be read has an original size".into()))?;
         let k = scale.unwrap_or(100.0) / 100.0;
@@ -113,7 +115,16 @@ pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
         (None, None) => true,
         _ => lock,
     };
-    let (w, h) = fit_size(w, h, keep);
+    // Sides set in proportion (from the original, or from a size whose sides both have a length)
+    // fit the limits together. Otherwise each side the call sets fits on its own, and a side it
+    // leaves as it was keeps its size, a straight line's 0 too.
+    let (w, h) = if keep && (original || (w0 > 0.0 && h0 > 0.0 && (w, h) != (w0, h0))) {
+        fit_size(w, h, true)
+    } else {
+        let (fw, fh) = fit_size(w, h, false);
+        let left = |new: f32, old: f32| !original && new == old;
+        (if left(w, w0) { w } else { fw }, if left(h, h0) { h } else { fh })
+    };
     // Any drawing: a group's members scale with its frame (its child space is kept); a chart or
     // SmartArt graphic lays itself out again at the new size.
     let theme = s.doc.settings.theme_colors.clone();

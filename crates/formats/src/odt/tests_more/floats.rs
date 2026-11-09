@@ -367,3 +367,92 @@ fn a_frame_keeps_its_place_in_the_stacking_order() {
     assert_eq!(float(&d).z, 0);
     assert!(crate::odt::tests::entry(&crate::odt::tests::export_model(&d).unwrap(), "content.xml").contains(r#"draw:z-index="0""#));
 }
+
+#[test]
+fn a_frame_anchored_to_a_page_stays_on_that_page() {
+    // LibreOffice's page-anchored frames name their page. Written without it, a frame on page 3
+    // came back on page 1 in LibreOffice.
+    let frame = |attrs: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><draw:frame {attrs} svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame><text:p>One</text:p></office:text></office:body></office:document-content>"#
+        );
+        import(&crate::odt::tests::package(&content, None)).unwrap()
+    };
+    let d = frame(r#"text:anchor-type="page" text:anchor-page-number="3""#);
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert!(c.contains(r#"text:anchor-type="page" text:anchor-page-number="3""#), "{c}");
+    let back =
+        crate::odt::tests::content_of(&crate::odt::tests::export_model(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap()).unwrap());
+    assert!(back.contains(r#"text:anchor-page-number="3""#), "again: {back}");
+    // A frame anchored to its paragraph names no page, and junk is none.
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&frame(r#"text:anchor-type="paragraph""#)).unwrap());
+    assert!(!c.contains("anchor-page-number"), "{c}");
+    for junk in ["-1", "abc", "", "99999999999999"] {
+        let d = frame(&format!(r#"text:anchor-type="page" text:anchor-page-number="{junk}""#));
+        let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        assert!(!c.contains("anchor-page-number"), "{junk}: {c}");
+    }
+}
+
+/// A page number only says something on a page anchor. On another LibreOffice ignores it, so it
+/// doesn't make a drawing anchored to a page when saved.
+#[test]
+fn a_page_number_on_another_anchor_is_no_page_anchor() {
+    let saved = |styles: &str, body: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+        );
+        crate::odt::tests::content_of(&crate::odt::tests::export_model(&import(&crate::odt::tests::package(&content, None)).unwrap()).unwrap())
+    };
+    let frame = |attrs: &str| {
+        format!(
+            r#"<text:p>One<draw:frame {attrs} svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame></text:p>"#
+        )
+    };
+    for anchor in ["paragraph", "char"] {
+        let c = saved("", &frame(&format!(r#"text:anchor-type="{anchor}" text:anchor-page-number="3""#)));
+        assert!(!c.contains(r#"text:anchor-type="page""#) && !c.contains("anchor-page-number"), "{anchor}: {c}");
+    }
+    let c = saved(
+        "",
+        r#"<text:p>One<draw:line text:anchor-type="paragraph" text:anchor-page-number="3" svg:x1="1cm" svg:y1="1cm" svg:x2="3cm" svg:y2="3cm"/></text:p>"#,
+    );
+    assert!(!c.contains(r#"text:anchor-type="page""#) && !c.contains("anchor-page-number"), "a line: {c}");
+    // An anchor its style gives counts as one the frame states.
+    let by_style = r#"<style:style style:name="fr" style:family="graphic"><style:graphic-properties text:anchor-type="page"/></style:style>"#;
+    let c = saved(by_style, &frame(r#"draw:style-name="fr" text:anchor-page-number="3""#));
+    assert!(c.contains(r#"text:anchor-type="page" text:anchor-page-number="3""#), "{c}");
+    let by_style = r#"<style:style style:name="fr" style:family="graphic"><style:graphic-properties text:anchor-type="paragraph"/></style:style>"#;
+    let c = saved(by_style, &frame(r#"draw:style-name="fr" text:anchor-page-number="3""#));
+    assert!(!c.contains("anchor-page-number"), "{c}");
+}
+
+#[test]
+fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
+    // LibreOffice's letter templates: its own metafile, then a PNG. Taking the first left nothing
+    // to show, and the picture was gone once the paragraph was written from the model.
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
+    let other = [b"\x89PNG\r\n\x1a\n".as_slice(), &[9u8; 64]].concat();
+    let svm = b"VCLMTF a metafile WordCraft can't draw".to_vec();
+    let frame = |images: &[&str]| {
+        let images: String = images.iter().map(|h| format!(r#"<draw:image xlink:href="{h}"/>"#)).collect();
+        format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p><draw:frame svg:width="2in" svg:height="1in" text:anchor-type="as-char">{images}</draw:frame></text:p></office:text></office:body></office:document-content>"#
+        )
+    };
+    let pictures = |d: &Document| d.body[0].as_para().unwrap().objects.iter().filter(|o| matches!(o, InlineObject::Image { .. })).count();
+    let both = frame(&["Pictures/a.svm", "Pictures/a.png"]);
+    let d = import(&zip_of(&[("content.xml", both.as_bytes()), ("Pictures/a.svm", &svm), ("Pictures/a.png", &png)])).unwrap();
+    assert_eq!(pictures(&d), 1, "the PNG");
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    assert_eq!(pictures(&back), 1, "written from the model");
+    // The first it can read, not the last.
+    let order = frame(&["Pictures/a.png", "Pictures/b.png"]);
+    let d = import(&zip_of(&[("content.xml", order.as_bytes()), ("Pictures/a.png", &png), ("Pictures/b.png", &other)])).unwrap();
+    assert_eq!(pictures(&d), 1);
+    assert_eq!(d.media.values().next().and_then(|m| m.get(8).copied()), Some(7), "the first");
+    // Nothing it can read: no picture, and no failure.
+    let only = frame(&["Pictures/a.svm"]);
+    let d = import(&zip_of(&[("content.xml", only.as_bytes()), ("Pictures/a.svm", &svm)])).unwrap();
+    assert_eq!(pictures(&d), 0);
+}

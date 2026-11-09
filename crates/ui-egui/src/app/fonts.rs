@@ -13,7 +13,7 @@ impl WordApp {
         // The chosen interface family may have just been added or removed: resolve it again.
         self.interface_font = None;
         self.session.relayout();
-        self.previews.fonts_changed(ctx, db.user_fonts().iter().flat_map(|f| f.families()));
+        self.previews.fonts_changed();
         ctx.request_repaint();
     }
 

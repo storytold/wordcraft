@@ -211,6 +211,10 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     let ok = |raw: Vec<OsString>| text_args(&raw).unwrap().1;
     assert_eq!(ok(vec!["zotero".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["render".into(), latin1(), "out.png".into(), "--page".into(), "2".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["render".into(), "--page".into(), "2".into(), latin1(), "out.png".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["convert".into(), "--format".into(), "flatopc".into(), latin1(), "out.xml".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["info".into(), "--password".into(), "secret".into(), latin1()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["zotero".into(), "--port".into(), "23119".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
     // Every command that opens a file reaches the open with it (no such file here), so
@@ -228,6 +232,7 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     for (raw, n) in [
         (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
         (vec!["render".into(), "in.docx".into(), latin1()], 3),
+        (vec!["render".into(), "--page".into(), latin1(), "in.docx".into(), "out.png".into()], 3),
         (vec!["run".into(), "--save".into(), latin1()], 3),
         (vec!["commands".into(), latin1()], 2),
     ] {
@@ -558,4 +563,20 @@ fn script_parse_resolves_paths_against_the_base() {
     let s = script::parse(r#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#, None).unwrap();
     assert_eq!(s.save, vec!["o.docx".to_string()]);
     assert_eq!(s.commands.len(), 1);
+}
+
+#[test]
+fn invisible_characters_are_escaped_and_json_lines_still_parse_back() {
+    let hidden = "a\u{ad}b\u{200b}c\u{200d}d\u{2060}e\u{2064}f\u{feff}g\u{e0041}h\u{e007f}i\u{85}j\u{202e}k";
+    let shown = escape_peer(hidden);
+    assert!(!shown.chars().any(is_unsafe_char), "{shown}");
+    assert!(shown.contains("\\u{e0041}") && shown.contains("\\u{ad}"), "{shown}");
+    // Errors keep a Windows path readable.
+    assert_eq!(escape_text("C:\\dir\\a.docx", false), "C:\\dir\\a.docx");
+
+    let value = json!({"part": hidden, "plain": "ünïcode ok"});
+    let line = json_line_safe(&value.to_string());
+    assert!(!line.chars().any(is_unsafe_char), "{line}");
+    assert!(line.contains("\\ud800") || line.contains("\\udb40"), "{line}");
+    assert_eq!(serde_json::from_str::<Value>(&line).unwrap(), value);
 }
