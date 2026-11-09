@@ -15,7 +15,7 @@ fn doc_with_crop(svg: &[u8], crop: [f32; 4]) -> (Document, wordcraft_layout::Doc
     let mut d = Document::new();
     let media = d.add_media(svg.to_vec(), "svg");
     let mut p = wordcraft_doc::Paragraph::new();
-    let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None };
+    let obj = wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None, fx: Default::default() };
     p.insert_object(0, obj, &Default::default()).unwrap();
     d.body = vec![wordcraft_doc::para_block(p)];
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
