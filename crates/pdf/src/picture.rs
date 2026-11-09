@@ -116,32 +116,11 @@ pub(crate) fn load_image(data: &Arc<Vec<u8>>, fx: PicFx) -> Option<Image> {
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
 pub(crate) fn load_image_within(data: &Arc<Vec<u8>>, fx: PicFx, budget: u64) -> Option<Image> {
-    use image::ImageDecoder;
     let fmt = image::guess_format(data).ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_IMAGE_SIDE);
-    limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?;
-        r.limits(limits.clone());
-        Some(r)
-    };
-    // Header-only size check before anything is allocated (the decoder's buffer at its own pixel
-    // size, 8 bytes for 16-bit RGBA, plus the RGBA conversion are charged); the side limits and
-    // the default 512 MB allocation cap apply to the header read and the decode alike.
-    let (hw, hh, native) = {
-        let d = reader()?.into_decoder().ok()?;
-        let (w, h) = d.dimensions();
-        (w, h, u64::from(d.color_type().bytes_per_pixel()))
-    };
-    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
-        return None;
-    }
-    let dec = reader()?.decode().ok()?;
+    // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
+    // export checks with.
+    let dec = wordcraft_geom::picture::decode_for_drawing(data, budget, MAX_IMAGE_SIDE).ok()?;
     let (w, h) = (dec.width(), dec.height());
-    if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
-        return None;
-    }
     if !fx.changes_pixels() && fmt == image::ImageFormat::Jpeg && matches!(dec.color(), image::ColorType::L8 | image::ColorType::Rgb8) {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
