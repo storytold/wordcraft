@@ -186,7 +186,7 @@ end run"#;
 
 fn markdown(rows: &[Value]) -> String {
     let mut s = String::from(
-        "| Probe | Status | Pages W/WC | Lines W/WC | Same breaks % | dy median / max | dx max | First difference |\n|---|---|---|---|---|---|---|---|\n",
+        "| Probe | Status | Pages W/WC | Lines W/WC | Same breaks % | dy median / max | dx max | dw max | First difference |\n|---|---|---|---|---|---|---|---|---|\n",
     );
     let pair = |v: &Value| v.as_array().map(|a| a.iter().map(|x| x.to_string()).collect::<Vec<_>>().join("/")).unwrap_or_default();
     let mut counts = std::collections::BTreeMap::<String, usize>::new();
@@ -216,6 +216,12 @@ fn markdown(rows: &[Value]) -> String {
                         f.get("word_page").map_or(String::new(), Value::to_string),
                         f.get("wordcraft_page").map_or(String::new(), Value::to_string)
                     ),
+                    "width" => format!(
+                        "p{} width dw {}: “{}”",
+                        f.get("page").map_or(String::new(), Value::to_string),
+                        f.get("dw").map_or(String::new(), Value::to_string),
+                        text("word")
+                    ),
                     _ => format!(
                         "p{} {kind} dy {} dx {}: “{}”",
                         f.get("page").map_or(String::new(), Value::to_string),
@@ -228,7 +234,7 @@ fn markdown(rows: &[Value]) -> String {
             _ => r["error"].as_str().unwrap_or("").chars().take(60).collect(),
         };
         s.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} / {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} / {} | {} | {} | {} |\n",
             r["probe"].as_str().unwrap_or(""),
             status,
             pair(&r["pages"]),
@@ -237,6 +243,7 @@ fn markdown(rows: &[Value]) -> String {
             r["dy_median"],
             r["dy_max"],
             r["dx_max"],
+            r["dw_max"],
             first.replace('|', "\\|")
         ));
     }

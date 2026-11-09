@@ -198,7 +198,9 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
     // Right edge differences of lines with the same text: how the widths add up (signed,
     // WordCraft minus Word; ragged-right lines only show it).
     let mut drs: Vec<f64> = Vec::new();
-    let (mut max_dx, mut max_dy) = (0.0f64, 0.0f64);
+    let (mut max_dx, mut max_dy, mut max_dw) = (0.0f64, 0.0f64, 0.0f64);
+    // The first line whose width differs, reported when nothing comes before it.
+    let mut first_width: Option<Value> = None;
     let mut first: Option<Value> = None;
     for (i, l) in r.iter().enumerate() {
         let Some(j) = matched[i] else {
@@ -220,9 +222,14 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         }
         let (dy, dx) = (m.y - l.y, m.x - l.x);
         dys.push(dy.abs());
-        drs.push((m.right - m.x) - (l.right - l.x));
+        let dw = (m.right - m.x) - (l.right - l.x);
+        drs.push(dw);
         max_dy = max_dy.max(dy.abs());
         max_dx = max_dx.max(dx.abs());
+        max_dw = max_dw.max(dw.abs());
+        if first_width.is_none() && dw.abs() > TOL {
+            first_width = Some(json!({"kind": "width", "page": l.page + 1, "word": l.text, "dw": round(dw)}));
+        }
         if first.is_none() && (dy.abs() > TOL || dx.abs() > TOL) {
             first = Some(
                 json!({"kind": if dy.abs() > TOL { "vertical offset" } else { "horizontal offset" }, "page": l.page + 1, "word": l.text, "dy": round(dy), "dx": round(dx), "word_y": round(l.y), "wordcraft_y": round(m.y)}),
@@ -231,10 +238,15 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
     }
     dys.sort_by(f64::total_cmp);
     drs.sort_by(f64::total_cmp);
+    let first = first.or(first_width);
     let same = pairs.len();
-    let status = if rp == tp && same == r.len() && same == t.len() && max_dy <= TOL && max_dx <= TOL {
+    let all = rp == tp && same == r.len() && same == t.len();
+    // "same" is about the measured lines: their text, page, origin and width (not pictures).
+    let status = if all && max_dy <= TOL && max_dx <= TOL && max_dw <= TOL {
         "same"
-    } else if rp == tp && same == r.len() && same == t.len() {
+    } else if all && max_dy <= TOL && max_dx <= TOL {
+        "widths"
+    } else if all {
         "offsets"
     } else if rp == tp {
         "breaks"
@@ -249,6 +261,7 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         "dy_median": round(dys.get(dys.len() / 2).copied().unwrap_or(0.0)),
         "dy_max": round(max_dy),
         "dx_max": round(max_dx),
+        "dw_max": round(max_dw),
         "width_diff": [round(drs.first().copied().unwrap_or(0.0)), round(drs.get(drs.len() / 2).copied().unwrap_or(0.0)), round(drs.last().copied().unwrap_or(0.0))],
         "first_difference": first,
     })
@@ -301,5 +314,11 @@ mod tests {
         d[1].y = 115.0;
         let c = compare(&a, 1, &d, 1);
         assert_eq!((c["status"].as_str(), c["dy_max"].as_f64()), (Some("offsets"), Some(1.0)));
+        // Same origins, one line a point wider: the widths differ, so it isn't the same.
+        let mut e = a.clone();
+        e[0].right = 91.0;
+        let c = compare(&a, 1, &e, 1);
+        assert_eq!((c["status"].as_str(), c["dw_max"].as_f64()), (Some("widths"), Some(1.0)));
+        assert_eq!((c["first_difference"]["kind"].as_str(), c["first_difference"]["dw"].as_f64()), (Some("width"), Some(1.0)));
     }
 }
