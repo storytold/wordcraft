@@ -8,7 +8,7 @@ pub fn decimal_separator(lang: Option<&str>) -> char {
     let tag = lang.unwrap_or("").trim().to_ascii_lowercase().replace('_', "-");
     // Regions that write a decimal point where the language usually writes a comma.
     const POINT_REGIONS: &[&str] =
-        &["de-ch", "de-li", "it-ch", "es-mx", "es-us", "es-419", "es-cu", "es-do", "es-gt", "es-hn", "es-ni", "es-pa", "es-pe", "es-pr", "es-sv"];
+        &["de-ch", "de-li", "it-ch", "es-mx", "es-us", "es-419", "es-pr", "es-do", "es-gt", "es-hn", "es-ni", "es-pa", "es-sv", "es-cu", "es-pe"];
     if POINT_REGIONS.iter().any(|r| tag == *r || tag.starts_with(&format!("{r}-"))) {
         return '.';
     }
@@ -23,8 +23,9 @@ pub fn decimal_separator(lang: Option<&str>) -> char {
 const SPACES: &[char] = &[' ', '\u{a0}', '\u{202f}', '\u{2009}'];
 const CURRENCY: &[char] = &['$', '€', '£', '¥', '¢', '₽', '₴', '₺', '₹', '₩', '₪', '₫', '฿', '₱', '₸', '₼', '₾'];
 /// Currency signs spelled with more than one character, longest first, and whether the sign may
-/// touch the number. Word reads `R$1,250` and `US$ 1,250`, but needs a space in `Bs. 1,250` and
-/// `S/. 1,250`. ISO codes (`ARS 1,250`) are read by the three-letter currency word below.
+/// touch the number. Word reads `R$1,250` and `US$ 1,250`, but needs a space in `Bs. 1,250`,
+/// `S/. 1,250` and `B/. 1,250.50`. ISO codes (`ARS 1,250`) are read by the three-letter currency
+/// word below.
 const CURRENCY_SYMBOLS: &[(&str, bool)] = &[
     ("Bs.S", false), // Venezuelan bolívar
     ("Bs.", false),  // Bolivian boliviano; also the Venezuelan bolívar
@@ -41,6 +42,7 @@ const CURRENCY_SYMBOLS: &[(&str, bool)] = &[
     ("$U", false),   // Uruguayan peso
     ("Q", false),    // Guatemalan quetzal
     ("L", false),    // Honduran lempira
+    ("B/.", false),  // Panamanian balboa
 ];
 
 /// Trim spaces and single-character currency signs from either end.
@@ -145,6 +147,9 @@ pub fn parse_number(s: &str, lang: Option<&str>) -> Option<f64> {
         return None;
     }
     let v: f64 = format!("0{int_digits}.{frac_digits}0").parse().ok()?;
+    if !v.is_finite() {
+        return None;
+    }
     Some(if neg { -v } else { v })
 }
 
@@ -177,6 +182,7 @@ mod tests {
         assert_eq!(parse_number("1.5", pl), Some(1.5));
         assert_eq!(parse_number("-2,25", pl), Some(-2.25));
         assert_eq!(parse_number("PLN 12", pl), Some(12.0));
+        assert_eq!(parse_number("-B/. 1 250,50", pl), Some(-1250.5));
         assert_eq!(parse_number("abc", pl), None);
         assert_eq!(parse_number("1,2,3", pl), None);
         // From review: ordinals, a leading zero, percentages and an en dash minus.
@@ -195,10 +201,59 @@ mod tests {
     }
 
     #[test]
+    fn overflowing_digit_strings_are_not_numbers() {
+        assert_eq!(parse_number(&"1".repeat(350), None), None);
+        assert_eq!(parse_number(&"9".repeat(400), Some("pl-PL")), None);
+        assert_eq!(parse_number(&format!("-{}", "1".repeat(350)), None), None);
+        let big = parse_number(&"1".repeat(300), None);
+        assert!(big.is_some_and(f64::is_finite), "{big:?}");
+    }
+
+    #[test]
+    fn cuban_and_peruvian_numbers_use_decimal_points() {
+        for lang in [Some("es-CU"), Some("es-PE")] {
+            assert_eq!(parse_number("1.234", lang), Some(1.234));
+            assert_eq!(parse_number("1,234.50", lang), Some(1234.5));
+            assert_eq!(format_number(5.75, lang), "5.75");
+        }
+        assert_eq!(parse_number("1.234,50", Some("es-ES")), Some(1234.5));
+        assert_eq!(format_number(5.75, Some("es-ES")), "5,75");
+    }
+
+    #[test]
+    fn balboa_numbers() {
+        let en = Some("en-US");
+        // Word 16.0 reads `B/.` as a word of its own, before or after the number.
+        assert_eq!(parse_number("B/. 1,234.50", en), Some(1234.5));
+        assert_eq!(parse_number("1,234.50 B/.", en), Some(1234.5));
+        assert_eq!(parse_number("B/.\u{a0}1,234.50", en), Some(1234.5), "a no-break space after the sign");
+        assert_eq!(parse_number("B/. 1,234.50 B/.", en), Some(1234.5), "the sign at both ends");
+        assert_eq!(parse_number("-B/. 1,234.50", en), Some(-1234.5), "a minus before the sign");
+        assert_eq!(parse_number("B/. 1,234.50", Some("es-PA")), Some(1234.5), "the balboa's own region");
+        // The sign has no space of its own in Word: touching the number is text.
+        assert_eq!(parse_number("B/.1,234.50", en), None);
+        assert_eq!(parse_number("1,234.50B/.", en), None);
+        assert_eq!(parse_number("B/ 1,234.50", en), None, "the balboa is B/. in Word");
+        assert_eq!(parse_number("B/.", en), None);
+        // The slash and the full stop make `B/.` ambiguous with a fraction: the sign is matched at
+        // the ends of the text only, so a fraction is never read as a balboa amount and a sign in
+        // the middle is not a sign.
+        assert_eq!(parse_number("1/.5", en), None, "a fraction is not a price");
+        assert_eq!(parse_number("1/.5", Some("es-PA")), None);
+        assert_eq!(parse_number("1/.5 B/.", en), None, "the sign at the end does not rescue a fraction");
+        assert_eq!(parse_number("B/. 1/.5", en), None);
+        assert_eq!(parse_number("2 B/. 1,234.50", en), None, "the sign sits before the number");
+        assert_eq!(parse_number("1,234.50 B/. 1,234.50", en), None, "the sign sits between two numbers");
+        assert_eq!(parse_number("1,234.50/2", en), None, "a division is not a balboa amount");
+        assert_eq!(parse_number("B/. 1,234.50,50", en), None, "a second decimal separator");
+    }
+
+    #[test]
     fn english_numbers() {
         let en = Some("en-US");
         assert_eq!(parse_number("1,250.50", en), Some(1250.5));
         assert_eq!(parse_number("$1,250", en), Some(1250.0));
+        assert_eq!(parse_number("PAB 1,250.50", en), Some(1250.5), "the ISO code");
         assert_eq!(parse_number("1.5", en), Some(1.5));
         assert_eq!(parse_number("12", None), Some(12.0));
         assert_eq!(parse_number(".5", None), Some(0.5));
