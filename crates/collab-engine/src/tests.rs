@@ -416,13 +416,144 @@ fn a_paragraph_align_undo_restores_every_covered_paragraph() {
 }
 
 #[test]
-fn a_command_that_moves_text_is_still_an_undo_barrier() {
-    let (mut room, node) = format_room("hello");
+fn a_case_change_undo_restores_the_previous_text_and_runs() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    let mut para = Paragraph::with_text("hello", CharProps::default());
+    // Two runs with different formatting: the command keeps them, so the
+    // inverse must put the exact run composition back with the old text.
+    para.runs = vec![
+        wordcraft_doc::Run { len: 2, props: CharProps { bold: Some(true), ..CharProps::default() } },
+        wordcraft_doc::Run { len: 3, props: CharProps::default() },
+    ];
+    doc.body.push(Arc::new(Block::Para(para)));
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let node = node(&mut room);
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
     let change = format_op("a", 1, 0, node, "format.changeCase", json!({"mode": "upper"}), selection(node, 0, 5));
-    room.submit("alice", Role::Editor, change.clone()).expect("change case lands");
-    let err = room.submit("alice", Role::Editor, undo_op(2, 1, node, &change)).expect_err("no exact inverse");
+    room.submit("alice", Role::Editor, change.clone()).expect("the case change lands");
+    assert_eq!(body_text(&room), "HELLO");
+    assert_eq!(runs(&room)[0].props.bold, Some(true), "the case change keeps the runs' formatting");
+
+    // The inverse is a primitive naming the previous body, not the command: the
+    // old text, its inline objects and its run composition come back exactly.
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, node, &change)).expect("the body restore lands");
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "the text and the runs are back");
+    let delta = undone.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("set_para_format"));
+    assert_eq!(delta["text"], json!("hello"));
+    assert_eq!(delta["expect"], json!("HELLO"));
+
+    // Redo replays the command over the restored text.
+    let redo = Op {
+        op_id: OpId::new("a", 3),
+        base_version: 2,
+        epoch: None,
+        kind: OpKind::Command,
+        target: Target::new("body", node, 0),
+        payload: serde_json::Value::Null,
+        history: Some(wordcraft_collab::wire::HistoryAction::Redo { op_id: change.op_id.clone() }),
+    };
+    room.submit("alice", Role::Editor, redo).expect("redo replays the command");
+    assert_eq!(body_text(&room), "HELLO", "the case change lands again");
+}
+
+#[test]
+fn an_enclose_undo_removes_the_field_and_restores_the_text() {
+    let (mut room, node) = format_room("x");
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    let enclose = format_op("a", 1, 0, node, "format.enclose", json!({"shape": "circle", "text": "x"}), selection(node, 0, 1));
+    room.submit("alice", Role::Editor, enclose.clone()).expect("the enclosure lands");
+    let enclosed = room.model().session().doc.body.first().and_then(|b| b.as_para()).cloned().expect("a paragraph");
+    assert_eq!(enclosed.objects.len(), 1, "the enclosure is an inline object");
+    assert_ne!(enclosed.text, "x", "the character is now the object's placeholder");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, node, &enclose)).expect("the body restore lands");
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "the text and the objects are back");
+    let delta = undone.delta.expect("a delta");
+    assert_eq!(delta["op"], json!("set_para_format"));
+    assert_eq!(delta["text"], json!("x"));
+    assert_eq!(delta["objects"], json!([]), "the field is gone");
+}
+
+#[test]
+fn an_undo_delta_replays_on_a_replica_session() {
+    let (mut room, node) = format_room("hello");
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    // A second replica holds the same document and its own map of the ids the
+    // room issued; it learns both the command and the undo only from deltas.
+    let mut replica = Session::new(room.model().session().doc.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(replica.doc.clone()).index_nodes(&mut ids);
+
+    let change = format_op("a", 1, 0, node, "format.changeCase", json!({"mode": "upper"}), selection(node, 0, 5));
+    let applied = room.submit("alice", Role::Editor, change.clone()).expect("the case change lands");
+    crate::apply_delta(&mut replica, &mut ids, applied.delta.as_ref().expect("a delta")).expect("the replica replays the command");
+    let replica_text = replica.doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
+    assert_eq!(replica_text, "HELLO");
+
+    let undone = room.submit("alice", Role::Editor, undo_op(2, 1, node, &change)).expect("the body restore lands");
+    crate::apply_delta(&mut replica, &mut ids, undone.delta.as_ref().expect("a delta")).expect("the replica replays the restore");
+    assert_eq!(serde_json::to_value(&replica.doc).expect("json"), before, "the replica is back at the exact earlier document");
+}
+
+#[test]
+fn a_step_over_more_than_256_paragraphs_stays_an_undo_barrier() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for _ in 0..300 {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text("ab", CharProps::default()))));
+    }
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|n| n.path == vec![0]).expect("first node").id;
+    let last = plan.nodes.iter().find(|n| n.path == vec![299]).expect("last node").id;
+
+    let change = format_op(
+        "a",
+        1,
+        0,
+        first,
+        "format.changeCase",
+        json!({"mode": "upper"}),
+        json!({"anchor": {"nodeId": first, "off": 0}, "focus": {"nodeId": last, "off": 2}}),
+    );
+    // The command still runs; only its inverse is not carried.
+    room.submit("alice", Role::Editor, change.clone()).expect("a wide case change still lands");
+    assert_eq!(body_text(&room), "AB", "the first paragraph changed case");
+
+    let err = room.submit("alice", Role::Editor, undo_op(2, 1, first, &change)).expect_err("a step this wide has no inverse");
     assert_eq!(err.code, RejectCode::Unsupported);
-    assert_eq!(body_text(&room), "HELLO", "the refused undo changed nothing");
+    assert_eq!(body_text(&room), "AB", "the refused undo changed nothing");
+}
+
+#[test]
+fn a_body_restore_on_a_retired_node_is_refused_before_mutation() {
+    let (mut room, node) = format_room("hello");
+    room.ids_mut().remove(wordcraft_collab::ids::NodeId(node), 0);
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    let err = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op(
+                "a",
+                1,
+                0,
+                OpKind::Primitive,
+                node,
+                0,
+                json!({"op": "set_para_format", "text": "HELLO", "objects": [], "expect": "hello", "runs": [{"len": 5}]}),
+            ),
+        )
+        .expect_err("a retired id cannot name the paragraph");
+    assert_eq!(err.code, RejectCode::Gone);
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "nothing changed");
+    assert_eq!(room.version(), 0, "the room did not advance");
 }
 
 #[test]

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use wordcraft_collab::ids::{NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
 use wordcraft_collab::wire::{HistoryAction, Op, OpId, OpKind, Target};
-use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
+use wordcraft_doc::{Block, Cell, CharProps, Document, InlineObject, Paragraph, Path, Pos, StoryRef, Table};
 
 use crate::DocModel;
 
@@ -1118,6 +1118,91 @@ fn a_format_restore_rewrites_the_runs_and_properties_it_names() {
     inverse.base_version = room.version();
     room.submit("alice", Role::Editor, inverse).expect("the inverse lands");
     assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the paragraph is back");
+}
+
+#[test]
+fn a_body_restore_rewrites_the_text_and_objects_it_names() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text("x", CharProps::default()))));
+    let mut room = Room::new(DocModel::new(doc));
+    let first = node(room.ids_mut(), 0);
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let field = json!(InlineObject::Field {
+        instr: "EQ \\o\\ac(○,x)".into(),
+        result: "x".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    });
+
+    // The inverse of `format.enclose`: the character is now the object's
+    // placeholder, so the restore names the body and the objects with it.
+    room.submit(
+        "alice",
+        Role::Editor,
+        op(
+            "a",
+            1,
+            0,
+            OpKind::Primitive,
+            first,
+            0,
+            json!({
+                "op": "set_para_format",
+                "text": "\u{FFFC}",
+                "objects": [field],
+                "expect": "x",
+                "runs": [{"len": 3}],
+            }),
+        ),
+    )
+    .expect("the body restore lands");
+    let para = || room.model().document().para(StoryRef::Body, &Path::top(0)).cloned().expect("a paragraph");
+    assert_eq!(para().text, "\u{FFFC}");
+    assert_eq!(para().objects.len(), 1, "the enclosed-character field is there");
+
+    // The adapter keeps the previous body and objects as its own inverse.
+    let step = room.undo("alice").expect("an undo step");
+    let mut inverse = step.inverse.first().expect("an inverse operation").clone();
+    inverse.base_version = room.version();
+    room.submit("alice", Role::Editor, inverse).expect("the inverse lands");
+    assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "the text and the objects are back");
+}
+
+#[test]
+fn a_body_restore_with_a_stale_expect_is_refused_before_mutation() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    doc.body.push(Arc::new(Block::Para(Paragraph::with_text("x", CharProps::default()))));
+    let mut room = Room::new(DocModel::new(doc));
+    let first = node(room.ids_mut(), 0);
+    let before = serde_json::to_value(room.model().document()).expect("json");
+    let field = json!(InlineObject::Field {
+        instr: "EQ \\o\\ac(○,x)".into(),
+        result: "x".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    });
+
+    for payload in [
+        // The paragraph no longer holds the text the restore was prepared from.
+        json!({"op": "set_para_format", "text": "y", "objects": [], "expect": "stale", "runs": [{"len": 1}]}),
+        // A body restore must name what it expects and the objects that go with it.
+        json!({"op": "set_para_format", "text": "y", "objects": [], "runs": [{"len": 1}]}),
+        json!({"op": "set_para_format", "text": "y", "expect": "x", "runs": [{"len": 1}]}),
+        // Objects that do not match the text's object characters.
+        json!({"op": "set_para_format", "text": "x", "objects": [field], "expect": "x", "runs": [{"len": 1}]}),
+    ] {
+        let err =
+            room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, first, 0, payload.clone())).expect_err("the body restore is refused");
+        assert_eq!(err.code, wordcraft_collab::wire::RejectCode::Invalid, "{payload}");
+        assert_eq!(serde_json::to_value(room.model().document()).expect("json"), before, "nothing changed");
+        assert_eq!(room.version(), 0, "the room did not advance");
+    }
 }
 
 #[test]

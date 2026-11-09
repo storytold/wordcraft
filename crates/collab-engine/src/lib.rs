@@ -20,7 +20,7 @@ use wordcraft_collab::wire::{Op, OpId, OpKind, Reject, RejectCode, Target};
 use wordcraft_collab_doc::DocModel;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
-use wordcraft_doc::{Block, Blocks, Document, ParaProps, Path, Pos, Run, StoryRef};
+use wordcraft_doc::{Block, Blocks, Document, InlineObject, ParaProps, Path, Pos, Run, StoryRef};
 use wordcraft_engine::{Selection, Session};
 
 /// Command areas that must never run from a network operation.
@@ -28,16 +28,19 @@ const DENIED_PREFIXES: &[&str] =
     &["file.", "tools.", "ui.", "view.", "caret.", "select.", "collab.", "edit.undo", "edit.redo", "edit.repeat", "review.readAloud"];
 
 /// The frequent character-formatting commands whose result can be undone
-/// exactly (ADR-0010). Every one of them only changes character properties —
-/// a direct property, a character style, or a rebuild of the cleared ones. A
-/// command that also moves text (`format.changeCase`) or replaces it
-/// (`format.enclose` with `text`) is deliberately absent: its `set_para_format`
-/// inverse would put formatting back over different text, so it stays an undo
-/// barrier instead.
+/// exactly (ADR-0010). Most of them only change character properties — a direct
+/// property, a character style, or a rebuild of the cleared ones — so the
+/// inverse carries `runs`/`mark`/`props`. Two of them rewrite the characters
+/// themselves: `format.changeCase` (the same text in another case) and
+/// `format.enclose` (an enclosed-character field replaces or wraps the
+/// selection). Their inverse carries the paragraph's `text` and `objects` as
+/// well, so undo restores the runs the command rebuilt instead of putting the
+/// old formatting over new text.
 const CHAR_FORMAT_COMMANDS: &[&str] = &[
     "format.allCaps",
     "format.bold",
     "format.border",
+    "format.changeCase",
     "format.charStyle",
     "format.clear",
     "format.color",
@@ -45,6 +48,7 @@ const CHAR_FORMAT_COMMANDS: &[&str] = &[
     "format.doubleUnderline",
     "format.emboss",
     "format.emphasisMark",
+    "format.enclose",
     "format.engrave",
     "format.font",
     "format.growFont",
@@ -118,17 +122,21 @@ const PARA_FORMAT_COMMANDS: &[&str] = &[
 ];
 
 /// The most paragraphs one formatting step restores in its inverse. A wider
-/// selection is not carried as primitives: the step stays a barrier instead of
-/// sending an unbounded transaction to every replica.
+/// selection is not captured: the command still runs, but the step has no
+/// inverse, so undo answers `unsupported` instead of sending an unbounded
+/// transaction to every replica.
 const MAX_FORMAT_PARAGRAPHS: usize = 256;
 
-/// The formatting of one paragraph before a formatting command, captured so
-/// the command's inverse can name the previous value exactly.
+/// One paragraph before a formatting command, captured so the command's
+/// inverse can name the previous value exactly. `text` and `objects` are only
+/// used when the command rewrote the characters (`format.changeCase`,
+/// `format.enclose`), where formatting alone would not restore the paragraph.
 struct FormatSnapshot {
     story: StoryRef,
     path: Path,
     node_id: u32,
-    text_len: usize,
+    text: String,
+    objects: Vec<InlineObject>,
     runs: Vec<Run>,
     mark: CharProps,
     props: ParaProps,
@@ -229,7 +237,7 @@ impl SessionModel {
         // A step that moved blocks (a command the adapter could not normalize)
         // cannot be restored by paragraph paths; formatting commands never do.
         let (inverse, touched) = match format {
-            Some(captured) if !nodes_changed => self.format_inverse(op, &captured).unwrap_or_default(),
+            Some(Some(captured)) if !nodes_changed => self.format_inverse(op, &captured).unwrap_or_default(),
             _ => (Vec::new(), Vec::new()),
         };
 
@@ -263,32 +271,36 @@ impl SessionModel {
     /// ends, so that range is the capture. A paragraph that has no session id
     /// cannot be named by the inverse, so the command is refused before it
     /// touches the document.
-    fn capture_format(&self, op: &Op, ids: &NodeIds) -> Result<Vec<FormatSnapshot>, Reject> {
+    fn capture_format(&self, op: &Op, ids: &NodeIds) -> Result<Option<Vec<FormatSnapshot>>, Reject> {
         let (a, b) = self.session.sel.ordered();
         if a.story != b.story {
-            return Ok(Vec::new());
+            return Ok(Some(Vec::new()));
         }
         let name = story_name(a.story);
         let mut out = Vec::new();
         for path in self.session.doc.paths_between(&a, &b) {
             let Some(para) = self.session.doc.para(a.story, &path) else { continue };
+            // A selection wider than the limit is not captured: the command
+            // still runs, but the step stays a barrier instead of sending an
+            // unbounded transaction to every replica.
+            if out.len() >= MAX_FORMAT_PARAGRAPHS {
+                return Ok(None);
+            }
             let node = ids
                 .get(&NodeKey::new(name.clone(), path.0.clone()))
                 .ok_or_else(|| invalid(op, format!("the paragraph {} has no session id, so its formatting cannot be undone", path_key(&path))))?;
-            if out.len() >= MAX_FORMAT_PARAGRAPHS {
-                return Err(invalid(op, "the selection covers too many paragraphs to undo its formatting"));
-            }
             out.push(FormatSnapshot {
                 story: a.story,
                 path,
                 node_id: node.0,
-                text_len: para.text.len(),
+                text: para.text.clone(),
+                objects: para.objects.clone(),
                 runs: para.runs.clone(),
                 mark: para.mark.clone(),
                 props: para.props.clone(),
             });
         }
-        Ok(out)
+        Ok(Some(out))
     }
 
     /// The inverse of a formatting command: one `set_para_format` per paragraph
@@ -300,20 +312,31 @@ impl SessionModel {
         let mut touched = Vec::new();
         for before in captured {
             let para = self.session.doc.para(before.story, &before.path)?;
-            if para.text.len() != before.text_len {
-                return None;
-            }
+            // A captured path that no longer holds a paragraph means the command
+            // moved blocks: the whole step becomes a barrier rather than a
+            // partial restore.
+            let text = para.text != before.text;
+            let objects = para.objects != before.objects;
             let runs = para.runs != before.runs;
             let mark = para.mark != before.mark;
             let props = para.props != before.props;
-            if !(runs || mark || props) {
+            if !(text || objects || runs || mark || props) {
                 continue;
             }
             if inverse.len() >= MAX_FORMAT_PARAGRAPHS {
                 return None;
             }
             let mut payload = json!({"op": "set_para_format"});
-            if runs {
+            if text || objects {
+                // The command rewrote the characters: the inverse names the
+                // exact previous text, its inline objects and its run
+                // composition, and `expect` names what the paragraph holds now
+                // so a stale restore cannot overwrite a later edit.
+                payload["text"] = json!(before.text);
+                payload["objects"] = serde_json::to_value(&before.objects).unwrap_or(Value::Null);
+                payload["expect"] = json!(para.text);
+                payload["runs"] = serde_json::to_value(&before.runs).unwrap_or(Value::Null);
+            } else if runs {
                 payload["runs"] = serde_json::to_value(&before.runs).unwrap_or(Value::Null);
             }
             if mark {

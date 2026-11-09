@@ -33,13 +33,17 @@
 //!   forward effect of a formatting command is still the command itself, and
 //!   only its inverse is a primitive (`set_para_format`, see below).
 //!
-//! `set_para_format` restores one paragraph's `runs`, `mark` and paragraph
-//! `props` to a named earlier value: it is the inverse of a character or
-//! paragraph formatting command, whose forward effect a replica replays as a
-//! command (a toggle or a relative step cannot be replayed backwards). The
-//! payload names only the fields the command changed; the address must be a
-//! paragraph and a run list must cover the current text on character
-//! boundaries, or the operation is refused before the document is touched.
+//! `set_para_format` restores one paragraph's body and formatting to a named
+//! earlier value: it is the inverse of a character or paragraph command, whose
+//! forward effect a replica replays as a command (a toggle or a relative step
+//! cannot be replayed backwards). The payload names only the fields the command
+//! changed. A formatting-only restore carries `runs`/`mark`/`props`; a command
+//! that rewrites characters (`format.changeCase`) or replaces them with an
+//! enclosed-character field (`format.enclose`) also carries the paragraph's
+//! `text` and `objects`, with `expect` naming the text the paragraph holds
+//! after the command. The address must be a paragraph, a run list must cover the
+//! target text on character boundaries, and `expect` must match the current
+//! text, or the operation is refused before the document is touched.
 //!
 //! A column removal, a merge and a split carry an exact inverse: the removed
 //! bodies, the original cell boundaries, the grid and the session ids of the
@@ -62,7 +66,7 @@ use wordcraft_doc::props::VMerge;
 use wordcraft_doc::table::MAX_COLS;
 use wordcraft_doc::table::MAX_ROWS;
 use wordcraft_doc::table::MAX_TABLE_DEPTH;
-use wordcraft_doc::{Block, Blocks, Cell, CharProps, Document, ParaProps, Paragraph, Path, Pos, Row, Run, StoryRef, Table};
+use wordcraft_doc::{Block, Blocks, Cell, CharProps, Document, InlineObject, ParaProps, Paragraph, Path, Pos, Row, Run, StoryRef, Table};
 
 /// The most runs one `set_para_format` restores. A longer paragraph is refused
 /// before the document changes: a hostile payload cannot make the adapter walk
@@ -268,17 +272,27 @@ impl DocModel {
     /// the paragraph mark) and its paragraph `props`; a field that is absent is
     /// left as it is, so the inverse carries only what the command changed.
     ///
+    /// A command that rewrites characters (`format.changeCase`) or replaces
+    /// them with an enclosed-character field (`format.enclose`) cannot be undone
+    /// by formatting alone: its inverse also carries `text` and `objects`, and
+    /// `expect` names the text the paragraph holds after the command. Without
+    /// that body a restore would put the old formatting over different text.
+    ///
     /// The address must name a paragraph. Anything else — a table, a row, a
     /// cell, an unknown or deleted node — is refused before the document is
-    /// touched, and so is a run list that does not cover the current text on
-    /// character boundaries.
+    /// touched, and so is a run list that does not cover the target text on
+    /// character boundaries, a body restore whose `expect` does not match, and
+    /// inline objects that do not match the text's object characters.
     fn set_para_format(&mut self, op: &Op, ids: &mut NodeIds) -> Result<Effect, Reject> {
         let (story, path, _) = self.resolve_pos(op, ids)?;
-        let Paragraph { text, runs, mark, props, .. } =
+        let Paragraph { text, runs, mark, props, objects, .. } =
             self.doc.para(story, &path).cloned().ok_or_else(|| invalid(op, format!("node {} does not name a paragraph", op.target.node_id)))?;
         let patch = format_patch(&op.payload, &text).map_err(|why| invalid(op, why))?;
         let inverse_payload = json!({
             "op": "set_para_format",
+            "text": patch.text.as_ref().map(|_| json!(text)),
+            "objects": patch.objects.as_ref().map(|_| json!(objects)),
+            "expect": patch.text.as_ref().map(|new| json!(new)),
             "runs": patch.runs.as_ref().map(|_| json!(runs)),
             "mark": patch.mark.as_ref().map(|_| json!(mark)),
             "props": patch.props.as_ref().map(|_| json!(props)),
@@ -286,6 +300,9 @@ impl DocModel {
         let delta = json!({
             "op": "set_para_format",
             "nodeId": op.target.node_id,
+            "text": patch.text.as_ref().map(|text| json!(text)),
+            "objects": patch.objects.as_ref().map(|objects| json!(objects)),
+            "expect": patch.text.as_ref().map(|_| json!(text)),
             "runs": patch.runs.as_ref().map(|runs| json!(runs)),
             "mark": patch.mark.as_ref().map(|mark| json!(mark)),
             "props": patch.props.as_ref().map(|props| json!(props)),
@@ -2199,20 +2216,57 @@ fn invalid(op: &Op, message: impl Into<String>) -> Reject {
     Reject::new(op.op_id.clone(), RejectCode::Invalid, message)
 }
 
-/// The formatting fields a `set_para_format` restores. Each is optional so an
-/// inverse carries only what the forward command changed; `None` = leave it.
+/// The body and formatting fields a `set_para_format` restores. Each is
+/// optional so an inverse carries only what the forward command changed;
+/// `None` = leave it. `text` names the paragraph body and `objects` the inline
+/// objects that live in it: a command that rewrites characters
+/// (`format.changeCase`) or replaces them with an enclosed-character field
+/// (`format.enclose` with `text`) cannot be undone by formatting alone.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct FormatPatch {
+    text: Option<String>,
+    objects: Option<Vec<InlineObject>>,
     runs: Option<Vec<Run>>,
     mark: Option<CharProps>,
     props: Option<ParaProps>,
 }
 
 /// Parse and validate a `set_para_format` payload (or delta) against the
-/// paragraph's current text. Every check runs before the caller mutates
-/// anything: a run list that does not cover the text exactly, or ends inside a
-/// character, is refused, not normalized.
+/// paragraph's current text and objects. Every check runs before the caller
+/// mutates anything: a run list that does not cover the target text exactly, a
+/// run that ends inside a character, or a text restore whose `expect` does not
+/// match the paragraph is refused, not normalized.
 fn format_patch(payload: &Value, text: &str) -> Result<FormatPatch, String> {
+    // A body restore names the text the paragraph must hold *now* (`expect`), so
+    // a stale inverse cannot overwrite an edit the room did not see.
+    let text_patch = match payload.get("text") {
+        Some(value) if !value.is_null() => {
+            let expect = payload.get("expect").and_then(Value::as_str).ok_or_else(|| "a paragraph body restore needs `expect`".to_string())?;
+            if expect != text {
+                return Err("the paragraph text changed since the restore was prepared".to_string());
+            }
+            Some(serde_json::from_value::<String>(value.clone()).map_err(|err| format!("bad `text`: {err}"))?)
+        }
+        _ => None,
+    };
+    let objects_patch = match payload.get("objects") {
+        Some(value) if !value.is_null() => {
+            Some(serde_json::from_value::<Vec<InlineObject>>(value.clone()).map_err(|err| format!("bad `objects`: {err}"))?)
+        }
+        _ => None,
+    };
+    if text_patch.is_none() && objects_patch.is_some() {
+        return Err("`objects` needs the `text` it belongs to".to_string());
+    }
+    if text_patch.is_some() && objects_patch.is_none() {
+        return Err("a paragraph body restore needs its `objects`".to_string());
+    }
+    let target_text = text_patch.as_deref().unwrap_or(text);
+    if let Some(objects_patch) = &objects_patch
+        && objects_patch.len() != target_text.chars().filter(|c| *c == wordcraft_doc::para::OBJ).count()
+    {
+        return Err("the restored objects do not match the text's object characters".to_string());
+    }
     let runs = match payload.get("runs") {
         Some(value) if !value.is_null() => {
             let runs: Vec<Run> = serde_json::from_value(value.clone()).map_err(|err| format!("bad `runs`: {err}"))?;
@@ -2225,20 +2279,23 @@ fn format_patch(payload: &Value, text: &str) -> Result<FormatPatch, String> {
                     return Err("a restored run is empty".to_string());
                 }
                 end = end.checked_add(run.len).ok_or_else(|| "the restored runs are too long".to_string())?;
-                if end > text.len() {
+                if end > target_text.len() {
                     return Err("the restored runs are longer than the paragraph".to_string());
                 }
-                if !text.is_char_boundary(end) {
+                if !target_text.is_char_boundary(end) {
                     return Err("a restored run ends inside a character".to_string());
                 }
             }
-            if end != text.len() {
-                return Err(format!("the restored runs cover {end} of {} bytes", text.len()));
+            if end != target_text.len() {
+                return Err(format!("the restored runs cover {end} of {} bytes", target_text.len()));
             }
             Some(runs)
         }
         _ => None,
     };
+    if text_patch.is_some() && runs.is_none() {
+        return Err("a paragraph body restore needs its `runs`".to_string());
+    }
     let mark = match payload.get("mark") {
         Some(value) if !value.is_null() => Some(serde_json::from_value::<CharProps>(value.clone()).map_err(|err| format!("bad `mark`: {err}"))?),
         _ => None,
@@ -2247,13 +2304,19 @@ fn format_patch(payload: &Value, text: &str) -> Result<FormatPatch, String> {
         Some(value) if !value.is_null() => Some(serde_json::from_value::<ParaProps>(value.clone()).map_err(|err| format!("bad `props`: {err}"))?),
         _ => None,
     };
-    if runs.is_none() && mark.is_none() && props.is_none() {
+    if text_patch.is_none() && runs.is_none() && mark.is_none() && props.is_none() {
         return Err("set_para_format changes nothing".to_string());
     }
-    Ok(FormatPatch { runs, mark, props })
+    Ok(FormatPatch { text: text_patch, objects: objects_patch, runs, mark, props })
 }
 
 fn apply_format_patch(para: &mut Paragraph, patch: FormatPatch) {
+    if let Some(text) = patch.text {
+        para.text = text;
+    }
+    if let Some(objects) = patch.objects {
+        para.objects = objects;
+    }
     if let Some(runs) = patch.runs {
         para.runs = runs;
     }

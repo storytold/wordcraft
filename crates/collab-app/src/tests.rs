@@ -470,6 +470,36 @@ impl FormatPair {
         self.peer.apply(&echo, &mut self.theirs).expect("the peer replays the command");
         step
     }
+
+    /// The command path a client that sends commands submits (track changes on,
+    /// or the CLI/MCP): the selection is the one the command was given in the
+    /// pre-command document, so a restore can be addressed in that document.
+    #[allow(clippy::expect_used)]
+    fn rewrite(&mut self, seq: u64, command: &str, params: serde_json::Value) -> Op {
+        let anchor = self.mine.sel.anchor.clone();
+        let focus = self.mine.sel.focus.clone();
+        let node = |pair: &FormatPair, path: usize| pair.alice.ids.get(&NodeKey::new("body", vec![path as u32])).expect("a body node").0;
+        let anchor_node = node(self, anchor.path.last());
+        let focus_node = node(self, focus.path.last());
+        let selection = json!({
+            "anchor": {"nodeId": anchor_node, "off": anchor.off},
+            "focus": {"nodeId": focus_node, "off": focus.off},
+        });
+        self.mine.run(command, &params).expect("the UI applies the command");
+        let step = Op {
+            op_id: OpId::new("alice", seq),
+            base_version: self.alice.version,
+            epoch: None,
+            kind: OpKind::Command,
+            target: Target::new("body", anchor_node, anchor.off),
+            payload: json!({"command": command, "params": params, "selection": selection}),
+            history: None,
+        };
+        let echo = self.room.submit("alice", Role::Editor, step.clone()).expect("the command lands");
+        self.alice.apply(&echo, &mut self.mine).expect("own echo is skipped");
+        self.peer.apply(&echo, &mut self.theirs).expect("the peer replays the command");
+        step
+    }
 }
 
 #[test]
@@ -574,4 +604,112 @@ fn a_two_paragraph_align_undo_lands_as_one_transaction_on_both_replicas() {
     pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverses");
     assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the author's paragraph properties are back");
     assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the peer's paragraph properties are back");
+}
+
+fn para_texts(session: &Session) -> Vec<String> {
+    session.doc.body.iter().filter_map(|block| block.as_para()).map(|para| para.text.clone()).collect()
+}
+
+#[test]
+fn a_two_paragraph_case_change_undo_lands_as_one_transaction_on_both_replicas() {
+    let mut pair = FormatPair::new(&["alpha", "beta"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(1), off: 4 },
+    };
+    let before = serde_json::to_value(&pair.mine.doc).expect("json");
+
+    // The characters of both paragraphs are rewritten; the command travels as a
+    // command, not as a text diff that would drop the run structure.
+    let change = pair.rewrite(1, "format.changeCase", json!({"mode": "upper"}));
+    let changed = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(para_texts(&pair.mine), vec!["ALPHA".to_string(), "BETA".to_string()]);
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), changed, "the peer replays the same command");
+
+    // The inverse names each previous body: one `set_para_format` per paragraph,
+    // sent to every replica as a single transaction.
+    let undo = history_op("alice", 2, pair.alice.version, &change, HistoryAction::Undo { op_id: change.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the body restores land");
+    let delta = answer.delta.as_ref().expect("a delta");
+    assert_eq!(delta["op"], json!("transaction"), "one step, several paragraphs");
+    assert_eq!(delta["ops"].as_array().map(Vec::len), Some(2), "{delta}");
+    assert_eq!(delta["ops"][0]["text"], json!("alpha"), "{delta}");
+    assert_eq!(delta["ops"][0]["expect"], json!("ALPHA"), "{delta}");
+
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverses");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverses");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the author's text and runs are back");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the peer's text and runs are back");
+}
+
+#[test]
+fn an_enclose_undo_removes_the_field_at_its_author_and_the_peer() {
+    let mut pair = FormatPair::new(&["x"]);
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(0), off: 1 },
+    };
+    let before = serde_json::to_value(&pair.mine.doc).expect("json");
+    let objects = |session: &Session| session.doc.body.first().and_then(|b| b.as_para()).map(|p| p.objects.len()).unwrap_or(0);
+
+    let enclose = pair.rewrite(1, "format.enclose", json!({"shape": "circle", "text": "x"}));
+    let enclosed = serde_json::to_value(&pair.mine.doc).expect("json");
+    assert_eq!(objects(&pair.mine), 1, "the author holds the field");
+    assert_eq!(objects(&pair.theirs), 1, "the peer replays the enclosure");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), enclosed);
+
+    // The inverse restores the body and the objects: the field goes away and the
+    // character comes back at both replicas.
+    let undo = history_op("alice", 2, pair.alice.version, &enclose, HistoryAction::Undo { op_id: enclose.op_id.clone() });
+    let answer = pair.room.submit("alice", Role::Editor, undo).expect("the body restore lands");
+    let delta = answer.delta.as_ref().expect("a delta");
+    assert_eq!(delta["op"], json!("set_para_format"));
+    assert_eq!(delta["objects"], json!([]), "the field is gone");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies its own inverse");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("the peer applies the inverse");
+    assert_eq!(objects(&pair.mine), 0);
+    assert_eq!(objects(&pair.theirs), 0);
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), before, "the author is back at the plain character");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), before, "the peer is back at the plain character");
+}
+
+#[test]
+fn a_foreign_edit_of_a_rewritten_paragraph_refuses_the_undo_without_touching_the_document() {
+    let mut pair = FormatPair::new(&["hello"]);
+    let node = pair.alice.ids.get(&NodeKey::new("body", vec![0])).expect("a body node").0;
+    pair.mine.sel = wordcraft_engine::Selection {
+        anchor: Pos { story: StoryRef::Body, path: Path::top(0), off: 0 },
+        focus: Pos { story: StoryRef::Body, path: Path::top(0), off: 5 },
+    };
+    let change = pair.rewrite(1, "format.changeCase", json!({"mode": "upper"}));
+
+    // Bob types into the same paragraph; his replica applies it optimistically.
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 5 });
+    pair.theirs.run("text.insert", &json!({"text": "!"})).expect("bob's UI types");
+    let typed = Op {
+        op_id: OpId::new("bob", 1),
+        base_version: 1,
+        epoch: None,
+        kind: OpKind::Primitive,
+        target: Target::new("body", node, 5),
+        payload: json!({"op": "insert_text", "text": "!"}),
+        history: None,
+    };
+    let answer = pair.room.submit("bob", Role::Editor, typed).expect("bob's edit lands");
+    pair.peer.apply(&answer, &mut pair.theirs).expect("bob's own echo is skipped");
+    pair.alice.apply(&answer, &mut pair.mine).expect("the author applies bob's edit");
+    let at_author = serde_json::to_value(&pair.mine.doc).expect("json");
+    let at_peer = serde_json::to_value(&pair.theirs.doc).expect("json");
+    assert_eq!(at_author, at_peer, "both replicas hold bob's edit");
+
+    // Alice's undo would overwrite bob's editing of the paragraph: the room
+    // refuses it before changing anything and without moving the version.
+    let version = pair.room.version();
+    let undo = history_op("alice", 2, pair.alice.version, &change, HistoryAction::Undo { op_id: change.op_id.clone() });
+    let err = pair.room.submit("alice", Role::Editor, undo).expect_err("a later edit of the paragraph blocks the undo");
+    assert_eq!(err.code, RejectCode::UndoConflict);
+    assert_eq!(crate::refusal_status(&err), (Status::InSync, false), "the session stays usable");
+    assert_eq!(serde_json::to_value(&pair.mine.doc).expect("json"), at_author, "nothing changed at the author");
+    assert_eq!(serde_json::to_value(&pair.theirs.doc).expect("json"), at_peer, "nothing changed at the peer");
+    assert_eq!(pair.room.version(), version, "the room did not advance");
 }
