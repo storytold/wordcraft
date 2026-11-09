@@ -60,6 +60,21 @@ pub fn read_markup(before_body: &str) -> Document {
     wordcraft_docx::read(&package).unwrap()
 }
 
+/// A document read from markup that lives before the body (`w:background`), followed by one empty
+/// paragraph, with document relationships and extra parts (a picture part a background fill can
+/// point at).
+pub fn read_markup_with(before_body: &str, doc_rels: &[(&str, &str, &str)], extra: &[(&str, &[u8])]) -> Document {
+    let document =
+        format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}>{before_body}<w:body><w:p/></w:body></w:document>"#);
+    let r = rels(doc_rels);
+    let mut entries: Vec<(&str, &[u8])> =
+        vec![("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", document.as_bytes()), ("word/_rels/document.xml.rels", r.as_bytes())];
+    for (p, c) in extra {
+        entries.push((p, c));
+    }
+    wordcraft_docx::read(&zip(&entries)).unwrap()
+}
+
 /// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
 /// including where a table expects rows or cells (ECMA-376 Part 3).
 #[test]

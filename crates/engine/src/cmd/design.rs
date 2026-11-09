@@ -413,7 +413,10 @@ fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
     if !supported(&bytes) {
         return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
     }
-    let ext = super::insert::image_ext(&bytes);
+    // A metafile's bytes probe as WMF or EMF, not as a raster image: the key carries the
+    // metafile's own extension (as `place_picture` does), so the media key names the bytes'
+    // actual format.
+    let ext = wordcraft_render::metafile_size(&bytes).map(|(_, _, ext)| ext).unwrap_or_else(|| super::insert::image_ext(&bytes));
     Ok(s.doc.add_media(bytes, ext))
 }
 /// `read_file_capped` reports a capped file as larger than N MB with the file's own wording;

@@ -2923,6 +2923,19 @@ fn page_background_reads_vml_opacity_forms() {
     assert_eq!(transparency("not a number"), 0.0);
 }
 
+/// A `v:fill` with an unknown pattern preset and a picture relationship keeps the picture: only
+/// known presets take the pattern branch, the rest fall through to the picture handling.
+#[test]
+fn page_background_with_unknown_pattern_preset_keeps_its_picture() {
+    let markup = r#"<w:background w:color="102030"><v:background id="_x0000_s1025"><v:fill type="pattern" pattern="notAPreset" r:id="rIdBg" color="000000" color2="FFFFFF"/></v:background></w:background>"#;
+    let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R'];
+    let d = crate::fixtures::read_markup_with(markup, &[("rIdBg", "image", "media/bg.png")], &[("word/media/bg.png", png)]);
+    assert!(d.settings.page_pattern.is_none(), "an unknown preset is not a pattern");
+    let pic = d.settings.page_picture.as_ref().expect("the fill keeps its picture");
+    assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png));
+    assert_eq!(d.settings.page_color, wordcraft_doc::props::Rgb::parse("102030"));
+}
+
 /// #2601: Drop Cap Options — a dropped cap with its lines, distance from the text and font, and
 /// one in the margin, survive a save: `w:framePr w:dropCap="drop|margin" w:lines w:hSpace` on the
 /// letter's own paragraph, the font on the letter's run (ECMA-376 §17.3.1.11). The text after the

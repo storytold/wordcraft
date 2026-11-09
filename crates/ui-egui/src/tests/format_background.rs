@@ -168,3 +168,24 @@ fn apply_keeps_a_multi_stop_gradient() {
     let params = edited.params();
     assert!(params["stops"].as_array().is_some_and(|s| s.iter().all(|s| s["transparency"].as_f64() == Some(60.0))), "{params}");
 }
+
+/// The draft preview paints the stops Apply sends: the document's interior stops with the
+/// endpoint pickers over them, not just the two endpoints.
+#[test]
+fn preview_paints_the_multi_stop_gradient_apply_sends() {
+    use wordcraft_doc::wordart::GradStop;
+    let stops = vec![
+        GradStop { pos: 0.0, color: wordcraft_doc::Rgb(255, 0, 0), transparency: 0.0 },
+        GradStop { pos: 50.0, color: wordcraft_doc::Rgb(0, 255, 0), transparency: 0.0 },
+        GradStop { pos: 100.0, color: wordcraft_doc::Rgb(0, 0, 255), transparency: 0.0 },
+    ];
+    let painted = crate::format_background::Draft::gradient_stops(&stops, wordcraft_doc::Rgb(1, 2, 3), wordcraft_doc::Rgb(4, 5, 6), 0.0);
+    assert_eq!(painted.len(), 3, "the interior stop survives");
+    assert_eq!(
+        (painted[0].color, painted[1].color, painted[2].color),
+        (wordcraft_doc::Rgb(1, 2, 3), wordcraft_doc::Rgb(0, 255, 0), wordcraft_doc::Rgb(4, 5, 6))
+    );
+    // Fewer than two document stops fall back to the two endpoints.
+    let fallback = crate::format_background::Draft::gradient_stops(&[], wordcraft_doc::Rgb::BLACK, wordcraft_doc::Rgb::WHITE, 25.0);
+    assert_eq!(fallback.iter().map(|s| s.pos).collect::<Vec<_>>(), [0.0, 100.0]);
+}

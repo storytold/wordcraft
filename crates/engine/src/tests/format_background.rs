@@ -171,3 +171,39 @@ fn a_picture_fill_refuses_inputs_past_the_size_limit() {
     assert_eq!(s.doc.settings, before, "bad base64 keeps the old fill too");
     assert!(s.run("design.pageFill", &serde_json::json!({"fill": "picture", "data": "!!!not-base64"})).is_err());
 }
+
+/// A WMF picture fill keeps a `.wmf` media key: the key names the bytes' actual format (as
+/// `place_picture` does), not the raster fallback.
+#[test]
+fn a_metafile_picture_fill_keeps_a_metafile_media_key() {
+    use serde_json::json;
+    // One WMF record: size in words, function, parameters; a placeable header at 1440 per inch.
+    let rec = |func: u16, params: &[i16]| {
+        let mut v = ((3 + params.len()) as u32).to_le_bytes().to_vec();
+        v.extend(func.to_le_bytes());
+        params.iter().for_each(|p| v.extend(p.to_le_bytes()));
+        v
+    };
+    let body = [rec(0x041B, &[720, 1440, 0, 0]), rec(0, &[])].concat();
+    let mut wmf = 0x9AC6_CDD7u32.to_le_bytes().to_vec();
+    for v in [0i16, 0, 0, 1440, 720] {
+        wmf.extend(v.to_le_bytes());
+    }
+    wmf.extend(1440u16.to_le_bytes());
+    wmf.extend([0u8; 6]);
+    let words = ((wmf.len() + 18 + body.len()) / 2) as u32;
+    for v in [1u16, 9, 0x300] {
+        wmf.extend(v.to_le_bytes());
+    }
+    wmf.extend(words.to_le_bytes());
+    wmf.extend(0u16.to_le_bytes());
+    wmf.extend(5u32.to_le_bytes());
+    wmf.extend(0u16.to_le_bytes());
+    wmf.extend(body);
+    assert!(wordcraft_render::metafile_size(&wmf).is_some(), "the fixture is a metafile");
+    let mut s = s();
+    let data = crate::cmd::insert::base64_encode(&wmf);
+    run(&mut s, "design.pageFill", json!({"fill": "picture", "data": data}));
+    let pic = s.doc.settings.page_picture.as_ref().expect("metafile picture kept");
+    assert!(pic.media.ends_with(".wmf"), "the key names the metafile format: {}", pic.media);
+}

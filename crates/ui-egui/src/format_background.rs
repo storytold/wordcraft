@@ -97,32 +97,38 @@ impl Draft {
 
     /// The command params that make this fill (a picture keeps the path or data the picker gave,
     /// else the media key already in the document).
+    /// The gradient's stops as the page draws them: the document's own stops (2 to 8), with the
+    /// endpoint colours from the start/end pickers; fewer or more stops fall back to the two
+    /// endpoints. The one transparency slider moves every stop only once the user changes it, so
+    /// an untouched multi-stop gradient keeps its own values.
+    pub(crate) fn gradient_stops(stops: &[GradStop], start: Rgb, end: Rgb, transparency: f32) -> Vec<GradStop> {
+        if (2..=8).contains(&stops.len()) {
+            let mean = stops.iter().map(|s| s.transparency).sum::<f32>() / stops.len() as f32;
+            let mut kept: Vec<GradStop> = stops.to_vec();
+            kept[0].color = start;
+            if let Some(last) = kept.last_mut() {
+                last.color = end;
+            }
+            if (transparency - mean).abs() > 0.01 {
+                for s in &mut kept {
+                    s.transparency = transparency;
+                }
+            }
+            return kept;
+        }
+        vec![GradStop { pos: 0.0, color: start, transparency }, GradStop { pos: 100.0, color: end, transparency }]
+    }
+
     pub fn params(&self) -> serde_json::Value {
         use serde_json::json;
         match &self.fill {
             DraftFill::None => json!({"fill": "none"}),
             DraftFill::Solid { color } => json!({"fill": "solid", "color": color.hex()}),
             DraftFill::Gradient { start, end, angle, transparency, stops } => {
-                let mut list: Vec<serde_json::Value> =
-                    stops.iter().map(|s| json!({"pos": s.pos, "color": s.color.hex(), "transparency": s.transparency})).collect();
-                if !(2..=8).contains(&list.len()) {
-                    list = vec![
-                        json!({"pos": 0.0, "color": start.hex(), "transparency": transparency}),
-                        json!({"pos": 100.0, "color": end.hex(), "transparency": transparency}),
-                    ];
-                } else {
-                    let mean = stops.iter().map(|s| s.transparency).sum::<f32>() / list.len() as f32;
-                    let last = list.len() - 1;
-                    list[0]["color"] = json!(start.hex());
-                    list[last]["color"] = json!(end.hex());
-                    // The slider is one transparency for the fill: move every stop only when the
-                    // user changed it, so an untouched multi-stop gradient keeps its own values.
-                    if (transparency - mean).abs() > 0.01 {
-                        for s in &mut list {
-                            s["transparency"] = json!(transparency);
-                        }
-                    }
-                }
+                let list: Vec<serde_json::Value> = Self::gradient_stops(stops, *start, *end, *transparency)
+                    .iter()
+                    .map(|s| json!({"pos": s.pos, "color": s.color.hex(), "transparency": s.transparency}))
+                    .collect();
                 json!({"fill": "gradient", "angle": angle, "stops": list})
             }
             DraftFill::Picture { path, media, data, tile, transparency, .. } => {
@@ -452,12 +458,11 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
         DraftFill::Solid { color } => {
             p.rect_filled(rect, 0.0, crate::theme::c32(*color));
         }
-        DraftFill::Gradient { start, end, angle, transparency, .. } => {
+        DraftFill::Gradient { start, end, angle, transparency, stops } => {
+            // The preview draws the same stops Apply sends: endpoint pickers over the document's
+            // own stops, not just the two endpoints.
             let g = Gradient {
-                stops: vec![
-                    GradStop { pos: 0.0, color: *start, transparency: *transparency },
-                    GradStop { pos: 100.0, color: *end, transparency: *transparency },
-                ],
+                stops: Draft::gradient_stops(stops, *start, *end, *transparency),
                 kind: GradientKind::Linear { angle: *angle, scaled: false },
                 tile: None,
                 rot_with_shape: false,

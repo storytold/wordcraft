@@ -134,11 +134,14 @@ fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     l
 }
 
-/// A bounded per-cell texture cache, refreshed when the page, scale or Print Markup changes.
+/// A bounded per-cell texture cache, refreshed when the page, scale, Print Markup, or the
+/// backgrounds setting changes. Backgrounds off strips the page fills before the print raster,
+/// as the job does, so the preview shows a plain page and can't serve a cached fill texture.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique(("print_page_texture", cache_slot));
-    let key = (app.session.rev(), app.session.prefs.print_markup, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, usize, u32, u32), TextureHandle)>(id))
+    let backgrounds = app.ui.print_backgrounds;
+    let key = (app.session.rev(), app.session.prefs.print_markup, backgrounds, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
+    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, bool, usize, u32, u32), TextureHandle)>(id))
         && k == key
     {
         return Some(t);
@@ -147,7 +150,14 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
-    let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
+    let mut doc = app.session.doc.clone();
+    if !backgrounds {
+        doc.settings.page_color = None;
+        doc.settings.page_picture = None;
+        doc.settings.page_gradient = None;
+        doc.settings.page_pattern = None;
+    }
+    let img = wordcraft_render::render_page(&doc, pg, scale, &Default::default());
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
@@ -512,5 +522,25 @@ mod tests {
             assert_eq!(app.session.rev(), rev);
             assert_eq!(app.session.dirty, dirty);
         }
+    }
+
+    /// Toggling the backgrounds setting repaints the print preview: backgrounds off strips the
+    /// fills before the raster (as the job does) and the texture key follows the setting, so no
+    /// cached fill texture survives the toggle.
+    #[test]
+    fn preview_repaints_when_the_backgrounds_setting_toggles() {
+        let mut session = Session::new(wordcraft_doc::Document::from_text("Synthetic backgrounds preview"));
+        session.run("design.pageColor", &json!({"color": "#102040"})).unwrap();
+        let mut app = WordApp::new(session, Services::default());
+        assert!(app.session.doc.settings.page_color.is_some());
+        let ctx = egui::Context::default();
+        app.ui.print_backgrounds = true;
+        let layout = layout_of(&app, &ctx);
+        let with = page_texture(&app, &ctx, &layout, 0, 0, 300.0).unwrap();
+        assert_eq!(with.id(), page_texture(&app, &ctx, &layout, 0, 0, 300.0).unwrap().id(), "same setting reuses the texture");
+        app.ui.print_backgrounds = false;
+        let without = page_texture(&app, &ctx, &layout, 0, 0, 300.0).unwrap();
+        assert_ne!(with.id(), without.id(), "the toggle repaints instead of serving the cached fill");
+        assert!(app.session.doc.settings.page_color.is_some(), "the preview borrows the fills, it doesn't take them");
     }
 }

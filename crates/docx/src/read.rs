@@ -456,20 +456,18 @@ fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
         });
         // The fallback colour belongs to the gradient, not to the page.
         r.doc.settings.page_color = if r.doc.settings.page_gradient.is_some() { None } else { bg_color };
-    } else if kind.eq_ignore_ascii_case("pattern") {
+    } else if kind.eq_ignore_ascii_case("pattern") && PagePattern::known(&fill.attr("pattern").unwrap_or("").chars().take(64).collect::<String>()) {
+        // Only a known preset is a pattern: an unknown or absent one falls through to the
+        // picture-relationship handling below, so a fill with both keeps its picture.
         let preset: String = fill.attr("pattern").unwrap_or("").chars().take(64).collect();
-        if PagePattern::known(&preset) {
-            r.doc.settings.page_pattern = Some(PagePattern {
-                preset,
-                fore: fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::BLACK),
-                back: fill.attr("color2").and_then(Rgb::parse).unwrap_or(Rgb::WHITE),
-                transparency,
-            });
-            // The back colour is the pattern's, not an explicit page colour.
-            r.doc.settings.page_color = None;
-        } else {
-            r.doc.settings.page_color = bg_color;
-        }
+        r.doc.settings.page_pattern = Some(PagePattern {
+            preset,
+            fore: fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::BLACK),
+            back: fill.attr("color2").and_then(Rgb::parse).unwrap_or(Rgb::WHITE),
+            transparency,
+        });
+        // The back colour is the pattern's, not an explicit page colour.
+        r.doc.settings.page_color = None;
     } else if let Some(media) =
         fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid")).and_then(|id| r.media_for(rels, id))
     {
