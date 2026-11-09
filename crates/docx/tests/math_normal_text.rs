@@ -20,7 +20,7 @@ fn save(run: MRun) -> (String, MRun) {
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     let start = xml.find("<m:r>").unwrap();
-    let end = start + xml[start..].find("</m:r>").unwrap();
+    let end = start + xml[start..].find("</m:r>").unwrap() + "</m:r>".len();
     let back = wordcraft_docx::read(&bytes).unwrap();
     let math = back.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
         InlineObject::Equation { math, .. } => Some(math.clone()),
