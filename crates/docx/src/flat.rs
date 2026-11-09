@@ -442,8 +442,9 @@ fn xml_fragment<'a>(ct: &str, bytes: &'a [u8]) -> Option<&'a str> {
 
 /// Whether `s` is exactly one well-formed element, with only whitespace, comments and processing
 /// instructions around it. Kept bytes are inlined into `pkg:xmlData` only then; anything else could
-/// close the wrapper and add parts of its own, so it goes out as `pkg:binaryData` (#3742).
-fn one_element(s: &str) -> bool {
+/// close the wrapper and add parts of its own, so it goes out as `pkg:binaryData` (#3742). Also the
+/// gate for an equation's kept OMML (#6072).
+pub(crate) fn one_element(s: &str) -> bool {
     let mut r = quick_xml::Reader::from_str(s);
     r.config_mut().check_comments = true;
     let (mut depth, mut roots) = (0usize, 0usize);

@@ -44,7 +44,7 @@ pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math, color
             w.close("m:oMathParaPr");
         }
     }
-    if !math.omml.is_empty() && math.omml.starts_with("<m:oMath") && crate::xml::parse(wrap_ns(&math.omml).as_bytes()).is_ok() {
+    if kept_omml_ok(&math.omml) {
         w.raw(&math.omml);
     } else {
         let parsed;
@@ -111,6 +111,17 @@ fn omml_color(omml: &str) -> Option<Rgb> {
     let root = crate::xml::parse(wrap_ns(omml).as_bytes()).ok()?;
     let e = root.child("m:oMath")?;
     crate::read::math::lift_color(&mut crate::read::math::read_omath(e, MathJc::default()))
+}
+
+/// Whether the kept source XML can be written back as it is: exactly one well-formed `m:oMath`
+/// (not `m:oMathPara`), with nothing around it. It is written verbatim into `document.xml`, and
+/// `.json` documents carry it too, so anything else (an unclosed or mismatched tag, an unknown
+/// entity, markup or text after the element) is written from the nodes instead (#6072). The
+/// lenient `xml::parse` accepts all of those; `one_element` and `parse_strict` don't.
+fn kept_omml_ok(omml: &str) -> bool {
+    (omml.starts_with("<m:oMath>") || omml.starts_with("<m:oMath "))
+        && crate::flat::one_element(omml)
+        && crate::xml::parse_strict(wrap_ns(omml).as_bytes()).is_ok()
 }
 
 /// The kept XML with namespace declarations, for validating it on its own.
