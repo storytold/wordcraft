@@ -32,6 +32,8 @@ The direct WPS payload takes precedence over picture blips inside its text. Text
 and floating-child paint require separate qualification. A shape's own picture fill retains
 its existing image fallback.
 
+Legacy DOC empty inline shapes (an `MM_SHAPE` PICF whose picture-frame shape has no BLIP, no `pib`/`pibName` and no FBSE, as some writers put after a text box anchored as a character) keep their goal size times scale as an invisible inline shape (no fill, no outline), so the line reserves the room and the text after the box starts below it, as in Word. A horizontal line or a linked picture with no BLIP is still dropped. DOCX saves the shape as `wp:inline` + `wps:wsp` with no fill and no line, and no image part.
+
 > **Comment command update:** 2026-10-14 · malformed explicit IDs rejected; synthetic refusal, undo/redo and DOCX save/reopen checks (#1690 finding 3). Readiness estimates unchanged.
 
 Comment commands reject explicit negative, floating-point and wrong-type IDs before editing or using the caret. Valid Delete, Resolve, Reply and Edit operations, including omitted caret IDs for Delete/Resolve, have undo/redo and two synthetic DOCX save/reopen checks preserving body and comment data (`crates/engine/tests/it/comment_ids.rs`). This does not extend the modern-comment format coverage listed below.
@@ -478,6 +480,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | 2026-10-17 | trivial | RTF on the system clipboard: Copy and Cut write the copy as RTF beside its text and HTML (Windows, macOS, Wayland; not X11), and Paste reads RTF on macOS and X11 too |
 | 2026-11-03 | trivial | Replace Table of Contents keeps Word's title above the section break over entries in columns, and Remove takes the title, the blank paragraph and its break with the table, as observed in Word for Mac (#4041) |
 | 2026-11-02 | minor | `w:altChunk` content (MHT, HTML, RTF, text, nested documents) brought in on open, where it stands; `.mht`/`.mhtml` open; HTML reads `style` element rules, paragraph margins, indents and line height, cell widths and borders, and an opened page takes Word's web-page defaults. Insert › Text from File keeps the file's pictures and lists |
+| 2026-11-02 | trivial | `.doc`: an empty inline shape (`MM_SHAPE`, no picture) keeps its goal size as an invisible inline object, so the following text starts below the box as in Word; DOCX saves it as an invisible `wps:wsp`, no image part |
 | 2026-11-02 | trivial | DOCX: a VML horizontal rule (`v:rect o:hr`, a web page's `<hr>` pasted into Word) is drawn across its line as Word draws it — the whole width inside the paragraph's indents, or `o:hrpct` of it, or its own width, placed by `o:hralign` — instead of as a 1 pt dot; in a table cell it follows the column; it saves back as the same VML rule |
 | 2026-11-02 | trivial | Soft edges on a see-through solid fill fade from the fill's own opacity, not from fully opaque, in the raster, PDF and caret-background paths; opaque fills draw as before (#1600). Synthetic raster/PDF tests; no new Word comparison |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |

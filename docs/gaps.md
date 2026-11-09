@@ -59,6 +59,8 @@ Exact line spacing keeps the run font baseline around tall equations; automatic 
 
 Legacy Word imports (#2445): interactive Save for `.doc`/`.dot` uses the existing DOCX Save As dialog. Cancel and write failures retain the draft and original path; Save before Close continues only after a successful supported-format save. This narrows save reliability under gap #3; binary `.doc` writing remains unsupported. Late Save As answers are rejected before writing if automation has replaced the document.
 
+Legacy Word empty inline shapes: a picture shape with no picture (seen after text boxes anchored as a character) keeps its size on the line as an invisible object, so the text after the box no longer runs underneath it.
+
 Document model hangs (#3614, #3692): paragraph object walks, image deduplication, linear-equation letter runs and text box paste no longer do quadratic work or unbounded copies on hostile files. This narrows gap #3; the engine, DOCX reader and UI loops named in #3614 remain.
 
 Print Markup text-copy exports also walk paragraph objects once when collecting comment quotes (#3614). Body/table traversal, quote limits, reply order and exported text remain unchanged. Other engine, reader and UI scans remain separate.
@@ -207,6 +209,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | 2026-10-31 | trivial | A list level with numFmt none shows its literal text as its label and still counts, as in Word (#4985); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-02 | trivial | Picture hyperlinks show on hover, follow on Ctrl/⌘+click and round-trip as Word stores them (#5267); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-02 | trivial | #26 narrowed: MHT opens and `w:altChunk` content is brought in on open; saving MHT remains |
+| 2026-11-02 | trivial | `.doc` empty inline shapes (`MM_SHAPE`, no picture) keep their goal size as an invisible inline object, so lines below a text box anchored as a character start below it as in Word; readiness estimates unchanged |
 | 2026-11-01 | trivial | Preserve table rows and cells inside selected alternate-content branches (#5219); readiness estimates unchanged. |
 | 2026-11-07 | trivial | Empty paragraph deletion preserves following paragraph/mark formatting (Leaf #152); synthetic regressions only, no ranked gap closed or estimate changed. |
 | 2026-11-07 | trivial | Charts: a series without its own colour takes the accent its `c:idx` picks, as Word does, not the one its place in the file picks (#5963) |
