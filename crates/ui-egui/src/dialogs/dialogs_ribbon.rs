@@ -88,17 +88,14 @@ fn label_of(app: &WordApp, id: &str) -> String {
 
 /// The dialog body; true closes it.
 pub fn customize_ribbon(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm) -> bool {
-    ui.horizontal(|ui| {
-        for (page, name) in [(Page::Ribbon, "Ribbon"), (Page::QuickAccess, "Quick Access Toolbar")] {
-            if ui.selectable_label(f.page == page, tl!(name)).clicked() && f.page != page {
-                f.page = page;
-                f.renaming = None;
-                f.confirm_reset = false;
-                f.message.clear();
-            }
-        }
-    });
-    ui.separator();
+    let names = [tl!("Ribbon").to_string(), tl!("Quick Access Toolbar").to_string()];
+    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, (f.page == Page::QuickAccess) as usize) {
+        f.page = if k == 0 { Page::Ribbon } else { Page::QuickAccess };
+        f.renaming = None;
+        f.confirm_reset = false;
+        f.message.clear();
+    }
+    ui.add_space(6.0);
     let (left, right, h) = (150.0, 230.0, 300.0);
     ui.add(egui::TextEdit::singleline(&mut f.filter).hint_text(tl!("Search")).desired_width(left + right + 8.0));
     let mut cats: Vec<(String, String)> = categories(app).into_iter().map(|c| (c.clone(), tl!(&c).to_string())).collect();
@@ -222,7 +219,7 @@ fn ribbon_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
     crate::rtl::vertical(ui, |ui| {
         ui.add_space(h / 2.0 - 10.0);
         let can_add = sel.group.is_some() && !f.command.is_empty();
-        let add = ui.add_enabled(can_add, egui::Button::new(tl!("Add >>")).min_size(vec2(96.0, 0.0)));
+        let add = ui.add_enabled(can_add, egui::Button::new(crate::rtl::arrows(tl!("Add >>"))).min_size(vec2(96.0, 0.0)));
         if add.on_disabled_hover_text(tl!("Pick a custom group (New Group makes one)")).clicked() {
             let mut m = address(&sel);
             m.remove("command");
@@ -235,7 +232,7 @@ fn ribbon_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
             }
         }
         let can_remove = sel.group.is_some() || tab_custom;
-        if ui.add_enabled(can_remove, egui::Button::new(tl!("<< Remove")).min_size(vec2(96.0, 0.0))).clicked()
+        if ui.add_enabled(can_remove, egui::Button::new(crate::rtl::arrows(tl!("<< Remove"))).min_size(vec2(96.0, 0.0))).clicked()
             && change(app, f, json!({"remove": address(&sel)})).is_some()
         {
             f.selected = match (&sel.group, &sel.command) {
@@ -357,12 +354,12 @@ fn qat_page(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm, h: f32) {
     crate::rtl::vertical(ui, |ui| {
         ui.add_space(h / 2.0 - 10.0);
         let can_add = !f.command.is_empty() && !ids.contains(&f.command);
-        if ui.add_enabled(can_add, egui::Button::new(tl!("Add >>")).min_size(vec2(96.0, 0.0))).clicked()
+        if ui.add_enabled(can_add, egui::Button::new(crate::rtl::arrows(tl!("Add >>"))).min_size(vec2(96.0, 0.0))).clicked()
             && change(app, f, json!({"qatAdd": f.command})).is_some()
         {
             f.qat_selected = f.command.clone();
         }
-        if ui.add_enabled(!f.qat_selected.is_empty(), egui::Button::new(tl!("<< Remove")).min_size(vec2(96.0, 0.0))).clicked() {
+        if ui.add_enabled(!f.qat_selected.is_empty(), egui::Button::new(crate::rtl::arrows(tl!("<< Remove"))).min_size(vec2(96.0, 0.0))).clicked() {
             change(app, f, json!({"qatRemove": f.qat_selected}));
         }
     });
