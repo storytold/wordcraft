@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `4480bc13` plus this status commit — 57 commits over
+- HEAD at this writing: `675b3f1a` plus this status commit — 61 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -61,7 +61,9 @@ missing, and where the next session should start.
   bulleted or numbered list at an explicit level, with the numbering definition
   it creates, §5.15), `set_para_multilevel` (one multilevel definition with each
   paragraph at its own level `0..=8`, §5.16), `set_para_restart_numbering` (one
-  list restarted at an explicit start, §5.16), `insert_row`, `remove_row`, and
+  list restarted at an explicit start, §5.16), `remove_blank` (a list of empty
+  paragraphs named by session id, with a restore form that puts them back with
+  their own ids, §5.17), `insert_row`, `remove_row`, and
   `set_para_format` (restore one paragraph's runs, mark and `ParaProps` — the
   inverse of a formatting command, §5.10).
 - Node ids address every container: a table `[block]`, its rows
@@ -164,6 +166,16 @@ missing, and where the next session should start.
   undo puts the earlier numbering references back and drops the instance
   (§5.16). Both keep the command delta for a step wider than 64 paragraphs, a
   paragraph inside a table or one without a session id.
+- Delete Blank Paragraphs (`para.removeBlank`) is normalized after the command
+  to one `remove_blank` structural operation naming the empty paragraphs it
+  took out; replicas replay the same transaction delta, undo puts the same
+  paragraphs back with their runs, properties and session ids in one step, and
+  redo removes them again (§5.17). The step reports the surviving paragraphs
+  beside each removal in `touched`, so a foreign edit there makes undo
+  `undo-conflict`. A command that removed nothing is an identity: no delta and
+  no step on the stack, so it is not a barrier either. A step that also changed
+  text or a kept block, touched a paragraph inside a table or one without a
+  session id, or removed more than 64 paragraphs keeps the command delta.
 
 ### Client and transport (`crates/collab-client`, `crates/collab-ws`)
 
@@ -251,7 +263,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step and a restarted list step are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16 |
+| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -356,9 +368,10 @@ Results at this writing:
   including the two that rewrite the characters, `format.changeCase` and
   `format.enclose`, whose inverse restores the paragraph's body (§5.11), and a
   paragraph move, a paragraph sort, an outline level step, a list step, a
-  multilevel list step and a restarted list step are addressable structural
-  operations with an exact inverse (§5.12, §5.13, §5.14, §5.15, §5.16); every
-  other command still has none and acts as an undo barrier. The
+  multilevel list step, a restarted list step and a blank-paragraph removal are
+  addressable structural operations with an exact inverse (§5.12, §5.13, §5.14,
+  §5.15, §5.16, §5.17); every other command still has none and acts as an undo
+  barrier. The
   `opId` dedup window travels with the snapshot (§5.5), so a retry across a
   restart is
   deduplicated; the window is bounded at 10 000 answers, so a retry after more
@@ -375,8 +388,9 @@ Results at this writing:
   move is a `move_block` structural operation (§5.12), a sort is a `permute`
   (§5.13), an outline level change is a `set_para_level` (§5.14), a list
   membership change is a `set_para_list` (§5.15), a multilevel list is a
-  `set_para_multilevel` and a restarted list is a
-  `set_para_restart_numbering` (§5.16), the rest
+  `set_para_multilevel`, a restarted list is a
+  `set_para_restart_numbering` (§5.16) and a multi-paragraph blank removal is a
+  `remove_blank` (§5.17), the rest
   stay barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
@@ -1732,6 +1746,137 @@ colliding definition and a wider step.
 **Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app` — 50, 105, 52 and 31 passed; `cargo clippy` on those four
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
+
+### 5.17 Deleting blank paragraphs is an addressable structural operation (run 2026-11-09)
+
+§5.16 left `para.removeBlank` in the barrier list: it deletes several blocks at
+once, so no primitive named it and its undo could only say `unsupported`. It is
+now one structural `remove_blank` operation with an explicit list of session
+ids — payload → normalized plan → adapter → confirmed delta → two replicas,
+the same template as §5.15/§5.16. **Head:** the code commit of this slice on
+`feature/realtime-collaboration` is `d70b3a28` with a comment-only follow-up
+`675b3f1a` (no push, CI unchanged); the docs commit adds this entry.
+
+**The operation.** The forward form names the paragraphs by session id:
+
+```json
+{"op":"remove_blank","ids":[42,17]}
+```
+
+Every id must name a top-level paragraph of one story that is empty
+(`Paragraph::is_empty`) and carries no section break — and the block after it
+must be a paragraph too, because a story's last mark cannot be removed and a
+paragraph before a table cannot be joined across it (the engine's own rule).
+The operation removes exactly the named paragraphs, so it never touches a
+non-empty one: a payload that names one is refused rather than filtered, which
+keeps the address explicit.
+
+**The exact form.** The inverse is the same operation with `restore`; each item
+carries the paragraph's body, its id and the index it goes back to, highest
+index first so every index stays valid as the paragraphs land:
+
+```json
+{"op":"remove_blank","story":"body",
+ "restore":[{"id":17,"index":1,"block":{…}},{"id":42,"index":3,"block":{…}}]}
+```
+
+`index` in a restore is the index in the document *after* the step (every
+earlier removal shifts it down by one), and `block` is the whole paragraph —
+text, runs, mark, `ParaProps`, objects — so undo returns exactly the earlier
+sequence of paragraphs. The restored paragraph takes its own session id back:
+`NodeIds::rebase` revives a tombstoned id, so a client that held the id
+addresses the same paragraph again (the same mechanism the table restores use,
+§5.7/§5.8).
+
+**One transaction, the same document at the author and the peer.** The
+authoritative delta wraps the operation in the step's unit:
+
+```json
+{"op":"transaction","ops":[{"op":"remove_blank","story":"body",
+  "items":[{"id":42,"index":3},{"id":17,"index":1}]}]}
+```
+
+The author applied the command optimistically; the peer applies the delta. Both
+end at the identical document, and the node map moves identically (removed ids
+tombstoned, later blocks shifted down, both restored ids rebased on undo). Undo
+lands as one `transaction`, redo replays the forward op and removes the same
+paragraphs again.
+
+**A foreign edit is `undo-conflict`.** The step reports in `Effect::touched` the
+surviving paragraphs beside every removal — the inverse puts the blank back
+between them. Any later edit another user makes in one of them makes undo
+answer `undo-conflict`, leaves both documents byte-identical and does not move
+the room version; the step stays on the stack and the session stays `InSync`
+(§5.9).
+
+**The command path and what stays a barrier.** `para.removeBlank` runs through
+the engine as before; the adapter walks the document before and after (blocks
+the command did not touch share their `Arc`), reads the removed block indexes
+back and names them by session id, then lets `plan_remove_blank` check every
+one again. A command that also changed text, runs, objects, a kept block, the
+block order, a table or another story, a paragraph inside a table, a paragraph
+without a session id, and a step wider than `MAX_BLANK_PARAGRAPHS` (64) is not
+captured: the step keeps its command delta and stays a barrier (its undo
+answers `unsupported`). A command that removed nothing is an identity: no
+delta, no step on the undo stack, so it is not a barrier either. The direct
+operation refuses the same cases before the document changes: an unknown id
+(`invalid`), a retired id (`gone`), a non-empty paragraph, a section break, a
+last block, a table, a row, a cell, a paragraph inside a table, a duplicate id,
+an empty set, two stories in one step and a wider step — the document and the
+room version do not move.
+
+**A map bug this slice found and fixed.** `NodeIds::shift_children` moved each
+child's two map entries one at a time, so when consecutive children shifted into
+each other's paths (removing several paragraphs, or any insertion that moves a
+run) a later child could erase the forward entry an earlier one had just
+written: the id resolved, but `get(key)` returned `None` and a client could no
+longer address a live paragraph. Every old key is now removed before any new
+one is written (the way `permute_children` already worked), with a regression
+test over a run of children in both directions.
+
+**Tests.**
+
+- `crates/collab/src/ids.rs`:
+  `shifting_a_run_of_children_leaves_every_forward_key_in_place` (every child of
+  a shifted run is still addressable at its new path, both directions).
+- `crates/collab-doc/src/tests.rs`:
+  `removing_blank_paragraphs_is_one_transactional_blank_step` (delta shape, the
+  highest index first, survivors keep their ids, removed ids retired),
+  `a_replica_applies_a_blank_step_and_keeps_the_survivors_ids` (delta
+  convergence and the replica's map), `undo_of_a_blank_step_lands_as_one_transaction_and_restores_the_paragraphs_and_their_ids`
+  (the restore items carry body/id/index, the document JSON is byte-identical
+  and both ids are revived at their own paths),
+  `a_blank_step_with_a_bad_address_or_a_non_empty_paragraph_is_refused_before_mutation`
+  (empty set, duplicate, unknown id, non-empty paragraph, id 0, no `ids`, the
+  last block → `invalid`; document and version unchanged every time),
+  `a_blank_step_on_a_paragraph_inside_a_table_is_refused_before_mutation`
+  (a cell paragraph and the table itself), `a_blank_step_naming_a_retired_id_is_gone`,
+  `a_blank_step_wider_than_the_bound_is_refused_before_mutation` (65 ids),
+  `a_foreign_edit_of_a_neighbouring_paragraph_makes_undo_a_conflict` (the step
+  stays on the stack).
+- `crates/collab-engine/src/tests.rs`:
+  `a_remove_blank_command_lands_as_one_blank_step_and_undoes` (the command
+  yields a transaction `remove_blank`; a replica that never ran it converges,
+  undoes with the same ids and redoes),
+  `a_remove_blank_command_with_no_blank_paragraph_changes_nothing_and_is_no_barrier`
+  (identity: no delta, no undo step),
+  `a_remove_blank_command_over_more_than_64_paragraphs_stays_an_undo_barrier`
+  (command delta, undo `unsupported`), `a_blank_step_on_a_table_is_refused_before_mutation`
+  (a blank whose next block is a table and a cell paragraph → `invalid`).
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s): `a_blank_undo_lands_as_one_transaction_at_its_author_and_the_peer`
+  (the plan is the command; the delta is one `remove_blank` transaction; undo
+  returns the exact earlier document and both replicas address the restored
+  paragraphs by their old ids; redo removes them again),
+  `a_foreign_edit_of_a_neighbouring_paragraph_refuses_the_blank_undo_without_touching_the_document`
+  (Bob types into a neighbour; both documents byte-identical, room version
+  unchanged).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 51, 113, 56 and 33 passed; `cargo clippy` on those four
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
