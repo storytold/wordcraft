@@ -1,11 +1,14 @@
 use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected, with_obj};
-use super::*;
+use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, StoryRef, Value, Wrap, json, p};
 
 /// Largest object offset or move, points.
 pub(super) const MAX_OFFSET: f32 = 4000.0;
 
 /// Resize and/or move the selected object (dragging its frame or handles).
 pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(r) = crate::cmd::canvas::member_bounds(s, v) {
+        return r;
+    }
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
@@ -58,7 +61,7 @@ fn landing(s: &Session, pos: &Pos, to: &Pos) -> Result<Pos, CmdError> {
 
 /// Move the In Line with Text object at `pos` to the text position `to`, where it stays In Line
 /// with Text, keeping its character formatting: Word's drag of an inline picture, which lands
-/// where its dashed insertion cursor was (#2233, #2234). Dropped on itself, nothing changes.
+/// where its insertion cursor was (#2233, #2234). Dropped on itself, nothing changes.
 /// Returns the object's position afterwards.
 fn move_in_text(s: &mut Session, pos: Pos, to: &Pos) -> Result<Pos, CmdError> {
     let to = landing(s, &pos, to)?;
@@ -161,8 +164,9 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         Some(path) => (Pos { story, path, off: 0 }, false),
         None => (nearest_line(&layout, page, y, story).ok_or_else(|| CmdError::Params("no text on that page to anchor to".into()))?, true),
     };
-    // Move its character to the anchor (unless it's already in that paragraph).
-    let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page {
+    // Move its character to the anchor, unless it's already in that paragraph and drawn on this
+    // page (one anchored on a later page of it is drawn there, #4250).
+    let at = if anchor.story == pos.story && anchor.path == pos.path && !on_page && layout.object(pos, page).is_some_and(|o| o.page == page) {
         pos.clone()
     } else {
         let obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
@@ -181,6 +185,10 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         if f.wrap == Wrap::Inline {
             f.wrap = Wrap::Square;
         }
+        // A drawing anchored to a page is on this one now.
+        if f.page > 0 {
+            f.page = u32::try_from(page).map_or(f.page, |p| p.saturating_add(1));
+        }
         f.h_rel = Anchor::Page;
         f.v_rel = Anchor::Page;
         f.h_align = None;
@@ -195,6 +203,8 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     s.touch();
     let origin = s.layout().object(&at, page).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?.origin;
     edit_float(s, &at, |f| {
+        // On its paragraph now: a page it was anchored to is gone, not only hidden.
+        f.page = 0;
         f.h_rel = Anchor::Column;
         f.v_rel = Anchor::Paragraph;
         f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);

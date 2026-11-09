@@ -1,5 +1,5 @@
 use super::options::PdfOptions;
-use super::*;
+use super::{DateTime, Document, Metadata};
 
 pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     let c = &doc.core;
@@ -8,7 +8,10 @@ pub(crate) fn metadata(doc: &Document, opts: &PdfOptions) -> Metadata {
     if !title.trim().is_empty() {
         m.title = Some(title);
     }
-    let author = opts.author.clone().unwrap_or_else(|| c.creator.clone());
+    // "Remove personal information from file properties on save" covers the PDF's author too:
+    // the document's creator is left out (an author the caller names is still written).
+    let kept = if doc.settings.remove_personal_info { String::new() } else { c.creator.clone() };
+    let author = opts.author.clone().unwrap_or(kept);
     if !author.trim().is_empty() {
         m.authors = vec![author];
     }

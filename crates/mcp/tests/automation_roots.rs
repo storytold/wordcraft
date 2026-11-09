@@ -2,8 +2,6 @@
 //! the MCP protocol, files open and load only from inside the read root and are saved and
 //! exported only inside the write root; paths that leave a root (`..`, another folder, a sibling
 //! with the same prefix, a link) are refused, and nothing is written outside.
-// Integration tests: unwrapping and panicking on failure is fine here, unlike in shipped code (AGENTS.md).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::path::{Path, PathBuf};
 
@@ -210,6 +208,7 @@ fn links_out_of_a_root_are_refused() {
 }
 
 /// The names in `dir`, sorted.
+#[cfg(unix)]
 fn names(dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
     names.sort();

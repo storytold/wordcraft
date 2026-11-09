@@ -1,5 +1,5 @@
 use super::grid::{Exclusion, Grid};
-use super::*;
+use super::{Arc, CharProps, Document, FaceRef, FieldCtx, Level, NumFormat, NumeralMode, ParaProps, ResolvedChar, TabLeader};
 
 /// How a run set in one of Word's symbol fonts (Symbol, Wingdings, Wingdings 2/3, Webdings)
 /// shows its characters. Those fonts are proprietary and usually missing: a substitute has other
@@ -87,7 +87,16 @@ impl StyleRun {
         let draw = self.rc.draw_size();
         let k = if draw > 0.0 { self.rc.size / draw } else { 1.0 };
         let raise = self.rc.position;
-        (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0))
+        let (mut a, mut d) = (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0));
+        // Emphasis marks sit above the characters (or below), and the line makes room for them
+        // (see `display::lines::emphasis_mark`).
+        let size = if self.rc.size.is_finite() { self.rc.size.clamp(0.0, 1638.0) } else { 0.0 };
+        match self.rc.emphasis {
+            wordcraft_doc::props::EmphasisMark::None => {}
+            wordcraft_doc::props::EmphasisMark::UnderDot => d = d.max(size * 0.42 + (-raise).max(0.0)),
+            _ => a = a.max(size * 1.32 + raise.max(0.0)),
+        }
+        (a, d)
     }
 }
 

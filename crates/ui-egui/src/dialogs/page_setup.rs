@@ -1,4 +1,4 @@
-use super::*;
+use super::{MeasureExt, Ui, Value, WordApp, json, semibold};
 
 /// Labels of Page Setup's paper size (#1433), in one place in case Word's wording differs.
 pub(crate) const PAPER_LABELS: PaperLabels =
@@ -91,7 +91,7 @@ pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &
         let label = ui.label(tl!(l.size));
         let entry = paper_entry(*paper).filter(|_| !*custom);
         let shown = tl!(entry.unwrap_or(l.custom));
-        let combo = egui::ComboBox::from_id_salt("ps_paper_size").width(180.0).height(400.0).selected_text(shown).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("ps_paper_size").width(180.0).height(400.0).selected_text(shown).show_ui(ui, |ui| {
             for (n, w, h) in wordcraft_geom::PAPER_SIZES {
                 if ui.selectable_label(entry == Some(*n), tl!(n)).clicked() {
                     let (w, h) = (w / ppu, h / ppu);
@@ -106,19 +106,24 @@ pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &
         });
         combo.response.labelled_by(label.id);
     });
-    egui::Grid::new("ps_paper").num_columns(4).show(ui, |ui| {
+    crate::rtl::Table::new("ps_paper").columns(4).show(ui, |t| {
         use wordcraft_engine::cmd::page::{MAX_PAGE_SIDE, MIN_PAGE_SIDE};
         let range = MIN_PAGE_SIDE / ppu..=MAX_PAGE_SIDE / ppu;
-        let width_label = ui.label(tl!(l.width));
-        let w = ui
-            .add(egui::DragValue::new(&mut paper.0).speed(3.6 / ppu).range(range.clone()).measure(unit).max_decimals(2))
-            .labelled_by(width_label.id);
-        let height_label = ui.label(tl!(l.height));
-        let h = ui.add(egui::DragValue::new(&mut paper.1).speed(3.6 / ppu).range(range).measure(unit).max_decimals(2)).labelled_by(height_label.id);
-        if (w.changed() || h.changed()) && paper.0 != paper.1 {
-            *landscape = paper.0 > paper.1;
-        }
-        ui.end_row();
+        t.row(|r| {
+            let width_label = r.cell(|ui| ui.label(tl!(l.width)));
+            let w = r.cell(|ui| {
+                ui.add(egui::DragValue::new(&mut paper.0).speed(3.6 / ppu).range(range.clone()).measure(unit).max_decimals(2).clip_text(true))
+                    .labelled_by(width_label.id)
+            });
+            let height_label = r.cell(|ui| ui.label(tl!(l.height)));
+            let h = r.cell(|ui| {
+                ui.add(egui::DragValue::new(&mut paper.1).speed(3.6 / ppu).range(range).measure(unit).max_decimals(2).clip_text(true))
+                    .labelled_by(height_label.id)
+            });
+            if (w.changed() || h.changed()) && paper.0 != paper.1 {
+                *landscape = paper.0 > paper.1;
+            }
+        });
     });
 }
 
@@ -130,7 +135,7 @@ pub(super) fn page_valign_combo(ui: &mut egui::Ui, valign: &mut wordcraft_doc::s
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Vertical alignment:"));
         let shown = CHOICES.iter().find(|(v, _)| v == valign).map_or("", |(_, l)| tl!(l));
-        let combo = egui::ComboBox::from_id_salt("ps_valign").selected_text(shown).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("ps_valign").selected_text(shown).show_ui(ui, |ui| {
             for (v, l) in CHOICES {
                 ui.selectable_value(valign, v, tl!(l));
             }

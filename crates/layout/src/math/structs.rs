@@ -1,6 +1,6 @@
 use super::bx::{Bx, Cls, St, hcat};
 use super::state::wide_accent;
-use super::*;
+use super::{Arg, C, ColJc, Ctx, FracKind, MItem, MNode, glyph_bounds};
 
 impl Ctx {
     /// Limits under and over `base` (centred), spaced as for big operators (`big`) or as

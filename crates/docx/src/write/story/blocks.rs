@@ -1,5 +1,5 @@
 use super::toc::written_toc_span;
-use super::*;
+use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
 
 impl Writer<'_> {
     fn write_trailing_para(&mut self, w: &mut W, depth: usize) {

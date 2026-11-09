@@ -98,8 +98,8 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     Ok(s)
 }
 
-/// The commands that open a file, and which of their arguments not starting with `--` it is (as
-/// `pos` counts). `run` opens the value of `--file`.
+/// The commands that open a file, and which positional argument it is, excluding option values.
+/// `run` opens the value of `--file`.
 const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("zotero", 1)];
 
 /// The arguments as text. Only the file the command opens may have a name that isn't valid Unicode,
@@ -108,8 +108,14 @@ const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0),
 fn text_args<S: AsRef<OsStr>>(raw: &[S]) -> Result<(Vec<String>, Option<PathBuf>), String> {
     let args: Vec<String> = raw.iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
+    let specs = match cmd {
+        "convert" => CONVERT_OPTIONS,
+        "render" => RENDER_OPTIONS,
+        "zotero" => ZOTERO_OPTIONS,
+        _ => PASSWORD_OPTIONS,
+    };
     let file_at = match OPENS_FILE.iter().find(|(c, _)| *c == cmd) {
-        Some((_, n)) => args.iter().enumerate().skip(1).filter(|(_, a)| !a.starts_with("--")).nth(*n).map(|(i, _)| i),
+        Some((_, n)) => positional_indices(args.get(1..).unwrap_or_default(), specs).get(*n).map(|i| i + 1),
         None if cmd == "run" => args.iter().position(|a| a == "--file").map(|i| i + 1),
         None => None,
     };
@@ -145,8 +151,13 @@ fn password_from(args: &[String]) -> Result<Option<String>, String> {
 }
 
 /// The positional arguments, skipping every option's value so an option value is never read as a
-/// path. Mirrors [`validate_options`], which has already checked the options are known.
+/// path. Uses the same option specifications as [`validate_options`].
 fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> {
+    positional_indices(args, specs).into_iter().filter_map(|i| args.get(i)).collect()
+}
+
+/// Keep the original indices too, so [`text_args`] can open a positional path by its native name.
+fn positional_indices(args: &[String], specs: &[OptionSpec]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(arg) = args.get(i) {
@@ -156,7 +167,7 @@ fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> 
             i += 2;
         } else {
             if !arg.starts_with("--") {
-                out.push(arg);
+                out.push(i);
             }
             i += 1;
         }
@@ -391,6 +402,27 @@ fn valid_connect_addr(addr: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
+fn load_run_script(rest: &[String], script_path: Option<&Path>) -> Result<Option<script::Script>, Failure> {
+    match arg_value(rest, "--script") {
+        Some(path) if !path.starts_with("--") => {
+            let source = script_path.unwrap_or(Path::new(&path));
+            Ok(Some(script::load(source)?))
+        }
+        _ if rest.iter().any(|arg| arg == "--script") => Err("run: --script requires a value".into()),
+        _ => Ok(None),
+    }
+}
+
+fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option<String>, Option<String>) {
+    // A source named on the command line wins over both of the script's.
+    let (mut from_file, mut from_template) = (arg_value(rest, "--file"), arg_value(rest, "--template"));
+    if from_file.is_none() && from_template.is_none() {
+        from_file = script.and_then(|loaded| loaded.file.clone());
+        from_template = script.and_then(|loaded| loaded.template.clone());
+    }
+    (from_file, from_template)
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -409,7 +441,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "convert" => {
             validate_options("convert", &rest, CONVERT_OPTIONS)?;
             // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
+            let format = match find_option_arg(&rest, "--format") {
+                OptionArg::Absent => None,
+                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+                OptionArg::Value(value) => Some(value),
+            };
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
@@ -474,17 +511,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
             let password = password_from(&rest)?;
-            let script = match arg_value(&rest, "--script") {
-                Some(path) if !path.starts_with("--") => Some(script::load(script_path.as_deref().unwrap_or(Path::new(&path)))?),
-                _ if rest.iter().any(|a| a == "--script") => return Err("run: --script requires a value".into()),
-                _ => None,
-            };
-            // A source named on the command line wins over both of the script's.
-            let (mut from_file, mut from_template) = (arg_value(&rest, "--file"), arg_value(&rest, "--template"));
-            if from_file.is_none() && from_template.is_none() {
-                from_file = script.as_ref().and_then(|c| c.file.clone());
-                from_template = script.as_ref().and_then(|c| c.template.clone());
-            }
+            let script = load_run_script(&rest, script_path.as_deref())?;
+            let (from_file, from_template) = run_source_paths(&rest, script.as_ref());
             let mut s = match (from_file, from_template) {
                 (Some(f), _) => open(&f, password.as_deref())?,
                 // Both go through `file.new`, which puts a blank document on the region's paper (#3152).
@@ -746,6 +774,12 @@ fn parity_markdown(p: &Value) -> String {
 
 fn main() -> ExitCode {
     let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    // Language packs installed in the suite's font store are used; `proof.installPack` installs
+    // only while the person has turned downloading on in the app.
+    wordcraft_engine::packs::use_font_store(false);
+    if let Some(source) = wordcraft_engine::packs::index_override() {
+        eprintln!("wordcraft-cli: Language packs come from a test source: {source}");
+    }
     match run(&args) {
         Ok(()) | Err(Failure::StdoutClosed) => ExitCode::SUCCESS,
         Err(Failure::Error(e)) => {

@@ -1,7 +1,7 @@
 use super::doc_state::MAX_UI_REQUESTS;
 use super::prefs::Prefs;
 use super::view::ViewState;
-use super::*;
+use super::{Arc, DocState, Document, ImeEditOutcome, Registry, Session, Value};
 
 impl Session {
     /// Queue a request for the front end. A headless session never drains the queue, so only
@@ -98,6 +98,7 @@ impl Session {
             pending_move,
             clipboard_text: String::new(),
             clipboard_html: String::new(),
+            clipboard_rtf: String::new(),
             clip_history: Default::default(),
             find,
             goal_x,
@@ -149,12 +150,14 @@ impl Session {
             math_latex: false,
             math_normal_text: false,
             also_selected,
+            member: None,
             prefs: Prefs::default(),
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
             read_aloud: Default::default(),
+            windows: Default::default(),
             password,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,

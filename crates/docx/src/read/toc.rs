@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Block, Blocks, ControlEvent, ControlKind, Document, HashSet, InlineObject, OBJ, StyleKind, control_events, pair_events};
 
 /// Word draws a table of contents' entry links without the Hyperlink character style (no blue,
 /// no underline) though the entries carry it (measured in Word for Windows: a Hyperlink-styled run
@@ -83,13 +83,14 @@ pub(super) fn toc_control_to_toc(body: &mut Blocks) {
     }
     // An empty paragraph opening the control takes the field. It may end a section, as above
     // entries in columns (#3889).
-    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty()) {
+    let empty_heading = engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty());
+    if empty_heading {
         field_to_heading(&mut engine, s + 1);
     } else {
         toc_field_to_heading(&mut engine);
     }
     if crate::write::written_toc_span(&engine) == Some((s, last)) {
-        *body = toc;
+        *body = if empty_heading { toc } else { engine };
     }
 }
 
@@ -97,7 +98,7 @@ pub(super) fn toc_control_to_toc(body: &mut Blocks) {
 /// reproduce exactly. Other imported TOCs keep their explicit boundaries, independent of styles.
 pub(super) fn toc_field_to_heading(body: &mut Blocks) {
     for i in 1..body.len() {
-        if body[i - 1].as_para().is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading")) {
+        if body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading")) {
             field_to_heading(body, i);
         }
     }
