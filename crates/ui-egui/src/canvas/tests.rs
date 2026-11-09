@@ -5302,3 +5302,52 @@ fn typing_with_a_shape_selected_types_into_it() {
     );
     assert!(!doc.plain_text(StoryRef::Body).contains("Hallo"), "nothing was typed");
 }
+
+/// #5911: when the shape can't take text (here: read-only protection whose exception covers only
+/// the shape, so its new story would be outside it), typing is dropped instead of replacing it.
+#[test]
+fn typing_is_dropped_when_a_shape_cannot_take_text() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 200, "height": 100})).unwrap();
+    a.run("review.restrict", json!({"exception": "add"})).unwrap();
+    a.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    a.run("select.objects", json!({"index": 0})).unwrap();
+    assert!(a.run("shape.addText", json!({})).is_err(), "protection refuses the new story");
+    a.run("select.objects", json!({"index": 0})).unwrap();
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    // The exception's markers come before and after the shape, which is still selected.
+    let at = h.state().session.sel.ordered().0;
+    let shape = doc.para_at(&at).and_then(|p| p.object_at(at.off));
+    assert!(
+        matches!(shape, Some(wordcraft_doc::InlineObject::Shape { .. })),
+        "the shape must stay; the body reads {:?}",
+        doc.plain_text(StoryRef::Body)
+    );
+    assert!(!doc.plain_text(StoryRef::Body).contains("Hallo"), "nothing was typed");
+
+    // A picture is left as before: typing still replaces it (Word's behaviour there is unchecked).
+    let png = {
+        let mut b = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8)).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    };
+    h.state_mut().run("review.restrict", json!({"stop": true})).unwrap();
+    h.state_mut().run("document.setText", json!({"text": ""})).unwrap();
+    h.state_mut().run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 40})).unwrap();
+    h.state_mut().run("select.objects", json!({"index": 0})).unwrap();
+    type_in(&mut h, "Hallo");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hallo");
+}

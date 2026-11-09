@@ -985,22 +985,23 @@ pub fn enter_text_box(app: &mut WordApp) -> bool {
 /// Typing with a shape selected types into it: into its text, or into a new, empty story for a
 /// shape without text (`shape.addText`), so the shape isn't replaced by what is typed (#5911).
 /// False when the typing is dropped: a line or connector holds no text, and Word ignores typing
-/// with one selected.
+/// with one selected; nor does a shape that can't take text.
 pub fn type_into_shape(app: &mut WordApp) -> bool {
-    let open = |o: &InlineObject| matches!(o, InlineObject::Shape { kind, .. } if kind.is_open());
+    // Only shapes: whether it is a line or connector. Pictures and other objects are left alone.
+    let open = |o: &InlineObject| match o {
+        InlineObject::Shape { kind, .. } => Some(kind.is_open()),
+        _ => None,
+    };
     let line = match wordcraft_engine::cmd::canvas::selected_member(&app.session) {
-        Some((_, _, o)) => Some(open(o)),
-        None => selected(app).map(|(_, o)| open(o)),
+        Some((_, _, o)) => open(o),
+        None => selected(app).and_then(|(_, o)| open(o)),
     };
     match line {
         None => true,
         Some(true) => false,
-        Some(false) => {
-            if crate::widgets::enabled(app, "shape.addText") {
-                let _ = app.run("shape.addText", json!({}));
-            }
-            true
-        }
+        // If the shape can't take text (a protected document refuses its new story), the typing is
+        // dropped, the refusal on the status line, rather than replacing the shape.
+        Some(false) => app.run("shape.addText", json!({})).is_ok(),
     }
 }
 
