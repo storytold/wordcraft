@@ -385,6 +385,11 @@ impl Body<'_> {
     }
 }
 
+/// Whether WordCraft can show these bytes as a picture (see the function below).
+pub(in crate::odt) fn readable_picture(data: &[u8]) -> bool {
+    wordcraft_metafile::is_metafile(data) || model::sniff_image(data).is_some()
+}
+
 /// A picture from a package's bytes: a raster image, or a Windows metafile (WMF, EMF: LibreOffice
 /// keeps clip art and logos so), sized `w` × `h` (points) when the frame says.
 pub(in crate::odt) fn picture(data: Vec<u8>, w: Option<f32>, h: Option<f32>, alt: &str) -> Option<model::Img> {
