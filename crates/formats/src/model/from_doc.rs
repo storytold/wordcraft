@@ -883,9 +883,44 @@ fn kept_index(doc: &Document, bl: &Blocks, i: usize) -> Option<(usize, std::sync
     (paras.len() == *n && wordcraft_doc::kept::run_fingerprint(paras.into_iter()) == *run).then(|| (*n, xml.clone()))
 }
 
+/// Where the text of each level's last numbered paragraph starts, points.
+type ItemText = [Option<f32>; 9];
+
+/// The flow paragraphs of `p`, a list item's further paragraph only while it still sits at its
+/// item's text: one moved out of it (Enter, then Decrease Indent to the margin, the ruler, the
+/// Paragraph dialog…) is body text after the list. Asked of the paragraph itself, so whichever
+/// command moved it, the paragraph is where it shows.
+fn flow_paras_at(doc: &Document, p: &Paragraph, opts: FlowOpts, at: &mut ItemText) -> Vec<Para> {
+    let rp = doc.styles.resolve_para(&p.props);
+    // (Its own indent, or its style's.)
+    let left = rp.indent_left;
+    let mut paras = flow_paras_in(doc, p, opts);
+    if let Some(n) = rp.numbering.filter(|n| n.num != 0) {
+        // The paragraph's own indent, else its level's, else its style's (as Word places it).
+        let level = doc.numbering.level(n.num, n.level).map(|l| l.indent);
+        let text = p.props.indent_left.or(level).unwrap_or(left);
+        if let Some(t) = at.get_mut(usize::from(n.level)) {
+            *t = Some(text);
+        }
+    } else if let Some(l) = p.props.list_item {
+        // Before any numbered paragraph at its level (a list header), anywhere off the margin.
+        let kept = match at.get(usize::from(l)).copied().flatten() {
+            Some(text) => left >= text - 0.5,
+            None => left > 0.5,
+        };
+        if !kept {
+            for q in &mut paras {
+                q.item = None;
+            }
+        }
+    }
+    paras
+}
+
 fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut skip = 0usize;
+    let mut at: ItemText = [None; 9];
     for (i, b) in bl.iter().enumerate() {
         if skip > 0 {
             skip -= 1;
@@ -900,7 +935,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
             let from = out.len();
             for b in bl.get(i..i + ix.0).unwrap_or(&[]) {
                 if let Block::Para(p) = &**b {
-                    out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para));
+                    out.extend(flow_paras_at(doc, p, tracked, &mut at).into_iter().map(FBlock::Para));
                 }
             }
             let n = out.len() - from;
@@ -911,7 +946,7 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: FlowOpts) -> 
             continue;
         }
         match &**b {
-            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para)),
+            Block::Para(p) => out.extend(flow_paras_at(doc, p, tracked, &mut at).into_iter().map(FBlock::Para)),
             Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked))),
             Block::Table(t) => {
                 for r in &t.rows {

@@ -691,8 +691,19 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
                         p.item = Some(li.level);
                         p.spacing.left = Some((f32::from(li.level) + 1.0) * 36.0);
                         p.spacing.first = Some(0.0);
+                    } else if let Some(FBlock::Para(prev)) = out.last_mut()
+                        && (prev.list.is_some_and(|x| x.level == li.level) || prev.item == Some(li.level))
+                    {
+                        // A code block, quote or heading in the item joins its paragraph with a
+                        // line break: it is no item of its own.
+                        prev.push_text("\n", &Fmt::default());
+                        prev.inlines.extend(p.inlines);
+                        continue;
                     } else {
-                        p.list = Some(li);
+                        // One after a sublist or table: no number either, at the item's text.
+                        p.item = Some(li.level);
+                        p.spacing.left = Some((f32::from(li.level) + 1.0) * 36.0);
+                        p.spacing.first = Some(0.0);
                     }
                     out.push(FBlock::Para(p));
                 }

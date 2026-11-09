@@ -822,3 +822,28 @@ fn an_items_further_paragraph_round_trips() {
     let md = export(&import("1. One\n    1. a\n    2. b\n\n   More\n\n    1. c\n"));
     assert!(md.contains("\n    1. c"), "{md}");
 }
+
+/// A code block, quote or heading inside a list item is no item of its own: it gets no number,
+/// and the list's next item keeps its number (#5723 review).
+#[test]
+fn a_block_inside_an_item_gets_no_number() {
+    let numbered =
+        |d: &Document| d.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.numbering.is_some()).map(|p| p.text.clone()).collect::<Vec<_>>();
+    for (src, last) in [
+        ("1. Install:\n\n   ```\n   cargo build\n   cargo test\n   ```\n\n2. Run\n", "2. Run"),
+        ("1. Install:\n\n   > quoted\n\n2. Run\n", "2. Run"),
+        ("1. Install:\n\n   # Heading\n\n2. Run\n", "2. Run"),
+        ("1. Install:\n\n   Cont\n\n   ```\n   cargo build\n   ```\n\n2. Run\n", "2. Run"),
+    ] {
+        let d = import(src);
+        let rows = numbered(&d);
+        assert_eq!(rows.len(), 2, "{src:?}: two numbered items: {rows:?}");
+        assert!(rows[0].starts_with("Install:"), "{src:?}: {rows:?}");
+        assert_eq!(rows[1], "Run", "{src:?}: {rows:?}");
+        let md = export(&d);
+        assert!(md.contains(&format!("\n{last}")), "{src:?}: {md}");
+        assert!(!md.contains("3."), "{src:?}: {md}");
+    }
+    let d = import("1. Install:\n\n   ```\n   cargo build\n   cargo test\n   ```\n\n2. Run\n");
+    assert!(numbered(&d)[0].contains("cargo build") && numbered(&d)[0].contains("cargo test"), "the code stays in its item: {:?}", numbered(&d));
+}

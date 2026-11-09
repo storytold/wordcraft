@@ -308,3 +308,31 @@ fn only_an_items_own_further_paragraph_stays_in_it() {
         assert!(md.contains("1. Two\n\n   Cont\n\nAfter") || md.contains("2. Two\n\n   Cont\n\nAfter"), "{md}");
     }
 }
+
+/// Written from the model, a list item's further paragraph is in its `text:list-item`, after the
+/// item's sublist, and the list stays one (#5723 review).
+#[test]
+fn a_further_paragraph_written_from_the_model_stays_in_its_item() {
+    let d = crate::markdown::import("1. One\n\n   Cont\n    - Sub\n\n   More\n\n2. Two\n");
+    let xml = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    let one = xml.find(">One<").unwrap();
+    let body = xml.get(one..).unwrap();
+    assert!(body.contains("Cont</text:p><text:list>"), "{xml}");
+    assert!(body.contains("Sub</text:p></text:list-item></text:list><text:p"), "{xml}");
+    assert!(body.contains("More</text:p></text:list-item><text:list-item><text:p"), "{xml}");
+    assert_eq!(xml.matches("<text:list xml:id").count(), 1, "one list: {xml}");
+    let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+    let rows: Vec<_> =
+        back.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.is_some(), p.props.list_item)).collect();
+    assert_eq!(
+        rows,
+        [
+            ("One".to_string(), true, None),
+            ("Cont".to_string(), false, Some(0)),
+            ("Sub".to_string(), true, None),
+            ("More".to_string(), false, Some(0)),
+            ("Two".to_string(), true, None)
+        ],
+        "{xml}"
+    );
+}
