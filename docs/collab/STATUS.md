@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `82931d86` plus this status commit — 66 commits over
+- HEAD at this writing: `b027fb1f` plus this status commit — 69 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -26,7 +26,10 @@ missing, and where the next session should start.
   (reconnect with the same `opId`) across a server restart is answered from the
   window and the version does not move (§5.5).
 - Session node ids with tombstones and path shifts; a fresh node map is sent when
-  an operation moves paths or adds ids (ADR-0002).
+  an operation moves paths or adds ids (ADR-0002). A command that allocates ids
+  (a comment, a footnote, a shape, a new table) carries the new, moved and
+  retired entries in `Applied.nodes` instead, so replicas keep addressing the
+  new nodes without a snapshot (§5.20).
 - Per-user undo/redo as an operation with a `history` field: one version per undo,
   `undoConflict` when the step's target changed, a step of several operations
   replayed as one all-or-nothing transaction (a refused inverse takes back the
@@ -400,8 +403,17 @@ Results at this writing:
   deduplicated; the window is bounded at 10 000 answers, so a retry after more
   than that (or of an operation accepted after the last snapshot, which the
   restore cannot replay either) is not covered.
-- A command that allocates ids (comments, tables, shapes, footnotes…) makes
-  replicas request a snapshot after it; there is no id delta on the wire yet.
+- A command that allocates ids no longer costs a snapshot: the accepted answer
+  carries `nodes` (`changed`, `removed`, `overflow`), so replicas adopt the ids
+  of a comment, a footnote, a text box or a new part and keep editing (§5.20).
+  The snapshot remains the fallback when the command changed an existing
+  story's size (every later path shifted), when the delta passed
+  `MAX_NODE_DELTA = 4096` entries (`overflow: true`), when a replica receives
+  such a command without a delta (an older server) and on any version gap. An
+  id-allocating command must land at the head; a stale one is refused `stale`
+  and the author resyncs instead of keeping ids minted on an older state.
+  Because the delta is not journaled, a retry answered from the `opId` window
+  carries no node list; the join that precedes a retry sends the whole map.
 - Table cells are addressable now, and so are the table's columns and merged
   cells (§5.7): a column insert/remove, a cell merge and a cell split travel as
   structural operations that reindex cell ids instead of retiring them, so the
@@ -2082,6 +2094,78 @@ host the full gate needs `CRAFT_FONTS_DIR` (the embedded CJK faces),
 `CRAFT_PROOF_EMBED=de,pl,pt,it,ru` (German/Portuguese hyphenation and grammar);
 without them unrelated font/hyphenation tests fail. No push was made and CI is
 unchanged.
+
+### 5.20 The ids a command allocates travel with its answer (run 2026-11-09)
+
+§4 said a command that allocates ids (comments, tables, shapes, footnotes, text
+boxes) makes every replica ask for a snapshot: the id map of the new nodes was
+issued only on the server. This slice puts that change on the wire. The
+snapshot stays the fallback for a delta that cannot be applied and for a map
+that cannot be described by new ids alone.
+
+**Wire.** `Applied` gained `nodes: Option<NodeDelta>` (absent on older
+servers, defaulted on parse). `NodeDelta { changed: [NodeRef], removed: [u32],
+overflow: bool }` names the ids the operation issued or moved, the ids it
+retired (a late operation on one is `gone`) and, when the change set passed
+`MAX_NODE_DELTA = 4096`, that the replica must take a snapshot instead. The
+list of commands that may allocate ids moved from `collab-app` into
+`crates/collab/src/wire.rs` (`may_allocate_ids`), so the server and every
+client classify a command the same way.
+
+**Server (`Room`).** Before applying such a command, the room starts recording
+in `NodeIds` (`start_delta`); `id_for`, `rebase`, `shift_children`,
+`permute_children` and `remove` record what they touch, and `take_delta`
+returns the change set (or `overflow`). After the command, when the model says
+it changed nodes, the room indexes the new nodes (`Model::index_nodes`) and
+attaches their ids to the **live** answer. A full map is still broadcast on
+join and after a structural primitive; `handle_op` skips it when the answer
+already carries `nodes`. The `opId` window and the journal store no node lists
+(a reconnect gets the whole map in `Nodes`), which keeps the window bounded. A
+command that resized an existing story cannot be described by new ids — every
+later path shifted — so it keeps the snapshot path; `Model::story_shape`
+(new method, default empty) is what tells the two apart. An id-allocating
+command now requires `baseVersion == head`: otherwise the comment/part ids the
+author minted optimistically could differ from the server's, so the operation
+is refused `stale` and the client resyncs. `NodeIds::rebase_many` now advances
+its id counter past every adopted id, so a locally issued id cannot collide.
+
+**Client (`SyncState::apply`).** The delta is applied after the document
+delta, rebasing `changed` and tombstoning `removed`. The author of a command
+takes only `nodes` (its document already has the change). A command that may
+allocate ids but arrives without `nodes`, or with `overflow`, returns
+`Outcome::Resync` — the snapshot path — and the app asks for one.
+
+**Tests.** `crates/collab/src/ids.rs`: `a_delta_names_the_ids_an_operation_issued_moved_and_retired`,
+`an_id_retired_and_restored_by_one_operation_is_not_reported_removed`,
+`a_delta_that_passes_the_bound_reports_overflow_instead_of_a_partial_map`,
+`rebasing_an_id_above_the_counter_makes_the_next_id_free`.
+`crates/collab/src/wire.rs`: `an_applied_carries_a_node_delta_and_an_old_answer_still_parses`.
+`crates/collab/src/tests.rs` (fake model):
+`a_command_that_appends_a_story_answers_with_the_new_ids` (the answer carries
+the delta, the tail does not, the joined map does),
+`an_id_allocating_command_needs_the_head_version`,
+`a_command_that_grows_an_existing_story_keeps_the_snapshot_path`.
+`crates/collab-engine/src/tests.rs`:
+`a_comment_command_carries_the_ids_of_the_new_story_and_a_replica_can_address_them`
+(the replica replays the command, adopts the same part id and the server
+accepts an edit on it).
+`crates/collab-app/src/tests.rs`:
+`a_comment_id_allocation_keeps_both_replicas_editing_without_a_snapshot` (both
+`Outcome::Quiet`, both one comment on the same part, Bob edits the comment
+paragraph by the server's id and both converge),
+`a_command_that_may_allocate_ids_without_a_delta_resyncs`,
+`a_node_delta_that_overflowed_resyncs_instead_of_applying_a_partial_map`.
+`apps/collab-server/src/tests.rs`:
+`a_comment_allocation_reaches_a_peer_as_a_node_delta_and_it_keeps_editing` (two
+real WebSocket clients: the broadcast carries the delta, the peer edits the new
+comment paragraph and both get version 3).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test` for
+`wordcraft-collab`, `-doc`, `-engine`, `-client`, `-ws`, `-app` and `-server`
+(all targets) green — 59 + 113 + 57 + 17 + 1 + 37 + 50 tests, 1 ignored on the
+server; `cargo clippy` for the same crates `--all-targets -- -D warnings`
+clean; `cargo fmt --all -- --check` clean. No push was made, the PR and CI were
+not touched.
 
 ## 6. Where things live
 
