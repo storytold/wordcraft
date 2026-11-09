@@ -111,3 +111,42 @@ fn same_length_picture_data_gets_a_different_cache_key() {
     assert_eq!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(a), &no_media), "the same data keeps its cache");
     assert_eq!(key(&no_path, &no_data, &Some("m.png".to_string())), Some("media:m.png".to_string()));
 }
+
+/// Apply carries the document's whole stop list: a multi-stop gradient keeps its interior colours
+/// and per-stop transparencies, and only the endpoint pickers and the slider change it.
+#[test]
+fn apply_keeps_a_multi_stop_gradient() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = wordcraft_doc::Document::new();
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: wordcraft_doc::Rgb(255, 0, 0), transparency: 10.0 },
+            GradStop { pos: 50.0, color: wordcraft_doc::Rgb(0, 255, 0), transparency: 20.0 },
+            GradStop { pos: 100.0, color: wordcraft_doc::Rgb(0, 0, 255), transparency: 30.0 },
+        ],
+        kind: GradientKind::Linear { angle: 90.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let draft = crate::format_background::Draft::from_doc(&d);
+    let params = draft.params();
+    let stops = params["stops"].as_array().expect("the stops are passed, not only the endpoints");
+    assert_eq!(stops.len(), 3);
+    assert_eq!((stops[1]["color"].as_str(), stops[1]["transparency"].as_f64()), (Some("00FF00"), Some(20.0)));
+    // Moving an endpoint's colour leaves the interior stop alone.
+    let mut edited = draft.clone();
+    if let crate::format_background::DraftFill::Gradient { start, .. } = &mut edited.fill {
+        *start = wordcraft_doc::Rgb(1, 2, 3);
+    }
+    let params = edited.params();
+    assert_eq!(params["stops"][0]["color"].as_str(), Some("010203"));
+    assert_eq!(params["stops"][1]["color"].as_str(), Some("00FF00"), "the middle stop is untouched");
+    // Moving the transparency slider moves every stop.
+    if let crate::format_background::DraftFill::Gradient { transparency, .. } = &mut edited.fill {
+        *transparency = 60.0;
+    }
+    let params = edited.params();
+    assert!(params["stops"].as_array().is_some_and(|s| s.iter().all(|s| s["transparency"].as_f64() == Some(60.0))), "{params}");
+}

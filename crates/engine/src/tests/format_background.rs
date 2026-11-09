@@ -82,6 +82,21 @@ fn multi_stop_gradients_are_sorted_and_keep_their_own_transparency() {
     assert!(matches!(g.kind, wordcraft_doc::fill::GradientKind::Linear { angle, .. } if (angle - 40.0).abs() < 0.01));
 }
 
+/// A picture fill from an existing `media` entry checks that the bytes are a picture: a DOCX
+/// picture relationship can hold anything, and a refusal must leave the old fill in place.
+#[test]
+fn a_picture_fill_refuses_media_that_is_not_a_picture() {
+    let mut s = s();
+    s.doc.media.insert("junk.png".into(), std::sync::Arc::new(b"not an image".to_vec()));
+    let before = s.doc.settings.clone();
+    assert!(s.run("design.pageFill", &json!({"fill": "picture", "media": "junk.png"})).is_err(), "junk bytes are refused");
+    assert_eq!(s.doc.settings, before, "the previous fill is kept");
+    // A real picture already in the document is still accepted by key.
+    s.doc.media.insert("real.png".into(), std::sync::Arc::new(tiny_png()));
+    run(&mut s, "design.pageFill", json!({"fill": "picture", "media": "real.png"}));
+    assert_eq!(s.doc.settings.page_picture.as_ref().map(|p| p.media.as_str()), Some("real.png"));
+}
+
 #[test]
 fn hostile_values_are_refused_or_clamped() {
     let mut s = s();

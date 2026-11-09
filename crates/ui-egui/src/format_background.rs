@@ -27,6 +27,8 @@ pub enum DraftFill {
         end: Rgb,
         angle: f32,
         transparency: f32,
+        /// The document's own stops, so Apply keeps interior colours and per-stop transparencies.
+        stops: Vec<GradStop>,
     },
     Picture {
         path: Option<String>,
@@ -66,14 +68,15 @@ impl Draft {
                 transparency: p.transparency,
             }
         } else if let Some(g) = &s.page_gradient {
-            let start = g.stops.first().map_or(Rgb::WHITE, |s| s.color);
-            let end = g.stops.last().map_or(Rgb::WHITE, |s| s.color);
+            let stops = g.stops.clone();
+            let start = stops.first().map_or(Rgb::WHITE, |s| s.color);
+            let end = stops.last().map_or(Rgb::WHITE, |s| s.color);
             let angle = match g.kind {
                 GradientKind::Linear { angle, .. } if angle.is_finite() => angle,
                 _ => 90.0,
             };
-            let transparency = g.stops.iter().map(|s| s.transparency).sum::<f32>() / g.stops.len().max(1) as f32;
-            DraftFill::Gradient { start, end, angle, transparency }
+            let transparency = stops.iter().map(|s| s.transparency).sum::<f32>() / stops.len().max(1) as f32;
+            DraftFill::Gradient { start, end, angle, transparency, stops }
         } else if let Some(p) = &s.page_pattern {
             DraftFill::Pattern { preset: p.preset.clone(), fore: p.fore, back: p.back, transparency: p.transparency }
         } else if let Some(c) = s.page_color {
@@ -91,9 +94,29 @@ impl Draft {
         match &self.fill {
             DraftFill::None => json!({"fill": "none"}),
             DraftFill::Solid { color } => json!({"fill": "solid", "color": color.hex()}),
-            DraftFill::Gradient { start, end, angle, transparency } => json!({
-                "fill": "gradient", "start": start.hex(), "end": end.hex(), "angle": angle, "transparency": transparency,
-            }),
+            DraftFill::Gradient { start, end, angle, transparency, stops } => {
+                let mut list: Vec<serde_json::Value> =
+                    stops.iter().map(|s| json!({"pos": s.pos, "color": s.color.hex(), "transparency": s.transparency})).collect();
+                if !(2..=8).contains(&list.len()) {
+                    list = vec![
+                        json!({"pos": 0.0, "color": start.hex(), "transparency": transparency}),
+                        json!({"pos": 100.0, "color": end.hex(), "transparency": transparency}),
+                    ];
+                } else {
+                    let mean = stops.iter().map(|s| s.transparency).sum::<f32>() / list.len() as f32;
+                    let last = list.len() - 1;
+                    list[0]["color"] = json!(start.hex());
+                    list[last]["color"] = json!(end.hex());
+                    // The slider is one transparency for the fill: move every stop only when the
+                    // user changed it, so an untouched multi-stop gradient keeps its own values.
+                    if (transparency - mean).abs() > 0.01 {
+                        for s in &mut list {
+                            s["transparency"] = json!(transparency);
+                        }
+                    }
+                }
+                json!({"fill": "gradient", "angle": angle, "stops": list})
+            }
             DraftFill::Picture { path, media, data, tile, transparency } => {
                 let mut p = json!({"fill": "picture", "tile": tile, "transparency": transparency});
                 if let Some(o) = p.as_object_mut() {
@@ -154,7 +177,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     if pick != kind {
         app.background.fill = match pick {
             1 => DraftFill::Solid { color: accent },
-            2 => DraftFill::Gradient { start: accent, end: Rgb::WHITE, angle: 90.0, transparency: 0.0 },
+            2 => DraftFill::Gradient { start: accent, end: Rgb::WHITE, angle: 90.0, transparency: 0.0, stops: Vec::new() },
             3 => DraftFill::Picture { path: None, media: None, data: None, tile: false, transparency: 0.0 },
             4 => DraftFill::Pattern { preset: "ltDnDiag".into(), fore: Rgb::BLACK, back: Rgb::WHITE, transparency: 0.0 },
             _ => DraftFill::None,
@@ -172,7 +195,7 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
                 *color = c;
             }
         }
-        DraftFill::Gradient { start, end, angle, transparency } => {
+        DraftFill::Gradient { start, end, angle, transparency, .. } => {
             if let Some(c) = color_button(ui, &theme, Id::unique("formatBackground.start"), tl!("Start"), *start) {
                 *start = c;
             }
@@ -421,7 +444,7 @@ fn paint_draft_fill(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) {
         DraftFill::Solid { color } => {
             p.rect_filled(rect, 0.0, crate::theme::c32(*color));
         }
-        DraftFill::Gradient { start, end, angle, transparency } => {
+        DraftFill::Gradient { start, end, angle, transparency, .. } => {
             let g = Gradient {
                 stops: vec![
                     GradStop { pos: 0.0, color: *start, transparency: *transparency },

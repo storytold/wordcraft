@@ -377,11 +377,16 @@ fn gradient_stops(s: &Session, v: &Value) -> Result<Vec<GradStop>, CmdError> {
 /// `path`. The image must be one the app can decode (hostile files are refused before the
 /// document keeps them).
 fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
+    // One check for a file, base64 data and an existing media entry: the renderer can only draw
+    // these, so an entry holding anything else (say a DOCX relationship's bytes) is refused
+    // before the fill replaces the previous one.
+    let supported = |bytes: &[u8]| wordcraft_geom::picture::probe(bytes).is_ok() || wordcraft_render::metafile_size(bytes).is_some();
     if let Some(key) = p::str(v, "media") {
-        return if s.doc.media.contains_key(key) && s.doc.media.get(key).is_some_and(|b| !b.is_empty()) {
-            Ok(key.to_string())
-        } else {
-            Err(CmdError::Params("`media` is not a picture in this document".into()))
+        return match s.doc.media.get(key) {
+            Some(b) if b.is_empty() => Err(CmdError::Params("`media` is not a picture in this document".into())),
+            Some(b) if supported(b) => Ok(key.to_string()),
+            Some(_) => Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into())),
+            None => Err(CmdError::Params("`media` is not a picture in this document".into())),
         };
     }
     let bytes = if let Some(d) = p::str(v, "data") {
@@ -394,8 +399,7 @@ fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
-    let ok = wordcraft_geom::picture::probe(&bytes).is_ok() || wordcraft_render::metafile_size(&bytes).is_some();
-    if !ok {
+    if !supported(&bytes) {
         return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
     }
     let ext = super::insert::image_ext(&bytes);
