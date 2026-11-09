@@ -22,7 +22,7 @@ use wordcraft_geom::Rect;
 use crate::cache::hash_of;
 use crate::ctx::Ctx;
 use crate::notes::NoteBox;
-use crate::page::PageBuilder;
+use crate::page::{ColumnLines, PageBuilder};
 use crate::{LayoutOptions, Page, Placed, ViewMode};
 
 /// The paging state between two body blocks: everything placing the following blocks reads
@@ -64,6 +64,9 @@ pub(crate) struct PageState {
     page_valign: PageVAlign,
     /// Where the paragraph before ended (page, column, y): a bordered group draws up to it.
     para_end: Option<(usize, usize, f32)>,
+    /// The top of the current page's body, and its pending lines between the columns.
+    page_top: f32,
+    column_lines: Option<ColumnLines>,
 }
 
 fn note_sig(n: &[NoteBox]) -> Vec<(u32, u32, bool, usize)> {
@@ -105,6 +108,8 @@ impl PageState {
             behind: pb.behind.last().copied().unwrap_or(0),
             page_valign: pb.page_valign,
             para_end: pb.para_end,
+            page_top: pb.page_top,
+            column_lines: pb.column_lines.clone(),
         }
     }
 
@@ -143,6 +148,8 @@ impl PageState {
         }
         pb.page_valign = self.page_valign;
         pb.para_end = self.para_end;
+        pb.page_top = self.page_top;
+        pb.column_lines.clone_from(&self.column_lines);
     }
 
     /// Whether placing the same blocks from here gives the same pages.
@@ -181,6 +188,8 @@ impl PageState {
             && self.behind == o.behind
             && self.page_valign == o.page_valign
             && self.para_end.map(|(p, c, y)| (p, c, y.to_bits())) == o.para_end.map(|(p, c, y)| (p, c, y.to_bits()))
+            && f(self.page_top, o.page_top)
+            && format!("{:?}", self.column_lines) == format!("{:?}", o.column_lines)
             && format!("{:?}", self.counters) == format!("{:?}", o.counters)
     }
 }
@@ -305,6 +314,10 @@ impl PassKey {
     }
 }
 
+/// How many blocks before an edited one a paragraph's placement can depend on it: `next_first_line`
+/// follows keep with next to a depth of 8, so a heading 9 blocks up sees the edit.
+const KEEP_CHAIN: usize = 9;
+
 /// How the next pass may reuse the previous one.
 pub(crate) struct Plan {
     /// Resume from this checkpoint of the previous pass.
@@ -348,13 +361,15 @@ impl Pass {
                 dirty_to = dirty_to.max(at + 1);
             }
         }
-        // The last checkpoint strictly before the first changed block (the block before it may
-        // keep with it, so it is placed again), whose section still has the same settings.
+        // The last checkpoint more than a keep-with-next chain before the first changed block
+        // (the blocks before it may keep with it, so they are placed again), whose section
+        // still has the same settings.
+        let resume_before = first_diff.saturating_sub(KEEP_CHAIN);
         let sect_same = |i: usize, si: usize| match (sections.get(i), self.sections.get(i)) {
             (Some((e, s)), Some((oe, os))) => (i == si || e == oe) && *s == os,
             _ => false,
         };
-        let cp = self.checkpoints.iter().rev().find(|c| c.state.block < first_diff).filter(|c| (0..=c.state.si).all(|i| sect_same(i, c.state.si)));
+        let cp = self.checkpoints.iter().rev().find(|c| c.state.block < resume_before).filter(|c| (0..=c.state.si).all(|i| sect_same(i, c.state.si)));
         let pages = match cp {
             Some(cp) => self.end_pages.get(..cp.pages.saturating_sub(1))?.to_vec(),
             None => Vec::new(),
@@ -415,6 +430,8 @@ impl PageState {
             behind: 0,
             page_valign: PageVAlign::default(),
             para_end: None,
+            page_top: 0.0,
+            column_lines: None,
         }
     }
 }

@@ -753,6 +753,64 @@ fn a_bordered_group_split_by_a_page_break_resumes_like_a_full_layout() {
 }
 
 #[test]
+fn a_page_top_after_a_page_break_resumes_like_a_full_layout() {
+    // #1284 (review): the checkpoint page's top is part of the state; without it a page break
+    // before a paragraph at the top of the page broke the page again.
+    let mut d = Document::from_text(&"Line of text\n".repeat(150));
+    let brk = wordcraft_doc::para::PAGE_BREAK;
+    let end = d.para_mut(StoryRef::Body, &Path::top(30)).unwrap().len();
+    d.insert_text(&Pos::body(30, end), &brk.to_string(), &Default::default()).unwrap();
+    d.para_mut(StoryRef::Body, &Path::top(31)).unwrap().props.page_break_before = Some(true);
+    let mut c = LayoutCache::new();
+    assert_same_as_full(&d, &mut c, "first layout");
+    for at in [33, 34, 100] {
+        d.insert_text(&Pos::body(at, 0), "Edit ", &Default::default()).unwrap();
+        assert_same_as_full(&d, &mut c, &format!("edit in paragraph {at}"));
+    }
+}
+
+#[test]
+fn the_lines_between_columns_resume_like_a_full_layout() {
+    // #1284 (review): the pending lines between the columns of the checkpoint page, and of the
+    // last one after a splice, are part of the state.
+    let mut d = Document::from_text(&"Line of text in two columns\n".repeat(300));
+    d.last_section.columns.count = 2;
+    d.last_section.columns.separator = true;
+    let mut c = LayoutCache::new();
+    let first = assert_same_as_full(&d, &mut c, "first layout");
+    assert!(first.pages.len() >= 4);
+    for at in [150, 5, 290] {
+        d.insert_text(&Pos::body(at, 0), "Edit ", &Default::default()).unwrap();
+        assert_same_as_full(&d, &mut c, &format!("edit in paragraph {at}"));
+    }
+}
+
+#[test]
+fn a_chain_of_kept_headings_resumes_like_a_full_layout() {
+    // #1284 (review): a heading keeps with the next to a depth of 8 blocks, so an edit to the
+    // space before a later paragraph can pull a heading two blocks up back onto its page.
+    for (filler, space) in (1..130).flat_map(|f| [100.0, 150.0, 250.0, 400.0].map(|s| (f, s))) {
+        let mut body: Vec<_> = paras("Filler line", filler);
+        for (text, keep) in [("Heading one", true), ("Heading two", true), ("Text after the headings", false)] {
+            let mut p = Paragraph::with_text(text, Default::default());
+            p.props.keep_next = keep.then_some(true);
+            if !keep {
+                p.props.space_before = Some(space);
+            }
+            body.push(para_block(p));
+        }
+        body.extend(paras("Tail line", 80));
+        let mut d = Document::new();
+        d.body = body;
+        let mut c = LayoutCache::new();
+        assert_same_as_full(&d, &mut c, "first layout");
+        let at = Pos::body(filler + 2, 0);
+        d.format_paragraphs(&at, &at, &|p| p.space_before = Some(0.0)).unwrap();
+        assert_same_as_full(&d, &mut c, &format!("{filler} filler paragraphs, {space} space before removed"));
+    }
+}
+
+#[test]
 fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
     // Multiple spacing puts its extra leading below the text, and Word lets that leading of a
     // page's last line run into the bottom margin: a multiple-spaced line stays on the page while
