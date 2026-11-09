@@ -455,3 +455,40 @@ fn markers_at_a_mixed_style_graphemes_edges_keep_it_atomic() {
         }
     }
 }
+
+/// Distributed and Thai Distributed space out graphemes, not drawing segments: a base letter and
+/// a combining mark in another size are two segments of one grapheme, and no gap opens between
+/// them, while the line still reaches both margins.
+#[test]
+fn distributed_lines_stretch_between_graphemes_not_inside_one() {
+    use wordcraft_doc::props::{Align, ParaProps};
+    crate::test_fonts();
+    for (align, text) in [(Align::Distribute, "xa\u{301}y"), (Align::ThaiDistribute, "xa\u{301}y\nz")] {
+        let mut d = Document::from_text("");
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+            c.font = Some("Source Sans 3".into());
+            c.size = Some(24.0);
+        })
+        .unwrap();
+        d.format_range(&Pos::body(0, 2), &Pos::body(0, 4), &|c| c.size = Some(48.0)).unwrap();
+        d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props = ParaProps { align: Some(align), ..Default::default() };
+        let l = lay(&d);
+        let pl = para_layout(&l);
+        let line = pl.lines.first().unwrap();
+        let k_of = |start: usize| pl.clusters.iter().position(|c| c.start == start).expect("a segment starts there");
+        let (base, mark, after) = (k_of(1), k_of(2), k_of(4));
+        let left = |k: usize| line.cl_left(k).unwrap();
+        let base_adv = pl.clusters[base].adv;
+        assert!(
+            (left(mark) - left(base) - base_adv).abs() < 0.01,
+            "{align:?}: the mark stays on its letter: {} vs {base_adv}",
+            left(mark) - left(base)
+        );
+        assert!(left(after) - left(mark) > pl.clusters[mark].adv + 1.0, "{align:?}: the gap opens after the grapheme");
+        let x = pl.x_of(0, 0).unwrap();
+        assert!(x.abs() < 0.01, "{align:?}: starts at the left margin: {x}");
+        let end = left(after) + pl.clusters[after].adv;
+        assert!((end - line.right).abs() < 0.05, "{align:?}: reaches the right margin: {end} vs {}", line.right);
+    }
+}
