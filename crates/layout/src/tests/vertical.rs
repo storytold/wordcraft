@@ -171,3 +171,63 @@ fn a_click_outside_a_floating_table_in_a_vertical_section_skips_its_cells() {
     // Inside the table a click still lands in a cell.
     assert!(l.hit(0, cx, cy, StoryRef::Body).unwrap().path.0.len() > 1);
 }
+
+/// The glyph draws in the page's turned lines, in drawing order, each with the point it is stood
+/// up about when it stands upright on its own (`None` when it lies with the line).
+fn glyph_pieces(items: &[display::Draw]) -> Vec<(&display::Draw, Option<(f32, f32)>)> {
+    let mut out = Vec::new();
+    for d in items {
+        match d {
+            display::Draw::Turned { items, .. } => out.extend(glyph_pieces(items)),
+            display::Draw::Rotated { cx, cy, items, .. } => {
+                out.extend(items.iter().filter(|i| matches!(i, display::Draw::Glyphs { .. })).map(|i| (i, Some((*cx, *cy)))))
+            }
+            display::Draw::Glyphs { .. } => out.push((d, None)),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// #6060: an ideographic comma narrower than an em (a proportional font's) keeps to its own square
+/// in top-to-bottom text, whether it ends its run or not: the square is its advance, and it moves
+/// to the square's upper right by half that advance and 0.05 em, not by 0.55 em.
+#[test]
+fn a_narrow_ideographic_comma_stays_in_its_own_square_in_vertical_text() {
+    crate::test_fonts();
+    // "C、" then "1" in red, so the comma ends its run as it does after Latin text in another
+    // face; then a comma between two ideographs in one run.
+    let mut d = Document::from_text("C\u{3001}1\n\u{8a9e}\u{3001}\u{3067}");
+    d.last_section.text_direction = TextDirection::Down;
+    let red = |c: &mut wordcraft_doc::props::CharProps| c.color = Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0xC0, 0, 0)));
+    let comma = "\u{3001}".len();
+    d.format_range(&Pos::body(0, 1 + comma), &Pos::body(0, 2 + comma), &red).unwrap();
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let pieces = glyph_pieces(&draws);
+    let pieces: Vec<_> = pieces
+        .iter()
+        .filter_map(|(d, centre)| match d {
+            display::Draw::Glyphs { text, glyphs, size, face, .. } => Some((text.clone(), glyphs.clone(), *size, *face, *centre)),
+            _ => None,
+        })
+        .collect();
+    let commas: Vec<usize> = pieces.iter().enumerate().filter(|(_, p)| p.0 == "\u{3001}").map(|(i, _)| i).collect();
+    assert_eq!(commas.len(), 2, "{:?}", pieces.iter().map(|p| &p.0).collect::<Vec<_>>());
+    for i in commas {
+        let (_, gs, size, face, centre) = &pieces[i];
+        let &[(gid, x, y)] = gs.as_slice() else { panic!("one glyph: {gs:?}") };
+        let own = face.advance(gid) as f32 * size / face.upem as f32;
+        assert!(own > 0.0 && own < size * 0.9, "the test font's comma is narrower than an em: {own} of {size}");
+        // The next character starts one advance after the comma's own pen position.
+        let (next_text, next, ..) = &pieces[i + 1];
+        let (_, nx, ny) = next[0];
+        let pen = nx - own;
+        let shift = size * 0.05 + own / 2.0;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        let (cx, cy) = centre.expect("the comma stands upright");
+        assert!(close(cx, pen + own / 2.0), "its square ends where {next_text:?} starts: centre {cx}, pen {pen}, advance {own}");
+        assert!(close(cy, ny - size * 0.38), "{cy} vs baseline {ny}");
+        assert!(close(x, pen + shift) && close(y, ny - shift), "moved by {shift}: ({x}, {y}) from ({pen}, {ny})");
+    }
+}
