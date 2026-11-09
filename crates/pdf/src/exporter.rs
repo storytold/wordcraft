@@ -5,10 +5,10 @@ use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap,
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
 use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text};
 use super::{
-    Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
-    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
-    NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
-    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font, HashMap, HashSet,
+    Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node, NonZeroU16, Outline,
+    OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface, Tag, TagGroup,
+    TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
 use wordcraft_doc::picfx::PicFx;
 
@@ -166,10 +166,53 @@ impl Exporter<'_> {
                 }
                 s.pop();
             }
+            // A turned picture cut at its line's top and bottom.
+            Draw::Clip { rect, items } => {
+                let Some(clip) = rect_path(rect) else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                for it in items {
+                    self.rotated_pictures(s, it);
+                }
+                s.pop();
+            }
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
             Draw::Figure { alt, draws, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| {
                 for d in draws {
+                    me.draw(s, d);
+                }
+            }),
+            _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
+        }
+    }
+
+    /// One draw of a paragraph's line, tagged for what it is: text as the paragraph's content
+    /// (structure entry `idx`), pictures and figures on their own, anything else an artifact.
+    fn line_item(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
+        match d {
+            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+            // A picture marked decorative: an artifact screen readers skip.
+            Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
+            Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
+            // A rotated inline picture, or a rotated group holding pictures: turned as a
+            // whole, each picture tagged on its own (see `rotated_pictures`).
+            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
+            // A clip (a turned picture cut at its line, an exact-height cell's lines, a canvas's
+            // members): each draw in it tagged as it would be outside it.
+            Draw::Clip { rect, items } => {
+                let Some(clip) = rect_path(rect) else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                for it in items {
+                    self.line_item(s, it, idx);
+                }
+                s.pop();
+            }
+            // A turned text box's line: still the paragraph's text. A rotated shape
+            // without text falls to the artifacts below.
+            Draw::Rotated { items, .. } if items.iter().any(holds_text) => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+            // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
+            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
+                for d in inner {
                     me.draw(s, d);
                 }
             }),
@@ -197,14 +240,7 @@ impl Exporter<'_> {
             let area = page.body;
             self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark(s, &wm, w, h, area));
         }
-        let dopts = DisplayOptions {
-            marks: false,
-            dim_header: false,
-            dim_body: false,
-            markup: self.opts.include_markup,
-            placeholders: false,
-            ..Default::default()
-        };
+        let dopts = self.opts.display_options();
         // What the items share (the authors' colours, the clipped cells) is worked out once per page.
         let shown = ItemDisplay::new(self.doc, page);
         for it in page.header.iter().chain(page.footer.iter()) {
@@ -221,27 +257,7 @@ impl Exporter<'_> {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
-                        match d {
-                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
-                            // A picture marked decorative: an artifact screen readers skip.
-                            Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
-                            Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
-                            // A rotated inline picture, or a rotated group holding pictures: turned as a
-                            // whole, each picture tagged on its own (see `rotated_pictures`).
-                            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
-                            // A turned text box's line: still the paragraph's text. A rotated shape
-                            // without text falls to the artifacts below.
-                            Draw::Rotated { items, .. } if items.iter().any(holds_text) => {
-                                self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d))
-                            }
-                            // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
-                            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
-                                for d in inner {
-                                    me.draw(s, d);
-                                }
-                            }),
-                            _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
-                        }
+                        self.line_item(s, d, idx);
                     }
                 }
                 Placed::Image { story, path, off, .. } => {
@@ -333,10 +349,7 @@ impl Exporter<'_> {
     /// the baseline) on the box's bottom; the box centred on the margins (`area`, else the page)
     /// and, when diagonal, turned 45° counterclockwise.
     fn watermark(&mut self, s: &mut Surface, wm: &wordcraft_doc::Watermark, w: f32, h: f32, area: Rect) {
-        let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
-        let face = r.face;
-        let text: String = wm.text.chars().take(200).collect();
-        let shaped = wordcraft_fonts::shape(&face, &text, &[], |c| c);
+        let Some((face, text, shaped)) = wordcraft_layout::watermark_run(wm, super::WATERMARK_MAX_CHARS) else { return };
         let upem = face.upem.max(1.0) as f32;
         let raw_w: f32 = shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() / upem;
         if raw_w <= 0.0 || !raw_w.is_finite() {

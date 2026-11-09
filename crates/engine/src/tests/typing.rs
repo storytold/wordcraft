@@ -9,6 +9,19 @@ use wordcraft_doc::{Pos, StoryRef};
 
 use crate::Session;
 
+/// Leaf #152: deleting the empty heading above body text must not promote that text to a heading.
+/// Deleting the empty heading mark keeps the next paragraph as body text.
+#[test]
+fn deleting_a_preceding_empty_heading_keeps_the_body_paragraph_style() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("\nBody paragraph."));
+    run(&mut s, "para.style", json!({"style": "Heading1"}));
+    run(&mut s, "text.delete", json!({}));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.text, "Body paragraph.");
+    assert_eq!(p.props.style, None);
+    assert_eq!(wordcraft_layout::outline::levels(&s.doc), [wordcraft_layout::outline::BODY]);
+}
+
 /// Create an empty session for command-driven typing fixtures.
 fn s() -> Session {
     Session::new(wordcraft_doc::Document::new())
@@ -1537,6 +1550,110 @@ fn typing_at_either_end_of_a_link_is_not_linked() {
     typ(&mut s, "\nmore");
     assert_eq!(texts(&s), ["see a sixte", "more! now"]);
     assert_eq!(links(&s), [("sixte".into(), false), (String::new(), false)]);
+}
+
+#[test]
+fn a_link_on_a_selection_shows_the_text_to_display() {
+    // Ctrl+K on selected text with a new Text to display: the selection is retyped with it and
+    // linked, keeping its formatting; typing after it stays outside the link (as in Word).
+    let mut s = typed("go see kiln now");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    typ(&mut s, "!");
+    assert_eq!(texts(&s), ["go see oven! now"]);
+    assert_eq!(links(&s), [("Oven".into(), false)]);
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Oven" && c.bold == Some(true)), "the new text keeps the selection's formatting");
+    // The same text, or text that can't stand in one line, leaves the selection as it is.
+    run(&mut s, "select.text", json!({"text": "see"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "see"}));
+    run(&mut s, "select.text", json!({"text": "now"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "two\nlines"}));
+    assert_eq!(texts(&s), ["go see oven! now"]);
+}
+
+#[test]
+fn a_new_selection_drops_the_formatting_left_after_a_link() {
+    // A link leaves plain formatting for what is typed after it. A selection made next doesn't
+    // take it: retyping that selection keeps its own formatting.
+    let bold_run = |s: &Session, text: &str| {
+        let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+        p.run_ranges().any(|(r, c)| &p.text[r] == text && c.bold == Some(true))
+    };
+    let mut s = typed("kiln");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Stove"}));
+    assert!(bold_run(&s, "Stove"), "select.all");
+    run(&mut s, "select.word", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Range"}));
+    assert!(bold_run(&s, "Range"), "select.word");
+    let anchor = serde_json::to_value(s.doc.start_of(s.sel.focus.story)).unwrap();
+    let focus = serde_json::to_value(s.sel.focus.clone()).unwrap();
+    run(&mut s, "select.range", json!({"anchor": anchor, "focus": focus}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Hob"}));
+    assert!(bold_run(&s, "Hob"), "select.range");
+}
+
+#[test]
+fn a_link_over_two_paragraphs_keeps_their_text() {
+    // Word shows <<Selection in Document>> for such a selection: the text to display is ignored.
+    let mut s = typed("one\ntwo");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "both"}));
+    assert_eq!(texts(&s), ["one", "two"]);
+    assert_eq!(links(&s), [("One".into(), false), ("two".into(), false)]);
+}
+
+#[test]
+fn a_retyped_link_text_is_tracked() {
+    let mut s = typed("go see kiln now");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "insert.link", json!({"url": "https://example.org/", "text": "Oven"}));
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "kiln" && c.del.is_some()), "the old text stays as a deletion");
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Oven" && c.ins.is_some() && c.link.is_some()));
+}
+
+#[test]
+fn a_link_keeps_a_selection_it_cannot_retype() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{InlineObject, Path};
+    let url = "https://example.org/";
+    // A second retyped link keeps its own selection's formatting: the first one's left no
+    // formatting pending for it.
+    let mut s = typed("go see kiln and vat now");
+    run(&mut s, "select.text", json!({"text": "kiln"}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Oven"}));
+    run(&mut s, "select.text", json!({"text": "vat"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Tub"}));
+    let p = s.doc.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(p.run_ranges().any(|(r, c)| &p.text[r] == "Tub" && c.bold == Some(true) && c.link.is_some()), "{:?}", p.text);
+    // A selection holding a manual line break keeps both lines.
+    let mut s = typed("one");
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "two");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "both"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "one\ntwo");
+    // A selection in a field's result is only linked; the field's next update owns that text.
+    let mut doc = wordcraft_doc::Document::from_text("See ");
+    let c = CharProps::default();
+    let p = doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let start = p.len();
+    p.insert_object(start, InlineObject::FieldStart { instr: "ADDIN ZOTERO_ITEM CSL_CITATION {}".into(), locked: false, dirty: false }, &c).unwrap();
+    let n = p.insert_text(p.len(), "(Smith 2020)", &c).unwrap();
+    p.insert_object(start + 3 + n, InlineObject::FieldEnd, &c).unwrap();
+    let mut s = Session::new(doc);
+    run(&mut s, "select.text", json!({"text": "Smith"}));
+    run(&mut s, "insert.link", json!({"url": url, "text": "Jones"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "See (Smith 2020)");
+    assert_eq!(s.doc.field_ranges(StoryRef::Body).len(), 1);
 }
 
 #[test]
@@ -3757,6 +3874,88 @@ fn backspace_cannot_join_into_locked_content_control() {
     let before = s.doc.clone();
     assert!(s.run("text.backspace", &json!({})).is_err());
     assert_eq!(s.doc, before);
+}
+
+// #3693 is an additional editing shortcut, not a claim of Word's default key behaviour.
+#[test]
+fn delete_previous_sentence_respects_caret_boundaries_and_unicode() {
+    for (text, before, expected) in [
+        ("First sentence. Second sentence.", "First sentence. Second sentence.", "First sentence. "),
+        ("First sentence. Second sentence.", "First sentence. Sec", "First sentence. ond sentence."),
+        ("First sentence. Second sentence.", "First sentence. ", "Second sentence."),
+        ("Grüße! Überall café.", "Grüße! Überall café.", "Grüße! "),
+        ("No punctuation here", "No punctuation", " here"),
+        ("One. Two.", "", "One. Two."),
+        ("", "", ""),
+    ] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+        let mut pos = s.sel.focus.clone();
+        pos.off = before.len();
+        s.sel = crate::Selection::caret(pos);
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected, "{text:?} at {before:?}");
+        if expected != text {
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, text);
+            run(&mut s, "edit.redo", json!({}));
+            assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, expected);
+        }
+    }
+}
+
+#[test]
+fn delete_previous_sentence_keeps_paragraph_boundaries_and_deletes_selections() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First.\nSecond sentence.", "raw": true, "paragraphs": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let count = s.doc.body.len();
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.body.len(), count);
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+    s.sel = crate::Selection { anchor: Pos { off: 0, ..end.clone() }, focus: Pos { off: 6, ..end } };
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, " sentence.");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Second sentence.");
+}
+
+#[test]
+fn delete_previous_sentence_tracks_changes_and_respects_read_only() {
+    for accept in [true, false] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "One. Two.", "raw": true}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "text.deleteSentenceBack", json!({}));
+        let changes = s.run("review.changes", &json!({})).unwrap();
+        assert!(changes.as_array().unwrap().iter().any(|c| c["kind"] == "delete"));
+        run(&mut s, if accept { "review.acceptAll" } else { "review.rejectAll" }, json!({}));
+        assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, if accept { "One. " } else { "One. Two." });
+    }
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Keep this.", "raw": true}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    assert!(s.run("text.deleteSentenceBack", &json!({})).is_err());
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "Keep this.");
+}
+
+#[test]
+fn delete_previous_sentence_does_not_cross_a_table_cell_boundary() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "First cell.", "raw": true}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second cell.", "raw": true}));
+    let end = s.sel.focus.clone();
+    s.sel = crate::Selection::caret(Pos { off: 0, ..end.clone() });
+    let before = s.doc.plain_text(StoryRef::Body);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), before);
+    s.sel = crate::Selection::caret(end);
+    run(&mut s, "text.deleteSentenceBack", json!({}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).unwrap().text, "");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("First cell."));
 }
 
 // English spelling from SCOWL 2026 (CP2): each English reads its own SCOWL dictionary, with
