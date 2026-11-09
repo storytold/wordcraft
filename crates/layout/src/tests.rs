@@ -940,6 +940,149 @@ fn a_megabyte_long_field_result_lays_out_quickly() {
     assert!(t.elapsed().as_secs() < 15, "a megabyte-long field result took {:?}", t.elapsed());
 }
 
+/// A field result beside a centered float stays outside the exclusion, matching plain text layout.
+///
+/// If a centered exclusion divides a line into two narrow spans (e.g. two 200pt spans in a 600pt
+/// column), an unbroken word wider than 200pt must not remain a single indivisible cluster that
+/// overflows into the float on an empty span. Both field and plain text must either wrap to a wider
+/// line below the float or emergency-split within the span boundaries, with no glyph or line geometry
+/// ever intersecting the exclusion area.
+#[test]
+fn centered_float_field_result_stays_outside_exclusion_matching_plain_text() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+
+    let col_w = 600.0;
+    let float_x = 200.0;
+    let float_w = 200.0;
+    let float_h = 100.0;
+
+    // Case 1: A word (~300pt) wider than the 200pt span beside the float (so it cannot fit beside it),
+    // but narrower than the full 600pt column width (so it fits on the line below).
+    let word = "a".repeat(45);
+
+    // 1. Plain text document
+    let mut d_plain = Document::from_text(&word);
+    d_plain.last_section.page_w = col_w;
+    d_plain.last_section.margin_left = 0.0;
+    d_plain.last_section.margin_right = 0.0;
+    d_plain.last_section.margin_top = 0.0;
+    d_plain.last_section.margin_bottom = 0.0;
+    Arc::make_mut(&mut d_plain.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d_plain.styles).default_chr.size = Some(12.0);
+
+    let f_plain = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: float_x, y: 0.0, dist: 0.0, ..Default::default() };
+    d_plain.insert_object(&Pos::body(0, 0), rect_shape(float_w, float_h, f_plain.clone()), &Default::default()).unwrap();
+
+    // 2. Field document
+    let mut d_field = Document::new();
+    d_field.last_section.page_w = col_w;
+    d_field.last_section.margin_left = 0.0;
+    d_field.last_section.margin_right = 0.0;
+    d_field.last_section.margin_top = 0.0;
+    d_field.last_section.margin_bottom = 0.0;
+    Arc::make_mut(&mut d_field.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d_field.styles).default_chr.size = Some(12.0);
+
+    let _ = d_field.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::Field { instr: "DOCVARIABLE unbroken".into(), result: word, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    );
+    let f_field = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: float_x, y: 0.0, dist: 0.0, ..Default::default() };
+    d_field.insert_object(&Pos::body(0, 0), rect_shape(float_w, float_h, f_field.clone()), &Default::default()).unwrap();
+
+    let l_plain = lay(&d_plain);
+    let l_field = lay(&d_field);
+
+    let check_no_lines_in_exclusion = |l: &DocLayout, label: &str| {
+        for page in &l.pages {
+            for item in &page.items {
+                if let Placed::Lines { y, para, .. } = item {
+                    for line in &para.lines {
+                        let line_top = y + line.top;
+                        let line_bottom = line_top + line.height;
+                        if line_top < float_h && line_bottom > 0.0 {
+                            let x_start = line.xs.first().copied().unwrap_or(0.0);
+                            let x_end = line.xs.last().copied().unwrap_or(0.0);
+                            assert!(
+                                x_end <= float_x + 0.01 || x_start >= float_x + float_w - 0.01,
+                                "{label}: line at y={line_top:.1}..{line_bottom:.1} with x={x_start:.1}..{x_end:.1} overlaps centered float at x={float_x}..{}",
+                                float_x + float_w
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    check_no_lines_in_exclusion(&l_plain, "plain text");
+    check_no_lines_in_exclusion(&l_field, "field result");
+
+    let get_text_line_top = |l: &DocLayout| -> f32 {
+        for page in &l.pages {
+            for item in &page.items {
+                if let Placed::Lines { y, para, .. } = item {
+                    for line in &para.lines {
+                        if line.xs.len() > 2 {
+                            return y + line.top;
+                        }
+                    }
+                }
+            }
+        }
+        0.0
+    };
+
+    let top_plain = get_text_line_top(&l_plain);
+    let top_field = get_text_line_top(&l_field);
+
+    assert!(top_plain >= float_h, "plain text should skip narrow spans and start below float: {top_plain} >= {float_h}");
+    assert!(top_field >= float_h, "field result should skip narrow spans and start below float: {top_field} >= {float_h}");
+    assert!((top_plain - top_field).abs() < 0.1, "field line top ({top_field}) must match plain text line top ({top_plain})");
+
+    // Case 2: A word (~800pt) longer than the entire column (120 'a's).
+    // Both must emergency-split within each span beside the float without intruding into the float.
+    let long_word = "a".repeat(120);
+    let mut d_plain_long = Document::from_text(&long_word);
+    d_plain_long.last_section.page_w = col_w;
+    d_plain_long.last_section.margin_left = 0.0;
+    d_plain_long.last_section.margin_right = 0.0;
+    d_plain_long.last_section.margin_top = 0.0;
+    d_plain_long.last_section.margin_bottom = 0.0;
+    Arc::make_mut(&mut d_plain_long.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d_plain_long.styles).default_chr.size = Some(12.0);
+    d_plain_long.insert_object(&Pos::body(0, 0), rect_shape(float_w, float_h, f_plain), &Default::default()).unwrap();
+
+    let mut d_field_long = Document::new();
+    d_field_long.last_section.page_w = col_w;
+    d_field_long.last_section.margin_left = 0.0;
+    d_field_long.last_section.margin_right = 0.0;
+    d_field_long.last_section.margin_top = 0.0;
+    d_field_long.last_section.margin_bottom = 0.0;
+    Arc::make_mut(&mut d_field_long.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d_field_long.styles).default_chr.size = Some(12.0);
+    let _ = d_field_long.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::Field {
+            instr: "DOCVARIABLE unbroken".into(),
+            result: long_word,
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &Default::default(),
+    );
+    d_field_long.insert_object(&Pos::body(0, 0), rect_shape(float_w, float_h, f_field), &Default::default()).unwrap();
+
+    let l_plain_long = lay(&d_plain_long);
+    let l_field_long = lay(&d_field_long);
+
+    check_no_lines_in_exclusion(&l_plain_long, "plain text (oversized word)");
+    check_no_lines_in_exclusion(&l_field_long, "field result (oversized word)");
+}
+
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
     para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false, level: None }

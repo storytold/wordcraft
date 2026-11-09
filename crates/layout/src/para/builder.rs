@@ -3,10 +3,11 @@ use super::chars::{
     SegKey, caps_expands, context_digit_dirs, draws_something, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range,
     reported_font_name, thai_run_face, upper_char,
 };
-use super::grid::east_asian;
+use super::grid::{Exclusion, east_asian};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::paragraph::break_positions;
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, ResolvedPara, RubyAlign, SOFT_HYPHEN};
+use wordcraft_doc::para::WrapText;
 use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
@@ -62,6 +63,115 @@ fn isolate_base_level(surrounding: u8, rtl_base: bool) -> u8 {
     } else {
         surrounding + 1
     }
+}
+
+/// Compute a conservative upper bound for line widths exposed to text beside floating exclusions.
+///
+/// If floating objects intersect the paragraph, text may flow into multiple narrower spans on a
+/// single line (such as on either side of a centered float, or beside side-restricted or overlapping
+/// exclusions). To prevent field words from remaining an indivisible cluster that overflows into an
+/// exclusion, this derives the narrowest valid span width across all vertical exclusion slices.
+fn conservative_span_bound(env: &ParaEnv, rp: &ResolvedPara) -> f32 {
+    let indents = rp.indent_left + rp.indent_right + rp.indent_first.abs();
+    let mut bound = (env.width - indents).max(20.0);
+    if env.exclusions.is_empty() {
+        return bound;
+    }
+
+    let lo1 = rp.indent_left + rp.indent_first;
+    let lo2 = rp.indent_left;
+    let hi = (env.width - rp.indent_right).max(1.0);
+
+    let mut y_points: Vec<f32> = Vec::new();
+    for ex in env.exclusions {
+        if !ex.top_bottom {
+            y_points.push(ex.top);
+            y_points.push(ex.bottom);
+        }
+    }
+
+    if y_points.is_empty() {
+        return bound;
+    }
+
+    y_points.sort_by(|a, b| a.total_cmp(b));
+    y_points.dedup();
+
+    for w in y_points.windows(2) {
+        let (y0, y1) = (w[0], w[1]);
+        if y1 <= y0 {
+            continue;
+        }
+        let y_mid = (y0 + y1) * 0.5;
+        let active: Vec<&Exclusion> = env.exclusions.iter().filter(|e| e.top <= y_mid && y_mid <= e.bottom).collect();
+        if active.is_empty() || active.iter().any(|e| e.top_bottom) {
+            continue;
+        }
+
+        for &lo in &[lo1, lo2] {
+            if hi <= lo + 20.0 {
+                continue;
+            }
+            let mut taken: Vec<(f32, f32)> = Vec::new();
+            for e in &active {
+                let (left, right) = match &e.contour {
+                    None => (e.left, e.right),
+                    Some(c) => {
+                        let occ = c.occupied(y_mid - e.top, y_mid + 1.0 - e.top);
+                        if occ.is_empty() {
+                            (e.left, e.right)
+                        } else {
+                            let l = occ.iter().map(|(a, _)| a + e.left).fold(f32::INFINITY, f32::min);
+                            let r = occ.iter().map(|(_, b)| b + e.left).fold(f32::NEG_INFINITY, f32::max);
+                            (l, r)
+                        }
+                    }
+                };
+                if e.side.is_both() {
+                    taken.push((left, right));
+                } else {
+                    let text_left = match e.side {
+                        WrapText::Left => true,
+                        WrapText::Right => false,
+                        _ => left - lo >= hi - right,
+                    };
+                    if text_left {
+                        taken.push((left, hi.max(right)));
+                    } else {
+                        taken.push((lo.min(left), right));
+                    }
+                }
+            }
+
+            let mut spans = vec![(lo, hi)];
+            for &(t_left, t_right) in &taken {
+                spans = spans
+                    .into_iter()
+                    .flat_map(|(a, b)| {
+                        if t_right <= a || t_left >= b {
+                            vec![(a, b)]
+                        } else {
+                            let mut out = Vec::new();
+                            if t_left > a {
+                                out.push((a, t_left.min(b)));
+                            }
+                            if t_right < b {
+                                out.push((t_right.max(a), b));
+                            }
+                            out
+                        }
+                    })
+                    .collect();
+            }
+
+            spans.retain(|(a, b)| b - a >= 20.0);
+            for (a, b) in spans {
+                bound = bound.min(b - a);
+            }
+        }
+    }
+
+    bound.max(20.0)
 }
 
 impl<'a> Builder<'a> {
@@ -590,9 +700,11 @@ impl<'a> Builder<'a> {
     /// - All emitted clusters share the field slot's `start..end` in the document paragraph text.
     /// - Word and space groupings are determined by `break_positions` (UAX #14) and whitespace transitions.
     /// - Embedding levels for bidi reordering are resolved via [`isolate_base_level`] and internal `lv`.
-    /// - Unbroken words wider than `max_line_w` (accounting for column width, paragraph indents, and float
-    ///   exclusions) are chunked into smaller clusters so that line breaking can emergency-split without
-    ///   overflowing margins, where each emitted cluster allocates its displayed string and glyph-range slice.
+    /// - Unbroken words wider than `max_line_w` (derived conservatively via [`conservative_span_bound`]
+    ///   from the narrowest valid line-breaker span beside floating exclusions and indents) are chunked
+    ///   into smaller clusters so that line breaking can emergency-split without overflowing margins or
+    ///   extending into floating exclusions, where each emitted cluster allocates its displayed string
+    ///   and glyph-range slice.
     /// - Glyphs within a word are grouped into style runs so fallback font styles are preserved without
     ///   introducing spurious line breaks.
     pub(super) fn shape_field(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, rp: &ResolvedPara) {
@@ -648,12 +760,7 @@ impl<'a> Builder<'a> {
         // Group `added` clusters into word and space chunks based on `break_positions` and whitespace kind.
         let mut group_start = 0;
         let n_added = added.len();
-        let indents = rp.indent_left + rp.indent_right + rp.indent_first.abs();
-        let mut max_line_w = (self.env.width - indents).max(20.0);
-        for ex in self.env.exclusions {
-            let ex_w = (ex.right - ex.left).max(0.0);
-            max_line_w = max_line_w.min((self.env.width - ex_w - indents).max(20.0));
-        }
+        let max_line_w = conservative_span_bound(self.env, rp);
 
         while group_start < n_added {
             let is_space = added[group_start].kind == ClKind::Space;
