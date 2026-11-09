@@ -827,7 +827,7 @@ struct XmlScan {
     refs: Vec<(String, Vec<RefFact>)>,
     /// `w:contentPart` relationship ids per owning part (for `CONTENTPART-TYPE`).
     content_parts: Vec<(String, Vec<String>)>,
-    /// Skipped contentPart ids per owner, used only for the CT-MISMATCH exemption.
+    /// Skipped contentPart and native InkML ids per owner, used only for the CT-MISMATCH exemption.
     content_part_exemptions: Vec<(String, Vec<String>)>,
     /// A contentPart collection (per part or pooled) hit the fact budget.
     content_part_capped_any: bool,
@@ -920,7 +920,7 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             continue;
         }
         let Some(text) = &e.decoded else { continue };
-        let scanned = scan::scan_part(&e.name, text, role, acc);
+        let mut scanned = scan::scan_part(&e.name, text, role, acc);
         content_part_scanned_owners.insert(e.name.to_ascii_lowercase());
         if scanned.note_capped {
             note_capped_any = true;
@@ -967,15 +967,23 @@ fn check_xml(pkg: &Package, acc: &mut Acc) -> XmlScan {
             content_part_capped_any = true;
             content_part_incomplete_owners.insert(e.name.clone());
         }
-        let exemptions_capped = append_content_parts(
+        let ink_targets = retain_native_ink_refs(pkg, &e.name, &mut scanned.ink_content_parts, scanned.ink_content_part_capped);
+        let mut exemptions_capped = append_content_parts(
             &mut content_part_exemptions,
             &mut content_part_exemptions_total,
             &e.name,
             scanned.content_part_exemptions,
             acc.limits.facts,
         );
-        if scanned.content_part_exemptions_capped || exemptions_capped {
-            // A lost skipped reference cannot establish non-consumption for this owner's pairing check.
+        exemptions_capped |= append_content_parts(
+            &mut content_part_exemptions,
+            &mut content_part_exemptions_total,
+            &e.name,
+            scanned.ink_content_parts,
+            acc.limits.facts,
+        );
+        if scanned.content_part_exemptions_capped || (scanned.ink_content_part_capped && ink_targets) || exemptions_capped {
+            // Lost references cannot establish non-consumption; native caps matter only where InkML targets exist.
             content_part_incomplete_owners.insert(e.name.clone());
             acc.note(format!(
                 "the fact budget stopped collection of contentPart pairing exemptions in {}; its customXml pairing was not checked",
@@ -1074,7 +1082,7 @@ fn append_note_items(
     capped
 }
 
-/// Append one part's `w:contentPart` ids under the pooled fact
+/// Append one part's contentPart validation or exemption ids under the pooled fact
 /// budget, enforcing the allowance while appending (see
 /// `append_note_items`). Returns true when any id was discarded.
 fn append_content_parts(content_parts: &mut Vec<(String, Vec<String>)>, total: &mut usize, part: &str, mut ids: Vec<String>, cap: usize) -> bool {
@@ -1088,6 +1096,29 @@ fn append_content_parts(content_parts: &mut Vec<(String, Vec<String>)>, total: &
         content_parts.push((part.to_string(), ids));
     }
     capped
+}
+
+/// Retain first-wins native references to InkML (MS-ODRAWXML §2.1.4) and report whether this owner has any InkML target.
+/// A capped native collection matters only for such an owner; documents without ink keep their existing checks and verdicts.
+fn retain_native_ink_refs(pkg: &Package, owner: &str, ids: &mut Vec<String>, capped: bool) -> bool {
+    if ids.is_empty() && !capped {
+        return false;
+    }
+    let rels_name = rels_part_name(owner);
+    let Some(rp) = pkg.rels.iter().find(|rp| rp.name.eq_ignore_ascii_case(&rels_name)) else {
+        ids.clear();
+        return false;
+    };
+    let mut by_id = HashMap::new();
+    for rel in &rp.rels {
+        by_id.entry(rel.id.as_str()).or_insert(rel);
+    }
+    let is_ink = |rel: &package::Rel| {
+        rel.target_abs.as_deref().and_then(|target| pkg.content_types.of(target)).is_some_and(|ct| ct.eq_ignore_ascii_case("application/inkml+xml"))
+    };
+    let ink_targets = by_id.values().any(|rel| is_ink(rel));
+    ids.retain(|id| by_id.get(id.as_str()).is_some_and(|rel| is_ink(rel)));
+    ink_targets
 }
 
 /// `NOTE-PR-LISTING` (ECMA-376 Part 1 §17.11.9) and its reverse,
@@ -1484,7 +1515,7 @@ fn header_footer_message(kind: &str, id: &str, target: &str, ct: Option<&str>) -
 /// type-free or extension-dependent — image / media, embedded package, OLE, altChunk, content
 /// parts, recipient data — prescribe no type and are deliberately absent; no pairing is invented
 /// for them. The `customXml` row is applied only when the relationship is not consumed by a
-/// `w:contentPart` element (see [`check_typed_content`]).
+/// `w:contentPart` element or a native `w14:contentPart` reaching InkML (see [`check_typed_content`]).
 pub(crate) const FIXED_REL_CONTENT_TYPES: &[(&str, &str)] = &[
     ("glossaryDocument", package::GLOSSARY_CONTENT_TYPE),
     ("styles", package::STYLES_CONTENT_TYPE),
@@ -1544,7 +1575,8 @@ fn rels_owner_name(rels_name: &str) -> Option<String> {
 /// all — non-consumption is not established there, and the run is
 /// already INCOMPLETE. Owners with complete collections are checked
 /// normally. Skipped contentPart references also exempt their first relationship,
-/// but remain separate so CONTENTPART-TYPE never validates skipped content.
+/// but remain separate so CONTENTPART-TYPE never validates skipped content. Native
+/// w14:contentPart references to InkML join only this exemption collection (MS-ODRAWXML §2.1.4).
 fn check_typed_content(
     pkg: &Package,
     content_parts: &[(String, Vec<String>)],
@@ -2947,39 +2979,50 @@ mod budget_tests {
         assert!(!full.coverage_notes.iter().any(|n| n.contains("contentPart")));
     }
 
-    /// Skipped references obey per-part and pooled budgets; incomplete consumption never becomes a pairing error.
+    /// Exemptions obey both fact budgets; capped native references without InkML do not change the verdict.
     #[test]
-    fn ct_mismatch_skipped_contentpart_exemptions_honour_fact_budgets() {
-        for (main_count, header_count) in [(3, 0), (1, 1)] {
-            let elements = |count| r#"<w:contentPart r:id="cp"/>"#.repeat(count);
-            let main = format!(
-                r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:mc="{NS_MC}"><w:body><w:p><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:p></w:body></w:document>"#,
-                elements(main_count)
-            );
-            let header = format!(
-                r#"<w:hdr xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:mc="{NS_MC}"><w:p><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:p></w:hdr>"#,
-                elements(header_count)
-            );
-            let cp_rels = rels(
-                r#"<Relationship Id="cp" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
-            );
-            let ct = String::from_utf8(content_types_with_override("word/data.xml", "text/xml"))
-                .unwrap()
-                .replace("</Types>", &format!(r#"<Override PartName="/word/header.xml" ContentType="{}"/></Types>"#, package::HEADER_CONTENT_TYPE));
-            let bytes = tiny_zip(&[
-                ("[Content_Types].xml", ct.into_bytes()),
-                ("_rels/.rels", package_rels()),
-                ("word/document.xml", main.into_bytes()),
-                ("word/_rels/document.xml.rels", cp_rels.clone()),
-                ("word/header.xml", header.into_bytes()),
-                ("word/_rels/header.xml.rels", if header_count > 0 { cp_rels } else { doc_rels() }),
-                ("word/data.xml", b"<root/>".to_vec()),
-            ]);
-            let report = validate_bytes_limited(&bytes, Limits { facts: 1, ..Limits::default() });
-            assert_eq!(report.verdict, Verdict::Incomplete, "{main_count}/{header_count}: {:?}", report.findings);
-            assert!(report.findings.is_empty(), "{:?}", report.findings);
-            assert!(report.coverage_notes.iter().any(|n| n.contains("contentPart") && n.contains("fact budget")), "{:?}", report.coverage_notes);
-            assert_eq!(validate_bytes(&bytes).verdict, Verdict::Pass);
+    fn ct_mismatch_contentpart_exemptions_honour_fact_budgets() {
+        for (native, target_ct, limited_verdict) in
+            [(false, "text/xml", Verdict::Incomplete), (true, "application/inkml+xml", Verdict::Incomplete), (true, "application/xml", Verdict::Pass)]
+        {
+            for (main_count, header_count) in [(3, 0), (1, 1)] {
+                let tag = if native { "w14:contentPart" } else { "w:contentPart" };
+                let elements = |count| format!(r#"<{tag} r:id="cp"/>"#).repeat(count);
+                let main = format!(
+                    r#"<w:document xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:mc="{NS_MC}" xmlns:w14="{NS_W14}"><w:body><w:p><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:p></w:body></w:document>"#,
+                    elements(main_count)
+                );
+                let header = format!(
+                    r#"<w:hdr xmlns:w="{NS_W}" xmlns:r="{NS_R}" xmlns:mc="{NS_MC}" xmlns:w14="{NS_W14}"><w:p><mc:AlternateContent><mc:Fallback>{}</mc:Fallback></mc:AlternateContent></w:p></w:hdr>"#,
+                    elements(header_count)
+                );
+                let cp_rels = rels(
+                    r#"<Relationship Id="cp" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+                );
+                let ct = String::from_utf8(content_types_with_override("word/data.xml", target_ct)).unwrap().replace(
+                    "</Types>",
+                    &format!(r#"<Override PartName="/word/header.xml" ContentType="{}"/></Types>"#, package::HEADER_CONTENT_TYPE),
+                );
+                let bytes = tiny_zip(&[
+                    ("[Content_Types].xml", ct.into_bytes()),
+                    ("_rels/.rels", package_rels()),
+                    ("word/document.xml", main.into_bytes()),
+                    ("word/_rels/document.xml.rels", cp_rels.clone()),
+                    ("word/header.xml", header.into_bytes()),
+                    ("word/_rels/header.xml.rels", if header_count > 0 { cp_rels } else { doc_rels() }),
+                    ("word/data.xml", b"<root/>".to_vec()),
+                ]);
+                let report = validate_bytes_limited(&bytes, Limits { facts: 1, ..Limits::default() });
+                assert_eq!(report.verdict, limited_verdict, "{main_count}/{header_count}: {:?}", report.findings);
+                assert!(report.findings.is_empty(), "{:?}", report.findings);
+                assert_eq!(
+                    report.coverage_notes.iter().any(|n| n.contains("contentPart") && n.contains("fact budget")),
+                    limited_verdict == Verdict::Incomplete,
+                    "{:?}",
+                    report.coverage_notes
+                );
+                assert_eq!(validate_bytes(&bytes).verdict, Verdict::Pass);
+            }
         }
     }
 

@@ -116,6 +116,10 @@ pub(crate) struct PartScan {
     pub content_parts: Vec<String>,
     /// Skipped contentPart ids used only to exempt CT-MISMATCH, never for CONTENTPART-TYPE.
     pub content_part_exemptions: Vec<String>,
+    /// Native Word 2010 contentPart ids; only resolved InkML targets may exempt CT-MISMATCH.
+    pub ink_content_parts: Vec<String>,
+    /// The fact budget dropped at least one native ink reference.
+    pub ink_content_part_capped: bool,
     /// The fact budget dropped at least one exemption-only id.
     pub content_part_exemptions_capped: bool,
     /// The fact budget dropped at least one contentPart id in this part.
@@ -542,6 +546,8 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
         facts: StoryFacts::default(),
         content_parts: Vec::new(),
         content_part_exemptions: Vec::new(),
+        ink_content_parts: Vec::new(),
+        ink_content_part_capped: false,
         content_part_exemptions_capped: false,
         content_part_capped: false,
         compat_97_2003: false,
@@ -593,6 +599,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let decls = declarations(&attrs);
                 state.declared.push(decls);
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &[], &mut out);
+                collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
@@ -632,6 +639,7 @@ pub(crate) fn scan_part(part: &str, text: &str, role: PartRole, acc: &mut Acc) -
                 let branch_prev = assign_alt_branch(&mut state, &id);
                 let decls = declarations(&attrs);
                 check_prefixes(&state.declared, &attrs, reader.resolver(), &decls, &mut out);
+                collect_ink_content_part(&id, &attrs, reader.resolver(), &mut out, acc.limits.facts);
                 if !was_suppressed {
                     collect_refs(&id, &attrs, reader.resolver(), &mut out.refs, acc.limits.facts, &mut state.refs_capped);
                     collect_content_part(&id, &attrs, reader.resolver(), &mut out.content_parts, acc.limits.facts, &mut out.content_part_capped);
@@ -1576,6 +1584,20 @@ fn collect_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolve
             return;
         }
         out.push(v);
+    }
+}
+
+/// Collect native Word 2010 references in either branch for pairing exemptions, never the w:contentPart type check.
+fn collect_ink_content_part(id: &ElemId, attrs: &[Attribute], res: &NamespaceResolver, out: &mut PartScan, cap: usize) {
+    if id.ns.as_deref() == Some(NS_W14)
+        && id.local == "contentPart"
+        && let Some(value) = attr_ns(attrs, res, NS_R, b"id")
+    {
+        if out.ink_content_parts.len() >= cap {
+            out.ink_content_part_capped = true;
+        } else {
+            out.ink_content_parts.push(value);
+        }
     }
 }
 

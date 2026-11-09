@@ -4535,3 +4535,62 @@ fn ct_mismatch_active_and_skipped_contentparts_are_both_exempt() {
     assert!(!has(&report, "CT-MISMATCH"), "{:?}", report.findings);
     assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
 }
+
+/// Native Word 2010 contentParts only exempt their InkML pairing, including inside skipped branches.
+#[test]
+fn ct_mismatch_native_ink_contentpart_is_exemption_only() {
+    for element in [
+        format!(r#"<w14:contentPart xmlns:w14="{W14_NS}" r:id="rIdInk"/>"#),
+        format!(r#"<w14:contentPart xmlns:w14="{W14_NS}" r:id="rIdInk"></w14:contentPart>"#),
+    ] {
+        for skipped in [false, true] {
+            let drawing = format!(
+                r#"<w:drawing><wp:inline><wp:extent cx="12700" cy="12700"/><wp:docPr id="1" name="Ink"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingInk">{element}</a:graphicData></a:graphic></wp:inline></w:drawing>"#
+            );
+            let content = if skipped {
+                format!(r#"<mc:AlternateContent><mc:Choice Requires="w">{drawing}</mc:Choice><mc:Fallback/></mc:AlternateContent>"#)
+            } else {
+                drawing
+            };
+            let mut d = content_part_doc(
+                &format!("<w:p><w:r>{content}</w:r></w:p>"),
+                r#"<Relationship Id="rIdInk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="ink.xml"/>"#,
+                "word/ink.xml",
+                "application/inkml+xml",
+            );
+            d.set("word/ink.xml", r#"<ink xmlns="http://www.w3.org/2003/InkML"/>"#);
+            let report = validate(&d);
+            assert!(!has(&report, "CT-MISMATCH"), "skipped={skipped}, {element}: {:?}", report.findings);
+            assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
+            assert_eq!(report.verdict, Verdict::Pass, "{:?}", report.findings);
+        }
+    }
+}
+
+/// Neither an unused InkML part, an unrelated namespace, nor a non-InkML target gains the native exemption.
+#[test]
+fn ct_mismatch_native_ink_exemption_stays_scoped() {
+    let native = format!(r#"<w:p><w:r><w14:contentPart xmlns:w14="{W14_NS}" r:id="rIdCP"/></w:r></w:p>"#);
+    let foreign = r#"<w:p><w:r><other:contentPart xmlns:other="urn:example:other" r:id="rIdCP"/></w:r></w:p>"#;
+    for (markup, ct) in [("<w:p/>", "application/inkml+xml"), (foreign, "application/inkml+xml"), (native.as_str(), "text/xml")] {
+        let d = content_part_doc(
+            markup,
+            r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+            "word/data.xml",
+            ct,
+        );
+        let report = validate(&d);
+        assert_finding(&report, "CT-MISMATCH", Some("word/data.xml"));
+        assert!(!has(&report, "CONTENTPART-TYPE"), "{:?}", report.findings);
+    }
+    // The brief's literal w:contentPart remains governed by its existing text/xml rule.
+    let d = content_part_doc(
+        &one_content_part("rIdCP"),
+        r#"<Relationship Id="rIdCP" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="data.xml"/>"#,
+        "word/data.xml",
+        "application/inkml+xml",
+    );
+    let report = validate(&d);
+    assert_finding(&report, "CONTENTPART-TYPE", Some("word/document.xml"));
+    assert!(!has(&report, "CT-MISMATCH"), "{:?}", report.findings);
+}
