@@ -237,8 +237,13 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
     if let Some(c) = f.background {
         p.push_str(&format!(" fo:background-color=\"#{}\"", c.hex().to_ascii_lowercase()));
     }
+    // One size in WordCraft's model is every script's in ODF's, as bold is: without these,
+    // LibreOffice shows Asian and complex-script text at the default size whatever was chosen.
     if let Some(s) = f.size {
-        p.push_str(&format!(" fo:font-size=\"{}\"", pt(s)));
+        p.push_str(&format!(" fo:font-size=\"{0}\" style:font-size-asian=\"{0}\"", pt(s)));
+        if f.extra.as_deref().and_then(|x| x.size_cs).is_none() {
+            p.push_str(&format!(" style:font-size-complex=\"{}\"", pt(s)));
+        }
     }
     if f.code {
         p.push_str(&format!(" fo:font-family=\"'{}'\" style:font-family-generic=\"modern\" style:font-pitch=\"fixed\"", model::MONO_FONT));
