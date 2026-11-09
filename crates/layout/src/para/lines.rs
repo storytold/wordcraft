@@ -751,7 +751,8 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let line_has_thai = self.has_thai
+        let line_has_thai = rp.align == Align::ThaiDistribute
+            && self.has_thai
             && pl.clusters.get(c0..c1).is_some_and(|clusters| {
                 clusters
                     .iter()
@@ -759,7 +760,7 @@ impl<'e> Breaker<'e> {
                     .any(|(offset, _)| text_cluster_source(pl, self.p, c0 + offset).is_some_and(|t| t.chars().any(crate::kinsoku::is_thai_text_char)))
             });
         let justify = display.is_none()
-            && ((rp.align == Align::Justify && stretch_end && (!line_has_thai || sc.end == LineEnd::Wrap))
+            && ((rp.align == Align::Justify && stretch_end)
                 || (rp.align == Align::ThaiDistribute && sc.end == LineEnd::Wrap)
                 || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
@@ -767,7 +768,7 @@ impl<'e> Breaker<'e> {
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            if line_has_thai && matches!(rp.align, Align::Justify | Align::ThaiDistribute) {
+            if line_has_thai && rp.align == Align::ThaiDistribute {
                 apply_thai_justification(pl, self.p, &mut sc.xs, c0, c1, align_from, content_end, slack, self.thai_justify_after);
             } else {
                 justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
@@ -1319,6 +1320,14 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
 #[cfg(test)]
 mod thai_group_tests {
     use super::line_thai_groups;
+
+    #[test]
+    fn capped_spacing_leaves_unused_slack() {
+        let caps = [4.8, 2.4];
+        let added = super::capped_equal_spacing(100.0, &caps);
+        assert_eq!(added, caps);
+        assert!(added.iter().sum::<f32>() < 100.0);
+    }
 
     #[test]
     fn sorted_gaps_are_restricted_to_the_current_line_and_after_tabs() {

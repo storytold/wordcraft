@@ -43,7 +43,7 @@ fn thai_justification_space_run(n: usize) -> Document {
     let mut d = Document::from_text(&text);
     let at = Pos::body(0, 0);
     d.format_paragraphs(&at, &at, &|p| {
-        p.align = Some(Align::Justify);
+        p.align = Some(Align::ThaiDistribute);
         p.indent_right = Some(468.0 - 4_000.0);
     })
     .expect("Thai paragraph formatting succeeds");
