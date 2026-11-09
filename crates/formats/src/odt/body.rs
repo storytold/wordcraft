@@ -1259,6 +1259,7 @@ impl Body<'_> {
                 if self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc {
                     self.group = Some(OpenGroup {
                         anchor: get(a, "text:anchor-type").map(String::from),
+                        page: get(a, "text:anchor-page-number").map(String::from),
                         style: get(a, "draw:style-name").map(String::from),
                         members: Vec::new(),
                     });
