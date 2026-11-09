@@ -94,6 +94,49 @@ fn prefix_for(uri: &[u8], extra: &[(&'static str, &str)]) -> &'static str {
     "?"
 }
 
+/// Word's 2006 namespace (`wne`). A Strict document from Word keeps a text box's content in
+/// `wne:txbxContent`; a Transitional one uses `w:txbxContent`.
+const WNE: &[u8] = b"http://schemas.microsoft.com/office/word/2006/wordml";
+
+/// The canonical prefix of an element named `local` in namespace `uri`, inside an element
+/// named `parent` (canonical, `None` at the root). This is [`prefix_for`] with two exceptions
+/// for Strict documents (#3548):
+///
+/// - Shapes, groups and canvases (`wsp`, `wgp`, `wpc`) and their parts are elements of the
+///   WordprocessingDrawing namespace in ECMA-376 Part 1, 5th edition (`dml-wordprocessingDrawing.xsd`,
+///   Strict and Transitional alike). A Strict document from Word puts them there; a Transitional
+///   one uses Word 2010's own namespaces, whose names the reader knows. So they read as `wps:`,
+///   `wpg:` and `wpc:` (see [`drawing_prefix`]).
+/// - A shape's text box content reads as `w:txbxContent` from the drawing namespace (the
+///   schema's name) and from Word's `wne:txbxContent`.
+fn element_prefix(uri: &[u8], local: &str, parent: Option<&str>, extra: &[(&'static str, &str)]) -> &'static str {
+    match prefix_for(uri, extra) {
+        "wp" => drawing_prefix(local, parent),
+        "?" if uri == WNE && local == "txbxContent" && parent == Some("wps:txbx") => "w",
+        p => p,
+    }
+}
+
+/// The prefix for `local`, an element of the WordprocessingDrawing namespace inside `parent`.
+/// Word 2010's namespaces split what this one holds: a shape and its parts are `wps:`, a group
+/// (`wgp`, a nested `grpSp`) and a graphic frame in it are `wpg:`, and a canvas is `wpc:`. Its
+/// members are named for what they are. A text box's content is `w:txbxContent`, and anything
+/// else (`inline`, `anchor`, `docPr`…) stays `wp:`.
+fn drawing_prefix(local: &str, parent: Option<&str>) -> &'static str {
+    match (parent, local) {
+        (_, "wsp") => "wps",
+        (_, "wgp" | "grpSp" | "graphicFrame") => "wpg",
+        (_, "wpc") => "wpc",
+        (Some("wps:wsp"), "cNvPr" | "cNvSpPr" | "cNvCnPr" | "spPr" | "style" | "extLst" | "txbx" | "linkedTxbx" | "bodyPr") => "wps",
+        (Some("wps:txbx"), "txbxContent") => "w",
+        (Some("wps:txbx" | "wps:linkedTxbx"), "extLst") => "wps",
+        (Some("wpg:wgp" | "wpg:grpSp"), "cNvPr" | "cNvGrpSpPr" | "grpSpPr" | "extLst") => "wpg",
+        (Some("wpg:graphicFrame"), "cNvPr" | "cNvFrPr" | "xfrm" | "extLst") => "wpg",
+        (Some("wpc:wpc"), "bg" | "whole" | "extLst") => "wpc",
+        _ => "wp",
+    }
+}
+
 /// Compatibility feature namespaces whose elements are not otherwise handled by this tree.
 /// Keep the reader's existing feature set when canonicalizing `mc:Choice/@Requires` aliases.
 fn requirement_prefix(uri: &[u8]) -> &'static str {
@@ -342,8 +385,8 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
     loop {
         buf.clear();
         let (res, ev) = r.read_resolved_event_into(&mut buf).map_err(|e| DocxError::Xml(e.to_string()))?;
-        let el_prefix = match &res {
-            ResolveResult::Bound(ns) => Some(prefix_for(ns.as_ref(), extra)),
+        let el_ns = match &res {
+            ResolveResult::Bound(ns) => Some(ns.as_ref()),
             _ => None,
         };
         match ev {
@@ -356,8 +399,8 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     return Err(DocxError::Limit("too many XML elements".into()));
                 }
                 let local = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
-                let name = match el_prefix {
-                    Some(p) => format!("{p}:{local}"),
+                let name = match el_ns {
+                    Some(ns) => format!("{}:{local}", element_prefix(ns, &local, stack.last().map(|p| p.name.as_str()), extra)),
                     None => local,
                 };
                 let mut el = El { name, attrs: Vec::new(), kids: Vec::new() };
@@ -419,15 +462,22 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     attach(&mut stack, &mut root, el);
                 }
             }
+            // Line ends are normalised as XML 1.0 says (§2.11): CR LF and a lone CR are read as
+            // LF, so a file saved with Windows line ends has no CR in its text. A CR written as
+            // `&#13;` is a character reference and stays.
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = t.decode().map_err(|e| DocxError::Xml(e.to_string()))?;
+                    let s = t.xml_content(XmlVersion::Explicit1_0).map_err(|e| DocxError::Xml(e.to_string()))?;
                     push_text(top, &s);
                 }
             }
             Event::CData(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let s = String::from_utf8_lossy(&t).into_owned();
+                    // CDATA that isn't UTF-8 is decoded lossily, with its line ends normalised the same way.
+                    let s = t
+                        .xml_content(XmlVersion::Explicit1_0)
+                        .map(|s| s.into_owned())
+                        .unwrap_or_else(|_| String::from_utf8_lossy(&t).replace("\r\n", "\n").replace('\r', "\n"));
                     push_text(top, &s);
                 }
             }
@@ -593,6 +643,42 @@ mod tests {
         assert!(parse(b"<a></a><b></b>").is_ok(), "lenient parsing still stops at the root");
     }
 
+    /// Every element name in `e`, depth first.
+    fn names(e: &El, out: &mut Vec<String>) {
+        out.push(e.name.clone());
+        for c in e.els() {
+            names(c, out);
+        }
+    }
+
+    #[test]
+    fn strict_drawing_names_read_as_word_2010_names() {
+        // A Strict shape with a text box, a group with a nested group and a graphic frame, and
+        // a canvas, each in the one Strict WordprocessingDrawing namespace (#3548).
+        let xml = br#"<w:body xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main" xmlns:a="http://purl.oclc.org/ooxml/drawingml/main" xmlns:d="http://purl.oclc.org/ooxml/drawingml/wordprocessingDrawing" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml">
+<d:anchor><d:extent/><d:docPr/><d:cNvGraphicFramePr/><a:graphic><a:graphicData>
+<d:wsp><d:cNvPr/><d:cNvSpPr/><d:spPr/><d:style/><d:extLst/><d:txbx><wne:txbxContent><w:p/></wne:txbxContent></d:txbx><d:bodyPr/></d:wsp>
+<d:wgp><d:cNvPr/><d:cNvGrpSpPr/><d:grpSpPr/><d:grpSp><d:cNvGrpSpPr/><d:grpSpPr/><d:wsp><d:cNvCnPr/><d:spPr/><d:linkedTxbx/><d:bodyPr/></d:wsp></d:grpSp>
+<d:graphicFrame><d:cNvPr/><d:cNvFrPr/><d:xfrm/><a:graphic/><d:extLst/></d:graphicFrame><d:extLst/></d:wgp>
+<d:wpc><d:bg/><d:whole/><d:wsp><d:spPr/><d:txbx><d:txbxContent/><d:extLst/></d:txbx></d:wsp><d:wgp><d:grpSpPr/></d:wgp><d:extLst/></d:wpc>
+</a:graphicData></a:graphic></d:anchor>
+<wne:txbxContent/><d:inline><d:docPr/><d:bodyPr/><d:bg/></d:inline></w:body>"#;
+        let mut got = Vec::new();
+        names(&parse(xml).unwrap(), &mut got);
+        let want = "w:body wp:anchor wp:extent wp:docPr wp:cNvGraphicFramePr a:graphic a:graphicData \
+            wps:wsp wps:cNvPr wps:cNvSpPr wps:spPr wps:style wps:extLst wps:txbx w:txbxContent w:p wps:bodyPr \
+            wpg:wgp wpg:cNvPr wpg:cNvGrpSpPr wpg:grpSpPr wpg:grpSp wpg:cNvGrpSpPr wpg:grpSpPr wps:wsp wps:cNvCnPr wps:spPr wps:linkedTxbx wps:bodyPr \
+            wpg:graphicFrame wpg:cNvPr wpg:cNvFrPr wpg:xfrm a:graphic wpg:extLst wpg:extLst \
+            wpc:wpc wpc:bg wpc:whole wps:wsp wps:spPr wps:txbx w:txbxContent wps:extLst wpg:wgp wpg:grpSpPr wpc:extLst \
+            ?:txbxContent wp:inline wp:docPr wp:bodyPr wp:bg";
+        assert_eq!(got.join(" "), want);
+        // The Transitional namespaces read as before.
+        let xml = br#"<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"><wp:inline><wp:docPr/></wp:inline><wps:wsp><wps:txbx><w:txbxContent/></wps:txbx></wps:wsp><wne:toolbars/></w:body>"#;
+        let mut got = Vec::new();
+        names(&parse(xml).unwrap(), &mut got);
+        assert_eq!(got.join(" "), "w:body wp:inline wp:docPr wps:wsp wps:txbx w:txbxContent ?:toolbars");
+    }
+
     #[test]
     fn a_relationship_attribute_is_the_namespaced_one_or_the_alias_of_one() {
         // The relationship namespace, and VML's `o:relid`.
@@ -643,6 +729,28 @@ mod tests {
         let t = p.child("w:t").unwrap();
         assert_eq!(t.text(), " hi A< ");
         assert_eq!(t.attr("xml:space"), Some("preserve"));
+    }
+
+    /// CDATA that isn't UTF-8 is decoded lossily, and its line ends are still normalised.
+    #[test]
+    fn line_ends_in_cdata_that_isnt_utf8_are_normalised() {
+        let x =
+            b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t><![CDATA[a\xff\r\nb\rc]]></x:t></x:document>";
+        assert_eq!(parse(x).unwrap().child("w:t").unwrap().text(), "a\u{FFFD}\nb\nc");
+    }
+
+    /// XML 1.0 §2.11: CR LF and a lone CR in text and CDATA are read as LF; `&#13;` stays a CR.
+    #[test]
+    fn line_ends_in_text_are_normalised_but_a_cr_reference_stays() {
+        let x = b"<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>a\r\nb\rc&#13;d<![CDATA[e\r\nf]]></x:t></x:document>";
+        let e = parse(x).unwrap();
+        assert_eq!(e.child("w:t").unwrap().text(), "a\nb\nc\rde\nf");
+        // The writer escapes a CR, so a CR in the text survives a save.
+        let x = format!(
+            "<x:document xmlns:x=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><x:t>{}</x:t></x:document>",
+            esc("a\r\nb\rc")
+        );
+        assert_eq!(parse(x.as_bytes()).unwrap().child("w:t").unwrap().text(), "a\r\nb\rc");
     }
 
     #[test]
