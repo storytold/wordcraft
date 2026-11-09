@@ -1,6 +1,6 @@
 //! Punctuation compression (`w:characterSpacingControl`) as WPS lays it out: a line that would
 //! overflow squeezes its full-width marks, each the same share, from a pool: half an em in
-//! compatibility mode 14 and older (1 − 1/(2k) em for k marks on justified lines in mode 15,
+//! compatibility mode 14 and older (k / (k + n/32) em for k marks on an n-em justified line in mode 15,
 //! nothing on other mode-15 lines), plus an em (mode 15: half an em) for each mark in the line's
 //! last unit; a closing mark ending a line needs no room for its blank half, which comes out of
 //! the pool (not on unjustified mode-15 lines); a line that fits is left alone. Assertions compare
@@ -148,12 +148,22 @@ fn compatibility_mode_15_squeezes_justified_lines_only() {
     // Left-aligned: no squeeze and no free blank half at the line end.
     assert_eq!(chars(&twenty(1), Align::Left, 19.9), 19);
     assert_eq!(chars(&format!("{}，国国国", "中".repeat(19)), Align::Left, 19.6), 18);
-    // Justified: 1 − 1/(2k) em in all (WPS: 19.50 em for one comma, 19.25 for two, 19.15 for five).
+    // Justified, 20 units: about 1 − 1/(2k) em in all (WPS: 19.50 em for one comma, 19.25 for two, 19.15 for five).
     for (k, fits, breaks) in [(1, 19.5, 19.45), (2, 19.25, 19.2), (5, 19.15, 19.05)] {
         assert_eq!(chars(&twenty(k), Align::Justify, fits), 20, "{k} commas at {fits} em");
         assert_eq!(chars(&twenty(k), Align::Justify, breaks), 19, "{k} commas at {breaks} em");
     }
     assert_eq!(chars(&format!("{}，国国国", "中".repeat(19)), Align::Justify, 19.6), 20);
+    // A longer line squeezes less: k / (k + n/32) em for a line n em long before its last unit
+    // (WPS, 12 pt: two commas on 26 units give up 0.725 em, on 46 units 0.5875).
+    let twenty_six = {
+        let mut units = vec!['中'; 26];
+        units[1] = '，';
+        units[13] = '，';
+        units.into_iter().chain("国国国国".chars()).collect::<String>()
+    };
+    assert_eq!(chars(&twenty_six, Align::Justify, 25.3), 26);
+    assert_eq!(chars(&twenty_six, Align::Justify, 25.27), 25, "0.73 em is more than a 26-unit line squeezes");
 }
 
 #[test]

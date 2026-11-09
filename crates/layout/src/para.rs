@@ -118,8 +118,10 @@ pub enum SqueezeRule {
     /// what the last unit is wider than an em.
     #[default]
     HalfEm,
-    /// Mode 15, justified lines only: 1 − 1/(2k) em for k marks (½ em for one mark, ¾ for two,
-    /// approaching a whole em), plus half what the last unit is wider than an em.
+    /// Mode 15, justified lines only: k / (k + n/32) em for k marks on a line n em long before its
+    /// last unit (WPS Office, 12 and 16 pt, 6- to 46-character lines, 1–4 marks: on 20-character
+    /// lines about ¾ em for two marks, ½ for one; less on longer lines), plus half what the last
+    /// unit is wider than an em.
     Justified,
 }
 
@@ -192,13 +194,19 @@ impl ParaLayout {
         let k = marks.len() as f32;
         let rooms: f32 = marks.iter().map(|s| s.room).sum();
         let em = marks.iter().map(|s| s.em).sum::<f32>() / k;
-        let (base, per_em) = match self.squeeze_rule {
-            SqueezeRule::HalfEm => (0.5, 1.0),
-            SqueezeRule::Justified => (1.0 - 0.5 / k, 0.5),
-        };
         // The last unit: the clusters after the line's last break opportunity before its end. The
         // pool grows by what it is wider than an em (`《瑞` and `瑞。` an em, `120` half an em).
         let unit = (c0..c1.saturating_sub(1)).rev().find(|&j| self.clusters.get(j).is_some_and(|c| c.break_after)).map_or(c0, |j| j + 1);
+        let (base, per_em) = match self.squeeze_rule {
+            SqueezeRule::HalfEm => (0.5, 1.0),
+            SqueezeRule::Justified => {
+                // k / (k + n/32) em: each mark at most an em over k plus a 32nd of the line before
+                // the last unit (n em long), so a longer line squeezes less.
+                let before: f32 = self.clusters.get(c0..unit).unwrap_or_default().iter().map(|c| c.adv).sum();
+                let n = if before.is_finite() && em > 0.0 { (before / em).clamp(0.0, 10_000.0) } else { 0.0 };
+                (k / (k + n / 32.0), 0.5)
+            }
+        };
         let unit_w: f32 = self.clusters.get(unit..c1).unwrap_or_default().iter().map(|c| c.adv).sum();
         // Less the automatic space after its last character, which the line doesn't take.
         let last_space = if c1 > 0 && !self.ends_in_free_mark(c0, c1) { self.auto_space_after(c1 - 1) } else { 0.0 };
