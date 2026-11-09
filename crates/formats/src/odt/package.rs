@@ -376,7 +376,7 @@ fn styles_xml(
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:letter-kerning=\"{kern}\"{color}{scripts}/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:letter-kerning=\"{kern}\"{color}{lang}{scripts}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
         // Widow and orphan control as Normal has it, said either way (the standard leaves it open
@@ -389,6 +389,9 @@ fn styles_xml(
             _ => String::new(),
         },
         tab = pt(tab),
+        // The document's language, without which each reader uses its own default: Normal's, as
+        // WordCraft has it (a Word file's Normal may state another than its defaults).
+        lang = doc.styles.resolve_char(None, &Default::default()).lang.as_deref().map(|l| super::writer::lang_attrs(l, "")).unwrap_or_default(),
         scripts = super::writer::script_attrs(&doc.styles.default_chr)
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
