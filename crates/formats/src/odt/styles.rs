@@ -229,7 +229,7 @@ struct StyleInfo {
     outline: Option<u8>,
     border_bottom: bool,
     /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
-    cell_background: Option<Rgb>,
+    cell_background: Option<Option<Rgb>>,
     /// A table-cell style's background picture (§17.3 `style:background-image`): its package
     /// path, `style:repeat` and `style:position`.
     cell_picture: Option<(String, String, String)>,
@@ -252,6 +252,9 @@ struct StyleInfo {
     /// A table-row style's `style:table-row-properties`: its height (`style:row-height`, exact)
     /// or least height (`style:min-row-height`), points.
     row_height: Option<(f32, bool)>,
+    /// `fo:background-color` of a table or table-row style (§20.175): what shows behind cells
+    /// with none of their own. `Some(None)`: `transparent`, which clears a parent style's.
+    table_background: Option<Option<Rgb>>,
     /// `fo:keep-together` of a table-row style: the row doesn't break across pages.
     row_keep: Option<bool>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
@@ -573,6 +576,12 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
 
 /// A property element `name` (`q` in full) of the style being read, into `s`: true when it is
 /// one (paragraph, table, column, cell, section and graphic properties, tab stops).
+/// What `fo:background-color` says of a table or row: a colour, or none (`transparent`).
+fn table_background_of(a: &Attrs) -> Option<Option<Rgb>> {
+    let bg = get(a, "fo:background-color")?;
+    if bg.trim() == "transparent" { Some(None) } else { model::parse_color(bg).map(Some) }
+}
+
 fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
     match name {
         "paragraph-properties" => paragraph_properties(a, s),
@@ -599,6 +608,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
                 s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
             }
             // §20.300 `table:align`: `margins` fills the text width, as no alignment does.
+            s.table_background = table_background_of(a).or(s.table_background);
             s.table_align = match get(a, "table:align").map(str::trim) {
                 Some("left") => Some(Align::Left),
                 Some("center") => Some(Align::Center),
@@ -620,6 +630,7 @@ fn style_child(name: &str, q: &str, a: &Attrs, s: &mut StyleInfo) -> bool {
             }
         }
         "table-row-properties" => {
+            s.table_background = table_background_of(a).or(s.table_background);
             if let Some(h) = get(a, "style:row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
                 s.row_height = Some((h.min(MAX_LEN), true));
             } else if let Some(h) = get(a, "style:min-row-height").and_then(length).filter(|h| h.is_finite() && *h > 0.0) {
@@ -677,7 +688,7 @@ pub(super) fn writing_direction(m: &str) -> wordcraft_doc::props::TextDirection 
 /// A table-cell style's `style:table-cell-properties` (ODF 1.3 §17.18): background, borders,
 /// padding and vertical alignment.
 fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
-    if let Some(c) = get(a, "fo:background-color").and_then(model::parse_color) {
+    if let Some(c) = table_background_of(a) {
         s.cell_background = Some(c);
     }
     cell_borders_and_padding(a, s);
@@ -1379,8 +1390,13 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.cell_picture.clone())
     }
 
+    pub(super) fn table_background(&self, name: &str) -> Option<Rgb> {
+        self.chain(name).iter().find_map(|(_, s)| s.table_background).flatten()
+    }
+
+    /// Background of a table-cell style (whole chain).
     pub(super) fn cell_background(&self, name: &str) -> Option<Rgb> {
-        self.chain(name).iter().find_map(|(_, s)| s.cell_background)
+        self.chain(name).iter().find_map(|(_, s)| s.cell_background).flatten()
     }
 
     /// Borders of a table-cell style (whole chain).
