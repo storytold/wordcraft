@@ -529,6 +529,7 @@ fn a_note_with_a_picture_stays_when_its_citation_leaves() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
         shape: None,
     };
