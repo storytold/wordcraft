@@ -359,14 +359,14 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
             // A connector stays one in formats that glue them (ODT, with boxes); elsewhere it is a
             // straight line.
             let kind = match kind {
-                ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector if !opts.boxes => ShapeKind::Line,
+                k if k.is_connector() && !opts.boxes => ShapeKind::Line,
                 k => *k,
             };
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
             let part = story.and_then(|id| doc.parts.get(&id));
             let blocks = part.map(|p| flow_blocks(doc, &p.blocks, 0, inner)).unwrap_or_default();
             let look = BoxLook {
-                fill: fill.clone().filter(|_| kind != ShapeKind::Line),
+                fill: fill.clone().filter(|_| !kind.is_open()),
                 line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                 dash: extra.dash.clone(),
                 arrows: (extra.arrow_start, extra.arrow_end),
@@ -743,7 +743,7 @@ fn graphic_group(
         .filter_map(|item| match item {
             GraphicItem::Shape { rect, kind, fill, stroke, stroke_width } if finite(rect) => {
                 let look = BoxLook {
-                    fill: fill.map(wordcraft_doc::fill::Fill::solid).filter(|_| *kind != ShapeKind::Line),
+                    fill: fill.map(wordcraft_doc::fill::Fill::solid).filter(|_| !kind.is_open()),
                     line: stroke.filter(|_| stroke_width.is_finite() && *stroke_width > 0.0).map(|c| (c, stroke_width.min(12.0))),
                     ..plain.clone()
                 };

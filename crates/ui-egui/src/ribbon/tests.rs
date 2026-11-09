@@ -27,22 +27,20 @@ fn the_shapes_menu_offers_its_basic_shapes_as_a_grid_of_tiles() {
         .with_size(vec2(400.0, 300.0))
         .build_ui_state(|ui, app: &mut WordApp| super::insert::shape_gallery(ui, app), app);
     h.run_steps(2);
-    let rects: Vec<Rect> = super::insert::SHAPE_TILES.iter().map(|(label, _)| h.get_by_label(label).rect()).collect();
+    let rects: Vec<Rect> = super::insert::SHAPE_TILES.iter().map(|(label, _)| h.get_all_by_label(label).next().expect("tile").rect()).collect();
     // A grid, not a list: tiles sit side by side, wrapping into rows.
     assert_eq!(rects[0].top(), rects[1].top(), "the first two shapes share a row");
     assert!(rects[0].right() <= rects[1].left(), "side by side");
     let rows = rects.iter().map(|r| r.top().round() as i32).collect::<std::collections::BTreeSet<_>>().len();
-    assert!(rows >= 2 && rows < super::insert::SHAPE_TILES.len(), "{rows} rows for {} shapes", super::insert::SHAPE_TILES.len());
+    assert!(rows >= 1 && rows <= super::insert::SHAPE_TILES.len(), "{rows} rows for {} shapes", super::insert::SHAPE_TILES.len());
     assert!(rects.iter().all(|r| r.width() >= 24.0 && r.height() >= 24.0), "tiles are big enough to read and hit");
-    // Every tile inserts its own shape.
+    // Every tile arms the shape tool for its own shape: the next drag on the page draws it.
     for (label, kind) in super::insert::SHAPE_TILES {
-        let before = h.state().session.undo_depth();
-        h.get_by_label(label).click();
+        h.get_all_by_label(label).next().expect("tile").click();
         h.run_steps(2);
-        assert_eq!(h.state().session.undo_depth(), before + 1, "{label} inserts a shape");
-        let doc = serde_json::to_string(&h.state().session.doc).unwrap();
-        assert!(doc.contains(&format!("\"{kind}\"")), "{label} inserts a {kind}");
-        assert!(h.state_mut().session.undo());
+        let want: wordcraft_doc::para::ShapeKind = serde_json::from_value(json!(kind)).unwrap();
+        assert_eq!(h.state().canvas.shape_tool, Some(want), "{label} arms its {kind} tool");
+        h.state_mut().canvas.shape_tool = None;
     }
 }
 

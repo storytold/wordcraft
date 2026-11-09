@@ -99,25 +99,7 @@ impl Writer<'_> {
         }
         w.open("wps:spPr", &[]);
         xfrm(w, off, *sw, *sh, float.spin());
-        let prst = match kind {
-            ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
-            ShapeKind::RoundedRectangle => "roundRect",
-            ShapeKind::Ellipse => "ellipse",
-            ShapeKind::FlowchartOr => "flowChartOr",
-            ShapeKind::Triangle => "triangle",
-            ShapeKind::RightTriangle => "rtTriangle",
-            ShapeKind::Diamond => "diamond",
-            ShapeKind::Line => "line",
-            ShapeKind::StraightConnector => "straightConnector1",
-            ShapeKind::ElbowConnector => "bentConnector3",
-            ShapeKind::CurvedConnector => "curvedConnector3",
-            ShapeKind::Arrow => "rightArrow",
-            ShapeKind::ArrowLeft => "leftArrow",
-            ShapeKind::ArrowUp => "upArrow",
-            ShapeKind::ArrowDown => "downArrow",
-            ShapeKind::Star => "star5",
-            ShapeKind::Heart => "heart",
-        };
+        let prst = kind.ooxml_prst();
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {
@@ -162,7 +144,7 @@ impl Writer<'_> {
                 if ink {
                     w.empty("a:round", &[]);
                 }
-                arrow_ends(w, extra);
+                arrow_ends(w, extra, *kind);
                 w.close("a:ln");
             }
             None => {
@@ -405,9 +387,14 @@ fn line_dash(w: &mut W, dash: &wordcraft_doc::line_dash::LineDash) {
 }
 
 /// A shape's `a:effectLst` (ECMA-376 Part 1 §20.1.8.26), children in schema order.
-/// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57).
-fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra) {
-    for (on, tag, style) in [(extra.arrow_start, "a:headEnd", extra.start_style), (extra.arrow_end, "a:tailEnd", extra.end_style)] {
+/// A line's arrowheads (`a:headEnd`, `a:tailEnd`, ECMA-376 §20.1.8.38 / §20.1.8.57). The arrow
+/// variants of lines and connectors carry their heads in the kind too (a `DoubleArrow`, an
+/// `ElbowArrow`), so they are written from it: the preset alone doesn't tell them apart on read.
+fn arrow_ends(w: &mut W, extra: &wordcraft_doc::connector::ShapeExtra, kind: ShapeKind) {
+    let both = matches!(kind, ShapeKind::DoubleArrow | ShapeKind::ElbowDoubleArrow | ShapeKind::CurvedDoubleArrow);
+    let start = extra.arrow_start || both;
+    let end = extra.arrow_end || both || matches!(kind, ShapeKind::ElbowArrow | ShapeKind::CurvedArrow);
+    for (on, tag, style) in [(start, "a:headEnd", extra.start_style), (end, "a:tailEnd", extra.end_style)] {
         if on {
             w.empty(tag, &[("type", style.kind.ooxml()), ("w", style.width.ooxml()), ("len", style.length.ooxml())]);
         }

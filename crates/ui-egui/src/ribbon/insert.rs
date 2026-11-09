@@ -1,45 +1,294 @@
-use super::common::{mi, mi_icon, stack};
+use super::common::{mi, stack};
 use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
+use egui::{Pos2, Stroke};
+use wordcraft_doc::para::ShapeKind;
 
-/// The basic shapes of Insert › Shapes: tooltip and `insert.shape` kind.
+use crate::theme::{Tokens, regular};
+
+/// The basic shapes of Insert › Shapes: the labels the gallery gives them, for screen readers
+/// and the grid test (each is a [`ShapeKind::label`]).
+#[cfg(test)]
 pub(super) const SHAPE_TILES: [(&str, &str); 9] = [
     ("Rectangle", "rectangle"),
     ("Rounded Rectangle", "roundedRectangle"),
     ("Oval", "ellipse"),
-    ("Triangle", "triangle"),
+    ("Isosceles Triangle", "triangle"),
     ("Diamond", "diamond"),
     ("Line", "line"),
     ("Arrow", "arrow"),
-    ("Star", "star"),
+    ("5-Point Star", "star"),
     ("Heart", "heart"),
 ];
 
-/// Shapes per row of the Insert › Shapes grid.
-const SHAPE_TILES_PER_ROW: usize = 5;
-
-/// The basic shapes as a grid of drawn tiles (#4349), each named by its tooltip; a click inserts it.
+/// Insert › Shapes (#4349): Word's gallery, a section per family, each shape a drawn tile. A
+/// click arms the shape tool (`ui.shapeTool`): the next drag on the page draws it at that size,
+/// and a plain click drops it at a default size (as Word's crosshair does).
 pub(super) fn shape_gallery(ui: &mut Ui, app: &mut WordApp) {
-    use crate::{icons, theme::Tokens};
-    use egui::{Rect, Sense, vec2};
+    ui.set_width(260.0);
+    egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+        shape_section(
+            ui,
+            app,
+            "Recently Used Shapes",
+            &[
+                ShapeKind::Rectangle,
+                ShapeKind::RoundedRectangle,
+                ShapeKind::Ellipse,
+                ShapeKind::Line,
+                ShapeKind::Arrow,
+                ShapeKind::Triangle,
+                ShapeKind::Diamond,
+                ShapeKind::Heart,
+                ShapeKind::Star,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Lines",
+            &[
+                ShapeKind::Line,
+                ShapeKind::Arrow,
+                ShapeKind::DoubleArrow,
+                ShapeKind::StraightConnector,
+                ShapeKind::ElbowConnector,
+                ShapeKind::ElbowArrow,
+                ShapeKind::ElbowDoubleArrow,
+                ShapeKind::CurvedConnector,
+                ShapeKind::CurvedArrow,
+                ShapeKind::CurvedDoubleArrow,
+                ShapeKind::Curve,
+                ShapeKind::Freeform,
+                ShapeKind::Scribble,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Rectangles",
+            &[
+                ShapeKind::Rectangle,
+                ShapeKind::RoundedRectangle,
+                ShapeKind::SingleCornerSnipped,
+                ShapeKind::TopCornersSnipped,
+                ShapeKind::DiagonalCornersSnipped,
+                ShapeKind::SnippedAndRounded,
+                ShapeKind::RoundSingleCorner,
+                ShapeKind::RoundSameSideCorner,
+                ShapeKind::RoundDiagonalCorner,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Basic Shapes",
+            &[
+                ShapeKind::TextBox,
+                ShapeKind::Ellipse,
+                ShapeKind::Triangle,
+                ShapeKind::RightTriangle,
+                ShapeKind::Parallelogram,
+                ShapeKind::Trapezoid,
+                ShapeKind::Diamond,
+                ShapeKind::Pentagon,
+                ShapeKind::Hexagon,
+                ShapeKind::Heptagon,
+                ShapeKind::Octagon,
+                ShapeKind::Decagon,
+                ShapeKind::Dodecagon,
+                ShapeKind::Pie,
+                ShapeKind::Chord,
+                ShapeKind::Teardrop,
+                ShapeKind::Frame,
+                ShapeKind::HalfFrame,
+                ShapeKind::LShape,
+                ShapeKind::DiagonalStripe,
+                ShapeKind::Cross,
+                ShapeKind::Plaque,
+                ShapeKind::Cylinder,
+                ShapeKind::Cube,
+                ShapeKind::Bevel,
+                ShapeKind::Donut,
+                ShapeKind::NoSymbol,
+                ShapeKind::BlockArc,
+                ShapeKind::FoldedCorner,
+                ShapeKind::SmileyFace,
+                ShapeKind::Heart,
+                ShapeKind::LightningBolt,
+                ShapeKind::Sun,
+                ShapeKind::Moon,
+                ShapeKind::Cloud,
+                ShapeKind::Arc,
+                ShapeKind::DoubleBracket,
+                ShapeKind::DoubleBrace,
+                ShapeKind::LeftBracket,
+                ShapeKind::RightBracket,
+                ShapeKind::LeftBrace,
+                ShapeKind::RightBrace,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Block Arrows",
+            &[
+                ShapeKind::Arrow,
+                ShapeKind::ArrowLeft,
+                ShapeKind::ArrowUp,
+                ShapeKind::ArrowDown,
+                ShapeKind::LeftRightArrow,
+                ShapeKind::UpDownArrow,
+                ShapeKind::QuadArrow,
+                ShapeKind::LeftRightUpArrow,
+                ShapeKind::BentArrow,
+                ShapeKind::UTurnArrow,
+                ShapeKind::LeftUpArrow,
+                ShapeKind::BentUpArrow,
+                ShapeKind::StripedRightArrow,
+                ShapeKind::NotchedRightArrow,
+                ShapeKind::PentagonArrow,
+                ShapeKind::Chevron,
+                ShapeKind::RightArrowCallout,
+                ShapeKind::DownArrowCallout,
+                ShapeKind::LeftArrowCallout,
+                ShapeKind::UpArrowCallout,
+                ShapeKind::LeftRightArrowCallout,
+                ShapeKind::QuadArrowCallout,
+                ShapeKind::CircularArrow,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Equation Shapes",
+            &[
+                ShapeKind::MathPlus,
+                ShapeKind::MathMinus,
+                ShapeKind::MathMultiply,
+                ShapeKind::MathDivide,
+                ShapeKind::MathEqual,
+                ShapeKind::MathNotEqual,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Flowchart",
+            &[
+                ShapeKind::FlowchartProcess,
+                ShapeKind::FlowchartAlternateProcess,
+                ShapeKind::FlowchartDecision,
+                ShapeKind::FlowchartData,
+                ShapeKind::FlowchartPredefinedProcess,
+                ShapeKind::FlowchartInternalStorage,
+                ShapeKind::FlowchartDocument,
+                ShapeKind::FlowchartMultidocument,
+                ShapeKind::FlowchartTerminator,
+                ShapeKind::FlowchartPreparation,
+                ShapeKind::FlowchartManualInput,
+                ShapeKind::FlowchartManualOperation,
+                ShapeKind::FlowchartConnector,
+                ShapeKind::FlowchartOffpageConnector,
+                ShapeKind::FlowchartCard,
+                ShapeKind::FlowchartPunchedTape,
+                ShapeKind::FlowchartSummingJunction,
+                ShapeKind::FlowchartOr,
+                ShapeKind::FlowchartCollate,
+                ShapeKind::FlowchartSort,
+                ShapeKind::FlowchartExtract,
+                ShapeKind::FlowchartMerge,
+                ShapeKind::FlowchartStoredData,
+                ShapeKind::FlowchartDelay,
+                ShapeKind::FlowchartSequentialData,
+                ShapeKind::FlowchartMagneticDisk,
+                ShapeKind::FlowchartDirectAccessStorage,
+                ShapeKind::FlowchartDisplay,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Stars and Banners",
+            &[
+                ShapeKind::Explosion1,
+                ShapeKind::Explosion2,
+                ShapeKind::Star4,
+                ShapeKind::Star,
+                ShapeKind::Star6,
+                ShapeKind::Star7,
+                ShapeKind::Star8,
+                ShapeKind::Star10,
+                ShapeKind::Star12,
+                ShapeKind::Star16,
+                ShapeKind::Star24,
+                ShapeKind::Star32,
+                ShapeKind::UpRibbon,
+                ShapeKind::DownRibbon,
+                ShapeKind::CurvedUpRibbon,
+                ShapeKind::CurvedDownRibbon,
+                ShapeKind::VerticalScroll,
+                ShapeKind::HorizontalScroll,
+                ShapeKind::Wave,
+                ShapeKind::DoubleWave,
+            ],
+        );
+        shape_section(
+            ui,
+            app,
+            "Callouts",
+            &[
+                ShapeKind::RectangularCallout,
+                ShapeKind::RoundedRectangularCallout,
+                ShapeKind::OvalCallout,
+                ShapeKind::CloudCallout,
+                ShapeKind::LineCallout1,
+                ShapeKind::LineCallout2,
+                ShapeKind::LineCallout3,
+                ShapeKind::LineCallout4,
+                ShapeKind::LineCallout1AccentBar,
+                ShapeKind::LineCallout2AccentBar,
+                ShapeKind::LineCallout3AccentBar,
+                ShapeKind::LineCallout4AccentBar,
+            ],
+        );
+        ui.separator();
+        super::common::mi_icon(ui, app, "canvas", "New Drawing Canvas", "insert.canvas", json!({}));
+    });
+}
+
+/// One gallery section: its title, then its shapes as a ten-wide grid of drawn tiles.
+fn shape_section(ui: &mut Ui, app: &mut WordApp, title: &str, shapes: &[ShapeKind]) {
     let t = Tokens::get(ui.ctx());
-    let enabled = crate::widgets::enabled(app, "insert.shape");
-    ui.add_enabled_ui(enabled, |ui| {
-        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-        for row in SHAPE_TILES.chunks(SHAPE_TILES_PER_ROW) {
-            ui.horizontal(|ui| {
-                for (label, kind) in row {
-                    let (r, resp) = ui.allocate_exact_size(vec2(34.0, 34.0), Sense::click());
-                    let name = crate::tl!(label);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
-                    crate::widgets::bg(ui, r, &resp, false, &t);
-                    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(24.0, 24.0)), &format!("shape.{kind}"), t.icon, t.accent);
-                    if resp.on_hover_text(name).clicked() {
-                        crate::widgets::run_from_ribbon(app, "insert.shape", json!({"kind": kind}));
-                        ui.close();
-                    }
+    ui.add_space(2.0);
+    ui.label(egui::RichText::new(tl!(title)).font(regular(11.0)).color(t.text_dim));
+    crate::rtl::grid(ui, egui::Grid::new(title).spacing(egui::vec2(2.0, 2.0)), |ui| {
+        for (i, &k) in shapes.iter().enumerate() {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::click());
+            let name = tl!(k.label());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
+            if resp.hovered() {
+                ui.painter().rect_filled(r, 2.0, t.hover);
+            }
+            let stroke_c = if resp.hovered() { t.accent_text } else { t.text };
+            let inner = r.shrink(4.0);
+            for (closed, pts) in wordcraft_render::shape_preview_contours(k, inner.width(), inner.height()) {
+                let screen_pts: Vec<Pos2> = pts.into_iter().map(|(x, y)| egui::pos2(inner.min.x + x, inner.min.y + y)).collect();
+                if closed {
+                    ui.painter().add(egui::Shape::closed_line(screen_pts, Stroke::new(1.0, stroke_c)));
+                } else {
+                    ui.painter().add(egui::Shape::line(screen_pts, Stroke::new(1.2, stroke_c)));
                 }
-            });
+            }
+            if resp.on_hover_text(name).clicked() {
+                // Arms the shape tool: the next canvas drag draws it.
+                let kind_val = serde_json::to_value(k).unwrap_or_else(|_| json!("rectangle"));
+                let _ = app.run("ui.shapeTool", json!({ "kind": kind_val }));
+                ui.close();
+            }
+            if i % 10 == 9 {
+                ui.end_row();
+            }
         }
     });
 }
@@ -78,23 +327,12 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Illustrations", None, app, |ui, app| {
         big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"), |ui, app| {
-            shape_gallery(ui, app);
-            ui.separator();
-            mi_icon(ui, app, "canvas", "New Drawing Canvas", "insert.canvas", json!({}));
-            // Connectors: glue their ends to shapes by dragging them (shape.connect).
-            for (l, k, arrow) in [
-                ("Straight Connector", "straightConnector", "none"),
-                ("Straight Arrow Connector", "straightConnector", "end"),
-                ("Elbow Connector", "elbowConnector", "none"),
-                ("Elbow Arrow Connector", "elbowConnector", "end"),
-                ("Curved Connector", "curvedConnector", "none"),
-                ("Curved Arrow Connector", "curvedConnector", "end"),
-            ] {
-                let icon = if arrow == "end" { k.replace("Connector", "ArrowConnector") } else { k.to_string() };
-                mi_icon(ui, app, &format!("shape.{icon}"), l, "insert.shape", json!({"kind": k, "arrow": arrow}));
-            }
-        });
+        crate::widgets::menu_button(
+            ui,
+            app,
+            crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"),
+            shape_gallery,
+        );
         stack(ui, |ui| {
             small(ui, app, "icons", Some("Icons"), "Icons", crate::widgets::ButtonAction::new("insert.icon", json!({}), false));
             small(ui, app, "smartArt", Some("SmartArt"), "SmartArt", crate::widgets::ButtonAction::new("insert.smartArt", json!({}), false));
