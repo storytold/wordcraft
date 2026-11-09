@@ -66,7 +66,7 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
                 numeral: opts.numeral,
                 ..Default::default()
             };
-            Some(wordcraft_pdf::export(doc, &pdf).map_err(|e| e.to_string()))
+            Some(wordcraft_pdf::export(&pdf_document(doc), &pdf).map_err(|e| e.to_string()))
         }
         other => wordcraft_formats::export_with(other, doc, &wordcraft_formats::ExportOptions { comments: opts.markup && opts.comments }),
     }
@@ -82,4 +82,21 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
     let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
     Ok(img.to_png())
+}
+
+/// Supply an absent or unreadable PDF creation date without changing the document or advancing
+/// its revision. This covers direct exports and web downloads, which do not pass through
+/// `stamp_save`.
+///
+/// Unreadable, not only absent: the DOCX reader takes `core.created` as it finds it, so a file can
+/// arrive carrying something like `not-a-date`. The PDF writer cannot put that in a document and
+/// falls back to the clock, which is the one thing a pinned date is meant to stop -- so the
+/// question asked here is the writer's own (`reads_as_date`), not whether the string is empty
+/// (noted in review).
+pub(crate) fn pdf_document(doc: &Document) -> std::borrow::Cow<'_, Document> {
+    let mut output = std::borrow::Cow::Borrowed(doc);
+    if !wordcraft_pdf::reads_as_date(&doc.core.created) {
+        output.to_mut().core.created = crate::cmd::saved_iso();
+    }
+    output
 }

@@ -87,7 +87,7 @@ impl Session {
     pub fn stamp_save(&mut self) {
         self.doc.settings.zoom = crate::cmd::view::saved_zoom(&self.view);
         let core = &mut self.doc.core;
-        core.modified = crate::cmd::now_iso();
+        core.modified = crate::cmd::saved_iso();
         if core.created.is_empty() {
             core.created = core.modified.clone();
         }
