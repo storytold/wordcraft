@@ -145,12 +145,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
             .params(r#"{"id"?: n (make this open document the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
             .pure(),
-        CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
-            s.push_ui_request(json!({"toggle": "split"}));
-            sel_result(s)
-        })
-        .key("Mod+Alt+S")
-        .pure(),
+        // Two panes on the document in one window (#3254), as Word's Split and Remove Split.
+        // The front end draws them: each pane scrolls on its own and keeps its own caret, zoom
+        // and view mode, and Remove Split leaves the pane that wasn't being worked in, as Word
+        // does. Read Mode shows the document in one pane.
+        CommandSpec::new("view.split", "Split", "View › Window", |s, v| toggle(s, v, |x| &mut x.split))
+            .params(r#"{"value"?: bool (on: split the window; off: Remove Split; omitted: toggle)} → {"value"}"#)
+            .key("Mod+Alt+S")
+            .when(|s| if s.view.read_mode { Some("Read Mode shows the document in one pane") } else { None })
+            .pure(),
         // View › Window across WordCraft windows (#322): the desktop app's native windows
         // perform these (see `Windows`), elsewhere they are disabled.
         CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {

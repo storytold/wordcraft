@@ -394,3 +394,125 @@ fn a_window_view_put_back_follows_the_spelling_setting() {
     s.put_view(held);
     assert!(s.view.proofing);
 }
+
+/// View › Split (#3254) turns on and off (Remove Split), or toggles without a value. It belongs
+/// to the window: a document made or opened from a split window, and a New Window, start with
+/// one pane, and the split document finds its panes again when it comes back. Read Mode shows
+/// one pane, so Split is unavailable there.
+#[test]
+fn split_is_the_windows_and_new_documents_and_windows_start_in_one_pane() {
+    let mut s = s();
+    assert!(!s.view.split);
+    assert_eq!(run(&mut s, "view.split", json!({})), json!({"value": true}));
+    assert!(s.view.split);
+    assert_eq!(run(&mut s, "view.split", json!({"value": true})), json!({"value": true}), "on stays on");
+    assert!(!s.copy_view().view().split, "New Window opens with one pane");
+    let split = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    assert!(!s.view.split, "a new document opens in one pane");
+    s.activate(split).unwrap();
+    assert!(s.view.split, "the split document keeps its panes");
+    assert_eq!(run(&mut s, "view.split", json!({})), json!({"value": false}), "Remove Split");
+    assert!(!s.view.split);
+
+    run(&mut s, "view.readMode", json!({}));
+    assert!(s.view.read_mode);
+    assert!(s.why_disabled("view.split").is_some());
+    assert!(s.run("view.split", &json!({"value": true})).is_err());
+    assert!(!s.view.split);
+}
+
+/// The two panes of a split window (#3254) each keep their own caret, zoom, view mode and
+/// Show/Hide ¶, as each of Word's panes has its own selection and view; the task panes and other
+/// window settings are the window's whichever pane is worked in. An edit made in one pane leaves
+/// the other's caret in what is left.
+#[test]
+fn split_panes_keep_their_own_caret_and_view_and_share_the_windows_settings() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello world"}));
+    run(&mut s, "view.split", json!({"value": true}));
+    run(&mut s, "view.navigationPane", json!({"value": true}));
+    let mut top = s.copy_view();
+
+    // The bottom pane: zoomed in, Draft, marks shown, "world" selected.
+    run(&mut s, "view.zoom", json!({"value": 150}));
+    run(&mut s, "view.draft", json!({}));
+    run(&mut s, "view.marks", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "world"}));
+    let world = s.sel.clone();
+
+    let mut bottom = s.swap_pane_view(top);
+    assert_eq!((s.view.zoom, s.view.mode, s.view.marks), (1.0, wordcraft_layout::ViewMode::Print, false), "the top pane keeps its view");
+    assert_eq!((s.sel.anchor.off, s.sel.focus.off), (11, 11), "and its caret");
+    assert!(s.view.nav_pane && s.view.split, "the window's settings stay");
+    // A task pane turned on while the top pane is worked in is the window's.
+    run(&mut s, "view.commentsPane", json!({"value": true}));
+    run(&mut s, "view.zoom", json!({"value": 75}));
+
+    top = s.swap_pane_view(bottom);
+    assert!((s.view.zoom - 1.5).abs() < 1e-6, "the bottom pane keeps its zoom: {}", s.view.zoom);
+    assert_eq!((s.view.mode, s.view.marks), (wordcraft_layout::ViewMode::Draft, true));
+    assert_eq!(s.sel, world, "and its selection");
+    assert!(s.view.nav_pane && s.view.comments_pane && s.view.split, "the window's settings follow the window");
+
+    // The bottom pane deletes " world"; the top pane's caret was at its end.
+    run(&mut s, "select.text", json!({"text": " world"}));
+    run(&mut s, "text.delete", json!({}));
+    bottom = s.swap_pane_view(top);
+    assert!((s.view.zoom - 0.75).abs() < 1e-6, "the top pane keeps its own zoom: {}", s.view.zoom);
+    assert_eq!(s.sel.focus.off, 5, "the top pane's caret is in what is left");
+    run(&mut s, "text.insert", json!({"text": "!"}));
+    assert_eq!(text(&s).trim(), "Hello!");
+    drop(bottom);
+}
+
+/// A Drawing Canvas member picked on its own (#2637) stays picked in its pane while the other
+/// pane of a split window is drawn (#3254), but not once the document has changed since.
+#[test]
+fn a_picked_canvas_member_stays_with_its_split_pane() {
+    let mut s = s();
+    run(&mut s, "insert.canvas", json!({}));
+    run(&mut s, "insert.shape", json!({"kind": "ellipse", "width": 100, "height": 50}));
+    run(&mut s, "select.member", json!({"index": 0}));
+    assert!(crate::cmd::canvas::selected_member(&s).is_some());
+    let other = s.copy_view();
+    let picked = s.swap_pane_view(other);
+    assert!(s.member.is_none(), "the other pane has no member picked");
+    let other = s.swap_pane_view(picked);
+    assert_eq!(crate::cmd::canvas::selected_member(&s).map(|(_, i, _)| i), Some(0), "picked again in its own pane");
+
+    let picked = s.swap_pane_view(other);
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    s.swap_pane_view(picked);
+    assert!(s.member.is_none(), "not after an edit");
+}
+
+/// Split and Remove Split change the window, not the document (#3254): neither is an undo step
+/// nor makes the document dirty, as in Word, where Undo skips them. An edit made in one pane is
+/// undone from the other, and the pane that undoes keeps a caret inside what is left.
+#[test]
+fn split_is_not_an_edit_and_either_pane_undoes_the_documents_edits() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Hello"));
+    run(&mut s, "caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 5)}));
+    let undo_steps = s.undo_depth();
+    run(&mut s, "view.split", json!({"value": true}));
+    assert_eq!((s.undo_depth(), s.dirty), (undo_steps, false), "Split is no undo step");
+    let top = s.copy_view();
+
+    // The lower pane types; the upper pane undoes it.
+    run(&mut s, "text.insert", json!({"text": " world"}));
+    let bottom = s.swap_pane_view(top);
+    assert_eq!(s.sel.focus.off, 5, "the upper pane's caret");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s).trim(), "Hello", "undone from the other pane");
+    let top = s.swap_pane_view(bottom);
+    assert!(s.sel.focus.off <= 5, "the lower pane's caret is inside what is left: {}", s.sel.focus.off);
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s).trim(), "Hello world");
+    drop(top);
+
+    let undo_steps = s.undo_depth();
+    run(&mut s, "view.split", json!({"value": false}));
+    assert_eq!(s.undo_depth(), undo_steps, "Remove Split is no undo step either");
+    assert!(!s.view.split);
+}

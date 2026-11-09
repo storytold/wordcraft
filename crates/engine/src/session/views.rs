@@ -29,6 +29,9 @@ pub struct WindowView {
     column: Option<ColumnBlock>,
     column_mode: bool,
     widened: Option<Widened>,
+    /// The Drawing Canvas member picked on its own (#2637). Only a split window's pane gets it
+    /// back ([`Session::swap_pane_view`]); [`Session::put_view`] leaves it out.
+    member: Option<crate::cmd::canvas::CanvasMember>,
     /// The document and its revision when the view was taken out.
     document_id: u64,
     rev: u64,
@@ -75,6 +78,7 @@ impl Session {
             column: self.column.take(),
             column_mode: take(&mut self.column_mode),
             widened: self.widened.take(),
+            member: self.member.take(),
             document_id: self.document_id,
             rev: self.rev,
         }
@@ -84,7 +88,8 @@ impl Session {
     pub fn copy_view(&self) -> WindowView {
         WindowView {
             sel: self.sel.clone(),
-            view: self.view.clone(),
+            // A new window, or a new pane, starts with one pane of its own.
+            view: ViewState { split: false, ..self.view.clone() },
             pending: self.pending.clone(),
             goal_x: self.goal_x,
             page_hint: self.page_hint,
@@ -101,6 +106,7 @@ impl Session {
             column: self.column.clone(),
             column_mode: self.column_mode,
             widened: self.widened.clone(),
+            member: None,
             document_id: self.document_id,
             rev: self.rev,
         }
@@ -129,6 +135,7 @@ impl Session {
             column,
             column_mode,
             widened,
+            member: _,
             document_id,
             rev,
         } = v;
@@ -166,5 +173,21 @@ impl Session {
         self.widened = None;
         self.goal_x = None;
         self.clamp_selection();
+    }
+
+    /// A split window (View › Split, #3254) draws or switches to its other pane: `pane`, that
+    /// pane's view, becomes the session's, and the view it held comes back to be kept for the
+    /// pane it belongs to. The window's settings ([`ViewState::with_pane_settings`]) stay as the
+    /// session has them, so the task panes and the rest don't change with the pane; the pane
+    /// brings its own selection, zoom and view mode. Positions in `pane` from before an edit are
+    /// made valid as [`Session::put_view`] does. A Drawing Canvas member picked in the pane is
+    /// picked again when nothing changed since.
+    pub fn swap_pane_view(&mut self, mut pane: WindowView) -> WindowView {
+        pane.view = self.view.with_pane_settings(&pane.view);
+        let member = pane.member.take().filter(|_| pane.document_id == self.document_id && pane.rev == self.rev);
+        let held = self.take_view();
+        self.put_view(pane);
+        self.member = member;
+        held
     }
 }
