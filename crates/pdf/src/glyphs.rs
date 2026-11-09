@@ -31,11 +31,14 @@ pub(crate) fn left_to_right(glyphs: &[(u32, f32, f32)]) -> bool {
     glyphs.windows(2).all(|w| matches!(w, [a, b] if a.1 <= b.1))
 }
 
-/// Per-glyph text ranges for clusters of several glyphs (a letter and its vowel marks) when each
-/// glyph is one of the cluster's characters (through the font's character map, one glyph at most
-/// left to take the character left over), so a viewer
-/// reversing a right-to-left word puts every mark back after its letter. Other clusters, such
-/// as a ligature drawn as two glyphs, keep their shared range.
+/// Per-glyph text ranges for clusters of several glyphs (a letter and its vowel marks, or
+/// Thai/Lao composite vowels) when each glyph is one of the cluster's characters (through
+/// the font's character map, one glyph at most left to take the character left over), so a viewer
+/// reversing a right-to-left word puts every mark back after its letter. In Thai and Lao clusters
+/// with composite vowels (such as SARA AM `\u{0E33}` or `\u{0EB3}`), separates the base consonant
+/// to its own range so ToUnicode maps it cleanly while keeping the composite vowel glyphs sharing
+/// their range for `/ActualText` extraction. Other clusters, such as a ligature drawn as two
+/// glyphs, keep their shared range.
 pub(crate) fn split_clusters(
     text: &str,
     glyphs: &[(u32, f32, f32)],
@@ -47,6 +50,27 @@ pub(crate) fn split_clusters(
     while i < ranges.len() {
         let Some(r) = ranges.get(i) else { break };
         let n = ranges.get(i..).map_or(1, |rest| rest.iter().take_while(|x| *x == r).count()).max(1);
+        if n > 1 && text.get(r.clone()).is_some_and(|t| t.contains(['\u{0E33}', '\u{0EB3}'])) {
+            let t = text.get(r.clone()).unwrap_or("");
+            if let Some(fc) = t.chars().next()
+                && fc != '\u{0E33}'
+                && fc != '\u{0EB3}'
+            {
+                let c_len = fc.len_utf8();
+                let consonant_range = r.start..r.start + c_len;
+                let rest_range = (r.start + c_len)..r.end;
+                if let Some(first) = out.get_mut(i) {
+                    *first = consonant_range;
+                }
+                for g in i + 1..i + n {
+                    if let Some(slot) = out.get_mut(g) {
+                        *slot = rest_range.clone();
+                    }
+                }
+                i += n;
+                continue;
+            }
+        }
         let chars: Vec<(usize, char)> = text.get(r.clone()).map(|t| t.char_indices().map(|(k, c)| (r.start + k, c)).collect()).unwrap_or_default();
         if n > 1 && chars.len() == n {
             // Glyphs the character map knows take their characters; one left over (a letter's

@@ -124,34 +124,92 @@ fn sample() -> Document {
     d
 }
 
+/// Extraction mode for reading text back from exported PDF pages in tests.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextExtractionMode {
+    /// Full extraction respecting `/ActualText` marked-content sequences.
+    Full,
+    /// Raw ToUnicode CMap extraction ignoring `/ActualText` replacements.
+    RawToUnicode,
+}
+
 /// Text of every page through hayro's interpreter (glyph → Unicode via ToUnicode / ActualText).
 fn extract_text(bytes: &[u8]) -> Vec<String> {
+    extract_text_mode(bytes, TextExtractionMode::Full)
+}
+
+/// Raw ToUnicode text of every page through hayro's interpreter, ignoring `/ActualText` spans.
+fn extract_raw_tounicode_text(bytes: &[u8]) -> Vec<String> {
+    extract_text_mode(bytes, TextExtractionMode::RawToUnicode)
+}
+
+/// Extracts text from PDF bytes under the given extraction mode.
+fn extract_text_mode(bytes: &[u8], mode: TextExtractionMode) -> Vec<String> {
     use hayro_interpret::font::Glyph;
     use hayro_interpret::{
         BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
         interpret_page,
     };
     use hayro_syntax::Pdf;
-    struct Ex(String);
+    struct Ex {
+        text: String,
+        actual: Vec<Option<String>>,
+        begun: usize,
+        open: Vec<Option<String>>,
+        mode: TextExtractionMode,
+    }
     impl Device<'_> for Ex {
+        /// Ignores soft mask state changes during text extraction.
         fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        /// Ignores blend mode updates during text extraction.
         fn set_blend_mode(&mut self, _: BlendMode) {}
+        /// Ignores vector path drawing during text extraction.
         fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        /// Ignores clip path additions during text extraction.
         fn push_clip_path(&mut self, _: &ClipPath) {}
+        /// Ignores transparency group entry during text extraction.
         fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        /// Tracks opening of marked-content sequences for `/ActualText` resolution in full extraction mode.
+        fn begin_marked_content(&mut self, _: &[u8], _: Option<i32>) {
+            if self.mode == TextExtractionMode::Full {
+                self.open.push(self.actual.get(self.begun).cloned().flatten());
+                self.begun += 1;
+            }
+        }
+        /// Closes marked-content sequences when exiting `/ActualText` scope.
+        fn end_marked_content(&mut self) {
+            if self.mode == TextExtractionMode::Full {
+                self.open.pop();
+            }
+        }
+        /// Consumes `/ActualText` if an active span is open, or appends the glyph's Unicode mapping.
         fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
-            // Synthetic bold fills and then strokes each glyph: one character, two draws.
             if matches!(mode, GlyphDrawMode::Stroke(_)) {
                 return;
             }
+            if self.mode == TextExtractionMode::Full
+                && let Some(slot) = self.open.iter_mut().find_map(Option::as_mut)
+            {
+                if !slot.is_empty() {
+                    self.text.push_str(&std::mem::take(slot));
+                }
+                return;
+            }
             match g.as_unicode() {
-                Some(hayro_cmap::BfString::Char(c)) => self.0.push(c),
-                Some(hayro_cmap::BfString::String(s)) => self.0.push_str(&s),
-                None => self.0.push('\u{FFFD}'),
+                Some(hayro_cmap::BfString::Char(c)) => self.text.push(c),
+                Some(hayro_cmap::BfString::String(s)) => self.text.push_str(&s),
+                None => {
+                    if self.mode == TextExtractionMode::Full {
+                        self.text.push('\u{FFFD}');
+                    }
+                }
             }
         }
+        /// Ignores embedded image rendering during text extraction.
         fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        /// Ignores clip path popping during text extraction.
         fn pop_clip_path(&mut self) {}
+        /// Ignores transparency group exit during text extraction.
         fn pop_transparency_group(&mut self) {}
     }
     let pdf = Pdf::new(bytes.to_vec()).expect("parse");
@@ -161,13 +219,15 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         .map(|page| {
             let mut ctx =
                 Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
-            let mut ex = Ex(String::new());
+            let actual = if mode == TextExtractionMode::Full { actual_texts(page) } else { Vec::new() };
+            let mut ex = Ex { text: String::new(), actual, begun: 0, open: Vec::new(), mode };
             interpret_page(page, &mut ctx, &mut ex);
-            ex.0
+            ex.text
         })
         .collect()
 }
 
+/// Collapses repeated whitespace runs into single space characters for string assertions.
 fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -2999,4 +3059,87 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
     let expected: std::collections::BTreeSet<String> =
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
     assert_eq!(shown, expected);
+}
+
+/// Verifies that Thai text with stacked marks and composite vowels extracts cleanly
+/// without control characters or cross-cluster word corruption (#5883).
+#[test]
+fn thai_text_extracts_correctly() {
+    let d = Document::from_text("ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+
+    // 1. Full extraction (with ActualText and recomposition if applicable):
+    let text = extract_text(&bytes).concat();
+    // No control characters or replacement characters in the extracted text (#5883).
+    assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
+    // Each word decodes to its own text, and specifically 'นี่' does not decode as 'น้ำ'.
+    assert!(text.contains("ห้อง"), "{text:?}");
+    assert!(text.contains("ก๋วยเตี๋ยว"), "{text:?}");
+    assert!(text.contains("น้ำ"), "{text:?}");
+    assert!(text.contains("ที่นี่"), "{text:?}");
+    assert!(!text.contains("ที่น้ำ"), "{text:?}");
+    assert_eq!(text.trim(), "ห้อง ก๋วยเตี๋ยว น้ำ ที่นี่");
+
+    // 2. Raw ToUnicode extraction without ActualText or test-side vowel recomposition:
+    let raw = extract_raw_tounicode_text(&bytes).concat();
+    // No control characters or replacement characters in raw ToUnicode (#5883).
+    assert!(!raw.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{raw:?}");
+    assert!(raw.contains("ห้อง"), "{raw:?}");
+    assert!(raw.contains("ก๋วยเตี๋ยว"), "{raw:?}");
+    assert!(raw.contains("ที่"), "{raw:?}");
+    assert!(raw.contains("นี่"), "{raw:?}");
+    assert!(!raw.contains("ที่น้ำ"), "{raw:?}");
+    assert!(raw.contains("น้ำ"), "{raw:?}");
+    // Tone marks and vowels are present in ToUnicode CMap:
+    assert!(raw.contains('\u{0E49}'), "ToUnicode missing MAI THO: {raw:?}");
+    assert!(raw.contains('\u{0E48}'), "ToUnicode missing MAI EK: {raw:?}");
+    assert!(raw.contains('\u{0E4B}'), "ToUnicode missing MAI CHATTAWA: {raw:?}");
+    assert!(raw.contains('\u{0E35}'), "ToUnicode missing SARA II: {raw:?}");
+}
+
+/// Verifies that Lao text with composite vowels (`\u{0EB3}`) extracts cleanly
+/// without control characters or cluster corruption (#5883).
+#[test]
+fn lao_text_extracts_correctly() {
+    let d = Document::from_text("ສະບາຍດີ ນ້ຳດື່ມ");
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let text = extract_text(&bytes).concat();
+    assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
+    assert!(text.contains("ສະບາຍດີ"), "{text:?}");
+    assert!(text.contains("ນ້ຳດື່ມ"), "{text:?}");
+    assert_eq!(text.trim(), "ສະບາຍດີ ນ້ຳດື່ມ");
+}
+
+/// Verifies that mixed RTL and LTR text preserves correct visual and extraction ordering
+/// across cluster and direction boundaries (#5883).
+#[test]
+fn mixed_rtl_ltr_text_extracts_correctly() {
+    let mut p = Paragraph::with_text("Hello ", CharProps::default());
+    p.props.bidi = Some(true);
+    p.insert_text(p.len(), "עברית", &CharProps::default()).unwrap();
+    p.insert_text(p.len(), " World ", &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "שלום", &CharProps::default()).unwrap();
+    p.insert_text(p.len(), " 123", &CharProps::default()).unwrap();
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let words = viewer_words(&bytes);
+    for w in ["Hello", "עברית", "World", "שלום", "123"] {
+        assert!(words.iter().any(|x| x == w), "{w:?} not extracted intact from {words:?}");
+    }
+}
+
+/// Verifies that Devanagari text with pre-base vowel signs (such as 'ि' U+093F)
+/// preserves logical character order and ActualText spans during PDF export (#5883).
+#[test]
+fn devanagari_prebase_vowels_extract_in_logical_order() {
+    let d = Document::from_text("किताब दिन हिंदी नमस्ते");
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    let text = extract_text(&bytes).concat();
+    assert!(!text.chars().any(|c| (c as u32) < 0x20 || c == '\u{FFFD}'), "{text:?}");
+    assert!(text.contains("किताब"), "{text:?}");
+    assert!(text.contains("दिन"), "{text:?}");
+    assert!(text.contains("हिंदी"), "{text:?}");
+    assert!(text.contains("नमस्ते"), "{text:?}");
+    assert_eq!(text.trim(), "किताब दिन हिंदी नमस्ते");
 }
