@@ -163,3 +163,36 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+/// Whether `xml` is well-formed (matching tags), by reading it through.
+fn well_formed(xml: &str) -> Result<(), String> {
+    let mut reader = quick_xml::Reader::from_str(xml);
+    loop {
+        match reader.read_event() {
+            Ok(quick_xml::events::Event::Eof) => return Ok(()),
+            Ok(_) => {}
+            Err(e) => return Err(e.to_string()),
+        }
+    }
+}
+
+/// #6125: Word writes `w:compatSetting` with a separate end tag. A save that replaced the
+/// compatibility mode left that end tag behind the generated self-closed element, and the part
+/// was not well-formed XML (Word refused the file). A plain open and save did it, with no edit.
+#[test]
+fn expanded_compat_settings_are_saved_well_formed() {
+    let expanded = SETTINGS
+        .replace(r#"w:val="15"/>"#, r#"w:val="15"></w:compatSetting>"#)
+        .replace(r#"w:val="1"/><w:compatSetting"#, r#"w:val="1"></w:compatSetting><w:compatSetting"#)
+        .replace(r#"w:val="1"/></w:compat>"#, r#"w:val="1"></w:compatSetting></w:compat>"#);
+    assert_eq!(expanded.matches("</w:compatSetting>").count(), 3, "the fixture is the expanded form");
+    well_formed(&expanded).unwrap();
+    let mut doc = wordcraft_docx::read(&with_settings(&expanded)).unwrap();
+    for generation in 0..2 {
+        let s = text(&save(&doc), "word/settings.xml");
+        well_formed(&s).unwrap_or_else(|e| panic!("generation {generation} is not well-formed ({e}): {s}"));
+        assert_eq!(s.matches("compatibilityMode").count(), 1, "{s}");
+        assert!(s.contains(r#"w:name="overrideTableStyleFontSizeAndJustification""#) && s.contains(r#"w:name="enableOpenTypeFeatures""#), "{s}");
+        doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    }
+}

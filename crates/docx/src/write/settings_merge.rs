@@ -229,11 +229,19 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
 
 /// The original `w:compat` with its `compatibilityMode` taken from the generated one.
 fn merge_compat(orig: &str, generated: &str) -> Option<String> {
+    // The whole `w:compatSetting` element: Word writes it with a separate end tag, which goes
+    // with the start tag (#6125). An element with anything inside isn't one we know how to replace.
     let mode = |s: &str| -> Option<(usize, usize)> {
         let at = s.find("w:name=\"compatibilityMode\"")?;
         let tag_start = s.get(..at)?.rfind('<')?;
-        let tag_end = tag_start + s.get(tag_start..)?.find('>')? + 1;
-        Some((tag_start, tag_end))
+        let tag_end = tag_start + tag_end(s.get(tag_start..)?)? + 1;
+        if s.get(..tag_end)?.ends_with("/>") {
+            return Some((tag_start, tag_end));
+        }
+        let rest = s.get(tag_end..)?;
+        let close = rest.find('<')?;
+        let end_tag = "</w:compatSetting>";
+        (rest.get(close..)?.starts_with(end_tag) && rest.get(..close)?.trim().is_empty()).then_some((tag_start, tag_end + close + end_tag.len()))
     };
     match (mode(orig), mode(generated)) {
         (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
@@ -377,6 +385,33 @@ mod tests {
         assert!(out.contains("<w:useFELayout/>") && out.contains("compatibilityMode"), "{out}");
         assert!(has_unowned(orig.as_bytes()));
         assert!(!has_unowned(GEN.as_bytes()));
+    }
+
+    /// #6125: Word writes each `w:compatSetting` with a separate end tag. Replacing the mode must
+    /// replace the whole element, or the original's end tag is left behind after the
+    /// generated self-closed one, and the part isn't well-formed XML.
+    #[test]
+    fn an_expanded_compat_mode_is_replaced_whole() {
+        let setting = |name: &str, val: &str, close: &str| {
+            format!(r#"<w:compatSetting w:name="{name}" w:uri="http://schemas.microsoft.com/office/word" w:val="{val}">{close}</w:compatSetting>"#)
+        };
+        // The mode first, last, with white space between the tags, and with the other
+        // switches around it.
+        for (mode_first, gap) in [(true, ""), (false, ""), (true, "\n  ")] {
+            let mode = setting("compatibilityMode", "14", gap);
+            let other = setting("overrideTableStyleFontSizeAndJustification", "1", "");
+            let (a, b) = if mode_first { (&mode, &other) } else { (&other, &mode) };
+            let orig = format!(
+                r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:zoom w:percent="90"/><w:compat><w:useFELayout/>{a}{b}</w:compat></w:settings>"#
+            );
+            let out = merge(orig.as_bytes(), GEN.as_bytes()).expect("merged");
+            crate::xml::parse_strict(&out).unwrap_or_else(|e| panic!("not well-formed ({e}): {}", String::from_utf8_lossy(&out)));
+            let out = String::from_utf8(out).unwrap();
+            assert_eq!(out.matches("compatibilityMode").count(), 1, "{out}");
+            assert!(out.contains(r#"w:name="compatibilityMode" w:uri="u" w:val="15""#), "the generated mode is the one kept: {out}");
+            assert!(out.contains("overrideTableStyleFontSizeAndJustification") && out.contains("<w:useFELayout/>"), "{out}");
+            assert_eq!(out.matches("</w:compatSetting>").count(), 1, "one end tag, for the other setting: {out}");
+        }
     }
 
     #[test]
