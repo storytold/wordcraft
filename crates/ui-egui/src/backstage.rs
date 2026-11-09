@@ -55,6 +55,17 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
     pos2(band_min_x + x, center_y)
 }
 
+/// The bottom of the backstage menu: About, and the community link unless the user turned the
+/// community button off — the title bar pill honors the same setting, so the menu hides the
+/// link with it.
+fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
+    let mut links = vec![("About", "about")];
+    if app.ui.show_discord {
+        links.push(("Discord community", "discord"));
+    }
+    links
+}
+
 /// Draws the Backstage side menu and the active page. Without a document only the Home, New, Open
 /// and Options pages work, and it handles Back, Escape, Save, Save As and Close routing.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
@@ -155,7 +166,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in bottom_links(app) {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
@@ -173,23 +184,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
+        // The side padding sits inside the pages, so the scroll area reaches the window's edge.
+        let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
-            crate::rtl::root(ui, |ui| export_page(app, ui));
+            pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
-                "home" => home_page(app, ui),
-                "new" => new_page(app, ui),
-                "open" => open_page(app, ui),
-                "saveAs" => save_as_page(app, ui),
-                "info" => info_page(app, ui),
-                "recover" => recovery_page(app, ui),
-                "print" | "export" => export_page(app, ui),
-                "options" => crate::options::page(app, ui),
-                _ => home_page(app, ui),
+        // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+            pad.show(ui, |ui| {
+                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
+                    "home" => home_page(app, ui),
+                    "new" => new_page(app, ui),
+                    "open" => open_page(app, ui),
+                    "saveAs" => save_as_page(app, ui),
+                    "info" => info_page(app, ui),
+                    "recover" => recovery_page(app, ui),
+                    "print" | "export" => export_page(app, ui),
+                    "options" => crate::options::page(app, ui),
+                    _ => home_page(app, ui),
+                })
             })
         });
     });
@@ -576,6 +592,28 @@ fn personal_error_id() -> egui::Id {
     egui::Id::unique("backstage_personal_error")
 }
 
+/// How the × of a recent row is drawn (#2716): not at all while nothing is hovered, dimmed while
+/// the row is, and with the stronger fill only when the pointer is on the × itself.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoveCue {
+    Hidden,
+    Dim,
+    Strong,
+}
+
+fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
+    if x_active {
+        RemoveCue::Strong
+    } else if row_active {
+        RemoveCue::Dim
+    } else {
+        RemoveCue::Hidden
+    }
+}
+
+/// Width of the × that sits at the trailing end of a recent row (#2716).
+const REMOVE_W: f32 = 28.0;
+
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
 /// stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -594,7 +632,10 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
     for (p, name) in shown.iter().zip(&names) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
+        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
+        // of its own at the trailing end, so it never opens the document; clicking the rest of the
+        // row opens it as before.
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
         // The row shows a name and a path that may not fit: the path in full is its tooltip.
         let resp = resp.on_hover_text(crate::i18n::isolate_path(p));
         // Two documents with the same file name are told apart by their path, as on screen.
@@ -616,10 +657,35 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         let side = crate::rtl::lead_center(rtl);
         ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
         ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
+        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
+        // Right-to-left: the × sits on the left, past the row's trailing edge.
+        let xr = if rtl { xr.translate(vec2(-(r.width() + REMOVE_W + 2.0), 0.0)) } else { xr };
+        let xresp = ui.interact(xr, ui.scope_id().with(("recent-remove", &p)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Remove from list")));
+        // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
+        // be found; only the × itself gets the stronger fill and full-strength glyph.
+        match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
+            RemoveCue::Hidden => {}
+            RemoveCue::Dim => {
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
+            }
+            RemoveCue::Strong => {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+            }
+        }
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+        if xresp.clicked() {
+            let _ = app.run("ui.recentRemove", json!({"path": p}));
+        }
+    }
+    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
+        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
+    {
+        let _ = app.run("ui.recentClear", json!({}));
     }
 }
 
