@@ -2,6 +2,8 @@ use super::common::{mi, mi_text, stack};
 use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
 
+/// Draw reference commands and translate the citation style only for display.
+/// The selected style remains the engine's stored identifier.
 pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Table of Contents", None, app, |ui, app| {
         menu_button(

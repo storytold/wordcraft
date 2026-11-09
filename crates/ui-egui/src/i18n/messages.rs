@@ -33,12 +33,16 @@ pub(crate) fn accessibility_issue(rule: &str, message: &str) -> String {
     translated.unwrap_or_else(|| t(message).to_string())
 }
 
+/// Translate only a numeric finding matching the expected prefix and suffix.
+/// Keep the original digit spelling rather than formatting the parsed value.
 fn numbered(message: &str, prefix: &str, suffix: &str, template: &str, name: &str) -> Option<String> {
     let n = message.strip_prefix(prefix)?.strip_suffix(suffix)?;
     n.parse::<usize>().ok()?;
     Some(fmt(t(template), &[(name, n)]))
 }
 
+/// Recognize the checker's current heading-order message before filling its catalog template.
+/// Changed wording or nonnumeric levels fall back to the original message.
 fn heading_order(message: &str) -> Option<String> {
     let (level, previous) = message.strip_prefix("Heading level skipped (Heading ")?.strip_suffix(')')?.split_once(" after Heading ")?;
     level.parse::<u8>().ok()?;
@@ -46,6 +50,8 @@ fn heading_order(message: &str) -> Option<String> {
     Some(fmt(t("Heading level skipped (Heading {level} after Heading {previous})"), &[("level", level), ("previous", previous)]))
 }
 
+/// Translate the current contrast message only when both ratios are finite and nonnegative.
+/// Preserve the supplied ratios so presentation cannot change the checker's values.
 fn contrast(message: &str) -> Option<String> {
     let (ratio, needed) = message.strip_prefix("Text is hard to read: contrast ")?.strip_suffix(":1 needed")?.split_once(":1, ")?;
     if ![ratio, needed].iter().all(|s| s.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0)) {
@@ -63,6 +69,7 @@ mod tests {
     use wordcraft_doc::props::{CharProps, Rgb, TextColor};
     use wordcraft_doc::{Block, Document, Paragraph, para_block};
 
+    /// Supply translations inline so presentation regressions do not need optional catalogs.
     fn japanese() -> Lang {
         fixture_lang(
             "ja",
@@ -70,6 +77,7 @@ mod tests {
         )
     }
 
+    /// Exercise each dynamic accessibility finding with a small engine-owned document.
     fn checker_document() -> Document {
         let mut doc = Document::new();
         let mut table = wordcraft_doc::table::Table::new(2, 2, 240.0);
@@ -87,6 +95,7 @@ mod tests {
     }
 
     #[test]
+    /// Switching presentation language must not alter the source document or engine report.
     fn presenting_checker_results_preserves_the_report_and_english_wording() {
         let doc = checker_document();
         let before = serde_json::to_value(&doc).unwrap();
@@ -115,6 +124,7 @@ mod tests {
     }
 
     #[test]
+    /// Route an engine result through the real heading helper without rewriting quoted text.
     fn proofing_presentation_preserves_unicode_words_and_literal_placeholders() {
         let mut session = wordcraft_engine::Session::new(Document::from_text("café café"));
         let before = serde_json::to_value(&session.doc).unwrap();
@@ -134,6 +144,7 @@ mod tests {
     }
 
     #[test]
+    /// Unknown message shapes remain readable rather than being partially interpolated.
     fn changed_or_malformed_checker_messages_keep_their_original_text() {
         set_current(japanese());
         for (rule, message) in [
