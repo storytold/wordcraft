@@ -479,8 +479,9 @@ fn read_family_coverage_reads_cmap_from_large_ttc_collection() {
     let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
     file.set_len((40 << 20) + 1024).unwrap();
     drop(file);
-    assert!(super::fallback_data::read_fallback_file(&path).is_none());
+    let fallback_file = super::fallback_data::read_fallback_file(&path);
     let got = super::fallback_data::read_family_coverage(&path);
     let _ = std::fs::remove_file(&path);
+    assert!(fallback_file.is_none());
     assert_eq!(got, super::fallback_data::coverage_ranges(BUNDLED[0]));
 }
