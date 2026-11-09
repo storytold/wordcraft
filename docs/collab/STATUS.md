@@ -934,7 +934,10 @@ sets the session's pending formatting (no document change to restore).
   `a_format_restore_on_a_node_that_is_not_a_paragraph_is_refused_before_mutation`
   (a table id → `invalid`, document and version unchanged),
   `a_format_restore_that_does_not_cover_the_text_is_refused_before_mutation`
-  (999-byte and 2-of-5-byte run lists → `invalid`, nothing written).
+  (999-byte and 2-of-5-byte run lists → `invalid`, nothing written),
+  `a_formatting_command_over_a_paragraph_without_a_session_id_is_refused_before_mutation`
+  (a covered paragraph whose id the room retired → `invalid`, document and
+  version unchanged).
 - `crates/collab-doc/src/tests.rs`:
   `a_format_restore_rewrites_the_runs_and_properties_it_names` (the adapter's
   own round trip: apply, then the stored inverse restores the exact JSON),
@@ -943,7 +946,7 @@ sets the session's pending formatting (no document change to restore).
 **Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app -p wordcraft-collab-client -p wordcraft-collab-ws` — 49,
-52, 22, 17, 13 and 0 plus 1 socket test, all passed; `cargo clippy` on those six
+52, 23, 17, 13 and 0 plus 1 socket test, all passed; `cargo clippy` on those six
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 

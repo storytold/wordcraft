@@ -460,3 +460,44 @@ fn a_format_restore_that_does_not_cover_the_text_is_refused_before_mutation() {
         assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "nothing changed");
     }
 }
+
+#[test]
+fn a_formatting_command_over_a_paragraph_without_a_session_id_is_refused_before_mutation() {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for text in ["alpha", "beta", "gamma"] {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(text, CharProps::default()))));
+    }
+    let mut room = Room::new(SessionModel::from_document(doc));
+    let plan = room.join(None, false);
+    let first = plan.nodes.iter().find(|n| n.path == vec![0]).expect("first node").id;
+    let middle = plan.nodes.iter().find(|n| n.path == vec![1]).expect("middle node").id;
+    let last = plan.nodes.iter().find(|n| n.path == vec![2]).expect("last node").id;
+    // The inverse needs an id for every covered paragraph; without one the
+    // command is refused instead of applying a change undo cannot name.
+    room.ids_mut().remove(wordcraft_collab::ids::NodeId(middle), 0);
+    let before = serde_json::to_value(&room.model().session().doc).expect("json");
+
+    let err = room
+        .submit(
+            "alice",
+            Role::Editor,
+            op(
+                "a",
+                1,
+                0,
+                OpKind::Command,
+                first,
+                0,
+                json!({
+                    "command": "para.alignCenter",
+                    "params": {},
+                    "selection": {"anchor": {"nodeId": first, "off": 0}, "focus": {"nodeId": last, "off": 2}},
+                }),
+            ),
+        )
+        .expect_err("a covered paragraph with no id cannot be undone");
+    assert_eq!(err.code, RejectCode::Invalid);
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), before, "nothing changed");
+    assert_eq!(room.version(), 0, "the room did not advance");
+}
