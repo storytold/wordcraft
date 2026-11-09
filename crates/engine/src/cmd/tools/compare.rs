@@ -107,7 +107,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     let mut p = pb.clone();
                     if opts.formatting && pa.text == pb.text {
                         let before = s.doc.revisions.len();
-                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut s.doc.revisions, &author, &date);
+                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut s.doc.revisions, Some(&s.doc.styles), &author, &date);
                         if s.doc.revisions.len() > before || p != *pb {
                             changes += 1;
                         }

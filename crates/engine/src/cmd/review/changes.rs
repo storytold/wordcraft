@@ -1,9 +1,19 @@
 use super::{CmdError, CmdResult, InlineObject, Paragraph, Pos, Selection, Session, StoryRef, Value, fmt_revisions, json, p, pos_json, sel_result};
 
 /// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
-fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
-    if props && (para.props.fmt_change.is_some() || para.props.num_change.is_some()) {
-        fmt_revisions::resolve_para(&mut para.props, accept);
+fn resolve_runs(
+    para: &mut wordcraft_doc::Paragraph,
+    from: usize,
+    to: usize,
+    (props_num, props_fmt): (bool, bool),
+    accept: bool,
+) -> Result<(), CmdError> {
+    if props_num && para.props.num_change.is_some() {
+        fmt_revisions::resolve_para_num(&mut para.props, accept);
+        para.touch();
+    }
+    if props_fmt && para.props.fmt_change.is_some() {
+        fmt_revisions::resolve_para_fmt(&mut para.props, accept);
         para.touch();
     }
     let ranges: Vec<(usize, usize, bool, bool, bool)> = para
@@ -26,17 +36,18 @@ fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, pro
 }
 
 /// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
-/// the section break on it), `props` the paragraph's own formatting change.
+/// the section break on it), `(props_num, props_fmt)` the paragraph's numbering and formatting changes.
 fn resolve_para(
     s: &mut Session,
     story: StoryRef,
     path: &wordcraft_doc::Path,
     (from, to): (usize, usize),
-    (mark, props): (bool, bool),
+    mark: bool,
+    (props_num, props_fmt): (bool, bool),
     accept: bool,
 ) -> Result<(), CmdError> {
     let para = s.doc.para_mut(story, path)?;
-    resolve_runs(para, from, to, props, accept)?;
+    resolve_runs(para, from, to, (props_num, props_fmt), accept)?;
     if !mark {
         return Ok(());
     }
@@ -172,7 +183,7 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
     for b in blocks.iter_mut() {
         let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
         let len = p.len();
-        resolve_runs(p, 0, len, true, accept)?;
+        resolve_runs(p, 0, len, (true, true), accept)?;
         if p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
             fmt_revisions::resolve_char(&mut p.mark, accept);
             if let Some(sec) = p.section.as_deref_mut() {
@@ -188,12 +199,13 @@ fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Res
     Ok(())
 }
 
+/// Accept or reject every tracked change across the entire document.
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
             let len = s.doc.para(st, &path).map(|p| p.len()).unwrap_or(0);
-            resolve_para(s, st, &path, (0, len), (true, true), accept)?;
+            resolve_para(s, st, &path, (0, len), true, (true, true), accept)?;
         }
     }
     // Tables, rows, cells and sections.
@@ -266,20 +278,28 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
     Some(start..end)
 }
 
+/// Accept or reject the tracked change at the current selection or caret position.
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
+    // A caret targeting a paragraph's numbering change.
+    let mut caret_num = None;
     // A caret in a paragraph whose own formatting changed (and no tracked text around it).
     let mut caret_props = None;
     let ranged = a != b;
     let (a, b) = if a == b {
-        // The change at the caret: the run around it, else the paragraph mark right after it,
-        // else the paragraph's formatting, else the table cell's.
+        // The change at the caret: numbering at offset 0, the run around it, else the paragraph mark
+        // right after it, else the paragraph's formatting, else the table cell's.
+        let num_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == 0 && p.props.num_change.is_some());
         let found = s.doc.para_at(&a).and_then(|p| revision_span(p, a.off));
-        let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some());
         let mark_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
+        let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some());
         match found {
+            _ if num_fmt => {
+                caret_num = Some(a.path.clone());
+                (a.clone(), a)
+            }
             Some(r) => (Pos { off: r.start, ..a.clone() }, Pos { off: r.end, ..a }),
             None if mark_fmt || mark_change(s, a.story, &a.path).is_some_and(|m| m.a == a) => {
                 caret_mark = Some(a.path.clone());
@@ -307,8 +327,10 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let to = if path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
-        let props = (ranged && (path != b.path || to > from)) || caret_props.as_ref() == Some(&path);
-        resolve_para(s, a.story, &path, (from, to), (mark, props), accept)?;
+        let multi_para = a.path != b.path;
+        let props_fmt = (ranged && (multi_para || to > from)) || caret_props.as_ref() == Some(&path);
+        let props_num = (ranged && multi_para && (path != a.path || from == 0)) || caret_num.as_ref() == Some(&path);
+        resolve_para(s, a.story, &path, (from, to), mark, (props_num, props_fmt), accept)?;
         if ranged {
             resolve_cell(s, a.story, &path, accept)?;
         }
@@ -319,6 +341,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     if next { select_next_unresolved(s) } else { sel_result(s) }
 }
 
+/// Collect all tracked changes (text, formatting, containers) across the document body.
 fn changes(s: &Session) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
     let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
@@ -339,6 +362,9 @@ fn changes(s: &Session) -> Vec<Change> {
             for (rev, props) in found.into_iter().flatten() {
                 out.push(Change::format(mk(&path, 0), mk(&path, 0), rev, props));
             }
+        }
+        if let Some(ch) = &p.props.num_change {
+            out.push(Change::format(mk(&path, 0), mk(&path, 0), ch.rev, fmt_revisions::para_num_diff(&p.props)));
         }
         if let Some(ch) = &p.props.fmt_change {
             out.push(Change::format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
@@ -396,6 +422,7 @@ pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
     doc.para_paths(StoryRef::Body).iter().any(|path| {
         doc.para(StoryRef::Body, path).is_some_and(|p| {
             p.props.fmt_change.is_some()
+                || p.props.num_change.is_some()
                 || p.mark.fmt_change.is_some()
                 || p.runs.iter().any(|r| r.props.fmt_change.is_some())
                 || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some())

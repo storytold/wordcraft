@@ -2197,6 +2197,24 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.revisions, d.revisions);
 }
 
+/// Tracked numbering-change metadata round-trips through DOCX even when active numbering is absent.
+#[test]
+fn numbering_change_without_active_list_roundtrips() {
+    let body = r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:date="2026-10-01T00:00:00Z" w:original="1:0"/></w:numPr></w:pPr><w:r><w:t>Removed</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].props.numbering.is_none(), "no active list definition on paragraph");
+    let nc = p[0].props.num_change.as_deref().expect("numberingChange read back");
+    assert_eq!(nc.previous_numbering(), Some(wordcraft_doc::props::NumRef { num: 1, level: 0 }));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert!(ap[0].props.numbering.is_none());
+    let anc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(anc.previous_numbering(), Some(wordcraft_doc::props::NumRef { num: 1, level: 0 }));
+}
+
 /// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
 /// when given, `settings`.
 fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {

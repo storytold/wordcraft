@@ -207,6 +207,7 @@ impl Reader<'_> {
         self.comment_map.get(file_id).copied()
     }
 
+    /// Read a single paragraph element (`w:p`) into a document [`Paragraph`].
     fn read_para(&mut self, sc: &mut StoryCtx, e: &El, rels: &Rels, depth: usize) -> Paragraph {
         let mut pb = PB::default();
         let mut para = Paragraph::new();
@@ -249,11 +250,10 @@ impl Reader<'_> {
                     .unwrap_or_default();
                 para.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
-            if para.props.numbering.is_some()
-                && let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange"))
-            {
-                let original = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
-                para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original }));
+            if let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange")) {
+                let original: String = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
+                let snapshot = NumChange::parse_original(&original);
+                para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original, snapshot }));
             }
             if let Some(s) = ppr.child("w:sectPr") {
                 para.section = Some(Box::new(self.read_section(s, rels)));

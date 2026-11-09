@@ -1,5 +1,5 @@
 use super::color::{Rgb, TextColor};
-use super::para_props::Border;
+use super::para_props::{Border, NumRef};
 use super::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -476,6 +476,49 @@ pub struct NumChange {
     /// Index into `Document::revisions`.
     pub rev: u32,
     pub original: String,
+    /// Preserved numbering reference before the change, for clean rejection within the app.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snapshot: Option<NumRef>,
+}
+
+impl NumChange {
+    /// Construct a boxed tracked numbering change recording `prev` as the paragraph's previous numbering.
+    pub fn boxed(rev: u32, prev: Option<NumRef>) -> Option<Box<NumChange>> {
+        Some(Box::new(Self::for_numbering(rev, prev)))
+    }
+
+    /// Construct a `NumChange` preserving `prev` as the numbering snapshot and formatted original.
+    pub fn for_numbering(rev: u32, prev: Option<NumRef>) -> Self {
+        let original = match prev {
+            Some(nr) => format!("{}:{}", nr.num, nr.level),
+            None => String::new(),
+        };
+        NumChange { rev, original, snapshot: prev }
+    }
+
+    /// The previous numbering recorded in this change.
+    pub fn previous_numbering(&self) -> Option<NumRef> {
+        self.snapshot
+    }
+
+    /// The numbering snapshot preserved by this change.
+    pub fn snapshot(&self) -> Option<NumRef> {
+        self.snapshot
+    }
+
+    /// Parse an `original` string into a [`NumRef`] if it strictly encodes `digits:0-8`.
+    pub fn parse_original(s: &str) -> Option<NumRef> {
+        let trimmed = s.trim();
+        let (num_str, lvl_str) = trimmed.split_once(':')?;
+        let num = num_str.trim().parse::<u32>().ok()?;
+        let lvl = lvl_str.trim().parse::<u8>().ok()?;
+        if lvl <= 8 { Some(NumRef { num, level: lvl }) } else { None }
+    }
+
+    /// Whether this change has a preserved snapshot or an explicit unnumbered original.
+    pub fn is_parseable(&self) -> bool {
+        self.snapshot.is_some() || self.original.trim().is_empty() || self.original.trim().eq_ignore_ascii_case("none")
+    }
 }
 
 impl CharProps {

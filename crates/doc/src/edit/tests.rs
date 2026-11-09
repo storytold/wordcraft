@@ -838,6 +838,43 @@ fn an_adopted_tracked_format_change_keeps_its_old_styles_and_list() {
     }
 }
 
+/// An adopted paragraph with a tracked numbering change remaps its previous numbering reference.
+#[test]
+fn an_adopted_paragraph_with_numbering_change_remaps_previous_numbering() {
+    use crate::props::{NumChange, NumRef};
+    use crate::{Revision, RevisionKind};
+    let mut ours = doc(&["ours"]);
+    let our_list = Arc::make_mut(&mut ours.numbering).add_list(crate::numbering::ListKind::Bullet);
+    let mut theirs = doc(&["theirs"]);
+    theirs.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
+    let their_list = Arc::make_mut(&mut theirs.numbering).add_list(crate::numbering::ListKind::Numbered);
+    assert_eq!(their_list, our_list);
+    let p = theirs.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.numbering = None;
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: their_list, level: 2 }))));
+
+    let frag = ours.adopt(theirs);
+    let Some(Block::Para(p)) = frag.blocks.first() else { panic!() };
+    let nc = p.props.num_change.as_ref().unwrap();
+    let prev = nc.previous_numbering().expect("previous numbering preserved and remapped");
+    assert_eq!(prev.level, 2, "nonzero level preserved after adoption");
+    assert_ne!(prev.num, our_list, "source ID was remapped to avoid collision with our list");
+    assert!(ours.numbering.nums.iter().any(|n| n.id == prev.num), "remapped to target list");
+    assert_eq!(nc.original, format!("{}:{}", prev.num, prev.level), "parseable original remapped in sync with snapshot");
+
+    // Unparseable legacy original string is rewritten to match the remapped snapshot so DOCX round trip preserves it
+    let mut theirs_legacy = doc(&["theirs_legacy"]);
+    theirs_legacy.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
+    let p_leg = theirs_legacy.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p_leg.props.numbering = None;
+    p_leg.props.num_change = Some(Box::new(NumChange { rev: 0, original: "1.".into(), snapshot: Some(NumRef { num: their_list, level: 2 }) }));
+    let frag_leg = ours.adopt(theirs_legacy);
+    let Some(Block::Para(p_leg_res)) = frag_leg.blocks.first() else { panic!() };
+    let nc_leg = p_leg_res.props.num_change.as_ref().unwrap();
+    let prev_leg = nc_leg.previous_numbering().expect("previous numbering preserved and remapped");
+    assert_eq!(nc_leg.original, format!("{}:{}", prev_leg.num, prev_leg.level), "original updated to match remapped snapshot");
+}
+
 #[test]
 fn adopted_styles_never_become_our_defaults() {
     use crate::styles::{Style, StyleKind};

@@ -413,6 +413,7 @@ struct Relink<'a> {
 }
 
 impl Relink<'_> {
+    /// Relink block contents (paragraphs and tables) recursively.
     fn block(&self, b: &mut Block) {
         // Its own stack, like `each_para_mut`: tables however deeply nested are relinked (#1339).
         let mut todo = vec![b];
@@ -437,6 +438,7 @@ impl Relink<'_> {
         }
     }
 
+    /// Remap a style identifier if it was renamed during adoption.
     fn style(&self, id: &mut Option<String>) {
         if let Some(new) = id.as_ref().and_then(|i| self.styles.get(i)) {
             *id = Some(new.clone());
@@ -451,6 +453,7 @@ impl Relink<'_> {
         }
     }
 
+    /// Remap a list numbering reference to its new identifier in the adopting document.
     fn num(&self, n: &mut Option<crate::props::NumRef>) {
         if let Some(n) = n.as_mut()
             && n.num != 0
@@ -464,6 +467,7 @@ impl Relink<'_> {
         if r < self.revs { self.rev.checked_add(r) } else { None }
     }
 
+    /// Shift a tracked property change's revision identifier into our revision space.
     fn shift_change<T>(&self, c: &mut Option<Box<crate::props::PropChange<T>>>) {
         match (c.as_ref().and_then(|c| self.rev_id(c.rev)), c.as_mut()) {
             (Some(v), Some(x)) => x.rev = v,
@@ -471,6 +475,7 @@ impl Relink<'_> {
         }
     }
 
+    /// Relink styles, revisions, lists, and numbering changes within paragraph `p`.
     fn para(&self, p: &mut Paragraph) {
         self.num(&mut p.props.numbering);
         self.para_style(&mut p.props.style);
@@ -496,7 +501,17 @@ impl Relink<'_> {
             self.shift_change(&mut s.fmt_change);
         }
         match (p.props.num_change.as_ref().and_then(|c| self.rev_id(c.rev)), p.props.num_change.as_mut()) {
-            (Some(v), Some(c)) => c.rev = v,
+            (Some(v), Some(c)) => {
+                c.rev = v;
+                if let Some(prev) = c.snapshot {
+                    let mut opt = Some(prev);
+                    self.num(&mut opt);
+                    c.snapshot = opt;
+                    if let Some(remapped) = opt {
+                        c.original = format!("{}:{}", remapped.num, remapped.level);
+                    }
+                }
+            }
             _ => p.props.num_change = None,
         }
         for o in &mut p.objects {
@@ -505,6 +520,7 @@ impl Relink<'_> {
         p.touch();
     }
 
+    /// Relink inline object references (media keys and drawing objects).
     fn object(&self, o: &mut InlineObject, depth: usize) {
         // An id that names nothing here becomes one that names nothing at all.
         let map = |m: &BTreeMap<u32, u32>, id: &mut u32| *id = m.get(id).copied().unwrap_or(u32::MAX);

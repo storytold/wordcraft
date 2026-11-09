@@ -270,6 +270,11 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
             w.empty("w:numberingChange", &refs);
         }
         w.close("w:numPr");
+    } else if let Some(a) = num_change {
+        w.open("w:numPr", &[]);
+        let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        w.empty("w:numberingChange", &refs);
+        w.close("w:numPr");
     }
     toggle(w, "w:suppressLineNumbers", p.suppress_line_numbers);
     if let Some(b) = &p.borders {

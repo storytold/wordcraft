@@ -384,7 +384,7 @@ fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions,
         let para = doc.para(*story, path);
         let mark_rev = para.is_some_and(|p| (text && (p.mark.ins.is_some() || p.mark.del.is_some())) || (fmt && p.mark.fmt_change.is_some()));
         // A paragraph whose own formatting changed is marked on every line.
-        let para_fmt = fmt && para.is_some_and(|p| p.props.fmt_change.is_some());
+        let para_fmt = fmt && para.is_some_and(|p| p.props.fmt_change.is_some() || p.props.num_change.is_some());
         for li in *l0..*l1 {
             let Some(line) = pl.lines.get(li) else { continue };
             let changed = para_fmt
@@ -747,5 +747,24 @@ mod tests_warp_lookups {
         let (a, b, _) = crate::tests::cost_ratio(1, || scan(&short), || scan(&long));
         eprintln!("text-box warp suffix: {a:.6}s -> {b:.6}s for 1000 calls with one million trailing bytes");
         assert!(b <= a * 8.0 + 0.005, "text-box warp lookup scanned the suffix: {a:.6}s -> {b:.6}s");
+    }
+
+    /// Change bars mark paragraphs that have only a numbering change.
+    #[test]
+    fn change_bars_mark_numbering_only_changes() {
+        let mut doc = Document::from_text("Numbered paragraph");
+        doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.num_change =
+            wordcraft_doc::props::NumChange::boxed(0, Some(wordcraft_doc::props::NumRef { num: 1, level: 0 }));
+
+        let mut cache = crate::LayoutCache::new();
+        let l = crate::layout(&doc, &mut cache, &crate::LayoutOptions::default());
+        assert!(!l.pages.is_empty(), "layout produced pages");
+
+        let mut opts = DisplayOptions::default();
+        opts.revisions.changed_lines = ChangeBar::Left;
+        opts.revisions.formatting = true;
+        let draws = page_display(&doc, &l.pages[0], &opts);
+        let has_change_bar = draws.iter().any(|d| matches!(d, Draw::Line { .. }));
+        assert!(has_change_bar, "change bars must mark paragraphs with numbering-only changes");
     }
 }

@@ -13,10 +13,10 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::props::VMerge;
-use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
+use wordcraft_doc::props::{CellProps, CharProps, NumRef, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::table::{Cell, Row, Table};
-use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef};
+use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef, StyleSheet};
 
 use crate::Session;
 
@@ -38,11 +38,22 @@ type Slot<T> = Option<Box<PropChange<T>>>;
 /// What a [`Slot`] should become (which may be no change at all).
 struct Replacement<T>(Slot<T>);
 
+/// The prior revisions to check when testing whether an author owns an existing change.
+#[derive(Copy, Clone)]
+enum BeforeRevisions<'a> {
+    /// A snapshot of revisions taken before the command or transformation began.
+    Snapshot(&'a [Revision]),
+    /// A prefix length into `Recorder::revisions` representing the revisions present before
+    /// the current operation (avoiding cloning the revision vector).
+    Prefix(usize),
+}
+
 struct Recorder<'a> {
     author: String,
     date: String,
-    before: &'a [Revision],
+    before: BeforeRevisions<'a>,
     revisions: &'a mut Vec<Revision>,
+    styles: Option<&'a StyleSheet>,
     rid: Option<u32>,
 }
 
@@ -64,8 +75,18 @@ impl Recorder<'_> {
         r
     }
 
+    /// Whether the revision at index `rev` was created by this author before the current operation.
     fn own(&self, rev: u32) -> bool {
-        self.before.get(rev as usize).is_some_and(|r| r.author == self.author)
+        let rev = rev as usize;
+        match self.before {
+            BeforeRevisions::Snapshot(before) => before.get(rev).is_some_and(|r| r.author == self.author),
+            BeforeRevisions::Prefix(len) => rev < len && self.revisions.get(rev).is_some_and(|r| r.author == self.author),
+        }
+    }
+
+    /// Whether this recorder is diffing paragraphs for document comparison.
+    fn is_compare(&self) -> bool {
+        matches!(self.before, BeforeRevisions::Prefix(_))
     }
 
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
@@ -117,8 +138,67 @@ impl Recorder<'_> {
             }
         }
         let mark = self.change(&b.mark, &a.mark, CharProps::formatting, |c| &c.fmt_change);
-        let props = self.change(&b.props, &a.props, ParaProps::formatting, |p| &p.fmt_change);
-        if runs.is_empty() && mark.is_none() && props.is_none() {
+        let effective_num_for = |p: &Paragraph| -> Option<NumRef> {
+            let style_num = self
+                .styles
+                .and_then(|st| st.resolve_para(&ParaProps { style: p.props.style.clone(), ..Default::default() }).numbering)
+                .filter(|n| n.num != 0);
+            match p.props.numbering {
+                Some(nr) if nr.num == 0 => {
+                    if style_num.is_some() {
+                        Some(NumRef { num: 0, level: nr.level })
+                    } else {
+                        None
+                    }
+                }
+                Some(nr) => Some(nr),
+                None => style_num,
+            }
+        };
+        let b_eff = effective_num_for(b);
+        let a_eff = effective_num_for(a);
+        let num_diff = b_eff != a_eff;
+        let num_change = if num_diff {
+            if self.is_compare() {
+                let rev = self.rid();
+                Some(wordcraft_doc::props::NumChange::boxed(rev, b.props.numbering))
+            } else {
+                let had = b.props.num_change.as_ref();
+                let own = had.filter(|c| self.own(c.rev));
+                let change = match own {
+                    Some(c) if !c.is_parseable() => {
+                        Some(Box::new(wordcraft_doc::props::NumChange { rev: c.rev, original: c.original.clone(), snapshot: c.snapshot }))
+                    }
+                    Some(c) => {
+                        let prev = c.snapshot;
+                        let prev_eff = match prev {
+                            Some(nr) if nr.num == 0 => {
+                                let style_num = self
+                                    .styles
+                                    .and_then(|st| st.resolve_para(&ParaProps { style: a.props.style.clone(), ..Default::default() }).numbering)
+                                    .filter(|n| n.num != 0);
+                                if style_num.is_some() { Some(NumRef { num: 0, level: nr.level }) } else { None }
+                            }
+                            Some(nr) => Some(nr),
+                            None => self
+                                .styles
+                                .and_then(|st| st.resolve_para(&ParaProps { style: b.props.style.clone(), ..Default::default() }).numbering)
+                                .filter(|n| n.num != 0),
+                        };
+                        if prev_eff == a_eff { None } else { wordcraft_doc::props::NumChange::boxed(c.rev, prev) }
+                    }
+                    None => {
+                        let rev = self.rid();
+                        wordcraft_doc::props::NumChange::boxed(rev, b.props.numbering)
+                    }
+                };
+                Some(change)
+            }
+        } else {
+            None
+        };
+        let props = self.change(&b.props, &a.props, strip_num, |p| &p.fmt_change);
+        if runs.is_empty() && mark.is_none() && props.is_none() && num_change.is_none() {
             return;
         }
         for (from, to, want) in runs {
@@ -129,6 +209,9 @@ impl Recorder<'_> {
         }
         if let Some(Replacement(p)) = props {
             a.props.fmt_change = p;
+        }
+        if let Some(nc) = num_change {
+            a.props.num_change = nc;
         }
         a.normalize();
         a.touch();
@@ -195,6 +278,12 @@ fn strip_section(s: &SectionProps) -> SectionProps {
     SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() }
 }
 
+/// The paragraph formatting stripped of list numbering and revision changes, for detecting
+/// numbering-only differences.
+fn strip_num(p: &ParaProps) -> ParaProps {
+    ParaProps { numbering: None, ..p.formatting() }
+}
+
 /// Keep the formatting changes the command `id` made to `s.doc` (compared with `before`) as
 /// tracked formatting changes, when Track Changes and Track Formatting are on.
 pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
@@ -203,7 +292,14 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
     let author = s.author.clone();
     let doc = &mut s.doc;
-    let mut r = Recorder { author, date: super::now_iso(), before: &before.revisions, revisions: &mut doc.revisions, rid: None };
+    let mut r = Recorder {
+        author,
+        date: super::now_iso(),
+        before: BeforeRevisions::Snapshot(&before.revisions),
+        revisions: &mut doc.revisions,
+        styles: Some(&doc.styles),
+        rid: None,
+    };
     r.blocks(&before.body, &mut doc.body, 0);
     for (k, pb) in &before.parts {
         if let Some(pa) = doc.parts.get_mut(k) {
@@ -222,19 +318,26 @@ pub(crate) struct ParaPropTracker {
 }
 
 impl ParaPropTracker {
+    /// Create a new tracker snapshotting revisions if paragraph formatting changes are tracked.
     pub(crate) fn new(s: &Session) -> Self {
         let tracking = s.doc.settings.track_changes && s.prefs.markup.track_formatting;
         ParaPropTracker { before: if tracking { s.doc.revisions.clone() } else { Vec::new() } }
     }
 
+    /// Return the tracked paragraph-formatting change to apply to `after`, given properties `before`.
     pub(crate) fn changed(&self, s: &mut Session, before: &ParaProps, after: &ParaProps) -> Option<Box<PropChange<ParaProps>>> {
         if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
             return after.fmt_change.clone();
         }
-        let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &self.before, revisions: &mut s.doc.revisions, rid: None };
-        r.change(before, after, ParaProps::formatting, |p| &p.fmt_change)
-            .map(|Replacement(change)| change)
-            .unwrap_or_else(|| after.fmt_change.clone())
+        let mut r = Recorder {
+            author: s.author.clone(),
+            date: super::now_iso(),
+            before: BeforeRevisions::Snapshot(&self.before),
+            revisions: &mut s.doc.revisions,
+            styles: Some(&s.doc.styles),
+            rid: None,
+        };
+        r.change(before, after, strip_num, |p| &p.fmt_change).map(|Replacement(change)| change).unwrap_or_else(|| after.fmt_change.clone())
     }
 }
 
@@ -248,8 +351,15 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
     }
     let Some(after) = s.doc.para(story, path).map(|p| p.props.clone()) else { return Ok(()) };
     let revisions = s.doc.revisions.clone();
-    let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &revisions, revisions: &mut s.doc.revisions, rid: None };
-    if let Some(Replacement(want)) = r.change(before, &after, ParaProps::formatting, |p| &p.fmt_change) {
+    let mut r = Recorder {
+        author: s.author.clone(),
+        date: super::now_iso(),
+        before: BeforeRevisions::Snapshot(&revisions),
+        revisions: &mut s.doc.revisions,
+        styles: Some(&s.doc.styles),
+        rid: None,
+    };
+    if let Some(Replacement(want)) = r.change(before, &after, strip_num, |p| &p.fmt_change) {
         let p = s.doc.para_mut(story, path)?;
         p.props.fmt_change = want;
         p.touch();
@@ -259,8 +369,17 @@ pub(crate) fn record_para_props(s: &mut Session, story: StoryRef, path: &Path, b
 
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
 /// differently from `old` as tracked formatting changes by `author`.
-pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions: &mut Vec<Revision>, author: &str, date: &str) {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+pub(crate) fn compare_formatting(
+    old: &Paragraph,
+    new: &mut Paragraph,
+    revisions: &mut Vec<Revision>,
+    styles: Option<&StyleSheet>,
+    author: &str,
+    date: &str,
+) {
+    let before_len = revisions.len();
+    let mut r =
+        Recorder { author: author.to_string(), date: date.to_string(), before: BeforeRevisions::Prefix(before_len), revisions, styles, rid: None };
     r.para(old, new);
 }
 
@@ -289,7 +408,17 @@ pub fn char_diff(c: &CharProps) -> Vec<Value> {
 
 /// The properties a paragraph's change set.
 pub fn para_diff(p: &ParaProps) -> Vec<Value> {
-    p.fmt_change.as_ref().map(|ch| diff(&ch.old.formatting(), &p.formatting())).unwrap_or_default()
+    if let Some(ch) = &p.fmt_change { diff(&strip_num(&ch.old), &strip_num(p)) } else { Vec::new() }
+}
+
+/// The properties a paragraph's numbering change sets.
+pub fn para_num_diff(p: &ParaProps) -> Vec<Value> {
+    if let Some(nc) = &p.num_change {
+        let old = ParaProps { numbering: nc.snapshot, ..p.formatting() };
+        diff(&old, &p.formatting())
+    } else {
+        Vec::new()
+    }
 }
 
 /// A section's change: the properties it set.
@@ -345,13 +474,32 @@ pub fn resolve_char(c: &mut CharProps, accept: bool) {
     }
 }
 
-/// Accept or reject a paragraph's change (its list numbering change goes with it).
-pub fn resolve_para(p: &mut ParaProps, accept: bool) {
-    p.num_change = None;
+/// Accept (drop the record) or reject (restore the old formatting) a paragraph's formatting change.
+/// If an imported formatting change contains prior numbering and no separate numbering change is present,
+/// rejecting restores that prior numbering.
+pub fn resolve_para_fmt(p: &mut ParaProps, accept: bool) {
     let Some(ch) = p.fmt_change.take() else { return };
     if !accept {
+        let num = if p.num_change.is_none() && ch.old.numbering.is_some() { ch.old.numbering } else { p.numbering };
+        let nc = p.num_change.take();
         *p = ch.old.formatting();
+        p.numbering = num;
+        p.num_change = nc;
     }
+}
+
+/// Accept (drop the record) or reject (restore previous numbering) a paragraph's list numbering change.
+pub fn resolve_para_num(p: &mut ParaProps, accept: bool) {
+    let Some(ch) = p.num_change.take() else { return };
+    if !accept && ch.is_parseable() {
+        p.numbering = ch.snapshot;
+    }
+}
+
+/// Accept or reject a paragraph's change (both its formatting and list numbering).
+pub fn resolve_para(p: &mut ParaProps, accept: bool) {
+    resolve_para_fmt(p, accept);
+    resolve_para_num(p, accept);
 }
 
 /// Accept or reject every table, row, cell and section change in `blocks` (paragraph changes
