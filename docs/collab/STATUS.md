@@ -4,7 +4,7 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `cd4c623c` plus this status commit — 55 commits over
+- HEAD at this writing: `4480bc13` plus this status commit — 57 commits over
   `4b0d3995`; the fork copy still carries the pre-rebase head
   `a6d6ae90` until it is force-pushed
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
@@ -57,7 +57,9 @@ missing, and where the next session should start.
   `remove_block`, `move_block` (a run of blocks swapped with the neighbour named
   by its session id, §5.12), `permute` (a contiguous run of paragraphs put in
   the order of an explicit id list, §5.13), `set_para_level` (the outline level
-  of a list of paragraphs named by session id, §5.14), `insert_row`, `remove_row`, and
+  of a list of paragraphs named by session id, §5.14), `set_para_list` (a
+  bulleted or numbered list at an explicit level, with the numbering definition
+  it creates, §5.15), `insert_row`, `remove_row`, and
   `set_para_format` (restore one paragraph's runs, mark and `ParaProps` — the
   inverse of a formatting command, §5.10).
 - Node ids address every container: a table `[block]`, its rows
@@ -82,7 +84,9 @@ missing, and where the next session should start.
   primitives cannot name is refused rather than mistaken for a chain of text
   edits. An outline level change leaves the text alone, so it is not a diff
   either: `para.promote`/`demote` travel as a command and the server names the
-  levels (§5.14).
+  levels (§5.14). A list membership change is the same: `para.bullets`/
+  `para.numbering` travel as a command and the server names the exact list state
+  and the numbering definition it allocated (§5.15).
 - A column removal, a cell merge and a cell split carry an exact inverse
   (`split_cells`/`merge_cells`/`insert_column` with `restore`): the removed
   bodies, the grid and the session ids travel in the inverse, so undo restores
@@ -133,6 +137,17 @@ missing, and where the next session should start.
   foreign edit in any levelled paragraph makes it `undo-conflict` (§5.14). A
   step wider than 64 paragraphs, or one that also changes a list level, keeps
   the command delta.
+- The Bullets and Numbering buttons (`para.bullets`/`para.numbering`) are
+  normalized after the command to one `set_para_list` structural operation
+  naming each changed paragraph's session id with its exact list state (the
+  numbering instance, level, style and the indents the command cleared) plus
+  the numbering definition the command created; replicas replay the same
+  transaction delta, undo restores the earlier list references and drops the
+  definition the step created (only while nothing uses it), redo lists again
+  with the same numbering id, and a foreign edit in any listed paragraph makes
+  it `undo-conflict` (§5.15). A step wider than 64 paragraphs, a paragraph
+  inside a table, a paragraph without a session id, or a command that also
+  changed anything but those fields keeps the command delta.
 
 ### Client and transport (`crates/collab-client`, `crates/collab-ws`)
 
@@ -220,7 +235,7 @@ missing, and where the next session should start.
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
 | Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
-| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move and a paragraph sort are addressable structural operations that undo and redo §5.12, §5.13 |
+| Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step and a bulleted/numbered list step are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | server side done | commit/409/`warnings[]`; cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
@@ -324,8 +339,9 @@ Results at this writing:
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
   `format.enclose`, whose inverse restores the paragraph's body (§5.11), and a
-  paragraph move, a paragraph sort and an outline level step are addressable
-  structural operations with an exact inverse (§5.12, §5.13, §5.14); every
+  paragraph move, a paragraph sort, an outline level step and a list step are
+  addressable structural operations with an exact inverse (§5.12, §5.13, §5.14,
+  §5.15); every
   other command still has none and acts as an undo barrier. The
   `opId` dedup window travels with the snapshot (§5.5), so a retry across a
   restart is
@@ -341,7 +357,8 @@ Results at this writing:
   is a text box, formatting and anything the diff cannot express; a formatting
   command's inverse is a `set_para_format` primitive (§5.10, §5.11), a paragraph
   move is a `move_block` structural operation (§5.12), a sort is a `permute`
-  (§5.13) and an outline level change is a `set_para_level` (§5.14), the rest
+  (§5.13), an outline level change is a `set_para_level` (§5.14) and a list
+  membership change is a `set_para_list` (§5.15), the rest
   stay barriers; a command that
   changes a table's shape retires that table's ids, so a client holding an old
   cell id is refused `gone` and resyncs rather than editing a neighbour. All four
@@ -945,13 +962,14 @@ the room version; the step stays on the stack and the session stays `InSync`
 
 **What stays a barrier.** Only commands a paragraph snapshot can name are
 listed; §5.11 lifts the two that rewrite text out of this list, §5.12 lifts the
-adjacent paragraph move, §5.13 lifts the paragraph sort and §5.14 lifts the
-outline level commands (`para.promote`/`demote`). Commands that move text past
+adjacent paragraph move, §5.13 lifts the paragraph sort, §5.14 lifts the
+outline level commands (`para.promote`/`demote`) and §5.15 lifts the Bullets
+and Numbering buttons (`para.bullets`/`para.numbering`). Commands that move text past
 more than 64 blocks
 (`para.moveUp`/`moveDown` over a wider selection), strip text
 (`para.removeBlank`, `para.convertBreaks`, the space/indent text tools),
-allocate numbering definitions (`para.bullets`, `para.numbering`,
-`para.multilevel`, `para.restartNumbering`) or otherwise
+allocate numbering definitions another way (`para.multilevel`,
+`para.restartNumbering`) or otherwise
 change more than `text`/`objects`/`runs`/`mark`/`props` still have no inverse,
 and their undo answers `unsupported` — as do a step over more than 256
 paragraphs, and a collapsed-caret formatting command that only sets the
@@ -1041,7 +1059,8 @@ stays `InSync` (§5.9).
 **What stays a barrier.** A step over more than 256 paragraphs is not captured
 at all: the command still runs, but the step has no inverse and its undo answers
 `unsupported` instead of sending an unbounded transaction. Commands that move or
-reorder blocks in other ways, allocate numbering definitions or change more than
+reorder blocks in other ways, allocate numbering definitions another way
+(`para.multilevel`, `para.restartNumbering`) or change more than
 a paragraph's
 body and formatting are unchanged from §5.10 (an adjacent paragraph move is
 lifted in §5.12). The client's diff fallback is
@@ -1155,8 +1174,8 @@ block the move did not displace does not block the undo.
 **What stays a barrier.** A selection wider than 64 blocks is not captured as a
 move: the command still runs, but the step keeps the command delta and its undo
 answers `unsupported`. Every other command that reorders or rewrites blocks
-remains a barrier (§5.10); `para.sort` is lifted out of this list by §5.13 and
-the outline level commands by §5.14.
+remains a barrier (§5.10); `para.sort` is lifted out of this list by §5.13, the
+outline level commands by §5.14 and the Bullets and Numbering buttons by §5.15.
 
 **Tests.**
 
@@ -1258,7 +1277,8 @@ identity `permute`, so the step is addressable instead of a barrier. A run
 wider than 64 paragraphs, a run that crosses a container or a paragraph without
 a session id is not captured: the command keeps its delta and its undo answers
 `unsupported`. `para.promote`/`demote` change outline levels and are lifted out
-of the barrier list by §5.14.
+of the barrier list by §5.14; `para.bullets`/`para.numbering` change list
+membership and are lifted out by §5.15.
 
 **A fresh node map after a permutation.** `SyncState::set_nodes` used to rebase
 ids one by one; with a permutation that can erase a key another id just wrote
@@ -1368,7 +1388,8 @@ to a command barrier. A step wider than `MAX_LEVEL_PARAGRAPHS` (64 paragraphs)
 is not captured:
 the command runs, keeps its delta and its undo answers `unsupported`. A
 selection with a list item changes a numbering level too and stays a barrier for
-the same reason.
+the same reason (the Bullets and Numbering buttons themselves, which set the
+list membership, are §5.15).
 
 A replica applying the delta adds the built-in `Heading{n}` style (and its
 linked character style) when its document lacks it — the command path does the
@@ -1413,6 +1434,130 @@ formats the same on every replica.
 **Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app` — 50, 80, 41 and 26 passed; `cargo clippy` on those four
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
+
+### 5.15 A list membership is an addressable structural operation (run 2026-11-09)
+
+§5.14 lifted the outline level commands out of the barrier list and left
+`para.bullets`/`para.numbering` there: they allocate a numbering definition,
+which no primitive could name and no replica could replay backwards (a toggle
+would flip again, and the definition the command allocated would differ across
+replicas). List membership is now one structural `set_para_list` operation with
+an explicit list of session ids, a kind and a level: **head `4480bc13`** on
+`feature/realtime-collaboration`, with this entry's docs commit on top (no push,
+CI unchanged).
+
+**The operation.** The forward form names the paragraphs, the kind
+(`bullets` or `numbering`) and the list level (`0..=8`):
+
+```json
+{"op":"set_para_list","ids":[42,17],"kind":"bullets","level":1}
+```
+
+The adapter reuses an existing definition whose nine levels are the canonical
+levels of that kind, or creates one with the document's own deterministic
+allocator (`free_id` over the numbering table, the same function the engine's
+`para.bullets` uses). The rule is a pure function of the document, so the same
+payload on two replicas that hold the same document picks the same abstract and
+`num` ids; a redo after undo reuses the definition the first run created instead
+of allocating a second one. A paragraph that already carries a list of the
+requested kind at the requested level is left untouched (style and indents
+included), so a repeated step is an identity: the delta still exists, the
+document does not change and no definition is allocated.
+
+**The exact form.** The command path and the inverse write each paragraph's
+complete list-facing state — the numbering instance (or `null` to inherit, `0`
+to leave the list), the level, the style and the four indents the list commands
+clear — plus the definitions the step adds:
+
+```json
+{"op":"set_para_list","items":[{"id":42,"num":3,"level":1,"style":"ListParagraph",
+  "indentLeft":null,"indentFirst":null,"indentLeftChars":null,"indentFirstChars":null}],
+ "define":[{"abstract":{…},"num":{…}}]}
+```
+
+A replica that never ran the command creates the definition with the identical
+ids and levels from `define`, so both replicas hold the same `Document` JSON,
+numbering table included. A definition that collides with an existing one (same
+id, different body) is refused; a `num` a step names must be defined by the
+document or by the same step.
+
+**One transaction, the same document at the author and the peer.** The
+authoritative delta wraps the exact operation in the step's unit:
+
+```json
+{"op":"transaction","ops":[{"op":"set_para_list","items":[…],"define":[…]}]}
+```
+
+The author applied the command optimistically; the peer applies the delta. Both
+end at the identical document because the command is deterministic on identical
+input and the delta names what it allocated. Undo is one exact `set_para_list`
+naming the state before the step plus `undefine` of the `num` the step created:
+the definition is dropped only when no paragraph, style or other list still
+points at it, so an edit another user made in the meantime keeps its label. The
+earlier list references come back, and because the definition is dropped, redo
+recreates it with the same id and ends at the same JSON as the first run.
+
+**A foreign edit is `undo-conflict`.** The step reports every paragraph whose
+list state it changed in `Effect::touched`. Any later edit another user makes in
+one of them makes undo answer `undo-conflict`, leaves both documents
+byte-identical and does not move the room version; the step stays on the stack
+and the session stays `InSync` (§5.9).
+
+**The command path and what stays a barrier.** `para.bullets` and
+`para.numbering` run through the engine as before; the adapter walks the
+document before and after (blocks the command did not touch share their `Arc`)
+and captures the step only when the difference is the list-facing state of at
+most `MAX_LIST_PARAGRAPHS` (64) paragraphs. A command that also changed text,
+runs, objects, the mark, the section, another paragraph property, the block
+order or an existing numbering definition is not captured at all: the step
+keeps its command delta and stays a barrier. The same holds for a changed
+paragraph inside a table (the operation addresses top-level paragraphs only) or
+one without a session id, and for a step wider than 64 paragraphs. The direct
+operation refuses those cases before the document changes: an unknown id
+(`invalid`), a retired id (`gone`), a table, a row, a cell or a paragraph inside
+a table, a duplicate id, an empty set, a level outside `0..=8`, an unknown kind,
+a colliding definition and a wider step are refused with the document and the
+room version unchanged.
+
+**Tests.**
+
+- `crates/collab-doc/src/tests.rs`:
+  `listing_paragraphs_is_one_transactional_list_step` (delta shape, one
+  definition, level 1, `ListParagraph`, ids unchanged),
+  `two_replicas_that_apply_the_same_list_payload_allocate_the_same_numbering_id`
+  (identical documents and the same `num` on both),
+  `a_repeated_list_step_is_an_identity_step` (document unchanged, no second
+  definition), `undo_of_a_list_step_lands_as_one_transaction_and_redo_returns_the_list`
+  (undo restores the exact earlier JSON including the numbering table, redo
+  returns the listed JSON), `a_list_step_with_an_unknown_retired_or_unaddressable_id_is_refused_before_mutation`
+  (unknown, duplicate, empty, level 9, unknown kind, stale path → `invalid`;
+  retired → `gone`; document and version unchanged every time),
+  `a_list_step_on_a_table_or_inside_one_is_refused_before_mutation`,
+  `a_list_step_wider_than_the_bound_is_refused_before_mutation` (65 ids),
+  `a_foreign_edit_of_a_listed_block_makes_undo_a_conflict` (the step stays on
+  the stack), `a_replica_applies_a_list_step_and_creates_the_definition`.
+- `crates/collab-engine/src/tests.rs`:
+  `a_bullets_command_lands_as_one_list_operation_and_undoes` (the command yields
+  a transaction `set_para_list` with its definition; a replica that never ran
+  it converges from the delta, undoes and redoes),
+  `a_numbering_command_over_a_selection_lists_every_paragraph_in_one_transaction`,
+  `a_list_command_over_more_than_64_paragraphs_stays_an_undo_barrier`,
+  `a_list_step_on_a_table_is_refused_before_mutation` (the table and a cell
+  paragraph → `invalid`, document and version unchanged),
+  `a_list_step_that_names_the_current_list_is_an_identity_step`.
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s): `a_bullets_undo_lands_as_one_transaction_at_its_author_and_the_peer`
+  (the plan is the command; the delta is one transaction with the same numbering
+  id at both replicas; undo and redo reach the author once and the peer as the
+  same delta, documents identical), `a_foreign_edit_of_a_listed_paragraph_refuses_the_undo_without_touching_the_document`
+  (Bob types into the listed paragraph; both documents byte-identical, room
+  version unchanged).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 50, 89, 46 and 28 passed; `cargo clippy` on those four
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
