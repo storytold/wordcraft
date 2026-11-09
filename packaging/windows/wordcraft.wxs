@@ -32,6 +32,15 @@
       <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchWordcraft" Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed" />
     </UI>
 
+    <!-- After an install or update, as the person installing: a taskbar or Start pin of the old
+         advertised shortcut is replaced, under the same name, by a plain shortcut to the new exe
+         (apps/wordcraft/src/taskbar_pins.rs), so updating to the plain shortcut does not leave
+         that pin blank. Its outcome never fails the install. Not on uninstall. -->
+    <CustomAction Id="RepairTaskbarPins" FileRef="WordcraftExe" ExeCommand="--repair-taskbar-pins" Execute="immediate" Return="ignore" />
+    <InstallExecuteSequence>
+      <Custom Action="RepairTaskbarPins" After="InstallFinalize" Condition="NOT (REMOVE~=&quot;ALL&quot;)" />
+    </InstallExecuteSequence>
+
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="CraftSuiteFolder" Name="ArtCraft">
         <Directory Id="INSTALLFOLDER" Name="WordCraft" />
