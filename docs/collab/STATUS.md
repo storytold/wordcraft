@@ -981,13 +981,13 @@ the room version; the step stays on the stack and the session stays `InSync`
 **What stays a barrier.** Only commands a paragraph snapshot can name are
 listed; §5.11 lifts the two that rewrite text out of this list, §5.12 lifts the
 adjacent paragraph move, §5.13 lifts the paragraph sort, §5.14 lifts the
-outline level commands (`para.promote`/`demote`) and §5.15 lifts the Bullets
-and Numbering buttons (`para.bullets`/`para.numbering`). Commands that move text past
+outline level commands (`para.promote`/`demote`), §5.15 lifts the Bullets and
+Numbering buttons (`para.bullets`/`para.numbering`) and §5.16 lifts the
+Multilevel List and Restart numbering buttons. Commands that move text past
 more than 64 blocks
 (`para.moveUp`/`moveDown` over a wider selection), strip text
 (`para.removeBlank`, `para.convertBreaks`, the space/indent text tools),
-allocate numbering definitions another way (`para.multilevel`,
-`para.restartNumbering`) or otherwise
+allocate numbering definitions another way or otherwise
 change more than `text`/`objects`/`runs`/`mark`/`props` still have no inverse,
 and their undo answers `unsupported` — as do a step over more than 256
 paragraphs, and a collapsed-caret formatting command that only sets the
@@ -1077,11 +1077,12 @@ stays `InSync` (§5.9).
 **What stays a barrier.** A step over more than 256 paragraphs is not captured
 at all: the command still runs, but the step has no inverse and its undo answers
 `unsupported` instead of sending an unbounded transaction. Commands that move or
-reorder blocks in other ways, allocate numbering definitions another way
-(`para.multilevel`, `para.restartNumbering`) or change more than
+reorder blocks in other ways, allocate numbering definitions another way or
+change more than
 a paragraph's
 body and formatting are unchanged from §5.10 (an adjacent paragraph move is
-lifted in §5.12). The client's diff fallback is
+lifted in §5.12; the Multilevel List and Restart numbering buttons are lifted in
+§5.16). The client's diff fallback is
 unchanged too: a case change planned from the document difference still travels
 as a `replace_range` primitive (whose undo is a text edit); this entry covers
 the command path — track changes on, the CLI/MCP, or any client that submits the
@@ -1576,6 +1577,161 @@ room version unchanged.
 **Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
 wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
 wordcraft-collab-app` — 50, 89, 46 and 28 passed; `cargo clippy` on those four
+crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
+clean. No push was made and CI is unchanged.
+
+### 5.16 Multilevel lists and restart numbering are addressable structural operations (run 2026-11-09)
+
+§5.15 lifted a list membership out of the barrier list and left the Multilevel
+List button and Restart numbering there: a multilevel definition numbers nine
+levels together (and the `legal` and `outline` kinds allocate different
+definitions), and a restart allocates a second numbering instance, which no
+primitive could name or replay backwards. Both are now addressable operations
+of the same list template — payload → normalized plan → adapter → confirmed
+delta → two replicas: `set_para_multilevel` and `set_para_restart_numbering`.
+**Head `129ecc9e`** on `feature/realtime-collaboration`, with this entry's docs
+commit on top (no push, CI unchanged).
+
+**The multilevel operation.** The forward form names the paragraphs with their
+own level and the multilevel kind:
+
+```json
+{"op":"set_para_multilevel","kind":"legal",
+ "levels":[{"id":42,"level":0},{"id":17,"level":2}]}
+```
+
+`kind` is `legal` (Word's `1.`, `1.1.`, `1.1.1.`) or `outline` (`I.`, `A.`,
+`1.`, …); every level is `0..=8`. The adapter reuses an existing definition
+whose nine levels are the canonical levels of that kind, or creates one with
+the document's own deterministic allocator (`free_id` over the numbering
+table), so the same payload on two replicas that hold the same document picks
+the same abstract and `num` ids. A paragraph that already carries that
+definition at the level it names is left untouched (style and indents
+included), so a repeated step is an identity: the delta still exists, the
+document does not change and no definition is allocated.
+
+**The restart operation.** The forward form names the paragraphs that move to
+the fresh instance and the first number it shows:
+
+```json
+{"op":"set_para_restart_numbering","ids":[42,17],"start":3}
+```
+
+Every named paragraph must already be in the same list (a restart restarts one
+list) and `start` is `1..=100_000`, the engine's own bound on "Set Numbering
+Value". The adapter allocates the new `num` with the document's allocator and
+copies the source's abstract list and level overrides, then sets its start
+overrides to `(level, start)` for every level the named paragraphs use, so the
+allocation is a pure function of the document and both replicas pick the same
+id. A restarted instance the named paragraphs already sit in whose start
+overrides are exactly the requested ones makes the step an identity: the
+document does not change and no second instance is allocated.
+
+**The exact form.** Both operations keep the `set_para_list` exact form — the
+same `items`, `define` and `undefine` — only under their own op name:
+
+```json
+{"op":"set_para_multilevel","items":[{"id":42,"num":3,"level":1,"style":"ListParagraph",
+  "indentLeft":null,"indentFirst":null,"indentLeftChars":null,"indentFirstChars":null}],
+ "define":[{"abstract":{…},"num":{…}}]}
+{"op":"set_para_restart_numbering","items":[{"id":42,"num":4,"level":0,"style":"ListParagraph",…}],
+ "define":[{"abstract":{…},"num":{"id":4,"abstractId":1,"startOverrides":[[0,3]],…}}]}
+```
+
+A replica that never ran the command creates the definition with the identical
+ids and levels from `define`, so both replicas hold the same `Document` JSON,
+numbering table included. A definition that collides with an existing one (same
+id, different body), a `num` a step names without a definition, a level outside
+`0..=8`, a zero, negative or too large start, an empty set, a duplicate id and a
+step wider than `MAX_LIST_PARAGRAPHS` (64) are refused before the document or
+the version changes.
+
+**One transaction, the same document at the author and the peer.** The
+authoritative delta wraps the exact operation in the step's unit:
+
+```json
+{"op":"transaction","ops":[{"op":"set_para_multilevel","items":[…],"define":[…]}]}
+```
+
+Undo is one exact op of the same name naming the state before the step plus
+`undefine` of the `num` the step created: the definition is dropped only when
+no paragraph, style or other list still points at it. The earlier references
+come back, and because the definition is dropped, redo recreates it with the
+same id and ends at the same JSON as the first run.
+
+**A foreign edit is `undo-conflict`.** The step reports every paragraph whose
+list state it changed in `Effect::touched`. Any later edit another user makes in
+one of them makes undo answer `undo-conflict`, leaves both documents
+byte-identical and does not move the room version; the step stays on the stack
+and the session stays `InSync` (§5.9).
+
+**The command path and what stays a barrier.** `para.multilevel` and
+`para.restartNumbering` run through the engine as before; the adapter walks the
+document before and after (blocks the command did not touch share their `Arc`)
+and captures the step when the difference is the list-facing state of at most 64
+paragraphs, naming the delta with the command's own op
+(`set_para_multilevel`/`set_para_restart_numbering`) instead of
+`set_para_list`. A command that also changed text, runs, objects, the mark, the
+section, another paragraph property, the block order or an existing numbering
+definition is not captured: the step keeps its command delta and stays a
+barrier. The same holds for a changed paragraph inside a table, one without a
+session id, and a step wider than 64 paragraphs (its undo answers
+`unsupported`). The direct operations refuse those cases before the document
+changes: an unknown id (`invalid`), a retired id (`gone`), a table, a row, a
+cell or a paragraph inside a table, a duplicate id, an empty set, a level
+outside `0..=8`, an unknown multilevel kind, a start of 0 or above 100 000, a
+paragraph that is not in a list, a restart that names two different lists, a
+colliding definition and a wider step.
+
+**Tests.**
+
+- `crates/collab-doc/src/tests.rs`:
+  `a_multilevel_step_lists_each_paragraph_at_its_level` (delta shape, one
+  nine-level definition, levels 0/1/2, `ListParagraph`),
+  `two_replicas_that_apply_the_same_multilevel_payload_allocate_the_same_numbering_id`,
+  `a_repeated_multilevel_step_is_an_identity_step` (document unchanged, no
+  second definition, no `define`),
+  `undo_of_a_multilevel_step_lands_as_one_transaction_and_redo_returns_the_levels`,
+  `a_multilevel_step_with_a_bad_level_or_id_is_refused_before_mutation` (empty,
+  level 9, duplicate, unknown kind, a missing level, unknown id → `invalid`;
+  retired → `gone`), `a_multilevel_step_on_a_table_is_refused_before_mutation`,
+  `a_multilevel_step_wider_than_the_bound_is_refused_before_mutation` (65 ids),
+  `a_foreign_edit_of_a_multilevel_block_makes_undo_a_conflict`;
+  `a_restart_step_moves_the_paragraphs_to_a_new_instance_with_an_explicit_start`
+  (same abstract, new `num`, `startOverrides` [[0,4]]),
+  `two_replicas_that_apply_the_same_restart_payload_allocate_the_same_numbering_id`,
+  `a_repeated_restart_step_is_an_identity_step`,
+  `undo_of_a_restart_step_lands_as_one_transaction_and_redo_returns_the_start`,
+  `a_restart_step_with_a_bad_start_or_address_is_refused_before_mutation`
+  (start 0, -1, 100 001, empty, duplicate, unknown, no start, not in a list,
+  two lists → `invalid`; retired → `gone`),
+  `a_restart_step_on_a_table_is_refused_before_mutation`,
+  `a_restart_step_wider_than_the_bound_is_refused_before_mutation`,
+  `a_foreign_edit_of_a_restarted_block_makes_undo_a_conflict`.
+- `crates/collab-engine/src/tests.rs`:
+  `a_multilevel_command_lands_as_one_multilevel_operation_and_undoes`,
+  `a_restart_numbering_command_lands_as_one_restart_operation_and_undoes` (the
+  command yields a transaction of its own op; a replica that never ran it
+  converges from the delta, undoes and redoes),
+  `a_multilevel_step_that_names_the_current_levels_is_an_identity_step`,
+  `a_restart_step_that_names_the_current_start_is_an_identity_step`,
+  `a_multilevel_command_over_more_than_64_paragraphs_stays_an_undo_barrier`,
+  `a_restart_step_with_a_zero_start_is_refused_before_mutation`.
+- `crates/collab-app/src/tests.rs` (two replicas, `Room<SessionModel>` plus two
+  `SyncState`s): `a_multilevel_undo_lands_as_one_transaction_at_its_author_and_the_peer`
+  (the plan is the command; the delta is one `set_para_multilevel` transaction
+  with the same numbering id at both replicas; undo and redo reach the author
+  once and the peer as the same delta),
+  `a_restart_numbering_undo_lands_as_one_transaction_at_its_author_and_the_peer`
+  (the listing lands first, the restart moves both paragraphs to the same fresh
+  instance, undo puts the source instance back and redo recreates the same one),
+  `a_foreign_edit_of_a_multilevel_paragraph_refuses_the_undo_without_touching_the_document`
+  (Bob types into the listed paragraph; both documents byte-identical, room
+  version unchanged).
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app` — 50, 105, 52 and 31 passed; `cargo clippy` on those four
 crates with `--all-targets -- -D warnings` clean; `cargo fmt --all -- --check`
 clean. No push was made and CI is unchanged.
 
