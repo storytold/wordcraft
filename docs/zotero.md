@@ -53,13 +53,20 @@ on, Zotero can't insert, refresh, unlink or delete citations, change the bibliog
 save its document preferences; Zotero reports the error and the document stays as it was.
 With exceptions (regions you may edit) or fillable content controls in forms mode, a change that
 stays inside them goes through, and anything reaching outside them (a citation moved into a new
-footnote, a change to the document's styles) is refused. Citations inside a content control
+footnote, a change to the document's styles) is refused; so is saving the document preferences
+(they are document-wide). Citations inside a content control
 locked against editing can't be added, refreshed, unlinked or deleted.
 
 With Track Changes on (or the "tracked changes" restriction), Zotero's insertions, refreshes,
 unlinks and deletions are tracked like your own edits: Reject brings the old text and citation
 back. A citation whose field is a tracked deletion no longer counts as a citation for Zotero.
-Changes to a citation's hidden code aren't tracked.
+Changes to a citation's hidden code aren't tracked. Zotero's document preferences can't be
+tracked either, so the "tracked changes" restriction refuses saving them (stop protection to change
+the citation style). Deleting or moving out the only citation in a footnote tracks the note's
+mark as a deletion too: Accept All removes the note, Reject All brings it back.
+
+With "limit formatting to a selection of styles" on, Zotero can't change the Bibliography style
+(Add/Edit Bibliography fails unless a Bibliography style with its settings already exists).
 
 ## Word compatibility
 

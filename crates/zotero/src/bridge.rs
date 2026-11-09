@@ -653,10 +653,10 @@ fn note_ref_pos(s: &Session, id: u32) -> Option<Pos> {
 fn remove_empty_note(s: &mut Session, f: &ZField) -> Option<Pos> {
     let StoryRef::Part(id) = f.start.story else { return None };
     let blocks = s.doc.story(StoryRef::Part(id))?;
-    let mut rest = String::new();
+    // As it reads: under Track Changes the deleted citation still sits in the note.
+    let rest = s.doc.final_text(StoryRef::Part(id));
     for b in blocks {
         if let Some(p) = b.as_para() {
-            rest.push_str(&p.text);
             // A picture, shape, equation... is content too, even though it has no text.
             if !p.objects.iter().all(|o| o.is_marker() || matches!(o, InlineObject::NoteRef { .. })) {
                 return None;

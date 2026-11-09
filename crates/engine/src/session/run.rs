@@ -469,16 +469,20 @@ impl Session {
         }
         let before =
             (self.doc.clone(), self.sel.clone(), self.history.clone(), self.redo.clone(), self.typing_open, self.undo_evicted, self.column.clone());
+        let dirty = self.dirty;
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self)));
         let mut result = match r {
             Ok(r) => r.map_err(|e| CmdError::Failed(e.to_string())),
             Err(_) => Err(CmdError::Failed(format!("{what}: internal error"))),
         };
-        if result.is_ok()
-            && guard
-            && (!crate::cmd::protect::outside_unchanged(&before.0, &self.doc, &self.author) || before.0.styles != self.doc.styles)
-        {
-            result = Err(CmdError::Disabled(format!("{what}: only the editable regions of this protected document can change")));
+        if result.is_ok() {
+            if guard && (!crate::cmd::protect::outside_unchanged(&before.0, &self.doc, &self.author) || before.0.styles != self.doc.styles) {
+                result = Err(CmdError::Disabled(format!("{what}: only the editable regions of this protected document can change")));
+            } else if self.doc.settings.protect_formatting && before.0.styles != self.doc.styles {
+                // The rule `styles.modify` follows: formatting is limited to the document's styles, so
+                // an edit that rewrites or adds a style is refused.
+                result = Err(CmdError::Disabled(format!("{what}: formatting is limited to the document's styles")));
+            }
         }
         if result.is_err() {
             let (d, s, h, r, t, ev, c) = before;
@@ -489,6 +493,7 @@ impl Session {
             self.typing_open = t;
             self.undo_evicted = ev;
             self.column = c;
+            self.dirty = dirty;
         }
         result
     }

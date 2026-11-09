@@ -597,8 +597,9 @@ fn with_citation(text: &str, caret: usize) -> (Z, u64) {
 }
 
 /// Every editing call Zotero makes, against field `id`; each must be refused. The document
-/// preferences aren't content: they follow the restriction alone (`prefs_refused`), refused
-/// unless the document has regions the user may edit.
+/// preferences aren't content: `prefs_refused` says whether they are refused too (the forms
+/// test skips them; `Document_setDocumentData` is refused in a document with exceptions as well,
+/// pinned in `read_only_exception_takes_a_citation_but_the_rest_refuses_one`).
 fn assert_every_edit_refused(z: &mut Z, id: u64, prefs_refused: bool) {
     let before = snapshot(&z.s.doc);
     z.begin();
@@ -670,6 +671,10 @@ fn read_only_exception_takes_a_citation_but_the_rest_refuses_one() {
     let id = z.cite(0, "(Doe 2020) ");
     z.ok("Document_complete", json!([1]));
     assert_eq!(z.text(), "Locked intro.\nFill in (Doe 2020) here.\nLocked end.");
+    // The preferences are document-wide, so refused even with the caret inside the exception.
+    z.begin();
+    assert!(z.call("Document_setDocumentData", json!([1, "<data/>"])).is_err());
+    z.ok("Document_complete", json!([1]));
     // A citation inside the exception can be refreshed, but not moved out of it into a note.
     z.begin();
     z.ok("Field_setText", json!([1, id, "(Doe 2021) ", false]));
@@ -817,4 +822,152 @@ fn citation_at_document_end_stays_closed() {
     let bytes = wordcraft_engine::io::save_bytes("probe.docx", &z.s.doc).unwrap();
     let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
     assert_eq!(back.field_ranges(StoryRef::Body).len(), 1);
+}
+
+// Review of #1323 (round 2): formatting protection, notes, preferences, dirty flag, authors.
+
+/// Which of the two styles of formatting protection to start.
+fn restrict_formatting(z: &mut Z, tracked: bool) {
+    let mode = if tracked { json!({"mode": "trackedChanges", "formatting": true}) } else { json!({"formatting": true}) };
+    z.s.run("review.restrict", &mode).unwrap();
+}
+
+#[test]
+fn formatting_protection_refuses_the_bibliography_style_and_a_bibliography() {
+    for tracked in [true, false] {
+        let (mut z, id) = with_citation("Hello world", 5);
+        // A bibliography field with its style already in place.
+        z.begin();
+        z.ok("Document_setBibliographyStyle", json!([1, 0, 720, 240, 240, [], 0]));
+        z.s.sel = Selection::caret(Pos::body(0, 0));
+        let bib = z.ok("Document_insertField", json!([1, "ReferenceMark", 0]))[0].as_u64().unwrap();
+        z.ok("Field_setCode", json!([1, bib, BIBL]));
+        z.ok("Document_complete", json!([1]));
+        restrict_formatting(&mut z, tracked);
+        // styles.modify is refused: so are Zotero's changes to the style.
+        assert!(z.s.run("styles.modify", &json!({"style": "Bibliography", "indentLeft": 5})).is_err());
+        let before = snapshot(&z.s.doc);
+        z.begin();
+        assert!(z.call("Document_setBibliographyStyle", json!([1, 360, 1440, 480, 120, [100], 0])).is_err(), "tracked={tracked}");
+        assert_eq!(snapshot(&z.s.doc), before, "tracked={tracked}: the style changed");
+        let _ = id;
+        z.ok("Document_complete", json!([1]));
+    }
+    // The style isn't in the document yet: a bibliography would create it, which is refused too.
+    for tracked in [true, false] {
+        let mut z = Z::new("Hello world", 5);
+        z.begin();
+        let bib = z.ok("Document_insertField", json!([1, "ReferenceMark", 0]))[0].as_u64().unwrap();
+        z.ok("Field_setCode", json!([1, bib, BIBL]));
+        z.ok("Document_complete", json!([1]));
+        assert!(z.s.doc.styles.get("Bibliography").is_none());
+        restrict_formatting(&mut z, tracked);
+        let before = snapshot(&z.s.doc);
+        z.begin();
+        assert!(z.call("Field_setText", json!([1, bib, "Doe, J. 2020.", false])).is_err(), "tracked={tracked}");
+        assert_eq!(snapshot(&z.s.doc), before, "tracked={tracked}: the document changed");
+        z.ok("Document_complete", json!([1]));
+    }
+}
+
+/// A footnote citation deleted under Track Changes: Accept All removes the note too (the mark
+/// is the author's tracked deletion), Reject All brings it back.
+fn note_citation_goes_tracked(method: &str) {
+    for accept in [true, false] {
+        let mut z = Z::new("Hello world", 5);
+        z.begin();
+        let id = z.cite(1, "(Doe 2020)");
+        z.ok("Document_complete", json!([1]));
+        assert_eq!(note_count(&z.s.doc, wordcraft_doc::PartKind::Footnote), 1);
+        z.s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        z.begin();
+        match method {
+            "Field_delete" => z.ok("Field_delete", json!([1, id])),
+            _ => z.ok("Document_convert", json!([1, [id], 0, [0]])),
+        };
+        z.ok("Document_complete", json!([1]));
+        z.s.run(if accept { "review.acceptAll" } else { "review.rejectAll" }, &json!({})).unwrap();
+        // What the file keeps: a note nothing references is not written.
+        let bytes = wordcraft_engine::io::save_bytes("probe.docx", &z.s.doc).unwrap();
+        let back = wordcraft_engine::io::open_bytes("probe.docx", &bytes).unwrap();
+        let notes = note_count(&back, wordcraft_doc::PartKind::Footnote);
+        let marks = z.s.doc.para(StoryRef::Body, &Path::top(0)).unwrap().objects.iter().filter(|o| matches!(o, InlineObject::NoteRef { .. })).count();
+        if accept && method == "Field_delete" {
+            assert_eq!((notes, marks), (0, 0), "{method}: accepted, the note stays");
+        } else if !accept {
+            assert_eq!((notes, marks), (1, 1), "{method}: rejected, the note is gone");
+            assert_eq!(fields::list(&z.s.doc).len(), 1, "{method}");
+        } else {
+            // Converted to the text: the note is gone, the citation is in the text.
+            assert_eq!((notes, marks), (0, 0), "{method}: accepted, the note stays");
+            assert!(z.text().contains("(Doe 2020)"), "{method}");
+        }
+    }
+}
+
+#[test]
+fn deleting_a_footnote_citation_under_track_changes_removes_the_note_on_accept() {
+    note_citation_goes_tracked("Field_delete");
+}
+
+#[test]
+fn converting_a_footnote_citation_to_the_text_under_track_changes_removes_the_note_on_accept() {
+    note_citation_goes_tracked("Document_convert");
+}
+
+#[test]
+fn tracked_changes_protection_refuses_the_untracked_document_preferences() {
+    let (mut z, _) = with_citation("Hello world", 5);
+    z.s.run("review.restrict", &json!({"mode": "trackedChanges"})).unwrap();
+    let before = snapshot(&z.s.doc);
+    z.begin();
+    assert!(z.call("Document_setDocumentData", json!([1, "<data/>"])).is_err());
+    assert_eq!(snapshot(&z.s.doc), before);
+    // Writing back what is already there stays fine.
+    z.ok("Document_setDocumentData", json!([1, PREFS]));
+    z.ok("Document_complete", json!([1]));
+}
+
+#[test]
+fn a_refused_edit_leaves_the_dirty_flag_alone() {
+    // An edit that runs to the end and is refused afterwards (a style change reaching outside the
+    // exception).
+    let mut z = Z::new("Locked intro.\nFill in here.", 0);
+    z.s.run("select.text", &json!({"text": "Fill in here."})).unwrap();
+    z.s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    z.s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    z.s.run("select.text", &json!({"text": "here"})).unwrap();
+    z.s.sel = Selection::caret(z.s.sel.ordered().0);
+    z.begin();
+    z.cite(0, "(Doe 2020) ");
+    z.ok("Document_complete", json!([1]));
+    let path = std::env::temp_dir().join(format!("wordcraft-zotero-dirty-{}.docx", std::process::id()));
+    z.s.run("file.saveAs", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let doc = z.s.document_id();
+    assert!(!z.s.document_dirty(doc), "the save left the document dirty");
+    z.begin();
+    assert!(z.call("Document_setBibliographyStyle", json!([1, 0, 720, 240, 240, [], 0])).is_err());
+    assert!(!z.s.document_dirty(doc), "a refused edit marked the document as changed");
+}
+
+#[test]
+fn a_refresh_by_another_author_is_theirs_on_both_texts() {
+    let mut z = Z::new("Hello world", 5);
+    z.s.run("file.setAuthor", &json!({"name": "Ann"})).unwrap();
+    z.s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    z.begin();
+    let id = z.cite(0, " (Doe 2020)");
+    z.ok("Document_complete", json!([1]));
+    z.s.run("file.setAuthor", &json!({"name": "Bob"})).unwrap();
+    z.begin();
+    z.ok("Field_setText", json!([1, id, "(Roe 2019)", false]));
+    z.ok("Document_complete", json!([1]));
+    let p = z.s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let author = |n: Option<u32>| n.and_then(|n| z.s.doc.revisions.get(n as usize)).map(|r| r.author.clone());
+    let new = p.props_of_char(p.text.find("Roe").unwrap());
+    assert_eq!(author(new.ins).as_deref(), Some("Bob"), "{new:?}");
+    // Ann's insertion, struck by Bob.
+    let old = p.props_of_char(p.text.find("Doe").unwrap());
+    assert_eq!(author(old.del).as_deref(), Some("Bob"), "{old:?}");
 }
