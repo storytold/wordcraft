@@ -274,16 +274,19 @@ Results at this writing:
   restore cannot replay either) is not covered.
 - A command that allocates ids (comments, tables, shapes, footnotes…) makes
   replicas request a snapshot after it; there is no id delta on the wire yet.
-- Table cells are addressable now, with the limits that remain: a column
-  insert/remove, a cell merge/split and a text box are still commands and still
-  resync. A command that changes a table's shape retires that table's ids
-  (`insert_row`/`remove_row` as primitives do the same by shifting them), so a
-  client holding an old cell id is refused `gone` and resyncs rather than
-  editing a neighbour — correct, but the caret of that client is lost. The node
-  map is larger: it carries every row, cell and cell paragraph, so a document
-  with a 2000-cell table sends ~3× more `nodes` entries than before; the server
-  bounds the document at 64 MiB and the map is sent on join and after structural
-  operations.
+- Table cells are addressable now, and so are the table's columns and merged
+  cells (§5.7): a column insert/remove, a cell merge and a cell split travel as
+  structural operations that reindex cell ids instead of retiring them, so the
+  caret of a client holding a cell id survives. What still travels as a command
+  is a text box, formatting and anything the diff cannot express; a command that
+  changes a table's shape retires that table's ids, so a client holding an old
+  cell id is refused `gone` and resyncs rather than editing a neighbour. A
+  merge, a split and a column removal have no inverse, so undo reports that step
+  as unsupported (an inserted column does undo: its inverse is `remove_column`).
+  The node map is larger: it carries every row, cell and cell paragraph, so a
+  document with a 2000-cell table sends ~3× more `nodes` entries than before;
+  the server bounds the document at 64 MiB and the map is sent on join and after
+  structural operations.
 - Offline editing is not supported: while a session reconnects, document commands
   pause instead of diverging.
 - The token is read from the environment on desktop; the cabinet must push a fresh
@@ -363,12 +366,12 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    `action_required` for fork PRs until a maintainer approves, and the PR shows
    `CONFLICTING` until the force-push).
 3. Optional hardening: command inverses for the common engine commands, property
-   primitives, column insert/remove as primitives, a cell merge/split primitive,
-   offline queue, or a join broadcast that carries the role before the first
-   presence frame (presence already carries it, §5.3). (The multi-operation undo
+   primitives, inverses for a merge/split and a column removal, an offline
+   queue, or a join broadcast that carries the role before the first presence
+   frame (presence already carries it, §5.3). (The multi-operation undo
    transaction is done: `a_step_of_several_operations_lands_as_one_transaction`;
    the `opId` window survives a snapshot restore: §5.5; table-cell ids are done:
-   §5.6.)
+   §5.6; columns, merges and splits are primitives: §5.7.)
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
@@ -586,6 +589,107 @@ wordcraft-collab-app -p wordcraft-collab-client` — 49, 32, 15, 10, 13 passed;
 wordcraft-collab-web` — 29 passed + 1 ignored (LibreOffice gate), 1 socket test,
 5 web tests; `cargo clippy` on those crates with `--all-targets -- -D warnings`
 clean; `cargo fmt --all -- --check` clean. No push was made and CI is unchanged.
+
+### 5.7 Columns, merges and splits as addressable primitives (run 2026-11-09)
+
+`TASK.md` §8 lists a structural conflict in a table as a test; §5.6 made rows
+and cells addressable but left a column insert/remove, a cell merge and a cell
+split as commands. Each of those changes a table's shape without adding or
+removing a row, so every replica resynced and a client holding a cell id was
+refused `gone` — the client's caret was lost. Four structural operations now
+cover them: **head `9c035abc`** on `feature/realtime-collaboration`, with this
+entry's docs commit on top (no push, CI unchanged).
+
+**The operations.** All four address a table by its node id (the table or any
+node inside it) and carry a grid address, not cell ids, so a client does not
+have to guess what `Table::insert_col`/`merge`/`split_cell` will do:
+
+- `insert_column {index}` / `remove_column {index}` — `index` is the grid column.
+- `merge_cells {rows: [r0, r1], cols: [g0, g1]}` — a rectangle of grid columns.
+- `split_cells {row, cell, columns}` — one cell cut into `columns` cells.
+
+The authoritative delta repeats the operation with the table's `nodeId`, so a
+replica recomputes the same plan from the same table; the row operations already
+worked that way (§5.6).
+
+**Ids are reindexed, not retired.**
+
+- A row whose cells do not span the inserted or removed column shifts its cell
+  ids after the change by one with their whole subtree
+  (`NodeIds::shift_children`): a client editing such a cell keeps its id, and an
+  edit planned before the insert still lands in its own cell. A cell that spans
+  the column only widens or shrinks and keeps its id.
+- `merge_cells` keeps the id of the first cell of each merged row (and the ids
+  of the blocks that stayed at the same place in it), tombstones the cells it
+  absorbs, and reissues the ids inside a cell whose block list it rewrote (a
+  continued row is drained into the cell above). `NodeIds::remove_descendants`
+  is new: it retires the blocks under a node and keeps the node's own id, which
+  is what a drained cell needs.
+- `split_cells` keeps the id and the content of the cell it cuts and issues ids
+  for the new parts, so the caret holder keeps typing in the first part.
+- A row that would lose its only cell to `remove_column` disappears from the
+  table (the document's `delete_col` drops it) and the rows below move up; the
+  map follows rather than leaving an id on the wrong row.
+
+**Refused before the document changes.** A merge that is past the last row or
+column, inverted, a single cell, or that starts or ends inside a vertical merge
+cannot be addressed cell by cell; a split with fewer than two parts or one the
+grid cannot take (`Table::split_cell` returns the cell unchanged) is refused
+too. Each returns `rejected{code:"invalid"}` with the table untouched and the
+room version unchanged — a test asserts the document JSON is byte-identical
+after five such operations.
+
+**Diff.** `collab-doc::diff` recognizes the four changes by replaying the
+document's own table primitive on a copy of the old table and comparing it with
+the new one — the probe that reproduces the shape names the operation and its
+address. A column insert/remove is found among the grid indexes, a merge among
+the cell boundaries of the first changed row, a split among the cells of the one
+row that gained cells (a split can widen cells of the other rows, which the
+comparison sees). Anything else still falls back to `kind:"command"`.
+
+**Undo.** An inserted column carries `remove_column` as its inverse (exact: the
+column did not exist before). A column removal, a merge and a split have no
+inverse — the removed bodies and the refined grid are not carried — so
+`Effect::inverse` is empty and the step is `unsupported`, as a command is
+(ADR-0010). That is not a regression: all three were commands with no inverse
+before.
+
+**Tests.**
+
+- `crates/collab/src/ids.rs` (unchanged suite) plus
+  `remove_descendants` exercised through the merge tests below.
+- `crates/collab-doc/src/tests.rs`:
+  `inserting_a_column_diffs_to_insert_column`,
+  `removing_a_column_diffs_to_remove_column`,
+  `merging_cells_diffs_to_merge_cells`, `splitting_a_cell_diffs_to_split_cells`,
+  `a_column_insert_matches_the_documents_own_insert_col` (a merged cell makes
+  one row widen and the others gain a cell; the adapter's plan must be the one
+  `Table::insert_col` follows),
+  `a_column_insert_moves_the_cell_ids_and_the_caret_holder_keeps_his` (an edit
+  planned before the insert lands in its own cell after it),
+  `two_replicas_insert_a_column_and_converge`,
+  `removing_a_column_keeps_the_ids_of_the_cells_it_does_not_touch`,
+  `removing_a_column_through_a_replica_matches_the_room`,
+  `merging_two_cells_keeps_the_first_cells_id_and_a_split_brings_the_cells_back`
+  (room + replica: converge after the merge, the absorbed cell is `gone`, the
+  caret paragraph keeps its id through the split and still types),
+  `a_merge_range_that_is_not_addressable_is_refused_before_the_document_changes`,
+  `undo_of_a_column_insert_removes_the_column_again` (the inserted column is the
+  inverse and restores the table exactly).
+- `crates/collab-engine/src/tests.rs`:
+  `a_column_insert_lands_through_the_session_adapter_and_keeps_the_caret_cell`,
+  `a_merge_lands_through_the_session_adapter_and_the_caret_cell_keeps_its_id`.
+- `a_column_insert_is_still_reported_as_unsupported`, which pinned the old
+  limitation, is gone; the four `*_diffs_to_*` tests replace it.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`): `cargo test -p
+wordcraft-collab -p wordcraft-collab-doc -p wordcraft-collab-engine -p
+wordcraft-collab-app -p wordcraft-collab-client` — 49, 43, 17, 10, 13 passed;
+`cargo test -p wordcraft-collab-server -p wordcraft-collab-ws -p
+wordcraft-collab-web` — 29 passed + 1 ignored (the LibreOffice commit gate), 1
+socket test, 5 web tests; `cargo clippy` on both groups with `--all-targets --
+-D warnings` clean; `cargo fmt --all -- --check` clean. No push was made and CI
+is unchanged.
 
 ## 6. Where things live
 
