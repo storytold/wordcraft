@@ -319,6 +319,15 @@ pub struct CanvasState {
     /// document's own layout, which a view change replaces), so a still pointer doesn't lay the
     /// document out every frame. Set only while the page shows the preview.
     table_preview_layout: Option<(TablePreviewKey, wordcraft_doc::Document, wordcraft_engine::Selection, std::sync::Arc<DocLayout>)>,
+    /// Which of a split window's two panes this page state is (0 or 1, [`crate::split`]): the
+    /// page's widget is told apart by it, so each pane keeps its own keyboard focus.
+    pub(crate) pane: u8,
+    /// Drawn as the split window's pane not being worked in: it shows and scrolls its pages,
+    /// but has no caret and takes neither the keyboard nor the input method.
+    pub(crate) passive: bool,
+    /// View › Split is on: the other pane (`split`). Kept with the page state, so it goes with
+    /// the window and is dropped when the window shows another document.
+    pub(crate) split: Option<Box<crate::split::SplitPane>>,
 }
 
 type TablePreviewKey = ((String, serde_json::Value, u64, u64, wordcraft_engine::Selection), std::sync::Arc<DocLayout>);
@@ -348,6 +357,28 @@ impl CanvasState {
             ime_reset,
             ..CanvasState::default()
         };
+    }
+
+    /// The page state of a new pane split off this one (View › Split, [`crate::split`]): another
+    /// pane number, on the same place (scroll position, scale) and with what belongs to the
+    /// window or the user (the colours last applied, the ruler's tab kind, the faces added for
+    /// interface text); nothing rendered, dragged or composed yet.
+    pub(crate) fn split_off(&self) -> CanvasState {
+        CanvasState {
+            pane: if self.pane == 0 { 1 } else { 0 },
+            scroll_request: Some(self.scroll_offset),
+            scroll_offset: self.scroll_offset,
+            scroll_max: self.scroll_max,
+            scroll_to_caret: false,
+            scale: self.scale,
+            canvas_rect: self.canvas_rect,
+            ime_faces: self.ime_faces.clone(),
+            last_highlight: self.last_highlight.clone(),
+            last_font_color: self.last_font_color.clone(),
+            last_shading: self.last_shading.clone(),
+            tab_kind: self.tab_kind,
+            ..CanvasState::default()
+        }
     }
 
     /// Stop a text-selection drag when the pointer gesture becomes an object drag.
@@ -475,6 +506,9 @@ impl Default for CanvasState {
             command_previewed: None,
             preview_scroll: None,
             table_preview_layout: None,
+            pane: 0,
+            passive: false,
+            split: None,
         }
     }
 }
@@ -746,7 +780,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
     // whole columns instead.
     let mut scroll_area = egui::ScrollArea::both()
         // One scroll position per open document, so switching back finds the page as it was left.
-        .id_salt(("canvas_scroll", app.session.document_id()))
+        .id_salt(("canvas_scroll", app.session.document_id(), app.canvas.pane))
         .auto_shrink([false, false])
         // Bringing the caret into view glides there, or jumps with animation effects off.
         .animated(view.animate)
@@ -798,7 +832,9 @@ fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocL
     } else {
         app.canvas.alt_code.clear();
     }
-    crate::ink::replay_tick(app, ui.ctx());
+    if !app.canvas.passive {
+        crate::ink::replay_tick(app, ui.ctx());
+    }
     let layout = shown_layout(app);
     if let Some(anchor) = reflow_anchor
         && let Some(page) = reading_anchor_page(&layout, &anchor)
@@ -1213,13 +1249,16 @@ fn paint_read_aloud_highlight(
     }
 }
 
-fn canvas_response(ui: &mut Ui, content: Rect, scroll_target: Option<Rect>) -> egui::Response {
+fn canvas_response(ui: &mut Ui, content: Rect, scroll_target: Option<Rect>, pane: u8) -> egui::Response {
     // A fixed id: an automatic one follows how many widgets came before, which Read Mode's
     // chrome changes, and a new id dropped the keyboard focus, so the arrows, Page Up/Down
     // and Escape did nothing in Read Mode until the reader clicked a page (#1772).
     // It also keeps the focus when Focus hides the rulers (#1678).
     ui.advance_cursor_after_rect(content);
-    let response = ui.interact(content, egui::Id::unique("wordcraft_canvas"), Sense::click_and_drag());
+    // The second pane of a split window has an id of its own (`split`).
+    let id = egui::Id::unique("wordcraft_canvas");
+    let id = if pane == 0 { id } else { id.with(pane) };
+    let response = ui.interact(content, id, Sense::click_and_drag());
     if let Some(target) = scroll_target {
         ui.scroll_to_rect(Rect::from_min_size(ui.min_rect().min + target.min.to_vec2(), target.size()), None);
     }
@@ -1332,6 +1371,16 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler, scroll_base, rescaled } = finish;
     update_canvas_scroll_state(app, ui, layout, geo, caret, &out, ScrollSync { base: scroll_base, rescaled });
     let (resp, rects) = out.inner;
+    if app.canvas.passive {
+        // The split window's pane not being worked in (`split`): its pages, scroll bars and
+        // rulers, and nothing that would take the keyboard, the input method, screen readers or
+        // the pointer from the pane being worked in. A press in it makes it that pane first.
+        app.canvas.focused = false;
+        if let (Some(h), Some(v)) = (hruler, vruler) {
+            rulers(app, ui, h, v, &rects, layout, geo.scale);
+        }
+        return;
+    }
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
     update_canvas_focus(app, ui, &resp, ime_geometry, ime_interrupt);
@@ -1547,7 +1596,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         ui.set_style(inherited);
         origin = ui.min_rect().min - viewport.min.to_vec2();
         let content = Rect::from_min_size(ui.min_rect().min, geo.size);
-        let resp = canvas_response(ui, content, scroll_target);
+        let resp = canvas_response(ui, content, scroll_target, app.canvas.pane);
         // Read Mode's neighbouring columns end right at the viewport's edges: keep their
         // shadows from showing there as hairlines.
         let clip = if app.session.view.read_mode { ui.clip_rect().shrink2(vec2(3.0, 0.0)) } else { ui.clip_rect() };
@@ -1595,7 +1644,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         if floating_comments(app) {
             // Its own layer, so presses on the card never reach the canvas under it.
             let ctx = ui.ctx().clone();
-            egui::Area::new(egui::Id::unique("floating_comment"))
+            egui::Area::new(egui::Id::unique("floating_comment").with(app.canvas.pane))
                 .order(egui::Order::Foreground)
                 .interactable(!app.modal_open())
                 .fixed_pos(Pos2::ZERO)
@@ -1679,7 +1728,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // top left, an options strip at its right) and draw the caret inside it.
         let mut math_caret = false;
         app.canvas.eq_options = None;
-        if let Some(m) = app.session.math.clone()
+        // A split window's other pane shows its selection but no caret (`split`).
+        let passive = app.canvas.passive;
+        if !passive
+            && let Some(m) = app.session.math.clone()
             && let Some(bx) = layout.equation_box(&m.at, app.session.page_hint)
             && let Some(pr) = rects.get(bx.page)
         {
@@ -1746,6 +1798,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         if !math_caret
+            && !passive
             && let Some(c) = layout.caret_on(&preview_sel(app).unwrap_or(&app.session.sel).focus, app.session.page_hint)
             && let Some(pr) = rects.get(c.page)
         {

@@ -356,7 +356,8 @@ impl WordApp {
             w.ui = Some(state);
         }
         let to = self.shown_document;
-        self.carry_document_state(from, to);
+        // The split pane is in the window's own page state, which came in with it.
+        self.carry_document_state(from, to, None);
         if let Some(view) = view {
             self.swap_view_in(key, to, view);
         }

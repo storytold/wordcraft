@@ -24,7 +24,7 @@ pub(crate) fn overlay_open(app: &WordApp, ctx: &egui::Context) -> bool {
 /// F6 and Shift+F6 move the keyboard through the panes and back to the document. The key stays
 /// with an open dialog, file browser, popup or keytips (Customize Keyboard records it), and an
 /// F6 the user bound to a command runs that command instead.
-fn route_f6(app: &WordApp, ctx: &egui::Context) {
+fn route_f6(app: &mut WordApp, ctx: &egui::Context, task_panes: bool) {
     if overlay_open(app, ctx) {
         return;
     }
@@ -40,7 +40,10 @@ fn route_f6(app: &WordApp, ctx: &egui::Context) {
             _ => true,
         });
     });
-    if let Some(reverse) = cycle {
+    // A split window's two panes come first (#3254).
+    if let Some(reverse) = cycle
+        && !crate::split::f6(app, reverse, task_panes)
+    {
         craft_ui::panes::focus_next(ctx, app.window_id(HOST), reverse);
     }
 }
@@ -52,7 +55,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !open.contains(&Pane::FormatShape) {
         crate::format_shape::forget_drag(ui.ctx());
     }
-    route_f6(app, ui.ctx());
+    route_f6(app, ui.ctx(), !open.is_empty());
     let states: Vec<(Pane, PaneState)> = open.iter().map(|pane| (*pane, pane_state(app, *pane))).collect();
     let out = PaneHost::new(app.window_id(HOST))
         .policy(SidePolicy::Columns)

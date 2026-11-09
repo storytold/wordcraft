@@ -92,7 +92,10 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Window", None, app, |ui, app| {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
-        big(ui, app, "split", "Split", "view.split", json!({}), false);
+        // Split becomes Remove Split while the window has two panes, as in Word (#3254).
+        let split = app.session.view.split;
+        let label = if split { "Remove\nSplit" } else { "Split" };
+        big(ui, app, "split", label, "view.split", json!({}), false);
         // Across the app's windows (#322; `windows`).
         let w = app.session.windows.clone();
         stack(ui, |ui| {
