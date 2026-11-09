@@ -114,7 +114,7 @@ pub(in crate::odt) fn align_attr(a: Option<Align>) -> &'static str {
     match a {
         Some(Align::Center) => " fo:text-align=\"center\"",
         Some(Align::Right) => " fo:text-align=\"end\"",
-        Some(Align::Justify) | Some(Align::Distribute) => " fo:text-align=\"justify\"",
+        Some(Align::Justify) | Some(Align::Distribute) | Some(Align::ThaiDistribute) => " fo:text-align=\"justify\"",
         Some(Align::Left) => " fo:text-align=\"start\"",
         None => "",
     }

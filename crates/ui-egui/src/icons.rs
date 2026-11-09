@@ -238,6 +238,21 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             ().then_lines(pen, 8.0, 17.0, &[7.0, 13.0])
         }
         "justify" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // Distributed: full lines with arrows out to both margins.
+        "distribute" => {
+            pen.lines(3.0, 17.0, &[4.0, 16.0]);
+            pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], a);
+            pen.line_c(&[(5.5, 7.5), (3.0, 10.0), (5.5, 12.5)], a);
+            pen.line_c(&[(14.5, 7.5), (17.0, 10.0), (14.5, 12.5)], a);
+        }
+        // Thai Distributed: full lines, a short last line, and the Thai letter ก between arrows.
+        "thaiDistribute" => {
+            pen.lines(3.0, 17.0, &[4.0, 7.0]);
+            pen.lines(3.0, 9.0, &[17.0]);
+            pen.text(10.0, 12.0, 7.5, "ก", c, false);
+            pen.line_c(&[(3.0, 12.0), (6.5, 12.0)], a);
+            pen.line_c(&[(13.5, 12.0), (17.0, 12.0)], a);
+        }
         // Text direction: lines set from the start edge, an arrow in the reading direction.
         "textLtr" => {
             pen.lines(3.0, 14.0, &[4.0, 8.0]);

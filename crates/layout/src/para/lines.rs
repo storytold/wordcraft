@@ -574,13 +574,16 @@ impl<'e> Breaker<'e> {
         }
         // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
-        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
+        // Thai Distributed spreads a line across its character gaps as Distributed does, but like
+        // Justify leaves the paragraph's last line alone (and stretches one ending with Shift+Enter).
+        let by_chars = matches!(rp.align, Align::Distribute | Align::ThaiDistribute);
+        let justify = display.is_none() && (matches!(rp.align, Align::Justify | Align::ThaiDistribute) && stretch_end || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
             shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
         } else if justify && slack > 0.0 {
-            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
+            justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), by_chars);
         }
     }
 
