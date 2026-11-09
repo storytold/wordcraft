@@ -535,10 +535,10 @@ impl<'e> Breaker<'e> {
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else if let Some(m) = spacing.filter(|_| pictures_alone) {
             self.top + (text_natural * m.min(1.0) - text_pictures).max(0.0) + obj_asc
-        } else if matches!(rp.line_spacing, LineSpacing::Exactly(_)) && text {
-            // An exact line with text keeps its baseline where text alone puts it; a taller
-            // picture beside the text is cut off at the line's top (Word for Mac: a 50pt picture
-            // and text in a 30pt exact line, baseline 24pt down).
+        } else if matches!(rp.line_spacing, LineSpacing::Exactly(_)) && (text || obj_asc + obj_desc <= 0.0) {
+            // An exact line with text, or an empty one (a paragraph mark alone), keeps its baseline
+            // where text alone puts it; a taller picture beside the text is cut off at the line's
+            // top (Word for Mac: a 50pt picture and text in a 30pt exact line, baseline 24pt down).
             self.top + baseline_offset(rp.line_spacing, asc, height, below)
         } else if matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
             // An exact line of only pictures keeps them standing on the font's descent above the

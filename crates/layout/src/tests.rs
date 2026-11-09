@@ -14626,6 +14626,15 @@ fn an_exact_line_puts_its_baseline_four_fifths_down() {
     let desc = para.styles[0].descent;
     let got = para.lines[0].baseline - para.lines[0].top;
     assert!(desc > 1.0 && (got - (30.0 - desc)).abs() < 0.01, "a picture alone: baseline {got}, descent {desc}");
+    // An empty paragraph's line (its mark alone) is a text line: 0.8 down.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(30.0));
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let got = para.lines[0].baseline - para.lines[0].top;
+    assert!((got - 24.0).abs() < 0.01, "an empty paragraph: baseline {got}");
 }
 
 /// A line of only a picture (and spaces) ends at the picture's bottom; with text beside the
