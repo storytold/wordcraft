@@ -9,6 +9,8 @@ use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, Sto
 pub(crate) struct PageBuilder<'a> {
     pub(crate) pages: Vec<Page>,
     pub(crate) sect: &'a SectionProps,
+    /// The current document section's numbering format, even when reflow uses first-section page geometry.
+    pub(crate) page_format: wordcraft_doc::section::NumFormat,
     pub(crate) sect_idx: usize,
     pub(crate) col: usize,
     pub(crate) cols: Vec<(f32, f32)>,
@@ -296,10 +298,18 @@ impl PageBuilder<'_> {
         self.page_items_start = self.pages.last().map_or(0, |p| p.items.len());
         true
     }
-    pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+    /// Finish the current page: the lines between its columns, its vertical alignment and its
+    /// footnotes, placed with the section state in effect (margins, gutter, separators).
+    /// `new_page` starts with this; after it has run, `new_page` finds nothing left to finish.
+    pub(crate) fn finish_page(&mut self) {
         self.close_column_lines();
         self.apply_valign();
+        // The page is aligned once: finishing it again before it is left moves nothing twice.
+        self.page_valign = wordcraft_doc::section::PageVAlign::Top;
         self.flush_notes();
+    }
+    pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
+        self.finish_page();
         self.beneath = self.sect_beneath;
         self.excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
@@ -394,7 +404,9 @@ impl PageBuilder<'_> {
     /// The bottom of the body on a page started with its body at `body_top`: a footer taller than
     /// the bottom margin pushes it up (Word: no gap), leaving it at least a little room.
     fn body_bottom(&self, body_top: f32) -> f32 {
-        (self.sect.page_h - self.sect.margin_bottom).min(self.foot_top.max(body_top + 36.0))
+        // ODF keeps the footer's spacing above a footer too tall for the bottom margin.
+        let gap = if self.sect.footer_gap.is_finite() { self.sect.footer_gap.clamp(0.0, 1584.0) } else { 0.0 };
+        (self.sect.page_h - self.sect.margin_bottom).min((self.foot_top - gap).max(body_top + 36.0))
     }
     /// The room for text in the next column, or on the page [`Self::advance`] starts after the
     /// last: there, below its body top (`body_top`) and above its footer and the notes carried
@@ -485,8 +497,10 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
         layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height
     });
     ctx.track_totals = track;
-    // Word starts the body right below a header that reaches past the top margin, no gap.
-    sect.margin_top.max(sect.header + h)
+    // Word starts the body right below a header that reaches past the top margin, no gap;
+    // ODF keeps the header's spacing.
+    let gap = if sect.header_gap.is_finite() { sect.header_gap.clamp(0.0, 1584.0) } else { 0.0 };
+    sect.margin_top.max(sect.header + h + gap)
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.

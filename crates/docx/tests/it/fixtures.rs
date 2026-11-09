@@ -1,6 +1,7 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
 use std::io::Write;
+use std::sync::Arc;
 
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
@@ -247,12 +248,52 @@ fn frame_zero_side_is_automatic() {
 }
 
 #[test]
+fn locked_frame_anchor_survives_two_saves() {
+    for (lock, expected) in [("", None), (" w:anchorLock=\"1\"", Some(true)), (" w:anchorLock=\"0\"", Some(false))] {
+        let mut document = read_body(&format!(r#"<w:p><w:pPr><w:framePr w:w="1440" w:h="720"{lock}/></w:pPr><w:r><w:t>Locked</w:t></w:r></w:p>"#));
+        let paragraph = paras(&document)[0];
+        assert_eq!(paragraph.props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+        if expected == Some(true) {
+            let Some(wordcraft_doc::Block::Para(paragraph)) = document.body.get_mut(0).map(std::sync::Arc::make_mut) else {
+                panic!("first block is the framed paragraph");
+            };
+            let frame = paragraph.props.frame.as_mut().unwrap();
+            frame.x = 36.0;
+            frame.y = 72.0;
+            frame.w = Some(108.0);
+        }
+        let json = serde_json::to_vec(&document).unwrap();
+        document = serde_json::from_slice(&json).unwrap();
+        if expected == Some(true) {
+            let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+            assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+        }
+        for pass in 0..2 {
+            let bytes = wordcraft_docx::write(&document).unwrap();
+            let xml = text(&unzip(&bytes), "word/document.xml");
+            let expected_xml = match expected {
+                Some(true) => "w:anchorLock=\"1\"",
+                Some(false) => "w:anchorLock=\"0\"",
+                None => "w:anchorLock=",
+            };
+            assert_eq!(xml.contains(expected_xml), expected.is_some(), "lock changed on save {}: {xml}", pass + 1);
+            document = wordcraft_docx::read(&bytes).unwrap();
+            assert_eq!(paras(&document)[0].props.frame.as_ref().and_then(|f| f.anchor_lock), expected);
+            if expected == Some(true) {
+                let frame = paras(&document)[0].props.frame.as_ref().unwrap();
+                assert_eq!((frame.x, frame.y, frame.w), (36.0, 72.0, Some(108.0)));
+            }
+        }
+    }
+}
+
+#[test]
 fn omitted_paragraph_defaults_can_be_edited() {
     let styles =
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);
     let mut d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     assert!(!d.styles.default_para_present);
-    d.styles.default_para.space_after = Some(12.0);
+    Arc::make_mut(&mut d.styles).default_para.space_after = Some(12.0);
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert!(again.styles.default_para_present);
     assert_eq!(again.styles.default_para.space_after, Some(12.0));
@@ -1725,12 +1766,27 @@ const CT_CHARTEX: &str = "application/vnd.ms-office.chartex+xml";
 /// A package holding one box & whisker chart the way Word writes it: the `cx:chart` in an
 /// `mc:Choice` requiring `requires` (bound to `requires_ns`), a picture of it in the `mc:Fallback`.
 fn chartex_docx(requires: &str, requires_ns: &str) -> Vec<u8> {
-    let frame = r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1"/><wp:cNvGraphicFramePr/>"#;
+    chartex_docx_linked(requires, requires_ns, false)
+}
+
+/// [`chartex_docx`], its drawing linked to a web address (`wp:docPr/a:hlinkClick`) when `link`,
+/// after a first choice linked elsewhere, which needs a namespace no reader knows, so a reader
+/// takes the chart's choice.
+fn chartex_docx_linked(requires: &str, requires_ns: &str, link: bool) -> Vec<u8> {
+    let click = if link { r#"<a:hlinkClick r:id="rIdWeb"/>"# } else { "" };
+    let other = if link {
+        r#"<mc:Choice xmlns:w99="urn:example:unsupported" Requires="w99"><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="254000" cy="254000"/><wp:docPr id="9" name="Other"><a:hlinkClick r:id="rIdOther"/></wp:docPr><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>"#
+    } else {
+        ""
+    };
+    let frame = format!(
+        r#"<wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="2743200" cy="1371600"/><wp:docPr id="1" name="Chart 1">{click}</wp:docPr><wp:cNvGraphicFramePr/>"#
+    );
     let body = format!(
-        r#"<w:p><w:r><w:t>Spread</w:t></w:r><w:r><mc:AlternateContent><mc:Choice xmlns:{requires}="{requires_ns}" Requires="{requires}"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:drawing>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Chart 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
+        r#"<w:p><w:r><w:t>Spread</w:t></w:r><w:r><mc:AlternateContent>{other}<mc:Choice xmlns:{requires}="{requires_ns}" Requires="{requires}"><w:drawing>{frame}<a:graphic><a:graphicData uri="{CHARTEX_NS}"><cx:chart xmlns:cx="{CHARTEX_NS}" r:id="rIdCx"/></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice><mc:Fallback><w:drawing>{frame}<a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="Chart 1"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdPic"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="1371600"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></mc:Fallback></mc:AlternateContent></w:r></w:p>"#
     );
     let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
-    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>"#;
+    let doc_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdCx" Type="http://schemas.microsoft.com/office/2014/relationships/chartEx" Target="charts/chartEx1.xml"/><Relationship Id="rIdPic" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/><Relationship Id="rIdWeb" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/chart" TargetMode="External"/><Relationship Id="rIdOther" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.com/other" TargetMode="External"/></Relationships>"#;
     let chart_rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/Microsoft_Excel_Worksheet.xlsx"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2011/relationships/chartColorStyle" Target="colors1.xml"/></Relationships>"#;
     let types = format!(
         r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="xlsx" ContentType="{CT_XLSX}"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/charts/chartEx1.xml" ContentType="{CT_CHARTEX}"/><Override PartName="/word/charts/colors1.xml" ContentType="application/vnd.ms-office.chartcolorstyle+xml"/></Types>"#
@@ -1783,6 +1839,25 @@ fn office_2016_chart_keeps_its_chart_part_and_fallback_through_saves() {
             let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
             d = wordcraft_docx::read(&zip(&entries)).unwrap();
         }
+    }
+}
+
+/// #5267: a link on an Office 2016 chart's drawing is the chart's link (not an earlier choice's),
+/// and saving keeps it on both branches (the writer rebuilds their frames).
+#[test]
+fn a_link_on_an_office_2016_charts_drawing_is_kept() {
+    let mut d = wordcraft_docx::read(&chartex_docx_linked("cx1", "http://schemas.microsoft.com/office/drawing/2015/9/8/chartex", true)).unwrap();
+    for _ in 0..2 {
+        let p = d.body[0].as_para().unwrap();
+        let off = p.object_offsets().into_iter().find(|o| matches!(p.object_at(*o), Some(InlineObject::Graphic { .. }))).unwrap();
+        assert_eq!(p.props_of_char(off).link.as_deref(), Some("https://example.com/chart"));
+        let files = unzip(&wordcraft_docx::write(&d).unwrap());
+        let body = text(&files, "word/document.xml");
+        let ids = attr_values(&body, "a:hlinkClick", "r:id");
+        assert_eq!(ids.len(), 2, "on the chart and its fallback picture: {body}");
+        assert_eq!(rel(&text(&files, "word/_rels/document.xml.rels"), &ids[0]).1, "https://example.com/chart");
+        let entries: Vec<_> = files.iter().map(|(name, bytes)| (name.as_str(), bytes.as_slice())).collect();
+        d = wordcraft_docx::read(&zip(&entries)).unwrap();
     }
 }
 
@@ -2169,6 +2244,68 @@ fn theme_colour_wins_over_the_fixed_colour() {
     assert!(near(Some(TextColor::Rgb(fill)), Rgb(0xFB, 0xE4, 0xD5)), "{fill:?}");
 }
 
+/// `w:shd w:val="nil"` paints nothing despite its fill: a CV template's red cell showed over the name.
+#[test]
+fn nil_shading_paints_no_fill() {
+    let body = r#"
+<w:tbl><w:tblGrid><w:gridCol w:w="200"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr>
+ <w:tc><w:tcPr><w:shd w:val="nil" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc>
+ <w:tc><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="C00000"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p><w:pPr><w:shd w:val="nil" w:fill="C00000" w:themeFill="accent2"/></w:pPr><w:r><w:rPr><w:shd w:val="nil" w:color="C00000" w:fill="C00000"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let Block::Table(t) = &*d.body[0] else { panic!("table first") };
+    assert_eq!(t.rows[0].cells[0].props.shading, None);
+    assert_eq!(t.rows[0].cells[1].props.shading, Some(Rgb(0xC0, 0, 0)));
+    let p = paras(&d);
+    assert_eq!(p[0].props.shading, None);
+    assert_eq!(p[0].props_of_char(0).shading, None);
+}
+
+/// A border's theme colour wins over its stale `w:color`: a template's white rule showed as black.
+#[test]
+fn border_theme_colour_wins_over_the_fixed_colour() {
+    let body = r#"
+<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="background1"/><w:left w:val="single" w:sz="4" w:color="FF0000"/></w:pBdr></w:pPr><w:r><w:rPr><w:bdr w:val="single" w:sz="4" w:color="auto" w:themeColor="accent2"/></w:rPr><w:t>x</w:t></w:r></w:p>
+<w:tbl><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="accent1"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:left w:val="single" w:sz="4" w:color="000000" w:themeColor="accent6" w:themeShade="BF"/></w:tcBorders></w:tcPr><w:p/></w:tc></w:tr></w:tbl>
+<w:p/>
+<w:sectPr><w:pgBorders><w:top w:val="single" w:sz="4" w:color="000000" w:themeColor="text2"/></w:pgBorders></w:sectPr>"#;
+    let styles = r#"<w:style w:type="table" w:styleId="T"><w:name w:val="T"/><w:tblPr><w:tblBorders><w:bottom w:val="single" w:sz="4" w:color="000000" w:themeColor="accent3"/></w:tblBorders></w:tblPr></w:style>"#;
+    let d = themed_docx(body, styles, None);
+    let p = paras(&d);
+    let pb = p[0].props.borders.unwrap();
+    assert_eq!(pb.top.and_then(|b| b.color), Some(Rgb(0xFF, 0xFF, 0xFF)));
+    assert_eq!(pb.left.and_then(|b| b.color), Some(Rgb(0xFF, 0, 0)), "no theme colour keeps the fixed one");
+    assert_eq!(p[0].props_of_char(0).border.and_then(|b| b.color), Some(Rgb(0xED, 0x7D, 0x31)));
+    let Block::Table(t) = &*d.body[1] else { panic!("table second") };
+    assert_eq!(t.props.borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x72, 0xC4)));
+    let cell = t.rows[0].cells[0].props.borders.and_then(|b| b.left).and_then(|b| b.color);
+    assert!(near(cell.map(TextColor::Rgb), Rgb(0x53, 0x81, 0x35)), "{cell:?}");
+    assert_eq!(d.last_section.page_borders.and_then(|b| b.top).and_then(|b| b.color), Some(Rgb(0x44, 0x54, 0x6A)));
+    let st = d.styles.get("T").and_then(|s| s.table.as_ref()).and_then(|t| t.borders);
+    assert_eq!(st.and_then(|b| b.bottom).and_then(|b| b.color), Some(Rgb(0xA5, 0xA5, 0xA5)));
+}
+
+/// Given both `themeTint` and `themeShade`, Word applies the tint alone, for text colours,
+/// shading and borders (MS-OI29500 17.3.2.6 b, 17.4.32 a; MS-OE376 2.3.2.3 a).
+#[test]
+fn theme_tint_wins_over_theme_shade() {
+    let both = r#"w:themeColor="accent1" w:themeTint="99" w:themeShade="7F""#;
+    let body = format!(
+        r#"<w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4" w:color="000000" {both}/></w:pBdr></w:pPr><w:r><w:rPr><w:color w:val="000000" {both}/><w:bdr w:val="single" w:sz="4" w:color="000000" {both}/><w:shd w:val="clear" w:color="auto" w:fill="000000" w:themeFill="accent1" w:themeFillTint="99" w:themeFillShade="7F"/></w:rPr><w:t>a</w:t></w:r></w:p>"#
+    );
+    let d = themed_docx(&body, "", None);
+    let p = paras(&d);
+    let ch = p[0].props_of_char(0);
+    // accent1 4472C4 lightened by tint 99 alone, as Word writes it into w:val.
+    let tinted = Rgb(0x8E, 0xAA, 0xDB);
+    assert!(near(ch.color, tinted), "text colour {:?}", ch.color);
+    let run_border = ch.border.and_then(|b| b.color).map(TextColor::Rgb);
+    assert!(near(run_border, tinted), "text border {run_border:?}");
+    let para_border = p[0].props.borders.and_then(|b| b.top).and_then(|b| b.color).map(TextColor::Rgb);
+    assert!(near(para_border, tinted), "paragraph border {para_border:?}");
+    assert!(near(ch.shading.map(TextColor::Rgb), tinted), "shading {:?}", ch.shading);
+}
+
 #[test]
 fn theme_colours_follow_the_colour_scheme_mapping() {
     // Styles are read before settings; the mapping still applies to them.
@@ -2357,6 +2494,31 @@ fn east_asian_number_formats_read_label_and_round_trip() {
     let out = wordcraft_docx::write(&d).unwrap();
     let back = wordcraft_docx::read(&out).unwrap();
     assert_eq!(formats(&back), want);
+}
+
+/// #4985: a level with numFmt none and literal text (`RESPONSE:`) labels its paragraph with that
+/// text, as in Word, and keeps both through a save.
+#[test]
+fn a_none_level_s_literal_text_is_its_label() {
+    use wordcraft_doc::numbering::Counters;
+    use wordcraft_doc::section::NumFormat;
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="none"/><w:lvlText w:val="RESPONSE:"/><w:pPr><w:ind w:left="1440" w:hanging="1440"/></w:pPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num></w:numbering>"#
+    );
+    let body = r#"<w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>X</w:t></w:r></w:p>"#;
+    let bytes = docx(body, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let label = |d: &Document| {
+        let n = paras(d).first().and_then(|p| p.props.numbering)?;
+        Counters::default().next_label(&d.numbering, n.num, n.level).map(|l| l.0)
+    };
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(label(&d).as_deref(), Some("RESPONSE:"));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(
+        back.numbering.level(1, 0).map(|l| (l.format, l.text.as_str(), l.indent, l.hanging)),
+        Some((NumFormat::None, "RESPONSE:", 72.0, 72.0))
+    );
+    assert_eq!(label(&back).as_deref(), Some("RESPONSE:"));
 }
 
 /// #464: a bookmark whose end follows the document's final table keeps its end (it goes into
@@ -3785,6 +3947,33 @@ fn bidi_theme_slots_follow_the_theme_font_language() {
     }
 }
 
+/// A `w:rFonts` fallback list longer than the reader keeps is cut at the last complete family
+/// within the bound, so the family a real list would pick survives while a hostile list cannot
+/// cost its whole length in every piece of text drawn in it.
+#[test]
+fn a_hostile_fallback_list_keeps_its_leading_families() {
+    let candidates: Vec<String> = (0..500).map(|i| format!("MissingCandidateFont{i}")).collect();
+    let list = format!("{};Source Serif 4", candidates.join(";"));
+    let body = format!(r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="{list}" w:hAnsi="{list}"/></w:rPr><w:t>x</w:t></w:r></w:p>"#);
+    let d = read_body(&body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    let kept = c.font.as_deref().expect("the leading families are kept");
+    assert!(kept.len() <= 256, "{} bytes kept", kept.len());
+    assert!(kept.starts_with("MissingCandidateFont0"), "{kept}");
+    // Every kept entry is a whole family name: the cut lands on a `;`, never inside a name.
+    assert!(kept.split(';').all(|f| f.starts_with("MissingCandidateFont") || f.contains("Source Serif")), "{kept}");
+    assert!(!kept.ends_with(';'), "no dangling separator: {kept}");
+}
+
+/// A real LibreOffice fallback list is read whole: a few families, well under any bound.
+#[test]
+fn a_real_fallback_list_is_read_whole() {
+    let body = r#"<w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans;Arial" w:hAnsi="Liberation Sans;Arial"/></w:rPr><w:t>x</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let c = &d.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(c.font.as_deref(), Some("Liberation Sans;Arial"));
+}
+
 /// The font table's family classes: Word draws a missing roman font in a serif face.
 #[test]
 fn roman_fonts_are_read_from_the_font_table() {
@@ -3792,6 +3981,15 @@ fn roman_fonts_are_read_from_the_font_table() {
     let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
     let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
+}
+
+/// Semicolon-separated roman font fallback lists in `fontTable.xml` register each candidate family.
+#[test]
+fn roman_fonts_split_fallback_lists() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Liberation Serif;Times New Roman"><w:family w:val="roman"/></w:font></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    assert_eq!(d.settings.roman_fonts, ["Liberation Serif", "Times New Roman"]);
 }
 
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
@@ -3876,6 +4074,144 @@ fn hyperlink_with_empty_target_is_no_link() {
     let p = back.body.iter().find_map(|b| b.as_para()).unwrap();
     assert_eq!(p.props_of_char(0).link, None);
     assert_eq!(p.props_of_char(5).link.as_deref(), Some("mailto:a@example.com"));
+}
+
+/// Picture brightness, contrast and transparency (#1711, #1766): VML `gain`/`blacklevel` (Word's
+/// watermark "Washout"), DrawingML `a:lum` and `a:alphaModFix`; saved as DrawingML and read back.
+#[test]
+fn picture_brightness_contrast_transparency() {
+    use wordcraft_doc::picfx::PicFx;
+    let png: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
+    let vml =
+        |attrs: &str| format!(r#"<w:r><w:pict><v:shape style="width:1in;height:36pt"><v:imagedata r:id="rIdImg" {attrs}/></v:shape></w:pict></w:r>"#);
+    let dml = |blip: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="635000"/><wp:docPr id="3" name="P"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdImg">{blip}</a:blip></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    };
+    let cases: Vec<(String, Option<PicFx>)> = vec![
+        // Word's Washout: 0.3 and 0.35 in 16.16 fixed point.
+        (vml(r#"gain="19661f" blacklevel="22938f""#), Some(PicFx::new(70_000, -70_000, 0))),
+        (vml(r#"gain="0.5" blacklevel="0.25""#), Some(PicFx::new(50_000, -50_000, 0))),
+        (vml(r#"gain="131072f""#), Some(PicFx::new(0, 50_000, 0))),
+        (vml(""), Some(PicFx::default())),
+        (dml(r#"<a:lum bright="80000" contrast="-80000"/>"#), Some(PicFx::new(80_000, -80_000, 0))),
+        (dml(r#"<a:alphaModFix amt="40000"/><a:lum bright="-20000"/>"#), Some(PicFx::new(-20_000, 0, 60_000))),
+        (dml(""), Some(PicFx::default())),
+        // Hostile values: clamped, never a panic.
+        (vml(r#"gain="NaNf" blacklevel="infinity""#), None),
+        (vml(r#"gain="-99999999f" blacklevel="99999999999f""#), None),
+        (vml(r#"gain="1e308" blacklevel="-1e308""#), None),
+        (vml(r#"gain="f" blacklevel="--3""#), None),
+        (dml(r#"<a:lum bright="999999999" contrast="-99999999999999999999"/><a:alphaModFix amt="-5"/>"#), None),
+        (dml(r#"<a:alphaModFix amt="250000"/><a:lum bright="x" contrast=""/>"#), None),
+    ];
+    let body: String = cases.iter().map(|(x, _)| format!("<w:p>{x}</w:p>")).collect();
+    let doc = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let r = rels(&[("rIdImg", "image", "media/pic.png")]);
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", r.as_bytes()),
+        ("word/media/pic.png", png),
+    ]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let fx_of = |d: &Document| -> Vec<PicFx> {
+        paras(d)
+            .iter()
+            .map(|p| match p.objects.first() {
+                Some(InlineObject::Image { fx, .. }) => *fx,
+                o => panic!("{o:?}"),
+            })
+            .collect()
+    };
+    let read = fx_of(&d);
+    assert_eq!(read.len(), cases.len());
+    for ((x, want), got) in cases.iter().zip(&read) {
+        assert_eq!(*got, got.clamped(), "{x}");
+        if let Some(want) = want {
+            let near = |a: i32, b: i32| (a - b).abs() <= 2;
+            assert!(near(got.bright, want.bright) && near(got.contrast, want.contrast) && got.transparency == want.transparency, "{x}: {got:?}");
+        }
+    }
+    // Clamped hostile values.
+    assert_eq!(read[11], PicFx::new(100_000, -100_000, 100_000));
+    assert_eq!(read[12], PicFx::default());
+    // Saved as DrawingML (VML pictures too) and read back unchanged.
+    let out = wordcraft_docx::write(&d).unwrap();
+    let back = wordcraft_docx::read(&out).unwrap();
+    assert_eq!(fx_of(&back), read);
+}
+
+/// Word's picture watermark with Washout (#1711): a VML picture in a header's Watermarks
+/// building block keeps its brightness and contrast.
+#[test]
+fn washout_picture_watermark_in_header() {
+    let hdr = format!(
+        r##"<w:hdr {W_NS}><w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Watermarks"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:r><w:pict><v:shape id="WordPictureWatermark1" type="#_x0000_t75" style="position:absolute;margin-left:0;margin-top:0;width:200pt;height:200pt;z-index:-251657216;mso-position-horizontal:center;mso-position-horizontal-relative:margin;mso-position-vertical:center;mso-position-vertical-relative:margin"><v:imagedata r:id="rImg" o:title="wm" gain="19661f" blacklevel="22938f"/></v:shape></w:pict></w:r></w:p></w:sdtContent></w:sdt></w:hdr>"##
+    );
+    let hrels = rels(&[("rImg", "image", "media/wm.png")]);
+    let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rHdr"/></w:sectPr>"#;
+    let d = wordcraft_docx::read(&docx(
+        body,
+        &[("rHdr", "header", "header1.xml")],
+        &[("word/header1.xml", &hdr), ("word/_rels/header1.xml.rels", &hrels), ("word/media/wm.png", "not really a png")],
+    ))
+    .unwrap();
+    let id = d.last_section.headers.default.unwrap();
+    let fx = d.parts[&id]
+        .blocks
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .find_map(|o| if let InlineObject::Image { fx, .. } = o { Some(*fx) } else { None })
+        .expect("watermark picture");
+    assert!((fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2, "{fx:?}");
+}
+
+/// A faded DrawingML picture behind a header's text (#1766; #1961 review): `a:alphaModFix` reads
+/// and is written back once, as in the body.
+#[test]
+fn faded_picture_behind_text_in_header() {
+    let hdr = format!(
+        r#"<w:hdr {W_NS}><w:p><w:r><w:drawing><wp:anchor behindDoc="1" distT="0" distB="0" distL="0" distR="0" simplePos="0" relativeHeight="1" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/><wp:positionH relativeFrom="margin"><wp:align>center</wp:align></wp:positionH><wp:positionV relativeFrom="margin"><wp:align>center</wp:align></wp:positionV><wp:extent cx="2540000" cy="2540000"/><wp:wrapNone/><wp:docPr id="7" name="Faded"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rImg"><a:alphaModFix amt="20000"/></a:blip></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p></w:hdr>"#
+    );
+    let hrels = rels(&[("rImg", "image", "media/wm.png")]);
+    let body = r#"<w:p><w:r><w:t>Body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rHdr"/></w:sectPr>"#;
+    let header_picture = |d: &wordcraft_doc::Document| {
+        let id = d.last_section.headers.default.unwrap();
+        d.parts[&id]
+            .blocks
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| p.objects.iter())
+            .find_map(|o| if let InlineObject::Image { fx, float, .. } = o { Some((*fx, float.wrap)) } else { None })
+            .expect("header picture")
+    };
+    let d = wordcraft_docx::read(&docx(
+        body,
+        &[("rHdr", "header", "header1.xml")],
+        &[("word/header1.xml", &hdr), ("word/_rels/header1.xml.rels", &hrels), ("word/media/wm.png", "not really a png")],
+    ))
+    .unwrap();
+    let (fx, wrap) = header_picture(&d);
+    assert_eq!(fx, wordcraft_doc::picfx::PicFx::new(0, 0, 80_000));
+    assert_eq!(wrap, wordcraft_doc::para::Wrap::BehindText);
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(header_picture(&again), (fx, wrap), "the same picture after saving");
+}
+
+/// An OLE object's preview keeps the corrections of its picture (#1961 review).
+#[test]
+fn ole_preview_keeps_its_corrections() {
+    let body = r##"<w:p><w:r><w:object w:dxaOrig="1440" w:dyaOrig="720"><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:72pt;height:36pt" o:ole=""><v:imagedata r:id="rIdImg" gain="19661f" blacklevel="22938f"/></v:shape></w:object></w:r></w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[("rIdImg", "image", "media/p.png")], &[("word/media/p.png", "not really a png")])).unwrap();
+    let fx = d.body[0]
+        .as_para()
+        .and_then(|p| p.objects.iter().find_map(|o| if let InlineObject::Image { fx, .. } = o { Some(*fx) } else { None }))
+        .expect("the preview");
+    assert!((fx.bright - 70_000).abs() <= 2 && (fx.contrast + 70_000).abs() <= 2, "{fx:?}");
 }
 
 #[test]
@@ -4052,6 +4388,54 @@ fn zero_effects_stay_zero_rotated() {
             assert!((h + 2.0 * py - expected.1).abs() < 0.001);
         }
     }
+}
+
+/// A turned picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`) is
+/// marked so its line keeps to its frame as in Word, and saves that way; one with the room keeps
+/// its rotated bounds.
+#[test]
+fn bare_turns_are_kept_through_a_save() {
+    let pic = |effects: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1524000" cy="762000"/>{effects}<wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="2700000"><a:off x="0" y="0"/><a:ext cx="1524000" cy="762000"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let read =
+        |body: &str| wordcraft_docx::read(&docx(body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
+    let bare = |d: &Document| paras(d)[0].objects[0].frame().unwrap().2.bare_turn;
+    for effects in ["", r#"<wp:effectExtent l="0" t="0" r="0" b="0"/>"#] {
+        let d = read(&pic(effects));
+        assert!(bare(&d), "{effects:?}");
+        let out = wordcraft_docx::write(&d).unwrap();
+        let body = text(&unzip(&out), "word/document.xml");
+        assert_eq!(attr_values(&body, "wp:effectExtent", "t"), ["0"]);
+        assert!(bare(&wordcraft_docx::read(&out).unwrap()));
+    }
+    // 120 × 60 pt at 45°: Word's rotated-bounds room, 3.64 pt wider and 33.64 pt taller each side.
+    let d = read(&pic(r#"<wp:effectExtent l="46210" t="427210" r="46210" b="427210"/>"#));
+    assert!(!bare(&d));
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.set_spin(wordcraft_geom::Spin::new(30.0, false, false));
+    assert!(!f.bare_turn, "turned here: the rotated bounds again");
+    // A shadow's room added later: saved, and so laid out, with the turn's room again.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.effect = [2.0; 4];
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    // Made floating: saved with the turn's room, so it opens again as an ordinary turn.
+    let mut d = read(&pic(""));
+    let f = first_object(&mut d).float_mut().unwrap();
+    f.wrap = wordcraft_doc::para::Wrap::Square;
+    assert!(!f.is_bare_turn());
+    let out = wordcraft_docx::write(&d).unwrap();
+    assert_ne!(attr_values(&text(&unzip(&out), "word/document.xml"), "wp:effectExtent", "t"), ["0"]);
+    assert!(!bare(&wordcraft_docx::read(&out).unwrap()));
+    // Only inline ones: a floating one keeps text clear of its rotated bounds as before.
+    let anchored = pic("").replace("<wp:inline>", "<wp:anchor>").replace("</wp:inline>", "</wp:anchor>");
+    assert!(!bare(&read(&anchored)));
 }
 
 /// The math namespace, declared on the math element itself (the fixture root doesn't).
@@ -4311,6 +4695,20 @@ fn vml_textbox_style_anchor_and_fit() {
     let tb = doc.parts.get(&story_id).unwrap();
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
+}
+
+/// #2601: a drop-cap frame of two letters in two fonts. The first letter's font is the cap's; only
+/// the runs in that font get the text's font back, the other letter keeps its own.
+#[test]
+fn drop_cap_frame_keeps_other_fonts() {
+    let body = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/></w:rPr><w:t>A</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/></w:rPr><w:t>b</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/></w:rPr><w:t>c tale</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1, "the frame merges into its paragraph");
+    assert_eq!(p[0].props.drop_cap_font.as_deref(), Some("Liberation Mono"));
+    assert_eq!(p[0].props_of_char(0).font.as_deref(), Some("Liberation Serif"), "the cap letter gets the text's font");
+    assert_eq!(p[0].props_of_char(1).font.as_deref(), Some("Liberation Sans"), "the other letter keeps its own");
 }
 
 /// A VML horizontal rule (`o:hr`, a web page's `<hr>` pasted into Word) is read as one: the whole

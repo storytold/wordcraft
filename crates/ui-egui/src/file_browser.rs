@@ -300,7 +300,10 @@ impl WordApp {
         if let Err(e) = self.finish_pick(b.after, picked) {
             log::warn!("file browser: {e}");
         }
-        self.canvas.want_focus = true;
+        // A modal dialog (the one that asked for the file, or one the pick opened) keeps the keyboard.
+        if !self.modal_open() {
+            self.canvas.want_focus = true;
+        }
     }
 }
 
@@ -309,20 +312,23 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut b) = app.file_browser.open.take() else { return };
     let t = Tokens::get(ctx);
     let mut done: Option<Option<PathBuf>> = None;
-    let window = egui::Window::new(tl!(b.title()))
-        .id(egui::Id::unique("builtin_file_browser"))
-        .collapsible(false)
-        .resizable(false)
-        .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
+    let id = egui::Id::unique("builtin_file_browser");
+    let window = egui::Window::new(tl!(b.title())).id(id).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
     let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
         ui.set_width(620.0);
-        done = body(ui, &mut b, &t);
+        done = crate::rtl::root(ui, |ui| body(ui, &mut b, &t));
     });
-    if shown.is_some_and(|s| crate::window_close::show(ctx, &s.response, &t)) {
-        done = Some(None);
+    if let Some(s) = &shown {
+        if crate::window_close::show(ctx, &s.response, &t) {
+            done = Some(None);
+        }
+        if done.is_none() {
+            crate::dialogs::block_behind(app, ctx, &s.response);
+        }
     }
     app.file_browser.open = Some(b);
     if let Some(picked) = done {
+        crate::dialogs::forget_nudge(ctx, id);
         app.close_file_browser(picked);
     }
 }
@@ -385,9 +391,21 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
                     } else if resp.hovered() {
                         ui.painter().rect_filled(r, 2.0, t.hover);
                     }
-                    let icon = Rect::from_center_size(pos2(r.min.x + 14.0, r.center().y), vec2(18.0, 18.0));
+                    let rtl = crate::rtl::on();
+                    let icon = Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 14.0), r.center().y), vec2(18.0, 18.0));
                     icons::paint(ui.painter(), icon, if e.dir { "folder" } else { "file" }, t.icon, t.accent);
-                    ui.painter().with_clip_rect(r).text(pos2(r.min.x + 30.0, r.center().y), Align2::LEFT_CENTER, &e.name, regular(13.0), t.text);
+                    // A long name keeps its beginning and ends in an ellipsis inside the row, from the
+                    // side reading starts from; the whole name is the row's tooltip then.
+                    let mut job = egui::text::LayoutJob::simple_singleline(crate::i18n::isolate(&e.name), regular(13.0), t.text);
+                    job.wrap.max_width = (r.width() - 36.0).max(0.0);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    let galley = ui.painter().layout_job(job);
+                    let text_x = crate::rtl::lead_x(rtl, r, 30.0);
+                    let at = pos2(if rtl { text_x - galley.size().x } else { text_x }, r.center().y - galley.size().y / 2.0);
+                    let elided = galley.elided;
+                    ui.painter().galley(at, galley, t.text);
+                    let resp = if elided { resp.on_hover_text(&e.name) } else { resp };
                     if resp.double_clicked() {
                         if e.dir {
                             go = Some(e.path.clone());
@@ -459,7 +477,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     let mut cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
     let enter = !location_done && ui.input(|i| i.key_pressed(egui::Key::Enter));
     ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
             let (ok, cancelb) =
                 crate::dialogs::ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, tl!(b.ok_label()))), tl!("Cancel"));
             cancel |= cancelb.clicked();
@@ -575,6 +593,142 @@ mod tests {
         let saved = wordcraft_engine::io::open_path(&dir.join("novel.docx")).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved without a portal"));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: the browser a modal dialog opens (Templates and Add-ins › Attach…) is modal over
+    /// it, frame after frame: the dialog doesn't rise above the browser's backdrop, where it
+    /// would take clicks beside the browser.
+    #[test]
+    fn the_browser_stays_above_the_dialog_that_opened_it() {
+        let dir = scratch("over_dialog");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("templates", &mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let req = FileDialogRequest::Open { purpose: "template".into() };
+        h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
+        let browser = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("builtin_file_browser"));
+        let backdrop = egui::LayerId::new(egui::Order::Middle, browser.id.with("modal_backdrop"));
+        let dialog = egui::LayerId::new(egui::Order::Middle, egui::Id::unique(("dialog", "Templates and Add-ins")));
+        for frame in 0..6 {
+            h.step();
+            if frame > 0 {
+                assert_eq!(h.ctx.memory(|m| m.top_modal_layer()), Some(browser), "frame {frame}");
+                let order: Vec<_> = h.ctx.memory(|m| m.layer_ids().collect());
+                let at = |l| order.iter().position(|o| *o == l).unwrap_or_else(|| panic!("frame {frame}: no {l:?} in {order:?}"));
+                assert!(at(dialog) < at(backdrop) && at(backdrop) < at(browser), "frame {frame}: {order:?}");
+            }
+        }
+        assert!(h.state().dialog.is_some(), "the dialog waits under it");
+        h.state_mut().canvas.want_focus = false;
+        h.state_mut().close_file_browser(None);
+        assert!(!h.state().canvas.want_focus, "the document doesn't ask for the keyboard back");
+        h.step();
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(2);
+        assert!(h.state().dialog.is_some(), "the dialog is back on top");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "", "it keeps the keyboard");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: Escape in the browser over a dialog (Templates and Add-ins › Attach…) cancels the
+    /// browser only; the dialog under it, drawn first, doesn't take the key too.
+    #[test]
+    fn escape_in_the_browser_leaves_the_dialog_under_it_open() {
+        let dir = scratch("escape_over_dialog");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("templates", &mut a);
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let req = FileDialogRequest::Open { purpose: "template".into() };
+        h.state_mut().file_browser.open = Some(Box::new(FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false)));
+        h.run_steps(3);
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(!h.state().file_browser_open(), "Escape closes the browser");
+        assert!(h.state().dialog.is_some(), "and leaves the dialog open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3859: a modal dialog that closes as it opens the browser (Save in "Save changes?" as a new
+    /// document closes, with no system dialog) leaves the keyboard in the browser's name box: the
+    /// document doesn't take it back on the next frame.
+    #[test]
+    fn a_dialog_closing_into_the_browser_leaves_it_the_keyboard() {
+        use egui_kittest::kittest::Queryable;
+        let services = Services {
+            file_dialog: Some(Box::new(|_req| {
+                let (tx, rx) = channel();
+                tx.send(Err("no portal".to_string())).unwrap();
+                rx
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.run("text.insert", json!({"text": "Unsaved"})).unwrap();
+        let _ = a.run("file.close", json!({}));
+        assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_label("Save").click();
+        h.run_steps(4);
+        assert!(h.state().dialog.is_none() && h.state().file_browser_open(), "Save As goes on in the browser");
+        let before = h.state().file_browser.open.as_ref().map(|b| b.name.clone());
+        h.event(egui::Event::Text("x".into()));
+        h.run_steps(2);
+        let after = h.state().file_browser.open.as_ref().map(|b| b.name.clone());
+        assert_ne!(after, before, "typing goes into the name box");
+    }
+
+    /// #3859: beside a modeless dialog (Find) the document takes the keyboard back.
+    #[test]
+    fn the_document_takes_the_keyboard_back_beside_a_modeless_dialog() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.dialog = crate::dialogs::Dialog::open("find", &mut a);
+        assert!(a.dialog.as_ref().is_some_and(|d| !d.is_modal()));
+        a.show_file_browser(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: a.session.document_id() },
+            false,
+        );
+        a.canvas.want_focus = false;
+        a.close_file_browser(None);
+        assert!(a.canvas.want_focus);
+    }
+
+    /// #3859: the browser is modal on its own too: no keytips run behind it.
+    #[test]
+    fn no_keytips_behind_the_browser() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let ctx = egui::Context::default();
+        assert!(!crate::keytips::suppressed(&a, &ctx));
+        a.show_file_browser(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: a.session.document_id() },
+            false,
+        );
+        assert!(crate::keytips::suppressed(&a, &ctx));
     }
 
     /// #3037: an empty folder (or a type filter that matches nothing) says so instead of a blank
