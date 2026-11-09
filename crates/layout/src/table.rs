@@ -405,9 +405,42 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // A top-level table in an inherited header or footer takes its share of the defining
     // section's width (`Ctx::pct_base`).
     let pct_base = if depth <= 1 { ctx.pct_base.unwrap_or(avail) } else { avail };
+    // The style's borders, overlaid by the table's own side by side.
+    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
+    // The first row's outer start (left) or end (right) border as cell `ci` draws it in
+    // `layout_table`: its own, else the row's exceptions (`w:tblPrEx`), the table style's
+    // conditional parts, the table's.
+    let edge_border = |row: &wordcraft_doc::Row, ci: usize, end: bool| -> Option<Border> {
+        let cell = row.cells.get(ci)?;
+        let g = row.first_grid() + row.cells.iter().take(ci).map(|c| c.span()).sum::<usize>();
+        let span = cell.span();
+        let edges = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
+        let rb = style
+            .map(|st| region_borders(&region_look(st, region_of(t, Some(st), 0, g, span, ncols)).borders, (0, t.rows.len()), edges))
+            .unwrap_or_default();
+        let row_b = row.props.exceptions.as_ref().and_then(|e| e.borders).unwrap_or_default();
+        let cb = cell.props.borders.unwrap_or_default();
+        if end { cb.right.or(row_b.right).or(rb.right).or(tborders.right) } else { cb.left.or(row_b.left).or(rb.left).or(tborders.left) }
+    };
+    let (start_border, end_border) =
+        t.rows.first().map_or((tborders.left, tborders.right), |r| (edge_border(r, 0, false), edge_border(r, r.cells.len().saturating_sub(1), true)));
+    // Half of a visible outer border: the part of it outside the edge it is centred on.
+    let outer_half = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0);
+    let (start_half, end_half) = (outer_half(start_border), outer_half(end_border));
+    let new_borders = ctx.doc.settings.compat_mode >= 15;
     let target = match (t.props.width_pct, t.props.width) {
-        // Word keeps a percentage past 100%; the cap only bounds hostile input.
-        (Some(p), _) if p > 0.0 => Some(pct_base * (p / 100.0).min(MAX_WIDTH_SHARE)),
+        // Word keeps a percentage past 100%; the cap only bounds hostile input. From Word 2013
+        // (compatibility mode 15) the columns are that share of the room left after the halves
+        // of the outer borders standing outside the edges: 50% of 451.3pt with 6pt lines is
+        // 222.65pt. A width in points is the columns' own (measured in Word for Windows, 25% to
+        // 120%, equal and unequal lines).
+        (Some(p), _) if p > 0.0 => {
+            let room = if new_borders { (pct_base - start_half - end_half).max(0.0) } else { pct_base };
+            Some(room * (p / 100.0).min(MAX_WIDTH_SHARE))
+        }
         (_, Some(w)) if w > 0.0 => Some(w),
         _ => None,
     };
@@ -454,29 +487,30 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // indent); earlier modes line the first cell's text up with it instead.
     let margins_def = default_margins(t, style);
     let indent = t.props.indent.unwrap_or(0.0);
-    // The style's borders, overlaid by the table's own side by side.
-    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
-    if let Some(own) = t.props.borders {
-        tborders.overlay(&own);
-    }
-    let first_cell = t.rows.first().and_then(|r| r.cells.first());
     // A right-to-left table (`w:bidiVisual`) mirrors: its first column stands at the right, its
     // start alignment and indent are measured from the right margin, and each cell's start
     // (left) margin and border are on its right.
     let rtl = t.props.bidi_visual;
     // How far in from the start margin the table's edge sits when it is start-aligned.
-    let start_offset = if ctx.doc.settings.compat_mode >= 15 {
+    let start_offset = if new_borders {
         // The border is centred on the edge, so half of it sits outside: Word moves the table in
         // by that half.
-        let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
-        indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
+        indent + start_half
     } else {
         indent - first_cell_left_margin_in(t, margins_def)
     };
+    // Likewise at the right margin: Word 2013+ puts an end-aligned table's end border's outer edge
+    // on it (measured in Word for Windows, tables of a percentage or a width in points). A
+    // right-to-left table aligned to the end (the left margin) keeps its edge on the margin
+    // whatever its borders (measured too).
+    let end_offset = if new_borders { end_half } else { 0.0 };
     let x = match (t.props.align, rtl) {
+        // Word 2013+ centres a left-to-right table's outer edges, its borders' outer halves included
+        // (measured in Word for Windows, a percentage or a width in points, unequal lines).
+        (Some(Align::Center), false) if new_borders => (avail - total + start_half - end_half) / 2.0,
         (Some(Align::Center), _) => (avail - total) / 2.0,
         // End alignment: the right margin, or the left one in a right-to-left table.
-        (Some(Align::Right), false) => avail - total,
+        (Some(Align::Right), false) => avail - total - end_offset,
         (Some(Align::Right), true) => 0.0,
         (_, true) => avail - total - start_offset,
         (_, false) => start_offset,
