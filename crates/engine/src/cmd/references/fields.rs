@@ -185,14 +185,7 @@ fn range_field_plain_text(para: &Paragraph, content_start: usize, end_off: usize
 }
 
 /// Remaps selection endpoints in `(story, path)` after a range field's result text changes byte length.
-fn remap_sel_after_field_update(
-    sel: &mut crate::Selection,
-    story: StoryRef,
-    path: &Path,
-    content_start: usize,
-    end_off: usize,
-    delta: isize,
-) {
+fn remap_sel_after_field_update(sel: &mut crate::Selection, story: StoryRef, path: &Path, content_start: usize, end_off: usize, delta: isize) {
     if delta == 0 {
         return;
     }
@@ -260,9 +253,7 @@ fn apply_field_update_with_span(
         let shift = if a >= insert_at { inserted_bytes } else { 0 };
         let _ = para.delete(a + shift, b + shift);
     }
-    if clear_dirty
-        && let Some(InlineObject::FieldStart { dirty, .. }) = para.objects.get_mut(k)
-    {
+    if clear_dirty && let Some(InlineObject::FieldStart { dirty, .. }) = para.objects.get_mut(k) {
         *dirty = false;
     }
     let delta = inserted_bytes as isize - deleted_bytes as isize;
@@ -471,11 +462,7 @@ fn part_bookmarks(doc: &wordcraft_doc::Document) -> Vec<(String, Pos)> {
 
 /// Put `results` into their fields, clearing `w:dirty` (a computed result is no longer stale:
 /// Word's F9 clears it too).
-fn apply_results(
-    doc: &mut wordcraft_doc::Document,
-    mut sel: Option<&mut crate::Selection>,
-    results: Vec<FieldResult>,
-) -> Result<(), CmdError> {
+fn apply_results(doc: &mut wordcraft_doc::Document, mut sel: Option<&mut crate::Selection>, results: Vec<FieldResult>) -> Result<(), CmdError> {
     let mut grouped: Vec<(StoryRef, Path, Vec<(usize, String)>)> = Vec::new();
     for (story, path, k, r) in results {
         if let Some((last_story, last_path, list)) = grouped.last_mut()

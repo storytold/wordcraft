@@ -13152,11 +13152,7 @@ fn range_field_update_remaps_caret_and_skips_mixed_fmt_change_runs() {
     let mut d = wordcraft_doc::Document::new();
     d.body = vec![wordcraft_doc::para_block(p)];
     let mut s = Session::new(d);
-    s.sel = crate::Selection::caret(wordcraft_doc::Pos {
-        story: StoryRef::Body,
-        path: wordcraft_doc::Path(vec![0]),
-        off: caret_at_end,
-    });
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0]), off: caret_at_end });
     run(&mut s, "references.updateFields", json!({"all": false}));
     let updated = s.doc.body[0].as_para().unwrap();
     assert_eq!(updated.plain_text(), "LongerTextaLongerTextb");
@@ -13170,14 +13166,7 @@ fn range_field_update_remaps_caret_and_skips_mixed_fmt_change_runs() {
         &CharProps::default(),
     )
     .unwrap();
-    let fmt_run = CharProps {
-        bold: Some(true),
-        fmt_change: Some(Box::new(PropChange {
-            rev: 0,
-            old: CharProps::default(),
-        })),
-        ..Default::default()
-    };
+    let fmt_run = CharProps { bold: Some(true), fmt_change: Some(Box::new(PropChange { rev: 0, old: CharProps::default() })), ..Default::default() };
     fp.insert_text(fp.len(), "20", &fmt_run).unwrap();
     fp.insert_text(fp.len(), "25", &CharProps::default()).unwrap();
     fp.insert_object(fp.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
