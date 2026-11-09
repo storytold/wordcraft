@@ -1,6 +1,6 @@
 # Installing languages and spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-11-03 · **Change:** trivial (Language packs are installed from Your languages and Add a language…; the Dictionaries folder is in Options › Language); previously trivial (Language packs: the missing-pack bar works on a fresh install and counts the caret's language); previously trivial (Language packs: language-packs-2 is published and pinned: 75 packs, adding Danish, German (Germany, Austria, Switzerland), Esperanto, Estonian, Persian, Croatian, Hungarian, Norwegian (Bokmål, Nynorsk), Dutch and Swedish (Sweden, Finland); Mongolian and Thai aren't packs yet); previously trivial (Language packs: the first set, language-packs-1, is published and pinned: 61 languages, and which aren't packs yet); previously minor (Language packs: install a language's spelling and hyphenation from File › Options › Language, or from the bar a document in that language shows; they are searched after the dictionaries folder and before the system's dictionaries; previously trivial: the Flatpak's own dictionaries folder; previously trivial: WordCraft's own dictionaries folder is searched on macOS and Linux too, as on Windows, so a dictionary dropped there works without a setting; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -11,7 +11,7 @@ language with **(no dictionary)**, for example *Português (Brasil) (no dictiona
 If a dictionary is installed but can't be read (an unsupported `SET` encoding, a file over the
 size limit, a parse error), the language isn't checked either, and the status bar shows
 **(dictionary unreadable)** instead. Its tooltip gives the `.dic` file and the reason, and
-**File › Options › Proofing** lists the same reason next to the file.
+**File › Options › Language** (Dictionary files) lists the same reason next to the file.
 
 Install a dictionary once, restart WordCraft, and the language is checked as you type.
 
@@ -27,14 +27,23 @@ built in; every other language is a pack.
 > split Thai text, which has no spaces, into words). Basque,
 > Ukrainian and Uyghur aren't packs: their data's licence doesn't allow it, or isn't clear.
 
-- **File › Options › Language › Language packs** lists the packs, each with its size, its licence
-  and a link to where it comes from. Click **Install** next to a language; **Remove** takes it out
-  again. The first time, click **Show available languages** to get the list.
+- **File › Options › Language › Your languages** lists English, the languages of the open
+  document and every installed pack, each with where its proofing comes from (*Built in*,
+  *Installed*, *Your own dictionary*, *System dictionary*, *Grammar built in*, *Not available yet*).
+  **Install** gets a document language's pack; **Remove** takes an installed one out; **Set as
+  default** makes it the language of new blank documents (the open document is left as it is).
+  **Add a language…** opens a list of the other packs: type *dutch*, *nederlands* or *nl* to
+  search, see each pack's size, licence and a link to where it comes from, and click **Install**.
 - When a document has text in a language whose pack isn't installed, a bar under the ribbon says
   *Dutch proofing isn't installed.* with an **Install** button showing the download size. ✕ hides
-  it for that document. It never shows for a language that has no pack.
+  it for that document. Once WordCraft has the list of packs, the bar shows only for a language
+  that has a pack. Before the list has been fetched (a fresh install, or the list of an older
+  WordCraft), it can't know, so it shows for a language that has no dictionary, with **Install**
+  alone: clicking it gets the list, then the pack if there is one (if not, the bar goes). With
+  downloading on, WordCraft fetches a missing or out-of-date list by itself once. Choosing a
+  language with nothing selected counts too.
 - Installing needs **downloading** on: the same single setting as WordCraft's font downloads
-  (the font store). Clicking Install, Show available languages or Refresh turns it on; nothing is
+  (the font store). Clicking Add a language…, Install or Refresh turns it on; nothing is
   downloaded before. Each pack is checked against the sha256 in WordCraft's pinned list before it
   is used.
 - Text in that language is checked and hyphenated as soon as the pack is installed: no restart.
@@ -87,9 +96,10 @@ Turkish `tr_TR` dictionaries ISO 8859-9).
 
 The first folder holding a matching pair wins:
 
-1. The folder set in **File › Options › Proofing › Dictionaries folder**. This is the easiest
+1. The folder set in **File › Options › Language › Dictionaries folder**. This is the easiest
    way on every system, and it works for an app started from the Start menu, Finder or the Dock.
-   The same pane lists the dictionary file each language found.
+   Your languages marks each language it supplies *Your own dictionary*, and the **Dictionary
+   files** list under it shows the file each language found.
 2. The folder in the `WORDCRAFT_DICTIONARIES` environment variable, and WordCraft's own
    `dictionaries` folder (the first row of each system below).
 3. An installed [Language pack](#language-packs) for the language.
@@ -166,7 +176,7 @@ from the LibreOffice repository (for example `it_IT/it_IT.aff`; the Spanish ones
 
 - Restart WordCraft. The status bar no longer says **(no dictionary)**, and a misspelled word
   such as `impramir` is underlined, with `imprimir` among its suggestions.
-- **File › Options › Proofing** lists the file each language found.
+- **File › Options › Language** (Dictionary files) lists the file each language found.
 - From the command line:
 
   ```sh
@@ -183,6 +193,8 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-03 | trivial | Language packs (CP4.3): the missing-pack bar offers a language before the list is fetched and gets the list, then the pack, on Install; a missing or stale list is fetched once while downloading is on; the caret's typing language counts |
+| 2026-11-03 | trivial | Language packs: install from Your languages or Add a language… in Options › Language; the Dictionaries folder is in Options › Language, not Proofing |
 | 2026-11-03 | trivial | Language packs: language-packs-2 is published and pinned (75 languages, adding the compounding languages); Mongolian and Thai aren't packs yet, and why |
 | 2026-11-02 | trivial | Language packs: language-packs-1 is published and pinned (61 languages); which languages aren't packs yet and why (CP4.4) |
 | 2026-11-02 | trivial | The Flatpak's own dictionaries folder (`~/.var/app/ai.storyteller.wordcraft/data/wordcraft/dictionaries`); the host's folders are outside its sandbox |

@@ -12,8 +12,16 @@ fn with_pictures(text: &str, pictures: &[&[u8]]) -> Document {
         let key = d.add_media(bytes.to_vec(), "png");
         let at = d.body.len();
         d.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("", CharProps::default())));
-        let image =
-            InlineObject::Image { media: key, w: 12.0, h: 6.0, alt: format!("picture {n}"), float: Default::default(), crop: [0.0; 4], ole: None };
+        let image = InlineObject::Image {
+            media: key,
+            w: 12.0,
+            h: 6.0,
+            alt: format!("picture {n}"),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
         d.insert_object(&Pos::body(at, 0), image, &CharProps::default()).unwrap();
     }
     d

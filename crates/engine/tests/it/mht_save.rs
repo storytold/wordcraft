@@ -21,7 +21,16 @@ fn report() -> Document {
     let key = doc.add_media(DOT.to_vec(), "png");
     let at = doc.body.len();
     doc.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()));
-    let image = InlineObject::Image { media: key, w: 30.0, h: 30.0, alt: "Logo".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+    let image = InlineObject::Image {
+        media: key,
+        w: 30.0,
+        h: 30.0,
+        alt: "Logo".into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+        fx: Default::default(),
+    };
     doc.insert_object(&Pos::body(at, 0), image, &CharProps::default()).unwrap();
     doc
 }
