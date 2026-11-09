@@ -81,6 +81,145 @@ fn compare_at_word_level_still_matches_a_whole_unchanged_word() {
 }
 
 #[test]
+fn compare_character_level_surfaces_fallback_on_long_paragraphs() {
+    // Under MAX_CHAR_DIFF (2,000 characters), character-level diff engages normally:
+    // sub-word fragment is marked, characterFallback is 0, and notHonoured does not contain "level".
+    let original_short = "The quick brown fox jumps over the lazy dog. ".repeat(10);
+    let revised_short = original_short.replacen("jumps", "jumped", 1);
+    assert!(original_short.chars().count() < 2000);
+    let mut s = Session::new(Document::from_text(&original_short));
+    let r = s.run("review.compare", &json!({"text": revised_short, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(0));
+    let not_honoured = r["notHonoured"].as_array().expect("notHonoured array");
+    assert!(!not_honoured.iter().any(|v| v == "level"), "level should be honoured for short paragraphs");
+    let p = s.doc.body[0].as_para().expect("body paragraph");
+    let deleted: String = p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    let inserted: String = p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    assert_eq!(deleted, "s", "character level marks only the sub-word suffix for short paragraphs");
+    assert_eq!(inserted, "ed", "character level marks only the sub-word suffix for short paragraphs");
+
+    // Above MAX_CHAR_DIFF (2,000 characters), character-level diff falls back to word-level diff.
+    // The fallback is surfaced in result metadata: characterFallback is incremented and
+    // notHonoured reports "level" rather than silently degrading without signal.
+    // In the output document, the fallback marks the whole word rather than sub-word fragments.
+    let original_long = "The quick brown fox jumps over the lazy dog. ".repeat(50);
+    let revised_long = original_long.replacen("jumps", "jumped", 1);
+    assert!(original_long.chars().count() > 2000);
+    let mut s = Session::new(Document::from_text(&original_long));
+    let r = s.run("review.compare", &json!({"text": revised_long, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(1));
+    let not_honoured = r["notHonoured"].as_array().expect("notHonoured array");
+    assert!(not_honoured.iter().any(|v| v == "level"), "level should be listed in notHonoured when fallback occurs");
+    let p = s.doc.body[0].as_para().expect("body paragraph");
+    let deleted: String = p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    let inserted: String = p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    assert_eq!(deleted, "jumps ", "long paragraph fallback marks the whole word");
+    assert_eq!(inserted, "jumped ", "long paragraph fallback marks the whole word");
+}
+
+#[test]
+fn compare_character_level_exact_boundaries_at_limit() {
+    let prefix = "The quick brown fox jumps over the lazy dog. ".repeat(44); // 1980 chars
+
+    // Exactly MAX_CHAR_DIFF (2000) characters: character-level diff engages without fallback.
+    let original_2000 = format!("{prefix}1234567890123456789x");
+    let revised_2000 = format!("{prefix}1234567890123456789y");
+    assert_eq!(original_2000.chars().count(), 2000);
+    assert_eq!(revised_2000.chars().count(), 2000);
+    let mut s = Session::new(Document::from_text(&original_2000));
+    let r = s.run("review.compare", &json!({"text": revised_2000, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(0));
+    let not_honoured = r["notHonoured"].as_array().expect("notHonoured array");
+    assert!(!not_honoured.iter().any(|v| v == "level"), "2000 chars should not fall back");
+    let p = s.doc.body[0].as_para().expect("body paragraph");
+    let deleted: String = p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    let inserted: String = p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    assert_eq!(deleted, "x", "character level marks single changed character at exactly 2000 chars");
+    assert_eq!(inserted, "y", "character level marks single changed character at exactly 2000 chars");
+
+    // Exactly 2001 characters (MAX_CHAR_DIFF + 1): triggers fallback to word-level diff.
+    let original_2001 = format!("{prefix}12345678901234567890x");
+    let revised_2001 = format!("{prefix}12345678901234567890y");
+    assert_eq!(original_2001.chars().count(), 2001);
+    assert_eq!(revised_2001.chars().count(), 2001);
+    let mut s = Session::new(Document::from_text(&original_2001));
+    let r = s.run("review.compare", &json!({"text": revised_2001, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(1));
+    let not_honoured = r["notHonoured"].as_array().expect("notHonoured array");
+    assert!(not_honoured.iter().any(|v| v == "level"), "2001 chars must trigger fallback");
+    let p = s.doc.body[0].as_para().expect("body paragraph");
+    let deleted: String = p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    let inserted: String = p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    assert_eq!(deleted, "12345678901234567890x", "fallback marks whole word at 2001 chars");
+    assert_eq!(inserted, "12345678901234567890y", "fallback marks whole word at 2001 chars");
+}
+
+#[test]
+fn compare_character_level_multiple_paragraphs_and_asymmetric_lengths() {
+    let short_a = "Short original text here.";
+    let short_b = "Short revised text here.";
+    let long_a = "The quick brown fox jumps over the lazy dog. ".repeat(50);
+    let long_b = long_a.replacen("jumps", "jumped", 1);
+    let long_c = "Another long paragraph that exceeds two thousand chars. ".repeat(40);
+    let long_d = long_c.replacen("Another", "Different", 1);
+
+    // Document with 1 short modified paragraph and 1 long modified paragraph: fallback count is 1.
+    let doc_mixed_a = format!("{short_a}\n{long_a}");
+    let doc_mixed_b = format!("{short_b}\n{long_b}");
+    let mut s = Session::new(Document::from_text(&doc_mixed_a));
+    let r = s.run("review.compare", &json!({"text": doc_mixed_b, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(1));
+
+    // Document with 2 long modified paragraphs: fallback count is 2.
+    let doc_2long_a = format!("{long_a}\n{long_c}");
+    let doc_2long_b = format!("{long_b}\n{long_d}");
+    let mut s = Session::new(Document::from_text(&doc_2long_a));
+    let r = s.run("review.compare", &json!({"text": doc_2long_b, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(2));
+
+    // Asymmetric lengths: original short, revised long (> 2000 chars) -> fallback count is 1.
+    let mut s = Session::new(Document::from_text(short_a));
+    let r = s.run("review.compare", &json!({"text": long_b, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(1));
+
+    // Asymmetric lengths: original long (> 2000 chars), revised short -> fallback count is 1.
+    let mut s = Session::new(Document::from_text(&long_a));
+    let r = s.run("review.compare", &json!({"text": short_b, "level": "character"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(1));
+}
+
+#[test]
+fn compare_word_level_default_and_explicit_never_flag_fallback() {
+    let original_long = "The quick brown fox jumps over the lazy dog. ".repeat(50);
+    let revised_long = original_long.replacen("jumps", "jumped", 1);
+    assert!(original_long.chars().count() > 2000);
+
+    // Explicit "level": "word" on long paragraph: characterFallback is 0 and "level" not in notHonoured.
+    let mut s = Session::new(Document::from_text(&original_long));
+    let r = s.run("review.compare", &json!({"text": revised_long, "level": "word"})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(0));
+    let not_honoured = r["notHonoured"].as_array().expect("notHonoured array");
+    assert!(!not_honoured.iter().any(|v| v == "level"));
+    let p = s.doc.body[0].as_para().expect("body paragraph");
+    let deleted: String = p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    let inserted: String = p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    assert_eq!(deleted, "jumps ");
+    assert_eq!(inserted, "jumped ");
+
+    // Default (no "level" param provided): behaves as word level, characterFallback is 0 and "level" not in notHonoured.
+    let mut s = Session::new(Document::from_text(&original_long));
+    let r = s.run("review.compare", &json!({"text": revised_long})).unwrap();
+    assert_eq!(r["characterFallback"].as_u64(), Some(0));
+    let not_honoured = r["notHonoured"].as_array().expect("notHonoured array");
+    assert!(!not_honoured.iter().any(|v| v == "level"));
+    let p = s.doc.body[0].as_para().expect("body paragraph");
+    let deleted: String = p.run_ranges().filter(|(_, c)| c.del.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    let inserted: String = p.run_ranges().filter(|(_, c)| c.ins.is_some()).map(|(r, _)| p.text[r].to_string()).collect();
+    assert_eq!(deleted, "jumps ");
+    assert_eq!(inserted, "jumped ");
+}
+
+#[test]
 fn compare_keeps_text_boxes_of_the_original() {
     // Text boxes are anchored in body paragraphs: one after changed text, one alone in an
     // otherwise empty paragraph, one after text the revised document keeps. Their anchors must
