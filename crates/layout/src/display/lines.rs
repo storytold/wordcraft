@@ -815,6 +815,8 @@ pub fn section_break_label(start: SectionStart) -> &'static str {
 
 /// Width of a [`Draw::MarkText`] label.
 pub fn mark_text_width(text: &str, size: f32) -> f32 {
+    #[cfg(test)]
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve("Source Sans 3", false, false).face;
     let k = size / face.upem.max(1.0) as f32;
     text.chars().map(|c| face.advance(face.glyph_for(c)) as f32 * k).sum()
@@ -846,7 +848,7 @@ fn section_break_mark(start: SectionStart, x0: f32, x1: f32, base: f32, size: f3
 fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &mut Vec<Draw>) {
     for it in items {
         match it {
-            MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text } => out.push(Draw::Glyphs {
+            MItem::Glyphs { face, size, color, synth_bold, synth_italic, glyphs, text, ranges } => out.push(Draw::Glyphs {
                 face: *face,
                 size: *size,
                 glyphs: glyphs.iter().map(|(g, gx, gy)| (*g, x + gx, base - gy)).collect(),
@@ -856,8 +858,7 @@ fn equation(items: &[MItem], x: f32, base: f32, alpha: f32, screen: bool, out: &
                 synth_italic: *synth_italic,
                 text: text.clone(),
                 link: None,
-                // Equation text maps back through the font (no per-glyph ranges from the math layout).
-                ranges: Vec::new(),
+                ranges: ranges.clone(),
                 text_bg: None,
                 x_scale: 1.0,
             }),

@@ -133,6 +133,7 @@ impl eframe::App for App {
         if let Some(key_file) = &self.2 {
             key_file.remove();
         }
+        self.0.start_pending_update();
     }
 }
 
@@ -192,6 +193,8 @@ fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server:
     if let Some(key_file) = key_file {
         key_file.remove();
     }
+    // `terminate:` ends the process without dropping the app, so a ready update's helper starts here.
+    app.start_pending_update();
     dispatch2::DispatchQueue::main().exec_async(|| {
         if let Some(mtm) = objc2::MainThreadMarker::new() {
             objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
@@ -299,25 +302,24 @@ fn uses_x11(setting: wordcraft_ui_egui::DisplayServer, env: impl Fn(&str) -> Opt
 }
 
 fn save_prefs(app: &WordApp) {
+    if let Err(e) = try_save_prefs(app) {
+        log::warn!("preferences: {e}");
+    }
+}
+
+/// Saves the preferences and says why when it could not. `Ok(false)`: nothing was written
+/// because preferences are switched off or there is no settings folder.
+fn try_save_prefs(app: &WordApp) -> Result<bool, String> {
     if !prefs_enabled() {
-        return;
+        return Ok(false);
     }
-    if let Some(p) = prefs_path() {
-        if let Some(dir) = p.parent()
-            && let Err(e) = std::fs::create_dir_all(dir)
-        {
-            log::warn!("preferences: cannot create {}: {e}", dir.display());
-            return;
-        }
-        match serde_json::to_vec_pretty(&app.prefs()) {
-            Ok(bytes) => {
-                if let Err(e) = write_prefs(&p, &bytes) {
-                    log::warn!("preferences: cannot save {}: {e}", p.display());
-                }
-            }
-            Err(e) => log::warn!("preferences: cannot serialize: {e}"),
-        }
+    let Some(p) = prefs_path() else { return Ok(false) };
+    if let Some(dir) = p.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
     }
+    let bytes = serde_json::to_vec_pretty(&app.prefs()).map_err(|e| format!("cannot serialize: {e}"))?;
+    write_prefs(&p, &bytes).map_err(|e| format!("cannot save {}: {e}", p.display()))?;
+    Ok(true)
 }
 
 /// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
@@ -352,6 +354,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
+        save_prefs: Some(Box::new(try_save_prefs)),
         ..Default::default()
     }
 }

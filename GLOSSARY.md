@@ -48,3 +48,21 @@ _Avoid_: User dictionary (in the interface)
 A folder of Hunspell dictionaries you supply, used before the system's (an installed Language pack
 comes after it).
 _Avoid_: Custom dictionaries
+
+## Export
+
+**Strict export**:
+An export that writes nothing, and reports why, when a character or picture the output is meant
+to show would be missing from it. Text the output doesn't show (hidden text, deletions without
+markup) isn't checked.
+_Avoid_: Safe mode, validated export
+
+**Missing glyph**:
+A character the output draws that no face in the font fallback chain can draw, so it would appear
+as an empty box.
+_Avoid_: Tofu, box, notdef character
+
+**Missing picture**:
+A picture the document refers to that the output cannot include: its part is absent, its data
+cannot be decoded, its format is unsupported, or it is linked from outside the file.
+_Avoid_: Broken image, dropped image
