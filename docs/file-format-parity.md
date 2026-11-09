@@ -1,4 +1,6 @@
 # File-format parity with Microsoft Word
+
+> **2026-11-08:** `wordcraft-cli convert --strict` refuses a PDF or PNG that would draw an empty box for a character or leave out a picture, including those a DOCX names outside the file or not at all (#6005); never fetched.
 > **2026-11-05:** A Word template opened from the file manager starts a new document based on it, and is never saved over (#3433).
 > **2026-11-05:** Strict Open XML documents open with their shapes, text boxes, groups and canvases (#3548).
 
@@ -324,6 +326,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 ## Revision history
 
 > 2026-11-08 · Page-number cached-result follow-up (#2201): refreshed PAGE/NUMPAGES display results survive identical requests and gallery format/alignment changes after DOCX reopen. All 13 existing preservation regressions remain, with a new cached-result fixture; readiness estimates unchanged.
+> 2026-11-08 · `convert --strict` for PDF and PNG output, and the pictures a DOCX open leaves out are recorded (#6005); recorded in the progress log, readiness unchanged.
 
 > 2026-11-07 · VML text boxes: `mso-layout-flow-alt:bottom-to-top` reads as `vert270` with any `layout-flow`, and `layout-flow:vertical` or `vertical-ideographic` otherwise as `vert`, so a compatibility-mode header's turned text box is drawn turned (#5193, `it::text_boxes::vml_text_boxes_keep_their_inset_fit_and_anchor`).
 > 2026-11-07 · Page-number preservation review follow-up (#2201): generated format/alignment changes retain neighboring content and paragraph marks; imported empty Header/Footer marks survive reuse; repeated requests keep clean state and undo depth. All nine original regressions remain. Readiness estimates unchanged.
