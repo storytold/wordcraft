@@ -201,6 +201,8 @@ pub struct ShapeExtra {
     pub end_style: ArrowStyle,
     /// A rounded rectangle's corner radius (`roundRect`'s `adj`, ECMA-376 §20.1.10.56): in
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
+    /// A [`ShapeKind::Frame`]'s border width (`frame`'s `adj1`), in the same units; `None`
+    /// draws [`DEFAULT_FRAME`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corner: Option<u32>,
     /// The outline dash pattern; absent in older saved documents means solid.
@@ -272,6 +274,16 @@ pub const MAX_CORNER: u32 = 50_000;
 
 /// A rounded rectangle's corner radius without its own: 16% of the shorter side.
 pub const DEFAULT_CORNER: f32 = 0.16;
+
+/// A frame's border width without its own: `frame`'s default `adj1`, 12.5% of the shorter side.
+pub const DEFAULT_FRAME: f32 = 0.125;
+
+/// The border width, in points, of a `w` × `h` [`ShapeKind::Frame`] with `corner` (see
+/// [`ShapeExtra::corner`]): at most half the shorter side, which leaves no hole.
+pub fn frame_width(corner: Option<u32>, w: f32, h: f32) -> f32 {
+    let side = wordcraft_geom::finite(w).min(wordcraft_geom::finite(h)).max(0.0);
+    side * corner.map_or(DEFAULT_FRAME, |c| c.min(MAX_CORNER) as f32 / 100_000.0)
+}
 
 /// The corner radius, in points, of a `w` × `h` rounded rectangle with `corner` (see
 /// [`ShapeExtra::corner`]).

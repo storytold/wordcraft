@@ -124,7 +124,8 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
         ShapeKind::ArrowDown => custom("down-arrow"),
         ShapeKind::Star => custom("star5"),
         ShapeKind::Heart => custom("heart"),
-        ShapeKind::Freeform => ("draw:path", None),
+        // A frame reaches the writer as the freeform it draws (see `model::from_doc`).
+        ShapeKind::Freeform | ShapeKind::Frame => ("draw:path", None),
         ShapeKind::Rectangle | ShapeKind::TextBox => ("draw:rect", None),
     }
 }

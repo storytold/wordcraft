@@ -78,17 +78,26 @@ impl<'a> ItemDisplay<'a> {
     }
 }
 
-/// A page's draw items as two layers, its headers and footers then its body, each at full
-/// strength with the opacity to draw it at. A dimmed layer is faded as one picture, as Word dims
-/// it: where its lines or fills overlap (a table's borders meeting) they don't darken each other.
-pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32, Vec<Draw>); 2] {
+/// A page's draw items as three layers, each at full strength with the opacity to draw it at:
+/// the pictures, shapes and charts of its headers and footers, which Word never dims (a
+/// letterhead's page frame keeps its colours while the body is edited); the rest of its headers
+/// and footers; and its body. A dimmed layer is faded as one picture, as Word dims it: where its
+/// lines or fills overlap (a table's borders meeting) they don't darken each other.
+pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32, Vec<Draw>); 3] {
     let (ha, ba) = dimming(opts);
-    let (mut hf, mut body) = (Vec::new(), Vec::new());
+    let (mut art, mut hf, mut body) = (Vec::new(), Vec::new(), Vec::new());
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, 1.0, &mut hf);
+    let drawing = |it: &&Placed| matches!(it, Placed::Image { .. } | Placed::Shape { .. } | Placed::Graphic { .. } | Placed::Clip { .. });
+    let split = |items: &[Placed]| -> (Vec<Placed>, Vec<Placed>) {
+        let (a, b): (Vec<&Placed>, Vec<&Placed>) = items.iter().partition(drawing);
+        (a.into_iter().cloned().collect(), b.into_iter().cloned().collect())
+    };
+    let ((ha_art, ha_rest), (fa_art, fa_rest)) = (split(&page.header), split(&page.footer));
+    stories_display(doc, &[&ha_art[..], &fa_art[..]], None, opts, &authors, 1.0, &mut art);
+    stories_display(doc, &[&ha_rest[..], &fa_rest[..]], None, opts, &authors, 1.0, &mut hf);
     stories_display(doc, &[&page.items[..]], None, opts, &authors, 1.0, &mut body);
     body_change_bars(doc, page, &page.items, opts, 1.0, &mut body);
-    [(ha, hf), (ba, body)]
+    [(1.0, art), (ha, hf), (ba, body)]
 }
 
 /// The opacity of the headers/footers and of the body.

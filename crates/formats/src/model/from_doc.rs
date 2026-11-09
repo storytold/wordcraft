@@ -342,6 +342,20 @@ fn rich_inlines(doc: &Document, o: &InlineObject, f: &Fmt, opts: FlowOpts) -> Op
     })
 }
 
+/// The freeform a `w` × `h` frame shape with border `corner` (see
+/// [`wordcraft_doc::connector::frame_width`]) draws: its outline clockwise and its hole the
+/// other way, so the hole stays empty under either fill rule.
+fn frame_freeform(corner: Option<u32>, w: f32, h: f32) -> wordcraft_doc::freeform::Freeform {
+    use wordcraft_doc::freeform::{FreePath, Freeform};
+    let (w, h) = (wordcraft_geom::finite(w).max(0.0), wordcraft_geom::finite(h).max(0.0));
+    let t = wordcraft_doc::connector::frame_width(corner, w, h);
+    let mut paths = vec![FreePath { pts: vec![[0.0, 0.0], [w, 0.0], [w, h], [0.0, h]], closed: true }];
+    if w - 2.0 * t > 0.0 && h - 2.0 * t > 0.0 {
+        paths.push(FreePath { pts: vec![[t, t], [t, h - t], [w - t, h - t], [w - t, t]], closed: true });
+    }
+    Freeform { w, h, paths, ..Default::default() }
+}
+
 /// Comment `c` (a reply to `parent`) of `doc` as a flow comment: its text holds no comments or
 /// notes of its own.
 /// The flow inline for picture, shape or group `o` of `doc` (a member of groups `depth` deep),
@@ -358,8 +372,12 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
         {
             // A connector stays one in formats that glue them (ODT, with boxes); elsewhere it is a
             // straight line.
+            // A frame (a border with a hole), which the other formats have no shape for, is the
+            // freeform it draws: its outline and, wound the other way, its hole.
+            let frame = (*kind == ShapeKind::Frame).then(|| std::sync::Arc::new(frame_freeform(extra.corner, *w, *h)));
             let kind = match kind {
                 ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector if !opts.boxes => ShapeKind::Line,
+                ShapeKind::Frame => ShapeKind::Freeform,
                 k => *k,
             };
             let inner = FlowOpts { notes: false, comments: false, boxes: false, ..opts };
@@ -383,7 +401,7 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                     Box::new(crate::model::Chain { name: format!("Frame{id}"), next })
                 }),
             };
-            let path = freeform.clone().filter(|_| kind == ShapeKind::Freeform);
+            let path = frame.or_else(|| freeform.clone()).filter(|_| kind == ShapeKind::Freeform);
             Some(Inline::Shape { kind, w: w * sx, h: h * sy, float: kept_float(float), blocks, look, path })
         }
         InlineObject::Image { media, w, h, alt, float, ole, crop, .. } => {

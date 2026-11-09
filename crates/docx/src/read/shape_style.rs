@@ -47,6 +47,7 @@ pub(crate) fn preset_kind(prst: &str) -> ShapeKind {
         "downArrow" => ShapeKind::ArrowDown,
         "star4" | "star5" | "star6" | "star7" | "star8" | "star10" | "star12" | "star16" | "star24" | "star32" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
+        "frame" => ShapeKind::Frame,
         _ => ShapeKind::Rectangle,
     }
 }

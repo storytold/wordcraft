@@ -1140,6 +1140,21 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
             p.close_path();
             p
         }
+        // The outer rectangle clockwise and the hole counter-clockwise: a hole under either
+        // fill rule.
+        ShapeKind::Frame => {
+            let mut p = r.to_path(0.1);
+            let t = f64::from(wordcraft_doc::connector::frame_width(corner, r.width() as f32, r.height() as f32));
+            let i = r.inset(-t);
+            if i.width() > 0.0 && i.height() > 0.0 {
+                p.move_to((i.x0, i.y0));
+                p.line_to((i.x0, i.y1));
+                p.line_to((i.x1, i.y1));
+                p.line_to((i.x1, i.y0));
+                p.close_path();
+            }
+            p
+        }
     }
 }
 

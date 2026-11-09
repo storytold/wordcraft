@@ -666,6 +666,50 @@ fn picture_brightness_contrast_transparency() {
     assert!(!top.iter().any(|p| p[0] == 100));
 }
 
+/// A letterhead's page frame (a `frame` shape in the header) is drawn as a border with a hole,
+/// not a filled box over the whole page, and at full strength while the body is edited: Word
+/// dims a header's text but not its pictures and shapes.
+#[test]
+fn header_frame_shape_has_a_hole_and_is_not_dimmed() {
+    use wordcraft_doc::fill::Fill;
+    use wordcraft_doc::para::{Float, InlineObject, Wrap};
+    let mut d = Document::from_text("body");
+    let mut hp = wordcraft_doc::Paragraph::new();
+    let frame = InlineObject::Shape {
+        kind: ShapeKind::Frame,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(Fill::solid(Rgb::BLACK)),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::BehindText, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        // A border a tenth of the shorter side: 10 pt.
+        extra: wordcraft_doc::connector::ShapeExtra { corner: Some(10_000), ..Default::default() },
+    };
+    hp.insert_object(0, frame, &Default::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+    let rect = page
+        .header
+        .iter()
+        .find_map(|it| if let wordcraft_layout::Placed::Shape { rect, .. } = it { Some(*rect) } else { None })
+        .expect("the frame is placed");
+    let opts = RenderOptions::default();
+    assert!(opts.display.dim_header, "the header is dimmed, as while editing the body");
+    let img = render_page(&d, page, 1.0, &opts);
+    let px = |x: f32, y: f32| img.pixel(x as u32, y as u32)[0];
+    let mid_y = rect.y + rect.h / 2.0;
+    assert_eq!(px(rect.x + 5.0, mid_y), 0, "the border is drawn at full strength");
+    assert_eq!(px(rect.x + rect.w - 5.0, mid_y), 0, "both sides of it");
+    assert_eq!(px(rect.x + rect.w / 2.0, mid_y), 255, "the middle is a hole");
+    assert_eq!(px(rect.x + rect.w / 2.0, rect.y + 15.0), 255, "the hole starts past the border");
+}
+
 /// #2892: a rule is stroked with flat ends, as the PDF export and Word draw them. Round caps
 /// used to stick half the width out past every end — a blob over the neighbouring border at
 /// each corner of a table with thick borders, while the exported PDF had square corners.

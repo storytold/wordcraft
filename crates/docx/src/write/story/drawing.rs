@@ -117,16 +117,22 @@ impl Writer<'_> {
             ShapeKind::ArrowDown => "downArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
+            ShapeKind::Frame => "frame",
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {
                 w.open("a:prstGeom", &[("prst", prst)]);
-                match extra.corner.filter(|_| *kind == ShapeKind::RoundedRectangle) {
-                    Some(c) => {
+                let adj = match kind {
+                    ShapeKind::RoundedRectangle => Some("adj"),
+                    ShapeKind::Frame => Some("adj1"),
+                    _ => None,
+                };
+                match adj.zip(extra.corner) {
+                    Some((name, c)) => {
                         w.open("a:avLst", &[]);
                         let fmla = format!("val {}", c.min(wordcraft_doc::connector::MAX_CORNER));
-                        w.empty("a:gd", &[("name", "adj"), ("fmla", &fmla)]);
+                        w.empty("a:gd", &[("name", name), ("fmla", &fmla)]);
                         w.close("a:avLst");
                     }
                     None => w.empty("a:avLst", &[]),

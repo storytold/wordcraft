@@ -188,3 +188,44 @@ fn a_shape_with_only_an_empty_paragraph_has_no_text() {
     let stories: Vec<bool> = d.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).map(|o| o.text_box().is_some()).collect();
     assert_eq!(stories, [false, false, true, false, false, false]);
 }
+
+/// A frame shape (a letterhead's page border, from DOCX `frame`), which ODT has no shape for,
+/// is written as the outline it draws: its outer edge and its hole, so LibreOffice doesn't fill
+/// the whole box; read back, it is that freeform, hole and all.
+#[test]
+fn a_frame_shape_is_written_as_a_border_with_a_hole() {
+    let mut p = Paragraph::new();
+    p.text.push(OBJ);
+    p.objects.push(InlineObject::Shape {
+        kind: ShapeKind::Frame,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(wordcraft_doc::fill::Fill::solid(Rgb(1, 2, 3))),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Default::default(),
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        // A border a tenth of the shorter side: 10 pt.
+        extra: wordcraft_doc::connector::ShapeExtra { corner: Some(10_000), ..Default::default() },
+    });
+    p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    let odt = export(&d).unwrap();
+    let content = content_of(&odt);
+    assert!(content.contains("<draw:path"), "{content}");
+    let back = import(&odt).unwrap();
+    let Some(InlineObject::Shape { kind, freeform, fill, .. }) = back.body[0].as_para().and_then(|p| p.objects.first()) else {
+        panic!("the frame comes back as a shape");
+    };
+    assert_eq!(*kind, ShapeKind::Freeform);
+    assert!(fill.is_some(), "it stays filled");
+    let f = freeform.as_deref().unwrap();
+    assert_eq!(f.paths.len(), 2, "its outline and its hole: {f:?}");
+    // The hole starts 10 pt in, in the freeform's own coordinates.
+    let hole = &f.paths[1];
+    let (sx, sy) = (f.w / 200.0, f.h / 100.0);
+    assert!(hole.pts.iter().all(|[x, y]| *x >= 9.5 * sx && *x <= 190.5 * sx && *y >= 9.5 * sy && *y <= 90.5 * sy), "{hole:?}");
+}

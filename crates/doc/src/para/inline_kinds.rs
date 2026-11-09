@@ -24,6 +24,9 @@ pub enum ShapeKind {
     ArrowDown,
     Star,
     Heart,
+    /// A picture frame (DrawingML's `frame`): a rectangle with a rectangular hole, its border as
+    /// wide as [`crate::connector::frame_width`] says.
+    Frame,
     /// A text box (rectangle with a text story).
     TextBox,
     /// A shape drawn point by point, such as ink (its geometry is the shape's `freeform`).
