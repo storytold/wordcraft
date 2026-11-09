@@ -59,8 +59,15 @@ pub struct Style {
 #[serde(default, rename_all = "camelCase")]
 pub struct TableStyleParts {
     pub borders: Option<Borders>,
-    /// Shading of every cell (`w:tblPr/w:shd`, or the `wholeTable` region's cell shading).
+    /// Shading of every cell: the style's own `w:tcPr/w:shd`, the only table-wide shading Word
+    /// paints (it reads no `wholeTable` region at all).
     pub fill: Option<Rgb>,
+    /// `w:tblPr/w:shd`: Word keeps it in the file but paints nothing from it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub table_shading: Option<Rgb>,
+    /// The parts whose `w:shd` states no colour; the whole table's is its own `w:tcPr/w:shd`.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub fills_off: BTreeMap<TablePart, FillOff>,
     /// Cell margins, points: [top, left, bottom, right] (`w:tblCellMar`).
     pub cell_margins: Option<[f32; 4]>,
     pub header_fill: Option<Rgb>,
@@ -103,6 +110,17 @@ pub struct TableStyleParts {
     /// parts through [`TableStyleParts::part`] / [`TableStyleParts::set_part`].
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub regions: BTreeMap<TablePart, PartFormat>,
+}
+
+/// How a table style part's `w:shd` states no colour. Both replace the colour a based-on style
+/// gives that part; they differ over the parts below it (measured in Word).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FillOff {
+    /// `w:val="nil"`: the part paints nothing, so the parts below it show.
+    Nil,
+    /// `w:fill="auto"`: the part paints "no colour" over the parts below it.
+    Auto,
 }
 
 /// A conditional formatting part of a table style (`w:tblStylePr/@w:type`, ECMA-376 §17.7.6).
@@ -319,6 +337,7 @@ impl TableStyleParts {
         self.col_band_size = patch.col_band_size.or(self.col_band_size);
         self.band_chr.overlay(&patch.band_chr);
         self.fill = patch.fill.or(self.fill);
+        self.table_shading = patch.table_shading.or(self.table_shading);
         self.cell_margins = patch.cell_margins.or(self.cell_margins);
         self.header_fill = patch.header_fill.or(self.header_fill);
         self.header_chr.overlay(&patch.header_chr);
@@ -338,6 +357,23 @@ impl TableStyleParts {
         self.col_band_borders = merge(self.col_band_borders, patch.col_band_borders);
         for (k, f) in &patch.regions {
             self.regions.entry(*k).or_default().overlay(f);
+        }
+        // A colour the patch gives a part ends what its base stated, and the other way round.
+        self.fills_off.retain(|p, _| patch.part(*p).fill.is_none());
+        for (p, off) in &patch.fills_off {
+            self.fills_off.insert(*p, *off);
+            let mut f = self.part(*p);
+            f.fill = None;
+            self.set_part(*p, f);
+        }
+    }
+
+    /// The shading of a cell in part `p`, over what the parts below it give (`below`).
+    pub fn fill_over(&self, p: TablePart, below: Option<Rgb>) -> Option<Rgb> {
+        match (self.part(p).fill, self.fills_off.get(&p)) {
+            (Some(c), _) => Some(c),
+            (None, Some(FillOff::Auto)) => None,
+            (None, _) => below,
         }
     }
 
@@ -381,6 +417,9 @@ impl TableStyleParts {
     pub fn set_part(&mut self, p: TablePart, f: PartFormat) {
         let align_only = PartFormat { align: f.align, v_align: f.v_align, ..PartFormat::default() };
         let PartFormat { chr, fill, borders, .. } = f.clone();
+        if fill.is_some() {
+            self.fills_off.remove(&p);
+        }
         let rest = match p {
             TablePart::WholeTable => {
                 self.fill = fill;

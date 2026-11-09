@@ -6668,6 +6668,29 @@ fn explicit_cell_top_beats_a_centred_table_style() {
     assert!((text_y(&mut back) - top).abs() < 0.5);
 }
 
+/// No Color on a cell or in a table style covers the style's colour instead of letting it show, and
+/// a colour given later ends that. Saved, the style's whole-table colour is one Word paints.
+#[test]
+fn no_color_covers_a_table_styles_colour() {
+    use wordcraft_doc::Rgb;
+    use wordcraft_doc::styles::{FillOff, TablePart};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "table.newStyle", json!({"name": "Tint", "wholeTable": {"fill": "DDEEFF"}}));
+    run(&mut s, "table.newStyle", json!({"name": "Child", "basedOn": "Tint", "apply": false, "wholeTable": {"fill": null}}));
+    assert_eq!(s.doc.styles.table_style("Child").unwrap().parts.fill_over(TablePart::WholeTable, Some(Rgb(1, 2, 3))), None);
+    run(&mut s, "table.modifyStyle", json!({"style": "Child", "wholeTable": {"fill": "112233"}}));
+    let child = s.doc.styles.get("Child").unwrap().table.clone().unwrap();
+    assert_eq!((child.fill, child.fills_off.get(&TablePart::WholeTable).copied()), (Some(Rgb(0x11, 0x22, 0x33)), None::<FillOff>));
+
+    run(&mut s, "table.shading", json!({"color": null}));
+    let cell = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().rows[0].cells[0].props.clone();
+    assert!(cell(&s).shading_auto && cell(&s).shading.is_none());
+    run(&mut s, "table.shading", json!({"color": "AABBCC"}));
+    assert!(!cell(&s).shading_auto);
+    assert_eq!(cell(&s).shading, Some(Rgb(0xAA, 0xBB, 0xCC)));
+}
+
 #[test]
 fn table_style_parts_format_every_table_using_the_style() {
     use wordcraft_doc::props::{Align, BorderStyle, VAlign};

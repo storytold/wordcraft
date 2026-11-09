@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, Rgb, TextColor, Underline, VAlign};
-use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart, TableStyleParts, TableStyleProps};
+use wordcraft_doc::styles::{FillOff, PartFormat, Style, StyleKind, TablePart, TableStyleParts, TableStyleProps};
 use wordcraft_doc::{Block, Table};
 
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -343,7 +343,12 @@ const PART_FIELDS: [&str; 13] =
 fn edit_part(st: &mut Style, part: TablePart, r: &Value) -> Result<(), CmdError> {
     let mut f = st.table_part(part);
     region(r, &mut f)?;
+    let no_colour = r.get("fill").is_some() && f.fill.is_none();
     st.set_table_part(part, f);
+    // No Color covers a based-on style's colour, and the parts below this one, as in Word.
+    if no_colour {
+        st.table.get_or_insert_default().fills_off.insert(part, FillOff::Auto);
+    }
     Ok(())
 }
 

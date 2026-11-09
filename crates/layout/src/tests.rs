@@ -5039,6 +5039,58 @@ fn row_bands_shade_only_with_a_band_size() {
     assert_eq!(shaded_rows(&d), vec![1, 2], "bands of two rows");
 }
 
+/// Which colour each row's cells get from a table style, and from a cell's own No Color. Measured
+/// in Word (all in modes 12, 14 and 15): a part's `w:fill="auto"` covers the style's colour where a
+/// `w:val="nil"` lets it show, a cell's the same, and `w:tblPr/w:shd` paints nothing.
+#[test]
+fn table_style_shading_and_no_colour_paint_as_in_word() {
+    use wordcraft_doc::styles::{FillOff, TablePart, TableStyleParts};
+    let (red, pink, yellow) = (wordcraft_doc::props::Rgb(255, 0, 0), wordcraft_doc::props::Rgb(255, 0, 255), wordcraft_doc::props::Rgb(255, 255, 0));
+    let colours = |parts: TableStyleParts, own_auto: bool| {
+        let mut d = styled_table_doc(Some("Probe"), 3);
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+            id: "Probe".into(),
+            name: "Probe".into(),
+            kind: wordcraft_doc::StyleKind::Table,
+            table: Some(parts),
+            ..Default::default()
+        });
+        let Block::Table(t) = Arc::make_mut(&mut d.body[1]) else { panic!("table") };
+        t.props.look.header_row = true;
+        t.rows[1].cells[0].props.shading_auto = own_auto;
+        let l = lay(&d);
+        let cells: Vec<(usize, usize, wordcraft_geom::Rect)> =
+            l.pages[0].items.iter().filter_map(|i| if let Placed::Cell { rect, row, cell, .. } = i { Some((*row, *cell, *rect)) } else { None }).collect();
+        let mut got: Vec<(usize, usize, wordcraft_doc::props::Rgb)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Fill { rect, color } = i { Some((*rect, *color)) } else { None })
+            .filter_map(|(f, color)| {
+                let (x, y) = (f.x + f.w / 2.0, f.y + f.h / 2.0);
+                cells.iter().find(|(_, _, c)| c.x <= x && x <= c.right() && c.y <= y && y <= c.bottom()).map(|(r, g, _)| (*r, *g, color))
+            })
+            .collect();
+        got.sort_by_key(|(r, g, _)| (*r, *g));
+        got
+    };
+    let whole = TableStyleParts { fill: Some(red), ..Default::default() };
+    let col_count = colours(whole.clone(), false).iter().filter(|(r, _, _)| *r == 0).count();
+    assert!(col_count > 0, "the style's colour fills the row");
+    assert!(colours(whole.clone(), false).iter().all(|(_, _, c)| *c == red));
+    // Only `w:tblPr/w:shd`: nothing.
+    assert!(colours(TableStyleParts { table_shading: Some(yellow), ..Default::default() }, false).is_empty());
+    // A header over the style's colour, and a cell's own No Color.
+    let header = colours(TableStyleParts { header_fill: Some(pink), ..whole.clone() }, false);
+    assert!(header.iter().all(|(r, _, c)| *c == if *r == 0 { pink } else { red }));
+    let own = colours(whole.clone(), true);
+    assert!(!own.iter().any(|(r, g, _)| (*r, *g) == (1, 0)), "No Color covers the style's colour");
+    assert_eq!(own.len(), colours(whole.clone(), false).len() - 1);
+    // A header with no colour: `auto` covers the style's, `nil` lets it show.
+    let off = |o: FillOff| TableStyleParts { fills_off: [(TablePart::FirstRow, o)].into_iter().collect(), ..whole.clone() };
+    assert!(colours(off(FillOff::Auto), false).iter().all(|(r, _, _)| *r != 0));
+    assert!(colours(off(FillOff::Nil), false).iter().any(|(r, _, _)| *r == 0));
+}
+
 /// The paragraph's own style (Normal included) and direct formatting beat the table style; the
 /// table style only fills in what they leave unset.
 #[test]

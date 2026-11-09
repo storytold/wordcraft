@@ -93,7 +93,11 @@ pub fn specs() -> Vec<CommandSpec> {
         )),
         t(CommandSpec::new("table.shading", "Shading", "Table Design › Table Styles", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
-            with_cells(s, |cl| cl.props.shading = c)
+            // No Color is a state of its own: it also covers the table style's colour, as in Word.
+            with_cells(s, |cl| {
+                cl.props.shading = c;
+                cl.props.shading_auto = c.is_none();
+            })
         })
         .params(r#"{"color": "RRGGBB" | null}"#)),
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)

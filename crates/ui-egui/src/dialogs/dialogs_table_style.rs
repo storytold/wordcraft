@@ -377,7 +377,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
             // Parts from lowest to highest precedence, as layout applies them.
             for part in PartSet::of_cell(&look, band, (ri, ROWS), (ci, 1, COLS)).iter() {
                 let Some(f) = TablePart::ALL.iter().position(|p| *p == part).and_then(|i| formats.get(i)) else { continue };
-                fill = f.fill.or(fill);
+                fill = st.parts.fill_over(part, fill);
                 chr.overlay(&f.chr);
                 h = f.align.or(h);
                 v = f.v_align.or(v);

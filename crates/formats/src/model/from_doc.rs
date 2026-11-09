@@ -960,7 +960,7 @@ fn styled_cell(t: &Table, style: Option<&wordcraft_doc::styles::TableStyleProps>
         let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
         for part in PartSet::of_cell(&t.props.look, sizes, (ri, nrows), (g, span, ncols)).iter() {
             let f = st.part(part);
-            out.fill = f.fill.or(out.fill);
+            out.fill = st.parts.fill_over(part, out.fill);
             out.v_align = f.v_align.or(out.v_align);
             out.chr.overlay(&f.chr);
             out.align = f.align.or(out.align);
@@ -1075,7 +1075,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                 rowspan,
                 covered: c.props.vmerge == VMerge::Continue,
                 header,
-                shading: c.props.shading.or(styled.as_ref().and_then(|s| s.fill)),
+                shading: c.props.shading.or(if c.props.shading_auto { None } else { styled.as_ref().and_then(|s| s.fill) }),
                 borders: styled.as_ref().map(|s| s.borders).or(c.props.borders),
                 valign: c.props.valign.or(styled.as_ref().and_then(|s| s.v_align)),
                 // Formats that keep cell padding get each cell's, its table's or Word's default.

@@ -1,4 +1,6 @@
 use super::{Document, Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, props, xml};
+use wordcraft_doc::props::Rgb;
+use wordcraft_doc::styles::FillOff;
 
 /// Built-in names Word keeps in lower case in styles.xml.
 fn file_style_name(name: &str) -> String {
@@ -113,7 +115,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
+        if t.borders.is_some() || t.table_shading.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
             w.open("w:tblPr", &[]);
             if let Some(n) = t.band_size {
                 w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
@@ -124,21 +126,32 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
             if let Some(b) = &t.borders {
                 props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
             }
+            if let Some(c) = t.table_shading {
+                w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
+            }
             if let Some(m) = &t.cell_margins {
                 props::margins(w, "w:tblCellMar", m);
             }
             w.close("w:tblPr");
         }
+        // What covers every cell is the style's own `w:tcPr`: Word reads no `wholeTable` region.
+        let whole = t.part(TablePart::WholeTable);
+        let whole_off = t.fills_off.get(&TablePart::WholeTable).copied();
+        if whole.fill.is_some() || whole_off.is_some() || whole.v_align.is_some() {
+            w.open("w:tcPr", &[]);
+            shd(w, whole.fill, whole_off);
+            v_align(w, whole.v_align);
+            w.close("w:tcPr");
+        }
         // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
-        // then cell borders, shading and vertical alignment. The whole table's text formatting
-        // is the style's own (above).
-        for part in TablePart::ALL {
+        // then cell borders, shading and vertical alignment.
+        for part in TablePart::ALL.into_iter().filter(|p| *p != TablePart::WholeTable) {
             let f = t.part(part);
+            let off = t.fills_off.get(&part).copied();
             let ppr = ParaProps { align: f.align, ..ParaProps::default() };
             let has_rpr = props::has_rpr(&f.chr);
-            // The whole table's borders are its table borders (`w:tblPr` above).
-            let borders = f.borders.filter(|_| part != TablePart::WholeTable);
-            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
+            let borders = f.borders;
+            let has_tc = f.fill.is_some() || off.is_some() || borders.is_some() || f.v_align.is_some();
             if !has_rpr && !has_tc && f.align.is_none() {
                 continue;
             }
@@ -158,25 +171,37 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
                 if let Some(bs) = borders {
                     props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
                 }
-                if let Some(c) = f.fill {
-                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
-                }
-                if let Some(v) = f.v_align {
-                    w.val(
-                        "w:vAlign",
-                        match v {
-                            VAlign::Top => "top",
-                            VAlign::Center => "center",
-                            VAlign::Bottom => "bottom",
-                        },
-                    );
-                }
+                shd(w, f.fill, off);
+                v_align(w, f.v_align);
                 w.close("w:tcPr");
             }
             w.close("w:tblStylePr");
         }
     }
     w.close("w:style");
+}
+
+/// A table style's `w:shd`: its colour, or how it states none.
+fn shd(w: &mut W, fill: Option<Rgb>, off: Option<FillOff>) {
+    match (fill, off) {
+        (Some(c), _) => w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]),
+        (None, Some(FillOff::Auto)) => w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", "auto")]),
+        (None, Some(FillOff::Nil)) => w.empty("w:shd", &[("w:val", "nil")]),
+        (None, None) => {}
+    }
+}
+
+fn v_align(w: &mut W, v: Option<VAlign>) {
+    if let Some(v) = v {
+        w.val(
+            "w:vAlign",
+            match v {
+                VAlign::Top => "top",
+                VAlign::Center => "center",
+                VAlign::Bottom => "bottom",
+            },
+        );
+    }
 }
 
 pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {

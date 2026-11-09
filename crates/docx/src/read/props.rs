@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use wordcraft_doc::para::cap_alt;
+use wordcraft_doc::styles::FillOff;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
     ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
@@ -232,6 +233,15 @@ impl PropCtx {
     }
 
     /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
+    /// How a `w:shd` states no colour, if it does.
+    pub fn shd_off(&self, e: &El) -> Option<FillOff> {
+        match e.attr("w:val") {
+            Some("nil") => Some(FillOff::Nil),
+            Some("clear") if self.shd_fill(e).is_none() => Some(FillOff::Auto),
+            _ => None,
+        }
+    }
+
     pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
         // `nil` counts as no shading, whatever fill it carries (MS-OI29500 17.18.78).
         if e.attr("w:val") == Some("nil") {
@@ -681,7 +691,10 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
             "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
             "w:tcBorders" => c.borders = Some(pc.borders(k)),
-            "w:shd" => c.shading = pc.shd_fill(k),
+            "w:shd" => {
+                c.shading = pc.shd_fill(k);
+                c.shading_auto = pc.shd_off(k) == Some(FillOff::Auto);
+            }
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),
             "w:tcMar" => {

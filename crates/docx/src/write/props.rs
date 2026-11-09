@@ -657,6 +657,8 @@ fn tcpr_inner(w: &mut W, c: &CellProps) {
     }
     if let Some(s) = c.shading {
         w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &s.hex())]);
+    } else if c.shading_auto {
+        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", "auto")]);
     }
     if c.no_wrap {
         w.empty("w:noWrap", &[]);

@@ -595,6 +595,43 @@ fn table_style_formatting_round_trips() {
     assert_eq!(got.table.as_ref(), Some(&parts));
 }
 
+/// What covers every cell goes in the style's own `w:tcPr`, the only place Word reads it from, and
+/// no `wholeTable` region is written. `w:tblPr/w:shd`, which Word keeps without painting, stays, and
+/// so do the ways of stating no colour, in a style and in a cell.
+#[test]
+fn table_style_shading_is_saved_where_word_reads_it() {
+    use wordcraft_doc::styles::{FillOff, TablePart, TableStyleParts};
+    let mut d = doc_with(vec![Paragraph::with_text("x", CharProps::default())]);
+    let style = |id: &str, parts: TableStyleParts| Style {
+        id: id.into(),
+        name: id.into(),
+        kind: StyleKind::Table,
+        based_on: Some("TableGrid".into()),
+        table: Some(parts),
+        ..Default::default()
+    };
+    let painted = TableStyleParts {
+        fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
+        table_shading: Some(Rgb(0xEE, 0xEE, 0xEE)),
+        fills_off: [(TablePart::FirstRow, FillOff::Auto), (TablePart::LastRow, FillOff::Nil)].into_iter().collect(),
+        ..Default::default()
+    };
+    let cleared = TableStyleParts { fills_off: [(TablePart::WholeTable, FillOff::Auto)].into_iter().collect(), ..Default::default() };
+    let sheet = Arc::make_mut(&mut d.styles);
+    sheet.upsert(style("Painted", painted.clone()));
+    sheet.upsert(style("Cleared", cleared.clone()));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    std::io::Read::read_to_string(&mut z.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+    assert!(!xml.contains("wholeTable"), "{xml}");
+    assert!(xml.contains(r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/></w:tcPr>"#), "{xml}");
+    assert!(xml.contains(r#"<w:shd w:val="nil"/>"#), "{xml}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(r.styles.get("Painted").unwrap().table.as_ref(), Some(&painted));
+    assert_eq!(r.styles.get("Cleared").unwrap().table.as_ref(), Some(&cleared));
+}
+
 /// #714: every table style part (ECMA-376 §17.7.6 `w:tblStylePr` types) keeps its run
 /// formatting, cell shading, cell borders and horizontal and vertical alignment through a save.
 #[test]

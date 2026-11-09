@@ -5,6 +5,14 @@ use super::{
 use crate::units::tw_i16;
 use std::sync::Arc;
 
+fn v_align_of(v: &str) -> VAlign {
+    match v {
+        "center" => VAlign::Center,
+        "bottom" => VAlign::Bottom,
+        _ => VAlign::Top,
+    }
+}
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -154,7 +162,7 @@ impl Reader<'_> {
                 st.chr = self.pc.rpr(rp);
             }
             if kind == StyleKind::Table {
-                let parts = self.table_style_parts(s, &mut st);
+                let parts = self.table_style_parts(s);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
             }
             // A style defined twice (some generators write their own Heading 1 after a
@@ -192,21 +200,33 @@ impl Reader<'_> {
         Ok(())
     }
 
-    /// A table style's table-level formatting and conditional formats. The `wholeTable` region
-    /// applies to every cell, so its paragraph and run properties go to the style's own (`st`).
-    fn table_style_parts(&self, s: &El, st: &mut Style) -> TableStyleParts {
+    /// A table style's table-level formatting and conditional formats. Word reads nothing from a
+    /// `wholeTable` region, in any compatibility mode, and drops it on save: what covers every cell
+    /// is the style's own `w:pPr`, `w:rPr` and `w:tcPr`.
+    fn table_style_parts(&self, s: &El) -> TableStyleParts {
         let mut t = TableStyleParts::default();
         if let Some(tp) = s.child("w:tblPr") {
             if let Some(b) = tp.child("w:tblBorders") {
                 t.borders = Some(self.pc.borders(b));
             }
-            t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
+            t.table_shading = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
             t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
             t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }
+        if let Some(tc) = s.child("w:tcPr") {
+            if let Some(e) = tc.child("w:shd") {
+                t.fill = self.pc.shd_fill(e);
+                if let Some(off) = self.pc.shd_off(e) {
+                    t.fills_off.insert(TablePart::WholeTable, off);
+                }
+            }
+            if let Some(v) = tc.child_val("w:vAlign") {
+                t.regions.insert(TablePart::WholeTable, PartFormat { v_align: Some(v_align_of(v)), ..PartFormat::default() });
+            }
+        }
         for c in s.children("w:tblStylePr").take(64) {
-            let Some(part) = c.attr("w:type").and_then(TablePart::from_ooxml) else { continue };
+            let Some(part) = c.attr("w:type").and_then(TablePart::from_ooxml).filter(|p| *p != TablePart::WholeTable) else { continue };
             let tc = c.child("w:tcPr");
             let ppr = c.child("w:pPr").map(|p| self.pc.ppr(p).0);
             let f = PartFormat {
@@ -214,30 +234,11 @@ impl Reader<'_> {
                 fill: tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_fill(e)),
                 borders: tc.and_then(|p| p.child("w:tcBorders")).map(|b| self.pc.borders(b)),
                 align: ppr.as_ref().and_then(|p| p.align),
-                v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(|v| match v {
-                    "center" => VAlign::Center,
-                    "bottom" => VAlign::Bottom,
-                    _ => VAlign::Top,
-                }),
+                v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(v_align_of),
             };
-            if part == TablePart::WholeTable {
-                // The whole table's paragraph and run properties are the style's own; its
-                // borders the table borders.
-                if let Some(p) = ppr {
-                    st.para.overlay(&p);
-                }
-                st.chr.overlay(&f.chr);
-                if f.fill.is_some() {
-                    t.fill = f.fill;
-                }
-                if let Some(b) = c.child("w:tblPr").and_then(|p| p.child("w:tblBorders")) {
-                    t.borders = Some(self.pc.borders(b));
-                }
-                if f.v_align.is_some() {
-                    t.regions.insert(part, PartFormat { v_align: f.v_align, ..PartFormat::default() });
-                }
-            } else {
-                t.set_part(part, f);
+            t.set_part(part, f);
+            if let Some(off) = tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_off(e)) {
+                t.fills_off.insert(part, off);
             }
         }
         t
