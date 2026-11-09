@@ -108,7 +108,14 @@ fn same_length_picture_data_gets_a_different_cache_key() {
     let b = a.replace("hKmMIQAAAABJRU5ErkJggg", "hKmMIQAAAABJRU5ErkJggH");
     assert_eq!(a.len(), b.len());
     assert_ne!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(b), &no_media), "the tails differ");
-    assert_eq!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(a), &no_media), "the same data keeps its cache");
+    assert_eq!(key(&no_path, &Some(a.clone()), &no_media), key(&no_path, &Some(a.clone()), &no_media), "the same data keeps its cache");
+    // A byte outside the sampled head, middle and tail still changes the key: the whole data is
+    // hashed, not three windows that two different pictures can share.
+    let mut bytes = a.clone().into_bytes();
+    bytes[30] = if bytes[30] == b'Z' { b'Y' } else { b'Z' };
+    let interior = String::from_utf8(bytes).expect("base64 is ASCII");
+    assert_eq!(interior.len(), a.len());
+    assert_ne!(key(&no_path, &Some(interior), &no_media), key(&no_path, &Some(a.clone()), &no_media), "an interior byte differs");
     assert_eq!(key(&no_path, &no_data, &Some("m.png".to_string())), Some("media:m.png".to_string()));
 }
 

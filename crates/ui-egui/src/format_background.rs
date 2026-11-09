@@ -476,15 +476,11 @@ pub(crate) fn picture_cache_key(path: &Option<String>, data: &Option<String>, me
         return Some(path.clone());
     }
     if let Some(d) = data {
-        let part = |r: std::ops::Range<usize>| d.get(r).unwrap_or("");
-        let mid = d.len() / 2;
-        return Some(format!(
-            "data:{}:{}:{}:{}",
-            d.len(),
-            part(0..d.len().min(24)),
-            part(mid..(mid + 24).min(d.len())),
-            part(d.len().saturating_sub(24)..d.len())
-        ));
+        // Hash the whole string: sampled windows can collide, and two pictures of one length
+        // would then share a cached texture (or a cached failure).
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        d.hash(&mut h);
+        return Some(format!("data:{}:{:016x}", d.len(), h.finish()));
     }
     media.as_ref().map(|m| format!("media:{m}"))
 }
