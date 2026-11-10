@@ -340,8 +340,7 @@ fn select_range(s: &mut Session, v: &Value) -> CmdResult {
 /// A unit a selection grows by: what a double-click (word), Ctrl/⌘+click (sentence) or
 /// triple-click (paragraph) selects, and what dragging after it extends by. A click in the
 /// selection bar (the left margin) selects a line; triple-click there the whole document. A
-/// double-click selects the word alone; only the drag after it takes the spaces between words
-/// (`drag_unit`, #2927).
+/// double-click takes the word and the spaces after it, as Word's default does (#2927).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
     Word,
@@ -463,16 +462,7 @@ fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     if at.story != start.story || end.story != start.story {
         return sel_result(s);
     }
-    let (us, ue) = match unit {
-        Unit::Word => match s.doc.para_at(&at) {
-            Some(p) => {
-                let (a, b) = p.word_with_spaces_at(at.off);
-                (Pos { off: a, ..at.clone() }, Pos { off: b, ..at.clone() })
-            }
-            None => (at.clone(), at.clone()),
-        },
-        _ => unit_range(s, &at, unit),
-    };
+    let (us, ue) = unit_range(s, &at, unit);
     s.sel = if unit == Unit::Document {
         Selection { anchor: us, focus: ue }
     } else if at >= start {

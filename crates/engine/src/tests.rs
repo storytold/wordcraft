@@ -8314,16 +8314,16 @@ fn drag_after_multi_click_extends_by_units() {
         run(s, "select.dragUnit", json!({"unit": unit, "start": start, "end": end, "pos": pos}));
         (s.sel.anchor.clone(), s.sel.focus.clone())
     };
-    // Double-click "beta" (6..10): the word alone, not the space after it (#2927).
+    // Double-click "beta" (6..11 with its trailing space), as Word's default selects it (#2927).
     run(&mut s, "caret.set", json!({"pos": Pos::body(0, 7)}));
     run(&mut s, "select.word", json!({}));
     let (a, b) = s.sel.ordered();
-    assert_eq!((a.off, b.off), (6, 10));
+    assert_eq!((a.off, b.off), (6, 11));
     // Forward into the middle of "gamma": the whole word joins.
     assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 13)), (Pos::body(0, 6), Pos::body(0, 16)));
-    // Back into "Alpha": anchored at the end of "beta", focus at the start of "Alpha".
-    assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 2)), (Pos::body(0, 10), Pos::body(0, 0)));
-    // Back inside the first word: the word and its trailing space, as before the drag (#2927).
+    // Back into "Alpha": anchored at the end of "beta ", focus at the start of "Alpha".
+    assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 2)), (Pos::body(0, 11), Pos::body(0, 0)));
+    // Back inside the first word: just that word and its space.
     assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 8)), (Pos::body(0, 6), Pos::body(0, 11)));
     // Into the next paragraph: whole word there.
     assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(1, 8)), (Pos::body(0, 6), Pos::body(1, 12)));
@@ -8356,31 +8356,79 @@ fn drag_after_multi_click_extends_by_units() {
     assert_eq!(text(&s), before);
 }
 
-/// #2927: a double-click selects the word alone, with no trailing space — before punctuation,
-/// at the end of a paragraph and mid-sentence alike (Word); a drag after it still takes whole
-/// words with the separators on the way.
+/// #2927: a double-click selects the word and the space after it, as Word's default does
+/// ("When selecting, automatically select entire word"); the formatting paths drop that space,
+/// as Word's smart selection does, so a formatted word never carries it.
 #[test]
-fn double_click_selects_the_word_without_its_trailing_space() {
+fn double_click_selects_the_word_and_its_trailing_space() {
     let mut s = s();
-    run(&mut s, "text.insert", json!({"text": "Alpha beta. \rTrailing space \rEnd."}));
+    run(&mut s, "text.insert", json!({"text": "Alpha beta gamma. \rTrailing space \rEnd."}));
     let click = |s: &mut Session, pos: Pos| {
         run(s, "caret.set", json!({"pos": pos}));
         run(s, "select.word", json!({}));
         s.sel.ordered()
     };
-    // Before punctuation: "beta", neither the full stop nor the space after it.
-    assert_eq!(click(&mut s, Pos::body(0, 7)), (Pos::body(0, 6), Pos::body(0, 10)));
-    // A drag from it into the last word of the document takes the words whole, with the
-    // separators on the way (the space, the full stop and the two paragraph marks).
-    run(&mut s, "select.dragUnit", json!({"unit": "word", "start": Pos::body(0, 6), "end": Pos::body(0, 10), "pos": Pos::body(2, 1)}));
+    // Mid-sentence: "beta " — the word and the space after it, not the next word.
+    assert_eq!(click(&mut s, Pos::body(0, 7)), (Pos::body(0, 6), Pos::body(0, 11)));
+    // Before punctuation: "gamma" — no space follows it, and the full stop is not in the word.
+    assert_eq!(click(&mut s, Pos::body(0, 13)), (Pos::body(0, 11), Pos::body(0, 16)));
+    // A drag from "beta" into the last word of the document takes the words whole, with the
+    // separators on the way (the full stop and the two paragraph marks).
+    run(&mut s, "select.dragUnit", json!({"unit": "word", "start": Pos::body(0, 6), "end": Pos::body(0, 11), "pos": Pos::body(2, 1)}));
     assert_eq!(s.sel.ordered(), (Pos::body(0, 6), Pos::body(2, 3)));
-    // At the end of a paragraph: "space", not the space before the mark.
-    assert_eq!(click(&mut s, Pos::body(1, 10)), (Pos::body(1, 9), Pos::body(1, 14)));
-    // The last word of a paragraph: "End", not the full stop.
+    // At the end of a paragraph: "space " up to the mark, not the mark itself.
+    assert_eq!(click(&mut s, Pos::body(1, 10)), (Pos::body(1, 9), Pos::body(1, 15)));
+    // The last word of a paragraph: "End", with no space after it and not the full stop.
     assert_eq!(click(&mut s, Pos::body(2, 1)), (Pos::body(2, 0), Pos::body(2, 3)));
     // Typing over the double-clicked word leaves the space behind it.
     run(&mut s, "text.insert", json!({"text": "Omega"}));
-    assert_eq!(text(&s), "Alpha beta. \nTrailing space \nOmega.");
+    assert_eq!(text(&s), "Alpha beta gamma. \nTrailing space \nOmega.");
+}
+
+/// #2927: character formatting on a caret inside a word formats the word but not the space
+/// after it, as Word's smart selection does (the selection itself keeps the space).
+#[test]
+fn formatting_a_word_at_the_caret_leaves_its_trailing_space_unformatted() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Alpha beta gamma"}));
+    let bold = |s: &Session, off: usize| s.doc.para_at(&Pos::body(0, off)).map(|p| p.props_of_char(off).bold == Some(true)).unwrap_or(false);
+    // The caret inside "beta": Home › Bold formats "beta", not the space after it.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 7)}));
+    run(&mut s, "format.bold", json!({}));
+    assert!(bold(&s, 6) && bold(&s, 9), "the word is formatted");
+    assert!(!bold(&s, 10), "the space after the word is not");
+    assert!(!bold(&s, 11), "the next word is not");
+    // The format painter's word path trims it too: "gamma" is 11..16, the space after it at 16.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 1)}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copyFormat", json!({}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 13)}));
+    run(&mut s, "edit.pasteFormat", json!({}));
+    assert!(bold(&s, 11) && bold(&s, 15), "the word is formatted");
+    assert!(!bold(&s, 16), "the space after the word is not");
+}
+
+/// #2927: a comment on a collapsed caret covers the word, never the space after it.
+#[test]
+fn comment_on_a_word_at_the_caret_leaves_its_trailing_space_out() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Alpha beta gamma"}));
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 7)}));
+    run(&mut s, "review.newComment", json!({"text": "note"}));
+    // The anchors wrap "beta" and stop before the space: the text reads "Alpha ␣beta␣ gamma".
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let ends: Vec<usize> = p
+        .object_offsets()
+        .into_iter()
+        .filter(|&o| {
+            matches!(
+                p.object_at(o),
+                Some(wordcraft_doc::para::InlineObject::CommentStart { .. } | wordcraft_doc::para::InlineObject::CommentEnd { .. })
+            )
+        })
+        .collect();
+    assert_eq!(ends, vec![6, 13], "the word alone, not the space after it");
+    assert_eq!(p.text, "Alpha \u{fffc}beta\u{fffc} gamma", "the space after the word is outside the anchors");
 }
 
 /// #856: a click in the selection bar selects the whole line (its trailing space; the

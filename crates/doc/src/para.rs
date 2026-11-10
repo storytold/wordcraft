@@ -550,8 +550,8 @@ impl Paragraph {
         }
         end
     }
-    /// The word around `off` (double-click): (start, end), the word alone — a double-click in
-    /// Word selects just the word, never the space after it (#2927).
+    /// The word around `off` (double-click): (start, end) with its trailing spaces, as Word's
+    /// default "When selecting, automatically select entire word" does (#2927).
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
         let is_w = |c: char| crate::bidi::is_word_char(c);
@@ -572,12 +572,7 @@ impl Paragraph {
             }
             b = off + i + c.len_utf8();
         }
-        (a, b)
-    }
-    /// The word around `off` and its trailing spaces: the units a drag after a double-click
-    /// extends by, whole words with the spaces between them (#2927).
-    pub fn word_with_spaces_at(&self, off: usize) -> (usize, usize) {
-        let (a, b) = self.word_at(off);
+        // Word also selects the trailing spaces.
         let mut e = b;
         for (i, c) in self.text.get(b..).unwrap_or("").char_indices() {
             if c != ' ' {
@@ -585,6 +580,14 @@ impl Paragraph {
             }
             e = b + i + c.len_utf8();
         }
+        (a, e)
+    }
+    /// The word around `off` without its trailing spaces: the range Word's "smart" selection
+    /// applies character formatting to, so a double-clicked word's space is never formatted
+    /// (#2927). `word_at` keeps the space in the selection itself, as Word does.
+    pub fn word_without_trailing_spaces_at(&self, off: usize) -> (usize, usize) {
+        let (a, b) = self.word_at(off);
+        let e = self.text.get(a..b).map_or(b, |w| a + w.trim_end_matches(' ').len());
         (a, e)
     }
     /// Sentence around `off` (Ctrl+click): ends after `.`, `!`, `?` and following spaces.
@@ -786,12 +789,13 @@ mod tests {
         assert_eq!(p.word_end(4), 11);
         assert_eq!(p.word_start(10), 4);
         assert_eq!(p.word_start(11), 4);
-        // A double-click takes the word alone, not the spaces after it; a drag after it takes
-        // the word and the spaces between words (#2927).
-        assert_eq!(p.word_at(5), (4, 9));
-        assert_eq!(p.word_with_spaces_at(5), (4, 11));
+        // A double-click takes the word and the spaces after it, as Word's default does; the
+        // formatting range drops the spaces, as Word's smart selection does (#2927).
+        assert_eq!(p.word_at(5), (4, 11));
+        assert_eq!(p.word_without_trailing_spaces_at(5), (4, 9));
         assert_eq!(p.word_at(19), (17, 20), "the full stop is not in the word");
-        assert_eq!(p.word_with_spaces_at(16), (11, 17), "the space joins the word before it");
+        assert_eq!(p.word_without_trailing_spaces_at(16), (11, 16), "the space after the word is not formatted");
+        assert_eq!(p.word_at(16), (11, 17), "the space joins the word before it");
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
