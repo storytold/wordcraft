@@ -27,7 +27,7 @@ const DATA: &str = r#"{"categories": [string], "series": [{"name": string, "valu
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.chart", "Chart", "Insert › Illustrations", insert).params(
+        CommandSpec::new("insert.chart", "Chart", "Insert › Media", insert).params(
             r#"{"type"?: "column|columnStacked|bar|barStacked|line|area|pie|doughnut|scatter", "data"?: {"categories": [string], "series": [{"name": string, "values": [number|null]}]}, "title"?: string, "legend"?: "right|left|top|bottom|none", "dataLabels"?: bool, "width"?: pt, "height"?: pt} (no params: the chart type picker)"#,
         ),
         CommandSpec::new("chart.type", "Change Chart Type", "Chart Design › Type", |s, v| {

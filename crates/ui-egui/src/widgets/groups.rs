@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::TALL_GROUPS;
-use super::buttons::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, DROPDOWN, LABEL_H, bg, label_line};
+use super::buttons::{BIG_ICON_Y, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, bg, label_line};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
 
 /// A ribbon group: content, a centred label below and a divider on the right.
@@ -51,14 +51,15 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
         if lit > 0.0 {
             ui.painter().set(glow, group_glow(area, t.accent, lit));
         }
-        title_row(
-            ui,
-            Rect::from_min_max(pos2(if rtl { r.min.x } else { start.x }, start.y + CONTENT_H), pos2(r.max.x, start.y + CONTENT_H + LABEL_H)),
-            id_title,
-            title,
-            launcher,
-            app,
-        );
+        // The band runs the group's full width along the row. Take it from the row's cursor, not
+        // from the child's rect: a COMPACT Font or Paragraph group can lay its content out past
+        // that rect, and the label was then centred far off the card and never drawn.
+        let band = if rtl {
+            Rect::from_min_max(pos2(ui.cursor().max.x, start.y + CONTENT_H), pos2(start_cursor.max.x, start.y + CONTENT_H + LABEL_H))
+        } else {
+            Rect::from_min_max(pos2(start.x, start.y + CONTENT_H), pos2(ui.cursor().min.x, start.y + CONTENT_H + LABEL_H))
+        };
+        title_row(ui, band, id_title, title, launcher, app);
     }
     ui.add_space(5.0);
     let x = if rtl { ui.cursor().max.x } else { ui.cursor().min.x };
@@ -106,6 +107,17 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     let title_y = r.center().y;
     let rtl = crate::rtl::flows(ui);
     ui.painter().text(pos2(r.center().x, title_y), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
+    #[cfg(test)]
+    {
+        let size = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size());
+        crate::widgets::GROUP_LABELS.with(|g| {
+            g.borrow_mut().push(crate::widgets::DrawnGroupLabel {
+                title: title.to_string(),
+                band: r,
+                text: Rect::from_center_size(pos2(r.center().x, title_y), size),
+            });
+        });
+    }
     if let Some(cmd) = launcher {
         let lr = Rect::from_center_size(pos2(crate::rtl::trail_x(rtl, r, 6.0), title_y), vec2(11.0, 11.0));
         let resp = ui.interact(lr, ui.scope_id().with(("launch", id_title)), Sense::click());
@@ -152,7 +164,23 @@ fn collapsed_group(
         t.icon,
         t.accent,
     );
-    label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, title, regular(11.5), t.text, true);
+    // The name sits in the card's label band, under the icon, so every tab keeps the three bands
+    // Word shows even when groups fold (#662); the drop-down marker stays beside it.
+    let label_y = r.min.y + CONTENT_H + (LABEL_H - LABEL_LINE_H) / 2.0;
+    label_line(ui, r.center().x, label_y, title, regular(11.5), t.text, true);
+    #[cfg(test)]
+    {
+        let size = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size());
+        let x = r.center().x - (size.x + DROPDOWN + 3.0) / 2.0;
+        let band = Rect::from_min_max(pos2(r.min.x, r.min.y + CONTENT_H), pos2(r.max.x, r.min.y + CONTENT_H + LABEL_H));
+        crate::widgets::COLLAPSED_LABELS.with(|g| {
+            g.borrow_mut().push(crate::widgets::DrawnGroupLabel {
+                title: title.to_string(),
+                band,
+                text: Rect::from_min_size(pos2(x, label_y), size),
+            });
+        });
+    }
     let resp = resp.on_hover_text(title);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let mut open = was_open;

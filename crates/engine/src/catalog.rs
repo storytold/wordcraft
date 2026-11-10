@@ -151,15 +151,15 @@ Insert|Tables|Draw Table|table.draw
 Insert|Tables|Convert Text to Table|table.fromText
 Insert|Tables|Excel Spreadsheet|insert.spreadsheet
 Insert|Tables|Quick Tables|table.quick
-Insert|Illustrations|Pictures|insert.picture
-Insert|Illustrations|Online Pictures|insert.onlinePicture
-Insert|Illustrations|Shapes|insert.shape
-Insert|Illustrations|Icons|insert.icon
-Insert|Illustrations|3D Models|insert.model3d
-Insert|Illustrations|SmartArt|insert.smartArt
-Insert|Illustrations|Chart|insert.chart
-Insert|Illustrations|Screenshot|insert.screenshot
-Insert|Illustrations|Drawing Canvas|insert.canvas
+Insert|Media|Pictures|insert.picture
+Insert|Media|Online Pictures|insert.onlinePicture
+Insert|Media|Shapes|insert.shape
+Insert|Media|Icons|insert.icon
+Insert|Media|3D Models|insert.model3d
+Insert|Media|SmartArt|insert.smartArt
+Insert|Media|Chart|insert.chart
+Insert|Media|Screenshot|insert.screenshot
+Insert|Media|Drawing Canvas|insert.canvas
 Insert|Add-ins|Get Add-ins|addins.get
 Insert|Media|Online Video|insert.video
 Insert|Links|Link|insert.link

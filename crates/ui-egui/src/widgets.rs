@@ -42,6 +42,22 @@ thread_local! {
     /// Groups drawn taller than [`CONTENT_H`] (title and height): their content runs into the
     /// group label below, as View › Show did with four check boxes in one column.
     pub(crate) static TALL_GROUPS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Group labels as drawn (title, the label band's rectangle and the text inside it): the
+    /// band must sit below the content and hold the whole text, never clipped by the card.
+    pub(crate) static GROUP_LABELS: std::cell::RefCell<Vec<DrawnGroupLabel>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Collapsed groups' names (the single button's title), likewise in the label band.
+    pub(crate) static COLLAPSED_LABELS: std::cell::RefCell<Vec<DrawnGroupLabel>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A group label as painted, for tests of the card's three bands.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct DrawnGroupLabel {
+    pub title: String,
+    pub band: Rect,
+    pub text: Rect,
 }
 
 #[cfg(test)]

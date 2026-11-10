@@ -1,4 +1,4 @@
-//! Drawing Canvas (#344): Insert › Illustrations › Shapes › New Drawing Canvas.
+//! Drawing Canvas (#344): Insert › Media › Shapes › New Drawing Canvas.
 //!
 //! A canvas is an [`InlineObject::Group`] with a [`CanvasStyle`]: a frame with its own fill and
 //! outline that holds pictures, shapes and text boxes at offsets in the canvas (points from its
@@ -59,7 +59,7 @@ pub fn selected_canvas(s: &Session) -> Option<(Pos, &InlineObject)> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.canvas", "Drawing Canvas", "Insert › Illustrations", insert)
+        CommandSpec::new("insert.canvas", "Drawing Canvas", "Insert › Media", insert)
             .params(r#"{"width"?: pt (default 432 = 6"), "height"?: pt (default 216 = 3"), "fill"?: "RRGGBB", "outline"?: "RRGGBB"}  (in line with text at the caret; it stays selected, so the next Pictures, Shapes or Text Box goes inside it)"#)
             .when(|s| {
                 matches!(s.sel.focus.story, StoryRef::Part(id) if s.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox))

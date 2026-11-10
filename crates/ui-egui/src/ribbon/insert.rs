@@ -76,7 +76,7 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
-    group(ui, "Illustrations", None, app, |ui, app| {
+    group(ui, "Media", None, app, |ui, app| {
         big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"), |ui, app| {
             shape_gallery(ui, app);

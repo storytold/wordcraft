@@ -28,7 +28,7 @@ const ITEMS: &str = r#"[string | {"text": string, "level"?: 0-7, "color"?: RRGGB
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.smartArt", "SmartArt", "Insert › Illustrations", insert).params(
+        CommandSpec::new("insert.smartArt", "SmartArt", "Insert › Media", insert).params(
             r#"{"layout"?: "basicList|process|cycle|hierarchy|pyramid|radial|matrix|venn", "items"?: [string | {"text": string, "level"?: 0-7, "color"?: RRGGBB}], "colors"?: "accent1…accent6|colorful", "width"?: pt, "height"?: pt} (no items: sample items for the layout)"#,
         ),
         CommandSpec::new("smartArt.items", "Edit Items", "SmartArt Design › Create Graphic", |s, v| {

@@ -640,6 +640,88 @@ fn ribbon_groups_fit_above_their_labels() {
     assert!(tall.is_empty(), "groups taller than the ribbon: {tall:#?}");
 }
 
+/// The card's three bands at a 1024 × 768 window on a 125 % display (819 × 614 points): every
+/// tab keeps a group-label band under its content, on one row, with each title centred and whole
+/// inside it (Word draws these labels at every width, narrow windows included).
+#[test]
+fn group_labels_sit_in_the_cards_label_band_at_1024() {
+    let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(819.0, 614.0)).with_pixels_per_point(1.25).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(3);
+    for tab in ["Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"] {
+        h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
+        h.run_steps(2);
+        crate::widgets::GROUP_LABELS.with(|g| g.borrow_mut().clear());
+        crate::widgets::COLLAPSED_LABELS.with(|g| g.borrow_mut().clear());
+        h.run_steps(1);
+        let labels = crate::widgets::GROUP_LABELS.with(|g| g.borrow().clone());
+        let collapsed = crate::widgets::COLLAPSED_LABELS.with(|g| g.borrow().clone());
+        assert!(!labels.is_empty() || !collapsed.is_empty(), "{tab}: the card drew no group labels");
+        // The band the card's height must leave room for: one row under every group's content.
+        let first = labels.first().or(collapsed.first()).expect("a label");
+        let (top, bottom) = (first.band.top(), first.band.bottom());
+        assert!(bottom - top >= crate::widgets::LABEL_H - 0.01, "{tab}: the label band is {} tall", bottom - top);
+        for l in &labels {
+            assert!(
+                (l.band.top() - top).abs() <= 0.5 && (l.band.bottom() - bottom).abs() <= 0.5,
+                "{tab} › {}: the label band {:?} is not on the card's label row ({top}–{bottom})",
+                l.title,
+                l.band
+            );
+            assert!(
+                l.text.top() >= l.band.top() - 0.01 && l.text.bottom() <= l.band.bottom() + 0.01,
+                "{tab} › {}: the title {:?} leaves its band {:?}, so the card clips it",
+                l.title,
+                l.text,
+                l.band
+            );
+            assert!(
+                l.band.height() - l.text.height() >= 1.5,
+                "{tab} › {}: {:.1} pt of band for a {:.1} pt title leaves no room to read it",
+                l.title,
+                l.band.height(),
+                l.text.height()
+            );
+            assert!(
+                (l.text.center().x - l.band.center().x).abs() <= 1.0,
+                "{tab} › {}: the title is off centre in its band ({:?} in {:?})",
+                l.title,
+                l.text,
+                l.band
+            );
+            assert!(l.text.width() <= l.band.width() + 0.5, "{tab} › {}: the title is wider than its band", l.title);
+        }
+        // A folded group is one button whose name sits in the same band (with its drop-down
+        // marker, so the title is not exactly centred).
+        for l in &collapsed {
+            assert!(
+                l.text.top() >= l.band.top() - 0.01 && l.text.bottom() <= l.band.bottom() + 0.01,
+                "{tab} › {}: the folded group's name {:?} leaves the label band {:?}",
+                l.title,
+                l.text,
+                l.band
+            );
+            assert!(l.band.height() >= crate::widgets::LABEL_H - 0.01, "{tab} › {}: the folded name has no band", l.title);
+            assert!(l.text.width() <= l.band.width() + 0.5, "{tab} › {}: the folded name is wider than its band", l.title);
+        }
+    }
+}
+
+/// The ribbon panel's height leaves room for the content and the label band after its margins:
+/// `Panel::top("ribbon")` is `CONTENT_H + LABEL_H + 10.0` with 4-point top and bottom margins.
+#[test]
+fn the_ribbon_card_leaves_room_for_the_label_band() {
+    let card = crate::widgets::CONTENT_H + crate::widgets::LABEL_H + 10.0 - 8.0;
+    assert!(card >= crate::widgets::CONTENT_H + crate::widgets::LABEL_H, "{card} leaves the label band no room");
+}
+
 /// #897: the tabs that didn't fit were drawn under Comments / Editing / Share, so at 1280 pt
 /// in Polish the table tabs were out of reach. They stay on the strip and a click opens them.
 #[test]
