@@ -1,5 +1,7 @@
 # File-format parity with Microsoft Word
 > **2026-11-07:** A page background can be a solid colour, a gradient, a pattern or a picture/texture (`w:background` with VML `v:background/v:fill`): DOCX reads and writes each, with gradient and pattern transparency as VML's single `opacity` (a gradient's two ends share it, averaged on write; a solid fill keeps no transparency), and the screen, Print Layout and PDF draw them. Fill Effects is the `design.pageFill` command and Draw › Edit › Format Background. Part of #3930; see the row for what remains.
+
+> **2026-11-08:** `wordcraft-cli convert --strict` refuses a PDF or PNG that would draw an empty box for a character or leave out a picture, including those a DOCX names outside the file or not at all (#6005); never fetched.
 > **2026-11-05:** A Word template opened from the file manager starts a new document based on it, and is never saved over (#3433).
 > **2026-11-05:** Strict Open XML documents open with their shapes, text boxes, groups and canvases (#3548).
 
@@ -321,6 +323,8 @@ CSL and library import are separate work.
 For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
 
 ## Revision history
+
+> 2026-11-08 · `convert --strict` for PDF and PNG output, and the pictures a DOCX open leaves out are recorded (#6005); recorded in the progress log, readiness unchanged.
 
 > 2026-11-07 · VML text boxes: `mso-layout-flow-alt:bottom-to-top` reads as `vert270` with any `layout-flow`, and `layout-flow:vertical` or `vertical-ideographic` otherwise as `vert`, so a compatibility-mode header's turned text box is drawn turned (#5193, `it::text_boxes::vml_text_boxes_keep_their_inset_fit_and_anchor`).
 
