@@ -491,6 +491,14 @@ impl Default for StyleSheet {
 
 /// The default heading colour.
 pub const HEADING_BLUE: Rgb = Rgb(0x0F, 0x47, 0x61);
+
+/// The paragraph defaults Word gives a document whose `w:docDefaults` has no `w:pPrDefault`: its
+/// Normal template's. Word fills a missing default part from the Normal template of the computer
+/// it runs on; a Microsoft 365 template (Thai and English, measured) says 8 pt after and nothing
+/// of line spacing, so lines are single.
+pub fn app_para_defaults() -> ParaProps {
+    ParaProps { space_after: Some(8.0), ..ParaProps::default() }
+}
 /// Default body/heading fonts (theme minor/major). Substituted by layout when not installed.
 pub const BODY_FONT: &str = "Aptos";
 pub const HEADING_FONT: &str = "Aptos Display";

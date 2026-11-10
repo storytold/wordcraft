@@ -185,6 +185,45 @@ fn paragraph_default_presence_survives_repeated_saves() {
     }
 }
 
+/// A default part the file leaves out is Word's own, from its Normal template (Microsoft 365,
+/// measured): run defaults in the theme's body font at 12 pt (15 pt complex script), 8 pt after a
+/// paragraph. Run defaults present but naming no font are Times New Roman in every slot, at 10 pt
+/// unless they say. An empty paragraph default part is no spacing.
+#[test]
+fn a_default_part_left_out_is_words_own() {
+    use wordcraft_doc::props::ParaProps;
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fontScheme name="F"><a:majorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme></a:themeElements></a:theme>"#;
+    let read = |defaults: &str, with_theme: bool| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{defaults}<w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#
+        );
+        let mut rels = vec![("rId1", "styles", "styles.xml")];
+        let mut parts = vec![("word/styles.xml", styles.as_str())];
+        if with_theme {
+            rels.push(("rId2", "theme", "theme/theme1.xml"));
+            parts.push(("word/theme/theme1.xml", theme));
+        }
+        let d = wordcraft_docx::read(&docx("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &rels, &parts)).unwrap();
+        let c = d.styles.resolve_char(None, &Default::default());
+        let after = d.styles.resolve_para(&ParaProps::default()).space_after;
+        (c.font, c.size, c.complex().size, after)
+    };
+    let s = |f: &str| f.to_string();
+    // No defaults: the theme's body font (Aptos without a theme), 12 pt, 15 pt, 8 pt after.
+    assert_eq!(read("", false), (s("Aptos"), 12.0, 15.0, 8.0));
+    assert_eq!(read("", true), (s("Calibri"), 12.0, 15.0, 8.0));
+    assert_eq!(read("<w:docDefaults/>", true), (s("Calibri"), 12.0, 15.0, 8.0));
+    // Paragraph defaults only: Word's run defaults, the file's (no) spacing.
+    assert_eq!(read("<w:docDefaults><w:pPrDefault><w:pPr/></w:pPrDefault></w:docDefaults>", false), (s("Aptos"), 12.0, 15.0, 0.0));
+    // Run defaults present: theirs, Times New Roman where they name no font, the spec's 10 pt.
+    let tnr = s("Times New Roman");
+    assert_eq!(read("<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>", true), (tnr.clone(), 10.0, 10.0, 8.0));
+    assert_eq!(read(r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>"#, false), (tnr, 12.0, 12.0, 8.0));
+    // Fonts the run defaults name stay theirs.
+    let named = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>"#;
+    assert_eq!(read(named, false), (s("Georgia"), 10.0, 10.0, 0.0));
+}
+
 #[test]
 fn zero_frame_keeps_normal_flow() {
     const ROUND_TRIPS: usize = 2;

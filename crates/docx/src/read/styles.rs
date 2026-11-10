@@ -5,6 +5,16 @@ use super::{
 use crate::units::tw_i16;
 use std::sync::Arc;
 
+/// The run defaults Word gives a document whose `w:docDefaults` has no `w:rPrDefault`. Word fills
+/// a missing default part from the Normal template of the computer it runs on; this is a Microsoft
+/// 365 template's on a Thai system (measured: the theme's body fonts, 12 pt, complex script 15 pt,
+/// kerning from 1 pt, Thai the bidi language, standard and contextual ligatures). An English one
+/// differs only in the complex-script size (12 pt) and that language.
+const APP_RPR_DEFAULT: &str = r#"<w:rPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:rFonts w:asciiTheme="minorHAnsi" w:eastAsiaTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:cstheme="minorBidi"/><w:kern w:val="2"/><w:sz w:val="24"/><w:szCs w:val="30"/><w:lang w:val="en-US" w:eastAsia="en-US" w:bidi="th-TH"/><w14:ligatures w14:val="standardContextual"/></w:rPr>"#;
+
+/// The font of run defaults that name none (Word, measured: every slot).
+const SPEC_DEFAULT_FONT: &str = "Times New Roman";
+
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
     ("caption", "Caption"),
@@ -86,10 +96,29 @@ impl Reader<'_> {
         }
         let mut sheet = StyleSheet::empty();
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
-        if let Some(dd) = root.child("w:docDefaults") {
-            if let Some(r) = dd.child("w:rPrDefault").and_then(|d| d.child("w:rPr")) {
-                sheet.default_chr = self.pc.rpr(r);
+        let rpr_default = root.child("w:docDefaults").and_then(|dd| dd.child("w:rPrDefault"));
+        match rpr_default {
+            // No run defaults at all: Word takes its Normal template's (see `APP_RPR_DEFAULT`).
+            None => {
+                if let Ok(r) = crate::xml::parse(APP_RPR_DEFAULT.as_bytes()) {
+                    sheet.default_chr = self.pc.rpr(&r);
+                }
             }
+            Some(d) => {
+                if let Some(r) = d.child("w:rPr") {
+                    sheet.default_chr = self.pc.rpr(r);
+                }
+                // Run defaults that name no font at all are Times New Roman in every slot, as in
+                // Word. (A slot left unset beside others that are set isn't measured.)
+                let c = &mut sheet.default_chr;
+                if c.font.is_none() && c.font_ea.is_none() && c.font_cs.is_none() {
+                    for f in [&mut c.font, &mut c.font_ea, &mut c.font_cs] {
+                        *f = Some(SPEC_DEFAULT_FONT.to_string());
+                    }
+                }
+            }
+        }
+        if let Some(dd) = root.child("w:docDefaults") {
             if let Some(p) = dd.child("w:pPrDefault").and_then(|d| d.child("w:pPr")) {
                 sheet.default_para = self.pc.ppr(p).0;
                 // Word makes no paragraph a text frame from the document defaults: the sizeless

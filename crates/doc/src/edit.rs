@@ -1119,7 +1119,7 @@ impl Document {
         };
         // What a style in the other document doesn't set comes from its defaults there, and
         // Word's own (no space, single lines) where those don't say.
-        let mut para_defaults = src.styles.default_para.clone();
+        let mut para_defaults = src.styles.para_defaults();
         para_defaults.space_before.get_or_insert(0.0);
         para_defaults.space_after.get_or_insert(0.0);
         para_defaults.line_spacing.get_or_insert(crate::props::LineSpacing::Multiple(1.0));
