@@ -117,6 +117,7 @@ impl Reader<'_> {
             // Reserve the id first: the note's own reference mark points at it.
             let (pk, kind) = if foot { (PartKind::Footnote, NoteKind::Footnote) } else { (PartKind::Endnote, NoteKind::Endnote) };
             let id = self.doc.add_part(pk, Blocks::new());
+            self.doc.missing_pictures.part_names.insert(id, self.story.clone());
             let mut sc = StoryCtx::default();
             let mut blocks = Blocks::new();
             self.current_note = Some((kind, id));
@@ -214,6 +215,7 @@ impl Reader<'_> {
             self.read_blocks(&mut sc, c, &rels, &mut blocks, self.chunks.depth);
             self.flush_pending(&mut sc, &mut blocks);
             let part = self.doc.add_part(PartKind::Comment, blocks);
+            self.doc.missing_pictures.part_names.insert(part, self.story.clone());
             if let Some(pid) = c.children("w:p").last().and_then(|p| p.attr("w14:paraId")) {
                 by_para.insert(pid.to_string(), id);
             }
