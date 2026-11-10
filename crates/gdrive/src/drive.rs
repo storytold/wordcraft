@@ -248,4 +248,21 @@ impl Drive {
             }
         }
     }
+
+    /// A new Google Doc in My Drive, converted by Drive from a Word document (`docx`): File ›
+    /// Export › Google Docs document. `name` loses a `.docx` ending (Google Docs names have none).
+    pub fn create_google_doc(&mut self, name: &str, docx: &[u8]) -> Result<DriveFile> {
+        let name = check_name(name)?;
+        let name = name.strip_suffix(".docx").filter(|s| !s.trim().is_empty()).unwrap_or(name);
+        if docx.len() as u64 > MAX_DOCUMENT {
+            return Err(Error::Invalid("the document is too large to upload".into()));
+        }
+        // Metadata asks for a Google Doc; the content is Word: Drive converts on upload.
+        let meta = serde_json::json!({ "name": name, "mimeType": MIME_GOOGLE_DOC });
+        let boundary = format!("wordcraft-{}", crate::pkce::random_token(18)?);
+        let body = multipart(&boundary, &meta, MIME_DOCX, docx);
+        let url = format!("{UPLOAD_API}/files?uploadType=multipart&fields={}", pct(FIELDS));
+        let req = Request::new(Method::Post, url).body(&format!("multipart/related; boundary={boundary}"), body);
+        Self::file(self.send(req)?)
+    }
 }
