@@ -882,6 +882,40 @@ fn modify_style_font_box_finds_the_family() {
     assert_eq!(rc.font, wordcraft_doc::styles::HEADING_FONT);
 }
 
+/// #5377: Modify Style has the Font dialog's Asian text font box when East Asian text is in use.
+/// OK stores that font on the style apart from the Latin text font, and stores none when the box
+/// was left alone.
+#[test]
+fn modify_style_sets_the_asian_text_font_apart_from_the_latin_one() {
+    use egui_kittest::kittest::Queryable;
+    let normal = |app: &WordApp| app.session.doc.styles.get("Normal").map(|s| s.chr.clone()).unwrap_or_default();
+
+    let mut h = app_harness(app_with("Example"));
+    h.state_mut().dialog = Dialog::modify_style(h.state(), "Normal");
+    h.run_steps(3);
+    assert!(h.query_by_label("Asian text font:").is_none(), "Latin text alone shows the one Font box");
+
+    let mut h = app_harness(app_with("한글 Example"));
+    h.state_mut().dialog = Dialog::modify_style(h.state(), "Normal");
+    h.run_steps(3);
+    assert!(h.query_by_label("Asian text font:").is_some(), "Hangul in the document shows the Asian text font box");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(normal(h.state()).font_ea, None, "an unchanged box sets no Asian font");
+
+    h.state_mut().dialog = Dialog::modify_style(h.state(), "Normal");
+    if let Some(Dialog::ModifyStyle { font_ea, .. }) = h.state_mut().dialog.as_mut() {
+        *font_ea = "Noto Sans KR".into();
+    }
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let chr = normal(h.state());
+    assert_eq!(chr.font_ea.as_deref(), Some("Noto Sans KR"));
+    assert_eq!(chr.font.as_deref(), Some(wordcraft_doc::styles::BODY_FONT), "the Latin text font is as it was");
+}
+
 /// A dialog was pinned by its anchor, so dragging its title bar did nothing (#732).
 #[test]
 fn dragging_a_dialog_title_bar_moves_it() {
