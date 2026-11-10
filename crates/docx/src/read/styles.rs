@@ -217,7 +217,7 @@ impl Reader<'_> {
         if let Some(tc) = s.child("w:tcPr") {
             if let Some(e) = tc.child("w:shd") {
                 t.fill = self.pc.shd_fill(e);
-                if let Some(off) = self.pc.shd_off(e) {
+                if let Some(off) = props::PropCtx::shd_off(e, t.fill) {
                     t.fills_off.insert(TablePart::WholeTable, off);
                 }
             }
@@ -236,8 +236,9 @@ impl Reader<'_> {
                 align: ppr.as_ref().and_then(|p| p.align),
                 v_align: tc.and_then(|p| p.child_val("w:vAlign")).map(v_align_of),
             };
+            let fill = f.fill;
             t.set_part(part, f);
-            if let Some(off) = tc.and_then(|p| p.child("w:shd")).and_then(|e| self.pc.shd_off(e)) {
+            if let Some(off) = tc.and_then(|p| p.child("w:shd")).and_then(|e| props::PropCtx::shd_off(e, fill)) {
                 t.fills_off.insert(part, off);
             }
         }

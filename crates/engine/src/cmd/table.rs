@@ -99,7 +99,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 cl.props.shading_auto = c.is_none();
             })
         })
-        .params(r#"{"color": "RRGGBB" | null}"#)),
+        .params(r#"{"color": "RRGGBB" | null (No Color, as in Word: written as w:fill="auto", it also covers the table style's colour)}"#)),
         t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)
             .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "width"?: pt, "color"?: "RRGGBB"}"#)),
         t(CommandSpec::new("table.cellAlign", "Alignment", "Table Layout › Alignment", |s, v| {

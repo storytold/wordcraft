@@ -232,11 +232,12 @@ impl PropCtx {
         Some(c)
     }
 
-    /// How a `w:shd` states no colour, if it does.
-    pub fn shd_off(&self, e: &El) -> Option<FillOff> {
+    /// How a `w:shd` states no colour, if it does, given its colour as [`PropCtx::shd_fill`]
+    /// reads it (so a theme colour isn't worked out twice).
+    pub fn shd_off(e: &El, fill: Option<Rgb>) -> Option<FillOff> {
         match e.attr("w:val") {
             Some("nil") => Some(FillOff::Nil),
-            Some("clear") if self.shd_fill(e).is_none() => Some(FillOff::Auto),
+            Some("clear") if fill.is_none() => Some(FillOff::Auto),
             _ => None,
         }
     }
@@ -693,7 +694,7 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:tcBorders" => c.borders = Some(pc.borders(k)),
             "w:shd" => {
                 c.shading = pc.shd_fill(k);
-                c.shading_auto = pc.shd_off(k) == Some(FillOff::Auto);
+                c.shading_auto = PropCtx::shd_off(k, c.shading) == Some(FillOff::Auto);
             }
             "w:noWrap" => c.no_wrap = on_off(k),
             "w:hideMark" => c.hide_mark = on_off(k),

@@ -616,20 +616,42 @@ fn table_style_shading_is_saved_where_word_reads_it() {
         fills_off: [(TablePart::FirstRow, FillOff::Auto), (TablePart::LastRow, FillOff::Nil)].into_iter().collect(),
         ..Default::default()
     };
+    let mut painted = painted;
+    painted.set_part(TablePart::WholeTable, wordcraft_doc::styles::PartFormat { v_align: Some(wordcraft_doc::props::VAlign::Center), ..painted.part(TablePart::WholeTable) });
     let cleared = TableStyleParts { fills_off: [(TablePart::WholeTable, FillOff::Auto)].into_iter().collect(), ..Default::default() };
+    let shown = TableStyleParts { fills_off: [(TablePart::WholeTable, FillOff::Nil)].into_iter().collect(), ..Default::default() };
     let sheet = Arc::make_mut(&mut d.styles);
     sheet.upsert(style("Painted", painted.clone()));
     sheet.upsert(style("Cleared", cleared.clone()));
+    sheet.upsert(style("Shown", shown.clone()));
+    // A cell's own No Color, beside a cell with a colour and one with none of its own.
+    let mut t = wordcraft_doc::Table::new(1, 3, 300.0);
+    t.props.style = Some("Painted".into());
+    t.rows[0].cells[0].props.shading_auto = true;
+    t.rows[0].cells[1].props.shading = Some(Rgb(0, 0xAA, 0));
+    d.body.insert(0, Arc::new(wordcraft_doc::Block::Table(t)));
     let bytes = wordcraft_docx::write(&d).unwrap();
-    let mut xml = String::new();
-    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
-    std::io::Read::read_to_string(&mut z.by_name("word/styles.xml").unwrap(), &mut xml).unwrap();
+    let part = |name: &str| {
+        let mut xml = String::new();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut xml).unwrap();
+        xml
+    };
+    let xml = part("word/styles.xml");
     assert!(!xml.contains("wholeTable"), "{xml}");
-    assert!(xml.contains(r#"<w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/></w:tcPr>"#), "{xml}");
+    assert!(xml.contains(r#"<w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/>"#), "{xml}");
+    assert!(xml.contains(r#"<w:vAlign w:val="center"/>"#), "the whole table's vertical alignment, in the style's own w:tcPr: {xml}");
     assert!(xml.contains(r#"<w:shd w:val="nil"/>"#), "{xml}");
+    let body = part("word/document.xml");
+    assert_eq!(body.matches(r#"w:fill="auto""#).count(), 1, "the one cell with No Color: {body}");
+    assert!(body.contains(r#"w:fill="00AA00""#), "{body}");
     let r = wordcraft_docx::read(&bytes).unwrap();
     assert_eq!(r.styles.get("Painted").unwrap().table.as_ref(), Some(&painted));
     assert_eq!(r.styles.get("Cleared").unwrap().table.as_ref(), Some(&cleared));
+    assert_eq!(r.styles.get("Shown").unwrap().table.as_ref(), Some(&shown));
+    let back = r.body.iter().find_map(|b| b.as_table()).unwrap();
+    let own: Vec<_> = back.rows[0].cells.iter().map(|c| (c.props.shading, c.props.shading_auto)).collect();
+    assert_eq!(own, [(None, true), (Some(Rgb(0, 0xAA, 0)), false), (None, false)]);
 }
 
 /// #714: every table style part (ECMA-376 §17.7.6 `w:tblStylePr` types) keeps its run

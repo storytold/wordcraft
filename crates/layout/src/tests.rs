@@ -5077,21 +5077,25 @@ fn table_style_shading_and_no_colour_paint_as_in_word() {
         got
     };
     let whole = TableStyleParts { fill: Some(red), ..Default::default() };
-    let col_count = colours(whole.clone(), false).iter().filter(|(r, _, _)| *r == 0).count();
-    assert!(col_count > 0, "the style's colour fills the row");
-    assert!(colours(whole.clone(), false).iter().all(|(_, _, c)| *c == red));
+    // Every cell, each once, in the style's colour: the exact list the other cases are read against.
+    let all = colours(whole.clone(), false);
+    let grid: Vec<(usize, usize)> = all.iter().map(|(r, g, _)| (*r, *g)).collect();
+    assert_eq!(grid, (0..3).flat_map(|r| (0..2).map(move |g| (r, g))).collect::<Vec<_>>(), "one fill per cell");
+    assert!(all.iter().all(|(_, _, c)| *c == red));
+    let painted = |f: &dyn Fn(usize, usize) -> Option<wordcraft_doc::props::Rgb>| {
+        grid.iter().filter_map(|&(r, g)| f(r, g).map(|c| (r, g, c))).collect::<Vec<_>>()
+    };
     // Only `w:tblPr/w:shd`: nothing.
     assert!(colours(TableStyleParts { table_shading: Some(yellow), ..Default::default() }, false).is_empty());
     // A header over the style's colour, and a cell's own No Color.
     let header = colours(TableStyleParts { header_fill: Some(pink), ..whole.clone() }, false);
-    assert!(header.iter().all(|(r, _, c)| *c == if *r == 0 { pink } else { red }));
+    assert_eq!(header, painted(&|r, _| Some(if r == 0 { pink } else { red })));
     let own = colours(whole.clone(), true);
-    assert!(!own.iter().any(|(r, g, _)| (*r, *g) == (1, 0)), "No Color covers the style's colour");
-    assert_eq!(own.len(), colours(whole.clone(), false).len() - 1);
+    assert_eq!(own, painted(&|r, g| ((r, g) != (1, 0)).then_some(red)), "No Color covers the style's colour");
     // A header with no colour: `auto` covers the style's, `nil` lets it show.
     let off = |o: FillOff| TableStyleParts { fills_off: [(TablePart::FirstRow, o)].into_iter().collect(), ..whole.clone() };
-    assert!(colours(off(FillOff::Auto), false).iter().all(|(r, _, _)| *r != 0));
-    assert!(colours(off(FillOff::Nil), false).iter().any(|(r, _, _)| *r == 0));
+    assert_eq!(colours(off(FillOff::Auto), false), painted(&|r, _| (r != 0).then_some(red)));
+    assert_eq!(colours(off(FillOff::Nil), false), all);
 }
 
 /// The paragraph's own style (Normal included) and direct formatting beat the table style; the

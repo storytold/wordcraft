@@ -29,7 +29,10 @@ const INHERIT_FILL: &str = "inherit";
 const FILL_CHOICES: [(&str, &str); 2] = [("Inherit", INHERIT_FILL), ("No Color", NO_FILL)];
 
 /// One table style part in the dialog, as it resolves through the based-on chain: colours are
-/// hex, empty for none; a fill can also be [`NO_FILL`] or [`INHERIT_FILL`].
+/// hex, empty for none. A fill read from the style is a colour, [`NO_FILL`] for its `auto`, or
+/// empty when it sets none or says `nil` (both shown as Inherit, as both let the parts below
+/// show). [`INHERIT_FILL`] is never read from a style: only Inherit picked in the open dialog
+/// sets it, so that OK sends it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TableRegion {
@@ -756,6 +759,26 @@ mod tests {
         assert_eq!(shown_choice("", &FILL_CHOICES), "Inherit");
         assert_eq!(shown_choice(INHERIT_FILL, &FILL_CHOICES), "Inherit");
         assert_eq!(shown_choice(NO_FILL, &FILL_CHOICES), "No Color");
+    }
+
+    /// A part's `nil` lets the whole table's colour show, so it reads as Inherit (empty), not as
+    /// No Color, and reopening the dialog sends nothing for it; its `auto` reads as No Color.
+    #[test]
+    fn a_parts_nil_reads_as_inherit_and_its_auto_as_no_color() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("table.newStyle", json!({"name": "Parts", "apply": false, "wholeTable": {"fill": "FF0000"}})).unwrap();
+        let set = |app: &mut WordApp, p: TablePart, off: FillOff| {
+            let st = std::sync::Arc::make_mut(&mut app.session.doc.styles).get_mut("Parts").unwrap();
+            st.table.get_or_insert_default().fills_off.insert(p, off);
+        };
+        set(&mut app, TablePart::FirstRow, FillOff::Nil);
+        set(&mut app, TablePart::LastRow, FillOff::Auto);
+        let regions = table_regions(&app, "Parts");
+        assert_eq!(regions[part_index(TablePart::FirstRow)].fill, "");
+        assert_eq!(regions[part_index(TablePart::LastRow)].fill, NO_FILL);
+        assert_eq!(regions[part_index(TablePart::WholeTable)].fill, "FF0000");
+        let params = table_style_params(Some("Parts"), "Parts", "Table Grid", &regions, &regions);
+        assert!(params.get("firstRow").is_none() && params.get("lastRow").is_none(), "{params}");
     }
 
     /// Inherit gives up a derived style's own colour, or its No Color, for the based-on style's.

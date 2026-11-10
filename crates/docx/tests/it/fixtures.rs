@@ -803,6 +803,13 @@ fn table_style_cell_shading_is_the_styles_tcpr() {
     assert_eq!(fill("Auto"), None);
     assert_eq!(fill("Nil"), None);
     assert_eq!(fill("AfterAuto"), g);
+    // How each says no colour: `auto` covers what is below, `nil` lets it show; a colour or a
+    // `wholeTable` region records neither.
+    let off = |id: &str| d.styles.table_style(id).unwrap().parts.fills_off.get(&TablePart::WholeTable).copied();
+    use wordcraft_doc::styles::FillOff;
+    assert_eq!([off("Red"), off("Green"), off("Whole"), off("Auto"), off("Nil"), off("AfterAuto")], [None, None, None, Some(FillOff::Auto), Some(FillOff::Nil), None]);
+    let over = |id: &str| d.styles.table_style(id).unwrap().parts.fill_over(TablePart::WholeTable, Some(wordcraft_doc::Rgb(1, 2, 3)));
+    assert_eq!((over("Auto"), over("Nil")), (None, Some(wordcraft_doc::Rgb(1, 2, 3))));
     assert_eq!(d.styles.table_style("Mid").unwrap().part(TablePart::WholeTable).v_align, Some(wordcraft_doc::props::VAlign::Center));
 }
 
@@ -821,6 +828,8 @@ fn a_table_style_parts_no_colour_covers_the_style_only_when_auto() {
  <w:style w:type="table" w:styleId="N"><w:name w:val="N"/>{red}{nil}</w:style>
  <w:style w:type="table" w:styleId="F"><w:name w:val="F"/>{first}</w:style>
  <w:style w:type="table" w:styleId="FN"><w:name w:val="FN"/><w:basedOn w:val="F"/>{nil}</w:style>
+ <w:style w:type="table" w:styleId="AN"><w:name w:val="AN"/><w:basedOn w:val="A"/>{nil}</w:style>
+ <w:style w:type="table" w:styleId="NA"><w:name w:val="NA"/><w:basedOn w:val="N"/>{auto}</w:style>
 </w:styles>"#
     );
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
@@ -829,10 +838,33 @@ fn a_table_style_parts_no_colour_covers_the_style_only_when_auto() {
         let p = d.styles.table_style(id).unwrap().parts;
         p.fill_over(TablePart::FirstRow, p.fill_over(TablePart::WholeTable, None))
     };
+    let red = Some(wordcraft_doc::Rgb(0xFF, 0, 0));
     assert_eq!(header("A"), None);
-    assert_eq!(header("N"), Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
+    assert_eq!(header("N"), red);
     assert_eq!(header("F"), Some(wordcraft_doc::Rgb(0xFF, 0, 0xFF)));
     assert_eq!(header("FN"), None);
+    // One way of saying no colour replaces the other: `nil` over a based-on `auto` lets the
+    // style's colour show again, `auto` over a based-on `nil` covers it.
+    assert_eq!(header("AN"), red);
+    assert_eq!(header("NA"), None);
+}
+
+/// A cell's own `w:shd`: a colour, `w:fill="auto"` (No Color, which covers its table style's
+/// colour) and `w:val="nil"` (nothing of its own, so the style's shows).
+#[test]
+fn a_cells_own_no_colour_is_read_as_auto_only_with_fill_auto() {
+    let cell = |shd: &str| format!(r#"<w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/>{shd}</w:tcPr><w:p/></w:tc>"#);
+    let body = format!(
+        r#"<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr>{}{}{}{}</w:tr></w:tbl><w:p/>"#,
+        cell(r#"<w:shd w:val="clear" w:color="auto" w:fill="auto"/>"#),
+        cell(r#"<w:shd w:val="clear" w:color="auto" w:fill="00AA00"/>"#),
+        cell(r#"<w:shd w:val="nil"/>"#),
+        cell(""),
+    );
+    let d = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+    let t = d.body.iter().find_map(|b| b.as_table()).expect("a table");
+    let own: Vec<_> = t.rows[0].cells.iter().map(|c| (c.props.shading, c.props.shading_auto)).collect();
+    assert_eq!(own, [(None, true), (Some(wordcraft_doc::Rgb(0, 0xAA, 0)), false), (None, false), (None, false)]);
 }
 
 fn gallery_ids(styles: &str) -> Vec<String> {
