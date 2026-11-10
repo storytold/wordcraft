@@ -267,6 +267,13 @@ impl Auth {
         Ok(token)
     }
 
+    /// Drops the cached access token (Drive answered 401), so the next call refreshes it.
+    pub fn invalidate_access(&mut self) {
+        if let Some(t) = &mut self.tokens {
+            t.access_token.clear();
+        }
+    }
+
     fn forget(&mut self) {
         self.tokens = None;
         if let Err(e) = self.store.clear() {

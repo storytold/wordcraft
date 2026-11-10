@@ -91,3 +91,51 @@ fn title_says_saved_to_drive_only_for_drive_files() {
     a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "1".into(), google_doc: false });
     assert!(super::saved_in_drive(&a));
 }
+
+#[test]
+fn drive_pages_commands_work_with_no_document_but_save_needs_one() {
+    for id in [
+        "ui.drive.status",
+        "ui.drive.start",
+        "ui.drive.reload",
+        "ui.drive.signIn",
+        "ui.drive.cancel",
+        "ui.drive.signOut",
+        "ui.drive.list",
+        "ui.drive.open",
+    ] {
+        assert!(crate::works_without_document(id), "{id} works with no document");
+    }
+    assert!(!crate::works_without_document("ui.drive.save"), "saving needs a document");
+}
+
+/// Save follows the last destination: a local Save As makes Save local; saving to Drive again
+/// makes Save go back to Drive.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn save_follows_the_last_destination() {
+    let mut a = app();
+    let doc = a.session.document_id();
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false });
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "opened from Drive: Save goes to Drive");
+    assert!(super::saved_in_drive(&a));
+    // Save As to a local file: the document now has a path, so Save writes it.
+    a.session.path = Some(std::env::temp_dir().join("Essay.docx"));
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_none(), "after a local Save As, Save is local");
+    assert!(!super::saved_in_drive(&a));
+    assert!(a.run("ui.drive.status", json!({})).unwrap()["document"].is_null());
+    // Saving that local document to Drive makes Drive its home again.
+    let file = wordcraft_gdrive::DriveFile {
+        id: "f2".into(),
+        name: "Essay.docx".into(),
+        mime_type: wordcraft_gdrive::drive::MIME_DOCX.into(),
+        modified_time: String::new(),
+        version: "1".into(),
+        size: Some(10),
+    };
+    let rev = a.session.rev();
+    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, file, marked_saved: true });
+    assert!(a.session.path.is_none());
+    assert_eq!(a.drive.origin(doc).map(|o| o.id.as_str()), Some("f2"));
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "saved to Drive: Save goes to Drive");
+}

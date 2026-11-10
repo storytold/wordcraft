@@ -403,6 +403,34 @@ fn api_errors_carry_googles_message() {
 }
 
 #[test]
+fn a_401_refreshes_the_access_token_and_retries_once() {
+    let fake = Fake::with(vec![
+        token_reply(),
+        (401, json!({"error": {"code": 401, "message": "Invalid Credentials"}})),
+        (200, json!({"access_token": "access-2", "expires_in": 3599, "token_type": "Bearer"})),
+        (200, json!({"files": []})),
+    ]);
+    let mut d = Drive::new(signed_in(&fake));
+    assert_eq!(d.list(None, None), Ok((vec![], None)));
+    let seen = fake.seen();
+    assert_eq!(seen.len(), 4);
+    assert_eq!(header(&seen[3], "Authorization"), Some("Bearer access-2"), "retried with the refreshed token");
+}
+
+#[test]
+fn a_401_then_a_refused_refresh_signs_out() {
+    let fake = Fake::with(vec![
+        token_reply(),
+        (401, json!({"error": {"code": 401, "message": "Invalid Credentials"}})),
+        (400, json!({"error": "invalid_grant", "error_description": "Token has been expired or revoked."})),
+    ]);
+    let mut d = Drive::new(signed_in(&fake));
+    assert_eq!(d.list(None, None), Err(Error::NotSignedIn));
+    assert_eq!(d.auth.access_token(Instant::now()), Err(Error::NotSignedIn), "signed out, nothing more sent");
+    assert_eq!(fake.seen().len(), 3);
+}
+
+#[test]
 fn not_signed_in_sends_nothing() {
     let fake = Fake::with(vec![]);
     let mut d = Drive::new(Auth::new(cfg(), fake.clone(), Box::new(Memory::default())));
