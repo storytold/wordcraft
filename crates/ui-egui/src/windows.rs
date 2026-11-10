@@ -246,6 +246,8 @@ pub(crate) struct ViewportInput {
     /// pass: [`WordApp::input_from_control`].
     pub(crate) injected: Option<ViewportId>,
     control_click: HashMap<ViewportId, bool>,
+    /// Touchpad scroll speed multiplier for secondary viewports (#6146).
+    pub(crate) touchpad_speed: crate::scroll::ScrollSpeed,
 }
 
 impl egui::Plugin for ViewportInput {
@@ -253,11 +255,13 @@ impl egui::Plugin for ViewportInput {
         "wordcraft_viewport_input"
     }
 
+    /// Hooks raw input for non-root viewports, applying touchpad scroll speed and secondary clicks.
     fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
         let viewport = input.viewport_id;
         if viewport == ViewportId::ROOT {
             return;
         }
+        self.touchpad_speed.apply_touchpad(input);
         if cfg!(target_os = "macos") {
             crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
         }
@@ -772,6 +776,10 @@ impl WordApp {
             ctx.add_plugin(ViewportInput::default());
             self.windows.input_plugin = true;
         }
+        let speed = self.ui.touchpad_scroll_speed;
+        ctx.with_plugin(|p: &mut ViewportInput| {
+            p.touchpad_speed = speed;
+        });
         self.settle_windows();
         let target = self.active_viewport();
         // Input queued for a window that has closed since (or moved into the root viewport)

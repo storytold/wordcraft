@@ -274,6 +274,8 @@ impl WordApp {
             nav_tab: _,
             display_server: _,
             status_count: _,
+            scroll_speed: _,
+            touchpad_scroll_speed: _,
             nav_pane: _,
             show_discord: _,
             author: _,

@@ -18,7 +18,7 @@ pens, microphones (Dictate) and speakers (Read Aloud), and displays.
 | Multiple monitors, per-monitor DPI, remembered window position, a window that fits its screen | ✅ | ✅ (#38, #76, #1215) | ✅ (winit DPI fix pending, #155) | ✅ | — | 85% | 1 |
 | Microphone: Dictate | ✅ (cloud speech service) | ❌ | ❌ | ❌ | ❌ | 0% | 8–15 + owner (speech model choice) |
 | Speakers: Read Aloud | ✅ | ✅ system speech, speed, sentence skip (#190) | ✅ | 🟡 espeak-ng, then espeak, then Speech Dispatcher (over its socket), each sentence in its language's voice; packages recommend a speech program; silent in the Flatpak (no audio access, no speech program) | 🟡 | 75% | 1–2 |
-| Touch screens and touchpads: pinch zoom, inertial scroll | ✅ | ✅ pinch (#179) | ✅ | ✅ inertial scroll (#252) | ✅ | 85% | 0–1 |
+| Touch screens and touchpads: pinch zoom, inertial scroll | ✅ | ✅ pinch (#179) | ✅ | ✅ inertial scroll (#252), touchpad and wheel scroll speed settings (#6146) | ✅ | 85% | 0–1 |
 | Scanners/cameras (Insert from device / Continuity Camera on Mac) | ✅ | ❌ | ❌ | ❌ | ❌ | 0% | 2–4 |
 
 Ink replay, eraser picking, lasso selection and arrow-candidate discovery reuse the paragraph prefixes they have already scanned (#3614). Page item order, stroke geometry and saved data retain their behavior. This narrows the stability work; ink import fidelity, native pen input and broader corpus qualification remain open.
@@ -28,6 +28,7 @@ File > Print offers 2, 4, 6, 9 or 16 logical pages per physical sheet side and l
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | trivial | Touchpad and mouse-wheel scroll speed preferences (Slow, Normal, Fast): scales Wayland touchpad point input by default (4×) so swiping matches desktop speed, and scales mouse wheel line distance; File › Options › Advanced › Scrolling (#6146) |
 | 2026-11-07 | trivial | Newly opened secondary windows constrain their initial viewport dimensions to the monitor's usable area, preventing windows from exceeding screen width on scaled displays (#5871) |
 | 2026-11-06 | trivial | Print helpers remove loaded PDF/settings files before driver work, tolerate prior removal and report cleanup errors; a held-driver regression checks the files are already absent (#5710) |
 | 2026-11-06 | trivial | Windows print submissions use a separate helper per job, preserving provider serialization inside the helper. An acknowledged cancellation stops that helper, so a stalled cancelled driver cannot block a later job; normal shutdown reaps helpers and removes temporary PDFs. The helper erases its plaintext inputs before driver work; a hard app crash during startup can still leave private temporary files. Startup requires an explicit start grant; after sending begins, jobs complete (#5710) |

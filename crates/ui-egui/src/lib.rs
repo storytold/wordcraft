@@ -69,6 +69,7 @@ pub mod ribbon_fit;
 pub mod rtl;
 pub mod ruler_tabs;
 pub mod scroll;
+pub use scroll::ScrollSpeed;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -432,6 +433,12 @@ pub struct UiState {
     /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
     /// Options › Display. Junk saved values read as words.
     pub status_count: StatusCount,
+    /// How far a mouse-wheel notch scrolls (#6146).
+    #[serde(default, alias = "scrollSpeed")]
+    pub scroll_speed: ScrollSpeed,
+    /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
+    #[serde(default, alias = "touchpadScrollSpeed")]
+    pub touchpad_scroll_speed: ScrollSpeed,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -513,6 +520,8 @@ impl Default for UiState {
             dictionary: Vec::new(),
             display_server: DisplayServer::Auto,
             status_count: StatusCount::default(),
+            scroll_speed: ScrollSpeed::default(),
+            touchpad_scroll_speed: ScrollSpeed::default(),
         }
     }
 }

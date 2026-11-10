@@ -8159,3 +8159,55 @@ fn recent_list_edits_work_without_a_document() {
     assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
     assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
 }
+
+/// Issue #6146: touchpad scrolling on Linux/Wayland is scaled by `touchpad_factor` in
+/// `raw_input_hook` so swiping matches the desktop's speed instead of crawling 1:1.
+/// Wheel notches scale with `ui.scrollSpeed`. Both settings persist in `ui.json` and are set on
+/// `ui.touchpadScrollSpeed` and `ui.scrollSpeed`.
+#[test]
+fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32, ctrl: bool| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: if ctrl { egui::Modifiers::CTRL } else { egui::Modifiers::NONE },
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. In `raw_input_hook`, touchpad Point deltas are scaled by touchpad_scroll_speed factor,
+    // while Line deltas and Ctrl/Command zoom events are untouched.
+    let mut raw = egui::RawInput {
+        events: vec![
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, false),
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, true),
+            wheel_event(egui::MouseWheelUnit::Line, -1.0, false),
+        ],
+        ..Default::default()
+    };
+    a.raw_input_hook(&ctx, &mut raw);
+    let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+    let expected_factor = crate::scroll::ScrollSpeed::Normal.touchpad_factor();
+    assert_eq!(dy[0], -10.0 * expected_factor, "point deltas are scaled by touchpad factor");
+    assert_eq!(dy[1], -10.0, "Ctrl+wheel zoom delta is NOT scaled");
+    assert_eq!(dy[2], -1.0, "Line deltas are NOT scaled by touchpad factor");
+
+    // 2. Commands ui.touchpadScrollSpeed and ui.scrollSpeed set the preferences.
+    let r = a.run("ui.touchpadScrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["touchpadScrollSpeed"], "fast");
+    assert_eq!(a.ui.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    let r = a.run("ui.scrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["scrollSpeed"], "fast");
+    assert_eq!(a.ui.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    assert!(a.run("ui.touchpadScrollSpeed", json!({"value": "warp"})).is_err());
+    assert!(a.run("ui.scrollSpeed", json!({"value": "warp"})).is_err());
+
+    // 3. Persistence between runs in ui.json
+    let saved = serde_json::to_string(&a.ui).unwrap();
+    let restored = UiState::from_json(saved.as_bytes()).unwrap();
+    assert_eq!(restored.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+    assert_eq!(restored.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+}

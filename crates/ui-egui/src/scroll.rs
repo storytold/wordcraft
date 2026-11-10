@@ -22,6 +22,111 @@ use egui::{Event, InputOptions, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
 /// like other desktop apps (egui's default is 40).
 pub const NOTCH_PX: f32 = 56.0;
 
+/// The user's choice for scrolling speed, relative to the platform's normal speed (#6146).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollSpeed {
+    /// Half the normal scroll speed.
+    Slow,
+    /// Normal scroll speed for the platform.
+    #[default]
+    Normal,
+    /// Twice the normal scroll speed.
+    Fast,
+}
+
+impl ScrollSpeed {
+    /// All speed choices in presentation order: Slow, Normal, Fast.
+    pub const ALL: [Self; 3] = [Self::Slow, Self::Normal, Self::Fast];
+
+    /// The command / JSON code for this speed: `"slow"`, `"normal"`, or `"fast"`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Slow => "slow",
+            Self::Normal => "normal",
+            Self::Fast => "fast",
+        }
+    }
+
+    /// Parses a speed from a string code, case-insensitively.
+    pub fn from_code(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "slow" => Some(Self::Slow),
+            "normal" => Some(Self::Normal),
+            "fast" => Some(Self::Fast),
+            _ => None,
+        }
+    }
+
+    /// User-facing label: `"Slow"`, `"Normal"`, or `"Fast"`.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Slow => "Slow",
+            Self::Normal => "Normal",
+            Self::Fast => "Fast",
+        }
+    }
+
+    /// Speed multiplier relative to normal (1.0).
+    pub const fn factor(self) -> f32 {
+        match self {
+            Self::Slow => 0.5,
+            Self::Normal => 1.0,
+            Self::Fast => 2.0,
+        }
+    }
+
+    /// Points the view moves per point of touchpad travel.
+    ///
+    /// On Wayland (Linux/BSD), touchpads emit point deltas without compositor-side kinetic
+    /// scaling or multiplier, which feels 4× slower than under XWayland / X11 (where winit emits
+    /// fractional lines, ~1 line per 10 points, multiplied by line speed).
+    /// On macOS and web browsers, the host platform already accelerates trackpad deltas and handles
+    /// inertia, so Normal speed is 1.0.
+    pub fn touchpad_factor(self) -> f32 {
+        const NORMAL_TOUCHPAD_FACTOR: f32 = if cfg!(any(target_os = "macos", target_arch = "wasm32")) { 1.0 } else { 4.0 };
+        NORMAL_TOUCHPAD_FACTOR * self.factor()
+    }
+
+    /// Scales this frame's touchpad (point) scrolling by [`Self::touchpad_factor`].
+    /// Call this before egui or canvas reads raw input.
+    /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
+    pub fn apply_touchpad(self, raw: &mut egui::RawInput) {
+        let factor = self.touchpad_factor();
+        if (factor - 1.0).abs() < 1e-4 {
+            return;
+        }
+        for event in &mut raw.events {
+            if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers, .. } = event
+                && !modifiers.command
+                && !modifiers.ctrl
+                && delta.is_finite()
+            {
+                *delta *= factor;
+            }
+        }
+    }
+
+    /// Multiplier for mouse-wheel notch distance.
+    pub fn wheel_factor(self) -> f32 {
+        self.factor()
+    }
+}
+
+impl From<String> for ScrollSpeed {
+    /// Parses a [`ScrollSpeed`] from a string, falling back to default.
+    fn from(s: String) -> Self {
+        ScrollSpeed::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<ScrollSpeed> for String {
+    /// Converts a [`ScrollSpeed`] to its string representation.
+    fn from(s: ScrollSpeed) -> Self {
+        s.code().to_string()
+    }
+}
+
 /// Whether to synthesise kinetic scrolling. macOS and Windows send their own momentum events
 /// (or report touchpads as line deltas), and browsers do their own; only Linux/BSD need it.
 const SYNTH_MOMENTUM: bool = !cfg!(any(target_os = "macos", target_os = "ios", target_os = "windows", target_arch = "wasm32"));
@@ -583,5 +688,32 @@ mod tests {
         m.release();
         assert!(m.tick(FRAME).length() <= MAX_SPEED * FRAME);
         assert!(notch_px(f32::NAN).is_finite() && notch_px(-1.0) == NOTCH_PX);
+    }
+
+    #[test]
+    fn touchpad_points_follow_the_touchpad_choice_and_nothing_else_does() {
+        assert_eq!(ScrollSpeed::Slow.factor(), 0.5);
+        assert_eq!(ScrollSpeed::Normal.factor(), 1.0);
+        assert_eq!(ScrollSpeed::Fast.factor(), 2.0);
+        assert_eq!(ScrollSpeed::from_code("slow"), Some(ScrollSpeed::Slow));
+        assert_eq!(ScrollSpeed::from_code("FAST"), Some(ScrollSpeed::Fast));
+        assert_eq!(ScrollSpeed::from_code("invalid"), None);
+
+        let factor = ScrollSpeed::Normal.touchpad_factor();
+        let mut raw = egui::RawInput {
+            events: vec![
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::NONE),
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::COMMAND),
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::CTRL),
+                wheel(MouseWheelUnit::Line, Vec2::new(0.0, -1.0), Modifiers::NONE),
+            ],
+            ..Default::default()
+        };
+        ScrollSpeed::Normal.apply_touchpad(&mut raw);
+        let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+        assert_eq!(dy[0], -10.0 * factor);
+        assert_eq!(dy[1], -10.0, "Command+wheel zoom delta untouched");
+        assert_eq!(dy[2], -10.0, "Ctrl+wheel zoom delta untouched");
+        assert_eq!(dy[3], -1.0, "Line wheel delta untouched");
     }
 }
