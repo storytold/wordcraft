@@ -46,6 +46,9 @@ zbus = "=5.19.0"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
 craft-update = { workspace = true }
+# File › Google Drive (`gdrive.rs`): sign-in, open and save over Drive's REST API on a worker.
+wordcraft-gdrive = { workspace = true }
+base64 = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
