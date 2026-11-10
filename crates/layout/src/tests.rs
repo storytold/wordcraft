@@ -1083,6 +1083,147 @@ fn centered_float_field_result_stays_outside_exclusion_matching_plain_text() {
     check_no_lines_in_exclusion(&l_field_long, "field result (oversized word)");
 }
 
+/// A field result straddling staggered floats on opposite sides does not overflow either exclusion.
+///
+/// When two floats are placed on opposite sides of a column with staggered heights (e.g. left float
+/// at y=0..50 taking 0..150, right float at y=50..100 taking 250..400 in a 400pt column), each thin
+/// vertical slice has 250pt available, but a line of non-zero row height straddling y=50 has only
+/// 100pt available (150..250). An unbroken word wider than the straddling row (e.g. ~180pt) but
+/// narrower than either slice (250pt) must be partitioned into breakable clusters so it emergency-splits
+/// rather than overflowing into the exclusion.
+#[test]
+fn staggered_opposite_floats_field_result_straddles_without_overflowing() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+
+    let col_w = 400.0;
+    let float1_w = 150.0;
+    let float1_h = 50.0;
+    let float2_x = 250.0;
+    let float2_y = 50.0;
+    let float2_w = 150.0;
+    let float2_h = 50.0;
+
+    // A word (~180pt at 12pt font) wider than the 100pt straddling row between the floats,
+    // but narrower than the 250pt available in each individual float slice.
+    let word = "a".repeat(26);
+
+    let mut d_field = Document::new();
+    d_field.last_section.page_w = col_w;
+    d_field.last_section.margin_left = 0.0;
+    d_field.last_section.margin_right = 0.0;
+    d_field.last_section.margin_top = 0.0;
+    d_field.last_section.margin_bottom = 0.0;
+    Arc::make_mut(&mut d_field.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d_field.styles).default_chr.size = Some(12.0);
+
+    let _ = d_field.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::Field { instr: "DOCVARIABLE straddle".into(), result: word, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    );
+
+    let f1 = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() };
+    d_field.insert_object(&Pos::body(0, 0), rect_shape(float1_w, float1_h, f1), &Default::default()).unwrap();
+
+    let f2 = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: float2_x, y: float2_y, dist: 0.0, ..Default::default() };
+    d_field.insert_object(&Pos::body(0, 0), rect_shape(float2_w, float2_h, f2), &Default::default()).unwrap();
+
+    let l = lay(&d_field);
+
+    for page in &l.pages {
+        for item in &page.items {
+            if let Placed::Lines { y, para, .. } = item {
+                for line in &para.lines {
+                    let line_top = y + line.top;
+                    let line_bottom = line_top + line.height;
+                    let x_start = line.xs.first().copied().unwrap_or(0.0);
+                    let x_end = line.xs.last().copied().unwrap_or(0.0);
+
+                    // If line vertically intersects float 1 (y: 0..50, x: 0..150)
+                    if line_top < float1_h && line_bottom > 0.0 {
+                        assert!(
+                            x_start >= float1_w - 0.01 || x_end <= 0.01,
+                            "line at y={line_top:.1}..{line_bottom:.1} with x={x_start:.1}..{x_end:.1} overlaps float 1 at x=0..{float1_w}"
+                        );
+                    }
+
+                    // If line vertically intersects float 2 (y: 50..100, x: 250..400)
+                    if line_top < float2_y + float2_h && line_bottom > float2_y {
+                        assert!(
+                            x_end <= float2_x + 0.01 || x_start >= float2_x + float2_w - 0.01,
+                            "line at y={line_top:.1}..{line_bottom:.1} with x={x_start:.1}..{x_end:.1} overlaps float 2 at x={float2_x}..{}",
+                            float2_x + float2_w
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// An RTL field result with asymmetric indents respects float exclusions and does not overflow.
+#[test]
+fn rtl_field_result_with_asymmetric_indents_stays_outside_float() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+
+    let col_w = 400.0;
+    let float_x = 280.0;
+    let float_w = 120.0;
+    let float_h = 60.0;
+
+    let word = "a".repeat(30);
+
+    let mut d_field = Document::new();
+    d_field.last_section.page_w = col_w;
+    d_field.last_section.margin_left = 0.0;
+    d_field.last_section.margin_right = 0.0;
+    d_field.last_section.margin_top = 0.0;
+    d_field.last_section.margin_bottom = 0.0;
+    Arc::make_mut(&mut d_field.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+    Arc::make_mut(&mut d_field.styles).default_chr.size = Some(12.0);
+
+    let _ = d_field.insert_object(
+        &Pos::body(0, 0),
+        InlineObject::Field { instr: "DOCVARIABLE rtl".into(), result: word, locked: false, dirty: false, code: false, form: String::new() },
+        &Default::default(),
+    );
+
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: float_x, y: 0.0, dist: 0.0, ..Default::default() };
+    d_field.insert_object(&Pos::body(0, 0), rect_shape(float_w, float_h, f), &Default::default()).unwrap();
+
+    // Set RTL paragraph with asymmetric indents (indent_left = 60pt, indent_right = 10pt)
+    d_field
+        .format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.bidi = Some(true);
+            p.indent_left = Some(60.0);
+            p.indent_right = Some(10.0);
+        })
+        .unwrap();
+
+    let l = lay(&d_field);
+
+    for page in &l.pages {
+        for item in &page.items {
+            if let Placed::Lines { y, para, .. } = item {
+                for line in &para.lines {
+                    let line_top = y + line.top;
+                    let line_bottom = line_top + line.height;
+                    let x_start = line.xs.first().copied().unwrap_or(0.0);
+                    let x_end = line.xs.last().copied().unwrap_or(0.0);
+
+                    if line_top < float_h && line_bottom > 0.0 {
+                        assert!(
+                            x_end <= float_x + 0.01 || x_start >= float_x + float_w - 0.01,
+                            "RTL line at y={line_top:.1}..{line_bottom:.1} with x={x_start:.1}..{x_end:.1} overlaps float at x={float_x}..{}",
+                            float_x + float_w
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
     para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false, level: None }

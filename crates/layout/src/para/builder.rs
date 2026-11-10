@@ -4,7 +4,7 @@ use super::chars::{
     reported_font_name, thai_run_face, upper_char,
 };
 use super::grid::east_asian;
-use super::lines::row_spans;
+use super::lines::{mirrored_exclusions, row_spans};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::paragraph::break_positions;
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, ResolvedPara, RubyAlign, SOFT_HYPHEN};
@@ -74,19 +74,23 @@ fn isolate_base_level(surrounding: u8, rtl_base: bool) -> u8 {
 /// single line (such as on either side of a centered float, or beside side-restricted or overlapping
 /// exclusions). To prevent field words from remaining an indivisible cluster that overflows into an
 /// exclusion, this derives the narrowest valid span width across all vertical exclusion slices.
-fn conservative_span_bound(env: &ParaEnv, rp: &ResolvedPara) -> f32 {
+fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara) -> f32 {
+    let width = env.width.max(20.0);
     let indents = rp.indent_left + rp.indent_right + rp.indent_first.abs();
-    let mut bound = (env.width - indents).max(20.0);
+    let mut bound = (width - indents).max(20.0);
     if env.exclusions.is_empty() {
         return bound;
     }
 
+    let mirrored = rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
+    let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
+
     let lo1 = rp.indent_left + rp.indent_first;
     let lo2 = rp.indent_left;
-    let hi = (env.width - rp.indent_right).max(1.0);
+    let hi = (width - rp.indent_right).max(1.0);
 
     let mut y_points: Vec<f32> = Vec::new();
-    for ex in env.exclusions {
+    for ex in exclusions {
         if !ex.top_bottom {
             y_points.push(ex.top);
             y_points.push(ex.bottom);
@@ -100,22 +104,25 @@ fn conservative_span_bound(env: &ParaEnv, rp: &ResolvedPara) -> f32 {
     y_points.sort_by(|a, b| a.total_cmp(b));
     y_points.dedup();
 
+    let font_h = styles.first().map(|st| st.ascent + st.descent).unwrap_or(14.0).max(1.0);
+    let est_h = (font_h * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 }).max(1.0);
+    let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h };
+
     for w in y_points.windows(2) {
         let (y0, y1) = (w[0], w[1]);
         if y1 <= y0 {
             continue;
         }
-        let y_mid = (y0 + y1) * 0.5;
-        let slice_h = (y1 - y_mid).min(1.0);
-        let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { slice_h };
-
-        for &lo in &[lo1, lo2] {
-            if hi <= lo + 20.0 {
-                continue;
-            }
-            if let Ok(spans) = row_spans(env.exclusions, y_mid, slice_h, table_h, lo, hi) {
-                for (a, b) in spans {
-                    bound = bound.min(b - a);
+        let sample_y = [y0, (y0 + y1) * 0.5, (y1 - est_h * 0.5).max(y0), (y1 - 1.0).max(y0)];
+        for top in sample_y {
+            for &lo in &[lo1, lo2] {
+                if hi <= lo + 20.0 {
+                    continue;
+                }
+                if let Ok(spans) = row_spans(exclusions, top, est_h, table_h, lo, hi) {
+                    for (a, b) in spans {
+                        bound = bound.min(b - a);
+                    }
                 }
             }
         }
@@ -733,7 +740,7 @@ impl<'a> Builder<'a> {
                 let bound = match self.span_bound {
                     Some(b) => b,
                     None => {
-                        let b = conservative_span_bound(self.env, rp);
+                        let b = conservative_span_bound(self.env, &self.styles, rp);
                         self.span_bound = Some(b);
                         b
                     }

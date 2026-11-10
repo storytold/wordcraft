@@ -127,7 +127,7 @@ struct DecimalScan {
 }
 
 /// The objects' exclusions mirrored across a line of `width`, for a right-to-left paragraph.
-fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
+pub(super) fn mirrored_exclusions(exclusions: &[Exclusion], width: f32) -> Vec<Exclusion> {
     exclusions
         .iter()
         .map(|e| Exclusion {
