@@ -26,6 +26,7 @@ struct ElsewhereContext {
     before_doc: Option<RunSnapshot>,
     blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
     default_language_before: Option<String>,
+    default_no_proof_before: Option<bool>,
     pending_application_change_before: bool,
 }
 
@@ -181,6 +182,7 @@ impl Session {
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
         let default_language_before = self.prefs.default_language.clone();
+        let default_no_proof_before = self.prefs.default_no_proof;
         let run = spec.run;
         let mutates = spec.mutates;
         let ime_caret_before = self.current_ime_caret_state();
@@ -198,7 +200,15 @@ impl Session {
         };
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
             return self.finish_elsewhere(
-                ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
+                ElsewhereContext {
+                    home,
+                    mark,
+                    before_doc,
+                    blocks_before,
+                    default_language_before,
+                    default_no_proof_before,
+                    pending_application_change_before,
+                },
                 result,
             );
         }
@@ -231,6 +241,7 @@ impl Session {
                 self.pending_ime_application_change = pending_application_change_before;
                 self.autocap = None;
                 self.prefs.default_language = default_language_before;
+                self.prefs.default_no_proof = default_no_proof_before;
                 if let Some(epoch) = ime_epoch_before {
                     self.ime_body_epoch = epoch;
                 }
@@ -413,7 +424,15 @@ impl Session {
     /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
     /// active and as it was.
     fn finish_elsewhere(&mut self, context: ElsewhereContext, result: Result<Value, CmdError>) -> Result<Value, CmdError> {
-        let ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before } = context;
+        let ElsewhereContext {
+            home,
+            mark,
+            before_doc,
+            blocks_before,
+            default_language_before,
+            default_no_proof_before,
+            pending_application_change_before,
+        } = context;
         // Another document is a state change the input method has to see, never an IME edit.
         self.ime_edit_outcome = ImeEditOutcome::default();
         match &result {
@@ -430,6 +449,7 @@ impl Session {
                 self.pending_ime_application_change = pending_application_change_before;
                 self.autocap = None;
                 self.prefs.default_language = default_language_before;
+                self.prefs.default_no_proof = default_no_proof_before;
                 if self.is_open(home) {
                     let _ = self.switch_to(home);
                     let opened: Vec<u64> = self.order.iter().copied().filter(|d| *d >= mark && *d != home).collect();

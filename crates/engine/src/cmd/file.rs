@@ -300,10 +300,13 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
         crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
     let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    let is_plain_text = matches!(ext.as_str(), "txt" | "text" | "md" | "markdown");
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
+        && is_plain_text
     {
         Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    }
+    if is_plain_text {
         if let Some(np) = s.prefs.default_no_proof {
             Arc::make_mut(&mut doc.styles).default_chr.no_proof = Some(np);
         }
