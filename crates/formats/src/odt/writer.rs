@@ -16,7 +16,8 @@ use indexes::index_at;
 pub(super) use indexes::{IndexKind, index_instr};
 use notes::annotation_name;
 pub(super) use props::{
-    align_attr, border_attrs, generated_style, generating_style, odf_border, odf_name, props_text, script_attrs, spacing_props, tab_stops,
+    align_attr, border_attrs, generated_style, generating_style, is_script, lang_attrs, odf_border, odf_name, props_text, script_attrs,
+    spacing_props, tab_stops,
 };
 use props::{parent_style, text_props};
 use tracked::{Item, join_deleted_marks};
@@ -321,7 +322,7 @@ impl Writer {
     /// The paragraph style of `p`; `start` makes it begin a page of that master page (ODF 1.3
     /// §19.471 `style:master-page-name`), restarting page numbering where asked (§20.322).
     fn para_style_at(&mut self, p: &Para, start: Option<&SecStart>) -> String {
-        let named = p.extra.as_ref().and_then(|x| x.style.as_deref()).filter(|_| matches!(p.kind, Kind::Normal | Kind::Rule));
+        let named = p.extra.as_ref().and_then(|x| x.style.as_deref());
         let parent = match (p.kind, self.note_parent, named) {
             // A custom style: written as a common style of the same name (see `custom_styles`).
             (_, _, Some(id)) => {

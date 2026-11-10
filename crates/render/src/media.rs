@@ -82,30 +82,14 @@ pub fn decode_pixmap_fx(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Option
 
 /// [`decode_pixmap_fx`] with an explicit RGBA byte budget (a small one in tests).
 pub(crate) fn decode_pixmap_within(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx, budget: u64) -> Option<Pixmap> {
-    use image::ImageDecoder;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_DECODE_SIDE);
-    limits.max_image_height = Some(MAX_DECODE_SIDE);
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-        r.limits(limits.clone());
-        Some(r)
-    };
-    // The header gives the size and the decoder's pixel format (16-bit RGBA takes 8 bytes a pixel
-    // before its RGBA8 copy); refuse before the decoder (and the RGBA copy) allocate anything.
-    let (hw, hh, native) = {
-        let d = reader()?.into_decoder().ok()?;
-        let (w, h) = d.dimensions();
-        (w, h, u64::from(d.color_type().bytes_per_pixel()))
-    };
-    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
+    // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
+    // export checks with.
+    let decoded = wordcraft_geom::picture::decode_for_drawing(bytes, budget, MAX_DECODE_SIDE);
+    if let Err(wordcraft_geom::picture::Refusal::TooLarge { width, height }) = &decoded {
         // Logged once a picture: its refusal is cached with it (`pixmap_for`).
-        log::warn!(
-            "a {hw}×{hh} picture of {native} bytes a pixel needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)"
-        );
-        return None;
+        log::warn!("a {width}×{height} picture needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)");
     }
-    let mut img = reader()?.decode().ok()?.into_rgba8();
+    let mut img = decoded.ok()?.into_rgba8();
     let (w, h) = img.dimensions();
     fx.apply_rgba(&mut img);
     premul_pixmap(w, h, img.as_raw())
@@ -270,8 +254,7 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
 
 /// Draws a metafile text run: `tf` maps the run's own space (see [`PlacedItem::Text`]) to the device.
 fn draw_vector_text(ctx: &mut RenderContext, t: &wordcraft_metafile::Text, tf: Affine) {
-    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
-    let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
+    let (face, shaped) = wordcraft_layout::metafile_text_run(t);
     let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
     let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
     let k = lay.em / face.upem.max(1.0);
@@ -326,18 +309,12 @@ fn device_pixel(view: Affine) -> f64 {
     if scale.is_finite() && scale > 1e-9 { 1.0 / scale } else { 1.0 }
 }
 
-/// Largest page-background picture decoded, in pixels (hostile files).
-const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
-
 /// Draw the page's picture or texture fill (Design › Page Color › Fill Effects) behind the content:
 /// tiled at its natural size (96 dpi) for a `tile` fill, stretched over the page otherwise.
 pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
     let Some(pic) = &doc.settings.page_picture else { return };
     let Some(bytes) = doc.media.get(&pic.media) else { return };
-    let (nw, nh) = match image_size(bytes) {
-        Some((w, h)) if w > 0 && h > 0 && (w as u64) * (h as u64) <= MAX_BACKGROUND_PIXELS => (w as f64, h as f64),
-        _ => return,
-    };
+    let Some((nw, nh)) = wordcraft_geom::picture::background_size(bytes).map(|(w, h)| (f64::from(w), f64::from(h))) else { return };
     let Some(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));

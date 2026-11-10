@@ -10,9 +10,13 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
     let on = |v: Option<bool>| v == Some(true);
     if on(x.caps) {
         p.push_str(" fo:text-transform=\"uppercase\"");
+    } else if x.caps == Some(false) {
+        p.push_str(" fo:text-transform=\"none\"");
     }
     if on(x.small_caps) {
         p.push_str(" fo:font-variant=\"small-caps\"");
+    } else if x.small_caps == Some(false) {
+        p.push_str(" fo:font-variant=\"normal\"");
     }
     if on(x.hidden) {
         p.push_str(" text:display=\"none\"");
@@ -54,14 +58,7 @@ pub(in crate::odt) fn extra_props(x: &wordcraft_doc::props::CharProps, size: Opt
     }
     p.push_str(&script_attrs(x));
     if let Some(l) = x.lang.as_deref() {
-        let mut parts = l.split(['-', '_']);
-        let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
-        if let Some(lang) = parts.next().filter(ok) {
-            p.push_str(&format!(" fo:language=\"{lang}\""));
-            if let Some(country) = parts.next().filter(ok) {
-                p.push_str(&format!(" fo:country=\"{country}\""));
-            }
-        }
+        p.push_str(&lang_attrs(l, ""));
     }
     p
 }
@@ -85,28 +82,7 @@ pub(in crate::odt) fn props_text(cp: &wordcraft_doc::props::CharProps) -> String
         extra: Some(Box::new(cp.clone())),
         ..Default::default()
     };
-    let mut p = text_props(&f);
-    // What a style turns off that the style it is based on may turn on: said so, or the parent's
-    // bold, italic, underline or strike-through would show through.
-    if cp.bold == Some(false) {
-        p.push_str(" fo:font-weight=\"normal\" style:font-weight-asian=\"normal\"");
-        if cp.bold_cs.is_none() {
-            p.push_str(" style:font-weight-complex=\"normal\"");
-        }
-    }
-    if cp.italic == Some(false) {
-        p.push_str(" fo:font-style=\"normal\" style:font-style-asian=\"normal\"");
-        if cp.italic_cs.is_none() {
-            p.push_str(" style:font-style-complex=\"normal\"");
-        }
-    }
-    if cp.underline == Some(Underline::None) {
-        p.push_str(" style:text-underline-style=\"none\"");
-    }
-    if cp.strike == Some(false) && cp.double_strike != Some(true) {
-        p.push_str(" style:text-line-through-style=\"none\"");
-    }
-    p
+    text_props(&f)
 }
 
 /// `fo:text-align` for `a` (ODF 1.3 §20.223).
@@ -120,8 +96,8 @@ pub(in crate::odt) fn align_attr(a: Option<Align>) -> &'static str {
     }
 }
 
-/// `fo:language`/`fo:country` (with `suffix`: `-asian`, `-complex` on `style:`) for BCP 47 tag
-/// `tag`.
+/// `fo:language`, `fo:script` and `fo:country` (with `suffix`: `-asian`, `-complex` on `style:`)
+/// for BCP 47 tag `tag`. A script is the four-letter subtag after the language.
 pub(in crate::odt) fn lang_attrs(tag: &str, suffix: &str) -> String {
     let mut parts = tag.split(['-', '_']);
     let ok = |s: &&str| (1..=8).contains(&s.len()) && s.chars().all(|c| c.is_ascii_alphanumeric());
@@ -129,11 +105,21 @@ pub(in crate::odt) fn lang_attrs(tag: &str, suffix: &str) -> String {
     let mut p = String::new();
     if let Some(lang) = parts.next().filter(ok) {
         p.push_str(&format!(" {ns}:language{suffix}=\"{lang}\""));
-        if let Some(country) = parts.next().filter(ok) {
+        let mut next = parts.next().filter(ok);
+        if let Some(script) = next.filter(|s| is_script(s)) {
+            p.push_str(&format!(" {ns}:script{suffix}=\"{script}\""));
+            next = parts.next().filter(ok);
+        }
+        if let Some(country) = next {
             p.push_str(&format!(" {ns}:country{suffix}=\"{country}\""));
         }
     }
     p
+}
+
+/// Whether a language tag's subtag is a script (BCP 47: four letters).
+pub(in crate::odt) fn is_script(subtag: &str) -> bool {
+    subtag.len() == 4 && subtag.chars().all(|c| c.is_ascii_alphabetic())
 }
 
 /// The Asian and complex-script attributes of `x`: fonts, complex size, weight, posture and the
@@ -168,10 +154,19 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
     let mut p = String::new();
     // Complex-script weight and posture of their own are written with the other script extras.
     let own_cs = |pick: fn(&wordcraft_doc::props::CharProps) -> Option<bool>| f.extra.as_deref().and_then(pick).is_some();
+    let extra = f.extra.as_deref();
+    // What it turns off that its style, or the style that is based on, may turn on: said so, or
+    // that bold, italic, underline or strike-through would show through.
+    let off = |pick: fn(&wordcraft_doc::props::CharProps) -> Option<bool>| extra.and_then(pick) == Some(false);
     if f.bold {
         p.push_str(" fo:font-weight=\"bold\" style:font-weight-asian=\"bold\"");
         if !own_cs(|x| x.bold_cs) {
             p.push_str(" style:font-weight-complex=\"bold\"");
+        }
+    } else if off(|x| x.bold) {
+        p.push_str(" fo:font-weight=\"normal\" style:font-weight-asian=\"normal\"");
+        if !own_cs(|x| x.bold_cs) {
+            p.push_str(" style:font-weight-complex=\"normal\"");
         }
     }
     if f.italic {
@@ -179,8 +174,12 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
         if !own_cs(|x| x.italic_cs) {
             p.push_str(" style:font-style-complex=\"italic\"");
         }
+    } else if off(|x| x.italic) {
+        p.push_str(" fo:font-style=\"normal\" style:font-style-asian=\"normal\"");
+        if !own_cs(|x| x.italic_cs) {
+            p.push_str(" style:font-style-complex=\"normal\"");
+        }
     }
-    let extra = f.extra.as_deref();
     if f.underline {
         use wordcraft_doc::props::Underline as U;
         let (style, kind, width, mode) = match extra.and_then(|e| e.underline) {
@@ -201,11 +200,16 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
             " style:text-underline-style=\"{style}\" style:text-underline-type=\"{kind}\" style:text-underline-width=\"{width}\" style:text-underline-color=\"{color}\"{mode}"
         ));
     }
+    if !f.underline && extra.is_some_and(|e| e.underline == Some(wordcraft_doc::props::Underline::None)) {
+        p.push_str(" style:text-underline-style=\"none\"");
+    }
     if f.strike || extra.is_some_and(|e| e.double_strike == Some(true)) {
         p.push_str(" style:text-line-through-style=\"solid\"");
         if extra.is_some_and(|e| e.double_strike == Some(true)) {
             p.push_str(" style:text-line-through-type=\"double\"");
         }
+    } else if off(|x| x.strike) {
+        p.push_str(" style:text-line-through-style=\"none\"");
     }
     if let Some(e) = extra {
         if (f.sup || f.sub) && e.position.is_some() {
@@ -233,8 +237,13 @@ pub(in crate::odt) fn text_props(f: &Fmt) -> String {
     if let Some(c) = f.background {
         p.push_str(&format!(" fo:background-color=\"#{}\"", c.hex().to_ascii_lowercase()));
     }
+    // One size in WordCraft's model is every script's in ODF's, as bold is: without these,
+    // LibreOffice shows Asian and complex-script text at the default size whatever was chosen.
     if let Some(s) = f.size {
-        p.push_str(&format!(" fo:font-size=\"{}\"", pt(s)));
+        p.push_str(&format!(" fo:font-size=\"{0}\" style:font-size-asian=\"{0}\"", pt(s)));
+        if f.extra.as_deref().and_then(|x| x.size_cs).is_none() {
+            p.push_str(&format!(" style:font-size-complex=\"{}\"", pt(s)));
+        }
     }
     if f.code {
         p.push_str(&format!(" fo:font-family=\"'{}'\" style:font-family-generic=\"modern\" style:font-pitch=\"fixed\"", model::MONO_FONT));

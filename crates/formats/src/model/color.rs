@@ -168,6 +168,29 @@ mod tests {
     #[test]
     fn eight_digit_hex_rejects_signs() {
         assert_eq!(parse_color("#+1+2+3+4"), None);
+        // #11223344 is alpha 0x44 over white.
         assert_eq!(parse_color("#11223344"), Some(Rgb(192, 196, 201)));
+    }
+
+    #[test]
+    fn colors_with_alpha_composite_over_white() {
+        // The secondary text colour of dark-theme sites: solid black would read as the site's
+        // own emphasis, white is invisible on the page; the composite is what the eye saw.
+        assert_eq!(parse_color("rgba(0, 0, 0, 0.45)"), Some(Rgb(140, 140, 140)));
+        assert_eq!(parse_color("rgb(0 0 0 / 0.45)"), Some(Rgb(140, 140, 140)));
+        assert_eq!(parse_color("rgba(0, 0, 0, 0)"), Some(Rgb(255, 255, 255)));
+        assert_eq!(parse_color("rgba(255, 0, 0, 1)"), Some(Rgb(255, 0, 0)));
+        assert_eq!(parse_color("rgba(255, 0, 0, 45%)"), Some(Rgb(255, 140, 140)));
+        assert_eq!(parse_color("hsla(120, 100%, 50%, 0.5)"), Some(Rgb(128, 255, 128)));
+        // A 4-digit hex's last digit is the alpha, too: #0008 is black at 8/15 over white.
+        assert_eq!(parse_color("#0008"), Some(Rgb(119, 119, 119)));
+        // `none` is a missing alpha, and a missing alpha is transparent, not the opaque default
+        // an omitted alpha takes.
+        assert_eq!(parse_color("rgb(0 0 0 / none)"), Some(Rgb(255, 255, 255)));
+        assert_eq!(parse_color("rgb(0 0 0)"), Some(Rgb(0, 0, 0)));
+        // An alpha that is not a finite number is no alpha: the colour stays opaque, not black.
+        assert_eq!(parse_color("rgba(0, 0, 0, nan)"), Some(Rgb(0, 0, 0)));
+        assert_eq!(parse_color("rgba(0, 0, 0, inf)"), Some(Rgb(0, 0, 0)));
+        assert_eq!(parse_color("rgba(0, 0, 0, nan%)"), Some(Rgb(0, 0, 0)));
     }
 }

@@ -1,8 +1,11 @@
-use super::date::dttm_to_iso;
+use super::date::{dttm_to_iso, iso_date};
 use super::parse::column_grid;
-use super::state::{CellDef, Dest, HeaderFooter, MAX_GROUPS, MAX_REV_AUTHORS, MAX_SECTIONS, Output, PageGeom, SecFmt, St};
+use super::state::{
+    CellDef, CommentData, Dest, HeaderFooter, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS, MAX_SECTIONS, NoteData,
+    Output, PageGeom, SecFmt, St, Sub,
+};
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
-use super::{Arc, Cell, FBlock, FTable, HashMap, Inline, Kind, Meta, Para, Rgb, model};
+use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
 
 #[derive(Default)]
 pub(super) struct Reader {
@@ -91,6 +94,22 @@ pub(super) struct Reader {
     pub(super) in_creatim: bool,
     pub(super) rule_pending: bool,
     pub(super) info_depth: Option<usize>,
+    // Notes and comments (only when the caller wants them).
+    pub(super) marks_on: bool,
+    pub(super) sub: Option<Sub>,
+    pub(super) notes: Vec<NoteData>,
+    pub(super) comments: Vec<CommentData>,
+    pub(super) atn_text: String,
+    pub(super) atn_initials: String,
+    pub(super) atn_author: String,
+    pub(super) atn_date: String,
+    pub(super) atn_parts: Option<(u32, u32, u32, u32, u32)>,
+    pub(super) atn_ref: Option<i32>,
+    pub(super) last_end: Option<i32>,
+    pub(super) range_starts: HashSet<i32>,
+    pub(super) range_ends: HashSet<i32>,
+    pub(super) claimed: HashSet<i32>,
+    pub(super) synth: i32,
 }
 
 impl Reader {
@@ -152,12 +171,103 @@ impl Reader {
         }
     }
 
+    /// A footnote, endnote or comment group starts: read it into an output of its own.
+    pub(super) fn start_sub(&mut self, comment: bool) {
+        if self.overflow > 0 || self.notes.len() >= MAX_NOTES || self.comments.len() >= MAX_NOTES {
+            self.st.dest = Dest::Skip;
+            return;
+        }
+        let saved = self.swap_output(Output::default());
+        self.sub = Some(Sub { depth: self.depth(), comment, endnote: false, saved: Box::new(saved) });
+        self.st.intbl = false;
+    }
+
+    /// A place marker as text in the current paragraph.
+    pub(super) fn push_mark(&mut self, tag: char, n: i64, fmt: Fmt) {
+        self.para.push_text(&format!("{MARK_OPEN}{tag}{n}{MARK_CLOSE}"), &fmt);
+        self.para_has = true;
+    }
+
+    /// The footnote or comment group closed: keep its text and leave a marker in the body.
+    pub(super) fn end_sub(&mut self) {
+        let Some(sub) = self.sub.take() else { return };
+        if self.para_has || !self.para.inlines.is_empty() {
+            self.end_para(false);
+        }
+        self.close_table();
+        let fmt = self.stack.last().map(|s| s.fmt.clone()).unwrap_or_default();
+        let mut inner = self.swap_output(*sub.saved);
+        inner.body.truncate(MAX_NOTE_BLOCKS);
+        if !sub.comment {
+            self.push_mark('N', self.notes.len() as i64, fmt);
+            self.notes.push(NoteData { endnote: sub.endnote, blocks: inner.body });
+            return;
+        }
+        let want = self.atn_ref.take().or(self.last_end.take());
+        let id = match want {
+            Some(i) if self.range_starts.contains(&i) && self.range_ends.contains(&i) && self.claimed.insert(i) => i,
+            _ => {
+                // No range of its own: the comment sits at this point.
+                self.synth = self.synth.saturating_sub(1);
+                let id = self.synth;
+                self.push_mark('B', i64::from(id), fmt.clone());
+                self.push_mark('E', i64::from(id), fmt);
+                id
+            }
+        };
+        let date =
+            if !self.atn_date.is_empty() { std::mem::take(&mut self.atn_date) } else { self.atn_parts.take().map(iso_date).unwrap_or_default() };
+        self.atn_parts = None;
+        self.comments.push(CommentData {
+            rtf_id: id,
+            author: std::mem::take(&mut self.atn_author),
+            initials: std::mem::take(&mut self.atn_initials),
+            date,
+            blocks: inner.body,
+        });
+    }
+
+    /// A comment word's text group closed (`\atrfstart 3`, `\atnauthor Ann`…).
+    pub(super) fn commit_atn(&mut self, kind: u8) {
+        let text = std::mem::take(&mut self.atn_text);
+        let text = text.trim();
+        let id = text.parse::<i32>().ok();
+        let fmt = self.stack.last().map(|s| s.fmt.clone()).unwrap_or_default();
+        match kind {
+            1 => {
+                if let Some(id) = id {
+                    self.range_starts.insert(id);
+                    self.push_mark('B', i64::from(id), fmt);
+                }
+            }
+            2 => {
+                if let Some(id) = id {
+                    self.range_ends.insert(id);
+                    self.last_end = Some(id);
+                    self.push_mark('E', i64::from(id), fmt);
+                }
+            }
+            3 => self.atn_initials = text.to_string(),
+            4 => self.atn_author = text.to_string(),
+            5 => {
+                // Either `\yr\mo\dy\hr\min` words (read as they came) or a packed date-time number.
+                if let Some(parts) = self.atn_parts.take() {
+                    self.atn_date = iso_date(parts);
+                } else if let Some(n) = text.parse::<u32>().ok().filter(|n| *n != 0) {
+                    self.atn_date = iso_date((1900 + ((n >> 20) & 0x1FF), (n >> 16) & 0xF, (n >> 11) & 0x1F, (n >> 6) & 0x1F, n & 0x3F));
+                }
+            }
+            6 => self.atn_ref = id,
+            _ => {}
+        }
+    }
+
     /// `\sect`: end the paragraph, and with it the section, which takes its formatting and the
     /// headers and footers read since the last break. Inside a header, footer or table, and past
     /// [`MAX_SECTIONS`], it only ends the paragraph.
     pub(super) fn end_section(&mut self) {
         self.end_para_mark();
-        if self.hf.is_some() || self.st.intbl || self.section_parts.len() + 1 >= MAX_SECTIONS {
+        if self.hf.is_some() || self.sub.is_some() || self.st.intbl || self.section_parts.len() + 1 >= MAX_SECTIONS {
             return;
         }
         let props = self.sec.props(&self.page);
@@ -175,7 +285,7 @@ impl Reader {
         let pv = p.unwrap_or(0);
         // Inside a header or footer the word is read into a scratch copy and dropped.
         let mut scratch;
-        let sec = if self.hf.is_some() {
+        let sec = if self.hf.is_some() || self.sub.is_some() {
             scratch = self.sec.clone();
             &mut scratch
         } else {
@@ -231,6 +341,9 @@ impl Reader {
             self.overflow -= 1;
             return;
         }
+        if self.sub.as_ref().is_some_and(|s| s.depth == self.depth()) {
+            self.end_sub();
+        }
         let closing = self.st.dest;
         // Destination-level commits.
         match closing {
@@ -249,6 +362,7 @@ impl Reader {
                 }
                 self.in_creatim = false;
             }
+            Dest::Atn(k) => self.commit_atn(k),
             _ => {}
         }
         let Some(mut prev) = self.stack.pop() else { return };
