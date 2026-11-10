@@ -167,7 +167,7 @@ fn opened(doc: &mut Document) {
 
 /// Parse a document from bytes; `name` gives the format by extension.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Document, String> {
-    open_bytes_with(name, bytes, None).map(|(doc, _)| doc)
+    open_bytes_with(name, bytes, None).map(|(doc, _, _)| doc)
 }
 
 /// Open a Word 97-2003 binary file, decrypting it with `password` when it is password-protected
@@ -190,8 +190,10 @@ fn open_binary_doc(bytes: &[u8], password: Option<&str>) -> Result<(Document, bo
 /// `password` first. Also says
 /// whether the file was encrypted. Without the password needed the error satisfies
 /// [`needs_password`]; with a wrong one, [`wrong_password`].
-pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Document, bool), String> {
-    open_bytes_in(name, bytes, password, &wordcraft_geom::Region::default()).map(|(doc, encrypted, _)| (doc, encrypted))
+/// Returns `(document, encrypted, is_plain_text)` where `is_plain_text` is true when the file
+/// was imported through the plain-text importer (encoding detection, no markup).
+pub fn open_bytes_with(name: &str, bytes: &[u8], password: Option<&str>) -> Result<(Document, bool, bool), String> {
+    open_bytes_in(name, bytes, password, &wordcraft_geom::Region::default())
 }
 
 /// The page a file that gives no page size (plain text, Markdown, HTML) opens on: `region`'s
