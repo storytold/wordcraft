@@ -67,9 +67,9 @@ pub fn templates(app: &mut WordApp, ui: &mut Ui, f: &mut TemplatesForm) -> bool 
     if let Some(p) = app.dialog_pick.take() {
         f.path = p;
     }
-    ui.label(egui::RichText::new(tl!("Document template:")).font(semibold(12.5)));
+    let label = ui.label(egui::RichText::new(tl!("Document template:")).font(semibold(12.5)));
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0));
+        ui.add(egui::TextEdit::singleline(&mut f.path).desired_width(300.0)).labelled_by(label.id);
         if ui.add_enabled(can_pick(app), egui::Button::new(tl!("Attach…"))).clicked() {
             pick(app);
         }
@@ -284,7 +284,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("House.dotx");
         let mut t = wordcraft_doc::Document::new();
-        t.styles.upsert(wordcraft_doc::styles::Style {
+        std::sync::Arc::make_mut(&mut t.styles).upsert(wordcraft_doc::styles::Style {
             id: "Memo".into(),
             name: "Memo".into(),
             kind: wordcraft_doc::styles::StyleKind::Paragraph,

@@ -8,6 +8,7 @@ use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
+use crate::boxes::BoxContext;
 use crate::para::{CellText, ClKind, ParaLayout};
 use crate::{BoxInput, BoxLayout, Ctx, Placed, layout_box};
 
@@ -343,38 +344,9 @@ fn region_look(st: &TableStyleProps, region: Region) -> RegionLook {
     out
 }
 
-/// A cell's borders from the table style's parts it is in, later parts winning. Row parts give
-/// their left/right edges at the table's sides and `inside_v` between cells; column parts their
-/// top/bottom edges at the table's top and bottom and `between` between rows; corner cells their
-/// four edges.
-fn region_borders(parts: &[(TablePart, Borders)], (ri, nrows): (usize, usize), (first_g, last_g): (bool, bool)) -> Borders {
-    let mut out = Borders::default();
-    for (part, b) in parts {
-        let b = *b;
-        let mapped = if part.is_row() {
-            Borders {
-                top: b.top,
-                bottom: b.bottom,
-                left: if first_g { b.left } else { b.inside_v },
-                right: if last_g { b.right } else { b.inside_v },
-                between: None,
-                inside_v: None,
-            }
-        } else if part.is_column() {
-            Borders {
-                top: if ri == 0 { b.top } else { b.between },
-                bottom: if ri + 1 >= nrows { b.bottom } else { b.between },
-                left: b.left,
-                right: b.right,
-                between: None,
-                inside_v: None,
-            }
-        } else {
-            Borders { between: None, inside_v: None, ..b }
-        };
-        out.overlay(&mapped);
-    }
-    out
+/// A cell's borders from the table style's parts it is in ([`wordcraft_doc::styles::part_borders`]).
+fn region_borders(parts: &[(TablePart, Borders)], rows: (usize, usize), edges: (bool, bool)) -> Borders {
+    wordcraft_doc::styles::part_borders(parts, rows, edges)
 }
 
 struct CellBox {
@@ -650,8 +622,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
                 (items, len)
             } else {
-                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } =
-                    layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth));
+                let BoxLayout { mut items, mut height, floats_bottom, last_top, .. } = layout_box(
+                    ctx,
+                    BoxInput {
+                        context: BoxContext::Cell { text, left: -margins[1], right: x1 - x0 - margins[1], clamp: true },
+                        ..BoxInput::cell(story, &cell.blocks, &cpath, cw, text, depth)
+                    },
+                );
                 // A hidden end-of-cell mark: an empty last paragraph takes no room (Word for
                 // Windows: a row of empty such cells is only its borders).
                 if cell.props.hide_mark && cell.blocks.last().and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty()) {
@@ -788,6 +765,15 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             {
                 items.push(Placed::Fill { rect, color: f });
             }
+            // Its background picture, over the shading and under the text, cut off at its edges.
+            if c.vmerge != VMerge::Continue
+                && let Some(pic) = t.rows.get(ri).and_then(|r| r.cells.get(ci)).and_then(|cell| cell.props.picture.as_deref())
+            {
+                let images = cell_picture(pic, rect, story, path);
+                if !images.is_empty() {
+                    items.push(Placed::Clip { rect, spin: wordcraft_geom::Spin::default(), items: images });
+                }
+            }
             // Behind-text frames count towards vertical alignment even without inline content.
             // They do not increase the row's flow height.
             let align_h = c
@@ -921,6 +907,11 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let fits = |bottom: f32| bottom <= limit + 0.01;
+    // A cell's background picture (a clip as big as the cell's area): split with the area like
+    // shading, not moved on like a picture in the text.
+    let areas: Vec<Rect> =
+        row.items.iter().filter_map(|it| if let Placed::Cell { rect, covered: false, .. } = it { Some(*rect) } else { None }).collect();
+    let background = |it: &Placed| matches!(it, Placed::Clip { rect, .. } if areas.contains(rect));
     // Each cell's items: every item of a row is in one of its cells.
     let (mut cells, mut ends, realign) = cells_from_top(row, limit);
     // A nested table's cell is deeper than the row's own.
@@ -970,6 +961,9 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     let mut cut_through = vec![false; cells.len()];
     for ((((items, splits), m), kept), through) in cells.iter().zip(&splits).zip(&mut moved).zip(&mut kept_cells).zip(&mut cut_through) {
         for (it, &split) in items.iter().zip(splits) {
+            if background(it) {
+                continue;
+            }
             let mut runs_over = |top: f32, bottom: f32| *through |= top < limit - 0.01 && bottom > limit + 0.01;
             let top = if let Some(r) = it.turned_bounds() {
                 // Turned text moves as a whole, like a picture.
@@ -1044,6 +1038,22 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
     for ((((c, items), splits), &shift), end) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts).zip(&ends) {
         let start = b.len();
         for (it, &split) in items.iter().zip(splits) {
+            // A background picture: the part above the cut stays, and the continuation's area
+            // shows the rest of it, from the cut down.
+            if let Placed::Clip { rect, spin, items: pictures } = it
+                && background(it)
+            {
+                let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
+                a.extend(above.map(|rect| Placed::Clip { rect, spin: *spin, items: pictures.clone() }));
+                b.extend(below.map(|r| {
+                    let mut pictures = pictures.clone();
+                    for p in &mut pictures {
+                        p.translate(0.0, r.y - rect.y.max(cut));
+                    }
+                    Placed::Clip { rect: r, spin: *spin, items: pictures }
+                }));
+                continue;
+            }
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
                 if fits(r.bottom()) {
@@ -1191,14 +1201,16 @@ fn align_in_part(
     }
     let limit = cut - row.bottom.clamp(0.0, cut);
     let mut kept = f32::MIN;
-    for ((items, splits), _) in cells.iter().zip(splits).zip(realign).filter(|(_, al)| al.is_none()) {
+    for (((items, splits), _), end) in cells.iter().zip(splits).zip(realign).zip(ends.iter()).filter(|((_, al), _)| al.is_none()) {
+        // No further than the cell's content: its last paragraph may have dropped its space after.
+        let end = end.unwrap_or(f32::MAX);
         for (it, &split) in items.iter().zip(splits) {
             let bottom = match (it.turned_bounds(), it) {
                 (Some(r), _) => Some(r.bottom()),
                 // A paragraph kept whole ends with its space after.
                 (None, Placed::Lines { para, l0, y, .. }) if split > *l0 => crate::item_bottom(*y, para, *l0, split)
                     .filter(|&b| b <= limit + 0.01)
-                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(limit) } else { b }),
+                    .map(|b| if split == para.lines.len() { (b + para.rp.space_after).min(end.max(b)).min(limit) } else { b }),
                 (None, Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }) => {
                     Some(rect.bottom())
                 }
@@ -1266,6 +1278,51 @@ fn line_split(para: &ParaLayout, (l0, l1): (usize, usize), y: f32, limit: f32, e
         }
     }
     k
+}
+
+/// Most copies of a tiled cell picture drawn.
+const MAX_TILES: usize = 400;
+
+/// A cell's background picture in `rect` (the cell's area): once at its own size where its
+/// alignment puts it, tiled from the cell's top left, or stretched over the cell.
+fn cell_picture(pic: &wordcraft_doc::props::CellPicture, rect: Rect, story: StoryRef, path: &[u32]) -> Vec<Placed> {
+    use wordcraft_doc::props::PictureRepeat;
+    let [w, h] = pic.size;
+    let image = |r: Rect| Placed::Image {
+        rect: r,
+        media: pic.media.clone(),
+        crop: [0.0; 4],
+        story,
+        path: wordcraft_doc::Path(path.to_vec()),
+        off: usize::MAX,
+        spin: wordcraft_geom::Spin::default(),
+        fx: Default::default(),
+    };
+    let sized = w.is_finite() && h.is_finite() && w > 0.1 && h > 0.1;
+    match pic.repeat {
+        PictureRepeat::Stretch => vec![image(rect)],
+        PictureRepeat::Tile if sized => {
+            let (cols, rows) = ((rect.w / w).ceil().max(1.0), (rect.h / h).ceil().max(1.0));
+            // Too many tiles to draw (or a cell of no finite size): one picture stretched over
+            // the cell, as a page's picture is, so the cell is always covered.
+            let tiles = cols * rows;
+            if !tiles.is_finite() || tiles > MAX_TILES as f32 {
+                return vec![image(rect)];
+            }
+            let (cols, rows) = (cols as usize, rows as usize);
+            (0..rows)
+                .flat_map(|r| (0..cols).map(move |c| (r, c)))
+                .map(|(r, c)| image(Rect::new(rect.x + c as f32 * w, rect.y + r as f32 * h, w, h)))
+                .collect()
+        }
+        _ if sized => {
+            let at = |a: f32| if a.is_finite() { a.clamp(0.0, 1.0) } else { 0.0 };
+            let x = rect.x + (rect.w - w) * at(pic.align[0]);
+            let y = rect.y + (rect.h - h) * at(pic.align[1]);
+            vec![image(Rect::new(x, y, w, h))]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// The parts of `r` above `cut` and below it, the latter moved up by `shift` (onto the
@@ -1529,6 +1586,7 @@ mod width_tests {
 
     #[test]
     fn autofit_shares_donor_loss() {
+        crate::test_fonts();
         let table = Table::new(1, 4, 260.0);
         let mut grid = [30.0, 120.0, 20.0, 90.0];
         let content = [(28.0, 28.0), (40.0, 120.0), (40.0, 40.0), (30.0, 90.0)];
@@ -1538,6 +1596,7 @@ mod width_tests {
 
     #[test]
     fn autofit_exhausts_donors() {
+        crate::test_fonts();
         let table = Table::new(1, 2, 50.0);
         let mut grid = [30.0, 20.0];
         autofit(&mut grid, &[(25.0, 25.0), (40.0, 40.0)], &table, 50.0);
@@ -1546,6 +1605,7 @@ mod width_tests {
 
     #[test]
     fn autofit_keeps_fitting_widths() {
+        crate::test_fonts();
         let table = Table::new(1, 3, 120.0);
         let mut grid = [30.0, 40.0, 50.0];
         autofit(&mut grid, &[(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)], &table, 120.0);
