@@ -407,7 +407,17 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }
-    if pressed && grab == Grab::Move && object.behind() && behind_draggable(app, &object) {
+    // Where text covers a Behind Text picture, a click edits the text and a drag moves the
+    // picture. An uncovered part must select the picture immediately, so its frame and Layout
+    // Options remain reachable after the user has clicked into the text (#6064).
+    if pressed
+        && grab == Grab::Move
+        && object.behind()
+        && behind_draggable(app, &object)
+        && crate::canvas::page_at(pages, layout, scale, at)
+            .and_then(|(page, x, y)| layout.object_at_in(page, x, y, EDGE / scale.max(0.01), object.story))
+            .is_none_or(|hit| hit.pos() != object.pos())
+    {
         let (min, picture) = match app.session.doc.para_at(&object.pos()).and_then(|p| p.object_at(object.pos().off)) {
             Some(o) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return false,

@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-11-10 · **Last updated:** 2026-11-10 · **Change:** minor (#6064: a selected picture offers Layout Options beside its frame; readiness estimates unchanged).
+> **Last reviewed:** 2026-11-10 · **Last updated:** 2026-11-10 · **Change:** minor (#6064: selected pictures offer Layout Options and Behind Text pictures can be selected again on an uncovered area; readiness estimates unchanged).
 
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
@@ -152,7 +152,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
-- 2026-11-10: A selected picture offers a Layout Options button beside its visible rotated bounds (#6064). It reuses the seven Wrap Text choices and Move with Text / Fix Position on Page commands, keeps the picture selected, follows zoom and scrolling, and closes when the selection leaves the picture. Crop mode, Read Mode, modal dialogs and offscreen pictures suppress the button. UI regression tests cover the popup, wrapping and undo, visibility and positioning; no new native Word comparison or readiness estimate.
+- 2026-11-10: A selected picture offers a Layout Options button beside its visible rotated bounds (#6064). It reuses the seven Wrap Text choices and Move with Text / Fix Position on Page commands, keeps the picture selected, follows zoom and scrolling, and closes when the selection leaves the picture. Crop mode, Read Mode, modal dialogs and offscreen pictures suppress the button. After selecting Behind Text, clicking an uncovered area of the picture restores its frame and Layout Options; clicking text above it still edits the text. UI regression tests cover all seven wrapping choices, undo/redo, mouse selection, popup dismissal, visibility and positioning; no new native Word comparison or readiness estimate.
 - 2026-11-08: Layout: a turned inline picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`, as other tools write) keeps its line to its frame and overhangs it, cut at the line's top and bottom, as Word does: the frame as it is in Word 2007 layout, with width and height exchanged from 45° to 135° and 225° to 315° in Word 2013+ layout. Such a file saves the same way. Pictures with the room recorded (Word's own files) still take their rotated bounds. Readiness unchanged.
 - 2026-11-08: XML text and CDATA read with their line ends normalised (XML 1.0 §2.11): CR LF and a lone CR are one line feed, `&#13;` stays a CR, so a line break inside `w:t` in a file saved with Windows line ends is one space, not two (#5897); readiness estimates unchanged.
 - 2026-11-08: Layout: contextual spacing drops the space after a table cell's last paragraph when that paragraph is in the Normal style, the end-of-cell mark counting as a Normal paragraph next to it; a last paragraph in another style keeps its space after. The rule is inferred from docxide-pdf's notes and its `cell-end-*` fixtures (`cell-end-text-context`, `cell-end-empty-context`); a Word comparison that tells it apart from the neighbouring paragraph's style is still open. Readiness unchanged.
@@ -876,7 +876,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 ## Revision history
 
-> 2026-11-10 · Selected pictures expose the existing wrapping choices through Layout Options (#6064); readiness unchanged.
+> 2026-11-10 · Selected pictures expose the existing wrapping choices through Layout Options and Behind Text pictures can be selected again on an uncovered area (#6064); readiness unchanged.
 
 > 2026-11-08 · Progress log: turned inline pictures without a recorded effect extent keep their line to the frame, as in Word.
 >

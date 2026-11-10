@@ -2682,6 +2682,10 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
         let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
         a.run("arrange.bounds", json!({"x": 120, "y": 80})).unwrap();
         a.run("arrange.wrap", json!({"wrap": wrap})).unwrap();
+        // The header's text starts at 36 pt, the body's at 72 pt. The picture must overlap
+        // the actual line in both stories; a fixed y = 80 misses all the header text.
+        let text = a.session.layout().caret(&Pos { off: 0, ..pos.clone() }).unwrap();
+        a.run("arrange.bounds", json!({"x": 120, "y": text.top})).unwrap();
         let before = a.session.layout().object(&pos, 0).unwrap().rect;
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -2697,12 +2701,16 @@ fn drag_floating_picture(wrap: &str, header: bool, preselect: bool) {
         let page = h.state().canvas.page_rects[0];
         let scale = h.state().canvas.scale;
         let frame = crate::frame::to_screen(page, scale, before);
-        // The top edge crosses the document's first text line, so Behind Text must still be
+        // The top edge crosses the story's first text line, so Behind Text must still be
         // draggable where its pixels overlap body text. Stay away from resize handles.
         let from = pos2(frame.left() + frame.width() * 0.25, frame.top() + 5.0 * scale);
         let to = from + vec2(50.0, 40.0);
         let button = |at, pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
         if wrap == "behindText" {
+            assert!(
+                h.state_mut().session.layout().object_at_in(0, before.x + before.w * 0.25, before.y + 5.0, 0.0, pos.story).is_none(),
+                "the fixture's click must overlap text above the picture"
+            );
             // A click without drag threshold still reaches the text above the picture.
             h.event(Event::PointerMoved(from));
             h.event(button(from, true));

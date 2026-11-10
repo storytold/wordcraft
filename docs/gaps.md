@@ -1,6 +1,6 @@
 # Where WordCraft falls short of Word
 
-> **Last reviewed:** 2026-11-10 · **Last updated:** 2026-11-10 · **Change:** minor (#6064: a selected picture offers Layout Options beside its frame; readiness estimates unchanged).
+> **Last reviewed:** 2026-11-10 · **Last updated:** 2026-11-10 · **Change:** minor (#6064: selected pictures offer Layout Options and Behind Text pictures can be selected again on an uncovered area; readiness estimates unchanged).
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 
@@ -79,7 +79,7 @@ Text context menus now include the existing formatting mini toolbar (#2959), inc
 
 Page drawing indexes text-box warp lookups by paragraph and story for the current call (#3614). Ordinary text boxes no longer rescan every preceding marker to find that they have no warp. Only requested offsets are retained; traversal stops after the last requested character. Original Linux display and save/reopen checks cover the correction; other drawing and command scans remain open. Gap and readiness estimates are unchanged.
 
-Picture wrapping access (gap 10): A selected picture offers a Layout Options button beside its visible rotated bounds (#6064). It reuses the seven Wrap Text choices and Move with Text / Fix Position on Page commands, keeps the picture selected, follows zoom and scrolling, and closes when the selection leaves the picture. Crop mode, Read Mode, modal dialogs and offscreen pictures suppress the button. UI regression tests cover the popup, wrapping and undo, visibility and positioning; no new native Word comparison or readiness estimate.
+Picture wrapping access (gap 10): A selected picture offers a Layout Options button beside its visible rotated bounds (#6064). It reuses the seven Wrap Text choices and Move with Text / Fix Position on Page commands, keeps the picture selected, follows zoom and scrolling, and closes when the selection leaves the picture. Crop mode, Read Mode, modal dialogs and offscreen pictures suppress the button. After selecting Behind Text, clicking an uncovered area of the picture restores its frame and Layout Options; clicking text above it still edits the text. UI regression tests cover all seven wrapping choices, undo/redo, mouse selection, popup dismissal, visibility and positioning; no new native Word comparison or readiness estimate.
 
 ## Ranked
 
@@ -185,7 +185,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
-> 2026-11-10 · Gap 10: a selected picture offers Layout Options without opening the ribbon or context menu (#6064); ranked gaps and readiness unchanged.
+> 2026-11-10 · Gap 10: selected pictures offer Layout Options and Behind Text pictures can be selected again on an uncovered area (#6064); ranked gaps and readiness unchanged.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 

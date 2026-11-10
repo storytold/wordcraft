@@ -117,24 +117,115 @@ mod tests {
     fn layout_options_changes_wrapping_without_losing_the_picture() {
         let mut h = window();
         let selection = h.state().session.sel.clone();
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": "Text must stay editable in front of a picture. ".repeat(16)})).unwrap();
+        h.state_mut().session.sel = selection.clone();
+        steps(&mut h, 6);
+        // Start inline, then exercise every choice through the popup, ending inline again.
+        for (label, expected) in [
+            ("Square", Wrap::Square),
+            ("Tight", Wrap::Tight),
+            ("Through", Wrap::Through),
+            ("Top and Bottom", Wrap::TopAndBottom),
+            ("Behind Text", Wrap::BehindText),
+            ("In Front of Text", Wrap::InFrontOfText),
+            ("In Line with Text", Wrap::Inline),
+        ] {
+            let before = h.state().session.doc.clone();
+            let depth = h.state().session.undo_depth();
+            h.get_by_label("Layout Options").click();
+            steps(&mut h, 3);
+            assert_eq!(h.state().session.sel, selection);
+            assert_eq!(h.state().session.doc, before);
+            assert_eq!(h.state().session.undo_depth(), depth);
+            h.get_by_label(label).click();
+            steps(&mut h, 3);
+            assert_eq!(h.state().session.sel, selection);
+            let (_, object) = crate::objects::selected(h.state()).unwrap();
+            assert_eq!(object.frame().unwrap().2.wrap, expected, "{label}");
+            assert_eq!(h.state().session.undo_depth(), depth + 1);
+            assert!(h.query_all_by_label(label).next().is_none(), "choosing {label} closes the popup");
+            let after = h.state().session.doc.clone();
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            assert_eq!(h.state().session.doc, before, "undo {label}");
+            h.state_mut().run("edit.redo", json!({})).unwrap();
+            assert_eq!(h.state().session.doc, after, "redo {label}");
+            steps(&mut h, 3);
+        }
+    }
+
+    #[test]
+    fn clicking_a_picture_shows_layout_options_and_escape_dismisses_the_popup() {
+        let mut h = window();
+        let selection = h.state().session.sel.clone();
+        let (pos, _) = crate::objects::selected(h.state()).unwrap();
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        steps(&mut h, 3);
+        assert!(h.query_all_by_label("Layout Options").next().is_none());
+        let layout = h.state_mut().session.layout();
+        let object = layout.object(&pos, h.state().session.page_hint).unwrap();
+        let rect = object.rect;
+        let at = crate::canvas::page_to_screen(h.state_mut(), object.page, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0).unwrap();
+        h.event(egui::Event::PointerMoved(at));
+        crate::table_resize::tests::button(&h, at, true);
+        h.step();
+        crate::table_resize::tests::button(&h, at, false);
+        steps(&mut h, 3);
+        assert_eq!(h.state().session.sel, selection);
         let before = h.state().session.doc.clone();
         let depth = h.state().session.undo_depth();
         h.get_by_label("Layout Options").click();
         steps(&mut h, 3);
+        assert!(h.query_all_by_label("Square").next().is_some());
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        steps(&mut h, 3);
+        assert!(h.query_all_by_label("Square").next().is_none());
+        assert!(h.query_all_by_label("Layout Options").next().is_some());
         assert_eq!(h.state().session.sel, selection);
         assert_eq!(h.state().session.doc, before);
         assert_eq!(h.state().session.undo_depth(), depth);
-        for label in ["In Line with Text", "Square", "Tight", "Through", "Top and Bottom", "Behind Text", "In Front of Text"] {
-            assert!(h.query_all_by_label(label).next().is_some(), "missing wrapping choice {label}");
-        }
-        h.get_by_label("Square").click();
+    }
+
+    #[test]
+    fn a_behind_text_picture_can_be_reselected_on_its_uncovered_area() {
+        let mut h = window();
+        let selection = h.state().session.sel.clone();
+        let (pos, _) = crate::objects::selected(h.state()).unwrap();
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        h.state_mut().run("text.insert", json!({"text": "Text in front of the picture"})).unwrap();
+        h.state_mut().session.sel = selection.clone();
+        steps(&mut h, 6);
+        h.get_by_label("Layout Options").click();
         steps(&mut h, 3);
-        assert_eq!(h.state().session.sel, selection);
-        let (_, object) = crate::objects::selected(h.state()).unwrap();
-        assert_eq!(object.frame().unwrap().2.wrap, Wrap::Square);
-        assert_eq!(h.state().session.undo_depth(), depth + 1);
-        h.state_mut().run("edit.undo", json!({})).unwrap();
-        assert_eq!(h.state().session.doc, before);
+        h.get_by_label("Behind Text").click();
+        steps(&mut h, 3);
+        assert_eq!(h.state().session.sel, selection, "changing wrapping keeps the picture selected");
+
+        let click = |h: &mut H, at| {
+            h.event(egui::Event::PointerMoved(at));
+            crate::table_resize::tests::button(h, at, true);
+            h.step();
+            crate::table_resize::tests::button(h, at, false);
+            steps(h, 3);
+        };
+        let layout = h.state_mut().session.layout();
+        let text = wordcraft_doc::Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
+        let caret = layout.caret(&text).unwrap();
+        let on_text = crate::canvas::page_to_screen(h.state_mut(), caret.page, caret.x + 2.0, caret.top + caret.height / 2.0).unwrap();
+        click(&mut h, on_text);
+        assert!(crate::objects::selected(h.state()).is_none(), "text in front of the picture must still take a plain click");
+        assert!(h.query_all_by_label("Layout Options").next().is_none());
+
+        let object = layout.object(&pos, h.state().session.page_hint).unwrap();
+        let rect = object.rect;
+        let on_picture = crate::canvas::page_to_screen(h.state_mut(), object.page, rect.x + rect.w / 2.0, rect.y + rect.h * 0.75).unwrap();
+        click(&mut h, on_picture);
+        assert_eq!(h.state().session.sel, selection, "an uncovered part of the picture must allow selecting it again");
+        h.get_by_label("Layout Options").click();
+        steps(&mut h, 3);
+        h.get_by_label("In Front of Text").click();
+        steps(&mut h, 3);
+        assert_eq!(crate::objects::selected(h.state()).unwrap().1.frame().unwrap().2.wrap, Wrap::InFrontOfText);
     }
 
     #[test]
