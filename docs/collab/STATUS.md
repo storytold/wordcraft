@@ -305,7 +305,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). The six other §5.26 findings (2, 3, 6, 8, 9, 10) remain open: they are separate failure modes (snapshot safety, room seeding, connection identity, session status, per-document connections, token renewal), named in §4 |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The five other §5.26 findings (3, 6, 8, 9, 10) remain open: they are separate failure modes (room seeding, connection identity, session status, per-document connections, token renewal), named in §4 |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -453,12 +453,16 @@ Results at this writing:
   client reconnects with `lastVersion` and receives the journal tail or a
   snapshot (`docs/collab/adr/0002-stale-peer-close.md`, `264afd18`). The price is
   named in both ADRs: a forced resync can cost the unconfirmed keystrokes of the
-  client that resyncs, which continues from the snapshot. Six findings of §5.26
-  stay open, each with its own slice: a corrupt snapshot becomes an empty room
-  (2), a room without a snapshot starts blank (3), a participant can register
-  another's `client_id` (6), a failed edit leaves the session reporting
-  `InSync` (8), the connection is app-wide while documents are per window (9),
-  and a session event replaces the client and drops its unconfirmed edits (10).
+  client that resyncs, which continues from the snapshot. Finding 2 no longer
+  turns a damaged document into an empty one: the store tells "never written"
+  from "stored and cannot be opened", and the second refuses the join while
+  leaving `model.json`/`meta` and `prev/` untouched
+  (`docs/collab/adr/0003-corrupt-snapshot-refused.md`, §5.30). Five findings of
+  §5.26 stay open, each with its own slice: a room without a snapshot starts
+  blank (3), a participant can register another's `client_id` (6), a failed edit
+  leaves the session reporting `InSync` (8), the connection is app-wide while
+  documents are per window (9), and a session event replaces the client and
+  drops its unconfirmed edits (10).
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -2914,6 +2918,125 @@ becomes an empty room) is the next data-safety one. Both convergence findings
 are now closed, so §2's criterion reads **done** with the price the two ADRs
 name; the six remaining findings are separate failure modes and are not hidden
 by that row.
+
+### 5.30 Finding 2: a snapshot that cannot be opened refuses the document (run 2026-11-11)
+
+**What the defect was.** `AppState::room_for` created a room on the first join.
+`Store::load` returned `Option<Snapshot>`, and `None` meant both "no snapshot
+was ever written" and every way a stored one can fail: an unreadable
+`model.json`, a missing or unparsable `meta`, a model that is not a `Document`,
+a model over the size bound. All of them fell into one `unwrap_or_else` that
+built the room from `Document::new()` (§5.26 finding 2,
+`apps/collab-server/src/lib.rs:240-270`).
+
+The blank room is a normal room. The first operation makes it dirty, `persist`
+writes it after 500 operations or on `leave`, and `persist_all` writes it on
+SIGTERM. `save` rotates the previous pair to `prev/` once, so the damaged file
+survives exactly one more snapshot — after that it is gone and the document is
+an empty page nobody asked for.
+
+**The decision.** `docs/collab/adr/0003-corrupt-snapshot-refused.md` (ADR
+WC-0003; repository-local, it does not consume a protocol ADR number). It
+compares keeping the fallback with deeper rotation, quarantining the file and
+starting blank, refusing to start the server, and refusing the document; it
+picks the last. The store is the only place that can see the difference, so the
+store owns it: `Store::load` answers `Ok(None)` (never written), `Ok(Some)`
+(opens) or `Err(Corrupt { file, reason })` (there and cannot be opened). The
+room table gets no entry on `Err`, so nothing can persist, rotate or commit over
+the file.
+
+**What the code does** (`apps/collab-server`, plus the ADR and four docs:
++536/−79 in seven files).
+
+- `src/store.rs`: `load` returns `Result<Option<Snapshot>, Corrupt>`. `model.json`
+  absent is `Ok(None)`; unreadable, over `MAX_MODEL` (`64 MiB`), or not a
+  `wordcraft_doc::Document` is `Err` on `model.json`. `meta` is required (it is
+  written last, so a model without it never committed), `version` is required
+  and every known key must be a number — starting at 0 would move the head
+  backwards; `epoch` may be absent (an older snapshot) and starts at 0. A
+  `cabinet_version` without its etag (or the reverse) is `Err`: dropping the
+  etag would drop the conflict check that stops the next commit from overwriting
+  an external edit. `dedup.json` and `source.docx` stay forgiving, as in §5.5:
+  a damaged window costs a duplicate answer, a missing source costs original
+  markup, and neither is text.
+- `src/lib.rs`: `room_for` returns `Result<Arc<Mutex<RoomState>>, Corrupt>` and
+  does not insert a room on `Err`; `refuse_corrupt` answers the join with
+  `Rejected { code: invalid, retryable: false }` and closes the socket, logging
+  the file, the reason and the directory an operator has to look at, without
+  document content. `Metrics` gained `corrupt_snapshots_total`. `RoomState::new`
+  removes the field duplication the two room constructors had.
+- `docs/collab/server.md` (the three states and the recovery path),
+  `production.md` (the counter and what to do when it grows), `rfc.md` §4.4 and
+  §4.6 (one row and one bullet; the wire is unchanged).
+
+**Tests** (five new; four pin the distinction, one the join).
+
+- `src/store.rs`: `a_damaged_model_is_corrupt_not_absent` (a truncated
+  `model.json` is `Err` on `model.json`), `a_snapshot_without_its_metadata_is_corrupt`
+  (the interrupted-write shape is `Err` on `meta`), `metadata_that_is_not_a_number_is_corrupt`
+  (`epoch=now`, `version=five`), `half_a_cabinet_marker_is_corrupt`, and
+  `a_missing_snapshot_is_none` (the absent case, asserted against them).
+- `src/tests.rs`: `a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten` —
+  with a truncated model and a `meta` on disk, a real client gets
+  `Rejected { invalid, retryable: false }`, `room_count()` is 0,
+  `corrupt_snapshots_total` is 1, `persist_all()` leaves `model.json` and `meta`
+  byte-for-byte unchanged, and a document with nothing stored still opens a room
+  at version 0.
+- `the_previous_snapshot_is_kept` used `b"one"`/`b"two"` as models; it now uses
+  real documents, because the store refuses to hand out anything else.
+- **The tests fail without the fix.** On the build host, with `room_for` falling
+  back to an empty room, the join test fails at the first `match` — the client
+  gets `Welcome { version: 0 }`, not a refusal — and, with that assertion
+  bypassed, at
+  `no empty room may stand in for the document` (`1 != 0`) and then at
+  `the damaged model is left for an operator`: `persist_all()` writes the empty
+  document JSON over the truncated bytes. The finding reproduced.
+
+**What ran** (build host `agents`, `scripts/remote-build.sh`, from this tree):
+
+- `cargo fmt --all -- --check` → **EXIT=0**.
+- `cargo clippy -p wordcraft-collab-server --all-targets -- -D warnings` →
+  **EXIT=0** (the first attempt failed on `cognitive_complexity` (31/30) in
+  `handle_socket`; the refusal moved to `refuse_corrupt`).
+- `cargo test` over `collab`, `collab-server`, `collab-client`, `collab-doc`,
+  `collab-app` → **291 passed, 0 failed, 1 ignored** (`collab` 59, `collab-doc`
+  116, `collab-client` 19, `collab-app` 39, `collab-server` 58 passed / 1
+  ignored — the LibreOffice commit gate). The slice added 5 tests:
+  `collab-server` 53 → 58.
+- `.github/workflows/` untouched, no manifest or lock change, no
+  `main`-touching step.
+
+**Local head.** The fix, its tests and the ADR are `bcca9bce` — `collab: refuse a
+document whose snapshot cannot be opened`; this page is one more commit on top of
+it and the only file it changes.
+
+| | |
+|---|---|
+| head | `bcca9bce` — `collab: refuse a document whose snapshot cannot be opened` |
+| files | `apps/collab-server/src/lib.rs` +95/−46, `src/store.rs` +184/−23, `src/tests.rs` +61/−10, `docs/collab/adr/0003-corrupt-snapshot-refused.md` +166, `docs/collab/server.md` +16, `production.md` +7, `rfc.md` +7 (7 files, +536/−79) |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27–§5.29: from `upstream/`,
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a
+fast-forward from `af9a43a2`, no rebase and no force. Then a maintainer's
+approval of the runs on the new head. Two follow-ups this slice names and does
+not take:
+
+- **The client reconnects in a loop on a refused join.** The transport
+  reconnects on any closed socket with a 250 ms backoff, and a join refusal
+  closes the socket, so a damaged document produces a reconnect every 250 ms
+  (each one counted). The refusal is not retryable and the app shows `Failed`,
+  but nothing tells the transport that a non-retryable refusal before `Welcome`
+  is final. It applies to the full-room and lease refusals too; it is a client
+  slice of its own.
+- **`prev/` is a one-step rollback, not a backup.** With the join refused the
+  pair is left alone, so `prev/` still holds the snapshot before the damage was
+  noticed — but nothing rotates or copies it on its own. Restore is an operator
+  action (`server.md`), and a real backup is the deployment's, not the store's.
+
+In the code, findings 3, 6, 8, 9 and 10 remain (§4), each with its own slice and
+test; finding 3 (a room with no snapshot replaces the open document) is the next
+data-safety one and now sits on the `Ok(None)` branch this slice made explicit.
 
 ## 6. Where things live
 
