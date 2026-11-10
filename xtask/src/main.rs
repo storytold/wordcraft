@@ -33,8 +33,10 @@ commands:
                   (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
-  docx-corpus --dir <path> [--out <report.json>]
+  docx-corpus --dir <path> [--out <report.json>] [--all-pages] [--timeout <secs>] [--cli <path>]
                   open, render and round-trip every .docx under a local corpus; writes JSON + Markdown
+                  (--all-pages renders every page; --cli uses an existing wordcraft-cli;
+                  `docx-corpus --help` lists all options)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the Word feature-parity summary in docs/parity-checklist.md
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
