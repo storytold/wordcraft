@@ -8136,6 +8136,15 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
     let (left, clipped) = cell_of(&got, &[0], 0);
     let (right, _) = cell_of(&got, &[0], 1);
     assert!(clipped, "the outer cell clips the nested table's text");
+    // At the outer cell's edges only: a cut nested cell doesn't clip its own text (the first
+    // clipped cell holding a line clips it), so text indented past it still shows.
+    for it in &got {
+        if let Placed::Cell { table, clip, rect, .. } = it
+            && table.0.len() > 1
+        {
+            assert!(!clip, "the nested cell at {rect:?} clips its text");
+        }
+    }
     // Nothing of the nested table reaches into the next cell: no line, no fill, no cell area.
     // (The outer table's own lines run on over half of the line between the cells.)
     let edge = left.right() + 1.0;

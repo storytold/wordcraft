@@ -921,9 +921,11 @@ fn crop_to_cell(it: Placed, lo: f32, hi: f32) -> Cropped {
             let (a, b) = (rect.x.max(lo), rect.right().min(hi));
             Cropped::Cut((b > a).then(|| Placed::Fill { rect: Rect::new(a, rect.y, b - a, rect.h), color }))
         }
-        Placed::Cell { rect, covered, table, row, cell, story, clip: _ } if past(rect.x, rect.right()) => {
+        // A nested cell keeps its own clipping: its text is cut at the outer cell's edges, not at
+        // the cropped nested cell's (text indented past its own cell still shows inside the outer).
+        Placed::Cell { rect, covered, table, row, cell, story, clip } if past(rect.x, rect.right()) => {
             let (a, b) = (rect.x.max(lo), rect.right().min(hi));
-            Cropped::Cut((b > a).then(|| Placed::Cell { rect: Rect::new(a, rect.y, b - a, rect.h), covered, table, row, cell, story, clip: true }))
+            Cropped::Cut((b > a).then(|| Placed::Cell { rect: Rect::new(a, rect.y, b - a, rect.h), covered, table, row, cell, story, clip }))
         }
         Placed::Rule { x0, y0, x1, y1, border } if past(x0.min(x1), x0.max(x1)) => {
             if (x0 - x1).abs() < SLACK {
