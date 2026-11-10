@@ -34,8 +34,10 @@ impl Writer {
         }
         let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
         let mut body = String::new();
+        let in_cell = std::mem::take(&mut self.in_cell);
         // An annotation holds paragraphs and lists only: a table's text goes in as paragraphs.
         self.blocks(&model::flatten_tables(&c.blocks), &mut body, 1);
+        self.in_cell = in_cell;
         self.close_ins(&mut body);
         (self.cur_style, self.chain, self.part, self.note_parent) = saved;
         out.push_str(&format!("<office:annotation{attrs}>{head}{body}</office:annotation>"));
@@ -68,7 +70,9 @@ impl Writer {
         let (class, parent) = if endnote { ("endnote", "Endnote") } else { ("footnote", "Footnote") };
         let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.replace(parent));
         let mut body = String::new();
+        let in_cell = std::mem::take(&mut self.in_cell);
         self.blocks(blocks, &mut body, 1);
+        self.in_cell = in_cell;
         self.close_ins(&mut body);
         (self.cur_style, self.chain, self.part, self.note_parent) = saved;
         if body.is_empty() {

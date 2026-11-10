@@ -10,11 +10,15 @@ use wordcraft_doc::{Block, Document, Rgb};
 const LO_TABLE: &str = r##"<style:style style:name="A1" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border-left="0.5pt solid #000000" fo:border-right="none" fo:border-top="0.5pt solid #000000" fo:border-bottom="0.5pt solid #000000"/></style:style><style:style style:name="B1" style:family="table-cell"><style:table-cell-properties fo:padding="0.1cm" fo:border="0.5pt solid #000000"/></style:style><style:style style:name="A2" style:family="table-cell"><style:table-cell-properties fo:padding-left="2pt" fo:padding-right="3pt" fo:padding-top="0pt" fo:padding-bottom="1pt" fo:border-left="0.5pt solid #000000" fo:border-right="none" fo:border-top="none" fo:border-bottom="2pt double #ff0000"/></style:style><style:style style:name="B2" style:family="table-cell"><style:table-cell-properties fo:border-left="0.5pt solid #000000" fo:border-right="0.5pt solid #000000" fo:border-top="none" fo:border-bottom="0.5pt dashed #000000"/></style:style>"##;
 
 fn table_doc(styles: &str, cells: [&str; 4]) -> Document {
+    import(&table_package(styles, cells)).unwrap()
+}
+
+fn table_package(styles: &str, cells: [&str; 4]) -> Vec<u8> {
     let content = format!(
         r#"<office:document-content {NS_T}><office:automatic-styles>{styles}</office:automatic-styles><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell table:style-name="{}"><text:p>a</text:p></table:table-cell><table:table-cell table:style-name="{}"><text:p>b</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell table:style-name="{}"><text:p>c</text:p></table:table-cell><table:table-cell table:style-name="{}"><text:p>d</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"#,
         cells[0], cells[1], cells[2], cells[3]
     );
-    import(&package(&content, None)).unwrap()
+    package(&content, None)
 }
 
 fn cells(d: &Document) -> Vec<CellProps> {
@@ -190,4 +194,59 @@ fn what_a_covered_cell_holds_stays_out_of_the_document() {
     assert_eq!(d.body[1].as_para().unwrap().text, "after");
     let Block::Table(t) = &*d.body[0] else { panic!() };
     assert_eq!(t.rows[0].cells[0].props.span, 2);
+}
+
+#[test]
+fn cell_padding_inherits_each_side_and_keeps_explicit_zero() {
+    let styles = r#"<style:style style:name="Base" style:family="table-cell"><style:table-cell-properties fo:padding="6pt"/></style:style>
+    <style:style style:name="Child" style:family="table-cell" style:parent-style-name="Base"><style:table-cell-properties fo:padding-left="0pt" fo:padding-bottom="9pt"/></style:style>"#;
+    let document = table_doc(styles, ["Child"; 4]);
+    let back = import(&crate::odt::tests::export_model(&document).unwrap()).unwrap();
+    for doc in [&document, &back] {
+        for cell in cells(doc) {
+            assert_eq!(cell.margins, Some([6.0, 0.0, 9.0, 6.0]));
+        }
+    }
+}
+
+#[test]
+fn tables_without_borders_do_not_acquire_a_default_grid() {
+    let styles = r##"<style:style style:name="L" style:family="table-cell"><style:table-cell-properties fo:border-top="1pt solid #000000" fo:border-left="1pt solid #000000"/></style:style>"##;
+    let pkg = table_package(styles, ["L", "missing", "missing", "missing"]);
+    let document = import(&pkg).unwrap();
+    // Exercise the parsed flow's writer as well as the document-model round trip:
+    // model conversion bakes cell borders and otherwise hides a wrong default grid.
+    let mut flow = crate::odt::parse(&pkg).unwrap();
+    for block in &mut flow.blocks {
+        if let crate::model::FBlock::Table(table) = block {
+            table.kept = None;
+            table.wrap = None;
+        }
+    }
+    let mut writer = crate::odt::writer::Writer::default();
+    let mut body = String::new();
+    writer.blocks(&flow.blocks, &mut body, 0);
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>{}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#,
+        writer.style_defs()
+    );
+    let written_flow = import(&package(&content, None)).unwrap();
+    let back = import(&crate::odt::tests::export_model(&document).unwrap()).unwrap();
+    for doc in [&document, &back, &written_flow] {
+        let table = doc
+            .body
+            .iter()
+            .find_map(|b| match b.as_ref() {
+                Block::Table(t) => Some(t),
+                _ => None,
+            })
+            .unwrap();
+        assert!(table.props.style.is_none());
+        assert!(!table.props.borders.unwrap_or_default().any_visible());
+        let cells = cells(doc);
+        assert!(cells[0].borders.unwrap_or_default().any_visible(), "{content}");
+        for cell in &cells[1..] {
+            assert!(!cell.borders.unwrap_or_default().any_visible());
+        }
+    }
 }

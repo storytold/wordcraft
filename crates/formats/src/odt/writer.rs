@@ -248,6 +248,8 @@ pub(super) struct Writer {
     story_top: Option<usize>,
     /// Cell styles by (shading, vertical-alignment).
     cell_styles: Vec<String>,
+    /// Whether the current story blocks belong to a table cell.
+    in_cell: bool,
     /// Graphic styles of floating pictures: their `style:graphic-properties` attributes.
     graphic_styles: Vec<String>,
     pub(super) pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
@@ -604,7 +606,7 @@ impl Writer {
                             // (LibreOffice puts a control with no placement at the line's top).
                             let raise = control.form_raise.filter(|r| r.is_finite()).map(|r| r.clamp(-1584.0, 1584.0)).unwrap_or(0.0);
                             let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Inline, y: raise, ..Default::default() };
-                            let (_, props, xy) = drawing::placement(drawing::Place::Text(Some(&float)), w, h);
+                            let (_, props, xy) = drawing::placement(drawing::Place::Text(Some(&float)), w, h, self.in_cell);
                             let style = self.graphic_style(format!("{props}{flat}"));
                             out.push_str(&format!(
                                 "<draw:control draw:style-name=\"{style}\" text:anchor-type=\"as-char\"{xy} draw:z-index=\"0\" svg:width=\"{}\" svg:height=\"{}\" draw:control=\"{id}\"/>",
@@ -1211,8 +1213,8 @@ impl Writer {
             } else {
                 ("", props.as_str())
             };
-            // Laid out where WordCraft places it, not held in the text's area: said, as the
-            // standard gives no default (§20.267) and a file's default style may say otherwise.
+            // Floating frames carry their cell constraint from frame_of. Other graphics
+            // state a fallback because §20.267 gives no default and styles may supply one.
             let flow = if props.contains("style:flow-with-text") { "" } else { " style:flow-with-text=\"false\"" };
             s.push_str(&format!(
                 "<style:style style:name=\"{}fr{}\" style:family=\"graphic\"{parent}><style:graphic-properties{props}{flow}/></style:style>",

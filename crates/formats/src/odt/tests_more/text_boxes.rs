@@ -325,3 +325,114 @@ fn a_frames_drawn_stroke_is_its_line_when_it_has_no_border() {
     assert_eq!(line(&open_with(&format!(r#"{stroke} fo:border="none""#))), None);
     assert_eq!(line(&open_with("")), None);
 }
+
+#[test]
+fn greyscale_mode_does_not_drop_a_metafile_picture() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D} xmlns:xlink="http://www.w3.org/1999/xlink"><office:automatic-styles><style:style style:name="Gray" style:family="graphic"><style:graphic-properties draw:color-mode="greyscale"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="Gray" text:anchor-type="as-char"><draw:image xlink:href="Pictures/shape.wmf"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = wmf();
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("Pictures/shape.wmf", &bytes)]);
+    let document = import(&pkg).unwrap();
+    assert!(document.body[0].as_para().unwrap().objects.iter().any(|object| matches!(object, InlineObject::Image { .. })));
+    let saved = export(&document).unwrap();
+    assert!(crate::odt::tests::entry(&saved, "META-INF/manifest.xml").contains("image/x-wmf"));
+}
+
+#[test]
+fn cell_frames_inherit_flow_with_text_and_allow_overrides() {
+    for (parent, child, anchor, outside) in [
+        ("true", "", "page", false),
+        ("false", "", "page", true),
+        ("true", r#"style:flow-with-text="false""#, "page", true),
+        ("false", r#"style:flow-with-text="true""#, "page", false),
+        ("false", "", "paragraph", true),
+    ] {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles>
+            <style:style style:name="base" style:family="graphic"><style:graphic-properties style:flow-with-text="{parent}"/></style:style>
+            <style:style style:name="middle" style:family="graphic" style:parent-style-name="base"/>
+            <style:style style:name="child" style:family="graphic" style:parent-style-name="middle"><style:graphic-properties {child}/></style:style>
+            </office:automatic-styles><office:body><office:text><table:table><table:table-row><table:table-cell><text:p>
+            <draw:frame draw:style-name="child" text:anchor-type="{anchor}" svg:width="1in" svg:height="1in"><draw:text-box><text:p>Box</text:p></draw:text-box></draw:frame>
+            </text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"#
+        );
+        let doc = import(&package(&content, None)).unwrap();
+        let wordcraft_doc::Block::Table(table) = doc.body[0].as_ref() else { panic!("table") };
+        let p = table.rows[0].cells[0].blocks[0].as_para().unwrap();
+        let InlineObject::Shape { float, .. } = &p.objects[0] else { panic!("frame") };
+        assert_eq!(float.outside_cell, outside, "{parent}, {child}, {anchor}");
+        let saved = crate::odt::tests::export_model(&doc).unwrap();
+        let xml = crate::odt::tests::content_of(&saved);
+        assert!(xml.contains(&format!(r#"style:flow-with-text="{}""#, !outside)), "{xml}");
+    }
+}
+
+#[test]
+fn libreoffice_cell_frame_saves_flow_with_text_false() {
+    for anchor in ["paragraph", "char"] {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:automatic-styles>
+            <style:style style:name="g" style:family="graphic"><style:graphic-properties style:flow-with-text="false" style:horizontal-rel="paragraph" style:vertical-rel="paragraph"/></style:style>
+            </office:automatic-styles><office:body><office:text><table:table><table:table-row><table:table-cell><text:p>
+            <draw:frame draw:style-name="g" text:anchor-type="{anchor}" svg:width="1in" svg:height="1in"><draw:text-box><text:p>Box</text:p></draw:text-box></draw:frame>
+            </text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"#
+        );
+        let doc = import(&package(&content, None)).unwrap();
+        let saved = crate::odt::tests::export_model(&doc).unwrap();
+        let xml = crate::odt::tests::content_of(&saved);
+        assert!(xml.contains(r#"style:flow-with-text="false""#), "{anchor}: {xml}");
+        assert!(!xml.contains(r#"style:flow-with-text="true""#), "{anchor}: {xml}");
+    }
+}
+
+#[test]
+fn cell_frame_scope_is_restored_after_tables_and_text_box_stories() {
+    let frame = |text: &str| {
+        format!(
+            r#"<draw:frame text:anchor-type="paragraph" svg:width="1in" svg:height="1in"><draw:text-box><text:p>{text}</text:p></draw:text-box></draw:frame>"#
+        )
+    };
+    let outer = frame("Outer");
+    let after_box = frame("After box");
+    let after_table = frame("After table");
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><table:table><table:table-row><table:table-cell><text:p>{outer}{after_box}</text:p></table:table-cell></table:table-row></table:table><text:p>{after_table}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut doc = import(&package(&content, None)).unwrap();
+    let wordcraft_doc::Block::Table(table) = doc.body[0].as_ref() else { panic!("table") };
+    let cell = table.rows[0].cells[0].blocks[0].as_para().unwrap();
+    let InlineObject::Shape { story: Some(part), .. } = &cell.objects[0] else { panic!("text box") };
+    let part = *part;
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
+    doc.media.insert("inner.png".into(), std::sync::Arc::new(png));
+    let inner = InlineObject::Image {
+        media: "inner.png".into(),
+        w: 12.0,
+        h: 12.0,
+        alt: String::new(),
+        float: wordcraft_doc::para::Float { wrap: Wrap::Square, ..Default::default() },
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let block = &mut doc.parts.get_mut(&part).unwrap().blocks[0];
+    let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(block) else { panic!("paragraph") };
+    p.insert_object(0, inner, &Default::default()).unwrap();
+    let saved = crate::odt::tests::export_model(&doc).unwrap();
+    let xml = crate::odt::tests::content_of(&saved);
+    // Resolve each frame's style: identical graphic styles may be shared.
+    let flow: Vec<_> = xml
+        .split("<draw:frame ")
+        .skip(1)
+        .map(|frame| {
+            let name = frame.split(r#"draw:style-name=""#).nth(1).unwrap().split('"').next().unwrap();
+            let style = xml.split(&format!(r#"<style:style style:name="{name}""#)).nth(1).unwrap().split("</style:style>").next().unwrap();
+            style.split(r#"style:flow-with-text=""#).nth(1).unwrap().split('"').next().unwrap()
+        })
+        .collect();
+    assert_eq!(flow.len(), 4, "{xml}");
+    assert_eq!(flow[3], "false", "body frame after table");
+    assert_eq!(flow[1], "false", "frame in a text box has its own story scope");
+    assert_eq!((flow[0], flow[2]), ("true", "true"), "cell scope restored after text box story");
+}

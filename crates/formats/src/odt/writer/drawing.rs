@@ -109,11 +109,11 @@ fn clip_attr(img: &model::Img) -> String {
 /// How a frame or shape `w` × `h` at `place` is anchored and placed: its `text:anchor-type`
 /// attribute, its graphic style's placement and its `svg:x`/`svg:y` (or `draw:transform` when
 /// it is turned). A group's member has no anchor of its own: it is placed by its position alone.
-pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, String, String) {
+pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32, in_cell: bool) -> (String, String, String) {
     let anchor = |a: &str| format!(" text:anchor-type=\"{a}\"");
     match place {
         Place::Text(Some(f)) if f.wrap != wordcraft_doc::para::Wrap::Inline => {
-            let (a, props, xy) = crate::odt::frames::frame_of(f, w, h);
+            let (a, props, xy) = crate::odt::frames::frame_of(f, w, h, in_cell);
             let page = if a == "page" && f.page > 0 { format!(" text:anchor-page-number=\"{}\"", f.page) } else { String::new() };
             (format!("{}{page}", anchor(a)), props, xy)
         }
@@ -320,7 +320,7 @@ impl Writer {
         let clip = clip_attr(img);
         // Always placed by a style: in line, standing on the baseline (LibreOffice puts a frame
         // with no placement at the line's top).
-        let (anchor, props, xy) = placement(place, img.w, img.h);
+        let (anchor, props, xy) = placement(place, img.w, img.h, self.in_cell);
         let (anchor, style) =
             (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(format!("{}{props}{clip}", super::GRAPHICS_PARENT))));
         let z = place.z_index();
@@ -357,7 +357,7 @@ impl Writer {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         // The group isn't turned: its members are placed by their own positions.
-        let (anchor, props, _) = placement(Place::Text(float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline)), size.0, size.1);
+        let (anchor, props, _) = placement(Place::Text(float.filter(|f| f.wrap != wordcraft_doc::para::Wrap::Inline)), size.0, size.1, self.in_cell);
         let style = self.graphic_style(props);
         self.boxes += 1;
         out.push_str(&format!("<draw:g draw:name=\"{}Group{}\" draw:style-name=\"{style}\"{anchor} draw:z-index=\"0\">", self.prefix, self.boxes));
@@ -396,7 +396,7 @@ impl Writer {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let frame = box_look_attrs(look, &mut self.draw_defs, self.prefix);
-        let (anchor, props, xy) = placement(place, size.0, size.1);
+        let (anchor, props, xy) = placement(place, size.0, size.1, self.in_cell);
         let style = self.graphic_style(format!("{}{props}{frame}", super::FRAME_PARENT));
         let mut body = self.story(blocks);
         if body.is_empty() {
@@ -445,7 +445,7 @@ impl Writer {
         let reopen = self.open_ins.as_ref().map(|(m, _)| m.clone());
         self.close_ins(out);
         let float = place.float();
-        let (anchor, props, xy) = placement(place, size.0, size.1);
+        let (anchor, props, xy) = placement(place, size.0, size.1, self.in_cell);
         let look_attrs = shape_look_attrs(look, &mut self.draw_defs, self.prefix);
         let style = self.graphic_style(format!("{props}{look_attrs}"));
         let body = self.story(blocks);
@@ -562,7 +562,9 @@ impl Writer {
     pub(in crate::odt) fn story(&mut self, blocks: &[FBlock]) -> String {
         let saved = (std::mem::take(&mut self.cur_style), std::mem::take(&mut self.chain), self.part, self.note_parent.take());
         let mut body = String::new();
+        let in_cell = std::mem::take(&mut self.in_cell);
         self.story_blocks(blocks, &mut body, 1);
+        self.in_cell = in_cell;
         self.close_ins(&mut body);
         (self.cur_style, self.chain, self.part, self.note_parent) = saved;
         body

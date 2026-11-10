@@ -1511,11 +1511,15 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.cell_borders)
     }
 
-    /// Padding of a table-cell style (top, left, bottom, right; whole chain), when it gives all
-    /// four sides; missing sides of a partial one are 0, as LibreOffice reads them.
+    /// Padding of a table-cell style (top, left, bottom, right), inherited per side through
+    /// the whole chain. Explicit zero overrides a parent; unstated sides default to zero.
     pub(super) fn cell_padding(&self, name: &str) -> Option<[f32; 4]> {
-        let p = self.chain(name).iter().map(|(_, s)| s.cell_padding).find(|p| p.iter().any(Option::is_some))?;
-        Some(p.map(|v| v.unwrap_or(0.0)))
+        let chain = self.chain(name);
+        if !chain.iter().any(|(_, style)| style.cell_padding.iter().any(Option::is_some)) {
+            return None;
+        }
+        let padding = std::array::from_fn(|index| chain.iter().find_map(|(_, s)| s.cell_padding[index]).unwrap_or(0.0));
+        Some(padding)
     }
 
     /// A graphic style's frame placement (whole chain).

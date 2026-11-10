@@ -456,3 +456,29 @@ fn a_frame_offering_several_formats_shows_the_first_it_can_read() {
     let d = import(&zip_of(&[("content.xml", only.as_bytes()), ("Pictures/a.svm", &svm)])).unwrap();
     assert_eq!(pictures(&d), 0);
 }
+
+#[test]
+fn body_float_saves_flow_with_text_false() {
+    let mut doc = open("", r#"text:anchor-type="as-char""#);
+    let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut doc.body[0]) else { panic!("paragraph") };
+    let InlineObject::Image { float, .. } = &mut p.objects[0] else { panic!("picture") };
+    *float = Float { wrap: Wrap::Square, ..Default::default() };
+    let saved = crate::odt::tests::export_model(&doc).unwrap();
+    let xml = crate::odt::tests::content_of(&saved);
+    assert!(xml.contains(r#"style:flow-with-text="false""#), "{xml}");
+    assert!(!xml.contains(r#"style:flow-with-text="true""#), "{xml}");
+}
+
+#[test]
+fn libreoffice_body_frame_saves_flow_with_text_false() {
+    // Synthetic LibreOffice-style paragraph-relative placement.
+    let doc = open(
+        r#"style:flow-with-text="false" style:wrap="parallel" style:horizontal-rel="paragraph" style:vertical-rel="paragraph""#,
+        r#"text:anchor-type="paragraph""#,
+    );
+    assert!(float(&doc).outside_cell);
+    let saved = crate::odt::tests::export_model(&doc).unwrap();
+    let xml = crate::odt::tests::content_of(&saved);
+    assert!(xml.contains(r#"style:flow-with-text="false""#), "{xml}");
+    assert!(!xml.contains(r#"style:flow-with-text="true""#), "{xml}");
+}
