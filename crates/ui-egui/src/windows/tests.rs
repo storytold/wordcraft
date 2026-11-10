@@ -777,3 +777,13 @@ fn newly_opened_window_does_not_exceed_screen_width() {
     std::fs::remove_dir_all(doc1.parent().unwrap()).ok();
     std::fs::remove_dir_all(doc2.parent().unwrap()).ok();
 }
+
+#[test]
+fn secondary_viewport_syncs_touchpad_scroll_speed_without_control_input() {
+    let ctx = backend();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    frame(&ctx, &mut a);
+    let speed = ctx.with_plugin(|p: &mut super::ViewportInput| p.touchpad_speed);
+    assert_eq!(speed, Some(crate::scroll::ScrollSpeed::Fast));
+}

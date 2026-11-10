@@ -354,6 +354,7 @@ impl WordApp {
         if !native {
             self.window_input(ctx);
         }
+        self.sync_viewport_input(ctx);
         self.send_control_input(ctx);
         // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
         // callback command belongs to `ui` (`flush_shot_and_synthetic`). A queued/settling capture

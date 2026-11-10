@@ -766,10 +766,10 @@ impl WordApp {
         }
     }
 
-    /// The control channel's next input, for the active window when it has a viewport of its own:
-    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
-    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
-        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+    /// Ensures [`ViewportInput`] is registered and keeps its touchpad scroll speed in sync with
+    /// user settings for secondary viewports (#6146).
+    pub(crate) fn sync_viewport_input(&mut self, ctx: &egui::Context) {
+        if !self.windows.native {
             return;
         }
         if !self.windows.input_plugin {
@@ -780,6 +780,15 @@ impl WordApp {
         ctx.with_plugin(|p: &mut ViewportInput| {
             p.touchpad_speed = speed;
         });
+    }
+
+    /// The control channel's next input, for the active window when it has a viewport of its own:
+    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
+    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
+        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+            return;
+        }
+        self.sync_viewport_input(ctx);
         self.settle_windows();
         let target = self.active_viewport();
         // Input queued for a window that has closed since (or moved into the root viewport)
