@@ -4,12 +4,12 @@ use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, Wo
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
+pub(crate) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
     hinted.hash(&mut h);
     let v = &app.session.view;
-    (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
+    (v.marks, app.session.prefs.marks, v.show_markup, app.page_is_dark(), wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
@@ -239,11 +239,11 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
 pub(crate) fn dark_page(app: &WordApp) -> bool {
     use wordcraft_engine::cmd::view::ReadPageColor;
     let v = &app.session.view;
-    if v.read_mode { v.read_page_color == ReadPageColor::Inverse } else { v.dark_mode }
+    if v.read_mode { v.read_page_color == ReadPageColor::Inverse } else { app.page_is_dark() }
 }
 
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
-pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
+pub(crate) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
