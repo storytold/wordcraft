@@ -617,7 +617,10 @@ fn table_style_shading_is_saved_where_word_reads_it() {
         ..Default::default()
     };
     let mut painted = painted;
-    painted.set_part(TablePart::WholeTable, wordcraft_doc::styles::PartFormat { v_align: Some(wordcraft_doc::props::VAlign::Center), ..painted.part(TablePart::WholeTable) });
+    painted.set_part(
+        TablePart::WholeTable,
+        wordcraft_doc::styles::PartFormat { v_align: Some(wordcraft_doc::props::VAlign::Center), ..painted.part(TablePart::WholeTable) },
+    );
     let cleared = TableStyleParts { fills_off: [(TablePart::WholeTable, FillOff::Auto)].into_iter().collect(), ..Default::default() };
     let shown = TableStyleParts { fills_off: [(TablePart::WholeTable, FillOff::Nil)].into_iter().collect(), ..Default::default() };
     let sheet = Arc::make_mut(&mut d.styles);

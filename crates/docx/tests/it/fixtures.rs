@@ -807,7 +807,10 @@ fn table_style_cell_shading_is_the_styles_tcpr() {
     // `wholeTable` region records neither.
     let off = |id: &str| d.styles.table_style(id).unwrap().parts.fills_off.get(&TablePart::WholeTable).copied();
     use wordcraft_doc::styles::FillOff;
-    assert_eq!([off("Red"), off("Green"), off("Whole"), off("Auto"), off("Nil"), off("AfterAuto")], [None, None, None, Some(FillOff::Auto), Some(FillOff::Nil), None]);
+    assert_eq!(
+        [off("Red"), off("Green"), off("Whole"), off("Auto"), off("Nil"), off("AfterAuto")],
+        [None, None, None, Some(FillOff::Auto), Some(FillOff::Nil), None]
+    );
     let over = |id: &str| d.styles.table_style(id).unwrap().parts.fill_over(TablePart::WholeTable, Some(wordcraft_doc::Rgb(1, 2, 3)));
     assert_eq!((over("Auto"), over("Nil")), (None, Some(wordcraft_doc::Rgb(1, 2, 3))));
     assert_eq!(d.styles.table_style("Mid").unwrap().part(TablePart::WholeTable).v_align, Some(wordcraft_doc::props::VAlign::Center));
