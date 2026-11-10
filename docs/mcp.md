@@ -146,6 +146,10 @@ Automation here means MCP (headless or `--connect`), any request on the app's co
 roots in force the check still applies. The person at the keyboard can still attach a template on a share, as in Word.
 A template that a document opened by path or from `data` already names is kept as it is.
 
+Not covered: input a control-channel client synthesizes with `ui.click`, `ui.key` or `ui.text`.
+It is handled on a later frame as the person's own, so it can fill in the Templates and Add-ins
+dialog and attach a template anywhere.
+
 ## Language packs
 
 Spelling and hyphenation for languages other than English come as Language packs, installed into
