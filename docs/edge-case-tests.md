@@ -3,10 +3,6 @@
 Last updated: 2026-11-10. These behavioral regressions supplement the application’s existing tests.
 They execute engine commands and the real egui application through its headless harness.
 
-The focused run on 2026-11-10 passed all 11 document/account tests (8 engine, 3 UI) on macOS ARM64.
-The initial zero-byte-file refusal expectation was corrected
-to the documented blank-document behavior; the original draft remains available.
-
 Run the focused suite with the same pinned fonts and language data used by CI:
 
 ```sh
@@ -31,19 +27,17 @@ These tests use synthetic temporary documents. The UI tests do not drive native 
 and the Unix symlink test is conditional. They do not replace cross-platform testing, real-document
 format fidelity work, long-running recovery/AutoSave soak testing, or native IME acceptance.
 
-## Finding from the broader suite
+## Placeholder font fallback
 
-Three existing strict-export CLI tests failed on macOS because the system’s `.LastResort`
-font claims coverage for unsupported characters by drawing placeholder boxes. A direct strict
-PDF export of U+40000 incorrectly succeeded before the fix. Automatic character and whole-run
-fallback now exclude that placeholder family, while explicit selection and genuine fallback
-fonts remain available. A twelfth regression uses synthetic family names on bundled open font
-bytes, so this check does not require an Apple font. It failed before the fix and passed after it.
+macOS's `.LastResort` font maps almost every code point to a placeholder box. Automatic
+character and whole-run fallback, and every coverage check they make, ignore it, so strict
+export reports such characters as missing glyphs instead of drawing boxes. Explicit selection
+of the family and readable fallback fonts still work. Two regressions use synthetic family
+names on bundled open font bytes, so neither needs an Apple font:
 
-Final validation on 2026-11-10: `cargo xtask ci` passed all nine steps (format, Clippy,
-workspace tests, interface audit, language check, doctests, assets, layers and WebAssembly).
-The three existing strict-export regressions also passed. A live CLI recheck of U+40000
-returned exit code 3, reported the missing glyph, and created no PDF.
+```sh
+cargo test --locked -p wordcraft-fonts --lib last_resort
+```
 
 ## Revision history
 

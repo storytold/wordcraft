@@ -184,7 +184,7 @@ impl FontDb {
             // A character no loaded face covers: load a system font for it, then retry (the run's
             // other characters may already be covered by loaded faces).
             for c in chars {
-                if self.read_faces().iter().any(|f| f.id != exclude && f.covers(*c)) {
+                if self.read_faces().iter().any(|f| f.id != exclude && f.allows_automatic_fallback() && f.covers(*c)) {
                     continue;
                 }
                 if self.system_fallback(*c) {
