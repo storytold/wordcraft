@@ -340,7 +340,7 @@ mod tests {
         let navy = Rgb(0x1F, 0x38, 0x64);
         let ink = |c: Rgb| CharProps { color: Some(TextColor::Rgb(c)), ..Default::default() };
         // A 2×2 table in style "Probe": each cell's text in the colour given, or the style's.
-        let flagged = |parts: TableStyleParts, style_chr: CharProps, table_shading: Option<Rgb>, texts: [Option<Rgb>; 4]| {
+        let flagged = |parts: TableStyleParts, style_chr: CharProps, table_shading: Option<Rgb>, texts: [Option<Rgb>; 4], shades: [Option<Rgb>; 4]| {
             let mut d = Document::from_text("Intro");
             d.core.title = "T".into();
             std::sync::Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
@@ -357,6 +357,7 @@ mod tests {
             t.props.shading = table_shading;
             for (i, c) in texts.iter().enumerate() {
                 let cell = &mut t.rows[i / 2].cells[i % 2];
+                cell.props.shading = shades[i];
                 cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Some text", c.map(ink).unwrap_or_default()))];
             }
             d.body.push(std::sync::Arc::new(Block::Table(t)));
@@ -375,18 +376,20 @@ mod tests {
         let black = Some(Rgb::BLACK);
         // Black text on the style's navy header: hard to read. The body rows are white.
         let header = TableStyleParts { header_fill: Some(navy), ..Default::default() };
-        assert_eq!(flagged(header.clone(), CharProps::default(), None, [black; 4]), [(0, 0), (0, 1)]);
+        assert_eq!(flagged(header.clone(), CharProps::default(), None, [black; 4], [None; 4]), [(0, 0), (0, 1)]);
         // The whole table navy, one cell with a light colour of its own.
         let whole = TableStyleParts { fill: Some(navy), ..Default::default() };
         let mut texts = [black; 4];
         texts[3] = None;
-        assert_eq!(flagged(whole, CharProps::default(), None, texts), [(0, 0), (0, 1), (1, 0)]);
+        assert_eq!(flagged(whole.clone(), CharProps::default(), None, texts, [None; 4]), [(0, 0), (0, 1), (1, 0)]);
+        // A cell's own shading beats its style's: black on a white cell in the navy table is fine.
+        assert_eq!(flagged(whole, CharProps::default(), None, [black; 4], [None, None, None, Some(Rgb::WHITE)]), [(0, 0), (0, 1), (1, 0)]);
         // `w:tblPr/w:shd` paints nothing: grey text on it is read against the white page.
         let grey = Some(Rgb(0x55, 0x55, 0x55));
-        assert_eq!(flagged(TableStyleParts::default(), CharProps::default(), Some(Rgb::BLACK), [grey; 4]), Vec::<(u64, u64)>::new());
+        assert_eq!(flagged(TableStyleParts::default(), CharProps::default(), Some(Rgb::BLACK), [grey; 4], [None; 4]), Vec::<(u64, u64)>::new());
         // The style's own light text on white, except where the paragraph sets a dark colour.
         let light = ink(Rgb(0xCC, 0xCC, 0xCC));
-        assert_eq!(flagged(TableStyleParts::default(), light, None, [None, black, None, black]), [(0, 0), (1, 0)]);
+        assert_eq!(flagged(TableStyleParts::default(), light, None, [None, black, None, black], [None; 4]), [(0, 0), (1, 0)]);
     }
 
     #[test]
