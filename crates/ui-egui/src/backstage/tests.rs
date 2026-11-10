@@ -517,6 +517,56 @@ fn an_unusable_saved_folder_falls_back_to_the_apps_own() {
     let _ = std::fs::remove_dir_all(&own);
 }
 
+/// #2716: the × of a recent row is a cue, not a secret: dimmed when only the row is hovered,
+/// stronger on the × itself, absent when neither is.
+#[test]
+fn recent_remove_cross_shows_when_the_row_is_hovered() {
+    use super::{RemoveCue, remove_cue};
+    assert_eq!(remove_cue(false, false), RemoveCue::Hidden);
+    assert_eq!(remove_cue(true, false), RemoveCue::Dim, "row hovered shows the glyph");
+    assert_eq!(remove_cue(false, true), RemoveCue::Strong);
+    assert_eq!(remove_cue(true, true), RemoveCue::Strong);
+}
+
+/// #2716: each recent row has its own Remove (× at the right end, so it opens nothing), and
+/// Clear all takes the whole list away; the list is empty afterwards.
+#[test]
+fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
+    use egui::accesskit::Role;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
+    assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
+    // The × inside alpha's row, not beta's: click it and only alpha goes.
+    let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
+        let r = row(h, name).expect(name);
+        h.query_all_by_role_and_label(Role::Button, "Remove from list")
+            .find(|n| n.rect().min.y >= r.min.y && n.rect().min.y < r.max.y)
+            .expect("row has its Remove")
+            .click();
+    };
+    remove_in(&mut h, "alpha.docx");
+    h.run_steps(4);
+    assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "the row's own Remove takes its row");
+    assert!(h.state().ui.backstage, "the × does not open the Backstage away");
+    assert!(row(&h, "alpha.docx").is_none() && row(&h, "beta.docx").is_some());
+    h.get_by_label("Clear all").click();
+    h.run_steps(4);
+    assert!(h.state().ui.recent.is_empty(), "Clear all empties the list");
+    assert!(h.query_by_label("Documents you open will show up here.").is_some());
+    assert!(row(&h, "beta.docx").is_none(), "and Clear all goes with it");
+}
+
 /// Home and New are different pages (#141): Home has the short template row, the link to New
 /// and Recent; New has every template and no Recent list.
 #[test]
@@ -1053,4 +1103,56 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.get_by_label("Save As").click();
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
+}
+
+/// Scrolls the File page with the wheel at `x` and returns doc0.docx's top before and after,
+/// plus the rectangle of the page's vertical scrollbar.
+fn file_page_wheel_at(x: f32) -> (f32, f32, egui::Rect) {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.recent = (0..12).map(|i| format!("/docs/doc{i}.docx")).collect();
+    a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 500.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    let bar = h
+        .query_all_by_role(egui::accesskit::Role::ScrollBar)
+        .map(|n| n.rect())
+        .filter(|r| r.height() > r.width())
+        .max_by(|a, b| a.height().total_cmp(&b.height()))
+        .expect("the File page's vertical scrollbar");
+    let before = h.get_by_label("doc0.docx").rect();
+    h.event(egui::Event::PointerMoved(egui::pos2(x, 300.0)));
+    h.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, -200.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    });
+    h.run_steps(4);
+    (before.min.y, h.get_by_label("doc0.docx").rect().min.y, bar)
+}
+
+/// #5282: the File page scrolls with the wheel over its right side.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_over_its_right_side() {
+    let (before, after, _) = file_page_wheel_at(1300.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up: before={before}, after={after}");
+}
+
+/// #5282: the scroll area reaches the window's right edge, so its bar sits there and the wheel
+/// works there too.
+#[test]
+fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
+    // The harness keeps an 8 point margin, so the window edge is at x=1432.
+    let (before, after, bar) = file_page_wheel_at(1428.0);
+    assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
+    assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
 }
