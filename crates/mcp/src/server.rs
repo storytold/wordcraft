@@ -148,9 +148,20 @@ impl Server {
                             }
                             continue;
                         }
+                        let id = m.get("id").cloned();
                         if let Some(r) = self.handle(m) {
                             size = size.saturating_add(crate::tools::json_len(&r));
-                            replies.push(r);
+                            if size > crate::tools::MAX_BATCH_OUTPUT {
+                                // This reply is the one that crosses the limit: it is not kept.
+                                let id = id.unwrap_or(Value::Null);
+                                replies.push(error(
+                                    id,
+                                    INTERNAL_ERROR,
+                                    "the batch's replies passed the output limit; this reply and the rest are left out",
+                                ));
+                            } else {
+                                replies.push(r);
+                            }
                         }
                     }
                     (!replies.is_empty()).then_some(Value::Array(replies))

@@ -298,7 +298,9 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
                     Ok(v) => json!({"command": id, "ok": true, "result": v}),
                     Err(e) => json!({"command": id, "ok": false, "error": e}),
                 };
-                size = size.saturating_add(json_len(&entry));
+                // Counted as the reply stores it: the array is text content, so its quotes and
+                // backslashes are escaped again.
+                size = size.saturating_add(json_len(&Value::String(entry.to_string())));
                 if size > MAX_BATCH_OUTPUT {
                     out.push(json!({"command": id, "ok": false, "error": format!("the batch's results passed {MAX_BATCH_OUTPUT} bytes; this command's result and the commands after it are left out")}));
                     failed = true;
@@ -456,6 +458,34 @@ mod tests {
         fn describe(&self) -> String {
             "big".into()
         }
+    }
+
+    /// A backend whose every result is 1 MiB of quotes, which the reply escapes twice.
+    struct Quoted {
+        calls: usize,
+    }
+
+    impl Backend for Quoted {
+        fn call(&mut self, _: &str, _: Value) -> Result<Value, String> {
+            self.calls += 1;
+            Ok(json!("\"".repeat(1 << 20)))
+        }
+        fn has_ui(&self) -> bool {
+            false
+        }
+        fn describe(&self) -> String {
+            "quoted".into()
+        }
+    }
+
+    #[test]
+    fn a_batch_budgets_the_escaped_text_it_returns() {
+        // Each result is 2 MiB as JSON and 4 MiB once the array is stored as text.
+        let commands: Vec<Value> = (0..40).map(|_| json!({"command": "edit.copy"})).collect();
+        let mut b = Quoted { calls: 0 };
+        let r = call_tool(&mut b, "batch", &json!({"commands": commands, "keepGoing": true}));
+        assert!(r.is_error);
+        assert!(b.calls <= (MAX_BATCH_OUTPUT >> 22) + 1, "{} commands ran", b.calls);
     }
 
     #[test]
