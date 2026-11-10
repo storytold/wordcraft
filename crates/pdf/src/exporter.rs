@@ -1,3 +1,4 @@
+use super::NormalizedF32;
 use super::export::Fit;
 use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_right, split_clusters, visual_order};
 use super::options::{PdfError, PdfOptions};
@@ -10,7 +11,6 @@ use super::{
     OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface, Tag, TagGroup,
     TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
-use super::NormalizedF32;
 use wordcraft_doc::picfx::PicFx;
 
 mod draw;

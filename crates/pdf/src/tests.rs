@@ -2979,6 +2979,8 @@ fn an_over_limit_pattern_keeps_its_back_colour() {
     let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
     let raw = String::from_utf8_lossy(&export(&d, &opts).unwrap()).into_owned();
     assert!(raw.contains("0 1 0 rg"), "the pattern's back colour fills the page");
+}
+
 /// A page with text and three pictures that don't draw: garbage, a PNG cut off in its data and a
 /// metafile that is only its header. The export is the same bytes as before strict export
 /// existed (#6005): each is a grey box, and the rest of the page is untouched.
