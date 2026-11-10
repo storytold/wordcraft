@@ -1425,6 +1425,7 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
 
 #[test]
 fn a_missing_font_is_drawn_in_its_font_table_alternate() {
+    crate::test_fonts();
     // Measured in Word 2024 and Word for Windows 16.0.20527 (#2702): a font that isn't installed is
     // drawn in the alternate its font table names (`w:altName`), before the roman rule; an
     // alternate that can't be drawn either leaves the family class in charge: Cambria for a roman
@@ -10204,6 +10205,7 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
 
 #[test]
 fn a_missing_east_asian_font_is_drawn_in_its_font_table_alternate() {
+    crate::test_fonts();
     // #2702 for the run's East Asian font (`w:eastAsia`): one that isn't installed is drawn in the
     // alternate its font table names, when that one is installed and has the characters. Take an
     // installed CJK font other than the one fallback would pick anyway, so the test tells them apart.
