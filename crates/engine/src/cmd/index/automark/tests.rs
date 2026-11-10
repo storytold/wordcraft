@@ -304,6 +304,24 @@ fn a_phrase_matches_whole_words_only() {
     assert_eq!(marked_text(&s), vec![r#"Kiln{XE "Kilns"} firings start, then Kiln firing{XE "Firing"} ends."#, r#"Kilns, then Kiln{XE "Kilns"}."#]);
 }
 
+/// A backslash in an entry is written as field text needs it, so the entry reaches the index as
+/// the concordance has it (unescaped, the field would lose it), and a second run still finds
+/// the entry there.
+#[test]
+fn a_backslash_in_an_entry_reaches_the_index() {
+    let mut s = session("Both AC and DC are used.");
+    let entries = json!({"entries": [["AC", r"AC\DC"], ["DC", r"Volts\Amps:Direct \ current"]]});
+    assert_eq!(s.run("references.autoMark", &entries).unwrap(), json!({"marked": 2, "terms": 2}));
+    assert_eq!(marked_text(&s), vec![r#"Both AC{XE "AC\\DC"} and DC{XE "Volts\\Amps:Direct \\ current"} are used."#]);
+    assert_eq!(s.run("references.autoMark", &entries).unwrap()["marked"], 0, "the entries are there already");
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.index", &json!({"columns": 1, "headings": false})).unwrap();
+    let lines: Vec<String> =
+        s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)).map(|p| p.plain_text()).collect();
+    assert_eq!(lines, vec![r"AC\DC, 1", r"Volts\Amps", r"Direct \ current, 1"]);
+}
+
 /// `entries` takes texts and [text, entry] pairs; anything else is refused before any change.
 #[test]
 fn entries_are_texts_or_pairs() {

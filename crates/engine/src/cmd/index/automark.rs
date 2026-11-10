@@ -15,6 +15,7 @@ use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Pos, StoryRef};
 
+use super::super::references::quoted;
 use super::{ENTRY_STYLE, clean};
 use crate::{CmdError, CmdResult, Session};
 
@@ -39,10 +40,11 @@ pub(super) struct Term {
 }
 
 /// The XE field for index entry `entry` (`Main:Sub` for a subentry), cleaned as Mark Entry cleans
-/// it; `None` when nothing is left.
+/// it; `None` when nothing is left. A backslash is written doubled, as quoted field text needs
+/// it, so the index shows the entry as the concordance has it.
 fn xe_for(entry: &str) -> Option<String> {
     let entry = clean(entry, MAX_ENTRY);
-    (!entry.is_empty()).then(|| format!("XE \"{entry}\""))
+    (!entry.is_empty()).then(|| format!("XE {}", quoted(&entry)))
 }
 
 /// A term for a concordance row: the text found and its entry (the text itself when the entry
