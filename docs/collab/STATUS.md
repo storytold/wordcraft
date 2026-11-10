@@ -5,11 +5,13 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `af9a43a2` (the CodeRabbit triage, §5.26) — the fork
-  branch and the `headRefOid` of PR #5834 — plus this page on top of it. This
-  page is documentation only, committed locally and **not pushed**: the envoy
-  role cannot push, so the owner sends it (§5.27). The branch is 79 commits
-  over `4b0d3995` before this page and one more with it. The branch was pushed
+- HEAD at this writing: `925bb0c9` (§5.28, the finding-1 fix) plus this page on
+  top of it. The fork branch and the `headRefOid` of PR #5834 are still
+  `af9a43a2` (the CodeRabbit triage, §5.26): everything after it —
+  `2a6f39c7`, `925bb0c9` and this page — is committed locally and **not
+  pushed**, because the envoy role cannot push; the owner sends it (§5.27,
+  §5.28). The branch is 81 commits over `4b0d3995` before this page and 82
+  with it. The branch was pushed
   on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
   20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
   `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
@@ -303,7 +305,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **partial** | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass, but two paths break the property: concurrent positional edits applied at a stale offset can leave a replica diverged with no resync (§5.26 finding 1), and an operation accepted while a peer's queue is full is dropped, so that peer can stay connected and stale (§5.26 finding 5). Plan: an ADR on transforming positional edits (or a `baseVersion` guard that forces a resync) and on a per-peer stale flag, then the fixes with two-client tests (§5.27) |
+| Changes converge without loss or duplicates | **partial**: finding 1 closed (§5.28), finding 5 open | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. The silent divergence of §5.26 finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`); ADR `docs/collab/adr/0001-positional-edit-guard.md`. Still open: an operation accepted while a peer's queue is full is dropped, so that peer can stay connected and stale (§5.26 finding 5). Plan: a per-peer stale flag that closes the socket on the next heartbeat, then the fix with a stalled-reader test (§5.27) |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -333,6 +335,13 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
+- §5.28, the slice this page records: on the build host, `cargo fmt --all --
+  --check` EXIT=0, `cargo clippy` over `collab`, `collab-client`, `collab-doc`,
+  `collab-app` and `collab-server` (`--all-targets -D warnings`) EXIT=0, and
+  `cargo test` over the same five crates — 284 passed, 0 failed, 1 ignored
+  (`collab` 59, `collab-doc` 116, `collab-client` 19, `collab-app` 39,
+  `collab-server` 51/1). No `wordcraft-ui-egui`, engine or workspace-wide run
+  in this pass: no file outside the five crates and `docs/collab` changed.
 - 350 protocol/adapter/client/server tests, all green; the LibreOffice commit
   gate stays the one ignored test. The nine crates in this run:
   `collab` 59, `collab-doc` 113, `collab-engine` 58, `collab-app` 38,
@@ -434,15 +443,18 @@ Results at this writing:
 - Web collab has been run with two clients only inside one headless browser
   (two iframes through a cabinet-like host page, §5.1). Two real machines, the
   real cabinet page and its storage, and the visible commit status stay manual.
-- **Convergence has two known gaps** (§5.26 findings 1 and 5, §5.27). The room
-  applies primitives at server offsets while their author has already applied
-  its own optimistic text, so two concurrent positional edits can leave a
-  replica diverged without a resync. And an operation accepted while a peer's
-  queue is full is dropped, so that peer can stay connected and stale. Both
-  need a decision first (transformation or a `baseVersion` guard that forces a
-  resync; a per-peer stale flag that closes the socket), then a fix with a
-  two-client test. Until then the TASK.md criterion "converge without loss or
-  duplicates" is **partial** (§2), not done.
+- **Convergence has one known gap left** (§5.26 findings 1 and 5, §5.27,
+  §5.28). Finding 1 is closed: the room refuses a positional text primitive
+  whose base is behind another client's change of the same paragraph (`stale`,
+  retryable) and its author resyncs instead of keeping a diverged replica
+  (`docs/collab/adr/0001-positional-edit-guard.md`, `925bb0c9`). The cost is
+  named there: two concurrent edits inside one paragraph can now cost the
+  unconfirmed keystrokes of the later author, who continues from the snapshot.
+  Finding 5 is open: an operation accepted while a peer's queue is full is
+  dropped, so that peer can stay connected and stale. It needs a per-peer stale
+  flag that closes the socket, then a test with a stalled reader. Until then
+  the TASK.md criterion "converge without loss or duplicates" is **partial**
+  (§2), not done.
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -2692,11 +2704,115 @@ pushed: the envoy role denies `git push`, so the owner runs
 `git push fork HEAD:refs/heads/feature/realtime-collaboration` from
 `upstream/` (a fast-forward from `af9a43a2`, no rebase and no force). The runs
 on `077b4056` validate neither `4ecab864` nor this page. After that, in this
-order: the ADR and the fix for finding 1, the ADR and the fix for finding 5
-(these two decide when the criterion can go back to `done`), then findings 2,
+order: the ADR and the fix for finding 5 (finding 1 is done, §5.28 — these two
+decide when the criterion can go back to `done`), then findings 2,
 3, 6, 8, 9 and 10, each with its own test. The PR title ended with the word
 "(draft)" as text though the flag was gone; that title was edited in this pass
 and no longer says it, which touches no commit.
+
+### 5.28 Finding 1: a positional edit that outlived its base is refused (run 2026-11-11)
+
+**What the defect was.** The room applies every operation to the head and
+computes its delta there, while the author of a primitive had already applied
+it optimistically and skips its own echo (`SyncState::apply`). When another
+client changed the same paragraph between the author's `baseVersion` and its
+operation, the delta it received was addressed at server offsets over a text
+that already held its own pending edit. The replica kept a document the server
+did not have, and nothing asked it to resync: the version advanced and the peer
+looked healthy (§5.26 finding 1, `crates/collab/src/room.rs:240-260`).
+
+**The decision.** `docs/collab/adr/0001-positional-edit-guard.md` (ADR WC-0001;
+repository-local, it does not consume a protocol ADR number). It compares the
+three routes — a transformation table or client rebase, a `baseVersion` guard
+with a forced resync, a CRDT — and picks the guard: it is the smallest change
+that makes a diverged replica impossible, and it is testable with two clients
+without a new merge algorithm. The ADR also states the price, which `rfc.md`
+§4.4 now names instead of promising a merge: two concurrent edits inside one
+paragraph can cost the later author its unconfirmed keystrokes, who continues
+from the snapshot. Rebase stays the target and will supersede this ADR.
+
+**What the code does** (`925bb0c9`, 7 files, +338/−3).
+
+- `crates/collab/src/room.rs`: `Room::submit` refuses an offset-based primitive
+  (`insert_text`, `delete_range`, `replace_range`, `split_para`, `merge_para`)
+  whose `baseVersion` is behind an operation accepted since then that changed
+  the text of the same paragraph, with `RejectCode::Stale` (retryable) and the
+  message "the paragraph changed since this edit was made; resync". The check
+  reads the journal's deltas; a `transaction` delta is scanned op by op; a
+  command's delta names only the command, so the room reads its stored inverse
+  and counts a `set_para_format` inverse that carries `text` (a case change or
+  an enclosure, §5.10) as a change of that paragraph. The guard is per
+  paragraph — an edit in another paragraph still lands — and exempts the
+  author's own operations, which are applied in the same order on both sides,
+  so fast typing on one base is not refused. Undo/redo requests skip it: their
+  inverse is not applied optimistically at the author.
+- `crates/collab-client/src/lib.rs`: `Client::on(Rejected)` drops a `stale` or
+  `gone` operation from the pending queue. Those are exactly the refusals whose
+  addresses or offsets cannot be replayed; before, such an operation stayed
+  queued and the next reconnect resent it at the same stale offset. `lease` and
+  `tokenExpired` keep their operation, because the server never examined it.
+- `docs/collab/rfc.md` §4.4: the "two people type in one paragraph" row now
+  states the refusal and the resync; the "stale base" row points at WC-0001.
+- `docs/collab/adr/0001-positional-edit-guard.md`: the decision record above.
+
+**Tests** (four, three of them new; each names the two-client path).
+
+- `crates/collab-doc/src/tests.rs`:
+  `a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`
+  — Alice's edit lands, Bob's edit on the same paragraph at `base_version` 0 is
+  refused `Stale`, retryable, the text and the version are unchanged;
+  `a_stale_text_edit_in_another_paragraph_still_lands` — the negative control,
+  a stale edit in the second paragraph is accepted;
+  `a_clients_own_earlier_edits_do_not_trip_the_guard` — three keys from one
+  client on the same base all land.
+- `crates/collab-client/src/tests.rs`:
+  `a_refused_stale_edit_is_not_resent_after_the_resync` — the queue is empty
+  after a `stale` refusal and a reconnect sends nothing, while a `lease`
+  refusal keeps its operation.
+- `crates/collab-app/src/tests.rs`:
+  `a_stale_positional_edit_resyncs_instead_of_diverging` — Alice's edit lands,
+  Bob's optimistic edit in the same paragraph is refused, Bob takes the room's
+  snapshot (`join(None, false)` → `set_document`, the path the transport takes
+  on `Snapshot`), and both replicas hold the same document JSON. Before the
+  resync Bob's replica says `B` where the room says `A`; after it, `A` on both.
+- The two refusal tests were checked against a tree with the guard call removed
+  on the build host: both fail there (`Applied {version: 2, conflict: true}`
+  instead of the refusal), so they pin the fix.
+
+**What ran** (build host `agents`, `scripts/remote-build.sh`, from this tree):
+
+- `cargo fmt --all -- --check` → **EXIT=0**.
+- `cargo clippy -p wordcraft-collab -p wordcraft-collab-client
+  -p wordcraft-collab-doc -p wordcraft-collab-app -p wordcraft-collab-server
+  --all-targets -- -D warnings` → **EXIT=0**.
+- `cargo test` over those five crates → **284 passed, 0 failed, 1 ignored**
+  (`collab` 59, `collab-doc` 116, `collab-client` 19, `collab-app` 39,
+  `collab-server` 51 passed / 1 ignored — the LibreOffice commit gate).
+  The slice added 5 tests: `collab-doc` 113 → 116, `collab-client` 18 → 19,
+  `collab-app` 38 → 39.
+- `.github/workflows/` untouched, no manifest or lock change, no
+  `main`-touching step.
+
+**Local head.** `925bb0c9` (the fix, its tests, the ADR and the RFC row); this
+page is one more commit on top of it and the only file it changes. `git log -1`
+and `git show --stat` for the fix are the ones the commit printed:
+
+| | |
+|---|---|
+| head | `925bb0c9` — `collab: refuse a positional edit whose base no longer matches its paragraph` |
+| files | `crates/collab/src/room.rs` +62/−2, `crates/collab-client/src/lib.rs` +8, `crates/collab-client/src/tests.rs` +24, `crates/collab-doc/src/tests.rs` +57, `crates/collab-app/src/tests.rs` +43, `docs/collab/adr/0001-positional-edit-guard.md` +143, `docs/collab/rfc.md` +1/−1 |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27: from `upstream/`,
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a
+fast-forward from `af9a43a2` with no rebase and no force (two commits for the
+fix and its ADR plus the earlier docs commit `2a6f39c7` and this page). Then a
+maintainer's approval of the runs on the new head. In the code, finding 5 is
+next (§4): a per-peer stale flag that closes the socket when an accepted
+operation was dropped from a full queue, with a stalled-reader test; that is
+what keeps the convergence criterion at **partial** with finding 1 closed.
+Findings 2, 3, 6, 8, 9 and 10 follow, each with its own test. The rebase for
+text primitives stays the design target and will supersede ADR WC-0001.
 
 ## 6. Where things live
 
