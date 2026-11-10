@@ -118,30 +118,35 @@ fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &
     changed
 }
 
-/// The output layout, kept while the document and Print Markup setting are unchanged.
+/// The output layout, kept while the open document, its revision, and Print Markup are unchanged:
+/// switching documents at the same revision must not reuse the other document's pages.
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     let id = egui::Id::unique("print_page_layout");
+    let doc = app.session.document_id();
     let rev = app.session.rev();
     let markup = app.session.prefs.print_markup;
-    if let Some((r, m, l)) = ctx.data(|d| d.get_temp::<(u64, bool, Arc<DocLayout>)>(id))
+    if let Some((d, r, m, l)) = ctx.data(|d| d.get_temp::<(u64, u64, bool, Arc<DocLayout>)>(id))
+        && d == doc
         && r == rev
         && m == markup
     {
         return l;
     }
     let l = app.session.export_layout_with(markup);
-    ctx.data_mut(|d| d.insert_temp(id, (rev, markup, l.clone())));
+    ctx.data_mut(|d| d.insert_temp(id, (doc, rev, markup, l.clone())));
     l
 }
 
-/// A bounded per-cell texture cache, refreshed when the page, scale, Print Markup, or the
-/// backgrounds setting changes. Backgrounds off strips the page fills before the print raster,
-/// as the job does, so the preview shows a plain page and can't serve a cached fill texture.
+/// A bounded per-cell texture cache, refreshed when the open document, page, scale, Print Markup,
+/// or the backgrounds setting changes. Backgrounds off strips the page fills before the print
+/// raster, as the job does, so the preview shows a plain page and can't serve a cached fill
+/// texture. Switching documents repaints instead of reusing the other document's preview.
 fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique(("print_page_texture", cache_slot));
+    let doc = app.session.document_id();
     let backgrounds = app.ui.print_backgrounds;
-    let key = (app.session.rev(), app.session.prefs.print_markup, backgrounds, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, bool, usize, u32, u32), TextureHandle)>(id))
+    let key = (doc, app.session.rev(), app.session.prefs.print_markup, backgrounds, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
+    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, u64, bool, bool, usize, u32, u32), TextureHandle)>(id))
         && k == key
     {
         return Some(t);
@@ -542,5 +547,25 @@ mod tests {
         let without = page_texture(&app, &ctx, &layout, 0, 0, 300.0).unwrap();
         assert_ne!(with.id(), without.id(), "the toggle repaints instead of serving the cached fill");
         assert!(app.session.doc.settings.page_color.is_some(), "the preview borrows the fills, it doesn't take them");
+    }
+
+    /// Switching open documents repaints the print preview: layout and texture keys carry the
+    /// document, so the newly selected document can't reuse the other's cached pages or pixels.
+    #[test]
+    fn preview_repaints_when_the_open_document_changes() {
+        let mut session = Session::new(wordcraft_doc::Document::from_text("Synthetic first document"));
+        session.run("design.pageColor", &json!({"color": "#102040"})).unwrap();
+        let mut app = WordApp::new(session, Services::default());
+        let ctx = egui::Context::default();
+        app.ui.print_backgrounds = true;
+        let first_layout = layout_of(&app, &ctx);
+        let first = page_texture(&app, &ctx, &first_layout, 0, 0, 300.0).unwrap();
+        app.session = Session::new(wordcraft_doc::Document::from_text("Synthetic second document"));
+        app.ui.print_backgrounds = true;
+        let second_layout = layout_of(&app, &ctx);
+        assert!(!Arc::ptr_eq(&first_layout, &second_layout), "the other document gets its own layout");
+        let second = page_texture(&app, &ctx, &second_layout, 0, 0, 300.0).unwrap();
+        assert_ne!(first.id(), second.id(), "the other document gets its own texture");
+        assert_eq!(second.id(), page_texture(&app, &ctx, &second_layout, 0, 0, 300.0).unwrap().id(), "the same document reuses its texture");
     }
 }
