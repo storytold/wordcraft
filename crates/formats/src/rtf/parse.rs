@@ -135,7 +135,13 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
                 }
                 match n {
                     b'\'' => {
-                        let h = bytes.get(i + 2..i + 4).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+                        // `from_str_radix` takes a leading `+`: a pair that isn't both hex digits
+                        // is not an escape at all.
+                        let h = bytes
+                            .get(i + 2..i + 4)
+                            .and_then(|h| std::str::from_utf8(h).ok())
+                            .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
+                            .and_then(|h| u8::from_str_radix(h, 16).ok());
                         match h {
                             Some(v) => {
                                 if r.st.dest == Dest::Pict {
@@ -150,7 +156,17 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
                                 }
                                 i += 4;
                             }
-                            None => i += 2,
+                            // Not two hex digits: the escape is malformed. Consume the escape and
+                            // any hex digits of a truncated pair, and leave every other byte,
+                            // `}` or a control word's `\`, to be read as the structure it is.
+                            None => {
+                                i += 2;
+                                let mut n = 0;
+                                while n < 2 && bytes.get(i).is_some_and(u8::is_ascii_hexdigit) {
+                                    i += 1;
+                                    n += 1;
+                                }
+                            }
                         }
                     }
                     b'*' => {
