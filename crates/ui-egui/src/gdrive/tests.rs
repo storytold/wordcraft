@@ -276,3 +276,12 @@ fn a_drive_export_changes_nothing_about_the_document() {
     assert!(a.session.dirty);
     assert!(a.drive.origin(a.session.document_id()).is_none());
 }
+
+#[test]
+fn drive_exports_drop_the_documents_extension() {
+    let mut a = app();
+    a.session.file_name = Some("Essay.docx".into());
+    assert_eq!(super::export_stem(&a), "Essay");
+    a.session.file_name = Some("v1.2 notes".into());
+    assert_eq!(super::export_stem(&a), "v1.2 notes", "only a document extension is dropped");
+}
