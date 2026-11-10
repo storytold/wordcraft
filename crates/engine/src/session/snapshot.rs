@@ -51,15 +51,21 @@ impl Session {
     /// #5623), under the same id: a window showing it keeps showing it and an agent's id stays
     /// good. The view (zoom, scroll, Read Mode…) stays, and the caret and selection stay where
     /// they were when the new content still has that place (clamped otherwise). Like
-    /// [`Session::set_document`] otherwise: the old content is gone, so there is no undo
-    /// history, no versions and no unsaved changes. `stamp` is the file as the caller saw it
-    /// before reading it, what the next change on disk is measured against: taken after the read,
-    /// a write that landed during the read would go unnoticed.
+    /// [`Session::set_document`] otherwise. The content as it was is kept as an undo step,
+    /// "Reload from Disk": Undo brings it back, unsaved changes included (the document then
+    /// differs from its file again, so it is unsaved); the undo history and the saved versions
+    /// stay, as they are this document's. `stamp` is the file as the caller saw it before
+    /// reading it, what the next change on disk is measured against: taken after the read, a
+    /// write that landed during the read would go unnoticed.
     pub fn reload_document(&mut self, doc: Document, stamp: Option<crate::io::DiskStamp>) {
         self.autocap = None;
         self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
-        self.doc = doc;
+        let was = std::mem::replace(&mut self.doc, doc);
+        let sel = self.sel.clone();
+        self.push_undo("Reload from Disk", was, sel);
+        // What was undone before the reload was undone from the old content: gone with it.
+        self.redo.clear();
         self.doc.ensure_nonempty();
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
@@ -79,8 +85,6 @@ impl Session {
         {
             self.recovery_slot = Default::default();
         }
-        self.reset_history();
-        self.clear_versions();
         self.touch();
         self.dirty = false;
         self.made_rev = self.rev;

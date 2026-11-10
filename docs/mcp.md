@@ -202,9 +202,10 @@ An id that names no open document, or a value that isn't a whole number from 0 u
 `execute` with `view.switchWindows {"id": n}` makes a document active, and `file.closeDocument
 {"id": n, "force"?: true}` closes one (unsaved changes need `force`). `file.reload {"id"?: n,
 "force"?: true}` reads a document's file again after another program changed it (unsaved changes
-need `force`); the document keeps its id, and `file.info` says whether its file has changed
-(`changedOnDisk`). The desktop app reloads a document without unsaved changes by itself when its
-file changes, and asks for one with them. Through `--connect`, `doc`
+need `force`); the document keeps its id and its undo history, the content as it was one Undo
+away, and `file.info` says whether its file has changed (`changedOnDisk`); `file.save` refuses to
+write over a changed file unless told `"overwrite": true`. The desktop app reloads a document
+without unsaved changes by itself when its file changes, and asks for one with them. Through `--connect`, `doc`
 reaches the app's control channel (see [Open documents](control-protocol.md#open-documents)); the
 app's window keeps showing the document it showed. `screenshot`, `click` and `key` act on the
 window, so they work on the document on screen.

@@ -144,7 +144,7 @@ impl WordApp {
             read_aloud_error: None,
             autosave_path: None,
             disk_check_at: 0.0,
-            disk_notice: None,
+            disk_notices: Vec::new(),
             saves_in_flight: Vec::new(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             recovery_seen: false,

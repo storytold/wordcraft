@@ -95,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path"?: string, "overwrite"?: bool (write over the document's own file although another program changed it since it was read: without it that save is an error, and file.reload reads the file again), "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
@@ -149,7 +149,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask; file.closeDocument closes a document there)}"#)
         .pure(),
         CommandSpec::new("file.reload", "Reload from Disk", "File", reload)
-            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays as it is)} → {"reloaded": true, "id", "path", "paragraphs", "words", "encrypted"}; reads the document's file again, for one another program changed (file.info says: "changedOnDisk"); the document keeps its id, zoom, scroll and caret, and loses its undo history"#)
+            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays as it is)} → {"reloaded": true, "id", "path", "paragraphs", "words", "encrypted"}; reads the document's file again, for one another program changed (file.info says: "changedOnDisk"); the document keeps its id, zoom, scroll, caret, undo history and versions, and the content as it was is an undo step, so edit.undo brings it back"#)
             .pure(),
         CommandSpec::new("file.closeDocument", "Close Document", "Agents", close_document)
             .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
@@ -338,8 +338,9 @@ pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
 /// file another program (an editor, a script, `git`, an agent) changed while it was open (#5623).
 /// The desktop app runs it by itself for a document without unsaved changes whose file changed,
 /// and offers it for one with them. The document keeps its id, its view and, where the new
-/// content still has the place, its caret ([`Session::reload_document`]). A file that is not
-/// encrypted any more drops the document's password.
+/// content still has the place, its caret, and its undo history, with the content as it was as
+/// one more step ([`Session::reload_document`]). A file that is not encrypted any more drops the
+/// document's password.
 fn reload(s: &mut Session, v: &Value) -> CmdResult {
     let id = match v.get("id").filter(|x| !x.is_null()) {
         None => s.document_id(),
@@ -430,6 +431,13 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
+    // A file another program changed since it was read is never written over without being
+    // asked (#5623): the desktop app's bar asks (Reload / Keep mine), and AutoSave waits.
+    if s.path.as_deref() == Some(path.as_path()) && p::bool(v, "overwrite") != Some(true) && s.changed_on_disk() {
+        return Err(CmdError::Failed(
+            "the file was changed on disk by another program since it was read: file.reload reads it again, or pass \"overwrite\": true to write the document over it".into(),
+        ));
+    }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));

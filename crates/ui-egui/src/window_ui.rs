@@ -215,7 +215,7 @@ impl WordApp {
             windows: _,
             print_document: _,
             disk_check_at: _,
-            disk_notice: _,
+            disk_notices: _,
             // Per document: the shown document's, swapped with `parked` on a document switch.
             autosave_path: _,
             comment_drafts: _,

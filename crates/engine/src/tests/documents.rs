@@ -396,8 +396,8 @@ fn a_window_view_put_back_follows_the_spelling_setting() {
 }
 
 /// #5623: a file another program changed while it was open is read again by `file.reload`. The
-/// document keeps its id, is not dirty, has no undo history, and its selection stays where the
-/// new text still has it.
+/// document keeps its id, is not dirty, and its selection stays where the new text still has
+/// it; the content as it was is an undo step.
 #[test]
 fn reload_reads_the_file_again_under_the_same_id() {
     let dir = temp_dir("reload");
@@ -416,7 +416,7 @@ fn reload_reads_the_file_again_under_the_same_id() {
     assert_eq!(text(&s), "alpha beta gamma");
     assert_eq!(s.document_id(), id, "the same document, for windows and agents");
     assert!(!s.dirty && !s.changed_on_disk(), "the file as it is now is what the next change is measured against");
-    assert_eq!(s.undo_depth(), 0, "the old content is gone: nothing to undo to");
+    assert_eq!(s.undo_label(), Some("Reload from Disk"), "the old content is one Undo away");
     assert_eq!(s.selected_text(), "beta", "the selection stays where the new text still has it");
     // A caret past the end of the shorter new text is pulled back inside it.
     run(&mut s, "select.text", json!({"text": "gamma"}));
@@ -529,3 +529,102 @@ fn reload_of_an_unencrypted_file_drops_an_unsaved_password() {
     assert_eq!(run(&mut s, "file.info", json!({}))["encrypted"], false);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A reload keeps the document's undo history and versions, and adds the content as it was as
+/// a step: Undo brings it back (the document then differs from its file, so it is unsaved), and
+/// Redo takes the file's content again. Nothing a person typed is lost by a reload, even a
+/// forced one.
+#[test]
+fn reload_keeps_the_undo_history_and_undo_brings_the_old_content_back() {
+    let dir = temp_dir("reload-undo");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    run(&mut s, "file.save", json!({}));
+    s.versions.push(("mine".into(), "2026-11-10".into(), s.doc.clone()));
+    std::fs::write(&path, "alpha beta").unwrap();
+    run(&mut s, "file.reload", json!({}));
+    assert_eq!(text(&s), "alpha beta");
+    assert_eq!(s.undo_depth(), 2, "the typing and the reload");
+    assert_eq!(s.versions.len(), 1, "the versions are this document's still");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "Xalpha", "Undo brings the content back as it was before the reload");
+    assert!(s.dirty, "the document differs from its file again");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s), "alpha beta");
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "alpha", "and the typing is undone in turn");
+    // Forced over unsaved changes: they are one Undo away too.
+    run(&mut s, "text.insert", json!({"text": "Y"}));
+    std::fs::write(&path, "alpha beta gamma").unwrap();
+    run(&mut s, "file.reload", json!({"force": true}));
+    assert_eq!(text(&s), "alpha beta gamma");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "Yalpha");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Save never writes over a file another program changed since it was read (#5623): the save
+/// is an error and the file keeps the other program's content, until the document is reloaded
+/// or the save says `overwrite`. A save to another path is a copy and writes as ever.
+#[test]
+fn save_refuses_to_write_over_a_file_changed_on_disk_unless_told_to() {
+    let dir = temp_dir("save-changed");
+    let path = dir.join("notes.txt");
+    std::fs::write(&path, "alpha").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": path.to_string_lossy()}));
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    std::fs::write(&path, "theirs").unwrap();
+    let e = s.run("file.save", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("changed on disk"), "{e}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs", "nothing was written over");
+    assert!(s.dirty && s.changed_on_disk());
+    let e = s.run("file.save", &json!({"path": path.to_string_lossy()})).unwrap_err().to_string();
+    assert!(e.contains("changed on disk"), "the own file named: {e}");
+    let copy = dir.join("copy.txt");
+    run(&mut s, "file.save", json!({"path": copy.to_string_lossy()}));
+    assert_eq!(std::fs::read_to_string(&copy).unwrap().trim_end(), "Xalpha", "a copy elsewhere writes");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+    run(&mut s, "file.save", json!({"overwrite": true}));
+    assert_eq!(std::fs::read_to_string(&path).unwrap().trim_end(), "Xalpha", "told to, it writes over");
+    assert!(!s.dirty && !s.changed_on_disk(), "and the file written is the one we know");
+    // Reloaded instead, the next save writes as ever.
+    std::fs::write(&path, "theirs again").unwrap();
+    run(&mut s, "file.reload", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Z"}));
+    run(&mut s, "file.save", json!({}));
+    assert_eq!(std::fs::read_to_string(&path).unwrap().trim_end(), "Ztheirs again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Every open document's file is watched, not only the active one's (#5623):
+/// `changed_on_disk_ids` names the documents whose file changed, parked ones included.
+#[test]
+fn every_open_document_is_asked_about_its_file() {
+    let dir = temp_dir("changed-ids");
+    let a_path = dir.join("a.txt");
+    let b_path = dir.join("b.txt");
+    std::fs::write(&a_path, "a").unwrap();
+    std::fs::write(&b_path, "b").unwrap();
+    let mut s = s();
+    run(&mut s, "file.open", json!({"path": a_path.to_string_lossy()}));
+    let a = s.document_id();
+    run(&mut s, "file.open", json!({"path": b_path.to_string_lossy()}));
+    let b = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    assert!(s.changed_on_disk_ids().is_empty());
+    std::fs::write(&a_path, "a changed").unwrap();
+    assert_eq!(s.changed_on_disk_ids(), vec![a], "the parked document's file changed");
+    assert!(s.document_changed_on_disk(a) && !s.document_changed_on_disk(b));
+    assert!(!s.document_changed_on_disk(999_999), "not open: nothing to say");
+    std::fs::write(&b_path, "b changed").unwrap();
+    assert_eq!(s.changed_on_disk_ids(), vec![a, b], "in the order they were opened");
+    run(&mut s, "file.reload", json!({"id": a}));
+    assert_eq!(s.changed_on_disk_ids(), vec![b]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+

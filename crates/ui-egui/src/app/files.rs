@@ -422,9 +422,15 @@ impl WordApp {
 
     /// AutoSave: write a saved document a couple of seconds after the last change. A failure is
     /// shown in the status bar and turns AutoSave off for the file until the user saves it again.
+    /// A file another program changed since it was read is not written over (#5623): the bar
+    /// under the ribbon asks (Reload / Keep mine), and AutoSave waits for the answer.
     pub(crate) fn autosave_tick(&mut self, now: f64) {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
+            if self.session.changed_on_disk() {
+                self.notice_disk_change(self.session.document_id(), crate::disk_change::DiskNotice::Unsaved);
+                return;
+            }
             if let Err(e) = self.session.run("file.save", &json!({})) {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;

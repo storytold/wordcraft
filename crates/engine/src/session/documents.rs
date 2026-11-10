@@ -689,7 +689,30 @@ impl Session {
     /// document without a file, or whose file is gone, hasn't changed on disk: there is nothing
     /// to read again.
     pub fn changed_on_disk(&self) -> bool {
-        let (Some(path), Some(was)) = (self.path.as_deref(), self.disk) else { return false };
-        crate::io::disk_stamp(path).is_some_and(|now| now != was)
+        changed_on_disk(self.path.as_deref(), self.disk)
     }
+
+    /// [`Session::changed_on_disk`] for any open document, the active one or a parked one;
+    /// false for an id that isn't open.
+    pub fn document_changed_on_disk(&self, id: u64) -> bool {
+        if id == self.document_id {
+            self.changed_on_disk()
+        } else {
+            self.others.iter().find(|d| d.document_id == id).is_some_and(|d| changed_on_disk(d.path.as_deref(), d.disk))
+        }
+    }
+
+    /// The open documents whose file another program changed since it was read or written, in
+    /// the order they were opened: what a front end that watches files looks at (#5623). One
+    /// `stat` per document that has a file.
+    pub fn changed_on_disk_ids(&self) -> Vec<u64> {
+        self.order.iter().copied().filter(|&id| self.document_changed_on_disk(id)).collect()
+    }
+}
+
+/// Whether the file at `path` differs from `was`, the stamp taken when it was read or written:
+/// see [`Session::changed_on_disk`].
+fn changed_on_disk(path: Option<&FsPath>, was: Option<crate::io::DiskStamp>) -> bool {
+    let (Some(path), Some(was)) = (path, was) else { return false };
+    crate::io::disk_stamp(path).is_some_and(|now| now != was)
 }

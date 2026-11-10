@@ -322,6 +322,11 @@ impl WordApp {
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
         let r = self.execute(id, params);
+        // A Save refused because another program changed the file (#5623) puts the bar up, so
+        // the answer (Reload / Keep mine) is at hand with the reason on the status line.
+        if id == "file.save" && r.is_err() && self.session.changed_on_disk() {
+            self.notice_disk_change(self.session.document_id(), crate::disk_change::DiskNotice::Unsaved);
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
