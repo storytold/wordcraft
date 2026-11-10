@@ -74,6 +74,18 @@ pub fn mime_for(name: &str) -> &'static str {
         MIME_RTF
     } else if lower.ends_with(".txt") {
         "text/plain"
+    } else if lower.ends_with(".pdf") {
+        "application/pdf"
+    } else if lower.ends_with(".html") {
+        "text/html"
+    } else if lower.ends_with(".md") {
+        "text/markdown"
+    } else if lower.ends_with(".tex") {
+        "application/x-tex"
+    } else if lower.ends_with(".ott") {
+        "application/vnd.oasis.opendocument.text-template"
+    } else if lower.ends_with(".fodt") {
+        "application/vnd.oasis.opendocument.text-flat-xml"
     } else {
         MIME_DOCX
     }

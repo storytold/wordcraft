@@ -65,6 +65,8 @@ pub struct DriveLink {
     pub conflict: Option<u64>,
     /// The page listed files since sign-in (so an empty Drive isn't listed every frame).
     pub listed: bool,
+    /// File › Export's "Save the copy to Google Drive" checkbox.
+    pub export_to_drive: bool,
     origins: HashMap<u64, Origin>,
     /// Per document: how many local saves set where it lives (see [`note_local_save`]). A Drive
     /// upload that ends after a newer one leaves the destination alone.
@@ -88,6 +90,24 @@ pub fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Val
         _ => {}
     }
     Some(imp::run(app, name, params))
+}
+
+/// The File › Export formats a copy can go to Google Drive in (the ones written from bytes).
+pub(crate) const EXPORT_FORMATS: [&str; 10] = ["pdf", "docx", "odt", "ott", "fodt", "rtf", "html", "md", "tex", "txt"];
+
+/// File › Export sends the copy to Google Drive: Google Drive is on and signed in, and the
+/// checkbox on the Export page is ticked.
+pub(crate) fn exports_to_drive(app: &WordApp) -> bool {
+    app.ui.google_drive && app.drive.signed_in == Some(true) && app.drive.export_to_drive
+}
+
+/// File › Export's "Save the copy to Google Drive" checkbox, shown once signed in.
+pub(crate) fn export_checkbox(app: &mut WordApp, ui: &mut egui::Ui) {
+    if !app.ui.google_drive || app.drive.signed_in != Some(true) {
+        return;
+    }
+    ui.checkbox(&mut app.drive.export_to_drive, tl!("Save the copy to Google Drive (My Drive) instead of a folder on this computer"));
+    ui.add_space(8.0);
 }
 
 const OFF: &str = "Google Drive is off; turn it on in File › Options › Accounts";
@@ -485,6 +505,12 @@ mod native {
             bytes: Vec<u8>,
             marked_saved: bool,
         },
+        /// File › Export with "Save the copy to Google Drive": a new file in My Drive. The
+        /// document's own home doesn't change.
+        Export {
+            name: String,
+            bytes: Vec<u8>,
+        },
     }
 
     pub(super) enum Event {
@@ -509,6 +535,7 @@ mod native {
             file: DriveFile,
             marked_saved: bool,
         },
+        Exported(DriveFile),
         Failed {
             what: &'static str,
             error: DriveError,
@@ -614,8 +641,28 @@ mod native {
                 send(app, Job::Open { id: id.to_owned() }, "open")
             }
             "save" => save(app, params),
+            "export" => export(app, params),
             other => Err(format!("unknown Google Drive command `{other}`; use status, start, reload, signIn, cancel, signOut, list, open or save")),
         }
+    }
+
+    /// `ui.drive.export {format}`: a copy in `format` (an extension File › Export offers) as a new
+    /// file in My Drive, named after the document. Nothing about the document changes.
+    fn export(app: &mut WordApp, params: &Value) -> Result<Value, String> {
+        let format = params.get("format").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
+        if !super::EXPORT_FORMATS.contains(&format.as_str()) {
+            return Err(format!("`format` is one of {}", super::EXPORT_FORMATS.join(", ")));
+        }
+        if app.services.drive_profile.is_none() {
+            return Err("Google Drive works with the WordCraft desktop app".into());
+        }
+        let name = format!("{}.{format}", app.title_stem());
+        let password = app.session.password.as_ref().map(wordcraft_engine::Password::as_str);
+        let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
+        let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
+        let r = send(app, Job::Export { name: name.clone(), bytes }, "export")?;
+        app.status(i18n::fmt(tl!("Exporting {name} to Google Drive…"), &[("name", &name)]));
+        Ok(r)
     }
 
     /// Serializes the document on the UI thread and hands the bytes to the worker.
@@ -697,6 +744,7 @@ mod native {
                 Job::Save { doc, rev, local, target, bytes, marked_saved } => {
                     drive.save(&target, &bytes).map(|file| Event::Saved { doc, rev, local, file, marked_saved })
                 }
+                Job::Export { name, bytes } => drive.save(&SaveTarget::New { name, parent: None }, &bytes).map(Event::Exported),
             };
             emit(r.unwrap_or_else(|error| Event::Failed { what, error, doc }));
             if !drive.auth.signed_in() {
@@ -712,6 +760,7 @@ mod native {
             Job::List { .. } => "list",
             Job::Open { .. } => "open",
             Job::Save { .. } => "save",
+            Job::Export { .. } => "export",
         }
     }
 
@@ -792,6 +841,10 @@ mod native {
                     }
                 }
                 app.status(i18n::fmt(tl!("Saved {name} to Google Drive"), &[("name", &name)]));
+            }
+            Event::Exported(file) => {
+                d.busy = None;
+                app.status(i18n::fmt(tl!("Exported {name} to Google Drive"), &[("name", &file.name)]));
             }
             Event::Failed { what, error, doc } => {
                 d.busy = None;

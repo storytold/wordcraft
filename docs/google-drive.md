@@ -1,8 +1,28 @@
 # Google Drive
 
-WordCraft opens documents from Google Drive and saves them back without a sync client. Go to
-**File › Google Drive**, sign in with Google, pick a document and click **Open**. Save then sends
-your changes back to the same file in Drive. You can also save any document to My Drive.
+WordCraft opens documents from Google Drive and saves them back without a sync client: the Google
+Drive desktop app isn't needed. Google Drive is **off** until you turn it on in **File › Options ›
+Accounts**, so File › Google Drive appears only for people who use it.
+
+Then go to **File › Google Drive**, sign in with Google, pick a document and click **Open**. Save
+then sends your changes back to the same file in Drive. You can also save any document to My Drive.
+
+```mermaid
+flowchart LR
+    S[Ribbon: Share] --> E[File › Export]
+    O[File › Options › Accounts] -->|turn on, add client, sign in| D[File › Google Drive]
+    O -->|signed in| X["Export: ☑ Save the copy to Google Drive"]
+    E --> X
+    X -->|PDF, Word, ODT, RTF, HTML, Markdown, LaTeX, text| M[(My Drive)]
+    D -->|Open| W[Editor]
+    W -->|Save ⌘S| C{changed in Drive?}
+    C -->|no| M
+    C -->|yes| R[refused: Save a Copy]
+```
+
+- **Export to Drive.** Once signed in, File › Export (also the ribbon's **Share** button) offers
+  **Save the copy to Google Drive**: the chosen format goes to My Drive as a new file, named after
+  the document, instead of a folder on this computer. The document itself doesn't change.
 
 - **Formats.** The list shows Word (`.docx`), OpenDocument (`.odt`), RTF and Google Docs files.
   A Google Doc opens as a Word copy (Drive exports it as `.docx`). Saving it adds a new `.docx`
@@ -28,13 +48,16 @@ their own Google Cloud project, so sign-in never goes through a WordCraft server
    yourself: user type *External*, publishing status *Testing*, and add your own Google
    account under **Test users**.
 3. Under **Clients**, create an OAuth client ID of type **Desktop app**, then download its JSON.
-4. Save that JSON as `google-drive.json` in WordCraft's profile folder:
+4. In WordCraft, go to **File › Options › Accounts**, tick **Use Google Drive**, enter the
+   client ID and secret from that JSON and click **Save client**, then **Sign in with Google**.
+   That writes `google-drive.json` (owner-only) for you. Or save the JSON yourself as
+   `google-drive.json` in WordCraft's profile folder:
    - macOS: `~/Library/Application Support/WordCraft/`
    - Windows: `%APPDATA%\WordCraft\`
    - Linux and BSD: `$XDG_CONFIG_HOME/wordcraft/` (usually `~/.config/wordcraft/`)
    - or the folder named by `WORDCRAFT_PROFILE_DIR`
-5. In WordCraft, go to File › Google Drive. Click **Try again** if the page was already open,
-   then click **Sign in with Google**.
+5. If you wrote the file yourself, turn Google Drive on in File › Options › Accounts, then go to
+   File › Google Drive (click **Try again** if the page was already open) and **Sign in with Google**.
 
 The file can also be written by hand:
 
@@ -77,7 +100,10 @@ headless.
 
 | Command | What it does |
 |---|---|
-| `ui.drive.status` | `{available, signedIn, busy, error, files, morePages, document}`; `document` is the active document's Drive file, if any |
+| `ui.drive.enable` | `{"value"?: bool}`: turns Google Drive on or off (File › Options › Accounts); off by default. Every other command except `status` says how to turn it on |
+| `ui.drive.client` | `{"clientId": string, "clientSecret"?: string}`: writes `google-drive.json` and reads it again |
+| `ui.drive.export` | `{"format": "pdf"\|"docx"\|"odt"\|"ott"\|"fodt"\|"rtf"\|"html"\|"md"\|"tex"\|"txt"}`: a copy as a new file in My Drive |
+| `ui.drive.status` | `{enabled, available, signedIn, busy, error, files, morePages, document}`; `document` is the active document's Drive file, if any |
 | `ui.drive.start` | Reads the OAuth client and the keychain (the page does this when it opens) |
 | `ui.drive.reload` | Reads `google-drive.json` again |
 | `ui.drive.signIn` | Opens the consent page in the browser and waits up to 5 minutes |
