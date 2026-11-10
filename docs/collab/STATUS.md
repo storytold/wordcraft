@@ -5,22 +5,28 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `077b4056` (the printing-gate entry) plus two local
-  commits below it — a code fix (`4ecab864`, §5.26) and this page — which are
-  not pushed. The PR head is 77 commits over `4b0d3995`; the local branch is
-  79. The branch was pushed on 2026-11-10 at 14:38Z (`15c9625b`) and again
-  around 17:14Z (`077b4056`): at that point the
-  local HEAD, the fork branch and the `headRefOid` of PR #5834 were the same
-  commit (§5.21, §5.24, §5.26). The PR is `MERGEABLE`; it was marked ready for
-  review at 14:57:53Z, though its title still ends with the word "(draft)" as
-  text (§5.26). The fork git source is gone from the manifest and the lock
-  (§5.24), and the three `printing.yml` steps are green on the pushed tree at
-  the build host (§5.25). CI itself has not executed on either pushed head:
-  every run on `15c9625b` and the five runs on `077b4056` (created at 17:14Z)
-  sit in `action_required` until a maintainer approves them (§5.2, §5.26). A
+- HEAD at this writing: `af9a43a2` (the CodeRabbit triage, §5.26) — the fork
+  branch and the `headRefOid` of PR #5834 — plus this page on top of it. This
+  page is documentation only, committed locally and **not pushed**: the envoy
+  role cannot push, so the owner sends it (§5.27). The branch is 79 commits
+  over `4b0d3995` before this page and one more with it. The branch was pushed
+  on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
+  20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
+  `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
+  The PR is `MERGEABLE`; it was marked ready for review at 14:57:53Z; its
+  title carried the word "(draft)" as text until this pass removed it (§5.27),
+  and the title now reads "Real-time collaboration: authoritative sync server,
+  document adapter, client core". The fork git
+  source is gone from the manifest and the lock (§5.24), and the three
+  `printing.yml` steps are green on the pushed tree at the build host (§5.25).
+  CI has not executed on any pushed head: every run on `15c9625b`, the five
+  runs on `077b4056` (17:14Z) and the five runs on `af9a43a2` (20:15:37Z) sit
+  in `action_required` until a maintainer approves them (§5.2, §5.26, §5.27). A
   maintainer had approved the workflows for `467948fa`; there `Nix` and
   `SonarCloud` passed and `Printing` failed on a stale `Cargo.lock`, not on
-  code (§5.23).
+  code (§5.23). CodeRabbit is green on `af9a43a2` (completed 20:25:20Z); its
+  review `5848804525` has two Minor findings, both about this page, and both
+  are answered here (§5.27).
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -297,14 +303,14 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) |
+| Changes converge without loss or duplicates | **partial** | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass, but two paths break the property: concurrent positional edits applied at a stale offset can leave a replica diverged with no resync (§5.26 finding 1), and an operation accepted while a peer's queue is full is dropped, so that peer can stay connected and stale (§5.26 finding 5). Plan: an ADR on transforming positional edits (or a `baseVersion` guard that forces a resync) and on a per-peer stale flag, then the fixes with two-client tests (§5.27) |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z | PR #5834; every workflow run on the pushed head waits in `action_required` for a maintainer's approval (§5.2, §5.26) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z | PR #5834; head `af9a43a2` equals the fork branch; every workflow run on the pushed head waits in `action_required` for a maintainer's approval (§5.2, §5.27) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -428,6 +434,15 @@ Results at this writing:
 - Web collab has been run with two clients only inside one headless browser
   (two iframes through a cabinet-like host page, §5.1). Two real machines, the
   real cabinet page and its storage, and the visible commit status stay manual.
+- **Convergence has two known gaps** (§5.26 findings 1 and 5, §5.27). The room
+  applies primitives at server offsets while their author has already applied
+  its own optimistic text, so two concurrent positional edits can leave a
+  replica diverged without a resync. And an operation accepted while a peer's
+  queue is full is dropped, so that peer can stay connected and stale. Both
+  need a decision first (transformation or a `baseVersion` guard that forces a
+  resync; a per-peer stale flag that closes the socket), then a fix with a
+  two-client test. Until then the TASK.md criterion "converge without loss or
+  duplicates" is **partial** (§2), not done.
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -578,17 +593,19 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    the cabinet's ticket must carry the numeric `fileId` in `doc`, and the shared
    service token must be in both `.env`s.
 2. Get a maintainer's approval for the runs on the PR head. The rebased branch
-   is pushed, the fork and the PR head are the same commit (`077b4056`), and
+   is pushed, the fork and the PR head are the same commit (`af9a43a2`), and
    the PR is `MERGEABLE`; it was marked ready for review at 14:57:53Z, so the
    draft flag is gone (§5.21, §5.26). A maintainer had approved the workflows
    for the earlier head `467948fa`: `Nix` and `SonarCloud` passed, `Printing`
    failed on a stale `Cargo.lock` rather than on code, and `39f2e1a4` fixes it
    (§5.23). The pushes at 14:38Z (`15c9625b`) and around 17:14Z (`077b4056`)
    started fresh runs that wait in `action_required`, so nothing has executed
-   on either head; the three `printing.yml` steps have been run green on the
+   on any of them; the three `printing.yml` steps have been run green on the
    pushed tree at the build host instead (§5.25). The fix from the CodeRabbit
-   triage (`4ecab864`) and this page are local commits still waiting for a
-   push (§5.26).
+   triage (`4ecab864`) and the pages above it were pushed at 20:15Z; the head
+   is `af9a43a2`, and its five runs wait in `action_required` too (§5.26,
+   §5.27). This page sits on top of that head and still waits for a push; the
+   envoy role cannot push, so it is one fast-forward for the owner (§5.27).
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -2528,15 +2545,17 @@ a maintainer's approval before anything runs. `077b4056` differs from
 The page still described PR #5834 as a draft on `15c9625b`, and listed the five
 workflow runs of that head. Both moved. This entry records the reconciliation
 and the CodeRabbit triage. The PR, the branch and CI were not touched; the fix
-(`4ecab864`) and this page are local commits that have not been pushed.
+(`4ecab864`) and this page were local commits at that point and were pushed
+later, as `af9a43a2` (§5.27).
 
 **Draft flag.** The issue timeline has one `ready_for_review` event:
 `copoka` marked the PR ready at 2026-11-10 14:57:53Z. `gh api
 repos/storytold/wordcraft/pulls/5834` at 17:20Z answers `"draft": false`,
 `"state": "open"`, `"mergeable": true`, `head.sha =
 077b40561b426d8bd63aa43b72c82a29bce4d901`, `head.repo.full_name =
-copoka/wordcraft`, `base.ref = main`. The title still ends with the word
-"(draft)" as text; the flag is what matters, and it is gone.
+copoka/wordcraft`, `base.ref = main`. The title still ended with the word
+"(draft)" as text at that point; the flag is what matters, and it was gone.
+The title text itself was edited later (§5.27).
 
 **The head moved by one docs commit.** `077b4056` is
 `15c9625b` + this page's predecessor, `docs(collab): the printing gates on the
@@ -2545,8 +2564,8 @@ pushed head, and the push in §5.24`: `git diff --stat 15c9625b..077b4056` is
 deletions(-)`. No code and no manifest changed. At that point the local `HEAD`
 and the head of `git fetch fork feature/realtime-collaboration` were both
 `077b4056`; `git rev-list --count 4b0d3995..077b4056` is 77, one more than
-`15c9625b` (76). Two local commits sit above it now: the fix `4ecab864` and
-this page.
+`15c9625b` (76). Two commits sat above it at that point: the fix `4ecab864`
+and this page.
 
 **The five runs on `077b4056`.** From `gh api
 "repos/storytold/wordcraft/actions/runs?head_sha=077b4056…"`:
@@ -2602,10 +2621,82 @@ in `4ecab864`, the other eight are confirmed and need their own slice.
 wordcraft-collab-server` 51 passed, 1 ignored (the LibreOffice commit gate).
 The full `cargo xtask ci` was not run in this pass.
 
-**What is left.** A maintainer's approval of the five runs on `077b4056`
-(§5.2 item 2), a push of the two local commits (`4ecab864` and this page), and
-the eight confirmed findings above, which need slices of their own. The local
-tree holds the fix and this page; the PR, the branch and CI were not touched.
+**What is left.** The two commits this entry describes were pushed after it was
+written: `4ecab864` and `af9a43a2`, which is the PR head when the next review
+landed (§5.27). They are no longer local. A maintainer still has to approve the
+five runs on the pushed head; the runs on `077b4056` validate neither
+`4ecab864` nor this page, so their approval would prove nothing about either.
+The eight confirmed findings above need slices of their own, findings 1 and 5
+first: they are what keeps the convergence criterion at **partial** (§2,
+§5.27).
+
+### 5.27 The review on `af9a43a2` is about this page; the acceptance table is reconciled (run 2026-11-10)
+
+**The push that preceded the review.** `4ecab864` and `af9a43a2` were pushed
+to the fork at 20:15Z. `git rev-parse HEAD`, `git ls-remote fork
+refs/heads/feature/realtime-collaboration` and `gh pr view 5834 --json
+headRefOid` all answered `af9a43a2294a3de266f383a7c27f6b805e2fbd1d`; the
+branch is 79 commits over `4b0d3995`. The five workflow runs on that head were
+created at 20:15:37Z and every one of them is `action_required`: nothing has
+executed. CodeRabbit started at 20:15:54Z and completed at 20:25:20Z with
+`success`.
+
+**The review.** `5848804525`, submitted 2026-11-10 20:25:18Z on `af9a43a2`,
+state `COMMENTED`, two findings, both **Minor** and both outside the diff: the
+only file this head changes is this page, so CodeRabbit could not anchor them
+inline. Both concern the accuracy of this page, not the code.
+
+**Finding 1 (`STATUS.md:300`): convergence reported as done.** Checked: the
+acceptance row "Changes converge without loss or duplicates" said `done`, while
+§5.26 lists finding 1 (concurrent positional edits applied at a stale offset;
+the author skips its own echo, so a replica can diverge without a resync) and
+finding 5 (an operation accepted while a peer's queue is full is dropped, so
+the peer can stay connected and stale) as `confirmed, not fixed`. The row was
+overstated and now reads **partial**, with both findings named, the two test
+groups that do pass, and the plan: an ADR on transforming positional edits or
+on a `baseVersion` guard that forces a resync, an ADR on a per-peer stale flag
+that closes the socket on the next heartbeat, then the fixes with a stalled
+reader and a two-client test. §4 carries the same limitation, so a reader who
+starts there sees it too.
+
+**Finding 2 (`STATUS.md:2605-2606`): approval of the old runs presented as
+validation.** Checked: the paragraph put a maintainer's approval of the five
+runs on `077b4056` first and the push of `4ecab864` and this page second. The
+runs on `077b4056` were created before `4ecab864` existed, so approving them
+validates neither the guard nor this page. The paragraph now says the push
+happened, that approval applies to the runs on the pushed head, and that the
+older runs prove nothing about either commit (§5.26 "What is left").
+
+**The other rows of the table were checked for the same overstatement.** They
+hold: two clients do edit one document (the divergence is the convergence row,
+not this one); cursors and presence are covered by the panel and the socket
+tests; reconnect and resync catch up from the journal and fall back to a
+snapshot on a gap, and a full peer queue is a different failure, counted under
+finding 5; per-user undo/redo, the viewer gate, commit and its cabinet
+callback, the single-user flag, the documents and the web bridge each have
+tests or a run behind them. Two changes were needed: the convergence row
+(partial) and the PR row, which now names `af9a43a2` and points at this entry
+for the runs. "Two real machines and the real cabinet storage" stays `not run`.
+
+**What ran.** No code changed: `git diff --stat` of this commit is this file
+only. The claims about runs and the review come from `gh api
+repos/storytold/wordcraft/reviews/5848804525`, `gh api
+repos/storytold/wordcraft/commits/af9a43a2/check-runs`, `gh api
+"repos/storytold/wordcraft/actions/runs?head_sha=af9a43a2…"`, `gh pr view 5834`
+and `git ls-remote fork`. No `cargo` command was run, because no Rust file
+moved; the last full gate is the one in §3.
+
+**What is left.** One push, then a maintainer's approval of the five runs on
+the resulting head. This page is committed on top of `af9a43a2` and is not
+pushed: the envoy role denies `git push`, so the owner runs
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` from
+`upstream/` (a fast-forward from `af9a43a2`, no rebase and no force). The runs
+on `077b4056` validate neither `4ecab864` nor this page. After that, in this
+order: the ADR and the fix for finding 1, the ADR and the fix for finding 5
+(these two decide when the criterion can go back to `done`), then findings 2,
+3, 6, 8, 9 and 10, each with its own test. The PR title ended with the word
+"(draft)" as text though the flag was gone; that title was edited in this pass
+and no longer says it, which touches no commit.
 
 ## 6. Where things live
 
