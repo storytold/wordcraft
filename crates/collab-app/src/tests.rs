@@ -234,6 +234,20 @@ fn a_presence_without_a_role_keeps_the_known_role() {
     assert!(!people[0].active);
 }
 
+#[test]
+fn a_join_announcement_without_a_role_keeps_the_known_role() {
+    // The join announcement is a presence frame with an empty state. A server
+    // built before the role field sends it without `role`: the peer that
+    // already knows this participant keeps its role instead of falling back to
+    // `participant`.
+    let mut people = Vec::new();
+    crate::apply_presence(&mut people, "c1", "owner", &json!({}));
+    crate::apply_presence(&mut people, "c1", "", &json!({}));
+    assert_eq!(people[0].role, "owner");
+    assert!(people[0].active);
+    assert_eq!(people.len(), 1, "the peer is updated, not duplicated");
+}
+
 /// Build the operation a client would send for one planned change.
 fn op_from(client: &str, seq: u64, base: u64, plan: &Outgoing, history: Option<HistoryAction>) -> Op {
     Op {

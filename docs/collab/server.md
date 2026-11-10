@@ -162,6 +162,13 @@ sent to the **other** participants — the author's own caret is already in its
 window. Cursors and selections are addresses (`story`, `nodeId`, `off`), never
 text. A viewer sends presence but no operations.
 
+A successful join is announced with the same frame: right after `welcome`, the
+server sends the peers already in the room a `presence` with an empty `state`,
+the newcomer's `client_id` and its role from the JWT. Their participant list
+shows the role before the newcomer's first presence frame; the newcomer is not
+echoed its own join and learns the existing peers from `welcome`. A client
+cannot name a role, so nothing on the wire is trusted for it.
+
 ## Roles
 
 The server checks the role on every operation. `viewer` is refused before the

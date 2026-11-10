@@ -426,6 +426,12 @@ mod tests {
         let text = r#"{"type":"presence","client_id":"c1","state":{"active":true}}"#;
         let msg: ServerMsg = serde_json::from_str(text).expect("an older peer's frame parses");
         assert!(matches!(msg, ServerMsg::Presence { role, .. } if role.is_empty()));
+
+        // The join announcement is the same frame with an empty state: a peer
+        // built before the role field parses it and keeps what it already knew.
+        let join = r#"{"type":"presence","client_id":"c2","state":{}}"#;
+        let msg: ServerMsg = serde_json::from_str(join).expect("a role-less join frame parses");
+        assert!(matches!(msg, ServerMsg::Presence { client_id, role, .. } if client_id == "c2" && role.is_empty()));
     }
 
     #[test]

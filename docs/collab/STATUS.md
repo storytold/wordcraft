@@ -4,12 +4,12 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `a785b611` plus this commit (the §5.22 test and this
-  page) — 70 commits over `4b0d3995` up to `a785b611`, so the branch is two
-  commits ahead of `fork/feature/realtime-collaboration` at `467948fa`, the head
-  of PR #5834 (§5.21, §5.22). The PR is `MERGEABLE`; its workflows wait as
-  `action_required` for a maintainer to approve them, which is the GitHub rule
-  for a fork PR (§5.2)
+- HEAD at this writing: `90eaa7dc` plus this commit (the join announcement and
+  this page) — 71 commits over `4b0d3995` up to `90eaa7dc`, so the branch is
+  three commits ahead of `fork/feature/realtime-collaboration` at `467948fa`,
+  the head of PR #5834 (§5.21, §5.22). The PR is `MERGEABLE`; its workflows wait
+  as `action_required` for a maintainer to approve them, which is the GitHub
+  rule for a fork PR (§5.2)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -51,8 +51,10 @@ missing, and where the next session should start.
   (including the `review.*Comment` commands); owner alone commits (ADR-0008).
 - Presence (ephemeral, never journaled) carries the sender's `role`, stamped by
   the server from the JWT claim, so a peer that was already connected shows a
-  newcomer's role on its first frame; the welcome list still gives every role
-  to the client that joins.
+  newcomer's role on its first frame. A successful join is announced to the
+  peers already in the room with an empty-state presence frame sent right after
+  `welcome`, so the role is there before the newcomer's first presence; the
+  welcome list still gives every role to the client that joins.
 - Snapshot = model JSON + source `.docx`; `Document::kept` is taken back from the
   source on restore (ADR-0011). Server snapshots every 500 operations, on commit
   and when the last peer leaves; a final snapshot is written on SIGTERM.
@@ -259,7 +261,10 @@ missing, and where the next session should start.
   owner or after the old session has been silent for `COLLAB_LEASE_TTL_SECS`
   (default 120) and has no connected peer.
 - Presence is fanned out to the other participants and never journaled; a viewer
-  may send it. Presence is not echoed to its author.
+  may send it. Presence is not echoed to its author. A successful join is
+  announced to the other peers after `welcome` with the same frame (empty
+  `state`, `role` from the JWT), so the role arrives before the newcomer's first
+  presence.
 - Commit is owner-only, checks `expectedVersion`, writes the `.docx` in memory,
   returns SHA-256 and warnings, and stores the source bytes for the next snapshot.
 - With `COLLAB_CABINET_URL`, the commit is also published to the cabinet
@@ -311,9 +316,9 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
-- 349 protocol/adapter/client/server tests, all green; the LibreOffice commit
+- 350 protocol/adapter/client/server tests, all green; the LibreOffice commit
   gate stays the one ignored test. The nine crates in this run:
-  `collab` 59, `collab-doc` 113, `collab-engine` 58, `collab-app` 37,
+  `collab` 59, `collab-doc` 113, `collab-engine` 58, `collab-app` 38,
   `collab-client` 17, `collab-web` 5, `collab-ws` 1, `wordcraft-web` 9,
   `collab-server` 50 (their socket scenarios included). §5.18 added 19: 13 unit
   tests of the callback client (`cabinet.rs`), 1 store round-trip of the cabinet
@@ -325,6 +330,14 @@ Results at this writing:
   and `cargo test` over the nine crates above — 349 passed, 0 failed, 1 ignored
   (the LibreOffice commit gate); `collab-engine` 58/0/0 in 1.23 s, 1.23 s of it
   the new test.
+- §5.3 join announcement added 1 `collab-app` test (37 → 38) and rewrote the
+  server's three-client socket test. Slice run on the build host `agents` from
+  this tree: `cargo fmt --all -- --check` EXIT=0, `cargo clippy -p
+  wordcraft-collab -p wordcraft-collab-app -p wordcraft-collab-server
+  --all-targets -- -D warnings` EXIT=0, `cargo test` over the same three crates
+  EXIT=0 — 147 passed, 0 failed, 1 ignored (`collab` 59, `collab-app` 38,
+  `collab-server` 50 passed / 1 ignored, the LibreOffice commit gate). The new
+  socket test times out when the announcement call is removed (checked).
 - Full gate on the final tree (`cargo xtask ci`, build host `agents`, with
   `CRAFT_I18N_DIR` and `CRAFT_FONTS_DIR` from the host): all 9 steps passed —
   fmt, clippy (`--workspace --all-targets -D warnings`), test (5991 passed, 0
@@ -556,10 +569,9 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    same commit, and the PR is `MERGEABLE` (§5.21); its workflows report
    `action_required` until a maintainer approves them, the GitHub rule for a
    fork PR.
-3. Optional hardening: property
-   primitives, an offline queue, or a join broadcast that carries the role before
-   the first presence frame (presence already carries it, §5.3). (The
-   multi-operation undo transaction is done:
+3. Optional hardening: property primitives or an offline queue. (The join
+   broadcast that carries the role before the first presence frame is done:
+   §5.3. The multi-operation undo transaction is done:
    `a_step_of_several_operations_lands_as_one_transaction`; the `opId` window
    survives a snapshot restore: §5.5; table-cell ids are done: §5.6; columns,
    merges and splits are primitives: §5.7; their inverses are done and an undo
@@ -569,25 +581,34 @@ and `apps/wordcraft-web/src/web.rs` (web); test
 4. Manual acceptance (desktop): two desktops over the real server, a 100+ page
    document, commit and reopen in Word/LibreOffice.
 
-### 5.3 Role in presence (run 2026-11-09)
+### 5.3 Role in presence and on join (run 2026-11-09; join announcement 2026-11-10)
 
 §5.1 left one visible gap: a peer that was already connected learned about a
 newcomer only from `presence`, which carried the caret and not the role, so its
 participant list showed `participant` until the next welcome. `TASK.md` §3 asks
-for "a participant list with roles", so the role now travels with presence.
+for "a participant list with roles". The role now travels with presence, and a
+join announcement tells the room's earlier peers who joined before the newcomer
+sends anything.
 
 - **Wire.** `ServerMsg::Presence` gains `role` (`#[serde(default)]`, so a frame
-  from an older server still parses). The client's `Presence` message is
-  unchanged: a client cannot name a role, the server stamps it from the JWT
-  claim (ADR-0008), the same authority that gates write and commit.
+  from an older server still parses). The join announcement reuses the same
+  frame with an empty `state`, so a peer built before the field parses it too.
+  The client's `Presence` message is unchanged: a client cannot name a role, the
+  server stamps it from the JWT claim (ADR-0008), the same authority that gates
+  write and commit.
 - **Server.** `process_frame` copies the authenticated role into every presence
-  broadcast. The room already keeps it per peer (`Peer.role`) for the welcome
-  list and the lease checks; nothing new is trusted from the wire.
+  broadcast. On a successful join, after `welcome`, `announce_join` sends the
+  other peers an empty-state presence frame with the newcomer's `client_id` and
+  `role`. The newcomer is not echoed its own join: it learns the existing peers
+  from `welcome`, which already lists their roles. The room keeps the role per
+  peer (`Peer.role`) for the welcome list and the lease checks; nothing new is
+  trusted from the wire.
 - **Client.** `Event::Presence` carries the role. `collab-app` folds a frame
   into the participant list through `apply_presence` (shared by the web session
   in `collab-web`): a known peer gets the role updated in place, a new peer is
   added with it, and an empty role (older server) keeps the role already known
-  instead of overwriting it with `participant`.
+  instead of overwriting it with `participant`. The announcement needs no client
+  change.
 - **UI.** Nothing else was needed: the desktop Collaboration panel already
   renders `id · role` from `ParticipantView`, and the host bridge already sends
   `hostParticipants` with `role` to the cabinet page.
@@ -598,15 +619,19 @@ for "a participant list with roles", so the role now travels with presence.
   structs stay camelCase while the message fields are snake_case. The presence
   row carries `client_id` and the server-added `role`.
 
-**Test.** `presence_carries_the_sender_role_to_peers_that_joined_earlier`
+**Test.** `a_join_announcement_gives_earlier_peers_the_newcomer_role`
 (`apps/collab-server/src/tests.rs`) connects three real WebSocket clients —
 `owner`, `editor`, `viewer` — checks that each welcome lists the roles already
-present, then has each client publish presence and asserts that both peers that
-joined earlier receive the sender's raw role (`viewer`, `editor`, `owner`).
-`presence_carries_the_sender_role` (client) and the `apply_presence` tests
-(collab-app: new peer, placeholder replacement, role-less frame) cover the two
-halves without a socket; `an_older_presence_without_a_role_still_parses` (wire)
-pins the frame of a server built before the field.
+present, then has the third join and asserts that both peers that joined
+earlier receive an empty-state presence frame with the newcomer's role before
+the newcomer sends any presence. The presence frames that follow still carry the
+sender's raw role. The test times out when the announcement is removed
+(verified). `presence_carries_the_sender_role` (client),
+`presence_gives_a_new_peer_its_role` (collab-app: an empty-state frame adds the
+peer with its role) and the `apply_presence` tests (placeholder replacement,
+role-less frame, role-less join announcement) cover the halves without a socket;
+`an_older_presence_without_a_role_still_parses` (wire) pins both the first
+presence frame and the join frame of a server built before the field.
 
 ### 5.4 Rebase onto upstream `main` `4b0d3995` (run 2026-11-09)
 

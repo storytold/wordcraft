@@ -138,7 +138,7 @@ WebSocket, JSON text frames (UTF-8), один фрейм ≤ 1 MiB; TLS снар
 | `applied` | S→C | `opId`, `version`, `epoch`, `delta`\|`state`, `nodes?` | авторитетный результат |
 | `rejected` | S→C | `opId`, `code`, `retryable`, `details?` | отказ |
 | `presence` | C→S | `cursor`, `selection`, `viewport`, `active` | не журналируется |
-| `presence` | S→C | `client_id`, `role`, `state` | `role` ставит сервер из JWT, не клиент |
+| `presence` | S→C | `client_id`, `role`, `state` | `role` ставит сервер из JWT, не клиент; при входе — кадр с пустым `state` и ролью новичка |
 | `snapshot` | S→C | `version`, `chunk`, `last` | догон/ресинк |
 | `commit` | C→S | `op_id`, `expected_version`, `etag?` | сборка файла |
 | `committed` | S→C | `version`, `sha256`, `bytes?`, `warnings[]` | результат |
@@ -445,7 +445,11 @@ active:{tab,pane}}`. 5–10 Гц, ≤ 2 KiB, коалесцирование в �
 `drop-stale` при перегрузке, TTL 30 с, `leave`/разрыв чистит сразу. Не журналируется,
 не влияет на `version`; автору своё состояние не эхо-броадкастится. viewer шлёт presence.
 Сервер добавляет в броадкаст `role` из JWT (ADR-0008), чтобы пир, подключённый
-раньше, видел роль нового участника с первого же кадра.
+раньше, видел роль нового участника с первого же кадра. Кроме того, сразу после
+`welcome` сервер шлёт остальным участникам кадр `presence` с пустым `state`,
+`client_id` и `role` новичка: роль видна ещё до его первого presence. Кадр без
+поля `role` (сервер старой сборки) парсится по-прежнему и не затирает уже
+известную роль.
 
 ## 6. Undo/redo на пользователя (ADR-0010)
 

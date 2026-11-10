@@ -361,6 +361,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         leave(&state, &claims.doc, &room, &client_id);
         return;
     }
+    announce_join(&room, &client_id, role);
 
     let mut heartbeat = interval(PRESENCE_TTL / 3);
     heartbeat.tick().await; // the first tick is immediate; the first frame stays an answer
@@ -484,6 +485,25 @@ async fn send_join(
         return false;
     }
     send(sink, &ServerMsg::Nodes { nodes: plan.nodes.clone() }).await.is_ok()
+}
+
+/// Tell the peers already in the room who just joined and with what role, so
+/// their participant list shows the role before the newcomer's first presence
+/// frame (TASK.md §3). The frame is an ordinary `presence` with an empty state:
+/// the clients already fold it through `apply_presence`, and an older peer that
+/// does not know the `role` field still parses it. The role comes from the JWT
+/// claim (ADR-0008), never from the wire, and the newcomer is not echoed its own
+/// join: it learns the existing peers from `welcome`.
+fn announce_join(room: &Arc<Mutex<RoomState>>, client_id: &str, role: Role) {
+    let targets: Vec<mpsc::Sender<ServerMsg>> = {
+        let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+        guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.out.clone()).collect()
+    };
+    let msg = ServerMsg::Presence { client_id: client_id.to_string(), role: role.as_str().to_string(), state: serde_json::json!({}) };
+    for tx in targets {
+        // Presence is droppable; a full queue must not stall the room.
+        let _ = tx.try_send(msg.clone());
+    }
 }
 
 async fn process_frame(

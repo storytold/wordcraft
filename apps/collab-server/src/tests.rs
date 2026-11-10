@@ -188,6 +188,20 @@ async fn connect_from(
 }
 
 async fn next_msg(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> ServerMsg {
+    // A peer that was already in the room receives a join announcement (an
+    // empty-state `presence` frame) whenever someone joins. Tests that count
+    // operations, answers or real presence frames skip it here; the test that
+    // checks the announcement reads raw frames through `next_frame`.
+    loop {
+        let msg = next_frame(ws).await;
+        if is_join_announcement(&msg) {
+            continue;
+        }
+        return msg;
+    }
+}
+
+async fn next_frame(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> ServerMsg {
     loop {
         let frame = timeout(Duration::from_secs(5), ws.next()).await.expect("no timeout").expect("frame").expect("ok frame");
         match frame {
@@ -197,6 +211,13 @@ async fn next_msg(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite:
             other => panic!("expected text frame, got {other:?}"),
         }
     }
+}
+
+/// A join announcement is the server telling a peer that was already in the
+/// room who joined and with what role, before that participant's first
+/// presence frame. It reuses the presence frame with an empty state.
+fn is_join_announcement(msg: &ServerMsg) -> bool {
+    matches!(msg, ServerMsg::Presence { state, .. } if state.as_object().is_some_and(|state| state.is_empty()))
 }
 
 async fn next_applied(
@@ -320,47 +341,29 @@ async fn presence_reaches_the_other_client_and_moves_no_version() {
 }
 
 #[tokio::test]
-async fn presence_carries_the_sender_role_to_peers_that_joined_earlier() {
+async fn a_join_announcement_gives_earlier_peers_the_newcomer_role() {
     let (url, cfg) = spawn_server().await;
     let mut owner = connect(&url, &cfg, "owner", "alice").await;
-    let mut editor = connect(&url, &cfg, "editor", "bob").await;
-
-    // The first client sees only itself; the second sees both roles.
-    match next_msg(&mut owner).await {
-        ServerMsg::Welcome { participants, .. } => {
-            assert_eq!(participants.len(), 1);
-            assert_eq!(participants[0].role, "owner");
-        }
-        other => panic!("expected welcome, got {other:?}"),
-    }
+    expect_welcome(&mut owner, &[("alice", "owner")]).await;
     let node = node_of(&mut owner).await;
-    match next_msg(&mut editor).await {
-        ServerMsg::Welcome { participants, .. } => {
-            let mut roles: Vec<_> = participants.iter().map(|p| (p.client_id.clone(), p.role.clone())).collect();
-            roles.sort();
-            assert_eq!(roles, [("alice".to_string(), "owner".to_string()), ("bob".to_string(), "editor".to_string())], "{participants:?}");
-        }
-        other => panic!("expected welcome, got {other:?}"),
-    }
+
+    // The second client joins; alice, already in the room, learns bob's role
+    // before bob sends any presence frame.
+    let mut editor = connect(&url, &cfg, "editor", "bob").await;
+    expect_welcome(&mut editor, &[("alice", "owner"), ("bob", "editor")]).await;
     let _ = node_of(&mut editor).await;
+    expect_join(&mut owner, "bob", "editor").await;
 
-    // A third participant joins with another role: the two peers that were
-    // already connected learn it from the newcomer's first presence frame.
+    // A third participant joins with another role: both peers that were
+    // already connected learn it from the join announcement, again before the
+    // newcomer's first presence.
     let mut viewer = connect(&url, &cfg, "viewer", "carol").await;
-    match next_msg(&mut viewer).await {
-        ServerMsg::Welcome { participants, .. } => {
-            let mut roles: Vec<_> = participants.iter().map(|p| (p.client_id.clone(), p.role.clone())).collect();
-            roles.sort();
-            assert_eq!(
-                roles,
-                [("alice".to_string(), "owner".to_string()), ("bob".to_string(), "editor".to_string()), ("carol".to_string(), "viewer".to_string())],
-                "{participants:?}"
-            );
-        }
-        other => panic!("expected welcome, got {other:?}"),
-    }
+    expect_welcome(&mut viewer, &[("alice", "owner"), ("bob", "editor"), ("carol", "viewer")]).await;
     let _ = node_of(&mut viewer).await;
+    expect_join(&mut owner, "carol", "viewer").await;
+    expect_join(&mut editor, "carol", "viewer").await;
 
+    // Presence frames keep carrying the sender's role to every other peer.
     let presence = || ClientMsg::Presence { state: json!({"cursor": {"story": "body", "nodeId": node, "off": 1}}) };
     viewer.send(Message::Text(serde_json::to_string(&presence()).expect("json").into())).await.expect("presence");
     expect_presence(&mut owner, "carol", "viewer").await;
@@ -373,6 +376,40 @@ async fn presence_carries_the_sender_role_to_peers_that_joined_earlier() {
     owner.send(Message::Text(serde_json::to_string(&presence()).expect("json").into())).await.expect("presence");
     expect_presence(&mut editor, "alice", "owner").await;
     expect_presence(&mut viewer, "alice", "owner").await;
+}
+
+/// Read the next frame, which must be a welcome listing exactly these peers and
+/// their roles.
+async fn expect_welcome(
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    expected: &[(&str, &str)],
+) {
+    match next_msg(ws).await {
+        ServerMsg::Welcome { participants, .. } => {
+            let mut roles: Vec<_> = participants.iter().map(|p| (p.client_id.clone(), p.role.clone())).collect();
+            roles.sort();
+            let mut want: Vec<_> = expected.iter().map(|(id, role)| ((*id).to_string(), (*role).to_string())).collect();
+            want.sort();
+            assert_eq!(roles, want, "{participants:?}");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+}
+
+/// Read the next raw frame, which must be the join announcement for this peer.
+async fn expect_join(
+    ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
+    client: &str,
+    role: &str,
+) {
+    match next_frame(ws).await {
+        ServerMsg::Presence { client_id, role: announced, state } => {
+            assert_eq!(client_id, client);
+            assert_eq!(announced, role, "the join announcement carries the token role");
+            assert_eq!(state, json!({}), "the newcomer has not sent a caret yet");
+        }
+        other => panic!("expected a join announcement for {client}, got {other:?}"),
+    }
 }
 
 async fn expect_presence(
