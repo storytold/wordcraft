@@ -295,7 +295,16 @@ impl Reader<'_> {
                 }
                 m
             }
-            None => fallback?,
+            None => {
+                if blip.attr("r:embed").is_none() {
+                    // A linked picture holds no copy: nothing to draw, and nothing is fetched.
+                    if let Some(link) = blip.attr("r:link") {
+                        let target = rels.by_id(link).map_or_else(|| link.to_string(), |r| r.target.clone());
+                        self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+                    }
+                }
+                fallback?
+            }
         };
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
