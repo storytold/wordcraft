@@ -251,8 +251,13 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         && let Some(id) = s.find_open(std::path::Path::new(path))
     {
         s.activate(id)?;
+        let skipped_parts = s
+            .damaged_source
+            .as_ref()
+            .filter(|(source, _)| crate::io::same_file_path(source, std::path::Path::new(path)))
+            .map_or_else(Vec::new, |(_, parts)| parts.clone());
         return Ok(
-            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id}),
+            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id, "skippedParts": skipped_parts}),
         );
     }
     let password = p::str(v, "password");

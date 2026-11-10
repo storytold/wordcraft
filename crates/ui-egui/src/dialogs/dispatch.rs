@@ -1225,7 +1225,11 @@ fn confirm_damaged_save_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -
     ui.label(tl!("Some parts of this document could not be read and will be missing from the saved file."));
     let mut warning = wordcraft_engine::cmd::file::skipped_parts_warning(skipped_parts);
     if *skipped_parts_more > 0 {
-        warning.push_str(&format!(" Also {} additional parts were omitted.", skipped_parts_more));
+        warning.push_str(&crate::i18n::tn(
+            *skipped_parts_more as u64,
+            "Also {n} additional part was omitted.",
+            "Also {n} additional parts were omitted.",
+        ));
     }
     ui.label(warning);
     ui.add_space(4.0);

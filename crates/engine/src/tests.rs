@@ -12366,6 +12366,12 @@ fn opening_a_docx_with_a_damaged_part_says_so() {
         opened["skippedParts"].as_array().is_some_and(|parts| parts.iter().any(|part| part == "word/settings.xml")),
         "open result should identify the skipped part: {opened}"
     );
+    let reopened = run(&mut damaged, "file.open", json!({"path": path.to_string_lossy()}));
+    assert_eq!(reopened["alreadyOpen"], true);
+    assert!(
+        reopened["skippedParts"].as_array().is_some_and(|parts| parts.iter().any(|part| part == "word/settings.xml")),
+        "already-open result should retain the skipped-part warning: {reopened}"
+    );
 
     // Saving over the damaged source is refused until the caller explicitly confirms it.
     let damaged_bytes = std::fs::read(&path).unwrap();
