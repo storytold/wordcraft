@@ -719,12 +719,63 @@ async fn an_operation_cannot_carry_another_clients_id() {
     }
 }
 
+/// A snapshot that is stored and cannot be opened refuses the join: an empty
+/// room in its place would be written over the only copy of the document on the
+/// first operation or on the next shutdown (ADR WC-0003). The absent case still
+/// opens a room, so the refusal is about damage, not about a missing file.
+#[tokio::test]
+async fn a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten() {
+    let cfg = config_for("corrupt-snapshot");
+    let data_dir = cfg.data_dir.clone();
+    let state = AppState::new(cfg.clone());
+    let store = crate::store::Store::new(&data_dir);
+    let dir = store.doc_dir("doc-1");
+    // A truncated model is what an interrupted non-atomic write leaves; the
+    // metadata is the committed marker and is present.
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("model.json"), b"{\"body\":[").expect("truncated model");
+    std::fs::write(dir.join("meta"), b"version=4\nepoch=0\n").expect("meta");
+    let model_before = std::fs::read(dir.join("model.json")).expect("model");
+    let meta_before = std::fs::read(dir.join("meta")).expect("meta");
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let served = state.clone();
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app(served)).await;
+    });
+    let url = format!("ws://{addr}/ws");
+
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    match next_msg(&mut alice).await {
+        ServerMsg::Rejected { reject } => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid);
+            assert!(reject.message.contains("stored snapshot"), "{}", reject.message);
+            assert!(!reject.retryable, "a retry meets the same file");
+        }
+        other => panic!("expected the join to be refused, got {other:?}"),
+    }
+    assert_eq!(state.room_count(), 0, "no empty room may stand in for the document");
+    assert!(state.metrics.render(0).contains("corrupt_snapshots_total 1"), "{}", state.metrics.render(0));
+
+    // Not even the shutdown snapshot may replace the damaged pair.
+    state.persist_all().expect("persist_all");
+    assert_eq!(std::fs::read(dir.join("model.json")).expect("model"), model_before, "the damaged model is left for an operator");
+    assert_eq!(std::fs::read(dir.join("meta")).expect("meta"), meta_before);
+
+    // Absence is not damage: a document nothing was stored for still opens.
+    let absent = state.room_for("doc-absent").expect("an absent snapshot opens a room");
+    assert_eq!(absent.lock().expect("room lock").room.version(), 0, "a new document starts at version 0");
+    assert_eq!(state.room_count(), 1);
+    let _ = std::fs::remove_dir_all(&data_dir);
+}
+
 #[test]
 fn a_room_is_restored_from_disk() {
     let cfg = dev_config();
     let doc = "doc-restore";
     let state = AppState::new(cfg.clone());
-    let room = state.room_for(doc);
+    let room = state.room_for(doc).expect("a room");
     let node = {
         let mut guard = room.lock().expect("room lock");
         guard.room.join(None, false).nodes.first().expect("a node").id
@@ -736,7 +787,7 @@ fn a_room_is_restored_from_disk() {
     drop(state);
 
     let restored = AppState::new(cfg);
-    let room = restored.room_for(doc);
+    let room = restored.room_for(doc).expect("a room");
     let guard = room.lock().expect("room lock");
     assert_eq!(guard.room.version(), 1, "the snapshot restores the version");
     let text = guard.room.model().session().doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
@@ -748,7 +799,7 @@ fn a_retry_after_a_snapshot_restore_is_not_applied_twice() {
     let cfg = dev_config();
     let doc = "doc-dedup-restore";
     let state = AppState::new(cfg.clone());
-    let room = state.room_for(doc);
+    let room = state.room_for(doc).expect("a room");
     let node = {
         let mut guard = room.lock().expect("room lock");
         guard.room.join(None, false).nodes.first().expect("a node").id
@@ -762,7 +813,7 @@ fn a_retry_after_a_snapshot_restore_is_not_applied_twice() {
 
     // A restart: the room comes back at version 1 with the saved `opId` window.
     let restored = AppState::new(cfg);
-    let room = restored.room_for(doc);
+    let room = restored.room_for(doc).expect("a room");
     let mut guard = room.lock().expect("room lock");
     assert_eq!(guard.room.version(), 1);
     let again = guard.room.submit("alice", wordcraft_collab::room::Role::Editor, op).expect("the retry is deduplicated");
@@ -777,7 +828,7 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
     let cfg = dev_config();
     let doc = "doc-kept";
     let state = AppState::new(cfg.clone());
-    let room = state.room_for(doc);
+    let room = state.room_for(doc).expect("a room");
     let source = wordcraft_docx::write(&wordcraft_doc::Document::new()).expect("a source docx");
     let from_file = wordcraft_docx::read_with_password(&source, None).expect("read the source");
     let expected = from_file.kept.get().is_some();
@@ -786,7 +837,7 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
     drop(state);
 
     let restored = AppState::new(cfg);
-    let room = restored.room_for(doc);
+    let room = restored.room_for(doc).expect("a room");
     let guard = room.lock().expect("room lock");
     assert_eq!(guard.room.model().session().doc.kept.get().is_some(), expected, "kept comes back from the source, not the JSON");
 }
@@ -795,7 +846,7 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
 fn a_shutdown_snapshot_keeps_every_open_room() {
     let cfg = dev_config();
     let state = AppState::new(cfg.clone());
-    let room = state.room_for("doc-shutdown");
+    let room = state.room_for("doc-shutdown").expect("a room");
     let node = {
         let mut guard = room.lock().expect("room lock");
         guard.room.join(None, false).nodes.first().expect("a node").id
@@ -807,14 +858,14 @@ fn a_shutdown_snapshot_keeps_every_open_room() {
     drop(state);
 
     let restored = AppState::new(cfg);
-    let room = restored.room_for("doc-shutdown");
+    let room = restored.room_for("doc-shutdown").expect("a room");
     assert_eq!(room.lock().expect("room lock").room.version(), 1);
 }
 
 #[test]
 fn a_second_session_needs_the_owner_role() {
     let state = AppState::new(dev_config());
-    let room = state.room_for("doc-lease");
+    let room = state.room_for("doc-lease").expect("a room");
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
 
@@ -1190,7 +1241,7 @@ fn a_silent_session_loses_the_lease_after_its_ttl() {
     let mut cfg = dev_config();
     cfg.lease_ttl_secs = 0;
     let state = AppState::new(cfg);
-    let room = state.room_for("doc-lease-ttl");
+    let room = state.room_for("doc-lease-ttl").expect("a room");
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
     // The only peer of sid-1 disconnected, and the TTL is zero.

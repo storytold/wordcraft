@@ -1,10 +1,17 @@
-//! Snapshot storage for document rooms (ADR-0005, ADR-0011).
+//! Snapshot storage for document rooms (ADR-0005, ADR-0011, ADR WC-0003).
 //!
 //! A snapshot is the model JSON **plus** the source `.docx` bytes, because
 //! `Document::kept` is `#[serde(skip)]` and unmodelled paragraph markup can
 //! only be rebuilt from the file it came from. The store writes atomically
 //! (temporary file + rename, metadata last), so a crash leaves either the old
 //! snapshot or the new one, never a half-written pair.
+//!
+//! [`Store::load`] tells three states apart: no snapshot was ever written
+//! (`Ok(None)`), a snapshot was written and opens (`Ok(Some(..))`), and a
+//! snapshot is there but cannot be opened (`Err(Corrupt)`). The last one is not
+//! an empty document: a caller that starts a blank room instead would persist
+//! it over the stored file on the first operation or on shutdown and destroy
+//! the only copy (ADR WC-0003).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -38,6 +45,36 @@ pub struct Store {
     dir: PathBuf,
 }
 
+/// Largest model the store will hand out. The server holds and commits
+/// documents up to `MAX_DOCUMENT`; a model over this bound is not one this
+/// server wrote, and reading it would spend the memory before the size check
+/// could refuse the join.
+pub const MAX_MODEL: usize = 64 << 20;
+
+/// A snapshot that is on disk and cannot be opened.
+///
+/// `Option` could not carry this: `None` meant both "never written" and "cannot
+/// be read", and the second one was answered with an empty room (ADR WC-0003).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Corrupt {
+    /// The file inside the document directory that failed.
+    pub file: &'static str,
+    /// What is wrong with it, for the log. Never document content.
+    pub reason: String,
+}
+
+impl Corrupt {
+    pub(crate) fn new(file: &'static str, reason: impl Into<String>) -> Corrupt {
+        Corrupt { file, reason: reason.into() }
+    }
+}
+
+impl std::fmt::Display for Corrupt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.file, self.reason)
+    }
+}
+
 impl Store {
     pub fn new(dir: impl Into<PathBuf>) -> Store {
         Store { dir: dir.into() }
@@ -47,30 +84,73 @@ impl Store {
         &self.dir
     }
 
-    /// Load the snapshot of `doc`, if one was written.
-    pub fn load(&self, doc: &str) -> Option<Snapshot> {
+    /// Load the snapshot of `doc`.
+    ///
+    /// `Ok(None)` means no snapshot was ever written for this document: the
+    /// caller may open a blank room. `Err` means a snapshot is there and cannot
+    /// be opened — the caller must refuse the document instead of starting an
+    /// empty room, which would be persisted over the stored file (ADR WC-0003).
+    pub fn load(&self, doc: &str) -> Result<Option<Snapshot>, Corrupt> {
         let dir = self.doc_dir(doc);
-        let model = fs::read(dir.join("model.json")).ok()?;
-        let meta = fs::read_to_string(dir.join("meta")).ok()?;
-        let mut version = 0u64;
+        let model = match fs::read(dir.join("model.json")) {
+            Ok(bytes) => bytes,
+            // The model is written before the metadata, so its absence is the
+            // one state that means "never snapshotted".
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(Corrupt::new("model.json", format!("cannot be read: {err}"))),
+        };
+        if model.len() > MAX_MODEL {
+            return Err(Corrupt::new("model.json", format!("is {} bytes, over the {MAX_MODEL}-byte model bound", model.len())));
+        }
+        // `save` writes the metadata last, after every rename: without it the
+        // pair is a write that never committed.
+        let meta = match fs::read_to_string(dir.join("meta")) {
+            Ok(text) => text,
+            Err(err) => return Err(Corrupt::new("meta", format!("is missing or unreadable: {err}"))),
+        };
+        let mut version = None;
         let mut epoch = 0u64;
         let mut cabinet_version = None;
         let mut cabinet_etag = None;
         for line in meta.lines() {
-            match line.split_once('=') {
-                Some(("version", value)) => version = value.parse().unwrap_or(0),
-                Some(("epoch", value)) => epoch = value.parse().unwrap_or(0),
-                Some(("cabinet_version", value)) => cabinet_version = value.parse::<u64>().ok(),
-                Some(("cabinet_etag", value)) => cabinet_etag = Some(value.to_string()),
+            let Some((key, value)) = line.split_once('=') else {
+                continue;
+            };
+            match key {
+                "version" => version = Some(parse_number("version", value)?),
+                "epoch" => epoch = parse_number("epoch", value)?,
+                "cabinet_version" => cabinet_version = Some(parse_number("cabinet_version", value)?),
+                "cabinet_etag" => cabinet_etag = Some(value.to_string()),
+                // Unknown keys are ignored: a newer server may write more.
                 _ => {}
             }
+        }
+        // The head version is what the room restores; without it there is
+        // nothing to join. An absent `epoch` is an older snapshot and starts at
+        // 0, as it did before the epoch was written.
+        let Some(version) = version else {
+            return Err(Corrupt::new("meta", "has no version line"));
+        };
+        // Half a cabinet marker is a torn write. Dropping it would also drop the
+        // conflict check and let the next commit overwrite an external edit.
+        let cabinet = match (cabinet_version, cabinet_etag) {
+            (Some(version), Some(etag)) => Some(Published { version, etag }),
+            (None, None) => None,
+            _ => return Err(Corrupt::new("meta", "has a cabinet version or an etag without the other")),
+        };
+        // The model has to be a document, not merely JSON: a truncated or
+        // foreign file under this name is exactly what a blank room would
+        // overwrite.
+        if let Err(err) = serde_json::from_slice::<wordcraft_doc::Document>(&model) {
+            return Err(Corrupt::new("model.json", format!("is not a document: {err}")));
         }
         let source = fs::read(dir.join("source.docx")).ok();
         // A snapshot written before the window was stored has no `dedup.json`:
         // the room still opens, only without deduplication across the restart.
+        // A damaged window is a cache, not the document: losing it costs a
+        // duplicate answer, not text.
         let dedup = fs::read(dir.join("dedup.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        let cabinet = cabinet_version.zip(cabinet_etag).map(|(version, etag)| Published { version, etag });
-        Some(Snapshot { version, epoch, model, source, dedup, cabinet })
+        Ok(Some(Snapshot { version, epoch, model, source, dedup, cabinet }))
     }
 
     /// Write a snapshot and rotate the previous one to `prev/`.
@@ -105,6 +185,12 @@ impl Store {
     pub fn doc_dir(&self, doc: &str) -> PathBuf {
         self.dir.join(sanitize(doc))
     }
+}
+
+/// A known `meta` number. A value that is not one is damage, not a default:
+/// starting a room at version 0 would move the head backwards.
+fn parse_number(key: &'static str, value: &str) -> Result<u64, Corrupt> {
+    value.parse::<u64>().map_err(|_| Corrupt::new("meta", format!("has a {key} that is not a number: {value:?}")))
 }
 
 /// Keep a document id from escaping the data directory.
@@ -157,7 +243,7 @@ mod tests {
         let snapshot =
             Snapshot { version: 7, epoch: 2, model: b"{\"body\":[]}".to_vec(), source: Some(b"PK\x03\x04".to_vec()), dedup, cabinet: None };
         store.save("doc-1", &snapshot).expect("save");
-        assert_eq!(store.load("doc-1"), Some(snapshot));
+        assert_eq!(store.load("doc-1"), Ok(Some(snapshot)));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -174,7 +260,7 @@ mod tests {
             cabinet: Some(Published { version: 42, etag: "1794186677".into() }),
         };
         store.save("doc-1", &snapshot).expect("save");
-        let loaded = store.load("doc-1").expect("load");
+        let loaded = store.load("doc-1").expect("load").expect("a snapshot");
         assert_eq!(loaded.cabinet, Some(Published { version: 42, etag: "1794186677".into() }), "the next commit expects the cabinet's etag");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -199,7 +285,7 @@ mod tests {
         store
             .save("doc-1", &Snapshot { version: 3, epoch: 0, model: b"{}".to_vec(), source: None, dedup: dedup.clone(), cabinet: None })
             .expect("save");
-        assert_eq!(store.load("doc-1").map(|s| s.dedup), Some(dedup));
+        assert_eq!(store.load("doc-1").expect("load").map(|s| s.dedup), Some(dedup));
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -212,7 +298,7 @@ mod tests {
         fs::create_dir_all(&doc_dir).expect("dir");
         fs::write(doc_dir.join("model.json"), b"{}").expect("model");
         fs::write(doc_dir.join("meta"), b"version=4\nepoch=1\n").expect("meta");
-        let snapshot = store.load("doc-old").expect("an older snapshot opens");
+        let snapshot = store.load("doc-old").expect("load").expect("an older snapshot opens");
         assert_eq!(snapshot.version, 4);
         assert!(snapshot.dedup.is_empty());
         let _ = fs::remove_dir_all(&dir);
@@ -226,7 +312,7 @@ mod tests {
             .save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
             .expect("save");
         fs::write(store.doc_dir("doc-1").join("dedup.json"), b"not json").expect("corrupt");
-        let snapshot = store.load("doc-1").expect("the document still opens");
+        let snapshot = store.load("doc-1").expect("load").expect("the document still opens");
         assert_eq!(snapshot.version, 2);
         assert!(snapshot.dedup.is_empty(), "a broken window falls back to none, never to a panic");
         let _ = fs::remove_dir_all(&dir);
@@ -236,22 +322,97 @@ mod tests {
     fn a_missing_snapshot_is_none() {
         let dir = temp_dir("missing");
         let store = Store::new(&dir);
-        assert!(store.load("never-saved").is_none());
+        assert_eq!(store.load("never-saved"), Ok(None), "never written is not damaged");
+    }
+
+    /// The distinction ADR WC-0003 is about: a file that is there and unreadable
+    /// is not the absence of a file.
+    #[test]
+    fn a_damaged_model_is_corrupt_not_absent() {
+        let dir = temp_dir("bad-model");
+        let store = Store::new(&dir);
+        store
+            .save("doc-1", &Snapshot { version: 3, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("save");
+        // A truncated write is JSON that does not parse, which is what a crash
+        // in the middle of a non-atomic writer leaves.
+        fs::write(store.doc_dir("doc-1").join("model.json"), b"{\"body\":[").expect("truncate");
+        let err = store.load("doc-1").expect_err("a truncated model is not an empty document");
+        assert_eq!(err.file, "model.json");
+        assert!(err.reason.contains("not a document"), "{}", err.reason);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `save` renames the model before writing the metadata, so a model without
+    /// metadata is a write that never committed.
+    #[test]
+    fn a_snapshot_without_its_metadata_is_corrupt() {
+        let dir = temp_dir("torn");
+        let store = Store::new(&dir);
+        let doc_dir = store.doc_dir("doc-1");
+        fs::create_dir_all(&doc_dir).expect("dir");
+        fs::write(doc_dir.join("model.json"), b"{}").expect("model");
+        let err = store.load("doc-1").expect_err("a model without meta never committed");
+        assert_eq!(err.file, "meta");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn metadata_that_is_not_a_number_is_corrupt() {
+        let dir = temp_dir("bad-meta");
+        let store = Store::new(&dir);
+        store
+            .save("doc-1", &Snapshot { version: 5, epoch: 1, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("save");
+        fs::write(store.doc_dir("doc-1").join("meta"), b"version=5\nepoch=now\n").expect("meta");
+        let err = store.load("doc-1").expect_err("an epoch that is not a number is damage");
+        assert_eq!(err.file, "meta");
+        assert!(err.reason.contains("epoch"), "{}", err.reason);
+
+        fs::write(store.doc_dir("doc-1").join("meta"), b"version=five\nepoch=1\n").expect("meta");
+        assert_eq!(store.load("doc-1").expect_err("a head that is not a number is damage").file, "meta");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Dropping half the cabinet marker would drop the conflict check and let
+    /// the next commit overwrite an external edit.
+    #[test]
+    fn half_a_cabinet_marker_is_corrupt() {
+        let dir = temp_dir("half-cabinet");
+        let store = Store::new(&dir);
+        let snapshot = Snapshot {
+            version: 2,
+            epoch: 0,
+            model: b"{}".to_vec(),
+            source: None,
+            dedup: DedupWindow::default(),
+            cabinet: Some(Published { version: 9, etag: "1794186677".into() }),
+        };
+        store.save("doc-1", &snapshot).expect("save");
+        fs::write(store.doc_dir("doc-1").join("meta"), b"version=2\nepoch=0\ncabinet_version=9\n").expect("meta");
+        let err = store.load("doc-1").expect_err("an etag without a version is damage");
+        assert_eq!(err.file, "meta");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn the_previous_snapshot_is_kept() {
         let dir = temp_dir("rotate");
         let store = Store::new(&dir);
+        // Both models are documents: the store refuses to hand out anything else
+        // (ADR WC-0003), so the test cannot use arbitrary bytes here.
         store
-            .save("doc-1", &Snapshot { version: 1, epoch: 0, model: b"one".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .save("doc-1", &Snapshot { version: 1, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
             .expect("first");
         store
-            .save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"two".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .save(
+                "doc-1",
+                &Snapshot { version: 2, epoch: 0, model: b"{\"body\":[]}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None },
+            )
             .expect("second");
-        assert_eq!(store.load("doc-1").map(|s| s.version), Some(2));
+        assert_eq!(store.load("doc-1").expect("load").map(|s| s.version), Some(2));
         let prev = fs::read(store.doc_dir("doc-1").join("prev/model.json")).expect("previous model");
-        assert_eq!(prev, b"one");
+        assert_eq!(prev, b"{}");
         let _ = fs::remove_dir_all(&dir);
     }
 

@@ -7,6 +7,9 @@
 //! (ADR-0009) and, when `COLLAB_CABINET_URL` names one, posted to the cabinet
 //! as its next file version (`cabinet.rs`, M87).
 //!
+//! A stored snapshot that cannot be opened refuses the join instead of starting
+//! a blank room that would be written over it (ADR WC-0003).
+//!
 //! The room logic itself lives in `wordcraft_collab`; this crate is the
 //! transport: WebSocket framing, tokens, rooms, presence fan-out, snapshots,
 //! metrics and the commit call.
@@ -37,7 +40,7 @@ use wordcraft_collab_engine::SessionModel;
 pub mod cabinet;
 pub mod store;
 
-use store::{Snapshot, Store};
+use store::{Corrupt, Snapshot, Store};
 
 /// Largest WebSocket frame the server accepts (RFC §9).
 pub const MAX_FRAME: usize = 1 << 20;
@@ -220,6 +223,22 @@ struct Refused {
     bytes: Arc<Vec<u8>>,
 }
 
+impl RoomState {
+    fn new(room: Room<SessionModel>, lease_ttl_secs: u64, published: Option<Published>) -> RoomState {
+        RoomState {
+            room,
+            peers: HashMap::new(),
+            session: String::new(),
+            lease_seen: std::time::Instant::now(),
+            lease_ttl_secs,
+            window: std::time::Instant::now(),
+            ops_in_window: 0,
+            published,
+            refused: None,
+        }
+    }
+}
+
 /// Counters for `/metrics`.
 #[derive(Default)]
 pub struct Metrics {
@@ -240,6 +259,9 @@ pub struct Metrics {
     /// Peer outboxes that overflowed: each one missed a document frame and was
     /// closed (ADR WC-0002).
     stale: AtomicU64,
+    /// Joins refused because the stored snapshot of the document cannot be
+    /// opened (ADR WC-0003). Non-zero means an operator has a file to restore.
+    corrupt: AtomicU64,
 }
 
 impl Metrics {
@@ -261,6 +283,7 @@ impl Metrics {
             ("cabinet_errors_total", self.publish_errors.load(Ordering::Relaxed)),
             ("save_copies_total", self.copies.load(Ordering::Relaxed)),
             ("stale_peers_total", self.stale.load(Ordering::Relaxed)),
+            ("corrupt_snapshots_total", self.corrupt.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -297,51 +320,53 @@ impl AppState {
         self.store.save(doc, &Snapshot { version, epoch, model, source, dedup, cabinet })
     }
 
-    fn room_for(&self, doc: &str) -> Arc<Mutex<RoomState>> {
+    /// The room of `doc`, restored from its stored snapshot when one exists.
+    ///
+    /// `Err` means a snapshot is stored and cannot be opened. No room is
+    /// created: a blank room would be persisted over that file on the first
+    /// operation or on the next shutdown and would destroy the only copy of the
+    /// document (ADR WC-0003). The caller refuses the join and leaves the file
+    /// for an operator.
+    fn room_for(&self, doc: &str) -> Result<Arc<Mutex<RoomState>>, Corrupt> {
         let mut rooms = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
-        rooms
-            .entry(doc.to_string())
-            .or_insert_with(|| {
-                let restored = self.store.load(doc).and_then(|snapshot| {
-                    if snapshot.model.len() > MAX_DOCUMENT {
-                        log::warn!("ignoring a snapshot of {} bytes for {doc}", snapshot.model.len());
-                        return None;
-                    }
-                    let mut document = serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model).ok()?;
-                    // `Document::kept` is not serialized (ADR-0011): take it from
-                    // the source `.docx` so unchanged paragraphs still write their
-                    // original markup. Fingerprints only match paragraphs that
-                    // were not edited since the file was read.
-                    if let Some(source) = &snapshot.source
-                        && let Ok(from_file) = wordcraft_docx::read_with_password(source, None)
-                    {
-                        document.kept = from_file.kept;
-                    }
-                    Some(RoomState {
-                        room: Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch, snapshot.dedup),
-                        peers: HashMap::new(),
-                        session: String::new(),
-                        lease_seen: std::time::Instant::now(),
-                        lease_ttl_secs: self.cfg.lease_ttl_secs,
-                        window: std::time::Instant::now(),
-                        ops_in_window: 0,
-                        published: snapshot.cabinet,
-                        refused: None,
-                    })
-                });
-                Arc::new(Mutex::new(restored.unwrap_or_else(|| RoomState {
-                    room: Room::new(SessionModel::from_document(wordcraft_doc::Document::new())),
-                    peers: HashMap::new(),
-                    session: String::new(),
-                    lease_seen: std::time::Instant::now(),
-                    lease_ttl_secs: self.cfg.lease_ttl_secs,
-                    window: std::time::Instant::now(),
-                    ops_in_window: 0,
-                    published: None,
-                    refused: None,
-                })))
-            })
-            .clone()
+        if let Some(room) = rooms.get(doc) {
+            return Ok(room.clone());
+        }
+        let state = match self.store.load(doc) {
+            Ok(Some(snapshot)) => {
+                let mut document = match serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model) {
+                    Ok(document) => document,
+                    // The store already checked; this keeps the room correct on
+                    // its own instead of trusting that.
+                    Err(err) => return Err(Corrupt::new("model.json", format!("is not a document: {err}"))),
+                };
+                // `Document::kept` is not serialized (ADR-0011): take it from
+                // the source `.docx` so unchanged paragraphs still write their
+                // original markup. Fingerprints only match paragraphs that
+                // were not edited since the file was read.
+                if let Some(source) = &snapshot.source
+                    && let Ok(from_file) = wordcraft_docx::read_with_password(source, None)
+                {
+                    document.kept = from_file.kept;
+                }
+                RoomState::new(
+                    Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch, snapshot.dedup),
+                    self.cfg.lease_ttl_secs,
+                    snapshot.cabinet,
+                )
+            }
+            // Never snapshotted: a new document starts here.
+            Ok(None) => RoomState::new(Room::new(SessionModel::from_document(wordcraft_doc::Document::new())), self.cfg.lease_ttl_secs, None),
+            Err(corrupt) => {
+                // The refusal is counted here, where the damage is found; the
+                // join path logs it with the path an operator has to look at.
+                Metrics::inc(&self.metrics.corrupt);
+                return Err(corrupt);
+            }
+        };
+        let room = Arc::new(Mutex::new(state));
+        rooms.insert(doc.to_string(), room.clone());
+        Ok(room)
     }
 
     pub fn room_count(&self) -> usize {
@@ -403,6 +428,25 @@ pub fn verify_token(cfg: &Config, token: &str) -> Result<Claims, Reject> {
     Ok(claims)
 }
 
+/// Refuse a join to a document whose stored snapshot cannot be opened, and end
+/// the connection (ADR WC-0003).
+///
+/// The message names the situation, not the server's paths: the client cannot
+/// repair the file. The detail goes to the log, without document content.
+async fn refuse_corrupt(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, doc: &str, corrupt: &Corrupt) {
+    log::error!(
+        "refusing a join for {doc}: its stored snapshot cannot be opened ({corrupt}); restore or remove {}",
+        state.store.doc_dir(doc).display()
+    );
+    let reject = Reject::new(
+        wordcraft_collab::wire::OpId::new("server", 0),
+        RejectCode::Invalid,
+        "the stored snapshot of this document cannot be opened; an operator must restore or remove it",
+    );
+    let _ = send(sink, &ServerMsg::Rejected { reject }, state.cfg.heartbeat).await;
+    let _ = sink.close().await;
+}
+
 async fn handle_socket(socket: WebSocket, state: AppState) {
     Metrics::inc(&state.metrics.connections);
     let (mut sink, mut stream) = socket.split();
@@ -410,7 +454,12 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let Some((client_id, claims, role, wants_version)) = authenticate(&mut sink, &mut stream, &state).await else {
         return;
     };
-    let room = state.room_for(&claims.doc);
+    let room = match state.room_for(&claims.doc) {
+        Ok(room) => room,
+        // Joining would create an empty room whose snapshot overwrites the
+        // stored file on the first operation or on shutdown (ADR WC-0003).
+        Err(corrupt) => return refuse_corrupt(&mut sink, &state, &claims.doc, &corrupt).await,
+    };
     // Every write to this peer is bounded by one heartbeat period: a peer that
     // stopped reading is closed instead of holding the connection open with a
     // document the room no longer has (ADR WC-0002).

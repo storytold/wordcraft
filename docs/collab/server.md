@@ -92,6 +92,22 @@ and still opens; only deduplication across that restart is missing. A retry of
 an operation accepted after the last snapshot is not covered, because the restore
 cannot replay the operation itself either.
 
+**A snapshot that cannot be opened refuses the document** (ADR WC-0003). On the
+first join the store tells three states apart:
+
+| State | When | What the server does |
+|---|---|---|
+| absent | there is no `model.json` | a new room at version 0, as always |
+| opens | the model is a `wordcraft_doc::Document` within the model bound and every known `meta` line parses | the room is restored from it |
+| damaged | `model.json` or `meta` is unreadable, `meta` has no `version`, a known `meta` value is not a number, a cabinet marker is half-written, the model does not parse or is over the bound | the join is refused `invalid` (not retryable), no room is created, nothing is written over the files |
+
+`dedup.json` and `source.docx` stay forgiving: a damaged window costs a
+duplicated answer across a restart and a missing source costs original markup on
+unchanged paragraphs; neither is text. The refusal leaves the files as they are,
+including the `prev/` pair, and counts in `corrupt_snapshots_total`. To recover,
+restore `model.json`/`meta` (or `prev/`) from a backup; to accept the loss and
+start a blank document on purpose, remove `<dataDir>/<doc>/`.
+
 ## Limits (v1)
 
 - WebSocket frame ≤ 1 MiB.

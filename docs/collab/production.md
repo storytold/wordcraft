@@ -78,10 +78,17 @@ first WebSocket frame must be `auth`.
 | `wordcraft_collab_save_copies_total` | refused copies the owner took to save |
 | `wordcraft_collab_presence_total` | presence frames |
 | `wordcraft_collab_stale_peers_total` | peers whose outbox overflowed and whose connection was closed (ADR WC-0002) |
+| `wordcraft_collab_corrupt_snapshots_total` | joins refused because the stored snapshot cannot be opened (ADR WC-0003) |
 
 A publication that is not counted in `cabinet_published_total` did not become a
 file version. `cabinet_errors_total` growing while `commits_total` grows is a
 callback misconfiguration (often the token or the `fileId` in `doc`).
+
+`corrupt_snapshots_total` growing means a document's stored snapshot cannot be
+opened and its joins are refused (ADR WC-0003). The log line names the document
+and the file; the document is not lost — restore `model.json`/`meta` (or `prev/`)
+from a backup, or remove `<dataDir>/<doc>/` to start it blank on purpose. The
+counter is per refused join, so a client that keeps reconnecting keeps counting.
 
 ## Callback contract (mail-frontend M87)
 
