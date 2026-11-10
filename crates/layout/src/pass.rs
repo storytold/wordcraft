@@ -78,6 +78,8 @@ fn new_ctx<'a>(
         cache,
         opts,
         hide_deleted: opts.hides_deleted(StoryRef::Body),
+        turned_cell: None,
+        turned_depth: 0,
         counters: Counters::default(),
         fields: FieldCtx {
             page: 1,
