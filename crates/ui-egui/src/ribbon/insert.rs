@@ -3,7 +3,7 @@ use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
 
 /// The basic shapes of Insert › Shapes: tooltip and `insert.shape` kind.
-pub(super) const SHAPE_TILES: [(&str, &str); 9] = [
+pub(super) const SHAPE_TILES: [(&str, &str); 17] = [
     ("Rectangle", "rectangle"),
     ("Rounded Rectangle", "roundedRectangle"),
     ("Oval", "ellipse"),
@@ -13,6 +13,14 @@ pub(super) const SHAPE_TILES: [(&str, &str); 9] = [
     ("Arrow", "arrow"),
     ("Star", "star"),
     ("Heart", "heart"),
+    ("Hexagon", "hexagon"),
+    ("Octagon", "octagon"),
+    ("Regular Pentagon", "pentagon"),
+    ("Decagon", "decagon"),
+    ("Parallelogram", "parallelogram"),
+    ("Trapezoid", "trapezoid"),
+    ("Cross", "plus"),
+    ("Chevron", "chevron"),
 ];
 
 /// Shapes per row of the Insert › Shapes grid.

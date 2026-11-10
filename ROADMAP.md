@@ -383,6 +383,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-16 | More preset shapes and picture fills (#1534): Insert › Shapes adds the hexagon, octagon, regular pentagon, decagon, parallelogram, trapezoid, plus and chevron (DrawingML presets with their default proportions, one shared outline for screen, PDF and text wrap; DOCX and VML/`.doc` shape numbers read, DOCX written); Shape Fill › Picture… fills a shape with a picture stretched over it and clipped to its outline, on screen and in PDF, read from and written to DOCX `a:blipFill` (`shape.fill {"picture": …}`, one undo step; a colour or No Color takes it off) |
 | 2026-11-05 | trivial | Progress log: ODT documents keep their language (gap 19) |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
 | 2026-11-06 | Accept All and Reject All no longer restyle the paragraph after an empty one carrying a section break (#5667): a Compare that added a section, then Reject All, left `Body` in the removed paragraph's Normal style and indents. The empty paragraph now goes whole and its section joins the following one, as deleting the break does. |
@@ -907,6 +908,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Progress log: more preset shapes and picture fills (#1534) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |

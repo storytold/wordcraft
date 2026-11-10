@@ -124,6 +124,15 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
         ShapeKind::ArrowDown => custom("down-arrow"),
         ShapeKind::Star => custom("star5"),
         ShapeKind::Heart => custom("heart"),
+        ShapeKind::Hexagon => custom("hexagon"),
+        ShapeKind::Octagon => custom("octagon"),
+        ShapeKind::Pentagon => custom("regular-pentagon"),
+        ShapeKind::Parallelogram => custom("parallelogram"),
+        ShapeKind::Trapezoid => custom("trapezoid"),
+        ShapeKind::Plus => custom("cross"),
+        ShapeKind::Chevron => custom("chevron"),
+        // ODF has no decagon of its own: the DrawingML name, which the reader accepts back.
+        ShapeKind::Decagon => custom("ooxml-decagon"),
         ShapeKind::Freeform => ("draw:path", None),
         ShapeKind::Rectangle | ShapeKind::TextBox => ("draw:rect", None),
     }
@@ -167,5 +176,28 @@ pub(super) fn freeform(name: &str, a: &Attrs, w: f32, h: f32) -> Option<wordcraf
             path::regular(corners, concave, sharpness, w, h)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+
+    /// #1534: each polygonal preset is written as a custom shape of its ODF type, so other
+    /// programs draw their own. Reading stays with the shape's own geometry (`geometry.rs`).
+    #[test]
+    fn polygonal_presets_are_written_as_custom_shapes() {
+        for (kind, ty) in [
+            (ShapeKind::Hexagon, "hexagon"),
+            (ShapeKind::Octagon, "octagon"),
+            (ShapeKind::Pentagon, "regular-pentagon"),
+            (ShapeKind::Parallelogram, "parallelogram"),
+            (ShapeKind::Trapezoid, "trapezoid"),
+            (ShapeKind::Plus, "cross"),
+            (ShapeKind::Chevron, "chevron"),
+            (ShapeKind::Decagon, "ooxml-decagon"),
+        ] {
+            assert_eq!(element_of(kind), ("draw:custom-shape", Some(ty)), "{kind:?}");
+        }
     }
 }
