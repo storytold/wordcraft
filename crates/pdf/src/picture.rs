@@ -15,19 +15,21 @@ pub(crate) struct Vector {
 }
 
 impl Vector {
-    /// Bytes the parsed picture holds: its paths' segments, its text and its bitmaps' pixels.
+    /// Bytes the parsed picture holds: its paths' segments, its text (with per-character advances) and its bitmaps' pixels.
     pub(crate) fn heap_bytes(&self) -> usize {
         let item = |it: &wordcraft_metafile::Item| match it {
-            wordcraft_metafile::Item::Path { segs, .. } => segs.len().saturating_mul(std::mem::size_of::<wordcraft_metafile::Seg>()),
+            wordcraft_metafile::Item::Path { segs, .. } => segs.capacity().saturating_mul(std::mem::size_of::<wordcraft_metafile::Seg>()),
             wordcraft_metafile::Item::Bitmap { width, height, .. } => (*width as usize).saturating_mul(*height as usize).saturating_mul(4),
-            wordcraft_metafile::Item::Text(t) => t.text.len().saturating_add(t.font.len()),
+            wordcraft_metafile::Item::Text(t) => {
+                t.text.capacity().saturating_add(t.font.capacity()).saturating_add(t.dx.capacity().saturating_mul(std::mem::size_of::<f32>()))
+            }
         };
         let items = self
             .pic
             .items
             .iter()
-            .fold(self.pic.items.len().saturating_mul(std::mem::size_of::<wordcraft_metafile::Item>()), |n, it| n.saturating_add(item(it)));
-        items.saturating_add(self.images.len().saturating_mul(std::mem::size_of::<Option<Image>>()))
+            .fold(self.pic.items.capacity().saturating_mul(std::mem::size_of::<wordcraft_metafile::Item>()), |n, it| n.saturating_add(item(it)));
+        items.saturating_add(self.images.capacity().saturating_mul(std::mem::size_of::<Option<Image>>()))
     }
 }
 
