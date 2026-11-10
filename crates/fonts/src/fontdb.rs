@@ -61,7 +61,8 @@ pub struct FontDb {
     catalog: RwLock<Vec<CatalogEntry>>,
     /// Fonts the user added at run time, and the folder they are stored in (#582).
     user: RwLock<user::UserFonts>,
-    /// Bumped whenever user fonts are added or removed ([`FontDb::generation`]).
+    /// Bumped whenever user fonts or a document's embedded fonts are added or removed
+    /// ([`FontDb::generation`]).
     generation: AtomicU64,
     /// The font files documents embed, by fingerprint ([`FontDb::set_document_fonts`]).
     document: Mutex<HashMap<u64, user::DocumentFont>>,
@@ -162,6 +163,21 @@ impl FontDb {
     /// [`FontDb::scan_in_background`]).
     pub fn global() -> &'static FontDb {
         GLOBAL.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+    }
+
+    /// The process-wide database if something has started it ([`FontDb::global`]), without
+    /// starting it. Code that only observes the database, or releases what it put there, uses this:
+    /// it neither loads the system fonts nor fixes which database a test process gets before the
+    /// test has chosen one.
+    pub fn global_if_started() -> Option<&'static FontDb> {
+        GLOBAL.get()
+    }
+
+    /// The process-wide database's [`generation`](Self::generation), without starting it: 0 while
+    /// it isn't started, since no font can have been added or removed yet. Layout cache keys read
+    /// this.
+    pub fn global_generation() -> u64 {
+        Self::global_if_started().map_or(0, FontDb::generation)
     }
 
     /// Initialize a test process with only the repository's pinned bundled fonts: no optional

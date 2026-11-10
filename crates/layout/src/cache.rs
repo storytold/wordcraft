@@ -105,7 +105,7 @@ pub(crate) fn env_hash(doc: &Document, opts: &LayoutOptions) -> u64 {
     wordcraft_proof::dictionary_generation().hash(&mut h);
     // A font added or removed (a document's fonts leave when it closes, #3687) changes which face
     // sets the text.
-    wordcraft_fonts::FontDb::global().generation().hash(&mut h);
+    wordcraft_fonts::FontDb::global_generation().hash(&mut h);
     hyphenation_key(doc).hash(&mut h);
     outline.hash(&mut h);
     opts.filename.hash(&mut h);

@@ -407,8 +407,8 @@ fn stored_name(name: &str, sfnt: &[u8]) -> String {
 }
 
 impl FontDb {
-    /// A counter that changes whenever user fonts are added or removed: a UI caching the font
-    /// list or a layout redraws when it moves.
+    /// A counter that changes whenever user fonts or a document's embedded fonts are added or
+    /// removed: a UI caching the font list or a layout redraws when it moves.
     pub fn generation(&self) -> u64 {
         self.generation.load(Ordering::Acquire)
     }

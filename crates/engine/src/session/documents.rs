@@ -40,7 +40,7 @@ impl FontClaims {
     pub(super) fn claim(&mut self, id: u64, doc: &Document) {
         self.release(id);
         self.0.insert(id, vec![id]);
-        wordcraft_fonts::FontDb::global().set_document_fonts(id, crate::io::embedded_font_files(doc));
+        set_document_fonts(id, crate::io::embedded_font_files(doc));
     }
 
     /// Open document `id` takes in content from `doc`: the fonts `doc` embeds are claimed for it
@@ -52,21 +52,32 @@ impl FontClaims {
         }
         let owner = next_document_id();
         self.0.entry(id).or_default().push(owner);
-        wordcraft_fonts::FontDb::global().set_document_fonts(owner, files);
+        set_document_fonts(owner, files);
     }
 
     /// Document `id` is closed or replaced: its fonts go unless another open document claims them.
     pub(super) fn release(&mut self, id: u64) {
         for owner in self.0.remove(&id).unwrap_or_default() {
-            wordcraft_fonts::FontDb::global().set_document_fonts(owner, Vec::new());
+            set_document_fonts(owner, Vec::new());
         }
+    }
+}
+
+/// `owner`'s claim on the process-wide font database is now `files`. Claiming none needs the
+/// database only if it was started: nothing can be claimed in one that wasn't, so a document that
+/// embeds no fonts, opened or closed, doesn't start it (#3687).
+fn set_document_fonts(owner: u64, files: Vec<(Vec<u8>, String)>) {
+    if !files.is_empty() {
+        wordcraft_fonts::FontDb::global().set_document_fonts(owner, files);
+    } else if let Some(db) = wordcraft_fonts::FontDb::global_if_started() {
+        db.set_document_fonts(owner, files);
     }
 }
 
 impl Drop for FontClaims {
     fn drop(&mut self) {
         for owner in std::mem::take(&mut self.0).into_values().flatten() {
-            wordcraft_fonts::FontDb::global().set_document_fonts(owner, Vec::new());
+            set_document_fonts(owner, Vec::new());
         }
     }
 }
