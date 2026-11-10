@@ -18,7 +18,7 @@
 //! vocabulary are not written, so Word has nothing to reject. Bounded: nesting is capped by the
 //! parser's depth limit, pictures and stories are capped in number.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use base64::Engine as _;
 use wordcraft_doc::Document;
@@ -38,6 +38,8 @@ const W10_NS: &str = "urn:schemas-microsoft-com:office:word";
 const MAX_MEDIA: usize = 4096;
 /// Most header, footer, footnote, endnote and comment stories written.
 const MAX_STORIES: usize = 50_000;
+/// Most bytes of header and footer parts inlined, all sections together.
+const MAX_INLINED_BYTES: usize = 64 << 20;
 /// A picture's longest side, points (a corrupt extent must not give a huge frame).
 const MAX_PICT_PT: f64 = 31_680.0;
 
@@ -63,6 +65,9 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         }
         None => Vec::new(),
     };
+    if c.over_budget {
+        return Err(DocxError::Limit(format!("headers and footers inlined past {MAX_INLINED_BYTES} bytes")));
+    }
 
     let mut kids: Vec<Node> = vec![Node::El(core_props(doc))];
     if let Some(f) = c.default_fonts() {
@@ -153,6 +158,14 @@ struct Conv<'a> {
     next_shape: i64,
     stories: usize,
     in_note: bool,
+    /// Notes and comments already inlined: (kind, id). A repeated reference does not copy the body again.
+    inlined_notes: HashSet<(char, String)>,
+    /// The header or footer in effect per (footer, type), as the previous sections left it.
+    hf_in_effect: HashMap<(bool, &'static str), String>,
+    /// Bytes of header and footer parts inlined so far.
+    inlined_bytes: usize,
+    /// A header or footer did not fit in `MAX_INLINED_BYTES`; the export fails.
+    over_budget: bool,
 }
 
 impl<'a> Conv<'a> {
@@ -197,6 +210,10 @@ impl<'a> Conv<'a> {
             next_shape: 1025,
             stories: 0,
             in_note: false,
+            inlined_notes: HashSet::new(),
+            hf_in_effect: HashMap::new(),
+            inlined_bytes: 0,
+            over_budget: false,
         }
     }
 
@@ -300,7 +317,8 @@ impl<'a> Conv<'a> {
 
     /// A DrawingML picture as a `w:pict` (inline, at its extent); any other drawing is dropped.
     fn picture(&mut self, drawing: &El, rels: &Rels) -> Vec<Node> {
-        let Some(id) = drawing.find("a:blip").and_then(|b| b.attr("r:embed")) else { return Vec::new() };
+        let Some(blip) = drawing.find("a:blip") else { return Vec::new() };
+        let Some(id) = blip.attr("r:embed") else { return Vec::new() };
         let Some(target) = rels.by_id(id).filter(|r| !r.external).map(|r| r.target.clone()) else { return Vec::new() };
         let Some(src) = self.bin_for(&target) else { return Vec::new() };
         let pt = |k: &str| {
@@ -312,7 +330,19 @@ impl<'a> Conv<'a> {
         let shape_id = format!("_x0000_i{}", self.next_shape);
         self.next_shape = self.next_shape.saturating_add(1);
         let mut kids: Vec<Node> = std::mem::take(&mut self.bins).into_iter().map(Node::El).collect();
-        kids.push(Node::El(self.shape_frame(&shape_id, &style, &src, &alt)));
+        let mut shape = self.shape_frame(&shape_id, &style, &src, &alt);
+        // Brightness and contrast as VML `gain` and `blacklevel` (16.16 fixed point, #1711).
+        // `v:imagedata` has no opacity, so a picture's transparency (`a:alphaModFix`) is dropped.
+        let fx = crate::units::blip_fx(blip);
+        if fx.changes_pixels()
+            && let Some(Node::El(data)) = shape.kids.iter_mut().find(|k| matches!(k, Node::El(e) if e.name == "v:imagedata"))
+        {
+            let (gain, black) = fx.to_vml();
+            let fixed = |v: f64| format!("{}f", (v * 65_536.0).round().clamp(-1.0e12, 1.0e12) as i64);
+            data.attrs.push(("gain".into(), fixed(gain)));
+            data.attrs.push(("blacklevel".into(), fixed(black)));
+        }
+        kids.push(Node::El(shape));
         vec![Node::El(plain("w:pict", kids))]
     }
 
@@ -368,10 +398,14 @@ impl<'a> Conv<'a> {
             return Vec::new();
         }
         let Some(note) = (if foot { self.footnotes.get(id) } else { self.endnotes.get(id) }).cloned() else { return Vec::new() };
+        let name = if foot { "w:footnote" } else { "w:endnote" };
+        // The body goes at the first reference only; a repeated one keeps its mark, empty.
+        if !self.inlined_notes.insert((if foot { 'f' } else { 'e' }, id.to_string())) {
+            return vec![Node::El(plain(name, Vec::new()))];
+        }
         self.stories += 1;
         let rels = if foot { self.foot_rels.clone() } else { self.end_rels.clone() };
         self.in_note = true;
-        let name = if foot { "w:footnote" } else { "w:endnote" };
         let kids = self.kids(&note, &rels, name, depth);
         self.in_note = false;
         vec![Node::El(plain(name, kids))]
@@ -390,6 +424,10 @@ impl<'a> Conv<'a> {
             return Vec::new();
         }
         let Some(c) = self.comments.get(id).cloned() else { return Vec::new() };
+        // A comment is written once, at its first reference.
+        if !self.inlined_notes.insert(('c', id.to_string())) {
+            return Vec::new();
+        }
         self.stories += 1;
         let rels = self.comment_rels.clone();
         let n = self.ann_id('c', id);
@@ -448,14 +486,27 @@ impl<'a> Conv<'a> {
                     continue;
                 }
                 let Some(path) = k.attr("r:id").and_then(|id| rels.by_id(id)).filter(|r| !r.external).map(|r| r.target.clone()) else { continue };
-                let Some(root) = self.pkg.xml(&path).ok().flatten() else { continue };
-                self.stories += 1;
-                let story_rels = self.pkg.rels(&path);
                 let ty = match k.attr("w:type") {
                     Some("even") => "even",
                     Some("first") => "first",
                     _ => "odd",
                 };
+                // A section without the story inherits the previous section's, as in OOXML: write
+                // it only where it changes.
+                if self.hf_in_effect.get(&(footer, ty)) == Some(&path) {
+                    continue;
+                }
+                let size = self.pkg.get(&path).map_or(0, |b| b.len());
+                if self.inlined_bytes.saturating_add(size) > MAX_INLINED_BYTES {
+                    // Skipping would leave later sections inheriting the wrong story: fail instead.
+                    self.over_budget = true;
+                    continue;
+                }
+                let Some(root) = self.pkg.xml(&path).ok().flatten() else { continue };
+                self.stories += 1;
+                self.inlined_bytes = self.inlined_bytes.saturating_add(size);
+                self.hf_in_effect.insert((footer, ty), path.clone());
+                let story_rels = self.pkg.rels(&path);
                 let name = if footer { "w:ftr" } else { "w:hdr" };
                 let was = std::mem::replace(&mut self.in_note, true);
                 let kids = self.kids(&root, &story_rels, name, depth + 1);
