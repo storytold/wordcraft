@@ -323,3 +323,33 @@ fn a_latin_link_inserted_into_reopened_hebrew_is_saved_left_to_right() {
     assert_eq!(s.typing_props().rtl, None);
     assert_eq!(s.typing_props().lang_bidi.as_deref(), Some("he-IL"), "the bidi language stays");
 }
+
+#[test]
+fn arrow_keys_step_over_invisible_markers_in_bidirectional_text() {
+    let mut boundary = session("ab\nدو سه", true);
+    run(&mut boundary, "select.text", json!({"text": "دو"}));
+    run(&mut boundary, "insert.bookmark", json!({"name": "Edge"}));
+    boundary.sel = crate::Selection::caret(Pos::body(1, 3));
+    run(&mut boundary, "caret.wordRight", json!({}));
+    assert_eq!(boundary.sel.focus, Pos::body(0, 2));
+
+    for (text, selected, right_to_left, command) in [("ab سلام cd", "سلام", false, "caret.right"), ("یک دو سه", "دو", true, "caret.left")]
+    {
+        let mut session = session(text, right_to_left);
+        run(&mut session, "select.text", json!({"text": selected}));
+        run(&mut session, "insert.bookmark", json!({"name": "Mark"}));
+        run(&mut session, "caret.docStart", json!({}));
+        let mut previous = caret_x(&mut session);
+        for _ in 0..30 {
+            let before = session.sel.focus.clone();
+            run(&mut session, command, json!({}));
+            if session.sel.focus == before {
+                break;
+            }
+            let current = caret_x(&mut session);
+            assert!(if right_to_left { current < previous } else { current > previous });
+            previous = current;
+        }
+        assert_eq!(session.sel.focus.off, text.len() + 6);
+    }
+}

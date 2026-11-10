@@ -2361,6 +2361,163 @@ fn typing_after_a_citation_goes_outside_its_field() {
     assert_eq!(s.doc.copy_range(&inside, &f[0].end).plain_text(), "(Smith 2020)");
 }
 
+fn marker_session(kind: usize, text: &str, selected: &str) -> Session {
+    let mut session = Session::new(wordcraft_doc::Document::from_text(text));
+    run(&mut session, "select.text", json!({"text": selected}));
+    match kind {
+        0 => run(&mut session, "insert.bookmark", json!({"name": "Mark"})),
+        1 => run(&mut session, "review.newComment", json!({"text": "note"})),
+        _ => run(&mut session, "review.restrict", json!({"exception": "add"})),
+    }
+    session
+}
+
+fn marker_caret(session: &mut Session, offset: usize) {
+    session.sel = crate::Selection::caret(Pos::body(0, offset));
+}
+
+fn assert_marker_pair(session: &Session, original: &[wordcraft_doc::InlineObject]) {
+    use wordcraft_doc::InlineObject;
+    let objects = &session.doc.para_at(&Pos::body(0, 0)).unwrap().objects;
+    assert_eq!(objects, original, "exactly the original start and end, without loss or duplication");
+    match objects.as_slice() {
+        [InlineObject::BookmarkStart { name: a }, InlineObject::BookmarkEnd { name: b }] => assert_eq!(a, b),
+        [InlineObject::CommentStart { id: a }, InlineObject::CommentEnd { id: b }]
+        | [InlineObject::PermStart { id: a, .. }, InlineObject::PermEnd { id: b }] => assert_eq!(a, b),
+        _ => panic!("expected one matching marker pair"),
+    }
+}
+
+#[test]
+fn word_selection_edges_keep_invisible_marker_pairs_on_delete() {
+    for kind in 0..3 {
+        for text in ["one two three", "one two"] {
+            for (command, start, end) in [("caret.wordRight", 7, 10), ("caret.wordLeft", 10, 7)] {
+                let mut session = marker_session(kind, text, "two");
+                let original = session.doc.para_at(&Pos::body(0, 0)).unwrap().objects.clone();
+                marker_caret(&mut session, start);
+                run(&mut session, command, json!({"extend": true}));
+                assert_eq!(session.sel.focus.off, end);
+                run(&mut session, "text.delete", json!({}));
+                assert_marker_pair(&session, &original);
+                assert_eq!(session.doc.plain_text(StoryRef::Body), text.replace("two", ""));
+            }
+        }
+    }
+}
+
+#[test]
+fn deleting_around_and_inside_marked_words_keeps_invisible_marker_pairs() {
+    for kind in 0..3 {
+        for selected in ["two", "w"] {
+            for command in ["text.backspace", "text.delete", "text.deleteWordBack", "text.deleteWordForward"] {
+                let template = marker_session(kind, "one two three", selected);
+                let paragraph = template.doc.para_at(&Pos::body(0, 0)).unwrap();
+                let original = paragraph.objects.clone();
+                // Both sides of each marker and all visible character boundaries in the word.
+                let offsets: Vec<_> = paragraph.text.char_indices().map(|(offset, _)| offset).filter(|offset| (4..=13).contains(offset)).collect();
+                for offset in offsets {
+                    let mut session = marker_session(kind, "one two three", selected);
+                    marker_caret(&mut session, offset);
+                    run(&mut session, command, json!({}));
+                    assert_marker_pair(&session, &original);
+                    assert_ne!(session.doc.para_at(&Pos::body(0, 0)).unwrap().text, paragraph.text, "{kind}: {command} at {offset}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn invisible_markers_are_no_caret_stops_for_left_and_right() {
+    for kind in 0..3 {
+        let mut session = marker_session(kind, "one two three", "two");
+        for (command, start, offsets) in [("caret.right", 3, [4, 8, 9, 10, 14]), ("caret.left", 14, [13, 9, 8, 7, 3])] {
+            marker_caret(&mut session, start);
+            let mut previous = session.layout().caret(&session.sel.focus).unwrap().x;
+            for offset in offsets {
+                run(&mut session, command, json!({}));
+                assert_eq!(session.sel.focus.off, offset, "{kind}: {command}");
+                let current = session.layout().caret(&session.sel.focus).unwrap().x;
+                assert!(if command == "caret.right" { current > previous } else { current < previous });
+                previous = current;
+            }
+        }
+        marker_caret(&mut session, 10);
+        run(&mut session, "caret.right", json!({"extend": true}));
+        assert_eq!((session.sel.anchor.off, session.sel.focus.off), (10, 14));
+    }
+}
+
+#[test]
+fn invisible_markers_stay_when_deleting_visible_neighbours() {
+    for kind in 0..3 {
+        for (command, offset, expected) in [
+            ("text.backspace", 13, "one \u{fffc}tw\u{fffc} three"),
+            ("text.delete", 4, "one \u{fffc}wo\u{fffc} three"),
+            ("text.deleteWordBack", 13, "one \u{fffc}\u{fffc} three"),
+            ("text.deleteWordForward", 4, "one \u{fffc}\u{fffc}three"),
+        ] {
+            let mut session = marker_session(kind, "one two three", "two");
+            marker_caret(&mut session, offset);
+            run(&mut session, command, json!({}));
+            assert_eq!(session.doc.para_at(&Pos::body(0, 0)).unwrap().text, expected, "{kind}: {command}");
+            assert_eq!(session.doc.para_at(&Pos::body(0, 0)).unwrap().objects.len(), 2);
+        }
+    }
+}
+
+#[test]
+fn invisible_markers_do_not_split_word_moves() {
+    for kind in 0..3 {
+        let mut session = marker_session(kind, "one two three", "two");
+        marker_caret(&mut session, 0);
+        for offset in [4, 10, 14, 19] {
+            run(&mut session, "caret.wordRight", json!({}));
+            assert_eq!(session.sel.focus.off, offset);
+        }
+        for offset in [14, 7, 0] {
+            run(&mut session, "caret.wordLeft", json!({}));
+            assert_eq!(session.sel.focus.off, offset);
+        }
+        let mut session = marker_session(kind, "foobar next", "bar");
+        marker_caret(&mut session, 0);
+        run(&mut session, "caret.wordRight", json!({}));
+        assert_eq!(session.sel.focus.off, 9);
+        run(&mut session, "caret.wordLeft", json!({}));
+        assert_eq!(session.sel.focus.off, 0);
+    }
+}
+
+#[test]
+fn invisible_markers_at_paragraph_edges_allow_navigation_and_joining() {
+    for kind in 0..3 {
+        for command in ["caret.right", "caret.wordRight", "text.delete"] {
+            let mut session = marker_session(kind, "ab\ncd", "ab");
+            marker_caret(&mut session, 5);
+            run(&mut session, command, json!({}));
+            if command == "text.delete" {
+                assert_eq!(session.doc.para_at(&Pos::body(0, 0)).unwrap().text, "\u{fffc}ab\u{fffc}cd");
+            } else {
+                assert_eq!(session.sel.focus, Pos::body(1, 0));
+            }
+        }
+        let mut session = marker_session(kind, "ab\ncd", "cd");
+        session.sel = crate::Selection::caret(Pos::body(1, 3));
+        run(&mut session, "caret.left", json!({}));
+        assert_eq!(session.sel.focus, Pos::body(0, 2));
+    }
+}
+
+#[test]
+fn typing_after_backspace_at_a_bookmark_end_extends_the_bookmark() {
+    let mut session = marker_session(0, "one two three", "two");
+    marker_caret(&mut session, 13);
+    run(&mut session, "text.backspace", json!({}));
+    run(&mut session, "text.insert", json!({"text": "X"}));
+    assert_eq!(session.doc.para_at(&Pos::body(0, 0)).unwrap().text, "one \u{fffc}twX\u{fffc} three");
+}
+
 /// Tab in a table typed in right-to-left text (#2634): like Word, a table inserted in a
 /// right-to-left paragraph is a right-to-left table, so its first cell stands at the right and
 /// Tab moves to the cell on the left (the next one in reading order); Shift+Tab comes back. A
