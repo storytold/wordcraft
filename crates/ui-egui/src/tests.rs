@@ -8193,6 +8193,14 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(dy[1], -10.0, "Ctrl+wheel zoom delta is NOT scaled");
     assert_eq!(dy[2], -1.0, "Line deltas are NOT scaled by touchpad factor");
 
+    // Fast touchpad setting scales raw_input_hook point deltas by the Fast factor.
+    a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    let mut raw_fast = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0, false)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw_fast);
+    if let egui::Event::MouseWheel { delta, .. } = &raw_fast.events[0] {
+        assert_eq!(delta.y, -10.0 * crate::scroll::ScrollSpeed::Fast.touchpad_factor());
+    }
+
     // 2. Commands ui.touchpadScrollSpeed and ui.scrollSpeed set the preferences.
     let r = a.run("ui.touchpadScrollSpeed", json!({"value": "fast"})).unwrap();
     assert_eq!(r["touchpadScrollSpeed"], "fast");

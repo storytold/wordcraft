@@ -302,7 +302,8 @@ impl WordApp {
             ctx.set_zoom_factor(zoom);
         }
         // Mouse-wheel line scroll speed (#6146): scales egui's own scroll areas.
-        let target_line_speed = 40.0 * self.ui.scroll_speed.wheel_factor();
+        let base_line_speed = egui::InputOptions::default().line_scroll_speed;
+        let target_line_speed = base_line_speed * self.ui.scroll_speed.wheel_factor();
         if (ctx.options(|o| o.input_options.line_scroll_speed) - target_line_speed).abs() > 1e-4 {
             ctx.options_mut(|o| o.input_options.line_scroll_speed = target_line_speed);
         }
