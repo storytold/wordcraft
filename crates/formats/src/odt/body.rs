@@ -158,7 +158,9 @@ pub(super) struct Body<'a> {
     /// Insertions open in the body: (region id, revision).
     active_ins: Vec<(String, RevMark)>,
     /// Spaces `text:s` may still add ([`MAX_EXPANDED_SPACES`]).
-    spaces_left: usize,
+    pub(super) spaces_left: usize,
+    /// The spaces-budget warning was logged.
+    spaces_warned: bool,
 }
 
 /// Most spaces the document's `text:s` elements add in all: each may ask for 1,000 in 20
@@ -203,6 +205,7 @@ impl<'a> Body<'a> {
             del: None,
             active_ins: Vec::new(),
             spaces_left: MAX_EXPANDED_SPACES,
+            spaces_warned: false,
         }
     }
 
@@ -832,7 +835,8 @@ impl Body<'_> {
             "s" => {
                 let asked = get(a, "text:c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1000);
                 let count = asked.min(self.spaces_left).max(1);
-                if count < asked && self.spaces_left > 0 {
+                if asked > self.spaces_left && !self.spaces_warned {
+                    self.spaces_warned = true;
                     log::warn!("odt: the document's spaces pass {MAX_EXPANDED_SPACES}; each further text:s adds one");
                 }
                 self.spaces_left = self.spaces_left.saturating_sub(count);

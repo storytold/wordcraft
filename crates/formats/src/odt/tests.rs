@@ -1156,3 +1156,17 @@ fn repeated_spaces_stop_growing_past_the_document_budget() {
     );
     assert!(import(&package(&content, None)).unwrap().plain_text(wordcraft_doc::StoryRef::Body).contains("a   b"));
 }
+
+#[test]
+fn header_spaces_count_against_the_content_budget() {
+    // A header that uses up the budget leaves the content one space per `text:s`.
+    let spaces = r#"<text:s text:c="1000"/>"#.repeat(20_000);
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>h{spaces}</text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>a<text:s text:c="5"/>b</text:p></office:text></office:body></office:document-content>"#
+    );
+    let doc = import(&package(&content, Some(&styles))).unwrap();
+    assert!(doc.plain_text(wordcraft_doc::StoryRef::Body).contains("a b"));
+}

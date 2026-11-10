@@ -1,4 +1,4 @@
-use super::body::Body;
+use super::body::{Body, MAX_EXPANDED_SPACES};
 use super::limits::{MAX_ENTRY, MAX_SECTIONS};
 use super::styles::{Styles, column_sep, columns_of};
 use super::xml::{Attrs, Ev, events, get, length, local};
@@ -140,6 +140,8 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
     };
     let parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
     let mut body = Body::new(&styles, &pages, &mut fetch);
+    // The headers and footers' spaces count against the same budget as the content's.
+    body.spaces_left = MAX_EXPANDED_SPACES.saturating_sub(parts.spaces_used);
     events(&content, |ev| body.feed(ev));
     let mut blocks = body.take_blocks();
     // An open section with nothing in it (after a column section at the end) isn't one: the
