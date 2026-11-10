@@ -266,8 +266,8 @@ fn a_controls_run_properties_are_read_and_kept() {
 /// Retained InkML and MathML properties preserve namespace declarations across saves.
 #[test]
 fn retained_ink_and_mathml_properties_keep_declared_namespaces() {
-    let pr = r#"<w:id w:val="42"/><pen:annotation mc:Ignorable="math"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><math:cn>2</math:cn></math:math><d:creator xmlns:d="http://purl.org/dc/elements/1.1/">Study</d:creator></pen:annotation>"#;
-    let ns = r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" mc:Ignorable="pen math""#;
+    let pr = r#"<w:id w:val="42"/><pen:annotation mc:Ignorable="math pen" mc:MustUnderstand="formula nib" mc:ProcessContent="formula:math pen:trace" mc:PreserveElements="math:* nib:trace" mc:PreserveAttributes="formula:id pen:*"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><math:cn>2</math:cn></math:math><d:creator xmlns:d="http://purl.org/dc/elements/1.1/">Study</d:creator></pen:annotation>"#;
+    let ns = r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:pen="http://www.w3.org/2003/InkML" xmlns:nib="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:formula="http://www.w3.org/1998/Math/MathML" mc:Ignorable="pen math""#;
     let mut d = read(&package_ns(&p(&sdt(pr, &t("Note"))), ns)).unwrap();
     for _ in 0..2 {
         let out = document_xml(&write(&d).unwrap());
@@ -277,9 +277,11 @@ fn retained_ink_and_mathml_properties_keep_declared_namespaces() {
         assert!(ignorable.split_whitespace().any(|p| p == "ink") && ignorable.split_whitespace().any(|p| p == "mml"), "{ignorable}");
         assert!(out.contains(r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#), "{out}");
         assert!(out.contains(r#"xmlns:dc="http://purl.org/dc/elements/1.1/""#), "{out}");
-        assert!(out.contains(r#"<ink:annotation mc:Ignorable="mml"><mml:math mml:id="formula" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><mml:cn>2</mml:cn></mml:math><dc:creator>Study</dc:creator></ink:annotation>"#), "{out}");
+        assert!(out.contains(r#"<ink:annotation mc:Ignorable="mml ink" mc:MustUnderstand="mml ink" mc:ProcessContent="mml:math ink:trace" mc:PreserveElements="mml:* ink:trace" mc:PreserveAttributes="mml:id ink:*"><mml:math mml:id="formula" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><mml:cn>2</mml:cn></mml:math><dc:creator>Study</dc:creator></ink:annotation>"#), "{out}");
         d = read(&write(&d).unwrap()).unwrap();
-        assert!(by_id(&d, 42).extra.iter().any(|x| x.contains(r#"<ink:annotation mc:Ignorable="mml"><mml:math"#)));
+        assert!(by_id(&d, 42).extra.iter().any(|x| {
+            x.contains(r#"<ink:annotation mc:Ignorable="mml ink" mc:MustUnderstand="mml ink" mc:ProcessContent="mml:math ink:trace" mc:PreserveElements="mml:* ink:trace" mc:PreserveAttributes="mml:id ink:*"><mml:math"#)
+        }));
     }
 }
 
