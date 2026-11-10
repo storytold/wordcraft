@@ -665,6 +665,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         levels,
         shown: Vec::new(),
         substituted: Vec::new(),
+        span_bound: None,
     };
     let mut cx =
         Cx { p, env, rp: &rp, res, math_props: doc.settings.math.clone().unwrap_or_default(), drop_first: drop_cap_char(p, &rp), shown: None };

@@ -3,11 +3,12 @@ use super::chars::{
     SegKey, caps_expands, context_digit_dirs, draws_something, is_khmer, is_mark, is_numeral_digit, ligature_features, lookup_family, remap_range,
     reported_font_name, thai_run_face, upper_char,
 };
-use super::grid::{Exclusion, east_asian};
+use super::grid::east_asian;
+use super::lines::row_spans;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::paragraph::break_positions;
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, ResolvedPara, RubyAlign, SOFT_HYPHEN};
-use wordcraft_doc::para::WrapText;
+use wordcraft_doc::props::LineSpacing;
 use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
@@ -24,6 +25,8 @@ pub(super) struct Builder<'a> {
     /// Fonts asked for that aren't installed, and the faces drawn instead (see
     /// `ParaLayout::substituted`).
     pub(super) substituted: Vec<(String, FaceRef)>,
+    /// Memoized conservative upper bound for line widths beside float exclusions.
+    pub(super) span_bound: Option<f32>,
 }
 
 /// The fonts a run asks for that aren't installed (see [`Builder::note_missing_fonts`]).
@@ -103,70 +106,17 @@ fn conservative_span_bound(env: &ParaEnv, rp: &ResolvedPara) -> f32 {
             continue;
         }
         let y_mid = (y0 + y1) * 0.5;
-        let active: Vec<&Exclusion> = env.exclusions.iter().filter(|e| e.top <= y_mid && y_mid <= e.bottom).collect();
-        if active.is_empty() || active.iter().any(|e| e.top_bottom) {
-            continue;
-        }
+        let slice_h = (y1 - y_mid).min(1.0);
+        let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { slice_h };
 
         for &lo in &[lo1, lo2] {
             if hi <= lo + 20.0 {
                 continue;
             }
-            let mut taken: Vec<(f32, f32)> = Vec::new();
-            for e in &active {
-                let (left, right) = match &e.contour {
-                    None => (e.left, e.right),
-                    Some(c) => {
-                        let occ = c.occupied(y_mid - e.top, y_mid + 1.0 - e.top);
-                        if occ.is_empty() {
-                            (e.left, e.right)
-                        } else {
-                            let l = occ.iter().map(|(a, _)| a + e.left).fold(f32::INFINITY, f32::min);
-                            let r = occ.iter().map(|(_, b)| b + e.left).fold(f32::NEG_INFINITY, f32::max);
-                            (l, r)
-                        }
-                    }
-                };
-                if e.side.is_both() {
-                    taken.push((left, right));
-                } else {
-                    let text_left = match e.side {
-                        WrapText::Left => true,
-                        WrapText::Right => false,
-                        _ => left - lo >= hi - right,
-                    };
-                    if text_left {
-                        taken.push((left, hi.max(right)));
-                    } else {
-                        taken.push((lo.min(left), right));
-                    }
+            if let Ok(spans) = row_spans(env.exclusions, y_mid, slice_h, table_h, lo, hi) {
+                for (a, b) in spans {
+                    bound = bound.min(b - a);
                 }
-            }
-
-            let mut spans = vec![(lo, hi)];
-            for &(t_left, t_right) in &taken {
-                spans = spans
-                    .into_iter()
-                    .flat_map(|(a, b)| {
-                        if t_right <= a || t_left >= b {
-                            vec![(a, b)]
-                        } else {
-                            let mut out = Vec::new();
-                            if t_left > a {
-                                out.push((a, t_left.min(b)));
-                            }
-                            if t_right < b {
-                                out.push((t_right.max(a), b));
-                            }
-                            out
-                        }
-                    })
-                    .collect();
-            }
-
-            spans.retain(|(a, b)| b - a >= 20.0);
-            for (a, b) in spans {
-                bound = bound.min(b - a);
             }
         }
     }
@@ -760,7 +710,6 @@ impl<'a> Builder<'a> {
         // Group `added` clusters into word and space chunks based on `break_positions` and whitespace kind.
         let mut group_start = 0;
         let n_added = added.len();
-        let max_line_w = conservative_span_bound(self.env, rp);
 
         while group_start < n_added {
             let is_space = added[group_start].kind == ClKind::Space;
@@ -780,10 +729,23 @@ impl<'a> Builder<'a> {
             let w_end = last.end.saturating_sub(start);
 
             let group_adv: f32 = group.iter().map(|c| c.adv).sum();
+            let exceeds_bound = if !is_space && group.len() > 1 {
+                let bound = match self.span_bound {
+                    Some(b) => b,
+                    None => {
+                        let b = conservative_span_bound(self.env, rp);
+                        self.span_bound = Some(b);
+                        b
+                    }
+                };
+                group_adv > bound
+            } else {
+                false
+            };
             // If an unbroken text word exceeds available line width (including indents and floats),
             // emit grapheme clusters individually so `Scan::break_long_word` can emergency-split
             // across lines with exact plain-text parity.
-            if !is_space && group.len() > 1 && group_adv > max_line_w {
+            if exceeds_bound {
                 let mut ci = 0;
                 while ci < group.len() {
                     let mut c_end = ci + 1;
