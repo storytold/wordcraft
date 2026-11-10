@@ -23,6 +23,7 @@ pub fn key_name(k: Key) -> Option<&'static str> {
         Key::Minus => "-",
         Key::Period => ".",
         Key::Comma => ",",
+        Key::Semicolon => ";",
         Key::OpenBracket => "[",
         Key::CloseBracket => "]",
         Key::Num0 => "0",
@@ -119,7 +120,7 @@ pub(super) fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value
 pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let reg = app.session.registry.clone();
     let name = key_name(key);
-    let bound = name.and_then(|n| app.session.keymap.resolve(&reg, &combo(m, n, true)));
+    let bound = name.and_then(|n| app.session.keymap.resolve_in(&reg, &app.session, &combo(m, n, true)));
     // Ctrl+F1 collapses the ribbon only when the user hasn't given it to a command (#1678); the
     // other interface shortcuts (Alt+Q, ⌘⌥R) keep their place ahead of the keymap.
     if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || bound.is_none()) {
@@ -204,7 +205,12 @@ pub(super) fn equation_key(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
 /// key) — not Mod+Shift+V (Paste Formatting) or Mod+Alt+V (Paste Special) — so a clipboard
 /// picture may be pasted on it (#45).
 pub(super) fn is_paste_release(key: Key, modifiers: egui::Modifiers) -> bool {
-    (modifiers.command || key == Key::Paste) && !modifiers.alt && !modifiers.shift
+    // Mod+Ctrl+V on macOS (Ctrl beside Command) is Paste Special, not a plain paste; when
+    // Ctrl alone plays Mod, the same chord is a plain paste.
+    (modifiers.command || key == Key::Paste)
+        && !modifiers.alt
+        && !modifiers.shift
+        && !(cfg!(target_os = "macos") && key == Key::V && modifiers.ctrl && modifiers.mac_cmd)
 }
 
 /// The modifiers a V release stands for: its own, or, when Mod went up before V and no V press
@@ -221,9 +227,15 @@ pub(super) fn is_modifier_key(key: Key) -> bool {
     )
 }
 
-/// Whether releasing `key` with `modifiers` is Mod+Alt+V (Paste Special).
+/// Whether `modifiers` ask for Paste Special: Mod+Alt+V, or Mod+Ctrl+V on macOS (Ctrl held
+/// beside Command, not alone as Mod).
+pub(super) fn is_paste_special_modifiers(modifiers: Modifiers) -> bool {
+    modifiers.alt || (cfg!(target_os = "macos") && modifiers.ctrl && modifiers.mac_cmd)
+}
+
+/// Whether releasing `key` with `modifiers` is Paste Special: Mod+Alt+V, or Mod+Ctrl+V on macOS.
 pub(super) fn is_paste_special_release(key: Key, modifiers: egui::Modifiers) -> bool {
-    key == Key::V && modifiers.command && modifiers.alt && !modifiers.shift
+    key == Key::V && modifiers.command && !modifiers.shift && is_paste_special_modifiers(modifiers)
 }
 
 /// The adjacent replacement a refused byte-counted equation deletion must discard.

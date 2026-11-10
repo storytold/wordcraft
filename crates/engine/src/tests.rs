@@ -143,17 +143,40 @@ fn every_command_has_unique_id() {
 
 #[test]
 fn every_shortcut_runs_one_command() {
-    // `by_shortcut` takes the first match, so a shared key silently shadows the later command (#186).
+    // `by_shortcut` takes the first match, so a shared key silently shadows the later command
+    // (#186). A state-specific command (`when`) may share a key: `KeyMap::resolve_in` gives it
+    // the key in that state and the general command keeps it elsewhere.
     let reg = cmd::registry();
     let mut seen = std::collections::HashMap::new();
     for c in reg.all() {
         for k in c.shortcut.split(" / ").filter(|k| !k.is_empty()) {
             if let Some(other) = seen.insert(k.to_ascii_lowercase(), c.id) {
-                panic!("{k} is bound to both {other} and {}", c.id);
+                let conditional = |id: &str| reg.get(id).is_some_and(|spec| spec.conditional);
+                assert!(conditional(other) || conditional(c.id), "{k} is bound to both {other} and {}", c.id);
             }
         }
     }
     assert_eq!(reg.by_shortcut("Shift+F3").map(|c| c.id), Some("format.changeCase"));
+}
+
+/// Word's Ctrl+Shift+N: Demote to Body Text in Outline view, Normal Style elsewhere on
+/// Windows/Linux (where both are Mod+Shift+N). macOS keeps Normal Style on ⌘⇧N.
+#[test]
+fn ctrl_shift_n_demotes_in_outline_view_and_is_normal_elsewhere() {
+    let mut s = s();
+    let reg = s.registry.clone();
+    let resolve = |s: &Session, key: &str| s.keymap.resolve_in(&reg, s, key).map(|c| c.id);
+    let key = if cfg!(target_os = "macos") { "Ctrl+Shift+N" } else { "Mod+Shift+N" };
+    if cfg!(target_os = "macos") {
+        let spec = s.keymap.resolve_in(&reg, &s, key).expect("Ctrl+Shift+N is bound");
+        assert_eq!(spec.id, "outline.demoteToBody");
+        assert!((spec.enabled)(&s).is_some(), "Demote to Body Text is in Outline view only");
+        assert_eq!(resolve(&s, "Mod+Shift+N"), Some("para.normal"), "Normal Style keeps ⌘⇧N");
+    } else {
+        assert_eq!(resolve(&s, key), Some("para.normal"), "Normal Style outside Outline view");
+    }
+    run(&mut s, "view.outline", json!({}));
+    assert_eq!(resolve(&s, key), Some("outline.demoteToBody"), "Demote to Body Text in Outline view");
 }
 
 /// The command a shortcut runs.
@@ -234,6 +257,70 @@ fn word_default_shortcuts_resolve_function_keys() {
     assert_eq!(id("F12"), Some("file.saveAs"));
     assert_eq!(id("Mod+Alt+M"), Some("review.newComment"));
     assert_eq!(id("Mod+H"), Some("edit.findReplace"));
+}
+
+#[test]
+fn word_for_mac_default_shortcuts_resolve() {
+    // Commands that already existed but had no Word key: Word for Mac's documented defaults, plus
+    // Word for Windows' keys where Word for Mac's own key is already taken by another command.
+    assert_eq!(id("Alt+F3"), Some("insert.autoText"));
+    let mac = cfg!(target_os = "macos");
+    // (key, the command on Word for Mac, the command on Linux and Windows)
+    let keys: &[(&str, Option<&str>, Option<&str>)] = &[
+        ("F1", Some("edit.undo"), None),
+        ("F2", Some("edit.cut"), None),
+        ("Mod+Ctrl+V", Some("edit.pasteSpecial"), None),
+        ("Mod+Alt+C", Some("edit.copyFormat"), Some("text.copyright")),
+        ("Mod+Alt+R", None, Some("text.registered")),
+        ("Mod+Alt+T", None, Some("text.trademark")),
+        ("Mod+Alt+.", None, Some("text.ellipsis")),
+        ("Ctrl+Shift+M", Some("para.indent"), None),
+        ("Alt+Space", Some("text.nbsp"), None),
+        // ⌥G/⌥R/⌥2 stay unbound: no Mac key, and the engine keys are the Windows Mod+⌥ ones
+        // above (#2905: binding them would fire on every Mac layout through the physical keys).
+        ("Alt+G", None, None),
+        ("Alt+R", None, None),
+        ("Alt+2", None, None),
+        ("Alt+;", Some("text.ellipsis"), None),
+        ("Mod+Ctrl+Alt+R", Some("review.thesaurus"), None),
+        // Word for Mac's Control+Shift outline keys.
+        ("Ctrl+Shift+=", Some("outline.expand"), None),
+        ("Ctrl+Shift+-", Some("outline.collapse"), None),
+        ("Ctrl+Shift+1", Some("outline.showLevel1"), None),
+        ("Ctrl+Shift+2", Some("outline.showLevel2"), None),
+        ("Ctrl+Shift+3", Some("outline.showLevel3"), None),
+        ("Ctrl+Shift+4", Some("outline.showLevel4"), None),
+        ("Ctrl+Shift+5", Some("outline.showLevel5"), None),
+        ("Ctrl+Shift+6", Some("outline.showLevel6"), None),
+        ("Ctrl+Shift+7", Some("outline.showLevel7"), None),
+        ("Ctrl+Shift+8", Some("outline.showLevel8"), None),
+        ("Ctrl+Shift+9", Some("outline.showLevel9"), None),
+        ("Ctrl+Shift+A", Some("outline.showAll"), None),
+        ("Ctrl+Shift+L", Some("outline.firstLineOnly"), None),
+        ("Ctrl+Shift+N", Some("outline.demoteToBody"), None),
+        // Word for Windows' outline keys stay as aliases on macOS.
+        ("Alt+Shift+1", Some("outline.showLevel1"), Some("outline.showLevel1")),
+        ("Alt+Shift+=", Some("outline.expand"), Some("outline.expand")),
+        ("Alt+Shift+-", Some("outline.collapse"), Some("outline.collapse")),
+        ("Alt+Shift+A", Some("outline.showAll"), Some("outline.showAll")),
+        // Word for Mac shows the first line with Control+Shift+L.
+        ("Alt+Shift+L", None, Some("outline.firstLineOnly")),
+        ("Mod+Ctrl+I", Some("table.insertRowAbove"), None),
+        ("Ctrl+0", Some("view.zoom100"), None),
+        ("Ctrl+=", Some("view.zoomIn"), None),
+        ("Ctrl+-", Some("view.zoomOut"), None),
+        ("Alt+Shift+Home", Some("table.selectRow"), Some("table.selectRow")),
+        ("Alt+Shift+End", Some("table.selectRow"), Some("table.selectRow")),
+        ("Alt+Shift+PageUp", Some("table.selectColumn"), Some("table.selectColumn")),
+        ("Alt+Shift+PageDown", Some("table.selectColumn"), Some("table.selectColumn")),
+        ("Mod+Alt+S", Some("view.split"), Some("view.split")),
+        // Word for Mac keeps Alt+Shift+C for the Reviewing Pane.
+        ("Alt+Shift+C", None, Some("view.split")),
+    ];
+    for (key, on_mac, elsewhere) in keys {
+        let expected = if mac { *on_mac } else { *elsewhere };
+        assert_eq!(id(key), expected, "{key}");
+    }
 }
 
 #[test]

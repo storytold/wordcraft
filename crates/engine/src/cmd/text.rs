@@ -38,7 +38,10 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.deleteWordBack", "Delete Previous Word", "Editing", delete_word_back).key("Mod+Backspace / Alt+Backspace"),
         CommandSpec::new("text.deleteSentenceBack", "Delete Previous Sentence", "Editing", delete_sentence_back).key("Mod+Shift+Backspace"),
         CommandSpec::new("text.deleteWordForward", "Delete Next Word", "Editing", delete_word_fwd).key("Mod+Delete / Alt+Delete"),
-        CommandSpec::new("text.nbsp", "Nonbreaking Space", "Insert › Symbols", |s, _| ins_char(s, NBSP)).key("Mod+Shift+Space"),
+        // Word for Mac inserts these with ⌥Space and ⇧⌥-; the Windows keys stay bound too.
+        CommandSpec::new("text.nbsp", "Nonbreaking Space", "Insert › Symbols", |s, _| ins_char(s, NBSP))
+            .key(super::mac_or("Mod+Shift+Space / Alt+Space", "Mod+Shift+Space")),
+        // Word for Mac's ⇧⌥- is already Outline › Collapse here, so only the Windows key is bound.
         CommandSpec::new("text.nbHyphen", "Nonbreaking Hyphen", "Insert › Symbols", |s, _| ins_char(s, NB_HYPHEN)).key("Mod+Shift+-"),
         CommandSpec::new("text.optionalHyphen", "Optional Hyphen", "Insert › Symbols", |s, _| ins_char(s, SOFT_HYPHEN)).key("Mod+-"),
         // Alt+X on Windows and Linux; macOS has no default (Option+X types a character there).
@@ -51,10 +54,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.typeCode", "Type Character Code", "Editing", insert_code)
             .params(r#"{"code": string (decimal digits as typed on the keypad, e.g. "0233"), "ansi"?: 874 | 1250–1258 (the leading-0 code page, default 1252), "oem"?: 437 | 737 | 850 | 852 | 857 | 866 (default from the locale)}"#),
         CommandSpec::new("text.emDash", "Em Dash", "Insert › Symbols", |s, _| ins_char(s, '—')).key("Mod+Alt+-"),
-        // On macOS Option+G / R / 2 / ; type these directly, so Word for Mac has no Cmd shortcut.
+        // macOS types ©, ® and ™ with Option itself, so Word for Mac has no Cmd shortcut for
+        // them; binding ⌥G/⌥R/⌥2 would fire on every Mac layout through the physical keys (#2905).
         CommandSpec::new("text.copyright", "Copyright Sign", "Insert › Symbols", |s, _| ins_char(s, '©')).key(non_mac("Mod+Alt+C")),
         CommandSpec::new("text.registered", "Registered Sign", "Insert › Symbols", |s, _| ins_char(s, '®')).key(non_mac("Mod+Alt+R")),
         CommandSpec::new("text.trademark", "Trademark Sign", "Insert › Symbols", |s, _| ins_char(s, '™')).key(non_mac("Mod+Alt+T")),
-        CommandSpec::new("text.ellipsis", "Ellipsis", "Insert › Symbols", |s, _| ins_char(s, '…')).key(non_mac("Mod+Alt+.")),
+        CommandSpec::new("text.ellipsis", "Ellipsis", "Insert › Symbols", |s, _| ins_char(s, '…'))
+            .key(super::mac_or("Alt+;", "Mod+Alt+.")),
     ]
 }

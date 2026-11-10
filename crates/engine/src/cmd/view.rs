@@ -83,16 +83,20 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.zoom", "Zoom", "View › Zoom", zoom)
             .params(r#"{"value": percent (10-500) | "pageWidth" | "onePage" | "multiplePages"}"#)
             .pure(),
-        CommandSpec::new("view.zoom100", "100%", "View › Zoom", |s, _| zoom(s, &json!({"value": 100}))).pure(),
+        // Word's Ctrl+0 / Ctrl+Plus / Ctrl+Minus. On macOS the ⌘ forms are already Subscript,
+        // Optional Hyphen and Add Space Before; the Control forms stay free.
+        CommandSpec::new("view.zoom100", "100%", "View › Zoom", |s, _| zoom(s, &json!({"value": 100}))).key(super::mac_or("Ctrl+0", "")).pure(),
         CommandSpec::new("view.zoomIn", "Zoom In", "View › Zoom", |s, _| {
             let z = ((s.view.zoom * 10.0).round() / 10.0 + 0.1).min(5.0);
             zoom(s, &json!({"value": z * 100.0}))
         })
+        .key(super::mac_or("Ctrl+=", ""))
         .pure(),
         CommandSpec::new("view.zoomOut", "Zoom Out", "View › Zoom", |s, _| {
             let z = ((s.view.zoom * 10.0).round() / 10.0 - 0.1).max(0.1);
             zoom(s, &json!({"value": z * 100.0}))
         })
+        .key(super::mac_or("Ctrl+-", ""))
         .pure(),
         CommandSpec::new("view.onePage", "One Page", "View › Zoom", |s, _| zoom(s, &json!({"value": "onePage"}))).pure(),
         CommandSpec::new("view.multiplePages", "Multiple Pages", "View › Zoom", |s, _| zoom(s, &json!({"value": "multiplePages"}))).pure(),
@@ -149,7 +153,9 @@ pub fn specs() -> Vec<CommandSpec> {
             s.push_ui_request(json!({"toggle": "split"}));
             sel_result(s)
         })
-        .key("Mod+Alt+S")
+        // Word for Windows also removes a split with Alt+Shift+C; Word for Mac keeps ⌘⌥S, and its
+        // Alt+Shift+C belongs to closing the Reviewing Pane.
+        .key(super::mac_or("Mod+Alt+S", "Mod+Alt+S / Alt+Shift+C"))
         .pure(),
         // View › Window across WordCraft windows (#322): the desktop app's native windows
         // perform these (see `Windows`), elsewhere they are disabled.

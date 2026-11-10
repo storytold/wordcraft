@@ -6390,6 +6390,7 @@ fn the_full_screen_button_reports_the_commands_own_enabled_state() {
                     params: s.params,
                     mutates: s.mutates,
                     enabled: unavailable,
+                    conditional: s.conditional,
                     run: s.run,
                 }
             } else {

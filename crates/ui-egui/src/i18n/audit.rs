@@ -208,8 +208,19 @@ impl<'a> Exempt<'a> {
     fn allows(&self, app: &WordApp, text: &str) -> bool {
         let plain = pseudo::unmarked(text);
         let plain = plain.trim().trim_end_matches(" —").trim();
-        let is_shortcut =
-            || plain.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter") || k.chars().count() <= 3);
+        // A shortcut ends in its key — one character, F1–F24, or a named key. A named key counts
+        // only with a modifier before it (Mod+Home, ⌘Home), so a bare word like Home is not
+        // exempt just for looking like a key.
+        let is_shortcut = || {
+            let has_modifier = plain.starts_with(['⌘', '⌃', '⌥', '⇧']) || plain.contains('+');
+            let key = plain.rsplit('+').find(|s| !s.is_empty()).unwrap_or(plain);
+            let key = key.trim_start_matches(['⌘', '⌃', '⌥', '⇧']);
+            let named = matches!(
+                key,
+                "Home" | "End" | "PageUp" | "PageDown" | "Left" | "Right" | "Up" | "Down" | "Space" | "Escape" | "Delete" | "Backspace" | "Insert"
+            );
+            key.is_empty() || key.chars().count() <= 3 || (has_modifier && named)
+        };
         // A command's error message in the status bar: commands answer scripts and MCP too, so
         // their messages stay English for now.
         let status = app.status_msg.iter().map(|(m, _)| m).chain(&app.read_aloud_error).any(|m| text.contains(m.as_str()));

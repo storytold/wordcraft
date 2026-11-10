@@ -36,7 +36,8 @@ pub const FORMATS: [(&str, &str); 5] = [
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
-            .key("Mod+Alt+V")
+            // Word for Mac's Paste Special is ⌘⌃V; ⌘⌥V stays bound too because it was here first.
+            .key(super::mac_or("Mod+Alt+V / Mod+Ctrl+V", "Mod+Alt+V"))
             .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
     ]
 }

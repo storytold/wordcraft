@@ -4,8 +4,8 @@ use super::ime::{
     note_ime_application_change, publish_ime_receipt,
 };
 use super::shortcuts::{
-    EquationReplacementDrop, dispatch, equation_key, is_context_menu_key, is_modifier_key, is_paste_release, is_paste_special_release,
-    is_shift_delete, paste_release_modifiers,
+    EquationReplacementDrop, dispatch, equation_key, is_context_menu_key, is_modifier_key, is_paste_release, is_paste_special_modifiers,
+    is_paste_special_release, is_shift_delete, paste_release_modifiers,
 };
 use super::{Key, Modifiers, WordApp, json};
 
@@ -60,14 +60,20 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
             continue;
         }
         note_key_state(app, &e);
+        // A paste event reads the modifiers of the V press that caused it: a modifier can go up
+        // before the event arrives, and ⌘⌃V is still Paste Special (#2905).
+        let paste_press_mods = match &e {
+            egui::Event::Paste(_) => app.canvas.v_press_mods.take(),
+            _ => None,
+        };
         if drop_refused_replacement(app, &e, &mut batch)
-            || prefilter(app, ctx, &e, alt_codes)
+            || prefilter(app, ctx, &e, alt_codes, paste_press_mods)
             || paste_release(app, &e)
             || equation_event(app, ctx, &e, &mut batch)
         {
             continue;
         }
-        handle_event(app, ctx, e);
+        handle_event(app, ctx, e, paste_press_mods);
     }
 }
 
@@ -160,12 +166,16 @@ fn note_key_state(app: &mut WordApp, e: &egui::Event) {
     // can go down and up within one frame, leaving the frame's modifiers without it.
     match &e {
         egui::Event::ModifiersChanged(m) if m.command => app.canvas.paste_mods = Some(*m),
-        egui::Event::Key { key: Key::V | Key::Paste, pressed: true, .. } => app.canvas.v_pressed = true,
+        egui::Event::Key { key: Key::V | Key::Paste, pressed: true, modifiers, .. } => {
+            app.canvas.v_pressed = true;
+            app.canvas.v_press_mods = Some(*modifiers);
+        }
         egui::Event::Key { key, pressed: true, modifiers, .. } if !is_modifier_key(*key) => {
             app.canvas.paste_mods = modifiers.command.then_some(*modifiers);
         }
         egui::Event::WindowFocused(_) => {
             app.canvas.v_pressed = false;
+            app.canvas.v_press_mods = None;
             app.canvas.paste_mods = None;
         }
         _ => {}
@@ -210,7 +220,7 @@ fn drop_refused_replacement(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -
 }
 
 /// Alt shortcut text, Alt codes and pasted picture files take their events before typing.
-fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes: bool) -> bool {
+fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes: bool, paste_press_mods: Option<Modifiers>) -> bool {
     // An Alt shortcut (Alt+Shift+D, Alt+F7…) may also send its key's text; it isn't typed.
     match &e {
         egui::Event::Key { pressed: true, .. } => {
@@ -238,8 +248,10 @@ fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes:
     }
     if let egui::Event::Paste(t) = &e {
         app.canvas.pasted = true;
-        // Copied picture files arrive as their paths: insert the pictures (#45).
-        if app.session.math.is_none() && !ctx.input(|i| i.modifiers.alt) && crate::paste_picture::paste_named_files(app, t) {
+        let m = paste_press_mods.unwrap_or_else(|| ctx.input(|i| i.modifiers));
+        // Copied picture files arrive as their paths: insert the pictures (#45), unless this
+        // is Paste Special, which lists them instead.
+        if app.session.math.is_none() && !is_paste_special_modifiers(m) && crate::paste_picture::paste_named_files(app, t) {
             return true;
         }
     }
@@ -266,14 +278,18 @@ fn paste_release(app: &mut WordApp, e: &egui::Event) -> bool {
     // pastes: a release with no V press seen was Mod+V.
     if let egui::Event::Key { key: key @ (Key::V | Key::Paste), pressed: false, modifiers, .. } = &e {
         let press_seen = std::mem::take(&mut app.canvas.v_pressed);
-        let modifiers = &paste_release_modifiers(*modifiers, press_seen, app.canvas.paste_mods.take());
+        // The V press's modifiers, not the release's: a modifier released in between (⌘⌃V
+        // with Ctrl up first) must not turn Paste Special into plain Paste.
+        let pressed_mods = app.canvas.v_press_mods.take();
+        let released_mods = paste_release_modifiers(*modifiers, press_seen, app.canvas.paste_mods.take());
+        let modifiers = &pressed_mods.unwrap_or(released_mods);
         let paste_keys = is_paste_release(*key, *modifiers);
         let pasted = std::mem::take(&mut app.canvas.pasted);
         if !pasted && paste_keys && app.session.math.is_none() && app.services.clipboard_picture.is_some() {
             let _ = app.run("edit.paste", json!({}));
         }
-        // Mod+Alt+V with no text on the clipboard: Paste Special still opens, listing what
-        // is there (a picture) or saying what it holds (#687, #833).
+        // Mod+Alt+V (or Mod+Ctrl+V on macOS) with no text on the clipboard: Paste Special still
+        // opens, listing what is there (a picture) or saying what it holds (#687, #833).
         if !pasted && is_paste_special_release(*key, *modifiers) && app.session.math.is_none() && app.services.clipboard_picture.is_some() {
             let _ = app.run("edit.pasteSpecial", json!({}));
         }
@@ -470,7 +486,7 @@ fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifi
 }
 
 /// Everything else: typed text, IME, clipboard and key presses.
-fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
+fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event, paste_press_mods: Option<Modifiers>) {
     match e {
         egui::Event::Text(t) => {
             let m = ctx.input(|i| i.modifiers);
@@ -508,12 +524,16 @@ fn handle_event(app: &mut WordApp, ctx: &egui::Context, e: egui::Event) {
         }
         egui::Event::Ime(egui::ImeEvent::Commit(text)) => ime_commit(app, text),
         egui::Event::Paste(t) => {
-            // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste Special.
-            let m = ctx.input(|i| i.modifiers);
-            let id = match (m.alt, m.shift) {
-                (true, true) => "edit.pasteText",
-                (true, false) => "edit.pasteSpecial",
-                _ => "edit.paste",
+            // Mod+Alt+V arrives as a paste too (the shell reads the clipboard): Paste
+            // Special, as does Mod+Ctrl+V on macOS. The V press's modifiers say which, even
+            // when a modifier went up before the event.
+            let m = paste_press_mods.unwrap_or_else(|| ctx.input(|i| i.modifiers));
+            let id = if m.alt && m.shift {
+                "edit.pasteText"
+            } else if is_paste_special_modifiers(m) {
+                "edit.pasteSpecial"
+            } else {
+                "edit.paste"
             };
             let _ = app.run(id, json!({"text": t}));
         }
