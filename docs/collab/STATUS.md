@@ -4,14 +4,16 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `bf781e69` (the git source) plus this page — 76
-  commits over `4b0d3995`, so the branch is seven commits ahead of
-  `fork/feature/realtime-collaboration` at `467948fa`, the head of PR
-  #5834 (§5.21–§5.24). The PR is `MERGEABLE`; a maintainer approved the
-  workflows on 2026-11-10, `Nix` and `SonarCloud` passed, `Printing` failed on
-  a stale `Cargo.lock` and is fixed on the branch (§5.23), and the last fork git
-  source is gone from the manifest and the lock (§5.24), so the PR needs a push
-  and a fresh run (§5.2)
+- HEAD at this writing: `15c9625b` (the git-source guard) plus this page — 77
+  commits over `4b0d3995`. The branch was pushed on 2026-11-10 at 14:38Z: the
+  local HEAD, `fork/feature/realtime-collaboration` and the `headRefOid` of PR
+  #5834 are the same commit (§5.21, §5.24). The PR is `MERGEABLE`. A maintainer
+  approved the workflows on 2026-11-10; on the previous head `467948fa` `Nix`
+  and `SonarCloud` passed and `Printing` failed on a stale `Cargo.lock`, not on
+  code (§5.23), and the fork git source is gone from the manifest and the lock
+  (§5.24). The three `printing.yml` steps are green on the pushed head at the
+  build host (§5.25); every run on `15c9625b` still sits in `action_required`
+  until a maintainer approves it, so CI itself has not executed there (§5.2)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -573,8 +575,10 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    same commit, and the PR is `MERGEABLE` (§5.21). A maintainer approved the
    workflows on 2026-11-10: `Nix` and `SonarCloud` passed, `Printing` failed on
    a stale `Cargo.lock` rather than on code, and `39f2e1a4` fixes it (§5.23).
-   The PR head still needs the next push to pick that commit up and a fresh run
-   to go green.
+   The push happened at 14:38Z, so the PR head `15c9625b` carries that fix
+   (§5.24); its own runs wait in `action_required` for approval, and the three
+   `printing.yml` steps have been run green on that tree at the build host
+   (§5.25).
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -2363,7 +2367,8 @@ wordcraft-ui-egui --all-targets --locked -- -D warnings`, EXIT=0 (50 s);
 passed, 0 failed, 1 ignored (the LibreOffice commit gate); `cargo clippy
 --locked` over the same crates `--all-targets -- -D warnings` EXIT=0.
 
-Nothing was pushed: the fix reaches CI with the next push of the branch.
+Nothing else was pushed at that point: `39f2e1a4` reached CI with the next push
+of the branch, which happened later at 14:38Z (§5.24).
 
 ### 5.24 CI: one owner for every git source — the fork pin is out of the lock, and a job keeps it out (run 2026-11-10)
 
@@ -2438,8 +2443,70 @@ together. It is a self-contained commit (`ci: fail on a git dependency outside
 storytold`); if a maintainer wants it as its own PR, it splits without touching
 the rest.
 
-Nothing was pushed and PR #5834 was not touched: both changes reach CI with the
-next push of the branch.
+The push followed at 14:38Z and carried both changes: local HEAD, the fork
+branch and the `headRefOid` of PR #5834 are `15c9625b`. The PR itself was not
+edited, and its runs on this head sit in `action_required` until a maintainer
+approves them; the three `printing.yml` steps were run on this tree at the build
+host instead (§5.25).
+
+### 5.25 The three `Printing` steps on the pushed head, run at the build host (run 2026-11-10)
+
+`Printing` is red on `467948fa` and every run on `15c9625b` sits in
+`action_required`, so the question was whether the job's steps pass on the
+pushed tree at all. They do, and the old red was the lock, not a lint finding.
+
+**What the old red was.** Run `42720338000` (`Printing`, head `467948fa`) had
+`Formatting` pass and `Native app and UI Clippy` fail in all three legs
+(`Print (macos-latest)`, `Print (windows-latest)`, `Print (ubuntu-24.04)`); the
+test steps were skipped. The failing log line is cargo's, not clippy's:
+`error: cannot update the lock file …/Cargo.lock because --locked was passed to
+prevent this` (exit 101 on macOS, 1 on Windows). No lint was ever printed on
+that head; §5.23 records the one-line lock fix (`39f2e1a4`).
+
+**What actually differs between the two heads.** The `Printing` steps depend on
+the lock and on the crates they build, so the difference matters: `467948fa..15c9625b`
+is seven commits — `a785b611` (docs), `90eaa7dc` and `3c11d775` (collab code),
+`39f2e1a4` and `bf781e69` (lock), `41f67dc3` (docs) and `15c9625b` (`ci.yml`) —
+not "only the lock and `ci.yml`". None of them touches `crates/ui-egui`,
+`crates/doc`, `crates/layout`, `crates/engine`, `crates/docx` or
+`apps/wordcraft`; the only manifest change is `apps/wordcraft-web/Cargo.toml`,
+and nothing depends on that app. The two steps compile the same code at both
+heads, so their result below is the result for `467948fa`'s crates too, once the
+lock that failed it is fixed.
+
+**Environment parity.** `printing.yml` runs its "Build with craft-fonts" step
+before the gates and puts `CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts` and
+`CRAFT_FONTS_REQUIRED=1` into `GITHUB_ENV`, so every later step builds with the
+embedded UI faces. The run below sets both the same way, against the host's
+`~/craft-fonts` checkout (`b076417`, `fonts/manifest.txt` present).
+
+**The run** (build host `agents`, `rustc 1.99.1`, clean tree, `git rev-parse
+--short HEAD` on the host = `15c9625b`; 2026-11-10 15:45:55Z–15:47:46Z):
+
+| Step (exactly as in `printing.yml`) | Result |
+|---|---|
+| `cargo fmt --all -- --check` | EXIT=0, no output |
+| `cargo clippy -p wordcraft -p wordcraft-ui-egui --all-targets --locked -- -D warnings` | EXIT=0 (rebuild with the fonts, 11.25 s); only the three pre-existing `patch … was not used in the crate graph` warnings from upstream's patch table (§5.23) |
+| `cargo test -p wordcraft -p wordcraft-ui-egui --locked` | EXIT=0 — 1293 passed, 0 failed, 4 ignored: `wordcraft` bin 78 passed/1 ignored, `wordcraft` it 8 passed, `wordcraft-ui-egui` lib 1191 passed/3 ignored, `wordcraft-ui-egui` it 16 passed |
+
+`-D warnings` is unchanged and no `allow` was added; clippy had nothing to
+report, so nothing was fixed.
+
+**One trap worth writing down.** The same three steps without `CRAFT_FONTS_DIR`
+give `fmt` EXIT=0, `clippy` EXIT=0 and `test` **EXIT=101**: one failure,
+`theme::tests::interface_symbols_have_glyphs`, "symbols without a glyph:
+[`。 U+3002 in tests.rs`]". That is the build, not the branch: without the fonts
+the UI font set has no CJK face, and the scan picks the ideographic full stop up
+from a test literal (`crates/ui-egui/src/tests.rs:110`, upstream's `b29f3a8a`)
+because it reads every string in `src/`. The file is identical on `origin/main`,
+and `Printing` is green on `main` `8548b33b` (run `42821245475`, 13:04Z today)
+with the fonts checkout. A bare `cargo test -p wordcraft-ui-egui` on a host
+without fonts therefore says nothing about CI.
+
+**Scope.** This proves the gates pass on the pushed tree; it does not replace a
+CI run. The workflows on `15c9625b` (`Printing` `42836182389`, `CI`
+`42836182540`, `Nix` `42836182675`, `SonarCloud` `42836182716`, `Packaging lint`
+`42836182721`) still need a maintainer's approval before they execute.
 
 ## 6. Where things live
 
