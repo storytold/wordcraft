@@ -1121,3 +1121,42 @@ mod spelling_navigation_tests {
         }
     }
 }
+
+
+/// Readability reports document statistics at a caret and selection statistics for a range.
+/// It uses the same document-versus-selection scope as review.wordCount.
+#[test]
+fn readability_statistics_follow_document_and_selection_scope() {
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run(
+        "document.setText",
+        &json!({"text": "The cat sat on the mat. Did it move? Yes! Goose goose goose. Quill quill."}),
+    )
+    .unwrap();
+
+    let document = s.run("review.readability", &json!({})).unwrap();
+    assert_eq!(document["scope"], "document");
+    assert_eq!(document["words"], 15);
+    assert_eq!(document["sentences"], 5);
+    assert_eq!(document["longestSentenceWords"], 6);
+    assert_eq!(document["topWords"][0]["word"], "goose");
+    assert_eq!(document["topWords"][0]["count"], 3);
+    assert_eq!(document["topWords"][1]["word"], "quill");
+    assert!(document["fleschReadingEase"].as_f64().is_some());
+    assert!(document["fleschKincaidGrade"].as_f64().is_some());
+    assert!(document["readingTimeMinutes"].as_f64().is_some());
+    assert!(document["speakingTimeMinutes"].as_f64().is_some());
+
+    // The second sentence occupies bytes/characters 24..36 in this ASCII-only fixture.
+    s.run(
+        "select.range",
+        &json!({"anchor": {"block": 0, "off": 24}, "focus": {"block": 0, "off": 36}}),
+    )
+    .unwrap();
+    let selected = s.run("review.readability", &json!({})).unwrap();
+    assert_eq!(selected["scope"], "selection");
+    assert_eq!(selected["words"], 3);
+    assert_eq!(selected["sentences"], 1);
+    assert_eq!(selected["longestSentenceWords"], 3);
+}

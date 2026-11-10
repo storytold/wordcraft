@@ -290,6 +290,7 @@ Mailings|Finish|Print Documents|mailings.printDocuments
 Review|Proofing|Spelling & Grammar|review.spelling
 Review|Proofing|Thesaurus|review.thesaurus
 Review|Proofing|Word Count|review.wordCount
+Review|Proofing|Readability Statistics|review.readability
 Review|Speech|Read Aloud|review.readAloud
 Review|Accessibility|Check Accessibility|file.accessibility
 Review|Accessibility|Alt Text|view.altTextPane

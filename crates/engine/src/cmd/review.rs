@@ -1,4 +1,4 @@
-//! Review tab: comments, track changes, word count, spelling (via the proofing hook).
+//! Review tab: comments, track changes, word count, readability statistics and spelling.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,7 +21,7 @@ use comments::{
     comment_at_caret, comments_change, delete_comment, edit_comment, list_comments, nav_comment, new_comment, reply, validate_comment_id,
 };
 pub use comments::{comment_list, comment_range_at_caret};
-use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_count};
+use proofing::{all_issues, issue_at, next_issue, readability, suggestions, thesaurus, word_count};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -76,6 +76,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"includeTextBoxes"?: bool}"#)
             // ⌘⇧G is Find Previous on macOS.
             .key(super::non_mac("Mod+Shift+G"))
+            .pure(),
+        CommandSpec::new("review.readability", "Readability Statistics", "Review › Proofing", readability)
+            .params(r#"{"includeTextBoxes"?: bool}"#)
             .pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue)

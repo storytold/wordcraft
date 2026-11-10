@@ -38,6 +38,39 @@ pub(super) fn word_count(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
+/// Readability statistics for the current selection, or the counted document at a caret.
+pub(super) fn readability(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(include_text_boxes) = p::bool(v, "includeTextBoxes") {
+        s.prefs.count_notes = include_text_boxes;
+    }
+
+    // Match review.wordCount: a collapsed selection or selected object uses document scope.
+    let document_scope = s.sel.is_collapsed() || crate::cmd::objects::object_selection(s).is_some();
+    let text = if document_scope { s.counted_text() } else { s.selected_text() };
+    let stats = crate::writing_stats::analyze(&text);
+    let top_words: Vec<Value> = stats
+        .top_words
+        .iter()
+        .map(|(word, count)| json!({"word": word, "count": count}))
+        .collect();
+
+    Ok(json!({
+        "scope": if document_scope { "document" } else { "selection" },
+        "includeTextBoxes": s.prefs.count_notes,
+        "words": stats.words,
+        "sentences": stats.sentences,
+        "syllables": stats.syllables,
+        "averageWordsPerSentence": stats.avg_words_per_sentence,
+        "longestSentenceWords": stats.longest_sentence_words,
+        "fleschReadingEase": stats.flesch_reading_ease,
+        "fleschReadingEaseLabel": crate::writing_stats::flesch_reading_ease_label(stats.flesch_reading_ease),
+        "fleschKincaidGrade": stats.flesch_kincaid_grade,
+        "readingTimeMinutes": stats.reading_minutes,
+        "speakingTimeMinutes": stats.speaking_minutes,
+        "topWords": top_words,
+    }))
+}
+
 /// Issues (spelling + grammar) in one paragraph as positions, each in its run's language and
 /// skipping text left unchecked — the same issues the layout underlines.
 fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
