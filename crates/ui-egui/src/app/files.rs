@@ -432,7 +432,11 @@ impl WordApp {
         if self.autosaves() && self.session.dirty && now - self.last_autosave > 2500.0 && now - self.canvas.caret_visible_since > 1500.0 {
             self.last_autosave = now;
             // Hosted in a page: Save hands the bytes to the page (an overwrite of the opened file).
-            let saved = if self.host_autosaves() { self.execute("file.save", json!({})).map(drop) } else { self.session.run("file.save", &json!({})).map(drop).map_err(|e| e.to_string()) };
+            let saved = if self.host_autosaves() {
+                self.execute("file.save", json!({})).map(drop)
+            } else {
+                self.session.run("file.save", &json!({})).map(drop).map_err(|e| e.to_string())
+            };
             if let Err(e) = saved {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
