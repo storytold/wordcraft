@@ -720,9 +720,11 @@ fn a_wide_table_builds_only_the_cells_a_row_keeps() {
     // A 5,000-column header padded every one-cell row below it to 5,000 cells.
     let n = 5000;
     let md = format!("{}|\n{}|\n{}", "|h".repeat(n), "|-".repeat(n), "|x|\n".repeat(200));
+    // A body row wider than the limit is cut to it too.
+    let md = format!("{md}{}|\n", "|y".repeat(n));
     let flow = parse(&md);
     let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
-    assert_eq!(t.rows.len(), 201);
+    assert_eq!(t.rows.len(), 202);
     assert!(t.rows.iter().all(|r| r.len() == wordcraft_doc::table::MAX_COLS));
     // A narrow table is unchanged.
     let FBlock::Table(t) = &parse("| a | b |\n| - | - |\n| x |\n").blocks[0] else { panic!("expected table") };

@@ -484,6 +484,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
                         break;
                     }
                     let mut cells = split_row(l);
+                    cells.truncate(cols);
                     cells.resize(cols, String::new());
                     table.rows.push(cells.iter().zip(&aligns).map(|(s, a)| cell(s, false, *a)).collect());
                     i += 1;
