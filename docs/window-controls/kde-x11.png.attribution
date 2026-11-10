@@ -1,0 +1,9 @@
+asset:        docs/window-controls/kde-x11.png
+title:        WordCraft window controls on KDE X11
+author:       @danielmigueltejedor with Codex
+source:       original work; isolated compositor, synthetic demo content or empty home screen
+license:      MIT OR Apache-2.0
+license-file: LICENSE-MIT
+added:        2026-10-21 by @danielmigueltejedor
+notes:        No personal documents or desktop content. Screenshot includes only the application window.
+sha256:       41634a60cea467f2f289e74f49066e98255cf79fd95aeb8f4eb3d58ff9b7a0e7
