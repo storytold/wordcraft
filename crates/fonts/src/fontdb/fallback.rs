@@ -110,7 +110,7 @@ impl FontDb {
     /// The best loaded face covering `c`, and the number of loaded faces it was chosen from.
     fn loaded_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
-        let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
+        let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude && f.allows_automatic_fallback()).collect();
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
         // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
         let rank = |f: &FontFace| {
@@ -248,7 +248,7 @@ impl FontDb {
                 return false;
             }
         }
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.covers(c));
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.allows_automatic_fallback() && f.covers(c));
         let cataloged: Vec<String> = self.read_catalog().iter().map(|e| e.family.clone()).collect();
         let rtl = crate::is_rtl(c) || arabic_block(c);
         let preferred = RTL_FALLBACKS.iter().filter(|_| rtl);
@@ -301,7 +301,7 @@ impl FontDb {
     /// whether a loaded face now covers them all.
     #[cfg(not(target_arch = "wasm32"))]
     fn load_indexed(&self, chars: &[char], whole_family: bool) -> bool {
-        let covered = |db: &FontDb| db.read_faces().iter().any(|f| chars.iter().all(|c| f.covers(*c)));
+        let covered = |db: &FontDb| db.read_faces().iter().any(|f| f.allows_automatic_fallback() && chars.iter().all(|c| f.covers(*c)));
         let cps: Vec<u32> = chars.iter().map(|c| u32::from(*c)).collect();
         let maps_all = |ranges: &[(u32, u32)]| cps.iter().all(|cp| ranges_hold(ranges, *cp));
         let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
