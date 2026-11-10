@@ -340,7 +340,9 @@ mod tests {
         let navy = Rgb(0x1F, 0x38, 0x64);
         let ink = |c: Rgb| CharProps { color: Some(TextColor::Rgb(c)), ..Default::default() };
         // A 2×2 table in style "Probe": each cell's text in the colour given, or the style's.
-        let flagged = |parts: TableStyleParts, style_chr: CharProps, table_shading: Option<Rgb>, texts: [Option<Rgb>; 4], shades: [Option<Rgb>; 4]| {
+        // Each cell's text colour and shading, row by row.
+        type Four = [Option<Rgb>; 4];
+        let flagged = |parts: TableStyleParts, style_chr: CharProps, table_shading: Option<Rgb>, texts: Four, shades: Four| {
             let mut d = Document::from_text("Intro");
             d.core.title = "T".into();
             std::sync::Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
