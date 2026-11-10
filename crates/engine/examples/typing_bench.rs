@@ -13,7 +13,8 @@ fn main() -> Result<(), String> {
     let mut s = Session::new(wordcraft_engine::doc::Document::new());
     s.run("file.open", &json!({"path": path})).map_err(|e| e.to_string())?;
     let first = s.layout().ms;
-    let block = s.doc.body.len() / 2;
+    let mid = s.doc.body.len() / 2;
+    let block = (mid..s.doc.body.len()).chain((0..mid).rev()).find(|&i| s.doc.body.get(i).and_then(|b| b.as_para()).is_some()).unwrap_or(mid);
     s.run("caret.set", &json!({"pos": {"story": "body", "path": [block], "off": 0}})).map_err(|e| e.to_string())?;
     let mut ms = Vec::with_capacity(keys);
     for _ in 0..keys {
