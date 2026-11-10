@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-10 · **Change:** trivial (the opt-in `cargo xtask docx-corpus` harness can run a local DOCX corpus; no corpus or Word comparison is checked in, so readiness estimates are unchanged); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -57,7 +57,9 @@ discounts and the user evidence (120 issues from outside users, 4 praise, 0 "swi
 
 **Why alpha:** the core workflows (write, format, styles, lists, tables, references, review, mail
 merge, open and save .docx) work end to end and ship as signed builds on every desktop platform
-and the web. **Why not beta:** DOCX has never been tested on real-world files; charts, SmartArt and
+and the web. **Why not beta:** DOCX has not been tested on a real-world corpus yet (the opt-in
+`cargo xtask docx-corpus` harness can now run one locally, but no corpus or Word comparison is
+checked in); charts, SmartArt and
 OLE objects are dropped silently; pagination differs from Word (no Aptos-metric font, no column
 balancing or footnote continuation); content controls are lost; there is open field evidence of
 a startup crash and several hangs; no native printing. Gaps #1–#7 in [`docs/gaps.md`](docs/gaps.md)
