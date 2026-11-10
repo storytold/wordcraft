@@ -77,9 +77,23 @@ repositories anyway: it identifies your project.
 
 ## How sign-in works
 
-The client ID and secret are the *app's* registration, not your credentials: they tell Google
-which app is asking. Your own sign-in, including 2-Step Verification (MFA), passkeys, security
-keys and Workspace SSO, happens on Google's page and never passes through WordCraft.
+### Why a client ID and secret *and* a Google sign-in?
+
+You need both; one doesn't replace the other.
+
+| | App registration (client ID and secret) | Google sign-in |
+|---|---|---|
+| Says | *which app* is asking | *who you are*, and that you allow this app |
+| Who sets it up | once per person or organisation, in their Google Cloud project | each person, in the browser |
+| Secret? | no: Google treats a desktop app's secret as not confidential | your password and MFA stay with Google |
+
+Google lets only registered apps reach Drive. WordCraft has no registration of its own built in:
+there's no WordCraft server between you and Google, and no single project that controls (or can
+cut off) everyone's access or shares one API quota. So each person, or an organisation's admin
+for everyone, registers once; after that it's an ordinary Google sign-in.
+
+Your sign-in, including 2-Step Verification (MFA), passkeys, security keys and Workspace SSO,
+happens on Google's page and never passes through WordCraft.
 
 WordCraft follows Google's flow for installed apps:
 
