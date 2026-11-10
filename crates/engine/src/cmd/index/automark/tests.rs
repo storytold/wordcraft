@@ -353,3 +353,32 @@ fn a_longer_concordance_costs_no_more_reading() {
     let (short, long) = (steps(100), steps(800));
     assert!(long <= short + short / 10, "800 rows took {long} steps, 100 rows {short}");
 }
+
+/// Rows that start alike cost no more reading either: 800 rows that share their first word with
+/// the text, start with the same mark, or share a long run of it are read in the steps 100 take.
+/// (Trying every such row wherever that word or mark starts would cost eight times as much.) The
+/// row among them that is in the text is still found.
+#[test]
+fn rows_that_start_alike_cost_no_more_reading() {
+    let text = vec!["Kilns hold heat while the glaze sets ... on every pot in the room."; 200].join("\n");
+    for (start, found) in [("glaze ", "sets"), ("...", " on"), ("glaze sets ... on every ", "pot")] {
+        let steps = |rows: usize| {
+            let mut s = session(&text);
+            let absent = (0..rows).map(|i| json!([format!("{start}absent{i}"), "Nowhere"]));
+            let entries: Vec<Value> = absent.chain([json!(["heat", "Heat"]), json!([format!("{start}{found}"), "Found"])]).collect();
+            let mut marked = Value::Null;
+            let n = wordcraft_doc::work::count(|| marked = s.run("references.autoMark", &json!({"entries": entries})).unwrap());
+            assert_eq!(marked["marked"], 400, "{start:?}: heat and {start}{found} in each of 200 paragraphs");
+            n
+        };
+        let (short, long) = (steps(100), steps(800));
+        assert!(long <= short + short / 10, "{start:?}: 800 rows took {long} steps, 100 rows {short}");
+    }
+    // Rows for one text marking different entries all mark its first match, in their order; a
+    // text that ends the paragraph is found, and so is one that another text starts with.
+    let mut s = session("the kiln and the glaze, the the pot");
+    let entries: Vec<Value> =
+        (0..3).map(|i| json!(["the", format!("Entry {i}")])).chain([json!(["the pot", "Pots"]), json!(["pot", "Pot"])]).collect();
+    assert_eq!(s.run("references.autoMark", &json!({"entries": entries})).unwrap()["marked"], 5);
+    assert_eq!(marked_text(&s), vec![r#"the{XE "Entry 0"}{XE "Entry 1"}{XE "Entry 2"} kiln and the glaze, the the pot{XE "Pots"}{XE "Pot"}"#]);
+}

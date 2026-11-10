@@ -8,7 +8,7 @@
 //! occurrence of its text in every paragraph, and a paragraph that already holds the entry's XE
 //! field is left alone.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{InlineObject, OBJ};
@@ -136,10 +136,43 @@ pub(super) fn auto_mark(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"marked": marked, "terms": terms.len()}))
 }
 
-/// The run of letters and digits `t` starts with (empty when it starts with anything else).
-fn leading_word(t: &str) -> &str {
-    let end = t.char_indices().find(|(_, c)| !c.is_alphanumeric()).map_or(t.len(), |(i, _)| i);
-    t.get(..end).unwrap_or_default()
+/// The texts `terms` look for, each once and in byte order, with the terms looking for it (in
+/// their own order).
+fn texts(terms: &[Term]) -> Vec<(&str, Vec<usize>)> {
+    let mut by_text: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+    for (k, t) in terms.iter().enumerate() {
+        by_text.entry(t.text.as_str()).or_default().push(k);
+    }
+    by_text.into_iter().collect()
+}
+
+/// Calls `found` with the place in `texts` of each one `rest` starts with, shortest first.
+///
+/// `texts` are in byte order ([`texts`]), so those that share the bytes of `rest` read so far are
+/// one run of them, narrowed a byte at a time. The cost is the length of what `rest` shares with
+/// the texts (a binary search for each byte of it), whatever their number: hundreds of rows that
+/// start with the same word, or the same mark, are not tried one by one.
+fn starting(texts: &[(&str, Vec<usize>)], rest: &str, mut found: impl FnMut(usize)) {
+    let (mut lo, mut hi) = (0usize, texts.len());
+    for (depth, &byte) in rest.as_bytes().iter().enumerate() {
+        wordcraft_doc::work::steps(1);
+        // A text that ends here is the first of the run: the others are longer.
+        if texts.get(lo).is_some_and(|(t, _)| t.len() == depth) {
+            found(lo);
+            lo = lo.saturating_add(1);
+        }
+        let run = texts.get(lo..hi).unwrap_or_default();
+        let at = |t: &(&str, Vec<usize>)| t.0.as_bytes().get(depth).copied();
+        let (from, to) = (run.partition_point(|t| at(t) < Some(byte)), run.partition_point(|t| at(t) <= Some(byte)));
+        (lo, hi) = (lo.saturating_add(from), lo.saturating_add(to));
+        if lo >= hi {
+            return;
+        }
+    }
+    // `rest` ends here: a text that is all of it.
+    if texts.get(lo).is_some_and(|(t, _)| t.len() == rest.len()) {
+        found(lo);
+    }
 }
 
 /// Insert each term's XE field, hidden, after its first whole-word, same-case match in every body
@@ -148,13 +181,12 @@ fn leading_word(t: &str) -> &str {
 /// paragraph marks it, at that term's first match. Returns how many fields went in.
 ///
 /// Each paragraph is read once, whatever the number of terms: a term can only match where a
-/// word starts, and only where that word is the one the term starts with.
+/// word starts, and there the texts are narrowed a byte at a time ([`starting`]) instead of
+/// tried one by one. A text is looked for until its first match in the paragraph, which serves
+/// every term with that text.
 pub(super) fn mark_terms(s: &mut Session, terms: &[Term]) -> Result<u32, CmdError> {
-    let mut by_word: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (k, t) in terms.iter().enumerate() {
-        by_word.entry(leading_word(&t.text)).or_default().push(k);
-    }
-    if by_word.is_empty() {
+    let texts = texts(terms);
+    if texts.is_empty() {
         return Ok(0);
     }
     let hidden = CharProps { hidden: Some(true), ..Default::default() };
@@ -172,20 +204,14 @@ pub(super) fn mark_terms(s: &mut Session, terms: &[Term]) -> Result<u32, CmdErro
         for (i, c) in text.char_indices() {
             wordcraft_doc::work::steps(1);
             if word_start {
-                let rest = text.get(i..).unwrap_or_default();
-                for &k in by_word.get(leading_word(rest)).into_iter().flatten() {
-                    wordcraft_doc::work::steps(1);
-                    let Some(t) = terms.get(k) else { continue };
-                    if seen.contains(&k) || !rest.starts_with(t.text.as_str()) {
-                        continue;
-                    }
-                    let end = i.saturating_add(t.text.len());
+                starting(&texts, text.get(i..).unwrap_or_default(), |g| {
+                    let Some((t, ks)) = texts.get(g) else { return };
+                    let end = i.saturating_add(t.len());
                     let whole = text.get(end..).and_then(|r| r.chars().next()).is_none_or(|n| !n.is_alphanumeric());
-                    if whole {
-                        seen.insert(k);
-                        first.push((k, end));
+                    if whole && seen.insert(g) {
+                        first.extend(ks.iter().map(|&k| (k, end)));
                     }
-                }
+                });
             }
             word_start = !c.is_alphanumeric();
         }
