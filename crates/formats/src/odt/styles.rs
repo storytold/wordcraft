@@ -1003,9 +1003,9 @@ fn border_sides(a: &Attrs) -> Option<Borders> {
     (b.top.is_some() || b.left.is_some() || b.bottom.is_some() || b.right.is_some()).then_some(b)
 }
 
-/// A list style's level (ODF 1.3 §16.31–16.33): numbered or not, its label and start value.
+/// An outline level: whether headings are numbered, their label and start value.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(super) struct ListLevel {
+pub(super) struct OutlineLevel {
     pub(super) ordered: bool,
     pub(super) label: Option<model::Label>,
     pub(super) start: u32,
@@ -1027,7 +1027,7 @@ pub(super) fn num_format(f: &str) -> NumFormat {
 /// A level's `style:list-level-properties` (its label's alignment, `fo:text-align`) or
 /// `style:list-level-label-alignment` (its indent, `fo:margin-left`, and the label's hanging,
 /// `fo:text-indent`), ODF 1.3 §17.19–17.20, into `slot`'s label.
-fn level_position(slot: &mut ListLevel, local: &str, a: &Attrs) {
+fn outline_position(slot: &mut OutlineLevel, local: &str, a: &Attrs) {
     let Some(label) = slot.label.as_mut() else { return };
     if local == "list-level-properties" {
         label.align = match get(a, "fo:text-align").map(str::trim) {
@@ -1045,31 +1045,23 @@ fn level_position(slot: &mut ListLevel, local: &str, a: &Attrs) {
     }
 }
 
-/// A `text:list-level-style-number`/`-bullet`/`-image` element's level.
-fn list_level(local: &str, a: &Attrs) -> ListLevel {
-    let shown = get(a, "text:display-levels").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9);
-    let start = get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(0, 32_767);
-    let affix = |k: &str| model::Affix::new(get(a, k).unwrap_or(""));
-    match local {
-        "list-level-style-number" => {
-            let format = num_format(get(a, "style:num-format").unwrap_or(""));
-            let ordered = format != NumFormat::None;
-            let label = model::Label {
-                format,
-                prefix: affix("style:num-prefix"),
-                suffix: affix("style:num-suffix"),
-                shown,
-                indent: None,
-                hanging: None,
-                align: None,
-            };
-            ListLevel { ordered, label: ordered.then_some(label), start }
-        }
-        _ => {
-            // A picture bullet shows as the default bullet.
-            let bullet = get(a, "text:bullet-char").and_then(|b| b.chars().find(|c| !c.is_control() && !c.is_whitespace()));
-            ListLevel { ordered: false, label: Some(model::Label::bulleted(bullet)), start: 1 }
-        }
+/// A `text:outline-level-style` element's numbering.
+fn outline_level(a: &Attrs) -> OutlineLevel {
+    let format = num_format(get(a, "style:num-format").unwrap_or(""));
+    let ordered = format != NumFormat::None;
+    OutlineLevel {
+        ordered,
+        start: get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).min(32_767),
+        label: ordered.then_some(model::Label {
+            sequential_letters: get(a, "style:num-letter-sync") != Some("true"),
+            format,
+            prefix: model::Affix::new(get(a, "style:num-prefix").unwrap_or("")),
+            suffix: model::Affix::new(get(a, "style:num-suffix").unwrap_or("")),
+            shown: get(a, "text:display-levels").and_then(|v| v.trim().parse::<u8>().ok()).unwrap_or(1).clamp(1, 9),
+            indent: None,
+            hanging: None,
+            align: None,
+        }),
     }
 }
 
@@ -1090,8 +1082,8 @@ pub(super) struct Styles {
     /// Font faces (`style:font-face`): name → family.
     faces: HashMap<String, String>,
     /// The levels of `text:outline-style` (heading numbering, ODF 1.3 §16.34), when there is one.
-    pub(super) outline: Option<Vec<ListLevel>>,
-    pub(super) lists: HashMap<String, Vec<ListLevel>>,
+    pub(super) outline: Option<Vec<OutlineLevel>>,
+    pub(super) explicit_levels: HashMap<String, Vec<wordcraft_doc::numbering::Level>>,
     /// Font of `style:default-style` for paragraphs (the document default, ODF 1.3 §16.4).
     default_font: Option<String>,
     /// The default paragraph style's font size (`fo:font-size` in `style:default-style`), points.
@@ -1145,8 +1137,7 @@ impl Styles {
         // In a table column's or row's `style:default-style`: the properties element it reads.
         let mut in_table_default: Option<&str> = None;
         let mut dates = DateStyles::default();
-        let mut list: Option<(String, Vec<ListLevel>)> = None;
-        // The list or outline level being read.
+        let mut list: Option<(String, Vec<wordcraft_doc::numbering::Level>)> = None;
         let mut level_at: Option<usize> = None;
         let mut outline_at: Option<usize> = None;
         events(xml, |ev| match ev {
@@ -1212,12 +1203,15 @@ impl Styles {
                 }
                 // Dashes and gradients; and the part's root, whose version they depend on.
                 "stroke-dash" | "gradient" | "document-styles" | "document-content" | "document" => self.defs.element(&q, &a),
-                "list-style" => list = get(&a, "style:name").map(|n| (n.to_string(), vec![ListLevel::default(); 10])),
-                "outline-style" => self.outline = Some(vec![ListLevel::default(); 10]),
+                "list-style" => {
+                    list = get(&a, "style:name")
+                        .map(|n| (n.to_string(), vec![super::numbering::definition("list-level-style-bullet", &Attrs::new(), 0); 9]))
+                }
+                "outline-style" => self.outline = Some(vec![OutlineLevel::default(); 10]),
                 "outline-level-style" => {
                     let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
                     if let Some(slot) = self.outline.as_mut().and_then(|o| o.get_mut(lv - 1)) {
-                        *slot = list_level("list-level-style-number", &a);
+                        *slot = outline_level(&a);
                     }
                     outline_at = Some(lv - 1);
                 }
@@ -1225,18 +1219,16 @@ impl Styles {
                     if let Some((_, v)) = &mut list {
                         let lv = get(&a, "text:level").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 10);
                         if let Some(slot) = v.get_mut(lv - 1) {
-                            *slot = list_level(local(&q), &a);
+                            *slot = super::numbering::definition(local(&q), &a, lv - 1);
                         }
                         level_at = Some(lv - 1);
                     }
                 }
                 "list-level-properties" | "list-level-label-alignment" => {
-                    let slot = match (&mut list, level_at) {
-                        (Some((_, v)), Some(i)) => v.get_mut(i),
-                        _ => self.outline.as_mut().zip(outline_at).and_then(|(o, i)| o.get_mut(i)),
-                    };
-                    if let Some(slot) = slot {
-                        level_position(slot, local(&q), &a);
+                    if let Some(slot) = list.as_mut().zip(level_at).and_then(|((_, v), i)| v.get_mut(i)) {
+                        super::numbering::spacing(slot, local(&q), &a);
+                    } else if let Some(slot) = self.outline.as_mut().zip(outline_at).and_then(|(o, i)| o.get_mut(i)) {
+                        outline_position(slot, local(&q), &a);
                     }
                 }
                 _ => {}
@@ -1253,7 +1245,7 @@ impl Styles {
                 }
                 "list-style" => {
                     if let Some((n, v)) = list.take() {
-                        self.lists.insert(n, v);
+                        self.explicit_levels.insert(n, v);
                     }
                 }
                 "list-level-style-number" | "list-level-style-bullet" | "list-level-style-image" => level_at = None,

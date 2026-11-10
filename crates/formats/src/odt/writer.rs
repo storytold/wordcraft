@@ -47,6 +47,16 @@ pub(super) fn odf_num_format(f: wordcraft_doc::section::NumFormat) -> &'static s
     }
 }
 
+/// ODF's synchronized letters repeat the same letter after z; sequential letters do not.
+fn letter_sync(label: model::Label) -> &'static str {
+    use wordcraft_doc::section::NumFormat as F;
+    match (label.format, label.sequential_letters) {
+        (F::LowerLetter | F::UpperLetter, true) => " style:num-letter-sync=\"false\"",
+        (F::LowerLetter | F::UpperLetter, false) => " style:num-letter-sync=\"true\"",
+        _ => "",
+    }
+}
+
 pub(super) fn x(s: &str) -> String {
     let mut o = String::with_capacity(s.len());
     for c in s.chars() {
@@ -133,8 +143,13 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
 
 /// The `xml:id` of the list markup `xml` (kept as read) begins with, if it does.
 fn list_xml_id(xml: &str) -> Option<String> {
+    list_xml_attr(xml, "xml:id")
+}
+
+fn list_xml_attr(xml: &str, name: &str) -> Option<String> {
     let head = xml.strip_prefix("<text:list")?.split('>').next()?;
-    let at = head.find("xml:id=\"")? + "xml:id=\"".len();
+    let attr = format!("{name}=\"");
+    let at = head.find(&attr)? + attr.len();
     let len = head.get(at..)?.find('"')?;
     head.get(at..at + len).map(str::to_string)
 }
@@ -795,9 +810,22 @@ impl Writer {
         if !self.kept_markup(&ix.0, &mut markup) {
             return None;
         }
+        // A continued list can retain its complete original style only while its
+        // referenced list still has the original XML ID. Otherwise write it anew.
+        if let Some(previous) = list_xml_attr(&markup, "text:continue-list")
+            && !self.list_xml.values().any(|id| id == &previous)
+        {
+            return None;
+        }
+        // A kept list can begin with an unnumbered list header. Its first numbered
+        // paragraph carries the identity needed by following continued lists.
+        let kept_list = run.iter().find_map(|b| match b {
+            FBlock::Para(q) => q.list,
+            _ => None,
+        });
         // A list without its own `xml:id` (older files' lists) is given one, for a list going on
         // with it to name.
-        if p.list.is_some()
+        if kept_list.is_some()
             && list_xml_id(&ix.0).is_none()
             && let Some(at) = markup.find("<text:list").map(|i| i + "<text:list".len())
         {
@@ -813,7 +841,7 @@ impl Writer {
         self.close_wrap(last.as_ref(), 0, out);
         self.master = None;
         // A list kept so: a list continuing it, written from the model, names it.
-        if let Some(l) = p.list
+        if let Some(l) = kept_list
             && let Some(id) = markup.find("<text:list").and_then(|i| markup.get(i..)).and_then(list_xml_id)
         {
             if l.list != 0 {
@@ -1117,6 +1145,7 @@ impl Writer {
                     let attrs = match out.label {
                         Some(lb) if lb.format != wordcraft_doc::section::NumFormat::Bullet => {
                             let mut a = format!(" style:num-format=\"{}\"", odf_num_format(lb.format));
+                            a.push_str(letter_sync(lb));
                             for (k, v) in [("style:num-prefix", lb.prefix.as_str()), ("style:num-suffix", lb.suffix.as_str())] {
                                 if !v.is_empty() {
                                     a.push_str(&format!(" {k}=\"{}\"", x(v)));

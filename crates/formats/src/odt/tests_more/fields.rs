@@ -366,3 +366,66 @@ fn a_field_that_follows_the_document_says_so() {
     assert!(c.contains(r#"<text:author-name text:fixed="false""#), "{c}");
     assert!(c.contains("<text:sender-firstname>Ann</text:sender-firstname>"), "{c}");
 }
+
+#[test]
+fn sequence_formulas_and_value_references_round_trip_end_to_end() {
+    let bytes = body(concat!(
+        r#"<text:sequence-decls><text:sequence-decl text:name="Figure" text:display-outline-level="0"/></text:sequence-decls>"#,
+        r#"<text:p><text:sequence text:name="Figure" text:formula="ooow:28" style:num-format="A" text:ref-name="first">stale</text:sequence></text:p>"#,
+        r#"<text:p><text:sequence text:name="Figure" text:formula="ooow:Figure+1" style:num-format="A">stale</text:sequence></text:p>"#,
+        r#"<text:p><text:sequence-ref text:ref-name="first" text:reference-format="value">stale</text:sequence-ref></text:p>"#,
+    ));
+    let mut d = import(&bytes).unwrap();
+    for _ in 0..3 {
+        let got = fields(&d);
+        assert_eq!(got.iter().map(|v| v.1.as_str()).collect::<Vec<_>>(), ["AB", "AC", "AB"]);
+        assert!(got[0].0.starts_with("SEQ ") && got[2].0.starts_with("REF "));
+        d = import(&export(&d).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn unsupported_sequence_formula_keeps_cache_and_reports_loss() {
+    let bytes = body(r#"<text:p><text:sequence text:name="F" text:formula="ooow:F*2">cached</text:sequence></text:p>"#);
+    let d = import(&bytes).unwrap();
+    assert!(crate::model::Dropped::OdtSequence.reported());
+    assert_eq!(fields(&d)[0].1, "cached");
+    let back = import(&export(&d).unwrap()).unwrap();
+    assert!(crate::model::Dropped::OdtSequence.reported());
+    assert_eq!(fields(&back)[0].1, "cached");
+}
+
+#[test]
+fn chapter_sequence_declarations_keep_cached_values() {
+    let bytes = body(concat!(
+        r#"<text:sequence-decls><text:sequence-decl text:name="F" text:display-outline-level="1"/></text:sequence-decls>"#,
+        r#"<text:p><text:sequence text:name="F" text:formula="ooow:F+1">2.3</text:sequence></text:p>"#,
+    ));
+    let d = import(&bytes).unwrap();
+    assert_eq!(fields(&d)[0].1, "2.3");
+    assert!(crate::model::Dropped::OdtSequence.reported());
+}
+
+#[test]
+fn deleted_sequences_do_not_advance_body_counters() {
+    let bytes = body(concat!(
+        r#"<text:tracked-changes><text:changed-region text:id="gone"><text:deletion><text:p><text:sequence text:name="F" text:formula="ooow:100">100</text:sequence></text:p></text:deletion></text:changed-region></text:tracked-changes>"#,
+        r#"<text:p><text:sequence text:name="F" text:formula="ooow:F+1">stale</text:sequence></text:p>"#,
+    ));
+    let d = import(&bytes).unwrap();
+    assert_eq!(fields(&d)[0].1, "1");
+    assert!(!crate::model::Dropped::OdtSequence.reported());
+}
+
+#[test]
+fn supported_sequences_outside_body_do_not_report_unsupported_formulas() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p><text:sequence text:name="F" text:formula="ooow:100">100</text:sequence></text:p></style:header></style:master-page></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p><text:sequence text:name="F" text:formula="ooow:F+1">stale</text:sequence></text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!(fields(&d).last().unwrap().1, "1");
+    assert!(!crate::model::Dropped::OdtSequence.reported());
+}

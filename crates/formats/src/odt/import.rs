@@ -361,7 +361,7 @@ fn apply_look(doc: &mut Document, kind: model::Kind, look: &super::styles::ParaL
 /// Number the headings as the outline style `levels` does (ODF 1.3 §16.34): one list whose
 /// levels carry the outline's formats, each linked to its heading style, which numbers its
 /// paragraphs through it, as Word's numbered headings do. Levels without a number are left so.
-fn number_headings(doc: &mut Document, levels: &[super::styles::ListLevel]) {
+fn number_headings(doc: &mut Document, levels: &[super::styles::OutlineLevel]) {
     use wordcraft_doc::numbering::{AbstractNum, ListKind, Num, levels_for};
     use wordcraft_doc::props::NumRef;
     let numbered: Vec<bool> = (0..9).map(|i| levels.get(i).is_some_and(|l| l.ordered)).collect();
@@ -790,7 +790,7 @@ struct Parsed {
     /// The file's `settings.xml`, kept for the next save.
     settings: Option<Vec<u8>>,
     /// The heading numbering (`text:outline-style`), level by level.
-    outline: Option<Vec<super::styles::ListLevel>>,
+    outline: Option<Vec<super::styles::OutlineLevel>>,
     /// How the file's heading, title, quotation and preformatted styles look.
     looks: Vec<(model::Kind, super::styles::ParaLook)>,
     /// The document's default paragraph spacing.

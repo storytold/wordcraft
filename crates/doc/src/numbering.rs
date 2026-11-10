@@ -23,6 +23,8 @@ pub enum LevelSuffix {
 pub struct Level {
     pub start: u32,
     pub format: NumFormat,
+    #[serde(skip_serializing_if = "is_false")]
+    pub sequential_letters: bool,
     /// Label template: `%1.`, `%1.%2.`, or the bullet character.
     pub text: String,
     pub align: Align,
@@ -55,6 +57,7 @@ impl Default for Level {
         Level {
             start: 1,
             format: NumFormat::Decimal,
+            sequential_letters: false,
             text: "%1.".into(),
             align: Align::Left,
             indent: 36.0,
@@ -465,7 +468,12 @@ fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], s
                 _ if def.legal => NumFormat::Decimal,
                 f => f,
             };
-            label.push_str(&fmt.format(val));
+            let sequential = level_def(k).is_some_and(|level| level.sequential_letters);
+            if sequential && matches!(fmt, NumFormat::UpperLetter | NumFormat::LowerLetter) {
+                label.push_str(&sequential_letters(val, fmt == NumFormat::UpperLetter));
+            } else {
+                label.push_str(&fmt.format(val));
+            }
             if label.len() > MAX_LABEL_BYTES {
                 break;
             }
@@ -480,6 +488,22 @@ fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], s
 const MAX_LEVEL_TEXT: usize = 64;
 /// Labels stop growing once they pass this many bytes.
 const MAX_LABEL_BYTES: usize = 256;
+
+fn is_false(value: &bool) -> bool {
+    !value
+}
+
+/// Alphabetic numbering a..z, aa..az, ba..; ODF without num-letter-sync.
+pub fn sequential_letters(mut value: u32, upper: bool) -> String {
+    let mut out = Vec::new();
+    while value > 0 {
+        value -= 1;
+        out.push((if upper { b'A' } else { b'a' }) + (value % 26) as u8);
+        value /= 26;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
+}
 
 #[cfg(test)]
 mod tests {
@@ -732,6 +756,23 @@ mod tests {
         }
         assert_eq!(l(3), "（十一）");
         assert_eq!(l(0), "第二章");
+    }
+
+    #[test]
+    fn sequential_letters_survive_current_and_implicit_labels() {
+        for (format, expected) in [(NumFormat::UpperLetter, "AB"), (NumFormat::LowerLetter, "ab")] {
+            let mut numbering = Numbering::default();
+            let levels = vec![
+                Level { start: 28, format, sequential_letters: true, text: "%1".into(), ..Level::default() },
+                Level { text: "%1.%2".into(), ..Level::default() },
+            ];
+            let identifier = numbering.try_add_levels(None, levels).unwrap();
+            let mut counters = Counters::default();
+            assert_eq!(counters.next_label(&numbering, identifier, 1).unwrap().0, format!("{expected}.1"));
+            assert_eq!(counters.current_label(&numbering, identifier, 0).as_deref(), Some(expected));
+            assert_eq!(counters.next_label(&numbering, identifier, 0).unwrap().0, if format == NumFormat::UpperLetter { "AC" } else { "ac" });
+            assert_eq!(counters.current_label(&numbering, identifier, 0), Some(if format == NumFormat::UpperLetter { "AC" } else { "ac" }.into()));
+        }
     }
 
     #[test]

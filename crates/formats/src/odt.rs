@@ -83,5 +83,7 @@ mod page_parts;
 #[cfg(test)]
 mod tests;
 
+mod numbering;
+mod sequences;
 #[cfg(test)]
 mod tests_more;
