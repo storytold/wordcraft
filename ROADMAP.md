@@ -1432,3 +1432,5 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
+
+> 2026-11-10 · #2454 merged with main's #3984 rule for lines of only in-line pictures: a text box, or a shape holding text, is no picture, so its line keeps the font's descent like a line with text (`layout::tests::textbox_keeps_line_descent`). Picture-only leading, list labels and hidden anchors follow #3984's measurements. Source merge; no new native measurements.

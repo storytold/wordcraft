@@ -307,6 +307,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | trivial | #2454 merged with main's #3984 rule for lines of only in-line pictures: a text box, or a shape holding text, is no picture, so its line keeps the font's descent like a line with text (`layout::tests::textbox_keeps_line_descent`). Picture-only leading, list labels and hidden anchors follow #3984's measurements. Source merge; no new native measurements. |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |
 | 2026-11-08 | trivial | Contextual spacing drops the space after a table cell's last paragraph in the Normal style, the end-of-cell mark counting as a Normal paragraph; another style keeps it, and a middle or bottom cell of a split row lines up without the dropped space (#5450) (`layout::tests::contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph`, `a_bottom_cell_of_a_split_row_ignores_a_dropped_space_after_beside_it`). |
 | 2026-11-04 | trivial | Header table measurements and fitted text-box heights use the page section’s PAGE format; cache reuse follows the field context |
@@ -535,3 +536,5 @@ Repeated table-cell control, 12 October 2026: four same-style contextual paragra
 
 > 2026-10-29 · Port #3915 to split layout modules: ordinary LTR tab groups follow paragraph alignment. Positional tabs, lists, RTL and display math retain their alignment paths. Source port only; no test execution or new native measurements.
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
+
+> 2026-11-10 · #2454 merged with main's #3984 rule for lines of only in-line pictures: a text box, or a shape holding text, is no picture, so its line keeps the font's descent like a line with text (`layout::tests::textbox_keeps_line_descent`). Picture-only leading, list labels and hidden anchors follow #3984's measurements. Source merge; no new native measurements.

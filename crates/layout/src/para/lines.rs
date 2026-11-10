@@ -427,6 +427,9 @@ impl<'e> Breaker<'e> {
             let object = if let ClKind::Object(o) = c.kind { Some(o) } else { None };
             let math = object.is_some_and(|o| pl.maths.iter().any(|(k, _)| *k == o));
             let check_box = object.is_some_and(|o| pl.check_boxes.contains(&o));
+            // A text box (or a shape with text in it) is no picture: Word keeps the font's
+            // descent below a line of them, alone or beside pictures (#2454).
+            let holds_text = object.is_some_and(|o| pl.text_objects.contains(&o));
             // A picture sits on the baseline of its run (raised or lowered by its position):
             // the line keeps that font's ascent and descent, and grows to fit it.
             let (a, d) = if check_box {
@@ -458,7 +461,8 @@ impl<'e> Breaker<'e> {
             any = true;
             // Text needs its descent below the line; so do inline math (an object with its own
             // descent) and a check box. A line break ending the line is no text.
-            ex.text |= math || check_box || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
+            ex.text |=
+                math || check_box || holds_text || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)

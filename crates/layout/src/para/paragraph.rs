@@ -76,6 +76,7 @@ struct Shaped<'a> {
     drop_cap_w: f32,
     maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
     check_boxes: Vec<usize>,
+    text_objects: Vec<usize>,
     enclosures: Vec<(usize, Enclosed)>,
     rubies: Vec<RubyLayout>,
     displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
@@ -186,6 +187,7 @@ impl<'a> Shaped<'a> {
             drop_cap_w: 0.0,
             maths: Vec::new(),
             check_boxes: Vec::new(),
+            text_objects: Vec::new(),
             enclosures: Vec::new(),
             rubies: Vec::new(),
             displays: Vec::new(),
@@ -404,6 +406,11 @@ impl<'a> Shaped<'a> {
             // makes a 30 pt line); `obj_h` is then negative. Word's positions run to 1584 pt.
             let raise = if raise.is_finite() { raise.clamp(-1584.0, 1584.0) } else { 0.0 };
             self.b.clusters.push(slot.cluster(ClKind::Object(k), w * s + el + er + 2.0 * px, (tall + raise, -raise)));
+            if let InlineObject::Shape { kind, story, .. } = o
+                && (*kind == wordcraft_doc::para::ShapeKind::TextBox || story.is_some())
+            {
+                self.text_objects.push(k);
+            }
         } else {
             self.push(slot, ClKind::Object(k), 0.0, 0.0);
         }
@@ -682,7 +689,23 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
-    let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let Shaped {
+        b,
+        has_page_fields,
+        notes,
+        drop_cap,
+        drop_cap_w,
+        maths,
+        check_boxes,
+        text_objects,
+        enclosures,
+        rubies,
+        displays,
+        ptabs,
+        left,
+        runs,
+        ..
+    } = sh;
     let mut pl = ParaLayout {
         rp,
         substituted: b.substituted,
@@ -704,6 +727,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         drop_cap_w,
         maths,
         check_boxes,
+        text_objects,
         rubies,
         displays,
         ptabs,

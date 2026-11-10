@@ -511,3 +511,5 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 Four geometry-dependent regression controls request Source Sans 3 explicitly. Platform-installed substitutes otherwise change their expected line counts. Assertions remain unchanged; renderer font metrics and substitution gaps remain open.
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
+
+> 2026-11-10 · #2454 merged with main's #3984 rule for lines of only in-line pictures: a text box, or a shape holding text, is no picture, so its line keeps the font's descent like a line with text (`layout::tests::textbox_keeps_line_descent`). Picture-only leading, list labels and hidden anchors follow #3984's measurements. Source merge; no new native measurements.

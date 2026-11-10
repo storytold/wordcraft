@@ -5689,6 +5689,110 @@ fn line_spacing_does_not_scale_pictures() {
 }
 
 #[test]
+fn picture_auto_spacing_leading() {
+    use wordcraft_doc::props::LineSpacing;
+    // Word Mac: single, 1.15 and double spacing add only the font's extra leading.
+    for (multiple, manual_break) in [1.0, 1.15, 2.0].into_iter().flat_map(|m| [false, true].map(|b| (m, b))) {
+        let mut d = Document::from_text("");
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Multiple(multiple));
+        let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+        p.insert_object(0, picture(144.0, 144.0, Default::default()), &chr).unwrap();
+        if manual_break {
+            p.insert_text(p.len(), &wordcraft_doc::para::LINE_BREAK.to_string(), &chr).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let line = &para.lines[0];
+        assert_eq!(line.end, if manual_break { para::LineEnd::LineBreak } else { para::LineEnd::Para });
+        let style = &para.styles[para.clusters[0].style as usize];
+        let natural = style.ascent + style.descent;
+        let expected = (144.0 + natural * (multiple - 1.0)).max(natural * multiple);
+        assert!((line.height - expected).abs() < 0.01, "{multiple}: {} vs {expected}", line.height);
+        assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
+    }
+}
+
+/// A text box is no picture: a line of one, alone or beside a picture, keeps the font's descent
+/// below it like a line with text, multiple spacing adding its share of the font's height (#2454;
+/// a legacy check box sizes its line as text of its size, see
+/// `lowered_pictures_and_check_boxes_take_words_line_heights`).
+#[test]
+fn textbox_keeps_line_descent() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut failures = Vec::new();
+    for multiple in [1.0, 1.15, 2.0] {
+        for with_picture in [false, true] {
+            let mut d = Document::from_text("");
+            let id = d.add_part(
+                wordcraft_doc::PartKind::TextBox,
+                vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Box text", Default::default()))],
+            );
+            let mut object = picture(90.0, 144.0, Default::default());
+            if let InlineObject::Shape { kind, story, .. } = &mut object {
+                *kind = wordcraft_doc::para::ShapeKind::TextBox;
+                *story = Some(id);
+            }
+            let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+            let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+            p.props.line_spacing = Some(LineSpacing::Multiple(multiple));
+            p.insert_object(0, object, &chr).unwrap();
+            if with_picture {
+                p.insert_object(p.len(), picture(90.0, 144.0, Default::default()), &chr).unwrap();
+            }
+            let l = lay(&d);
+            let para = l.pages[0]
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    Placed::Lines { story: StoryRef::Body, para, .. } => Some(para),
+                    _ => None,
+                })
+                .unwrap();
+            let line = &para.lines[0];
+            let style = &para.styles[para.clusters[0].style as usize];
+            let tallest = para.clusters.iter().map(|c| c.obj_h).fold(0.0f32, f32::max);
+            assert!(tallest > style.ascent, "the fixture must exceed the text ascent");
+            assert!(line.height.is_finite());
+            let natural = style.ascent + style.descent;
+            let expected = (tallest + style.descent + (multiple - 1.0) * natural).max(natural * multiple);
+            if (line.height - expected).abs() >= 0.01 {
+                failures.push(format!("picture={with_picture}, spacing={multiple}: {} vs {expected}", line.height));
+            }
+            assert!((line.baseline - line.top - tallest).abs() < 0.01);
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[test]
+fn picture_skips_hidden_box() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("");
+    let id = d.add_part(wordcraft_doc::PartKind::TextBox, vec![]);
+    let mut anchor = picture(90.0, 144.0, wordcraft_doc::para::Float { hidden: true, ..Default::default() });
+    if let InlineObject::Shape { kind, story, .. } = &mut anchor {
+        *kind = wordcraft_doc::para::ShapeKind::TextBox;
+        *story = Some(id);
+    }
+    let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    p.insert_object(0, anchor, &chr).unwrap();
+    p.insert_object(p.len(), picture(90.0, 144.0, Default::default()), &chr).unwrap();
+    let l = lay(&d);
+    let para = l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Placed::Lines { story: StoryRef::Body, para, .. } => Some(para),
+            _ => None,
+        })
+        .unwrap();
+    assert!((para.lines[0].height - 144.0).abs() < 0.01, "hidden anchors take no font height");
+}
+
+#[test]
 fn multiple_line_spacing_adds_its_leading_below_the_text() {
     crate::test_fonts();
     use wordcraft_doc::props::LineSpacing;
@@ -14396,6 +14500,41 @@ fn a_row_leaves_room_for_the_border_below_it() {
             assert!(end + border <= bottom + 0.02, "border {border}, {fill} filler lines: the last row ends at {end}, the margin at {bottom}");
         }
     }
+}
+
+#[test]
+fn labelled_picture_continuation() {
+    use wordcraft_doc::props::{LineSpacing, NumRef};
+    let mut heights = Vec::new();
+    for numbered in [false, true] {
+        let mut d = Document::new();
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+        let mut p = Paragraph::with_text(&format!("Label{}", wordcraft_doc::para::LINE_BREAK), chr.clone());
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        if numbered {
+            p.props.numbering = Some(NumRef { num, level: 0 });
+        }
+        p.insert_object(p.len(), picture(144.0, 144.0, Default::default()), &chr).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let para = l.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(para.lines.len(), 2);
+        assert_eq!(para.label.is_some(), numbered);
+        assert_eq!(para.lines[0].end, LineEnd::LineBreak);
+        let line = &para.lines[1];
+        assert!((line.baseline - line.top - 144.0).abs() < 0.01);
+        heights.push(line.height);
+    }
+    println!("unlabelled/labelled continuation heights: {heights:?}");
+    assert!((heights[0] - heights[1]).abs() < 0.01, "the label is on the first line: {heights:?}");
 }
 
 /// A horizontal rule (VML `o:hr`) takes its whole line and is drawn across its share of it,
