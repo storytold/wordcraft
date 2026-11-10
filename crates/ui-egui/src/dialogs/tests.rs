@@ -2078,6 +2078,116 @@ fn the_page_waits_for_the_keyboard_until_a_modal_dialog_closes() {
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "!", "the page has it after the dialog");
 }
 
+/// Drags from `at` to 30 points right in `h`, and counts the window drags the app asked for.
+fn window_drags(h: &mut egui_kittest::Harness<WordApp>, at: egui::Pos2) -> usize {
+    let mut drags = 0;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let events = [egui::Event::PointerMoved(at), button(at, true)]
+        .into_iter()
+        .chain([10.0, 20.0, 30.0].map(|dx| egui::Event::PointerMoved(at + vec2(dx, 0.0))))
+        .chain([button(at + vec2(30.0, 0.0), false)]);
+    for e in events {
+        h.event(e);
+        h.step();
+        drags += h.output().viewport_output.values().flat_map(|v| &v.commands).filter(|c| matches!(c, egui::ViewportCommand::StartDrag)).count();
+    }
+    drags
+}
+
+/// #5124: behind a modal dialog the window still moves by its title bar, as in Word for Mac, where
+/// WordCraft draws it, or by the top of File's side menu, which covers it there; elsewhere the
+/// system's title bar does, and WordCraft's bar under it doesn't.
+#[test]
+fn the_window_moves_by_its_title_bar_behind_a_modal_dialog() {
+    for (mac, backstage) in [(true, false), (true, true), (false, false), (false, true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.integrated_titlebar = mac;
+        a.ui.backstage = backstage;
+        let mut h = app_harness(a);
+        h.run_steps(6);
+        let font = Dialog::open("font", h.state_mut());
+        h.state_mut().dialog = font;
+        h.run_steps(4);
+        let at = egui::pos2(if backstage { 100.0 } else { 300.0 }, 12.0);
+        assert_eq!(window_drags(&mut h, at), usize::from(mac), "macOS: {mac}, File: {backstage}");
+        assert!(matches!(h.state().dialog, Some(Dialog::Font { .. })), "Font stays");
+        assert_eq!(h.state().ui.backstage, backstage, "nothing behind it opened or closed");
+    }
+}
+
+/// Opens a modal state in `a`: the built-in file browser, a dialog by name, or Colors.
+fn open_modal_state(a: &mut WordApp, state: &str) {
+    match state {
+        "none" => {}
+        "fileBrowser" => {
+            let document = a.session.document_id();
+            a.show_file_browser(
+                crate::file_dialogs::FileDialogRequest::Open { purpose: "document".into() },
+                crate::file_dialogs::AfterPick::OpenDocument { document },
+                false,
+            );
+        }
+        "colors" => a.colors = Some(crate::colors::ColorsDialog::new(None, crate::colors::Target::cmd("format.color"))),
+        dialog => a.dialog = Dialog::open(dialog, a),
+    }
+}
+
+/// The file browser, a modal dialog and Colors each block the window; nothing open or a modeless
+/// dialog doesn't.
+#[test]
+fn modal_open_is_true_for_the_file_browser_a_modal_dialog_and_colors() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        open_modal_state(&mut a, state);
+        assert_eq!(a.modal_open(), modal, "{state}");
+    }
+}
+
+/// #5124: whatever is open, a drag on the title bar macOS draws moves the window; where the system
+/// draws it, WordCraft's bar under it only does while nothing blocks it.
+#[test]
+fn the_title_bar_moves_the_window_in_every_modal_state() {
+    for (state, modal) in [("none", false), ("find", false), ("font", true), ("fileBrowser", true), ("colors", true)] {
+        for mac in [true, false] {
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.integrated_titlebar = mac;
+            let mut h = app_harness(a);
+            h.run_steps(6);
+            open_modal_state(h.state_mut(), state);
+            h.run_steps(4);
+            assert_eq!(h.state().modal_open(), modal, "{state}");
+            assert_eq!(window_drags(&mut h, egui::pos2(300.0, 12.0)), usize::from(mac || !modal), "{state}, macOS: {mac}");
+            assert_eq!(h.state().modal_open(), modal, "{state} stays open");
+        }
+    }
+}
+
+/// #5124: where a dialog reaches over the title bar (a short window), a drag on the dialog is the
+/// dialog's own and doesn't move the window.
+#[test]
+fn a_drag_on_a_dialog_over_the_title_bar_doesnt_move_the_window() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.integrated_titlebar = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 420.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    let font = Dialog::open("font", h.state_mut());
+    h.state_mut().dialog = font;
+    h.run_steps(4);
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    let at = egui::pos2(rect.center().x, rect.top() + 8.0);
+    assert!(at.y < 30.0, "the dialog reaches over the title bar: {rect:?}");
+    assert_eq!(window_drags(&mut h, at), 0, "a drag on its title");
+    let rect = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Font")))).expect("the dialog is open");
+    assert_eq!(window_drags(&mut h, egui::pos2(rect.center().x, rect.top() + 1.0)), 0, "nor just inside its edge");
+}
+
 #[test]
 fn font_sample_props_map_each_field_to_its_property() {
     use super::font::font_sample_props;
