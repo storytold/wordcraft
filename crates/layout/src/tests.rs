@@ -8154,9 +8154,16 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
         _ => None,
     });
     assert!(yellow.is_some_and(|r| r.x < left.right() && (r.right() - left.right()).abs() < 0.01), "{yellow:?}");
-    // A nested table that fits is left as it is.
+    // A nested table that fits is left as it is, even with thick outer lines reaching half their
+    // width over the cell's edges.
     let mut fits = inner;
     fits.props.width_pct = Some(80.0);
+    fits.props.borders = Some(wordcraft_doc::props::Borders::all(wordcraft_doc::props::Border {
+        style: wordcraft_doc::props::BorderStyle::Single,
+        width: 6.0,
+        color: None,
+        space: 0.0,
+    }));
     let mut o = outer;
     o.rows[0].cells[0].blocks[0] = std::sync::Arc::new(wordcraft_doc::Block::Table(fits));
     let mut d = Document::from_text("Below");

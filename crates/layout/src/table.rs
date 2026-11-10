@@ -837,10 +837,15 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 .get(ri)
                 .and_then(|r| r.cells.get(ci))
                 .is_some_and(|cell| cell.blocks.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(nt) if nt.props.float.is_some())));
+            // Only a table whose own cells run past the edges is cut: half a thick border reaching
+            // over the edge isn't.
+            let wider = !turned
+                && !floats
+                && cell_items.iter().any(|it| matches!(it, Placed::Cell { rect, .. } if rect.x < lo - 0.01 || rect.right() > hi + 0.01));
             let mut cut = false;
             for mut it in cell_items {
                 it.translate(0.0, dy);
-                if !turned && !floats {
+                if wider {
                     match crop_to_cell(it, lo, hi) {
                         Cropped::Kept(it) => items.push(it),
                         Cropped::Cut(Some(it)) => {
