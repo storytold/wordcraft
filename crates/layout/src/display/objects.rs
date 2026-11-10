@@ -1,6 +1,7 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
 use super::{BezPath, Document, Draw, FaceRef, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use wordcraft_doc::connector::ArrowStyle;
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -35,9 +36,15 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                 })
             }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => {
-                out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha, alt: String::new(), decorative: false })
-            }
+            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
+                rect: inside(r),
+                media: media.clone(),
+                crop: [0.0; 4],
+                alpha,
+                alt: String::new(),
+                fx: Default::default(),
+                decorative: false,
+            }),
         }
     }
     out
@@ -137,7 +144,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
                 }
                 if !closed
                     && extra.arrow_end
-                    && let Some(arrow) = path_arrowhead(&pts, color, width)
+                    && let Some(arrow) = path_arrowhead(&pts, color, width, extra.end_style)
                 {
                     out.push(arrow);
                 }
@@ -166,7 +173,7 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
             && let Some(color) = stroke
         {
             let points: Vec<(f32, f32)> = pts.iter().map(|[x, y]| (*x, *y)).collect();
-            if let Some(arrow) = path_arrowhead(&points, color, width) {
+            if let Some(arrow) = path_arrowhead(&points, color, width, extra.end_style) {
                 out.push(arrow);
             }
         }
@@ -179,10 +186,10 @@ fn path_stroke_width(width: f32) -> f32 {
 }
 
 /// Make a filled triangular arrowhead at the last point, in the points' coordinate space.
-/// The last distinct segment supplies its direction and the bounded stroke width sets its size.
+/// The last distinct segment supplies its direction; `style` and the stroke width set its size.
 /// Returns `None` if there is no usable final segment. The triangle has no outline, so the path's
 /// cap setting does not affect its appearance.
-fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Option<Draw> {
+fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32, style: ArrowStyle) -> Option<Draw> {
     let tip = *points.last()?;
     let (prev_x, prev_y) = points.iter().rev().skip(1).copied().find(|p| *p != tip)?;
     let dx = tip.0 - prev_x;
@@ -191,13 +198,17 @@ fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Optio
     if !length.is_finite() || length <= f32::EPSILON {
         return None;
     }
-    let (dx, dy) = (dx / length, dy / length);
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
+    Some(arrowhead(tip, (dx / length, dy / length), stroke_width, style, color))
+}
+
+/// A filled triangular arrowhead with its tip at `tip`, pointing along unit vector `dir`: as long
+/// and as wide as `style` makes it for a `stroke_width` line ([`ArrowStyle::dims`]).
+fn arrowhead(tip: (f32, f32), (dx, dy): (f32, f32), stroke_width: f32, style: ArrowStyle, color: Rgb) -> Draw {
+    let (len, wide) = style.dims(stroke_width);
     let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-    let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
+    let (nx, ny) = (-dy * wide / 2.0, dx * wide / 2.0);
     let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-    Some(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() })
+    Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() }
 }
 
 /// A line or connector at `rect` (its unflipped frame: flips are the frame's turn), with its
@@ -239,21 +250,13 @@ fn line_draws(
         }),
     }
     let Some(color) = stroke else { return };
-    // Our line runs from the bottom-left corner to the top-right; connectors from the top-left
-    // to the bottom-right.
-    let (start, end) =
-        if kind == ShapeKind::Line { ((rect.x, rect.bottom()), (rect.right(), rect.y)) } else { ((rect.x, rect.y), (rect.right(), rect.bottom())) };
-    let width = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
-    let len = (width * 3.5).max(7.0);
-    for (on, tip, at_end) in [(extra.arrow_start, start, false), (extra.arrow_end, end, true)] {
-        if !on {
-            continue;
+    // A line runs from the top-left corner to the bottom-right, as it is drawn (DrawingML's
+    // `line`), and so do connectors; flips are the frame's turn.
+    let (start, end) = ((rect.x, rect.y), (rect.right(), rect.bottom()));
+    for (on, tip, at_end, style) in [(extra.arrow_start, start, false, extra.start_style), (extra.arrow_end, end, true, extra.end_style)] {
+        if on {
+            out.push(arrowhead(tip, end_direction(kind, rect.w, rect.h, at_end), stroke_width, style, color));
         }
-        let (dx, dy) = end_direction(kind, rect.w, rect.h, at_end);
-        let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
-        let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
-        let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-        out.push(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() });
     }
 }
 
@@ -304,6 +307,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let mut out = Vec::with_capacity(runs.len());
     for (face, s, shaped) in runs {
         let k = scale(face);
+        let ranges = crate::missing::cluster_ranges(s, &shaped);
         let mut glyphs = Vec::with_capacity(shaped.len());
         for g in &shaped {
             glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
@@ -321,7 +325,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
             synth_italic: false,
             text: s.to_string(),
             link: None,
-            ranges: Vec::new(),
+            ranges,
             text_bg: None,
             x_scale: 1.0,
         });
@@ -395,9 +399,10 @@ pub(super) fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>
 pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
-        InlineObject::Image { media, crop, alt, .. } => {
+        InlineObject::Image { media, crop, alt, fx, .. } => {
+            let alpha = alpha * fx.opacity();
             let decorative = o.is_decorative();
-            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), decorative }], out)
+            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), fx: *fx, decorative }], out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));
@@ -454,6 +459,7 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
                         crop: [0.0; 4],
                         alpha,
                         alt: String::new(),
+                        fx: Default::default(),
                         decorative: false,
                     }),
                     _ => None,
@@ -478,17 +484,30 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
     e
 }
 
-/// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
-/// baseline at `cx`): inside the room kept for its effects.
+/// Where inline object `obj` is drawn, given its cluster's box (`adv` wide at `cx`, reaching
+/// `obj_h` above the baseline and `obj_d` below it): inside the room kept for its effects.
 /// A rotated one's unrotated frame, centred in that room.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
+///
+/// `line` is the room a horizontal rule is placed in, from `cx`; `modern`: Word 2013+ layout
+/// (see [`wordcraft_doc::para::Float::line_pad`]).
+pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, (obj_h, obj_d): (f32, f32), line: f32, modern: bool) -> Rect {
     let frame = obj.and_then(InlineObject::frame);
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
-    let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
+    // Lowered further than its height, it is drawn with its top on the baseline (Word).
+    let room = Rect::new(cx + l, base - obj_h.max(0.0) + t, (adv - l - r).max(0.0), (obj_h + obj_d - t - b).max(0.0));
+    // A horizontal rule is as wide as its share of the paragraph's width, whatever narrows its
+    // line, and is placed by its alignment in what the line has left: it runs past the margin
+    // beside a float or a first-line indent, as in Word (see `ParaLayout::rule_room`).
+    if let Some(InlineObject::Shape { w, extra, .. }) = obj
+        && let Some(hr) = extra.hr
+    {
+        let rw = hr.width(room.w, *w);
+        return Rect::new(hr.left(room.x, line, rw), room.y, rw, room.h);
+    }
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };
-    // The room is the rotated bounds of the frame: undo the rotation.
+    // The room is what the line kept for the turned frame: undo that.
     let (w, h) = (wordcraft_geom::finite(w).clamp(1.0, 4000.0), wordcraft_geom::finite(h).clamp(1.0, 4000.0));
-    let (bw, _) = float.spin().extent(w, h);
+    let bw = w + 2.0 * float.line_pad(w, h, modern).0;
     let k = if bw > 0.0 { room.w / bw } else { 1.0 };
     let (fw, fh) = (w * k, h * k);
     Rect::new(room.x + (room.w - fw) / 2.0, room.y + (room.h - fh) / 2.0, fw, fh)
@@ -508,3 +527,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         cap: Default::default(),
     }
 }
+
+#[cfg(test)]
+mod fill_alpha_tests;
