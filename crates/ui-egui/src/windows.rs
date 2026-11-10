@@ -248,6 +248,8 @@ pub(crate) struct ViewportInput {
     control_click: HashMap<ViewportId, bool>,
     /// Touchpad scroll speed multiplier for secondary viewports (#6146).
     pub(crate) touchpad_speed: crate::scroll::ScrollSpeed,
+    /// Mouse-wheel scroll speed multiplier for secondary viewports (#6146).
+    pub(crate) wheel_speed: crate::scroll::ScrollSpeed,
 }
 
 impl egui::Plugin for ViewportInput {
@@ -261,7 +263,7 @@ impl egui::Plugin for ViewportInput {
         if viewport == ViewportId::ROOT {
             return;
         }
-        self.touchpad_speed.apply_touchpad(input);
+        self.touchpad_speed.apply_input_scroll(input, self.wheel_speed);
         if cfg!(target_os = "macos") {
             crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
         }
@@ -776,9 +778,11 @@ impl WordApp {
             ctx.add_plugin(ViewportInput::default());
             self.windows.input_plugin = true;
         }
-        let speed = self.ui.touchpad_scroll_speed;
+        let touchpad_speed = self.ui.touchpad_scroll_speed;
+        let wheel_speed = self.ui.scroll_speed;
         ctx.with_plugin(|p: &mut ViewportInput| {
-            p.touchpad_speed = speed;
+            p.touchpad_speed = touchpad_speed;
+            p.wheel_speed = wheel_speed;
         });
     }
 

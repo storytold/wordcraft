@@ -88,11 +88,16 @@ impl ScrollSpeed {
         NORMAL_TOUCHPAD_FACTOR * self.factor()
     }
 
-    /// Scales this frame's touchpad (point) scrolling by [`Self::touchpad_factor`].
+    /// Scales this frame's point scrolling by [`Self::touchpad_factor`].
+    /// On wasm32, browser mouse wheels also arrive as [`egui::MouseWheelUnit::Point`] with
+    /// [`egui::MouseWheelSource::Unknown`], so `wheel_speed` is applied there as well (#6146).
     /// Call this before egui or canvas reads raw input.
     /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
-    pub fn apply_touchpad(self, raw: &mut egui::RawInput) {
-        let factor = self.touchpad_factor();
+    pub fn apply_input_scroll(self, raw: &mut egui::RawInput, wheel_speed: ScrollSpeed) {
+        let mut factor = self.touchpad_factor();
+        if cfg!(target_arch = "wasm32") {
+            factor *= wheel_speed.wheel_factor();
+        }
         if (factor - 1.0).abs() < 1e-4 {
             return;
         }
@@ -105,6 +110,13 @@ impl ScrollSpeed {
                 *delta *= factor;
             }
         }
+    }
+
+    /// Scales this frame's touchpad (point) scrolling by [`Self::touchpad_factor`].
+    /// Call this before egui or canvas reads raw input.
+    /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
+    pub fn apply_touchpad(self, raw: &mut egui::RawInput) {
+        self.apply_input_scroll(raw, ScrollSpeed::Normal);
     }
 
     /// Multiplier for mouse-wheel notch distance.
@@ -715,5 +727,24 @@ mod tests {
         assert_eq!(dy[1], -10.0, "Command+wheel zoom delta untouched");
         assert_eq!(dy[2], -10.0, "Ctrl+wheel zoom delta untouched");
         assert_eq!(dy[3], -1.0, "Line wheel delta untouched");
+    }
+
+    #[test]
+    fn apply_input_scroll_scales_points_and_leaves_zoom_alone() {
+        let mut raw = egui::RawInput {
+            events: vec![
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::NONE),
+                wheel(MouseWheelUnit::Point, Vec2::new(0.0, -10.0), Modifiers::CTRL),
+            ],
+            ..Default::default()
+        };
+        ScrollSpeed::Fast.apply_input_scroll(&mut raw, ScrollSpeed::Fast);
+        let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+        let mut expected = -10.0 * ScrollSpeed::Fast.touchpad_factor();
+        if cfg!(target_arch = "wasm32") {
+            expected *= ScrollSpeed::Fast.wheel_factor();
+        }
+        assert_eq!(dy[0], expected);
+        assert_eq!(dy[1], -10.0, "Ctrl zoom untouched");
     }
 }

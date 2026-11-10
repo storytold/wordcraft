@@ -24,7 +24,7 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
-        self.ui.touchpad_scroll_speed.apply_touchpad(raw);
+        self.ui.touchpad_scroll_speed.apply_input_scroll(raw, self.ui.scroll_speed);
         if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
             return;
         }
