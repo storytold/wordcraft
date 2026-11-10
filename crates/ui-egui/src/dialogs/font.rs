@@ -6,9 +6,11 @@ pub(super) fn preview_size(size: &str) -> f32 {
     size.trim().parse::<f32>().ok().filter(|pt| pt.is_finite()).unwrap_or(12.0).clamp(6.0, 72.0)
 }
 
-/// The page colour the sample sits on.
-pub(super) fn sample_paper(app: &WordApp) -> wordcraft_doc::Rgb {
-    app.session.doc.settings.page_color.unwrap_or(wordcraft_doc::Rgb(255, 255, 255))
+/// The page colour the sample sits on: the page's visible fill — a gradient's mean stop or a
+/// pattern's back colour composited over the paper at its transparency — else the page colour,
+/// else white.
+pub(crate) fn sample_paper(app: &WordApp) -> wordcraft_doc::Rgb {
+    wordcraft_render::RenderOptions::default().visible_fill(&app.session.doc)
 }
 
 const SAMPLE_WIDTH: f32 = 300.0;
@@ -68,7 +70,7 @@ pub(super) fn font_sample_box(
     let mut render_options = crate::canvas::screen_render_options();
     render_options.dark = dark;
     render_options.dark_paper = wordcraft_render::DARK_PAPER;
-    let display_paper = render_options.paper_of(&app.session.doc);
+    let display_paper = render_options.visible_fill(&app.session.doc);
     let mark = if sup {
         Some(VertAlign::Superscript)
     } else if sub {
@@ -183,5 +185,53 @@ pub(super) fn apply_font(app: &mut WordApp, d: &Dialog) {
     }
     if !changed.is_empty() {
         let _ = app.run("format.set", json!({"props": changed}));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wordcraft_doc::PagePattern;
+    use wordcraft_doc::Rgb;
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+
+    use crate::{Services, WordApp};
+
+    fn app() -> WordApp {
+        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Sample")), Services::default())
+    }
+
+    /// The sample sits on the fill a reader sees: a solid page colour, or a gradient's mean stop
+    /// and a pattern's back colour composited over the paper at their transparency.
+    #[test]
+    fn the_sample_paper_is_the_visible_fill() {
+        let mut a = app();
+        a.session.doc.settings.page_color = Some(Rgb(0x10, 0x20, 0x40));
+        assert_eq!(super::sample_paper(&a), Rgb(0x10, 0x20, 0x40), "a solid page colour is the paper");
+
+        a.session.doc.settings.page_gradient = Some(Gradient {
+            stops: vec![GradStop { pos: 0.0, color: Rgb::BLACK, transparency: 50.0 }, GradStop { pos: 100.0, color: Rgb::BLACK, transparency: 50.0 }],
+            kind: GradientKind::Linear { angle: 0.0, scaled: false },
+            tile: None,
+            rot_with_shape: false,
+            flip: GradientFlip::None,
+        });
+        a.session.doc.settings.page_color = Some(Rgb::BLACK);
+        assert_eq!(super::sample_paper(&a), Rgb(128, 128, 128), "half-transparent black over white, not the black fallback");
+
+        a.session.doc.settings.page_gradient = None;
+        a.session.doc.settings.page_pattern = Some(PagePattern { preset: "pct10".into(), fore: Rgb::BLACK, back: Rgb::BLACK, transparency: 100.0 });
+        a.session.doc.settings.page_color = Some(Rgb::BLACK);
+        assert_eq!(super::sample_paper(&a), Rgb::WHITE, "a fully transparent pattern leaves the white paper");
+    }
+
+    /// The sample paper stays the file's colour on a dark page: `dark` inks the preview itself,
+    /// not the paper it hands to the renderer.
+    #[test]
+    fn the_sample_paper_is_not_inked_for_a_dark_page() {
+        let mut a = app();
+        a.session.doc.settings.page_color = Some(Rgb(0xF0, 0xE0, 0xD0));
+        a.session.view.dark_mode = true;
+        assert_eq!(super::sample_paper(&a), Rgb(0xF0, 0xE0, 0xD0));
     }
 }
