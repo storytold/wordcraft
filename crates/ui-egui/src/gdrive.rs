@@ -95,6 +95,20 @@ pub fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Val
 /// The File › Export formats a copy can go to Google Drive in (the ones written from bytes).
 pub(crate) const EXPORT_FORMATS: [&str; 10] = ["pdf", "docx", "odt", "ott", "fodt", "rtf", "html", "md", "tex", "txt"];
 
+/// The name a Drive export starts from: the title, without the extension a Drive document's name
+/// carries ("Essay.docx" exports as "Essay.pdf", not "Essay.docx.pdf").
+pub(crate) fn export_stem(app: &WordApp) -> String {
+    let stem = app.title_stem();
+    let path = std::path::Path::new(&stem);
+    let known = path.extension().and_then(|e| e.to_str()).is_some_and(|e| {
+        matches!(e.to_ascii_lowercase().as_str(), "docx" | "docm" | "dotx" | "dotm" | "doc" | "odt" | "ott" | "fodt" | "rtf" | "txt" | "md" | "html")
+    });
+    match path.file_stem().and_then(|s| s.to_str()) {
+        Some(s) if known && !s.is_empty() => s.to_string(),
+        _ => stem,
+    }
+}
+
 /// File › Export sends the copy to Google Drive: Google Drive is on and signed in, and the
 /// checkbox on the Export page is ticked.
 pub(crate) fn exports_to_drive(app: &WordApp) -> bool {
@@ -656,7 +670,7 @@ mod native {
         if app.services.drive_profile.is_none() {
             return Err("Google Drive works with the WordCraft desktop app".into());
         }
-        let name = format!("{}.{format}", app.title_stem());
+        let name = format!("{}.{format}", super::export_stem(app));
         let password = app.session.password.as_ref().map(wordcraft_engine::Password::as_str);
         let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
         let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
