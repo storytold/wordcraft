@@ -7298,7 +7298,7 @@ version = "0.15.1"
 dependencies = [
  "flate2",
  "serde_json",
- "sha2",
+ "sha2 0.11.1",
 ]
 
 [[package]]
