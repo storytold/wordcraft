@@ -9,7 +9,8 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{InlineObject, OBJ};
-use wordcraft_doc::props::{Rgb, TextColor, VMerge};
+use wordcraft_doc::props::{CharProps, ParaProps, Rgb, TextColor, VMerge};
+use wordcraft_doc::styles::PartSet;
 use wordcraft_doc::table::Table;
 use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, StoryRef};
 
@@ -39,6 +40,38 @@ struct Checker<'a> {
 
 fn at(path: &Path, off: usize) -> Pos {
     Pos { story: StoryRef::Body, path: path.clone(), off }
+}
+
+/// What the table cell holding paragraph `path` gives its text, as the layout draws it.
+struct CellLook {
+    /// The cell's own shading, else its table style's for the parts the cell is in. Not
+    /// `w:tblPr/w:shd`: Word keeps that without painting it, and so does the layout.
+    fill: Option<Rgb>,
+    /// The table style's character and paragraph formatting for those parts, under the
+    /// paragraph's own style and formatting.
+    chr: Option<CharProps>,
+    para: Option<ParaProps>,
+}
+
+fn cell_look(doc: &Document, path: &Path) -> Option<CellLook> {
+    let (tp, r, c) = path.cell()?;
+    let t = doc.table(StoryRef::Body, &tp)?;
+    let cell = t.rows.get(r)?.cells.get(c)?;
+    let mut look = CellLook { fill: None, chr: None, para: None };
+    if let Some(st) = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id)) {
+        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+        let mut chr = CharProps::default();
+        // Each part over the last, lowest precedence first (ECMA-376 §17.7.6), as the layout does.
+        for part in PartSet::of_cell(&t.props.look, sizes, (r, t.rows.len()), (t.grid_col(r, c), cell.span(), t.cols().max(1))).iter() {
+            let f = st.part(part);
+            look.fill = f.fill.or(look.fill);
+            chr.overlay(&f.chr);
+        }
+        look.chr = Some(chr);
+        look.para = Some(st.para);
+    }
+    look.fill = cell.props.shading.or(look.fill);
+    Some(look)
 }
 
 impl Checker<'_> {
@@ -87,7 +120,7 @@ impl Checker<'_> {
                     self.push(json!({"kind": "tip", "rule": "linkText", "issue": "Link text \"click here\" isn't descriptive", "where": path.0, "pos": at(&path, 0)}));
                 }
             }
-            self.contrast(&path, p, rp.shading);
+            self.contrast(&path, p);
         }
         self.blank_run(&blank);
         for tp in tables {
@@ -154,12 +187,14 @@ impl Checker<'_> {
     }
 
     /// Text whose colour is too close to what it's drawn on (WCAG 2: 4.5:1, 3:1 for large text).
-    fn contrast(&mut self, path: &Path, p: &Paragraph, para_shading: Option<Rgb>) {
+    /// In a table cell, both are what the layout draws: the table style's text formatting under
+    /// the paragraph's, and the cell's own shading or else its style's.
+    fn contrast(&mut self, path: &Path, p: &Paragraph) {
         let doc = self.doc;
-        let cell = path.cell().and_then(|(tp, r, c)| {
-            let t = doc.table(StoryRef::Body, &tp)?;
-            t.rows.get(r).and_then(|row| row.cells.get(c)).and_then(|c| c.props.shading).or(t.props.shading)
-        });
+        let look = cell_look(doc, path);
+        let table_chr = look.as_ref().and_then(|l| l.chr.as_ref());
+        let para_shading = doc.styles.resolve_para_in(&p.props, look.as_ref().and_then(|l| l.para.as_ref())).shading;
+        let cell = look.as_ref().and_then(|l| l.fill);
         let page = doc.settings.page_color.unwrap_or(Rgb::WHITE);
         let mut start = 0usize;
         for r in &p.runs {
@@ -168,7 +203,7 @@ impl Checker<'_> {
             if text.trim().is_empty() || r.props.hidden == Some(true) {
                 continue;
             }
-            let rc = doc.styles.resolve_char(p.props.style.as_deref(), &r.props);
+            let rc = doc.styles.resolve_char_in(p.props.style.as_deref(), table_chr, &r.props);
             let TextColor::Rgb(fg) = rc.color else { continue };
             let bg = rc.highlight.or(rc.shading).or(para_shading).or(cell).unwrap_or(page);
             let ratio = contrast_ratio(fg, bg);
@@ -291,6 +326,67 @@ mod tests {
         s.run("select.range", &i["select"]).unwrap();
         s.run(i["action"]["command"].as_str().unwrap(), &i["action"]["params"]).unwrap();
         assert!(!rules(&mut s).iter().any(|(_, r)| r == "altText"));
+    }
+
+    /// In a table, contrast is against what the cell shows: its table style's shading (a dark
+    /// header, a whole table's colour), not `w:tblPr/w:shd`, which Word keeps without painting;
+    /// and the text colour its table style gives, under the paragraph's own.
+    #[test]
+    fn contrast_in_a_table_is_against_the_shading_the_cell_shows() {
+        use wordcraft_doc::props::{CharProps, TextColor};
+        use wordcraft_doc::styles::TableStyleParts;
+        use wordcraft_doc::table::Table;
+        use wordcraft_doc::{Block, Paragraph};
+        let navy = Rgb(0x1F, 0x38, 0x64);
+        let ink = |c: Rgb| CharProps { color: Some(TextColor::Rgb(c)), ..Default::default() };
+        // A 2×2 table in style "Probe": each cell's text in the colour given, or the style's.
+        let flagged = |parts: TableStyleParts, style_chr: CharProps, table_shading: Option<Rgb>, texts: [Option<Rgb>; 4]| {
+            let mut d = Document::from_text("Intro");
+            d.core.title = "T".into();
+            std::sync::Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
+                id: "Probe".into(),
+                name: "Probe".into(),
+                kind: wordcraft_doc::StyleKind::Table,
+                chr: style_chr,
+                table: Some(parts),
+                ..Default::default()
+            });
+            let mut t = Table::new(2, 2, 300.0);
+            t.props.style = Some("Probe".into());
+            t.props.look.header_row = true;
+            t.props.shading = table_shading;
+            for (i, c) in texts.iter().enumerate() {
+                let cell = &mut t.rows[i / 2].cells[i % 2];
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Some text", c.map(ink).unwrap_or_default()))];
+            }
+            d.body.push(std::sync::Arc::new(Block::Table(t)));
+            let mut s = Session::new(d);
+            let v = s.run("file.accessibility", &json!({})).unwrap();
+            let mut at: Vec<(u64, u64)> = v["issues"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|i| i["rule"] == "contrast")
+                .map(|i| (i["where"][1].as_u64().unwrap(), i["where"][2].as_u64().unwrap()))
+                .collect();
+            at.sort_unstable();
+            at
+        };
+        let black = Some(Rgb::BLACK);
+        // Black text on the style's navy header: hard to read. The body rows are white.
+        let header = TableStyleParts { header_fill: Some(navy), ..Default::default() };
+        assert_eq!(flagged(header.clone(), CharProps::default(), None, [black; 4]), [(0, 0), (0, 1)]);
+        // The whole table navy, one cell with a light colour of its own.
+        let whole = TableStyleParts { fill: Some(navy), ..Default::default() };
+        let mut texts = [black; 4];
+        texts[3] = None;
+        assert_eq!(flagged(whole, CharProps::default(), None, texts), [(0, 0), (0, 1), (1, 0)]);
+        // `w:tblPr/w:shd` paints nothing: grey text on it is read against the white page.
+        let grey = Some(Rgb(0x55, 0x55, 0x55));
+        assert_eq!(flagged(TableStyleParts::default(), CharProps::default(), Some(Rgb::BLACK), [grey; 4]), Vec::<(u64, u64)>::new());
+        // The style's own light text on white, except where the paragraph sets a dark colour.
+        let light = ink(Rgb(0xCC, 0xCC, 0xCC));
+        assert_eq!(flagged(TableStyleParts::default(), light, None, [None, black, None, black]), [(0, 0), (1, 0)]);
     }
 
     #[test]
