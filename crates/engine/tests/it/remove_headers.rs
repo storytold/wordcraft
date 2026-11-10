@@ -33,7 +33,7 @@ fn remove_footer_clears_every_section_and_its_part() {
     // document: before, only the last section's footers were cleared and the part stayed.
     let Some(Block::Para(p)) = s.doc.body.first().map(|b| &**b) else { panic!("first block") };
     assert!(p.section.as_ref().is_some_and(|sec| sec.footers.default.is_none()), "the first section's footer is cleared");
-    assert!(s.doc.parts.get(&first).is_none(), "the footer part the first section named is removed");
+    assert!(!s.doc.parts.contains_key(&first), "the footer part the first section named is removed");
     assert!(s.doc.last_section.footers.default.is_none());
     // The inspector counts none, so its row drops its Remove All button.
     assert_eq!(s.run("file.inspect", &json!({})).unwrap()["found"]["headers"], json!(0));
@@ -51,7 +51,7 @@ fn remove_header_clears_every_section_and_its_part() {
     s.run("insert.removeHeader", &json!({})).unwrap();
     let Some(Block::Para(p)) = s.doc.body.first().map(|b| &**b) else { panic!("first block") };
     assert!(p.section.as_ref().is_some_and(|sec| sec.headers.default.is_none()), "the first section's header is cleared");
-    assert!(s.doc.parts.get(&first).is_none(), "the header part the first section named is removed");
+    assert!(!s.doc.parts.contains_key(&first), "the header part the first section named is removed");
     assert_eq!(s.run("file.inspect", &json!({})).unwrap()["found"]["headers"], json!(0));
 }
 
@@ -91,6 +91,6 @@ fn inspect_document_remove_headers_clears_every_section() {
     // The report `found` counts what was found; the count the inspector reads afresh after the
     // removal is none.
     assert_eq!(s.run("file.inspect", &json!({})).unwrap()["found"]["headers"], json!(0));
-    assert!(s.doc.parts.get(&first).is_none(), "the footer part the first section named is removed");
+    assert!(!s.doc.parts.contains_key(&first), "the footer part the first section named is removed");
     assert!(s.doc.parts.values().all(|p| !matches!(p.kind, PartKind::Header | PartKind::Footer)));
 }
