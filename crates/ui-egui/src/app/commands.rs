@@ -1166,6 +1166,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
+        // File › Google Drive signs in, lists and opens with no document open; only saving needs one.
+        || (id.starts_with("ui.drive.") && id != "ui.drive.save")
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being

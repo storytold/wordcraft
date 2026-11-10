@@ -90,13 +90,23 @@ pub fn intercept_save(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
     if id != "file.save" || params.get("path").is_some_and(|p| !p.is_null()) {
         return None;
     }
-    app.drive.origin(app.session.document_id())?;
+    destination(app)?;
     Some(imp::run(app, "save", params))
+}
+
+/// The active document's Drive file, while Drive is where it was last opened from or saved to.
+/// A local Save As gives the document a path, and from then on Save writes that file; saving to
+/// Drive again clears the path (see `Event::Saved`).
+fn destination(app: &WordApp) -> Option<&Origin> {
+    if app.session.path.is_some() {
+        return None;
+    }
+    app.drive.origin(app.session.document_id())
 }
 
 fn status(app: &WordApp) -> Value {
     let d = &app.drive;
-    let origin = d.origin(app.session.document_id());
+    let origin = destination(app);
     json!({
         "available": d.unavailable.is_none() && app.services.drive_profile.is_some(),
         "unavailable": d.unavailable,
@@ -113,7 +123,7 @@ fn status(app: &WordApp) -> Value {
 /// which has no file of its own until it is saved): the title bar then says so instead of
 /// "Not saved".
 pub(crate) fn saved_in_drive(app: &WordApp) -> bool {
-    app.drive.origin(app.session.document_id()).is_some_and(|o| !o.google_doc)
+    destination(app).is_some_and(|o| !o.google_doc)
 }
 
 /// Apply the worker's results (each frame).
@@ -313,7 +323,7 @@ mod native {
         Save { doc: u64, rev: u64, target: SaveTarget, bytes: Vec<u8>, marked_saved: bool },
     }
 
-    enum Event {
+    pub(super) enum Event {
         Unavailable(String),
         /// What the keychain held at start.
         Restored(bool),
@@ -537,7 +547,7 @@ mod native {
         }
     }
 
-    fn apply(app: &mut WordApp, event: Event) {
+    pub(super) fn apply(app: &mut WordApp, event: Event) {
         let d = &mut app.drive;
         match event {
             Event::Unavailable(why) => {
@@ -588,8 +598,14 @@ mod native {
                 let name = file.name.clone();
                 d.origins.insert(doc, Origin { google_doc: file.is_google_doc(), id: file.id, name: file.name, version: file.version });
                 // Only the document that was saved, and only if nothing was typed while it uploaded.
-                if marked_saved && app.session.document_id() == doc && app.session.rev() == rev {
-                    app.session.dirty = false;
+                if app.session.document_id() == doc {
+                    // Drive is now where the document lives: Save goes back there, not to a
+                    // local file it was saved to earlier.
+                    app.session.path = None;
+                    app.session.file_name = Some(name.clone());
+                    if marked_saved && app.session.rev() == rev {
+                        app.session.dirty = false;
+                    }
                 }
                 app.status(i18n::fmt(tl!("Saved {name} to Google Drive"), &[("name", &name)]));
             }

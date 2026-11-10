@@ -130,14 +130,19 @@ impl Drive {
         Self { auth }
     }
 
+    /// Sends `req` with a fresh access token. A 401 (the token was revoked or expired early)
+    /// drops the cached token and retries once after a refresh; if Google refuses the refresh,
+    /// `access_token` signs out and this answers `NotSignedIn`.
     fn send(&mut self, req: Request) -> Result<Response> {
-        let token = self.auth.access_token(Instant::now())?;
-        let resp = self.auth.http().send(req.bearer(&token))?;
-        if resp.status == 401 {
-            // Revoked between the expiry check and the call.
-            return Err(Error::NotSignedIn);
+        for _ in 0..2 {
+            let token = self.auth.access_token(Instant::now())?;
+            let resp = self.auth.http().send(req.clone().bearer(&token))?;
+            if resp.status != 401 {
+                return Ok(resp);
+            }
+            self.auth.invalidate_access();
         }
-        Ok(resp)
+        Err(Error::NotSignedIn)
     }
 
     fn file(resp: Response) -> Result<DriveFile> {
