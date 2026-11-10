@@ -34,6 +34,7 @@ craft-font-catalog = { git = "https://github.com/storytold/craft-libs", rev = "4
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
 wordcraft-zotero = { path = "crates/zotero" }
+wordcraft-gdrive = { path = "crates/gdrive" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 craft-metafile = { git = "https://github.com/storytold/craft-libs", rev = "453b0da782ccef39be9a6dac8d27c80b553ef1cc", version = "=0.1.0" }
