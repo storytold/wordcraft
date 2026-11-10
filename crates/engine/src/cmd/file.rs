@@ -299,8 +299,10 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
     } else {
         crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
+    let ext = path.rsplit(['/', '\\']).next().unwrap_or(path).rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let inherits_editing_lang = is_plain_text || ext == "md" || ext == "markdown";
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && is_plain_text
+        && inherits_editing_lang
     {
         Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
     }
