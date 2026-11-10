@@ -275,7 +275,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
-    let names = ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].map(|n| tl!(n).to_string());
+    let names = [tl!("Indents and Spacing").to_string(), tl!("Line and Page Breaks").to_string(), tl!("Asian Typography").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = k as u8;
     }
@@ -1103,7 +1103,14 @@ pub(crate) fn search_results(app: &mut WordApp, ui: &mut Ui, query: &str, enter:
         find = ui.add(egui::Button::new(label).min_size(vec2(width, 0.0))).clicked() || (enter && hits.is_empty());
     }
     if let Some(id) = run {
-        let _ = app.run(id, json!({}));
+        if id == "view.paperColor" {
+            // Command Search is an interactive UI entry point: open the selector instead of
+            // sending the engine command an empty value. Programmatic callers still get the
+            // command's normal parameter validation.
+            let _ = app.run("file.options", json!({"pane": "general"}));
+        } else {
+            let _ = app.run(id, json!({}));
+        }
     } else if find {
         find_in_navigation_pane(app, ui.ctx(), &text);
     }
@@ -1155,7 +1162,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     ui.set_width(820.0);
-    let names = ["About", "Contributors", "Models", "Language data"].map(|n| tl!(n).to_string());
+    let names = [tl!("About").to_string(), tl!("Contributors").to_string(), tl!("Models").to_string(), tl!("Language data").to_string()];
     if let Some(i) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = i as u8;
     }
