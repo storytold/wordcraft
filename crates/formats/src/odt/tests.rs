@@ -263,6 +263,59 @@ fn a_frame_stating_a_size_of_nothing_is_fitted_to_the_text() {
 }
 
 #[test]
+fn a_grayscale_picture_is_still_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let frame =
+        r#"<draw:frame draw:style-name="gray" text:anchor-type="as-char" svg:width="0pt"><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="gray" style:family="graphic"><style:graphic-properties draw:color-mode="greyscale"/></style:style></office:automatic-styles><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut picture = Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(1000, 500, image::Rgb([255, 0, 0])).write_to(&mut picture, image::ImageFormat::Png).unwrap();
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &picture.into_inner())]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!((img.w - 306.14).abs() < 0.5 && (img.h - 153.07).abs() < 0.5, "{} {}", img.w, img.h);
+    let pixel = image::load_from_memory(&img.data).unwrap().to_rgb8().get_pixel(0, 0).0;
+    assert_eq!(pixel[0], pixel[1]);
+    assert_eq!(pixel[1], pixel[2]);
+}
+
+#[test]
+fn greyscale_jpeg_stays_jpeg_and_does_not_affect_the_next_frame() {
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="gray" style:family="graphic"><style:graphic-properties draw:color-mode="greyscale"/></style:style></office:automatic-styles><office:body><office:text><text:p><draw:frame draw:style-name="gray" text:anchor-type="as-char"><draw:image xlink:href="Pictures/a.jpg"/></draw:frame><draw:frame text:anchor-type="as-char"><draw:image xlink:href="Pictures/a.jpg"/></draw:frame><draw:frame draw:style-name="gray" text:anchor-type="as-char"><draw:text-box><text:p><draw:frame text:anchor-type="as-char"><draw:image xlink:href="Pictures/a.jpg"/></draw:frame></text:p></draw:text-box></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut picture = Cursor::new(Vec::new());
+    image::RgbImage::from_pixel(8, 8, image::Rgb([255, 0, 0])).write_to(&mut picture, image::ImageFormat::Jpeg).unwrap();
+    let bytes = picture.into_inner();
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.jpg", &bytes)]);
+    let flow = parse(&pkg).unwrap();
+    let pictures: Vec<_> =
+        paras(&flow).into_iter().flat_map(|p| &p.inlines).filter_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).collect();
+    assert_eq!(pictures.len(), 2);
+    let nested = paras(&flow)
+        .into_iter()
+        .flat_map(|p| &p.inlines)
+        .find_map(|i| if let Inline::Shape { blocks, .. } = i { Some(blocks) } else { None })
+        .unwrap();
+    let nested_image = nested
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| &p.inlines)
+        .find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None })
+        .unwrap();
+    assert_eq!(nested_image.data.as_ref(), &bytes);
+    assert_eq!(image::guess_format(&pictures[0].data).unwrap(), image::ImageFormat::Jpeg);
+    let pixel = image::load_from_memory(&pictures[0].data).unwrap().to_rgb8().get_pixel(0, 0).0;
+    assert_eq!(pixel[0], pixel[1]);
+    assert_eq!(pixel[1], pixel[2]);
+    assert_eq!(pictures[1].data.as_ref(), &bytes);
+}
+
+#[test]
 fn a_picture_in_line_raised_or_turned_with_no_size_is_fitted_to_the_text() {
     let styles = format!(
         r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#

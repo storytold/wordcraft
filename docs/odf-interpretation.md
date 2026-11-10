@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-05 · **Change:** trivial (a document's language: kept on any save, and stated when written from the model); previously major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-10 · **Change:** minor (frame flow in table cells on read and write); previously trivial (a document's language: kept on any save, and stated when written from the model); previously major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -45,6 +45,7 @@ knows of, so none gets lost.
 | A shape's line width when unstated, and *(meaning)* what a stated width of 0 (a hairline) draws at | §20.410 `svg:stroke-width`: no default | 0.25 pt | 0.5 pt |
 | *(meaning)* A page-anchored frame positioned against a paragraph or character | §20.299, §20.398 Table 23: combination not defined | the page's text area | the page's edge |
 | *(meaning)* An in-line frame positioned against a paragraph or page | §20.398 Table 23: combination not defined | stands on the baseline | positioned against the baseline (raised by its offset) |
+| A floating frame whose graphic style, parents and default style leave `style:flow-with-text` unstated | §20.267: no default | page-relative frames may leave their containing cell; other frames stay in it. An explicit or inherited `true` keeps the frame in its cell; `false` lets it leave, regardless of anchor | does not constrain the frame to the text area (`false`) |
 | Height of a line holding only in-line pictures | no line-height algorithm in the standard | as tall as its text would be too | as tall as the pictures |
 | How the space between two paragraphs adds up when the document doesn't say | not defined (`fo:margin-top`/`-bottom` refer to XSL's margins; whether XSL's space resolution, which keeps the larger, comes with them is not said); LibreOffice's `AddParaTableSpacing` setting says when present (false: the larger) | the larger of the two (as Word) | their sum |
 | Widow and orphan control when neither the default paragraph style, Standard nor the paragraph's style states `fo:widows`/`fo:orphans` | §20.312, §20.244 refer to XSL's widows and orphans (initial value 2); whether that default comes with the reference is not said | on: 2 lines (XSL's initial value, and Word's) | off (a first or last line can stand alone at a page's edge) |
@@ -104,7 +105,8 @@ states what the standard leaves open instead of relying on any application's def
 - header and footer heights, with `style:dynamic-spacing="false"` when there is spacing;
 - a frame's placement as an explicit position against the page or paragraph;
 - in-line pictures standing on the baseline;
-- drawings not held in the text's area (`style:flow-with-text="false"`, §20.267 gives no default);
+- floating drawings kept in their table cell state `style:flow-with-text="true"`; drawings
+  allowed to leave the cell, body floats and in-line drawings state `false` (§20.267 gives no default);
 - tab stops measured as the file it was opened from measured them (`TabsRelativeToIndent` in
   `settings.xml`), from the margin for WordCraft's own documents;
 - widow and orphan control, on or off, in the default paragraph style;
@@ -164,6 +166,7 @@ from public bug reports and ONLYOFFICE's converter test snapshots):
 
 | Date | Change |
 |---|---|
+| 2026-11-10 | Document the unstated frame-flow choice alongside LibreOffice's, inherited and explicit values, and writing `flow-with-text="true"` for floating drawings kept in a table cell, `false` otherwise. |
 | 2026-11-05 | A document's language is read from its default style or Standard and written back from the model. It was lost when a style or list definition changed (numbering, a new style), and readers then showed the document in their own default language. Styles written from the model no longer say English for a document that isn't. A language's script (`fo:script`) is kept with it, and a style with no parent takes the default style's language when Standard's differs. |
 | 2026-11-04 | The settings removed: File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values. WordCraft makes one choice for each case the standard leaves open, the one the default made, so nothing changes for a document opened with the default. What a file states is still followed, its `TabsRelativeToIndent` and `AddParaTableSpacing` among it. LibreOffice's choices stay listed beside WordCraft's. |
 | 2026-11-04 | How WordCraft writes ODF: unchanged paragraphs and tables with drawings, comments, tracked changes, notes or marks are written as read too (the text said from the model); what is edited, and the cases left in the element audit, from the model. |

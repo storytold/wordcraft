@@ -921,7 +921,8 @@ pub struct FTable {
     pub rows: Vec<Vec<Cell>>,
     /// Grid column widths in points (empty = equal widths).
     pub widths: Vec<f32>,
-    /// The source table had no borders (HTML default); the document table gets no grid style.
+    /// Suppress the implicit grid style (HTML defaults to no borders). Always true for ODT,
+    /// where only explicit cell/table borders apply; those borders are kept separately.
     pub borderless: bool,
     /// Its alignment, width and row heights, for formats that keep them (ODT).
     pub extra: Option<Box<TableExtra>>,

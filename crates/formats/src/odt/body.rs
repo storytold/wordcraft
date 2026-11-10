@@ -176,6 +176,8 @@ pub(super) struct Body<'a> {
     /// The open frame's picture crop (`fo:clip`: top, right, bottom, left, points of its original
     /// size).
     frame_clip: Option<[f32; 4]>,
+    /// Bake greyscale into the current standalone raster picture; reset at each frame.
+    image_gray: bool,
     /// The open frame's name (`draw:name`), which a linked text box names.
     pub(super) frame_name: Option<String>,
     /// The kind of the drawing shape being read (its text is read as a text box's).
@@ -291,6 +293,7 @@ impl<'a> Body<'a> {
             frame_box: None,
             frame_look: model::BoxLook::default(),
             frame_clip: None,
+            image_gray: false,
             frame_name: None,
             shape_kind: None,
             shape_flip: (false, false),
@@ -1363,6 +1366,7 @@ impl Body<'_> {
                 self.frame_look = g.look(h.is_none(), &self.styles.defs);
                 self.frame_name = get(a, "draw:name").map(|n| n.chars().take(256).collect());
                 self.frame_clip = g.clip;
+                self.image_gray = g.color_mode.as_deref() == Some("greyscale");
             }
             "image" | "object" | "object-ole" | "desc" | "title" | "contour-polygon" => self.frame_part(q, a),
             // A columned section (ODF 1.3 §5.4) is a continuous section with its columns.

@@ -146,6 +146,8 @@ impl Body<'_> {
                 if let Some(name) = self.frame_name.take().filter(|n| !n.is_empty()) {
                     self.frame_look.chain = Some(Box::new(model::Chain { name, next }));
                 }
+                // A text box's nested drawings have their own colour mode.
+                self.image_gray = false;
                 let frame = (self.frame.take(), self.frame_float.take(), std::mem::take(&mut self.frame_look));
                 self.start_note(a);
                 if let Some(n) = &mut self.note {

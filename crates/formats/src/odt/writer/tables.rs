@@ -231,7 +231,9 @@ impl Writer {
                     out.push_str("<text:p text:style-name=\"Standard\"/>");
                 }
                 // With the sections kept around its blocks, closed in it.
+                let in_cell = std::mem::replace(&mut self.in_cell, true);
                 self.story_blocks(&c.blocks, out, depth + 1);
+                self.in_cell = in_cell;
                 self.close_ins(out);
                 out.push_str("</table:table-cell>");
                 for _ in 1..span {

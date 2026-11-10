@@ -91,6 +91,7 @@ impl Body<'_> {
     /// End a frame or drawing shape: its picture, equation, text box or shape goes into the
     /// paragraph.
     pub(in crate::odt) fn end_frame(&mut self) {
+        let image_gray = std::mem::take(&mut self.image_gray);
         if let Some((w, h, img, alt, eq, chart, object)) = self.frame.take() {
             let boxed = self.frame_box.take();
             let mut float = self.frame_float.take();
@@ -162,14 +163,18 @@ impl Body<'_> {
                         Inline::Image(img)
                     })
                 }
-                (None, None) => img.and_then(|data| picture(data, w, h, alt.trim())).map(|mut img| {
-                    fit_to(&mut img, fit);
-                    img.float = float.map(Box::new);
-                    if let Some(clip) = self.frame_clip.take() {
-                        img.crop = crop_fractions(clip, &img.data);
-                    }
-                    Inline::Image(img)
-                }),
+                // Keep vector pictures when the raster decoder cannot apply greyscale.
+                (None, None) => img
+                    .map(|data| if image_gray { grayscale(&data).unwrap_or(data) } else { data })
+                    .and_then(|data| picture(data, w, h, alt.trim()))
+                    .map(|mut img| {
+                        fit_to(&mut img, fit);
+                        img.float = float.map(Box::new);
+                        if let Some(clip) = self.frame_clip.take() {
+                            img.crop = crop_fractions(clip, &img.data);
+                        }
+                        Inline::Image(img)
+                    }),
             };
             if let Some(inline) = inline {
                 // A group's member goes into the group, at its place in it.
@@ -471,4 +476,32 @@ fn metafile_size(d: &[u8]) -> Option<(f32, f32)> {
         return None;
     };
     (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w.min(1584.0), h.min(1584.0)))
+}
+
+fn grayscale(bytes: &[u8]) -> Option<Vec<u8>> {
+    let image = model::decode_bounded(bytes)?.grayscale();
+    let mut output = std::io::Cursor::new(Vec::new());
+    let format = match image::guess_format(bytes).ok()? {
+        image::ImageFormat::Jpeg => image::ImageFormat::Jpeg,
+        _ => image::ImageFormat::Png,
+    };
+    image.write_to(&mut output, format).ok()?;
+    Some(output.into_inner())
+}
+
+#[cfg(test)]
+mod colour_mode_tests {
+    use super::*;
+
+    #[test]
+    fn ending_a_frame_clears_its_greyscale_mode() {
+        let styles = crate::odt::styles::Styles::default();
+        let pages = crate::odt::import::Pages::default();
+        let mut zip = |_: &str| None;
+        let mut body = Body::new(&styles, &pages, &mut zip);
+        body.image_gray = true;
+        body.frame = Some((None, None, None, String::new(), None, None, None));
+        body.end_frame();
+        assert!(!body.image_gray);
+    }
 }

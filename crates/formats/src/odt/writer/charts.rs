@@ -198,7 +198,7 @@ impl Writer {
             }
         };
         // Always placed by a style (see `image_frame`).
-        let (anchor, props, xy) = placement(place, c.w, c.h);
+        let (anchor, props, xy) = placement(place, c.w, c.h, self.in_cell);
         let (anchor, style) = (anchor, format!(" draw:style-name=\"{}\"{xy}", self.graphic_style(props)));
         let z = place.z_index();
         out.push_str(&format!(

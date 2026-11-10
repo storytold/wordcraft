@@ -67,6 +67,10 @@ pub(super) struct Graphic {
     /// A picture's crop (`fo:clip`, §20.179): how much is cut off its top, right, bottom and
     /// left, in lengths of its original size.
     pub(super) clip: Option<[f32; 4]>,
+    /// The picture colour treatment (draw:color-mode); greyscale is baked into its pixels.
+    pub(super) color_mode: Option<String>,
+    /// Keep a page-relative frame in its containing cell (style:flow-with-text).
+    flow_with_text: Option<bool>,
     /// Text follows the object's outline (`style:wrap-contour`, §20.401), into its hollows or
     /// only along its outside (`style:wrap-contour-mode`, §20.402: `full` or `outside`).
     wrap_contour: Option<bool>,
@@ -165,6 +169,8 @@ impl Graphic {
             markers: [s("draw:marker-start"), s("draw:marker-end")],
             stroke_width: get(a, "svg:stroke-width").and_then(length).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 12.0)),
             clip: get(a, "fo:clip").and_then(clip_rect),
+            color_mode: s("draw:color-mode"),
+            flow_with_text: get(a, "style:flow-with-text").map(|v| v.trim() == "true"),
             wrap_contour: get(a, "style:wrap-contour").map(|v| v.trim() == "true"),
             vert: get(a, "loext:writing-mode").or_else(|| get(a, "style:writing-mode")).map(|m| {
                 use wordcraft_doc::props::{TextDirection, TextVert};
@@ -214,6 +220,8 @@ impl Graphic {
         self.stroke_color = self.stroke_color.or(parent.stroke_color);
         self.stroke_width = self.stroke_width.or(parent.stroke_width);
         self.clip = self.clip.or(parent.clip);
+        fill(&mut self.color_mode, &parent.color_mode);
+        self.flow_with_text = self.flow_with_text.or(parent.flow_with_text);
         self.wrap_contour = self.wrap_contour.or(parent.wrap_contour);
         self.vert = self.vert.or(parent.vert);
         fill(&mut self.contour_mode, &parent.contour_mode);
@@ -390,6 +398,12 @@ pub(super) fn float_of(anchor: Option<&str>, x: Option<&str>, y: Option<&str>, g
     Float {
         wrap,
         wrap_text,
+        // Explicit false permits leaving the cell for every anchor; unstated page-relative
+        // placement also escapes unless its style keeps it with the text.
+        outside_cell: g.flow_with_text == Some(false)
+            || (matches!(h_rel, Anchor::Page | Anchor::Margin | Anchor::LeftMargin | Anchor::RightMargin)
+                && matches!(v_rel, Anchor::Page | Anchor::Margin)
+                && g.flow_with_text != Some(true)),
         h_rel,
         v_rel,
         x: if h_align.is_none() { off(x) } else { 0.0 },
@@ -577,7 +591,7 @@ pub(super) fn turned(f: &Float) -> bool {
 /// How a floating picture is written: its `text:anchor-type`, its graphic style's
 /// `style:graphic-properties` attributes, and the frame's `svg:x`/`svg:y` attributes, or its
 /// `draw:transform` when it is turned (`w` × `h` its size).
-pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, String) {
+pub(super) fn frame_of(f: &Float, w: f32, h: f32, in_cell: bool) -> (&'static str, String, String) {
     // A page number holds until it is placed by its paragraph: moved in WordCraft.
     let by_paragraph =
         matches!(f.h_rel, Anchor::Column | Anchor::Character) || matches!(f.v_rel, Anchor::Paragraph | Anchor::Line | Anchor::Character);
@@ -634,8 +648,10 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
         None => "from-top",
     };
     let d = |v: f32| pt(if v.is_finite() { v.clamp(0.0, MAX_LEN) } else { 0.0 });
+    // The cell constraint must not confine body floats to the text area.
+    let flow = in_cell && !f.outside_cell;
     let props = format!(
-        " style:wrap=\"{wrap}\" style:horizontal-pos=\"{hpos}\" style:horizontal-rel=\"{hrel}\" style:vertical-pos=\"{vpos}\" style:vertical-rel=\"{vrel}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\"",
+        " style:flow-with-text=\"{flow}\" style:wrap=\"{wrap}\" style:horizontal-pos=\"{hpos}\" style:horizontal-rel=\"{hrel}\" style:vertical-pos=\"{vpos}\" style:vertical-rel=\"{vrel}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\"",
         d(f.dist),
         d(f.dist),
         d(f.dist_top),
@@ -655,4 +671,21 @@ pub(super) fn frame_of(f: &Float, w: f32, h: f32) -> (&'static str, String, Stri
         xy.push_str(&format!(" svg:y=\"{}\"", p(f.y)));
     }
     (anchor, props, xy)
+}
+
+#[cfg(test)]
+mod anchor_tests {
+    use super::*;
+
+    #[test]
+    fn page_relative_frames_escape_cells_but_paragraph_frames_do_not() {
+        let page = float_of(Some("page"), Some("12pt"), Some("24pt"), &Graphic::default());
+        assert!(page.outside_cell);
+        assert_eq!((page.h_rel, page.v_rel, page.x, page.y), (Anchor::Page, Anchor::Page, 12.0, 24.0));
+        let paragraph = float_of(Some("paragraph"), None, None, &Graphic::default());
+        assert!(!paragraph.outside_cell);
+        let graphic = Graphic { hrel: Some("page-content".into()), vrel: Some("page".into()), ..Default::default() };
+        assert!(float_of(Some("paragraph"), None, None, &graphic).outside_cell);
+        assert!(!float_of(Some("as-char"), None, None, &graphic).outside_cell);
+    }
 }
