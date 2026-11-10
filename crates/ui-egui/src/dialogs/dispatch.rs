@@ -982,8 +982,10 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// Modify Style: a style's name, fonts, size, colour, spacing, bold and italic. OK applies them
+/// with `styles.modify`; closing goes back to the dialog it was opened from, if any.
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } = d else {
+    let Dialog::ModifyStyle { back, resume, id, name, font, font_ea, font_ea_was, asian, size, bold, italic, color, before, after } = d else {
         return false;
     };
     crate::rtl::Table::new("ms").columns(2).show(ui, |t| {
@@ -991,8 +993,28 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             let name_label = r.cell(|ui| ui.label(tl!("Name:")));
             r.cell(|ui| ui.text_edit_singleline(name).labelled_by(name_label.id));
         });
+        // The Font dialog's two boxes when East Asian text is in use (#5377).
+        if *asian {
+            t.row(|r| {
+                r.cell(|ui| ui.label(tl!("Asian text font:")));
+                r.cell(|ui| {
+                    let shown = app.previews.font_shown(font_ea);
+                    let fams = app.previews.east_asian_families();
+                    let prev = app.previews.font_preview_fn();
+                    if let Some(f) = crate::widgets::font_combo(ui, "ms_font_ea", 220.0, &shown, &fams, Some(&*prev)) {
+                        if f == crate::widgets::ADD_FONT {
+                            let _ = app.run("font.add", json!({}));
+                        } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                            let _ = app.run("font.loadSystem", json!({}));
+                        } else {
+                            *font_ea = app.previews.font_stored(&f);
+                        }
+                    }
+                });
+            });
+        }
         t.row(|r| {
-            r.cell(|ui| ui.label(tl!("Font:")));
+            r.cell(|ui| ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") }));
             r.cell(|ui| {
                 let shown = app.previews.font_shown(font);
                 let fams = app.previews.families();
@@ -1000,6 +1022,8 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
                     if f == crate::widgets::ADD_FONT {
                         let _ = app.run("font.add", json!({}));
+                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                        let _ = app.run("font.loadSystem", json!({}));
                     } else {
                         *font = app.previews.font_stored(&f);
                     }
@@ -1033,6 +1057,9 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
         if let Some(c) = wordcraft_doc::Rgb::parse(color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
+        }
+        if !font_ea.is_empty() && font_ea != font_ea_was {
+            chr["fontEa"] = json!(font_ea);
         }
         let _ = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
     }

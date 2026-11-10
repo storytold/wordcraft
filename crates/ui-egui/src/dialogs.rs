@@ -250,6 +250,16 @@ pub enum Dialog {
         id: String,
         name: String,
         font: String,
+        /// The style's Asian text font (a stored name, empty when it has none) and its value when
+        /// the dialog opened: OK sets it only when it was changed (#5377).
+        #[serde(default)]
+        font_ea: String,
+        #[serde(skip)]
+        font_ea_was: String,
+        /// Show the Asian text font box: a Chinese, Japanese or Korean interface, a style with an
+        /// Asian font, or East Asian text in the document (as [`Dialog::Font`] does).
+        #[serde(default)]
+        asian: bool,
         size: f32,
         bold: bool,
         italic: bool,
@@ -871,6 +881,8 @@ impl Dialog {
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
 
+    /// Modify Style for the style `id`, showing its formatting as resolved through the styles it
+    /// is based on. `None` when there is no such style.
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
         let st = app.session.doc.styles.get(id)?;
         let rc = app.session.doc.styles.resolve_char(
@@ -881,12 +893,20 @@ impl Dialog {
             },
         );
         let rp = app.session.doc.styles.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.into()), ..Default::default() });
+        let font_ea = rc.font_ea.unwrap_or_default();
+        let lang = crate::i18n::current().code();
+        let asian = ["zh", "ja", "ko"].iter().any(|l| lang.starts_with(l))
+            || !font_ea.is_empty()
+            || app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).chars().any(east_asian_char);
         Some(Dialog::ModifyStyle {
             back: false,
             resume: None,
             id: id.into(),
             name: st.name.clone(),
             font: rc.font,
+            font_ea_was: font_ea.clone(),
+            font_ea,
+            asian,
             size: rc.size,
             bold: rc.bold,
             italic: rc.italic,
