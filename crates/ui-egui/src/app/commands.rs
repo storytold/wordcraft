@@ -373,11 +373,14 @@ impl WordApp {
         // the view follows it. Saving, exporting, printing, the document's properties and File ›
         // Options move neither the caret nor the text, so the view stays where the user is
         // reading (#3864); AutoSave runs its save on the session and never gets here.
+        // A reload from disk (#5623) keeps the view too: the caret stays where it was, and the
+        // person may be reading elsewhere.
         let file_keeps_view = matches!(
             id,
             "file.save"
                 | "file.saveAs"
                 | "file.saveTemplate"
+                | "file.reload"
                 | "file.exportPdf"
                 | "file.exportPng"
                 | "file.printPdf"

@@ -76,7 +76,8 @@ impl WordApp {
         let mut did = Vec::new();
         for id in changed {
             let notice = self.disk_notices.iter().position(|(d, _)| *d == id);
-            if self.session.document_dirty(id) {
+            // A comment or reply still being typed is unsaved work too (#1348): the bar asks.
+            if self.session.document_dirty(id) || self.document_has_comment_drafts(id) {
                 if notice.is_none() {
                     self.disk_notices.push((id, DiskNotice::Unsaved));
                     did.push((id, DiskChange::Asked));
@@ -376,5 +377,48 @@ mod tests {
         app.run("text.insert", json!({"text": "X"})).unwrap();
         assert!(app.check_disk_change().is_empty());
         assert_eq!(text(&app), "X");
+    }
+
+    /// A reload keeps the view where the person is reading (#5623): neither the automatic
+    /// reload nor the bar's Reload scrolls to the caret.
+    #[test]
+    fn a_reload_does_not_scroll_the_view_to_the_caret() {
+        let (mut app, path) = app_with_file("view", "alpha");
+        app.canvas.scroll_to_caret = false;
+        std::fs::write(&path, "alpha beta").unwrap();
+        assert_eq!(app.check_disk_change().len(), 1);
+        assert!(!app.canvas.scroll_to_caret, "the view stays");
+        app.run("text.insert", json!({"text": "X"})).unwrap();
+        app.canvas.scroll_to_caret = false;
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        app.check_disk_change();
+        app.reload_from_disk();
+        assert_eq!(text(&app), "alpha beta gamma");
+        assert!(!app.canvas.scroll_to_caret, "the bar's Reload keeps it too");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// A comment or reply still being typed is unsaved work (#1348): a document with one is
+    /// asked, not reloaded under it.
+    #[test]
+    fn a_document_with_a_comment_draft_is_asked_not_reloaded() {
+        let dir = temp_dir("draft");
+        let path = dir.join("notes.docx");
+        let mut app = app();
+        app.run("text.insert", json!({"text": "alpha"})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        let comment = app.run("review.newComment", json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        app.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        let id = app.session.document_id();
+        assert!(!app.session.dirty);
+        crate::panes::draft_reply(&mut app, comment, "typing a reply");
+        // Another program writes the file: a headless session saving its own document there.
+        let mut other = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        other.run("text.insert", &json!({"text": "theirs"})).unwrap();
+        other.run("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(app.check_disk_change(), vec![(id, DiskChange::Asked)], "the draft is unsaved work");
+        assert_eq!(app.disk_notice(), Some(&DiskNotice::Unsaved));
+        assert_eq!(text(&app), "alpha", "nothing was lost");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -105,6 +105,12 @@ pub(crate) fn has_comment_drafts(app: &WordApp) -> bool {
     d.document == app.session.document_id() && !(d.edits.is_empty() && d.replies.is_empty())
 }
 
+/// Tests: a reply typed under comment `id` and not written yet.
+#[cfg(test)]
+pub(crate) fn draft_reply(app: &mut WordApp, id: u32, text: &str) {
+    drafts(app).replies.insert(id, text.to_string());
+}
+
 fn drafts(app: &mut WordApp) -> &mut CommentDrafts {
     let document = app.session.document_id();
     app.comment_drafts.of(document)

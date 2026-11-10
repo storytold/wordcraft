@@ -72,6 +72,10 @@ impl Session {
         self.pending = None;
         self.typing = None;
         self.also_selected.clear();
+        // A canvas member picked in the old content, and a tracked cut waiting for its paste to
+        // become a move: both belong to the content that is gone.
+        self.member = None;
+        self.pending_move = None;
         self.column = None;
         self.column_mode = false;
         self.widened = None;
