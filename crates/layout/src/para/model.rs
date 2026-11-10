@@ -87,7 +87,16 @@ impl StyleRun {
         let draw = self.rc.draw_size();
         let k = if draw > 0.0 { self.rc.size / draw } else { 1.0 };
         let raise = self.rc.position;
-        (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0))
+        let (mut a, mut d) = (self.ascent * k + raise.max(0.0), self.descent * k + (-raise).max(0.0));
+        // Emphasis marks sit above the characters (or below), and the line makes room for them
+        // (see `display::lines::emphasis_mark`).
+        let size = if self.rc.size.is_finite() { self.rc.size.clamp(0.0, 1638.0) } else { 0.0 };
+        match self.rc.emphasis {
+            wordcraft_doc::props::EmphasisMark::None => {}
+            wordcraft_doc::props::EmphasisMark::UnderDot => d = d.max(size * 0.42 + (-raise).max(0.0)),
+            _ => a = a.max(size * 1.32 + raise.max(0.0)),
+        }
+        (a, d)
     }
 }
 
@@ -112,6 +121,29 @@ pub enum ClKind {
     Object(usize),
     /// Zero-width marker (bookmark, comment anchor) or hidden text.
     Marker,
+}
+
+/// One drawing segment of a grapheme cluster (or object, tab, break).
+/// Font/style changes may split its drawing; paragraph edit/wrap boundaries keep it atomic.
+#[derive(Clone, Debug)]
+pub struct Cluster {
+    pub start: usize,
+    pub end: usize,
+    pub adv: f32,
+    pub kind: ClKind,
+    /// Index into `ParaLayout::styles`.
+    pub style: u32,
+    /// Glyph range in `ParaLayout::glyphs`.
+    pub g0: u32,
+    pub g1: u32,
+    /// A line may break after this cluster.
+    pub break_after: bool,
+    /// Height above the baseline for objects (images), points.
+    pub obj_h: f32,
+    /// Depth below the baseline for objects (equations), points.
+    pub obj_d: f32,
+    /// The cluster is a decimal separator (decimal tabs align on it).
+    pub dot: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

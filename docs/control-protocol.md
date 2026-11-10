@@ -1,5 +1,7 @@
 # Control protocol
 
+> **Last updated:** 2026-10-31 · #2596: accept-thread startup failure disables the server and removes its key file; MCP retry policy distinguishes file exports from in-memory images.
+
 Start the app with a control port: `wordcraft --control 7981` (or `WORDCRAFT_CONTROL_PORT=7981`).
 A missing or invalid port after `--control` (not 1–65535) prints an error and exits with status 2.
 It listens on `127.0.0.1` only. Send one JSON object per line, with the window's key (see
@@ -50,14 +52,40 @@ any other host it sends no key, says so, and the app refuses its requests: to dr
 another machine, forward its port to `127.0.0.1` (for example `ssh -L 7981:127.0.0.1:7981 host`)
 and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 
+## Delivery and startup failures
+
+If the accept thread cannot start, startup reports that the control server is off and removes
+its newly written key file; it does not report a listening server. Failure to start a worker
+for one connection closes only that connection and releases its admission slot.
+
+The server can accept a complete JSON body at EOF even without a final newline. A client that
+encounters a write error must therefore treat delivery as unknown once it has attempted to
+send. The MCP bridge does not replay mutations in this case, or image exports with a string
+`path`; see [delivery failures](mcp.md#delivery-failures).
+
+A request that times out while still queued is cancelled and cannot run later. If execution
+has already started, the timeout reports an unknown outcome rather than promising cancellation.
+Unauthenticated connections are limited to 64 while they wait for their first authorised request.
+
+## View › Window
+
+The app's native windows (one per document, or several on one document) take part in View ›
+Window (#322): `view.arrangeAll` tiles them over the monitor, `view.sideBySide {value?, window?}`
+places this window and another one in the left and right halves and turns on Synchronous
+Scrolling, `view.syncScroll {value?}` turns that on or off, and `view.switchWindows {id?}` lists
+and switches documents. `window` is a window id from `ui.inspect` → `windows.others`, the windows
+other than the one the command runs in (optional when only one other window is open). The
+commands are disabled where there is one window (web, CLI, MCP without the app). Wayland doesn't
+let apps move windows, so there Arrange All and Side by Side only resize.
+
 ## Methods
 
 | Method | Params | Result |
 |---|---|---|
-| `engine.execute` | `command`, `params`, `doc?` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog` (`{"name": dialog, "part"?: table style part}`; `part` opens New / Modify Table Style (`newTableStyle` / `modifyTableStyle`) on that part: `wholeTable`, `headerRow`, `firstColumn`, `bandedRows`, `nwCell`… as `table.modifyStyle` names them), `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"\|"en"\|"zh-hans"\|"zh-hant"\|"ja"\|"pt-br"\|"es"\|"uk"\|"sr"\|"sr-latn"\|"et"\|"tr"\|"ru"\|"pl"\|"de"\|"it"\|"cs"\|"hu"\|"fr"}`), `ui.theme` (`{"value": "system"\|"light"\|"dark"}`; `system` follows the OS appearance, light when it reports none), `ui.interfaceSize` (`{"value": "auto"}` or `{"percent": 50–300}`, clamped; no value reads it; `auto` keeps the system display scale, a percentage is absolute, so 100 is one screen pixel per point (#822); the result's `percent` is the size drawn at and `auto` whether it follows the system; document zoom stays `view.zoom`), `ui.animations` (`{"value": "system"\|"on"\|"off"}`; no value reads it; `system` follows the system's animation setting, which the desktop app reads on Windows, macOS, Linux and the BSDs and the web app from `prefers-reduced-motion`, and means on where the system doesn't say; the result's `enabled` is what the setting comes to and `system` what the system reports, `null` when it doesn't say), `ui.fileBrowser` (desktop: `{"purpose": "document"\|"picture"\|"recipients"\|"save"}` opens WordCraft's own file browser, for when the system file dialog doesn't show up, #576), `ui.saveAsTemplate` (File › Save As › Save as Word Template: the Save dialog for a `.dotx`, starting in the user templates folder; the result's `dir` is that folder, `null` on the web, #2852), `ui.caretAnimation` (`{"value": true\|false}`; no value reads it; off, the caret jumps and blinks on and off instead of gliding and fading), `ui.startScreen` (`{"value": true\|false}`; no value reads it; on, the default, the desktop and web apps start on File › Home when launched with nothing to open, #766), `ui.alignmentGuides` (`{"value": true\|false}`; no value reads it; on, the default, moving a picture or shape snaps it to the page, the margins and other objects, with guide lines while dragging; Alt moves freely), `ui.quickAccessToolbar` (`{"value": true\|false}`; no value toggles it; false takes the Quick Access Toolbar out of the title bar, as its menu's Hide Quick Access Toolbar does, and true brings it back, #1945), `ui.focusRibbon` (`{"value": true\|false}`; no value toggles it; in Focus, true drops the ribbon down over the page, as the bar's ⋯ does, and false puts it away, as a click on the page does; outside Focus it stays put away, #1678), `ui.contextMenu` (opens the page's context menu below the caret, as Shift+F10 does), `ui.paneDock` (`{"pane": "navigation"\|"clipboard"\|"styles"\|"styleInspector"\|"accessibility"\|"altText"\|"formatShape"\|"restrictEditing"\|"comments"\|"smartArtText", "dock"?: "left"\|"right"\|"float", "before"?: pane\|null}`; no `dock` reads it; docks or floats a task pane as its menu does, kept between runs; Styles is `view.stylesPaneDock`, #1756; `before` puts the pane directly before that pane in the order, outside it on their edge, as a drop over a docked pane's outer third does, and `null` after every pane; the order is kept between runs)…) |
+| `engine.execute` | `command`, `params`, `doc?` | the command's result (any id from `engine.commands`, including UI commands `ui.tab`, `ui.dialog` (`{"name": dialog, "part"?: table style part}`; `part` opens New / Modify Table Style (`newTableStyle` / `modifyTableStyle`) on that part: `wholeTable`, `headerRow`, `firstColumn`, `bandedRows`, `nwCell`… as `table.modifyStyle` names them), `ui.backstage`, `ui.zotero.*` (see `docs/zotero.md`), `ui.language` (`{"value": "auto"\|"en"\|"zh-hans"\|"zh-hant"\|"ja"\|"pt-br"\|"es"\|"uk"\|"sr"\|"sr-latn"\|"et"\|"tr"\|"ru"\|"pl"\|"de"\|"it"\|"cs"\|"hu"\|"fr"}`), `ui.theme` (`{"value": "system"\|"light"\|"dark"}`; `system` follows the OS appearance, light when it reports none), `ui.interfaceSize` (`{"value": "auto"}` or `{"percent": 50–300}`, clamped; no value reads it; `auto` keeps the system display scale, a percentage is absolute, so 100 is one screen pixel per point (#822); the result's `percent` is the size drawn at and `auto` whether it follows the system; document zoom stays `view.zoom`), `ui.animations` (`{"value": "system"\|"on"\|"off"}`; no value reads it; `system` follows the system's animation setting, which the desktop app reads on Windows, macOS, Linux and the BSDs and the web app from `prefers-reduced-motion`, and means on where the system doesn't say; the result's `enabled` is what the setting comes to and `system` what the system reports, `null` when it doesn't say), `ui.fileBrowser` (desktop: `{"purpose": "document"\|"picture"\|"recipients"\|"save"}` opens WordCraft's own file browser, for when the system file dialog doesn't show up, #576), `ui.saveAsTemplate` (File › Save As › Save as Word Template: the Save dialog for a `.dotx`, starting in the user templates folder; the result's `dir` is that folder, `null` on the web, #2852), `ui.caretAnimation` (`{"value": true\|false}`; no value reads it; off, the caret jumps and blinks on and off instead of gliding and fading), `ui.startScreen` (`{"value": true\|false}`; no value reads it; on, the default, the desktop and web apps start on File › Home when launched with nothing to open, #766), `ui.alignmentGuides` (`{"value": true\|false}`; no value reads it; on, the default, moving a picture or shape snaps it to the page, the margins and other objects, with guide lines while dragging; Alt moves freely), `ui.quickAccessToolbar` (`{"value": true\|false}`; no value toggles it; false takes the Quick Access Toolbar out of the title bar, as its menu's Hide Quick Access Toolbar does, and true brings it back, #1945), `ui.displayServer` (`{"value": "auto"\|"wayland"\|"x11"}`; no value reads it; File › Options › Advanced › Linux display server, which the desktop app reads on Linux and the BSDs at its next launch; `WORDCRAFT_WAYLAND` overrides it, #2184), `ui.statusCount` (`{"value": "words"\|"characters"\|"charactersNoSpaces"}`; no value reads it; what the status bar's count shows — words (the default), characters with spaces, or characters without spaces — kept between runs, #2797), `ui.recentRemove` (`{"path": entry}` takes that document off the recent list — `path` must be an entry on the list; on the desktop the new list is saved right away: the result's `saved` is true then, false with `saveError` when the write failed (the removal still holds for this run) and null where the host keeps no preferences (the web app, or preferences switched off), #2716), `ui.recentClear` (`{}` clears the whole list; the result reports `removed`, the new `recent` and `saved` as above), `ui.focusRibbon` (`{"value": true\|false}`; no value toggles it; in Focus, true drops the ribbon down over the page, as the bar's ⋯ does, and false puts it away, as a click on the page does; outside Focus it stays put away, #1678), `ui.contextMenu` (opens the page's context menu below the caret, as Shift+F10 does), `ui.paneDock` (`{"pane": "navigation"\|"clipboard"\|"styles"\|"styleInspector"\|"accessibility"\|"altText"\|"formatShape"\|"restrictEditing"\|"comments"\|"smartArtText", "dock"?: "left"\|"right"\|"float", "before"?: pane\|null}`; no `dock` reads it; docks or floats a task pane as its menu does, kept between runs; Styles is `view.stylesPaneDock`, #1756; `before` puts the pane directly before that pane in the order, outside it on their edge, as a drop over a docked pane's outer third does, and `null` after every pane; the order is kept between runs)…) |
 | `engine.commands` | — | every command: id, label, location, shortcut, params, enabled |
 | `document.inspect` | `text?`, `doc?` | blocks (text, style, runs, lists, tables), parts, sections, selection, pages |
-| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf; `document`: the active document's id; `documents`: the open documents (`id`, `title`, `path`, `dirty`, `active`) |
+| `ui.inspect` | — | UI state, view, dialog, window size, page rects on screen, caret, comment balloons (`balloons`: id + screen rect; `balloon`: the selected one), perf; `windows`: the other windows as the drawn window sees them (`available`, `others`, `sideBySide`, `syncScroll`); `document`: the active document's id; `documents`: the open documents (`id`, `title`, `path`, `dirty`, `active`) |
 | `ui.click` | `x`, `y`, `button?`, `count?`, `shift?`, `cmd?`, `alt?` | real pointer input at window coordinates |
 | `ui.clickText` | `page` (0-based), `x`, `y` (points from the page's top-left), `count?` | click inside a page |
 | `ui.move` / `ui.drag` | `x`,`y` / `x`,`y`,`toX`,`toY`,`steps?` | pointer move / drag |
@@ -72,6 +100,22 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 | `ui.focus` / `app.quit` | | window control |
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
+
+**Task pane docking.** `ui.paneDock` and `view.stylesPaneDock` use **physical** `left` / `right`
+(the window's left and right edges), matching Dock Left / Dock Right in the pane menu. That stays
+true in a right-to-left interface language: `{"dock":"left"}` always puts the pane on the physical
+left and the command reports `"left"`. A pane that has never been docked keeps its default
+start-/end-edge role when mirrored: start-default panes (e.g. Navigation) open on the physical
+right in Arabic, end-default panes (e.g. Comments) on the physical left. Saved docks and explicit
+requests are never flipped.
+
+Language packs (see [MCP](mcp.md#language-packs)) are commands like any other: `proof.packs`,
+`proof.installPack {"locale": "nl"}` and `proof.removePack {"locale": "nl"}`. Through the control
+channel they act on the running app's packs, and install only while its downloading setting is on;
+they never turn it on, and neither does a `ui.click` or `ui.key` on the app's Install, Add a
+language… or Refresh buttons. An install or a refresh runs in the background
+(`"started": true`); `proof.packs` reports its progress, then the result.
+`ui.dialog {"name": "languageData"}` opens About › Language data.
 
 ### Open documents
 
@@ -128,16 +172,37 @@ an operation that depends on it; do not replay an edit simply because its effect
 
 ### Closing the document
 
-`engine.execute` with `file.close` never shows the Save / Don't Save / Cancel prompt. On a
-document with unsaved changes it replies with an error (the app keeps running and the edits
-stay); save first (`file.save`), or pass `{"force": true}` to discard the changes and close.
-The bare form `{"method": "file.close", "force": true}` (a method name that is a command id) is
-guarded the same way, and only a boolean `true` counts as `force`. A document without unsaved
-changes closes at once (#1268). Closing closes the document and its window, and the window
-focused before it becomes the active one. The last window stays open with no page, and
-`file.new` or `file.open` goes on from there (#1712); closing it doesn't quit the app. With
+`engine.execute` never shows the Save / Don't Save / Cancel prompt, so a command that would
+discard unsaved work is **refused with an error** (the app keeps running and the edits stay);
+save first (`file.save`), or pass `{"force": true}` to discard the changes and go ahead.
+
+`file.close` closes the shown document, so it is refused while that document has unsaved
+changes; the bare form `{"method": "file.close", "force": true}` (a method name that is a
+command id) is guarded the same way, and only a boolean `true` counts as `force`. A document
+without unsaved changes closes at once (#1268). Closing closes the document and its window, and
+the window focused before it becomes the active one. The last window stays open with no page,
+and `file.new` or `file.open` goes on from there (#1712); closing it doesn't quit the app. With
 `doc` naming a document in the background, `file.close` closes that document and its window under
 the same rule (unsaved changes need `{"force": true}`), and the active window stays active.
+
+When another window shows the same document, `file.close` closes only the window it is sent to:
+the document and its unsaved work stay open, so nothing is lost and the command is **not**
+refused (#3274).
+
+`file.new`, `file.open`, `file.recover` (with `restore`) and the mailings merges open their
+result as **another document beside** the open ones and leave the unsaved one alone, so they
+lose nothing and are never refused.
+
+`file.closeDocument` closes the document its `id` names (the active one when the `id` is
+absent), so it is refused while that document has unsaved work: changes that aren't written to
+a file, a save the browser's picker hasn't finished, or a comment still being typed. Pass
+`{"force": true}` to discard that work and close the document; only a boolean `true` counts as
+`force`. The refusal and the Save Changes prompt ask about the same work, so they cannot
+disagree (#3274).
+
+`app.quit` closes every open document, so it is refused while any of them has unsaved changes:
+the app keeps running and the work stays. Save first, or pass `{"force": true}` to discard the
+changes and quit. Only a boolean `true` counts as `force`.
 
 ### Native printing
 
@@ -165,3 +230,17 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+### Physical print sheet layout
+
+`ui.printSubmit`, `ui.print` and `file.printPdf` accept `pagesPerSheet`: the integer
+1 (default), 2, 4, 6, 9 or 16, or `"booklet"` / `"bookletReverse"` for left/right binding.
+These settings change only the print PDF, leaving document Page Setup unchanged.
+Selection/range/parity are applied first. N-up fills cells in row order; booklet mode
+pads the selected pages to a multiple of four and pairs outer/inner pages. Copies
+repeat complete sheet plans, preserving blank slots at copy boundaries. Native copies
+remain a spooler setting. Two-up and booklet sheets are landscape. Use duplex on the
+short edge for folded booklets; this does not configure a printer's duplex capability.
+The preview shows physical sheet sides, before copies, using the same sheet plan.
+Explicit `paper` chooses the physical sheet; otherwise the first selected page supplies
+its size. Independent Page Setup multiple-page modes (#2414) are not required.
