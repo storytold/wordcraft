@@ -29,7 +29,7 @@ pub mod store;
 mod tests;
 
 pub use drive::{Drive, DriveFile, SaveTarget};
-pub use oauth::{Auth, ClientConfig, Tokens};
+pub use oauth::{Auth, ClientConfig, Tokens, write_client};
 
 /// Errors from signing in or talking to Drive. Messages are English; the UI translates its own
 /// summary and shows the detail as is.
