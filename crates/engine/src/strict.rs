@@ -193,7 +193,14 @@ pub fn strict_report(
 /// The PDF export's options for `opts`: the one place they are built, shared by the export and
 /// its strict check.
 pub(crate) fn pdf_options(opts: &ExportOptions) -> wordcraft_pdf::PdfOptions {
-    wordcraft_pdf::PdfOptions { include_markup: opts.markup, comments: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() }
+    wordcraft_pdf::PdfOptions {
+        include_markup: opts.markup,
+        comments: opts.markup && opts.comments,
+        numeral: opts.numeral,
+        form_fields: opts.form_fields,
+        blank_fields: opts.blank_fields,
+        ..Default::default()
+    }
 }
 
 /// What a page image shows: the display options `file.exportPng` renders with.
