@@ -325,6 +325,7 @@ mod tests {
 
     #[test]
     fn show_level_and_collapse_hide_what_is_under_a_heading() {
+        crate::test_fonts();
         // H1, body, H2, body, H1, body
         let levels = [1, BODY, 2, BODY, 1, BODY];
         let all = OutlineView::default();
@@ -408,7 +409,7 @@ mod tests {
             })
             .collect();
         assert!(folded(&styled).is_empty());
-        if let Some(s) = styled.styles.styles.iter_mut().find(|s| s.id == "Heading2") {
+        if let Some(s) = std::sync::Arc::make_mut(&mut styled.styles).styles.iter_mut().find(|s| s.id == "Heading2") {
             s.para.collapsed = Some(true);
         }
         assert_eq!(folded(&styled), vec![false, false, false, false, false, false, false, false]);

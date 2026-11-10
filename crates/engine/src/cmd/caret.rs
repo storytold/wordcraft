@@ -370,6 +370,7 @@ fn select_all(s: &mut Session, v: &Value) -> CmdResult {
     }
     let st = s.sel.focus.story;
     s.sel = Selection { anchor: s.doc.start_of(st), focus: s.doc.end_of(st) };
+    s.pending = None;
     s.column = None;
     s.column_mode = false;
     sel_result(s)
@@ -379,6 +380,7 @@ fn select_range(s: &mut Session, v: &Value) -> CmdResult {
     let a = v.get("anchor").and_then(parse_pos).ok_or_else(|| CmdError::Params("bad `anchor`".into()))?;
     let b = v.get("focus").and_then(parse_pos).ok_or_else(|| CmdError::Params("bad `focus`".into()))?;
     s.sel = Selection { anchor: s.doc.clamp(&a), focus: s.doc.clamp(&b) };
+    s.pending = None;
     sel_result(s)
 }
 
@@ -439,6 +441,7 @@ fn select_unit(s: &mut Session, unit: Unit) -> CmdResult {
     if s.doc.para_at(&f).is_some() {
         let (a, b) = unit_range(s, &f, unit);
         s.sel = Selection { anchor: a, focus: b };
+        s.pending = None;
     }
     sel_result(s)
 }
@@ -533,6 +536,9 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
             if count == n {
                 s.sel =
                     Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: i + needle.len() } };
+                // Formatting picked for the old caret doesn't carry over (as `select.word`): what
+                // replaces the selection takes its formatting.
+                s.pending = None;
                 return sel_result(s);
             }
         }
