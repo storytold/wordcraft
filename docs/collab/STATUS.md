@@ -2,18 +2,25 @@
 
 - Date: 2026-11-10
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
-- PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
+- PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
+  since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `15c9625b` (the git-source guard) plus this page — 77
-  commits over `4b0d3995`. The branch was pushed on 2026-11-10 at 14:38Z: the
-  local HEAD, `fork/feature/realtime-collaboration` and the `headRefOid` of PR
-  #5834 are the same commit (§5.21, §5.24). The PR is `MERGEABLE`. A maintainer
-  approved the workflows on 2026-11-10; on the previous head `467948fa` `Nix`
-  and `SonarCloud` passed and `Printing` failed on a stale `Cargo.lock`, not on
-  code (§5.23), and the fork git source is gone from the manifest and the lock
-  (§5.24). The three `printing.yml` steps are green on the pushed head at the
-  build host (§5.25); every run on `15c9625b` still sits in `action_required`
-  until a maintainer approves it, so CI itself has not executed there (§5.2)
+- HEAD at this writing: `077b4056` (the printing-gate entry) plus two local
+  commits below it — a code fix (`4ecab864`, §5.26) and this page — which are
+  not pushed. The PR head is 77 commits over `4b0d3995`; the local branch is
+  79. The branch was pushed on 2026-11-10 at 14:38Z (`15c9625b`) and again
+  around 17:14Z (`077b4056`): at that point the
+  local HEAD, the fork branch and the `headRefOid` of PR #5834 were the same
+  commit (§5.21, §5.24, §5.26). The PR is `MERGEABLE`; it was marked ready for
+  review at 14:57:53Z, though its title still ends with the word "(draft)" as
+  text (§5.26). The fork git source is gone from the manifest and the lock
+  (§5.24), and the three `printing.yml` steps are green on the pushed tree at
+  the build host (§5.25). CI itself has not executed on either pushed head:
+  every run on `15c9625b` and the five runs on `077b4056` (created at 17:14Z)
+  sit in `action_required` until a maintainer approves them (§5.2, §5.26). A
+  maintainer had approved the workflows for `467948fa`; there `Nix` and
+  `SonarCloud` passed and `Printing` failed on a stale `Cargo.lock`, not on
+  code (§5.23).
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -297,7 +304,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z | PR #5834; every workflow run on the pushed head waits in `action_required` for a maintainer's approval (§5.2, §5.26) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -570,15 +577,18 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    offers the room's file as a copy (§5.19); what remains for it is operational:
    the cabinet's ticket must carry the numeric `fileId` in `doc`, and the shared
    service token must be in both `.env`s.
-2. Mark PR #5834 ready once CI has run and the pin is acceptable to the
-   maintainers. The rebased branch is pushed, the fork and the PR head are the
-   same commit, and the PR is `MERGEABLE` (§5.21). A maintainer approved the
-   workflows on 2026-11-10: `Nix` and `SonarCloud` passed, `Printing` failed on
-   a stale `Cargo.lock` rather than on code, and `39f2e1a4` fixes it (§5.23).
-   The push happened at 14:38Z, so the PR head `15c9625b` carries that fix
-   (§5.24); its own runs wait in `action_required` for approval, and the three
-   `printing.yml` steps have been run green on that tree at the build host
-   (§5.25).
+2. Get a maintainer's approval for the runs on the PR head. The rebased branch
+   is pushed, the fork and the PR head are the same commit (`077b4056`), and
+   the PR is `MERGEABLE`; it was marked ready for review at 14:57:53Z, so the
+   draft flag is gone (§5.21, §5.26). A maintainer had approved the workflows
+   for the earlier head `467948fa`: `Nix` and `SonarCloud` passed, `Printing`
+   failed on a stale `Cargo.lock` rather than on code, and `39f2e1a4` fixes it
+   (§5.23). The pushes at 14:38Z (`15c9625b`) and around 17:14Z (`077b4056`)
+   started fresh runs that wait in `action_required`, so nothing has executed
+   on either head; the three `printing.yml` steps have been run green on the
+   pushed tree at the build host instead (§5.25). The fix from the CodeRabbit
+   triage (`4ecab864`) and this page are local commits still waiting for a
+   push (§5.26).
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -2233,7 +2243,7 @@ headRefOid,mergeable,mergeStateStatus,headRepository,statusCheckRollup`):
 | head repository | `copoka/wordcraft` |
 | base | `4b0d3995` |
 | mergeable | `MERGEABLE` (merge state `UNSTABLE`) |
-| state | `OPEN`, draft |
+| state | `OPEN`; draft at the time (the PR was marked ready for review at 14:57:53Z — §5.26) |
 | check runs | `CodeRabbit` — completed, skipped |
 
 `UNSTABLE` is the fork rule, not a failure: the four patch workflows (`CI`,
@@ -2504,9 +2514,98 @@ with the fonts checkout. A bare `cargo test -p wordcraft-ui-egui` on a host
 without fonts therefore says nothing about CI.
 
 **Scope.** This proves the gates pass on the pushed tree; it does not replace a
-CI run. The workflows on `15c9625b` (`Printing` `42836182389`, `CI`
-`42836182540`, `Nix` `42836182675`, `SonarCloud` `42836182716`, `Packaging lint`
-`42836182721`) still need a maintainer's approval before they execute.
+CI run. The workflows on the head this page records, `077b4056`, are `Printing`
+`42862821281`, `CI` `42862822112`, `Packaging lint` `42862822199`, `Nix`
+`42862822236` and `SonarCloud` `42862822414`, all created at 17:14Z and all
+still `action_required`; the five runs on `15c9625b` (`Printing` `42836182389`,
+`CI` `42836182540`, `Nix` `42836182675`, `SonarCloud` `42836182716`,
+`Packaging lint` `42836182721`) never executed either (§5.26). Both heads need
+a maintainer's approval before anything runs. `077b4056` differs from
+`15c9625b` only in this page, so the run above applies to both trees.
+
+### 5.26 The PR is ready for review; the runs on `077b4056` wait, CodeRabbit is green (run 2026-11-10)
+
+The page still described PR #5834 as a draft on `15c9625b`, and listed the five
+workflow runs of that head. Both moved. This entry records the reconciliation
+and the CodeRabbit triage. The PR, the branch and CI were not touched; the fix
+(`4ecab864`) and this page are local commits that have not been pushed.
+
+**Draft flag.** The issue timeline has one `ready_for_review` event:
+`copoka` marked the PR ready at 2026-11-10 14:57:53Z. `gh api
+repos/storytold/wordcraft/pulls/5834` at 17:20Z answers `"draft": false`,
+`"state": "open"`, `"mergeable": true`, `head.sha =
+077b40561b426d8bd63aa43b72c82a29bce4d901`, `head.repo.full_name =
+copoka/wordcraft`, `base.ref = main`. The title still ends with the word
+"(draft)" as text; the flag is what matters, and it is gone.
+
+**The head moved by one docs commit.** `077b4056` is
+`15c9625b` + this page's predecessor, `docs(collab): the printing gates on the
+pushed head, and the push in §5.24`: `git diff --stat 15c9625b..077b4056` is
+`docs/collab/STATUS.md | 93 +++…`, `1 file changed, 80 insertions(+), 13
+deletions(-)`. No code and no manifest changed. At that point the local `HEAD`
+and the head of `git fetch fork feature/realtime-collaboration` were both
+`077b4056`; `git rev-list --count 4b0d3995..077b4056` is 77, one more than
+`15c9625b` (76). Two local commits sit above it now: the fix `4ecab864` and
+this page.
+
+**The five runs on `077b4056`.** From `gh api
+"repos/storytold/wordcraft/actions/runs?head_sha=077b4056…"`:
+
+| Workflow | Run | Status | Created |
+|---|---|---|---|
+| `Printing` | `42862821281` | `action_required` | 17:14:05Z |
+| `CI` | `42862822112` | `action_required` | 17:14:06Z |
+| `Packaging lint` | `42862822199` | `action_required` | 17:14:06Z |
+| `Nix` | `42862822236` | `action_required` | 17:14:06Z |
+| `SonarCloud` | `42862822414` | `action_required` | 17:14:06Z |
+
+Nothing has run: `action_required` is the fork rule from §5.21, and the runs
+on `15c9625b` did not execute either.
+
+**CodeRabbit on `077b4056`: the check is green, and the review is triaged.**
+At 17:20Z the check was still running. It completed at 17:23:31Z with
+`conclusion=success` (`CodeRabbit` run `129993348649`, started 17:14:22Z), and
+the review landed at 17:23:29Z: one `COMMENTED` review on `077b4056` with ten
+**Major** findings, all in the review body as "outside diff range" comments —
+the only diff of this head is this page, so CodeRabbit reviewed the PR's code
+and could not anchor them inline. The two earlier reviews (`15c9625b`,
+15:19:41Z and 15:20:49Z) and their 17 inline comments remain as they were;
+their `original_commit_id` is `15c9625b` and they describe the same classes.
+
+Each of the ten was checked against the code. None was rejected; two were fixed
+in `4ecab864`, the other eight are confirmed and need their own slice.
+
+| # | Finding (all Major) | Where | Disposition |
+|---|---|---|---|
+| 1 | Concurrent positional edits are applied at a stale offset; the author skips its own echo, so a replica can diverge without a resync | `crates/collab/src/room.rs:240-260` | confirmed, not fixed: the room applies primitives at server offsets and the replica applies them over its optimistic text. Needs transformation/rebase or a `baseVersion` guard that resyncs; an ADR first |
+| 2 | A snapshot that cannot be read or parsed becomes an empty room, which can then be persisted over the stored file | `apps/collab-server/src/lib.rs:240-270` | confirmed, not fixed: `Store::load` returns `Option` and cannot tell "absent" from "corrupt"; `room_for` would have to reject the join instead of creating the room |
+| 3 | A room with no snapshot starts blank and its snapshot replaces the open document, losing unsaved text | `apps/collab-server/src/lib.rs:240-270` | confirmed, not fixed: the protocol has no seeding step for an existing document; needs a decision on who initializes the room |
+| 4 | An operation can carry another participant's `op_id`, making the victim skip the answer and then receive a cached one | `apps/collab-server/src/lib.rs:574-623` | **confirmed, fixed**: `handle_op` rejects with `Invalid` and counts a reject; test `an_operation_cannot_carry_another_clients_id` |
+| 5 | When a peer's queue is full the accepted operation is dropped and the peer can stay connected, stale, if nothing follows | `apps/collab-server/src/lib.rs:791-809` | confirmed, not fixed: needs a per-peer stale flag that closes the socket on the next heartbeat, plus a test with a stalled reader |
+| 6 | Any authenticated participant can register another's `client_id`; a stale connection can also remove the replacement's entry | `apps/collab-server/src/lib.rs:448-449` | confirmed, not fixed: `register` inserts by `client_id` and `leave` removes by it, so peers need a connection identity |
+| 7 | A cached answer re-broadcast after a retry is applied by peers that already applied it | `apps/collab-server/src/lib.rs:598-603` | **confirmed, fixed**: the client ignores an `Applied` whose `op_id` it already confirmed; test `a_replayed_answer_for_a_confirmed_operation_is_not_applied_twice` |
+| 8 | An edit whose planning or submission fails stays local while the session still reports `InSync`; a commit can omit it | `crates/ui-egui/src/collab.rs:29-47` | confirmed, not fixed: `after_command` reports the message and leaves the status; needs reconcile-and-pause |
+| 9 | The connection is app-wide while documents are per window, so a connection made for one document can carry another's edits | `crates/ui-egui/src/window_ui.rs:161-173` | confirmed, not fixed: `swap_window` deliberately keeps `collab` app-wide; needs per-document connections |
+| 10 | A session event for the current session replaces the client and drops its unconfirmed edits | `apps/wordcraft-web/src/web.rs:243-274` | confirmed, not fixed: `HostState::on_event(Session)` always yields `Connect` and the shell installs a new `Collab`; needs token renewal on the same client |
+
+**The fix (`4ecab864`).** Two guards, no protocol change:
+
+- the server refuses an operation whose `op_id.client` is not the connection's
+  `client_id`, with `Invalid` and a rejects metric (§4);
+- the client returns `Event::None` for an `Applied` it has already confirmed, so
+  a replayed cached answer cannot apply a delta twice (§7).
+
+**What ran** (build host `agents`, on the tree with both guards):
+`cargo fmt --all -- --check` EXIT=0; `cargo clippy -p wordcraft-collab-client
+-p wordcraft-collab-server --all-targets -- -D warnings` EXIT=0;
+`cargo test -p wordcraft-collab-client` 18 passed; `cargo test -p
+wordcraft-collab-server` 51 passed, 1 ignored (the LibreOffice commit gate).
+The full `cargo xtask ci` was not run in this pass.
+
+**What is left.** A maintainer's approval of the five runs on `077b4056`
+(§5.2 item 2), a push of the two local commits (`4ecab864` and this page), and
+the eight confirmed findings above, which need slices of their own. The local
+tree holds the fix and this page; the PR, the branch and CI were not touched.
 
 ## 6. Where things live
 
