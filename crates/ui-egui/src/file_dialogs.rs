@@ -342,29 +342,9 @@ impl WordApp {
                 // fills (as the job does), backgrounds on keeps them. The printer path borrows
                 // this in printing.rs; the file path borrows it here so neither mutates the open
                 // document.
-                let (colour, picture, gradient, pattern) = if self.ui.print_backgrounds {
-                    (None, None, None, None)
-                } else {
-                    (
-                        self.session.doc.settings.page_color.take(),
-                        self.session.doc.settings.page_picture.take(),
-                        self.session.doc.settings.page_gradient.take(),
-                        self.session.doc.settings.page_pattern.take(),
-                    )
-                };
+                let fills = wordcraft_doc::PageFills::take_unless(self.ui.print_backgrounds, &mut self.session.doc.settings);
                 let r = self.run("file.printPdf", params);
-                if colour.is_some() {
-                    self.session.doc.settings.page_color = colour;
-                }
-                if picture.is_some() {
-                    self.session.doc.settings.page_picture = picture;
-                }
-                if gradient.is_some() {
-                    self.session.doc.settings.page_gradient = gradient;
-                }
-                if pattern.is_some() {
-                    self.session.doc.settings.page_pattern = pattern;
-                }
+                fills.restore(&mut self.session.doc.settings);
                 if r.is_ok() {
                     self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
                 }

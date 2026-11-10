@@ -157,10 +157,7 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
     let mut doc = app.session.doc.clone();
     if !backgrounds {
-        doc.settings.page_color = None;
-        doc.settings.page_picture = None;
-        doc.settings.page_gradient = None;
-        doc.settings.page_pattern = None;
+        let _ = wordcraft_doc::PageFills::take(&mut doc.settings);
     }
     let img = wordcraft_render::render_page(&doc, pg, scale, &Default::default());
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());

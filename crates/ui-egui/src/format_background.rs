@@ -352,12 +352,12 @@ fn color_button(ui: &mut Ui, theme: &[Rgb], id: Id, label: &str, c: Rgb) -> Opti
     crate::colors::take_field(ui.ctx(), id, &mut hex);
     let mut picked = None;
     ui.horizontal(|ui| {
-        ui.label(label);
+        let name = ui.label(label);
         let t = Tokens::get(ui.ctx());
         let (r, _) = ui.allocate_exact_size(vec2(18.0, 14.0), Sense::hover());
         ui.painter().rect_filled(r, 2.0, crate::theme::c32(c));
         ui.painter().rect_stroke(r, 2.0, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-        ui.menu_button("▾", |ui| crate::colors::field_menu(ui, theme, id, &mut hex));
+        let _ = ui.menu_button("▾", |ui| crate::colors::field_menu(ui, theme, id, &mut hex)).response.labelled_by(name.id);
     });
     if let Some(n) = Rgb::parse(&hex)
         && n != c

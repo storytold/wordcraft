@@ -236,6 +236,52 @@ pub struct PagePicture {
     pub transparency: f32,
 }
 
+/// The page's background fills (Design › Page Color › Fill Effects), taken together so every
+/// take-and-restore site strips the same four fields: a missed field would leak a fill into a
+/// print job or preview that asked for none.
+#[derive(Clone, Debug, Default)]
+pub struct PageFills {
+    pub page_color: Option<Rgb>,
+    pub page_picture: Option<PagePicture>,
+    pub page_gradient: Option<Gradient>,
+    pub page_pattern: Option<PagePattern>,
+}
+
+impl PageFills {
+    /// Take the fills out of `settings`, leaving none behind; [`PageFills::restore`] puts them back.
+    pub fn take(settings: &mut Settings) -> Self {
+        PageFills {
+            page_color: settings.page_color.take(),
+            page_picture: settings.page_picture.take(),
+            page_gradient: settings.page_gradient.take(),
+            page_pattern: settings.page_pattern.take(),
+        }
+    }
+
+    /// Put taken fills back into `settings`. Only fields that were `Some` are written, so a fill
+    /// set while they were out (none of today's callers set one) is not clobbered.
+    pub fn restore(self, settings: &mut Settings) {
+        if self.page_color.is_some() {
+            settings.page_color = self.page_color;
+        }
+        if self.page_picture.is_some() {
+            settings.page_picture = self.page_picture;
+        }
+        if self.page_gradient.is_some() {
+            settings.page_gradient = self.page_gradient;
+        }
+        if self.page_pattern.is_some() {
+            settings.page_pattern = self.page_pattern;
+        }
+    }
+
+    /// Take the fills when `strip` is true, else keep them and return an empty guard: the call
+    /// site's `restore` then writes nothing back.
+    pub fn take_unless(keep: bool, settings: &mut Settings) -> Self {
+        if keep { PageFills::default() } else { PageFills::take(settings) }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Watermark {

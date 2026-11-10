@@ -376,21 +376,29 @@ impl Exporter<'_> {
             }
         }
         if !tile.dots.is_empty() {
-            // Each dot is its own small path: krilla paths aren't merged here, and a preset has
-            // at most sixteen dots a tile.
-            s.set_fill(Some(fill(p.fore, 1.0)));
+            // All dots share one path: subpaths of one fill draw the same marks as one path per
+            // dot, with one path operation per page instead of one per dot per tile.
+            const K: f32 = 0.552_284_8;
+            let mut pb = PathBuilder::new();
             for ty in 0..rows {
                 for tx in 0..cols {
                     let (ox, oy) = (tx as f32 * TILE, ty as f32 * TILE);
                     for [cx, cy, r] in &tile.dots {
-                        let rect = Rect::new(ox + cx * TILE - r * TILE, oy + cy * TILE - r * TILE, 2.0 * r * TILE, 2.0 * r * TILE);
-                        if let Some(path) = shape_path(ShapeKind::Ellipse, &rect, None) {
-                            s.draw_path(&path);
-                        }
+                        let (cx, cy, rx, ry) = (ox + cx * TILE, oy + cy * TILE, r * TILE, r * TILE);
+                        pb.move_to(cx + rx, cy);
+                        pb.cubic_to(cx + rx, cy + ry * K, cx + rx * K, cy + ry, cx, cy + ry);
+                        pb.cubic_to(cx - rx * K, cy + ry, cx - rx, cy + ry * K, cx - rx, cy);
+                        pb.cubic_to(cx - rx, cy - ry * K, cx - rx * K, cy - ry, cx, cy - ry);
+                        pb.cubic_to(cx + rx * K, cy - ry, cx + rx, cy - ry * K, cx + rx, cy);
+                        pb.close();
                     }
                 }
             }
-            s.set_fill(None);
+            if let Some(path) = pb.finish() {
+                s.set_fill(Some(fill(p.fore, 1.0)));
+                s.draw_path(&path);
+                s.set_fill(None);
+            }
         }
         if let Some(width) = tile.strokes.first().map(|s| s[4]) {
             let stroke = Stroke {
@@ -401,20 +409,21 @@ impl Exporter<'_> {
                 line_cap: LineCap::Butt,
                 ..Default::default()
             };
+            // All stroke segments share one stroked path: one path operation per page.
+            let mut pb = PathBuilder::new();
             for ty in 0..rows {
                 for tx in 0..cols {
                     let (ox, oy) = (tx as f32 * TILE, ty as f32 * TILE);
-                    let mut pb = PathBuilder::new();
                     for [x0, y0, x1, y1, _] in &tile.strokes {
                         pb.move_to(ox + x0 * TILE, oy + y0 * TILE);
                         pb.line_to(ox + x1 * TILE, oy + y1 * TILE);
                     }
-                    if let Some(path) = pb.finish() {
-                        s.set_stroke(Some(stroke.clone()));
-                        s.draw_path(&path);
-                        s.set_stroke(None);
-                    }
                 }
+            }
+            if let Some(path) = pb.finish() {
+                s.set_stroke(Some(stroke));
+                s.draw_path(&path);
+                s.set_stroke(None);
             }
         }
         s.pop();
