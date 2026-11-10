@@ -232,33 +232,43 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
     if app.drive.signed_in.is_none() && app.drive.busy.is_none() && app.drive.unavailable.is_none() {
         let _ = app.run("ui.drive.start", json!({}));
     }
-    ui.add_space(10.0);
-    // The client: an OAuth client of type Desktop app from the person's own Google Cloud project.
+    // Two separate things, so nobody mistakes the app's registration for their own sign-in:
+    // 1. the OAuth client (identifies WordCraft to Google; from the person's Cloud project);
+    // 2. the person's Google account (signed in on Google's page, MFA included).
+    let step = |ui: &mut egui::Ui, n: &str, title: &str| {
+        ui.add_space(14.0);
+        ui.label(egui::RichText::new(format!("{n}  {}", tl!(title))).font(crate::theme::semibold(14.0)));
+        ui.add_space(2.0);
+    };
     let configured = app.drive.unavailable.is_none();
+    step(ui, "1", "App registration (one-time setup)");
+    ui.label(tl!(
+        "An OAuth client of type Desktop app from your own Google Cloud project. It identifies WordCraft to Google: it isn't your password or your Google account, and Google treats a desktop app's secret as not confidential."
+    ));
     ui.label(if configured {
-        tl!("Google client: set up. Enter a new one below to replace it.")
+        tl!("✓ Registered. Enter a new client below only to replace it.")
     } else {
-        tl!("Google client: not set up. Create an OAuth client of type Desktop app in your own Google Cloud project (see Google Drive in WordCraft's documentation), then enter it here.")
+        tl!("Not registered yet. See Google Drive in WordCraft's documentation for how to create the client.")
     });
     let id_key = egui::Id::unique("accounts_google_client_id");
     let secret_key = egui::Id::unique("accounts_google_client_secret");
     let mut id = ui.data(|d| d.get_temp::<String>(id_key)).unwrap_or_default();
     let mut secret = ui.data(|d| d.get_temp::<String>(secret_key)).unwrap_or_default();
     egui::Grid::new("accounts_google_client").num_columns(2).show(ui, |ui| {
-        let l = ui.label(tl!("Client ID:")).id;
+        let l = ui.label(tl!("OAuth client ID:")).id;
         ui.add(egui::TextEdit::singleline(&mut id).desired_width(380.0).hint_text("1234-abc.apps.googleusercontent.com")).labelled_by(l);
         ui.end_row();
-        let l = ui.label(tl!("Client secret:")).id;
+        let l = ui.label(tl!("OAuth client secret:")).id;
         ui.add(egui::TextEdit::singleline(&mut secret).password(true).desired_width(380.0)).labelled_by(l);
         ui.end_row();
     });
-    if ui.add_enabled(!id.trim().is_empty(), egui::Button::new(tl!("Save client"))).clicked() {
+    if ui.add_enabled(!id.trim().is_empty(), egui::Button::new(tl!("Save registration"))).clicked() {
         let secret_param = if secret.trim().is_empty() { Value::Null } else { Value::from(secret.trim()) };
         match app.run("ui.drive.client", json!({"clientId": id.trim(), "clientSecret": secret_param})) {
             Ok(_) => {
                 id.clear();
                 secret.clear();
-                app.status(tl!("Saved the Google client").to_string());
+                app.status(tl!("Saved the app registration").to_string());
             }
             Err(e) => app.status(e),
         }
@@ -267,13 +277,18 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
         d.insert_temp(id_key, id);
         d.insert_temp(secret_key, secret);
     });
+
+    step(ui, "2", "Your Google account");
+    ui.label(tl!(
+        "Sign-in happens on Google's own page in your browser: your password and 2-Step Verification (MFA) stay with Google and never pass through WordCraft."
+    ));
     if !configured {
+        ui.label(tl!("Register the app (step 1) first."));
         return;
     }
-    ui.add_space(10.0);
     match (app.drive.signed_in, app.drive.busy) {
         (Some(true), _) => {
-            ui.label(tl!("Signed in to Google."));
+            ui.label(tl!("✓ Signed in. WordCraft keeps only a sign-in token, in the system keychain; Sign out revokes it at Google."));
             ui.horizontal(|ui| {
                 if ui.button(tl!("Open File › Google Drive")).clicked() {
                     let _ = app.run("ui.backstage", json!({"value": true, "page": "drive"}));
