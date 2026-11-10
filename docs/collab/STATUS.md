@@ -1,17 +1,17 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-10
+- Date: 2026-11-11
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `925bb0c9` (§5.28, the finding-1 fix) plus this page on
+- HEAD at this writing: `bf632378` (§5.31, the finding-3 fix) plus this page on
   top of it. The fork branch and the `headRefOid` of PR #5834 are still
-  `af9a43a2` (the CodeRabbit triage, §5.26): everything after it —
-  `2a6f39c7`, `925bb0c9` and this page — is committed locally and **not
-  pushed**, because the envoy role cannot push; the owner sends it (§5.27,
-  §5.28). The branch is 81 commits over `4b0d3995` before this page and 82
-  with it. The branch was pushed
+  `af9a43a2` (the CodeRabbit triage, §5.26): the eight commits after it —
+  `2a6f39c7`, `925bb0c9`, `3225e644`, `264afd18`, `c6e3df4a`, `bcca9bce`,
+  `37af31cb` and `bf632378` — are committed locally and **not pushed**, because
+  the envoy role cannot push; the owner sends it (§5.27–§5.31). The branch is
+  86 commits over `4b0d3995` before this page and 87 with it. The branch was pushed
   on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
   20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
   `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
@@ -457,12 +457,14 @@ Results at this writing:
   turns a damaged document into an empty one: the store tells "never written"
   from "stored and cannot be opened", and the second refuses the join while
   leaving `model.json`/`meta` and `prev/` untouched
-  (`docs/collab/adr/0003-corrupt-snapshot-refused.md`, §5.30). Five findings of
-  §5.26 stay open, each with its own slice: a room without a snapshot starts
-  blank (3), a participant can register another's `client_id` (6), a failed edit
-  leaves the session reporting `InSync` (8), the connection is app-wide while
-  documents are per window (9), and a session event replaces the client and
-  drops its unconfirmed edits (10).
+  (`docs/collab/adr/0003-corrupt-snapshot-refused.md`, §5.30). Finding 3 no
+  longer turns an open document into an empty page: a room is built from the
+  copy its first writer brings, and a join that brings none is refused
+  (`docs/collab/adr/0004-room-without-snapshot-seeded.md`, §5.31). Four findings
+  of §5.26 stay open, each with its own slice: a participant can register
+  another's `client_id` (6), a failed edit leaves the session reporting `InSync`
+  (8), the connection is app-wide while documents are per window (9), and a
+  session event replaces the client and drops its unconfirmed edits (10).
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -3037,6 +3039,153 @@ not take:
 In the code, findings 3, 6, 8, 9 and 10 remain (§4), each with its own slice and
 test; finding 3 (a room with no snapshot replaces the open document) is the next
 data-safety one and now sits on the `Ok(None)` branch this slice made explicit.
+
+### 5.31 Finding 3: a room without a snapshot is seeded by its first writer (run 2026-11-11)
+
+**What the defect was.** `AppState::room_for` created a room on the first join,
+and for a document the store had never snapshotted (`Ok(None)`, the branch
+§5.30 made explicit) it built one from `Document::new()`. `Room::join` answers a
+client without `lastVersion` with a snapshot, so that client received the empty
+document and `Session::set_document` replaced the document it had open: the text
+on screen, including edits it had not committed, was gone from its window, the
+window then said `InSync`, and the next commit wrote an empty `.docx` over the
+cabinet's copy. The protocol had no seeding step, so `last_version: null` meant
+both "I have nothing" and "I have the document, tell me what the room holds"
+(§5.26 finding 3, `apps/collab-server/src/lib.rs:240-270`).
+
+**The decision.** `docs/collab/adr/0004-room-without-snapshot-seeded.md`
+(ADR WC-0004; repository-local, it does not consume a protocol ADR number). It
+compares keeping the blank room and hiding the divergence in the client,
+refusing every join to an unsnapshotted room, having the server fetch the file
+from the cabinet, and seeding from the first writer's copy; it picks the last.
+The client that has the document open is the only party that can seed the room,
+and the server's rule becomes one sentence: **a room is created from state — a
+stored snapshot or a client's copy — and never from a default.**
+
+**What the code does** (+890/−81 in sixteen files).
+
+- `crates/collab/src/wire.rs`: `ClientMsg::Auth` gains `seed: bool`
+  (`#[serde(default)]`, so an older client's auth still parses) and
+  `ClientMsg::Seed { bytes, last }` carries the document in chunks. A `seed`
+  frame outside the handshake is refused `invalid`.
+- `apps/collab-server/src/lib.rs`: `authenticate` returns a `Handshake` (it was
+  a four-tuple) and, after the token is verified, `read_seed` accumulates the
+  stream bounded by `MAX_MODEL` and `AUTH_TIMEOUT` per frame. `room_for` takes
+  the seed and the role and answers `(room, seeded)` or a `Refusal`: `Corrupt`
+  (ADR WC-0003), `Unseeded` (nothing stored, nothing offered, or a role that may
+  not write), `BadSeed` (the bytes are not a document). `read_model` is now the
+  single parser for a stored model and an offered one. `send_join` takes
+  `seeded` and sends no snapshot back to the client whose copy became the room:
+  `welcome.resync` is false and the client keeps its document, selection and
+  undo history. `Metrics` gained `unseeded_joins_total`, and `refuse_join`
+  replaced the corruption-only refusal helper.
+- Clients: `Collab::connect` (desktop `crates/collab-app`, web
+  `crates/collab-web`) takes the open `Document` and keeps its `serde_json`;
+  `collab-ws` and `collab-web` send `auth{seed}` plus
+  `wordcraft_collab_client::seed_frames` while nothing is accepted
+  (`version == 0`), which is exactly the window in which the server may need
+  them. `crates/ui-egui/src/collab.rs` and `apps/wordcraft-web/src/web.rs` pass
+  `app.session.doc`.
+- Clients offer the document as it was when the session started, so the
+  unconfirmed queue that follows rebuilds the current text: the replay is not
+  applied twice. A room that already has state ignores the seed and answers with
+  its snapshot, so a stale copy can never overwrite it.
+- `docs/collab/server.md` (the handshake, the three store states, the frame
+  bounds), `production.md` (the counter and what to do when it grows), `rfc.md`
+  §4.2/§4.5/§4.6 (the two message rows and two paragraphs) and `host-bridge.md`
+  (the host opens the session after the document is in the app, because the seed
+  is whatever the app holds).
+
+**Tests** (nine new: five pin the server rule, two the wire, one the client core,
+one the transport).
+
+- `apps/collab-server/src/tests.rs`:
+  `a_client_with_an_open_document_seeds_the_room_it_joins` (the seeding client
+  gets `welcome{version: 0, resync: false}` and no snapshot; a second client's
+  snapshot contains the first client's text; an edit at that paragraph's offset
+  lands at version 1), `a_join_without_a_seed_is_refused_when_nothing_is_stored`
+  (`invalid`, not retryable, no room, the counter counts, and a viewer with a
+  copy is refused the same way), `a_new_document_still_opens_a_room`,
+  `a_seed_does_not_replace_a_stored_snapshot` (the restored room answers with
+  its own document and the offered copy never reaches it) and
+  `a_seed_that_is_not_a_document_is_refused`. The connect helpers now offer an
+  empty document, which is the room the old tests used to get; `open_room` and
+  `a_viewer_cannot_write` were adjusted for the two states "stored" and "a
+  viewer never creates a room".
+- `crates/collab/src/wire.rs`: `an_older_auth_without_a_seed_field_parses`,
+  `a_seed_chunk_round_trips_through_json`, and the auth carries `seed` when it
+  says so.
+- `crates/collab-client/src/tests.rs`:
+  `seed_frames_split_the_document_and_mark_exactly_one_last_chunk` (the parts
+  rebuild the model, one `last`, and an empty document still sends its frame).
+- `crates/collab-ws/tests/reconnect.rs`:
+  `the_first_connection_offers_the_open_document` — the transport announces the
+  seed and the fake server rebuilds the document byte for byte.
+- **The tests fail without the fix** (run at the build host with `room_for` back
+  on `Document::new()` for `Ok(None)`). The seed test fails at its first
+  assertion — the seeding client gets `welcome{resync: true}` and a snapshot
+  instead of `resync: false`; with that assertion bypassed it fails at
+  `the room kept the document the first client had open` and prints the empty
+  model (`"text":""`, no runs) the second client received. The refusal test
+  fails at its first `match`: `expected the join to be refused, got Welcome { …
+  version: 0, … resync: true }` — the blank room and its snapshot, which is the
+  finding. Both patches were reverted; the tree is clean.
+
+**What ran** (build host `agents`, `scripts/remote-build.sh`, from this tree at
+`bf632378`):
+
+- `cargo fmt --all -- --check` → **EXIT=0**.
+- `cargo clippy -p wordcraft-collab-server --all-targets -- -D warnings` →
+  **EXIT=0** (`collab-client`, `collab-ws` and `collab-web` with all targets are
+  also clean under `-D warnings`, which the changed call sites need).
+- `cargo test` over `collab`, `collab-server`, `collab-client`, `collab-doc`,
+  `collab-app` → **299 passed, 0 failed, 1 ignored** (`collab` 61, `collab-doc`
+  116, `collab-client` 20, `collab-app` 39, `collab-server` 63 passed / 1
+  ignored — the LibreOffice commit gate). The slice added 9 tests:
+  `collab-server` 58 → 63, `collab` 59 → 61, `collab-client` 19 → 20, and
+  `collab-ws`'s `reconnect` test 1 → 2 (2 passed, outside the five-crate set).
+- `cargo xtask wasm` → `wasm32-unknown-unknown check: ok (22 crates)`; the wasm
+  build of the web app was checked on its own as well:
+  `cargo check -p wordcraft-web --target wasm32-unknown-unknown` → **EXIT=0**,
+  because the app binary is not in the xtask set and it carries one changed call
+  site.
+- `.github/workflows/` touched: no; manifest or lock changed: no; nothing that
+  touches `main`.
+
+**Local head.** The fix, its tests and the ADR are `bf632378` — `collab: open a
+room from the document the first writer has open`; this page is one more commit
+on top of it and the only file it changes.
+
+| | |
+|---|---|
+| head | `bf632378` — `collab: open a room from the document the first writer has open` |
+| files | `apps/collab-server/src/lib.rs` +174/−43, `src/tests.rs` +248/−18, `crates/collab/src/wire.rs` +39/−1, `crates/collab-client/src/lib.rs` +30/−3, `src/tests.rs` +29, `crates/collab-ws/src/lib.rs` +22/−4, `tests/reconnect.rs` +45/−1, `crates/collab-app/src/lib.rs` +6/−2, `crates/collab-web/src/lib.rs` +28/−3, `crates/ui-egui/src/collab.rs` +1/−1, `apps/wordcraft-web/src/web.rs` +1/−1, `docs/collab/adr/0004-room-without-snapshot-seeded.md` +197, `server.md` +32/−3, `rfc.md` +21/−1, `production.md` +10, `host-bridge.md` +7 (16 files, +890/−81) |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27–§5.30: from `upstream/`,
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
+from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the
+runs on the new head. Three follow-ups this slice names and does not take:
+
+- **The seed carries no source `.docx`.** The collab session does not hold the
+  host's file bytes, so a room seeded from a model has no `source.docx` until
+  its first commit, and a commit before that writes the modeled form of
+  unchanged paragraphs with the ADR-0011 warning. Text is not affected; the
+  follow-up is a second seed stream for the source, fed by the host bridge.
+- **The seed carries no cabinet `version`/`etag`,** so a seeded room's first
+  commit is still unconditional (§4). The clients that can seed do not know the
+  etag; the host does. Until the seed carries it, the existing limitation
+  stands, and it is now the only unprotected window a seeded room has.
+- **A room whose snapshot was lost while clients were connected stays refused.**
+  Those clients have `version > 0` and therefore do not seed; reopening the
+  document seeds a new room. That is loud instead of silent, and it shares the
+  §5.30 follow-up: the client reconnects in a loop on a non-retryable refusal
+  (`invalid`), so the window keeps counting `unseeded_joins_total` until someone
+  closes it or reopens the document.
+
+In the code, findings 6, 8, 9 and 10 of §5.26 remain (§4), each with its own
+slice and test. Finding 6 (a participant can register another's `client_id`) is
+the next protocol-shaped one; findings 8–10 are client-side state.
 
 ## 6. Where things live
 
