@@ -34,8 +34,8 @@ fn rectangle(wrap: Wrap, y: f32) -> InlineObject {
 
 fn policy_doc(child: Option<InlineObject>) -> (Document, u32) {
     let mut d = Document::from_text("");
-    d.styles.default_chr.font = Some("Arial".into());
-    d.styles.default_chr.size = Some(10.0);
+    Arc::make_mut(&mut d.styles).default_chr.font = Some("Arial".into());
+    Arc::make_mut(&mut d.styles).default_chr.size = Some(10.0);
     let root = d.add_part(PartKind::TextBox, vec![para_block(paragraph())]);
     d.parts.get_mut(&root).unwrap().body = TextBody { auto_fit: true, inset: Some([0; 4]), ..Default::default() };
     if let Some(child) = child {
@@ -170,6 +170,7 @@ fn plain_and_inline_keep_flow() {
         float: Default::default(),
         crop: [0.0; 4],
         ole: None,
+        fx: Default::default(),
     };
     let (mut d, root) = policy_doc(Some(image));
     d.para_mut(StoryRef::Part(root), &Path::top(0)).unwrap().props.line_spacing = Some(LineSpacing::AtLeast(LINE_HEIGHT));

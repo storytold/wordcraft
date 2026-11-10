@@ -34,7 +34,7 @@ enum Fit {
 
 fn shared_graph(graph: Graph, fit: Fit) -> (Document, u32) {
     let mut d = Document::from_text("");
-    d.styles.default_chr.font = Some("Source Sans 3".into());
+    Arc::make_mut(&mut d.styles).default_chr.font = Some("Source Sans 3".into());
     let ids: Vec<_> =
         (0..4).map(|k| d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text(&format!("Level{k}"), Default::default()))])).collect();
     for id in &ids {
@@ -136,6 +136,7 @@ fn rejected_probe_copies_no_story() {
         pin: None,
         footer_wraps: HashMap::new(),
         header_tables: HashMap::new(),
+        header_repeats: 0,
         frames: Default::default(),
         fitted: HashMap::new(),
         fitted_order: Vec::new(),
@@ -193,6 +194,7 @@ fn with_probe_ctx(d: &Document, f: impl FnOnce(&mut Ctx)) {
         pin: None,
         footer_wraps: HashMap::new(),
         header_tables: HashMap::new(),
+        header_repeats: 0,
         frames: Default::default(),
         fitted: HashMap::new(),
         fitted_order: Vec::new(),
@@ -239,7 +241,7 @@ fn root_none_is_reused() {
         );
         assert_eq!(after, before, "repeated layout and table measurement reuse the exhausted root result");
         assert_eq!(COPIED_BLOCKS.with(std::cell::Cell::get), copied);
-        let key = (root, 240.0f32.to_bits());
+        let key = (root, 240.0f32.to_bits(), ctx.fields.page_key());
         assert_eq!(ctx.fitted.get(&key), Some(&None));
         assert_eq!(ctx.fitted_order, [key]);
         assert_eq!(ctx.measure_depth, 0);
@@ -266,8 +268,8 @@ enum Nest {
 
 pub(crate) fn nested_none_is_not_cached(fitted_boxes: impl Fn(&mut Ctx, &Paragraph) -> Vec<(usize, f32)>) {
     let mut d = Document::from_text("");
-    d.styles.default_chr.font = Some("Source Sans 3".into());
-    let list = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    Arc::make_mut(&mut d.styles).default_chr.font = Some("Source Sans 3".into());
+    let list = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let parent = d.add_part(PartKind::TextBox, vec![]);
     let leaf = d.add_part(PartKind::TextBox, Document::from_text("Visible child").body);
     let root = d.add_part(PartKind::TextBox, Document::from_text("Numbered root").body);
@@ -307,7 +309,7 @@ pub(crate) fn nested_none_is_not_cached(fitted_boxes: impl Fn(&mut Ctx, &Paragra
             assert_eq!(measured.len(), 1, "a fresh root must recover from exhausted {nest:?}");
             assert!(measured[0].1 > 0.0);
             assert!(!ctx.measure_exhausted);
-            let key = (root, 240.0f32.to_bits());
+            let key = (root, 240.0f32.to_bits(), ctx.fields.page_key());
             assert_eq!(ctx.fitted.get(&key), Some(&Some(measured[0].1)));
             assert_eq!(ctx.fitted_order, [key]);
             assert_eq!(ctx.eq_count, 7);
@@ -372,7 +374,7 @@ fn suppressed_owner_identity() {
 
 fn floating_doc(text: &str) -> (Document, u32, InlineObject) {
     let mut d = Document::from_text("");
-    d.styles.default_chr.font = Some("Source Sans 3".into());
+    Arc::make_mut(&mut d.styles).default_chr.font = Some("Source Sans 3".into());
     let id = d.add_part(PartKind::TextBox, Document::from_text(text).body);
     d.parts.get_mut(&id).unwrap().body = TextBody { auto_fit: true, inset: Some([0; 4]), ..Default::default() };
     let obj = shape(id, 240.0);
@@ -413,7 +415,7 @@ fn floating_none_is_reused() {
 #[test]
 fn floating_success_is_reused() {
     let (mut d, _, obj) = floating_doc("Original floating content");
-    let list = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let list = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
     let unused = d.add_part(PartKind::TextBox, Document::from_text("Unrelated numbered part").body);
     d.para_mut(StoryRef::Part(unused), &Path::top(0)).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num: list, level: 0 });
