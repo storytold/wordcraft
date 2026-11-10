@@ -279,3 +279,56 @@ fn word_2003_xml_with_windows_line_ends_reads_one_space_per_line_break() {
     let d = read_xml(xml.as_bytes()).unwrap();
     assert_eq!(paras(&d)[0].plain_text(), "a b");
 }
+
+/// A Word 2003 XML Document's settings (`w:docPr`) and font table (`w:fonts`) are read, as Word
+/// carries them over when it saves one as .docx: the default tab stop, the compatibility switches,
+/// compatibility mode 11, and each font's family (2003 capitalises it: `Roman`). They were
+/// dropped, so such a document had 36pt tab stops, Word 2007's compatibility mode and no roman
+/// fonts.
+#[test]
+fn word_2003_xml_reads_settings_and_the_font_table() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:fonts><w:defaultFonts w:ascii="Times New Roman" w:fareast="Brand Ming" w:h-ansi="Times New Roman" w:cs="Times New Roman"/><w:font w:name="Brand Kai"><w:altName w:val="BrandKai"/><w:panose-1 w:val="03000509000000000000"/><w:charset w:val="88"/><w:family w:val="Script"/><w:pitch w:val="fixed"/></w:font><w:font w:name="Brand Ming"><w:family w:val="Roman"/><w:pitch w:val="variable"/></w:font></w:fonts><w:docPr><w:view w:val="print"/><w:defaultTabStop w:val="480"/><w:characterSpacingControl w:val="CompressPunctuation"/><w:compat><w:spaceForUL/><w:balanceSingleByteDoubleByteWidth/><w:doNotExpandShiftReturn/><w:ww6BorderRules/><w:doNotUseHTMLParagraphAutoSpacing/><w:breakWrappedTables/><w:useFELayout/></w:compat></w:docPr><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:wordDocument>"#;
+    let d = read_xml(xml.as_bytes()).unwrap();
+    let s = &d.settings;
+    assert!((s.default_tab - 24.0).abs() < 0.01, "480 twips: {}", s.default_tab);
+    assert_eq!(s.compat_mode, 11);
+    assert!(s.do_not_expand_shift_return && s.sum_paragraph_spacing);
+    assert_eq!(s.roman_fonts, ["Brand Ming"]);
+    // Saved as DOCX, they are kept, the switches WordCraft doesn't read too, and the font table.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut part = |name: &str| {
+        let mut s = String::new();
+        std::io::Read::read_to_string(&mut z.by_name(name).unwrap(), &mut s).unwrap();
+        s
+    };
+    let settings = part("word/settings.xml");
+    assert!(settings.contains("<w:spaceForUL/>") && settings.contains("<w:useFELayout/>"), "{settings}");
+    // In ECMA-376's names: renamed, turned round, and those 2003 has no name for added, once.
+    for want in ["<w:doNotSuppressParagraphBorders/>", "<w:doNotSnapToGridInCell/>", "<w:growAutofit/>", "<w:cachedColBalance/>"] {
+        assert!(settings.contains(want), "{want} in {settings}");
+    }
+    assert!(!settings.contains("ww6BorderRules") && !settings.contains("breakWrappedTables"), "{settings}");
+    assert_eq!(settings.matches("allowSpaceOfSameStyleInTable").count(), 1, "{settings}");
+    // `w:panose-1` becomes `w:panose1`, and the family is in lower case.
+    let fonts = part("word/fontTable.xml");
+    for want in [
+        r#"<w:altName w:val="BrandKai"/>"#,
+        r#"<w:panose1 w:val="03000509000000000000"/>"#,
+        r#"<w:family w:val="script"/>"#,
+        r#"<w:family w:val="roman"/>"#,
+    ] {
+        assert!(fonts.contains(want), "{want} in {fonts}");
+    }
+    assert!(!fonts.contains("panose-1"), "{fonts}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(again.settings.compat_mode, 11);
+    assert_eq!(again.settings.roman_fonts, ["Brand Ming"]);
+    assert!(again.settings.allow_space_of_same_style_in_table);
+    assert!(again.settings.do_not_expand_shift_return && (again.settings.default_tab - 24.0).abs() < 0.01);
+    // Without `w:docPr` or `w:fonts` it is still mode 11, with the default tab stop.
+    let plain = r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml"><w:body><w:p/></w:body></w:wordDocument>"#;
+    let plain = read_xml(plain.as_bytes()).unwrap();
+    assert_eq!(plain.settings.compat_mode, 11);
+    assert!((plain.settings.default_tab - 36.0).abs() < 0.01 && plain.settings.roman_fonts.is_empty());
+}
