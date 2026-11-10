@@ -1827,3 +1827,19 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+
+#[test]
+fn exact_double_borders_write_nearest_word_lines() {
+    use wordcraft_doc::props::{Border, Borders, CharProps};
+    use wordcraft_doc::{Block, Document, Paragraph, Table, para_block};
+    let mut doc = Document::new();
+    let mut paragraph = Paragraph::with_text("Ruled", CharProps::default());
+    paragraph.props.borders = Some(Borders { bottom: Border::default().double_widths([0.7, 0.2, 0.05]), ..Default::default() });
+    let mut table = Table::new(1, 1, 100.0);
+    table.props.style = None;
+    table.rows[0].cells[0].props.borders = Some(Borders { bottom: Border::default().double_widths([0.1, 0.2, 0.45]), ..Default::default() });
+    doc.body = vec![para_block(paragraph), std::sync::Arc::new(Block::Table(table))];
+    let rtf = export(&doc);
+    assert!(rtf.contains(r"\brdrtnthsg\brdrw8"), "{rtf}");
+    assert!(rtf.contains(r"\brdrthtnsg\brdrw6"), "{rtf}");
+}

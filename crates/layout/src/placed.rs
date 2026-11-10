@@ -1,5 +1,36 @@
 use super::{Arc, Border, ParaLayout, Path, Rect, Rgb, Spin, StoryRef, TextDirection, Wrap};
 
+/// Physical side of the enclosed content, independent of the rule's endpoint order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BorderSide {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl BorderSide {
+    pub(crate) fn inward(self) -> (f32, f32) {
+        match self {
+            Self::Top => (0.0, 1.0),
+            Self::Bottom => (0.0, -1.0),
+            Self::Left => (1.0, 0.0),
+            Self::Right => (-1.0, 0.0),
+        }
+    }
+
+    fn turned(self, turn: TextDirection) -> Self {
+        use BorderSide::*;
+        match (turn, self) {
+            (TextDirection::Horizontal, side) => side,
+            (TextDirection::Down, Top) | (TextDirection::Up, Bottom) => Right,
+            (TextDirection::Down, Right) | (TextDirection::Up, Left) => Bottom,
+            (TextDirection::Down, Bottom) | (TextDirection::Up, Top) => Left,
+            (TextDirection::Down, Left) | (TextDirection::Up, Right) => Top,
+        }
+    }
+}
+
 /// Something placed on a page (page coordinates, points, y down).
 #[derive(Clone, Debug)]
 pub enum Placed {
@@ -21,6 +52,9 @@ pub enum Placed {
         color: Rgb,
     },
     Rule {
+        /// Used only for asymmetric compound borders. Non-border rules use Top as
+        /// a placeholder: their symmetric stroke ignores the side, even when vertical.
+        side: BorderSide,
         x0: f32,
         y0: f32,
         x1: f32,
@@ -189,7 +223,8 @@ impl Placed {
                     it.turn(turn, x, y);
                 }
             }
-            Placed::Rule { x0, y0, x1, y1, .. } => {
+            Placed::Rule { side, x0, y0, x1, y1, .. } => {
+                *side = side.turned(turn);
                 (*x0, *y0) = turn_point(turn, x, y, *x0, *y0);
                 (*x1, *y1) = turn_point(turn, x, y, *x1, *y1);
             }

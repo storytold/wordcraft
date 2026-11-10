@@ -3000,3 +3000,28 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
     assert_eq!(shown, expected);
 }
+
+#[test]
+fn exact_double_border_exports_its_stroke_widths() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let border = Border::default().double_widths([0.7, 0.2, 0.05]).unwrap();
+    let lines = |border| {
+        let mut paragraph = Paragraph::with_text("Ruled", CharProps::default());
+        paragraph.props.borders = Some(Borders { bottom: Some(border), ..Default::default() });
+        let mut doc = Document::new();
+        doc.body = vec![para_block(paragraph)];
+        let bytes = export(&doc, &PdfOptions { tagged: false, ..Default::default() }).unwrap();
+        stroked_segments(&bytes).into_iter().filter(|(a, b, _)| (a.y - b.y).abs() < 1e-3 && (a.x - b.x).abs() > 1.0).collect::<Vec<_>>()
+    };
+    let single = lines(Border { style: BorderStyle::Single, ..border });
+    assert_eq!(single.len(), 1);
+    let centre = single[0].0.y;
+    let mut double = lines(border);
+    assert_eq!(double.len(), 2);
+    double.sort_by(|a, b| a.2.total_cmp(&b.2));
+    for ((a, _, width), expected, distance) in [(double[0], 0.05, 0.45), (double[1], 0.7, 0.125)] {
+        assert!((width - expected).abs() < 1e-4, "{width}");
+        assert!(((a.y - centre).abs() - distance).abs() < 1e-4, "{} vs {centre}", a.y);
+    }
+    assert!((double[0].0.y - centre) * (double[1].0.y - centre) < 0.0);
+}

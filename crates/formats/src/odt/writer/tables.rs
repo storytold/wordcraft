@@ -56,6 +56,11 @@ pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Ce
         odf_border(top),
         odf_border(bottom)
     ));
+    for (side, border) in [("top", top), ("left", left), ("bottom", bottom), ("right", right)] {
+        if let Some(border) = border {
+            p.push_str(&super::props::line_width_attr(side, border));
+        }
+    }
     if let Some(bg) = c.shading {
         p.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
     }

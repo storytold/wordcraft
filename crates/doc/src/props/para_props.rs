@@ -191,11 +191,19 @@ pub struct TabStop {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
+/// Border line patterns, including exact ODF double-line widths.
 pub enum BorderStyle {
     #[default]
     None,
     Single,
     Double,
+    /// ODF inner stroke, gap and outer stroke in twentieths of a point. Word formats
+    /// write [`BorderStyle::word`]; the border width is that line's Word width.
+    DoubleWidths {
+        inner: u8,
+        gap: u8,
+        outer: u8,
+    },
     Dotted,
     Dashed,
     Thick,
@@ -203,8 +211,7 @@ pub enum BorderStyle {
     DotDash,
     Wave,
     /// The compound lines of thin and thick strokes (`thinThickSmallGap` to
-    /// `thinThickThinLargeGap`), kept so a file writes back the line it read; drawn as a single
-    /// line of the border's width.
+    /// `thinThickThinLargeGap`), drawn as separate strokes scaled by the border width.
     ThinThickSmallGap,
     ThickThinSmallGap,
     ThinThickThinSmallGap,
@@ -217,10 +224,65 @@ pub enum BorderStyle {
 }
 
 impl BorderStyle {
+    pub fn stroke_widths(self) -> Option<[f32; 3]> {
+        match self {
+            Self::DoubleWidths { inner, gap, outer } => Some([inner, gap, outer].map(|part| f32::from(part) / 20.0)),
+            _ => None,
+        }
+    }
+
+    /// Nearest Word pattern by the proportions of the strokes and gap.
+    pub fn word(self) -> BorderStyle {
+        let Some([inner, gap, outer]) = self.stroke_widths() else { return self };
+        use BorderStyle::*;
+        if inner == outer {
+            return Double;
+        }
+        let total = inner + gap + outer;
+        let target = [outer / total, gap / total, inner / total];
+        let mut best = Double;
+        let mut error = f32::INFINITY;
+        for style in [Double, ThinThickSmallGap, ThickThinSmallGap, ThinThickMediumGap, ThickThinMediumGap, ThinThickLargeGap, ThickThinLargeGap] {
+            if let Some(pattern) = style.compound_pattern() {
+                let sum: f32 = pattern.iter().sum();
+                let distance: f32 = pattern.iter().zip(target).map(|(part, want)| (part / sum - want).powi(2)).sum();
+                if distance < error {
+                    best = style;
+                    error = distance;
+                }
+            }
+        }
+        best
+    }
+
+    /// Relative stroke and gap widths, from the outside toward the enclosed content.
+    /// One unit is 0.6 times the model width, matching Double and Triple.
+    /// Thin/thick ordering is an approximation, not yet measured against native Word.
+    /// The small, medium and large gaps are one, two and four thin strokes respectively.
+    pub fn compound_pattern(self) -> Option<&'static [f32]> {
+        use BorderStyle::*;
+        Some(match self {
+            DoubleWidths { .. } => return Option::None,
+            Double => &[1.0, 2.0, 1.0],
+            Triple => &[1.0, 2.0, 1.0, 2.0, 1.0],
+            ThinThickSmallGap => &[1.0, 1.0, 2.0],
+            ThickThinSmallGap => &[2.0, 1.0, 1.0],
+            ThinThickMediumGap => &[1.0, 2.0, 2.0],
+            ThickThinMediumGap => &[2.0, 2.0, 1.0],
+            ThinThickLargeGap => &[1.0, 4.0, 2.0],
+            ThickThinLargeGap => &[2.0, 4.0, 1.0],
+            ThinThickThinSmallGap => &[1.0, 1.0, 2.0, 1.0, 1.0],
+            ThinThickThinMediumGap => &[1.0, 2.0, 2.0, 2.0, 1.0],
+            ThinThickThinLargeGap => &[1.0, 4.0, 2.0, 4.0, 1.0],
+            _ => return Option::None,
+        })
+    }
+
     pub fn ooxml(self) -> &'static str {
         match self {
             BorderStyle::None => "nil",
             BorderStyle::Single => "single",
+            BorderStyle::DoubleWidths { .. } => self.word().ooxml(),
             BorderStyle::Double => "double",
             BorderStyle::Dotted => "dotted",
             BorderStyle::Dashed => "dashed",
@@ -268,14 +330,39 @@ impl BorderStyle {
 #[serde(default)]
 pub struct Border {
     pub style: BorderStyle,
-    /// Line width, points.
+    /// Word line width, points; exact double strokes are held by the style.
     pub width: f32,
     pub color: Option<Rgb>,
     /// Distance from the text, points.
     pub space: f32,
 }
 
+// Border sits in every run's and paragraph's properties; exact widths must not enlarge it.
+const _: () = assert!(std::mem::size_of::<Border>() == 16);
+
 impl Border {
+    /// Retain ODF double-line widths to a twentieth of a point, within a 12 point band.
+    pub fn double_widths(mut self, widths: [f32; 3]) -> Option<Border> {
+        if !widths.iter().all(|part| part.is_finite() && (0.0..=1584.0).contains(part)) {
+            return None;
+        }
+        let total: f32 = widths.iter().sum();
+        if total <= 0.0 || (widths[0] == 0.0 && widths[2] == 0.0) {
+            return None;
+        }
+        let scale = (12.0 / total).min(1.0);
+        let mut parts = widths.map(|part| if part > 0.0 { (part * scale * 20.0).round().max(1.0) as u8 } else { 0 });
+        let excess = parts.iter().map(|part| u16::from(*part)).sum::<u16>().saturating_sub(240);
+        if let Some(largest) = parts.iter_mut().max() {
+            *largest = largest.saturating_sub(excess as u8);
+        }
+        let [inner, gap, outer] = parts;
+        self.style = BorderStyle::DoubleWidths { inner, gap, outer };
+        let band = (f32::from(inner) + f32::from(gap) + f32::from(outer)) / 20.0;
+        self.width = band / (0.6 * self.style.word().compound_pattern()?.iter().sum::<f32>());
+        Some(self)
+    }
+
     pub fn single(width: f32) -> Border {
         Border { style: BorderStyle::Single, width, color: None, space: 0.0 }
     }
@@ -548,5 +635,37 @@ impl ParaProps {
     /// Just the formatting: without the tracked changes.
     pub fn formatting(&self) -> ParaProps {
         ParaProps { num_change: None, fmt_change: None, ..self.clone() }
+    }
+}
+
+#[cfg(test)]
+mod double_width_tests {
+    use super::*;
+
+    #[test]
+    fn double_widths_keep_exact_strokes_and_word_fallbacks() {
+        for (widths, word) in [
+            ([0.7, 0.2, 0.05], BorderStyle::ThinThickSmallGap),
+            ([0.1, 0.2, 0.45], BorderStyle::ThickThinSmallGap),
+            ([0.1, 0.2, 0.1], BorderStyle::Double),
+        ] {
+            let border = Border::default().double_widths(widths).unwrap();
+            assert_eq!(border.style.stroke_widths(), Some(widths));
+            assert_eq!(border.style.word(), word);
+        }
+        assert_eq!(std::mem::size_of::<Border>(), 16);
+        assert_eq!(std::mem::size_of::<Option<Border>>(), 16);
+        assert_eq!(std::mem::size_of::<Borders>(), 96);
+        assert_eq!(Border::default().double_widths([0.33; 3]).unwrap().style.stroke_widths(), Some([0.35; 3]));
+        assert_eq!(Border::default().double_widths([8.0; 3]).unwrap().style.stroke_widths(), Some([4.0; 3]));
+        assert_eq!(Border::default().double_widths([1584.0, 0.001, 0.001]).unwrap().style.stroke_widths(), Some([11.9, 0.05, 0.05]));
+        assert_eq!(Border::default().double_widths([0.001, 0.0, 1.0]).unwrap().style.stroke_widths(), Some([0.05, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn double_widths_reject_invalid_parts_and_missing_strokes() {
+        for widths in [[f32::NAN, 1.0, 1.0], [-1.0, 1.0, 1.0], [0.0; 3], [1584.1, 1.0, 1.0], [0.0, 1.0, 0.0], [f32::INFINITY; 3]] {
+            assert!(Border::default().double_widths(widths).is_none(), "{widths:?}");
+        }
     }
 }

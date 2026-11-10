@@ -1,6 +1,6 @@
 # MCP server
 
-> **Last updated:** 2026-10-31 · Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
+> **Last updated:** 2026-11-10 · Exact ODF border widths documented; previously: Delivery review fixes for #2596: unknown outcomes are not replayed, including image exports to a path; invalid UTF-8 returns a parse error without stopping later requests.
 
 WordCraft speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so
 Claude and other agents can write and edit documents.
@@ -263,7 +263,9 @@ those aren't given; `styles.modify` sets only what it is given.
 A **Border** is `{"style": …, "width": pt, "color": colour | null, "space": pt}` (`space` is
 the distance from the text). Missing fields are `none`, 0, no colour and 0, so a border needs a
 `width` above 0 to show. `style` is one of `none`, `single`, `double`, `dotted`, `dashed`,
-`thick`, `triple`, `dotDash`, `wave`.
+`thick`, `triple`, `dotDash`, `wave`, or `{"doubleWidths": {"inner": 14, "gap": 4, "outer": 1}}`.
+The `doubleWidths` parts are in twentieths of a point, read from ODT files; `width`
+is the nearest Word line's width for DOCX and RTF export.
 
 ### ParaProps
 
@@ -295,3 +297,9 @@ the distance from the text). Missing fields are `none`, 0, no colour and 0, so a
 "right"?: pt}`: the alignment and indents as seen on the page, which each selected paragraph turns
 into its own start and end once `props` (a `bidi` in it, say) is applied. The Paragraph dialog sends
 only the fields that changed this way, as one command and so one undo step.
+
+## Revision history
+
+| Date | Change |
+|---|---|
+| 2026-11-10 | Document the exact ODF double-border style and its units. |

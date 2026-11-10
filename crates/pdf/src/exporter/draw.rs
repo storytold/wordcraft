@@ -193,7 +193,8 @@ impl Exporter<'_> {
         if ![x0, y0, x1, y1].iter().all(|v| ok(*v)) {
             return;
         }
-        let w = if width.is_finite() { width.clamp(0.1, 100.0) } else { 0.5 };
+        // One twentieth of a point, the finest border stroke the model holds.
+        let w = if width.is_finite() { width.clamp(0.05, 100.0) } else { 0.5 };
         let paint: krilla::paint::Paint = rgb::Color::new(c.0, c.1, c.2).into();
         let stroke = |width: f32, dash: Option<StrokeDash>, cap: LineCap| Stroke {
             paint: paint.clone(),

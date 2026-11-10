@@ -187,14 +187,15 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
     }
     let r = 4.6;
     out.push(disc(r));
-    out.push(Placed::Rule { x0: cx - 2.6, y0: cy, x1: cx + 2.6, y1: cy, border: white });
+    out.push(Placed::Rule { side: crate::BorderSide::Top, x0: cx - 2.6, y0: cy, x1: cx + 2.6, y1: cy, border: white });
     if children {
-        out.push(Placed::Rule { x0: cx, y0: cy - 2.6, x1: cx, y1: cy + 2.6, border: white });
+        out.push(Placed::Rule { side: crate::BorderSide::Top, x0: cx, y0: cy - 2.6, x1: cx, y1: cy + 2.6, border: white });
     }
     if collapsed {
         let w = first.xs.last().copied().unwrap_or(0.0).max(12.0);
         let by = y + (first.baseline - first.top) + 3.0;
         out.push(Placed::Rule {
+            side: crate::BorderSide::Top,
             x0: x,
             y0: by,
             x1: x + w,

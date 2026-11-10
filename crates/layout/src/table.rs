@@ -839,17 +839,17 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
             let top_vis = c.vmerge != VMerge::Continue;
             if top_vis && let Some(e) = b.top.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0, x1: hx1, y1: y0, border: e });
+                items.push(Placed::Rule { side: crate::BorderSide::Top, x0: hx0, y0, x1: hx1, y1: y0, border: e });
             }
             let last_of_merge = c.vmerge == VMerge::None || !cont.get(ri + 1).is_some_and(|v| v.contains(&c.g));
             if last_of_merge && let Some(e) = b.bottom.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e });
+                items.push(Placed::Rule { side: crate::BorderSide::Bottom, x0: hx0, y0: y1, x1: hx1, y1, border: e });
             }
             if let Some(e) = b.left.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0, y0, x1: x0, y1, border: e });
+                items.push(Placed::Rule { side: crate::BorderSide::Left, x0, y0, x1: x0, y1, border: e });
             }
             if let Some(e) = b.right.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: x1, y0, x1, y1, border: e });
+                items.push(Placed::Rule { side: crate::BorderSide::Right, x0: x1, y0, x1, y1, border: e });
             }
             items.push(Placed::Cell {
                 rect: Rect::new(c.x, 0.0, c.w, if c.vmerge == VMerge::Continue { rh } else { span_h }),
@@ -1120,28 +1120,28 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
                     a.extend(above.map(cell_at));
                     b.extend(below.map(cell_at));
                 }
-                Placed::Rule { x0, y0, x1, y1, border } => {
+                Placed::Rule { side, x0, y0, x1, y1, border } => {
                     if (y0 - y1).abs() < 0.01 {
                         // Horizontal: the top edge stays, the bottom edge moves; both fragments close.
                         if *y0 <= 0.01 {
                             a.push(it.clone());
-                            b.push(Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border });
+                            b.push(Placed::Rule { side: *side, x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border });
                         } else if *y0 >= row.height - 0.01 {
-                            a.push(Placed::Rule { x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border });
-                            b.push(Placed::Rule { x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border });
+                            a.push(Placed::Rule { side: *side, x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border });
+                            b.push(Placed::Rule { side: *side, x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border });
                         } else if *y0 <= cut {
                             a.push(it.clone());
                         } else {
-                            b.push(Placed::Rule { x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border });
+                            b.push(Placed::Rule { side: *side, x0: *x0, y0: y0 - shift, x1: *x1, y1: y1 - shift, border: *border });
                         }
                     } else {
                         let (t, bt) = (y0.min(*y1), y0.max(*y1));
                         if t < cut {
-                            a.push(Placed::Rule { x0: *x0, y0: t, x1: *x1, y1: bt.min(cut), border: *border });
+                            a.push(Placed::Rule { side: *side, x0: *x0, y0: t, x1: *x1, y1: bt.min(cut), border: *border });
                         }
                         if bt > cut {
                             let shift = geo_shift(bt, shift);
-                            b.push(Placed::Rule { x0: *x0, y0: (t - shift).max(0.0), x1: *x1, y1: bt - shift, border: *border });
+                            b.push(Placed::Rule { side: *side, x0: *x0, y0: (t - shift).max(0.0), x1: *x1, y1: bt - shift, border: *border });
                         }
                     }
                 }

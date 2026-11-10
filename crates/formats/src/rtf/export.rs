@@ -287,6 +287,7 @@ fn rtf_border_style(s: wordcraft_doc::props::BorderStyle) -> &'static str {
     match s {
         BorderStyle::None => "\\brdrnone",
         BorderStyle::Single => "\\brdrs",
+        s @ BorderStyle::DoubleWidths { .. } => rtf_border_style(s.word()),
         BorderStyle::Double => "\\brdrdb",
         BorderStyle::Dotted => "\\brdrdot",
         BorderStyle::Dashed => "\\brdrdash",
