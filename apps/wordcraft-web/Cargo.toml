@@ -23,8 +23,10 @@ craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "fd5e2f
 # The host messages (craft-libs): one contract and one bridge for the web builds.
 # The collaboration messages (`session`, `session-state`, `presence`, `commit`,
 # `committed`) are on the `feat/collab-session-messages` branch, not yet in
-# `storytold/craft-libs`; ADR-0016 §3 pins the fork revision until that merges.
-craft-web-host = { git = "https://github.com/copoka/craft-libs", rev = "7666e2b100d8cf12998f9b57d3b036964cc3189c", version = "0.1.0" }
+# `storytold/main`; ADR-0016 §3 pins that revision until it merges. The revision
+# is fetched from `storytold/craft-libs` (the head of its pull request), not from
+# a fork, so every git dependency comes from one owner (CI: `git-sources`).
+craft-web-host = { git = "https://github.com/storytold/craft-libs", rev = "7666e2b100d8cf12998f9b57d3b036964cc3189c", version = "0.1.0" }
 egui = { workspace = true }
 log = { workspace = true }
 serde_json = { workspace = true }
