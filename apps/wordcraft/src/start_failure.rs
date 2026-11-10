@@ -11,10 +11,10 @@
 //! the process alive until it is dismissed; the exit code afterwards is still the error's.
 
 /// What the dialog and the log say. Any error `run_native` returns lands here. One from the app's
-/// own start-up (`AppCreation`, e.g. a `--control` file it can't write) says only that it couldn't
-/// start. One from winit, the windowing layer (on Linux, for example, no display session), says
-/// the window couldn't start or stopped, without driver advice, which can't help there. Any other
-/// comes from graphics, possibly after the window was up, so graphics is named as the likely
+/// own start-up (`AppCreation`; WordCraft's creator does not return one today) says only that it
+/// couldn't start. One from winit, the windowing layer (on Linux, for example, no display session),
+/// says the window couldn't start or stopped, without driver advice, which can't help there. Any
+/// other comes from graphics, possibly after the window was up, so graphics is named as the likely
 /// cause, not the certain one.
 pub(crate) fn message(error: &eframe::Error) -> String {
     match error {
