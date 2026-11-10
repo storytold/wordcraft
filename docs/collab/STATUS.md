@@ -4,13 +4,14 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `39f2e1a4` plus this commit (the lock fix and this page)
-  — 73 commits over `4b0d3995` up to `39f2e1a4`, so the branch is four commits
-  ahead of `fork/feature/realtime-collaboration` at `467948fa`, the head of PR
-  #5834 (§5.21–§5.23). The PR is `MERGEABLE`; a maintainer approved the
+- HEAD at this writing: `bf781e69` (the git source) plus this page — 76
+  commits over `4b0d3995`, so the branch is seven commits ahead of
+  `fork/feature/realtime-collaboration` at `467948fa`, the head of PR
+  #5834 (§5.21–§5.24). The PR is `MERGEABLE`; a maintainer approved the
   workflows on 2026-11-10, `Nix` and `SonarCloud` passed, `Printing` failed on
-  a stale `Cargo.lock` and is fixed on the branch (§5.23), so the PR needs a
-  push and a fresh run (§5.2)
+  a stale `Cargo.lock` and is fixed on the branch (§5.23), and the last fork git
+  source is gone from the manifest and the lock (§5.24), so the PR needs a push
+  and a fresh run (§5.2)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -295,7 +296,7 @@ missing, and where the next session should start.
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
 | PR to upstream | open (draft) | PR #5834; GitHub CI waits for maintainer approval |
-| Web host bridge | done; `craft-web-host` pinned to the fork revision `7666e2b1` | `host.rs`, `collab-web`, `host-bridge.md` |
+| Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
 
@@ -403,18 +404,18 @@ Results at this writing:
 
 ## 4. Known limitations
 
-- **The craft-libs pin is a fork revision.** `crates/web-host` in
-  `storytold/craft-libs` has the six collaboration messages on
+- **The craft-libs pin is a revision outside `storytold/main`.** `crates/web-host`
+  in `storytold/craft-libs` has the six collaboration messages on
   `feat/collab-session-messages`, commit
-  `7666e2b100d8cf12998f9b57d3b036964cc3189c` (pushed to `copoka/craft-libs`),
-  not in upstream `main` yet. Per ADR-0016 §3 `apps/wordcraft-web/Cargo.toml`
-  pins `craft-web-host` to that fork revision
-  (`git = "https://github.com/copoka/craft-libs"`), and `Cargo.lock` records the
-  same source/rev; it is the only fork dependency — every other craft-libs crate
-  stays on its `storytold/craft-libs` revision. The wasm app builds and tests on
-  that pin (see §3 and `host-bridge.md` §"Build note"). After the craft-libs PR
-  merges, point the URL back at `storytold/craft-libs` and pin the merge commit;
-  nothing else in the app changes.
+  `7666e2b100d8cf12998f9b57d3b036964cc3189c`, not merged into `storytold/main`
+  yet. Per ADR-0016 §3 `apps/wordcraft-web/Cargo.toml` pins `craft-web-host` to
+  that revision **fetched from `storytold/craft-libs`** (the head of
+  storytold/craft-libs#716; `git ls-remote` and the GitHub API both serve the
+  commit, and cargo fetched it by SHA from storytold), and `Cargo.lock` records
+  the storytold URL (§5.24). No git dependency comes from another owner: the
+  `git-sources` CI job fails on one. The wasm app builds and tests on that pin
+  (see §3 and `host-bridge.md` §"Build note"). After the craft-libs PR merges,
+  pin the merge commit; nothing else in the app changes.
 - Web collab has been run with two clients only inside one headless browser
   (two iframes through a cabinet-like host page, §5.1). Two real machines, the
   real cabinet page and its storage, and the visible commit status stay manual.
@@ -2347,7 +2348,10 @@ does not otherwise touch, so they were left alone.
 repository https://github.com/copoka/craft-libs` completing before the lock
 error. `craft-web-host` is pinned there deliberately (ADR-0016 §3, `7666e2b1`),
 because the collaboration host messages are not in `storytold/craft-libs` yet;
-dropping the pin would take the web session out of the build.
+dropping the pin would take the web session out of the build. That pin was a
+separate, real problem — one owner for every git source — and it is fixed in
+§5.24: the same commit is fetched from `storytold/craft-libs` and a CI job now
+refuses a source from anywhere else.
 
 **Gates** (build host `agents`, cargo 1.99.1, from the committed tree at
 `39f2e1a4`): `cargo metadata --locked` EXIT=0 and does not modify the lock
@@ -2360,6 +2364,82 @@ passed, 0 failed, 1 ignored (the LibreOffice commit gate); `cargo clippy
 --locked` over the same crates `--all-targets -- -D warnings` EXIT=0.
 
 Nothing was pushed: the fix reaches CI with the next push of the branch.
+
+### 5.24 CI: one owner for every git source — the fork pin is out of the lock, and a job keeps it out (run 2026-11-10)
+
+§5.23 left two things of one class, both about delivery rather than the protocol:
+
+1. **A git dependency came from a fork.** `apps/wordcraft-web/Cargo.toml:27` and
+   `Cargo.lock:1236` named `git+https://github.com/copoka/craft-libs?rev=7666e2b1…`
+   for `craft-web-host`. Every build, including CI's `--locked` resolution,
+   cloned a fork branch; if that branch is force-pushed or deleted, `cargo
+   metadata --locked` fails for everyone at once.
+2. **Nothing checked where git dependencies come from.** `ci.yml` called only
+   the shared `gate.yml`, which does not inspect sources, so a fork could come
+   back unnoticed. pdfcraft and cadcraft had the same hole and closed it with a
+   `git-sources` job (pdfcraft's `ci.yml`, job "Git dependencies come from
+   storytold"); wordcraft did not.
+
+**The same commit, fetched from `storytold`.** No code changed. The revision is
+the head of storytold/craft-libs#716 — `7666e2b100d8cf12998f9b57d3b036964cc3189c`
+— and `storytold/craft-libs` serves it: the GitHub API answers `200` with that
+sha, and cargo fetched it by revision from storytold (the relock log prints
+`Updating git repository https://github.com/storytold/craft-libs` and `Adding
+craft-web-host v0.1.0 (https://github.com/storytold/craft-libs?rev=7666e2b1…)`).
+pdfcraft pins the identical commit the same way (`apps/pdfcraft-web/Cargo.toml`),
+so the five apps now describe one source.
+
+**The lock was regenerated, not hand-edited.** On the build host `agents`,
+`cargo metadata --format-version 1` rewrote exactly one line — the `source` of
+`craft-web-host` — and nothing else moved: the package set and every other
+`storytold/craft-libs`/`egui`/`winit`/`winprint.rs` revision are the same
+(`git diff Cargo.lock` is `1 file changed, 1 insertion(+), 1 deletion(-)`). The
+lock was then pulled back from the host, so the committed file is the one cargo
+produced.
+
+**The gate.** A new job `git-sources` ("Git dependencies come from storytold")
+sits before `gate` in `ci.yml` and does three things: refuses source
+replacement, `patch` and `paths` in `.cargo/config`/`.cargo/config.toml` (those
+never show up in `Cargo.lock`); runs `cargo metadata --locked`, which catches a
+lock out of date with the manifests; and parses `Cargo.lock` as TOML, failing on
+any `git+` source that is not `git+https://github.com/storytold/`. It is the
+same script pdfcraft runs, minus its Windows font-notice step, which wordcraft
+does not have. It adds one `ubuntu-latest` job and changes no shared workflow.
+
+**Proof, both directions** (build host `agents`, from the committed tree, the
+job's own script extracted from `ci.yml` and run as-is):
+
+| Run | Result |
+|---|---|
+| the job's script on this tree | EXIT=0 — `cargo metadata --locked` EXIT=0, and no git source outside `github.com/storytold/` |
+| `grep -n 'github.com/copoka' Cargo.lock` | no match |
+| manifest temporarily back on `copoka`, lock relocked from it | `cargo metadata --locked` **fails** (the lock/manifest drift is caught first), and the source scan exits 1 naming `git+https://github.com/copoka/craft-libs?rev=7666e2b1…` |
+| both files restored from the saved copies | byte-identical to the committed tree; the script is EXIT=0 again |
+
+**Gates on the same tree** (build host `agents`, `cargo 1.99.1`):
+
+```
+cargo fmt --all -- --check                                    EXIT=0
+cargo clippy -p wordcraft-web -p wordcraft-collab-web \
+    --all-targets -- -D warnings                              EXIT=0
+cargo check -p wordcraft-web --target wasm32-unknown-unknown   EXIT=0
+cargo xtask wasm                                              EXIT=0
+cargo test over the nine collaboration crates                 350 passed, 0 failed, 1 ignored
+```
+
+The one ignored test is still the LibreOffice commit gate (needs `soffice`).
+`dirty=3` in the gate log is this change in the working tree: the manifest, the
+lock and `ci.yml` (this page came after).
+
+**House rule 11.** `ci.yml` is CI, and the rule asks for CI changes outside a
+feature or fix PR. The change is a repository guard rather than a shared
+workflow, and it rides here because the pin and the gate close one hole
+together. It is a self-contained commit (`ci: fail on a git dependency outside
+storytold`); if a maintainer wants it as its own PR, it splits without touching
+the rest.
+
+Nothing was pushed and PR #5834 was not touched: both changes reach CI with the
+next push of the branch.
 
 ## 6. Where things live
 
