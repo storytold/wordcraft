@@ -123,8 +123,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 );
                 resp
             };
-            // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            // Escape closes File unless something over it takes the key: the built-in file
+            // browser, a dialog (Clear list…, a recent document that isn't there), the Colors
+            // dialog or a menu (a recent document's right-click menu).
+            let escape_closes = !app.file_dialog_open() && app.dialog.is_none() && app.colors.is_none() && !egui::Popup::is_any_open(ui.ctx());
+            if back.clicked() || (escape_closes && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
@@ -615,10 +618,23 @@ fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
 const REMOVE_W: f32 = 28.0;
 
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
-/// stores an open failure in this page's temporary state.
+/// stores an open failure in this page's temporary state. Clear list… empties the list after
+/// asking; a document's right-click menu takes it off the list, or clears the list too.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
+        if !app.ui.recent.is_empty() {
+            ui.add_space(8.0);
+            if ui
+                .small_button(tl!("Clear list…"))
+                .on_hover_text(tl!("Take every document off the Recent list. The files themselves stay where they are."))
+                .clicked()
+            {
+                let _ = app.run("ui.dialog", json!({"name": "clearRecent"}));
+            }
+        }
+    });
     ui.add_space(6.0);
     let error = ui.ctx().data(|d| d.get_temp::<String>(open_error_id())).unwrap_or_default();
     if !error.is_empty() {
@@ -678,6 +694,16 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+        resp.context_menu(|ui| {
+            if ui.button(tl!("Remove from list")).clicked() {
+                let _ = app.run("ui.recentRemove", json!({"path": p}));
+                ui.close();
+            }
+            if ui.button(tl!("Clear list…")).clicked() {
+                let _ = app.run("ui.dialog", json!({"name": "clearRecent"}));
+                ui.close();
+            }
+        });
         if xresp.clicked() {
             let _ = app.run("ui.recentRemove", json!({"path": p}));
         }
@@ -715,13 +741,28 @@ pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<String>(save_as_error_id()));
 }
 
-/// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
-/// leaves File open so the list can say why, rather than closing it on a greyed-out window.
+/// Open a file from the Recent list. One that isn't at its path any more (moved, renamed, deleted,
+/// or on a drive that isn't connected) isn't opened: a prompt offers to take it off the list,
+/// before any Save Changes prompt, as nothing is going to replace the document. A file that is
+/// there but can't be opened (unreadable, damaged) leaves File open so the list can say why,
+/// rather than closing it on a greyed-out window.
 pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
+    if recent_missing(path) {
+        app.dialog = Some(crate::dialogs::Dialog::MissingRecent { path: path.to_string() });
+        return Ok(());
+    }
     app.open_file(path, None)?;
     app.ui.backstage = false;
     app.canvas.want_focus = true;
     Ok(())
+}
+
+/// Whether the file a Recent entry names is gone from its path. Only a definite "not found"
+/// counts (the file, its folder or its drive isn't there); one that can't be looked at for
+/// another reason, such as permissions, is left to `file.open` to explain. The browser has no
+/// files to look at, so nothing counts as missing there.
+fn recent_missing(path: &str) -> bool {
+    matches!(std::path::Path::new(path).try_exists(), Ok(false))
 }
 
 fn open_page(app: &mut WordApp, ui: &mut Ui) {
