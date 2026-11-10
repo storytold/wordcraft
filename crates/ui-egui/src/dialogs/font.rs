@@ -112,7 +112,25 @@ pub(super) fn font_box(
 /// The character properties the Font dialog's fields stand for.
 pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     let Dialog::Font {
-        font, font_ea, size, bold, italic, underline, strike, sup, sub, small_caps, caps, hidden, color, spacing, kern, kern_at, ..
+        font,
+        font_ea,
+        size,
+        bold,
+        italic,
+        underline,
+        underline_color,
+        strike,
+        double_strike,
+        sup,
+        sub,
+        small_caps,
+        caps,
+        hidden,
+        color,
+        spacing,
+        kern,
+        kern_at,
+        ..
     } = d
     else {
         return serde_json::Map::new();
@@ -121,7 +139,19 @@ pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     props.insert("bold".into(), json!(*bold));
     props.insert("italic".into(), json!(*italic));
     props.insert("strike".into(), json!(*strike));
-    props.insert("underline".into(), json!(if *underline { "single" } else { "none" }));
+    props.insert("doubleStrike".into(), json!(*double_strike));
+    // A blank style box (the selection mixes styles) sends no style; the colour goes with a
+    // style that draws a line.
+    if let Some(u) = underline_style(underline) {
+        props.insert("underline".into(), json!(u.ooxml()));
+        if u != wordcraft_doc::props::Underline::None {
+            if let Some(c) = wordcraft_doc::Rgb::parse(underline_color) {
+                props.insert("underlineColor".into(), json!(c.hex()));
+            } else if underline_color.eq_ignore_ascii_case("auto") {
+                props.insert("underlineColor".into(), json!("auto"));
+            }
+        }
+    }
     let vert = if *sup {
         "superscript"
     } else if *sub {
@@ -161,6 +191,38 @@ pub(super) fn font_props(d: &Dialog) -> serde_json::Map<String, Value> {
     props
 }
 
+/// The underline style named `name` (its `w:u` name), if any.
+pub(super) fn underline_style(name: &str) -> Option<wordcraft_doc::props::Underline> {
+    wordcraft_doc::props::Underline::ALL.into_iter().find(|u| u.ooxml() == name)
+}
+
+/// The Underline style box's entries, in Word's order: (none), Words only, then the lines.
+pub(super) const UNDERLINE_STYLES: [(&str, &str); 11] = [
+    ("none", "(none)"),
+    ("words", "Words only"),
+    ("single", "Single"),
+    ("double", "Double"),
+    ("thick", "Thick"),
+    ("dotted", "Dotted"),
+    ("dash", "Dashed"),
+    ("dotDash", "Dot dash"),
+    ("dotDotDash", "Dot dot dash"),
+    ("wave", "Wave"),
+    ("wavyDouble", "Double wave"),
+];
+
+/// The sample with the Underline style and color boxes and Double strikethrough applied: a
+/// blank style box keeps the line [`font_sample_props`] chose.
+pub(super) fn font_sample_lines(props: &mut wordcraft_doc::props::CharProps, underline: &str, underline_color: &str, double_strike: bool) {
+    if let Some(u) = underline_style(underline)
+        && (u != wordcraft_doc::props::Underline::None || props.underline != Some(wordcraft_doc::props::Underline::Dotted))
+    {
+        props.underline = Some(u);
+    }
+    props.underline_color = wordcraft_doc::Rgb::parse(underline_color);
+    props.double_strike = Some(double_strike);
+}
+
 /// Is `c` Chinese, Japanese or Korean text (ideographs, kana, Hangul, CJK punctuation, fullwidth
 /// forms)?
 pub(super) fn east_asian_char(c: char) -> bool {
@@ -181,7 +243,18 @@ pub(super) fn apply_font(app: &mut WordApp, d: &Dialog) {
     if let Some(f) = changed.get("fontEa").and_then(Value::as_str).map(str::to_string) {
         changed.insert("fontEa".into(), json!(app.previews.font_stored(&f)));
     }
+    // Automatic underline colour drops the run's own colour, which `format.set` can't do; both
+    // commands make one undo step.
+    let auto_line = changed.get("underlineColor").and_then(Value::as_str) == Some("auto");
+    if auto_line {
+        changed.remove("underlineColor");
+    }
+    let mark = app.session.undo_mark();
     if !changed.is_empty() {
         let _ = app.run("format.set", json!({"props": changed}));
+    }
+    if auto_line {
+        let _ = app.run("format.underlineColor", json!({"color": "auto"}));
+        app.session.merge_undo_since(mark);
     }
 }

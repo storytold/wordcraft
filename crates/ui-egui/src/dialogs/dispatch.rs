@@ -1,7 +1,7 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
-use super::font::{apply_font, font_box, font_sample_box, font_sample_props, sample_paper};
+use super::font::{UNDERLINE_STYLES, apply_font, font_box, font_sample_box, font_sample_lines, font_sample_props, sample_paper, underline_style};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
@@ -105,7 +105,9 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         bold,
         italic,
         underline,
+        underline_color,
         strike,
+        double_strike,
         sup,
         sub,
         small_caps,
@@ -120,8 +122,10 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
-    let sample_props =
-        font_sample_props(app, sample_paper(app), font, size, color, (*bold, *italic, *underline, *strike), (*small_caps, *caps, *hidden), *spacing);
+    let lined = underline_style(underline).is_some_and(|u| u != wordcraft_doc::props::Underline::None);
+    let mut sample_props =
+        font_sample_props(app, sample_paper(app), font, size, color, (*bold, *italic, lined, *strike), (*small_caps, *caps, *hidden), *spacing);
+    font_sample_lines(&mut sample_props, underline, underline_color, *double_strike);
     crate::rtl::Table::new("fontdlg").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
         // Word's two font boxes when East Asian text is in use: the Latin text font and
         // the Asian text font, each with its own list (type to find a font).
@@ -175,6 +179,28 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
         });
         t.row(|r| {
+            let label = r.cell(|ui| ui.label(tl!("Underline style:")));
+            r.cell(|ui| {
+                let shown = UNDERLINE_STYLES.iter().find(|(v, _)| v == underline).map_or("", |(_, l)| tl!(l));
+                let combo = craft_ui::ComboBox::from_id_salt("fontdlg_underline").width(160.0).height(400.0).selected_text(shown).show_ui(ui, |ui| {
+                    for (v, l) in UNDERLINE_STYLES {
+                        if ui.selectable_label(underline == v, tl!(l)).clicked() {
+                            *underline = v.to_string();
+                        }
+                    }
+                });
+                combo.response.labelled_by(label.id);
+            });
+        });
+        t.row(|r| {
+            r.cell(|ui| ui.label(tl!("Underline color:")));
+            r.cell(|ui| {
+                // Nothing to colour while there is no underline.
+                let theme = app.session.doc.settings.theme_colors.clone();
+                ui.add_enabled_ui(underline != "none", |ui| color_field(ui, &theme, underline_color, "Automatic", "auto"));
+            });
+        });
+        t.row(|r| {
             let spacing_label = r.cell(|ui| ui.label(tl!("Spacing (pt):")));
             r.cell(|ui| ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0)).labelled_by(spacing_label.id));
         });
@@ -216,8 +242,17 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             r.cell(|ui| ui.checkbox(italic, tl!("Italic")));
         });
         t.row(|r| {
-            r.cell(|ui| ui.checkbox(underline, tl!("Underline")));
+            // Strikethrough and Double strikethrough exclude each other: the one just ticked wins.
+            let was_strike = *strike;
             r.cell(|ui| ui.checkbox(strike, tl!("Strikethrough")));
+            r.cell(|ui| ui.checkbox(double_strike, tl!("Double strikethrough")));
+            if *strike && *double_strike {
+                if was_strike {
+                    *strike = false;
+                } else {
+                    *double_strike = false;
+                }
+            }
         });
         t.row(|r| {
             // Superscript and Subscript exclude each other: the one just ticked wins.
