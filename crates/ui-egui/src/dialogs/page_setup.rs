@@ -112,12 +112,13 @@ pub(super) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &
         t.row(|r| {
             let width_label = r.cell(|ui| ui.label(tl!(l.width)));
             let w = r.cell(|ui| {
-                ui.add(egui::DragValue::new(&mut paper.0).speed(3.6 / ppu).range(range.clone()).measure(unit).max_decimals(2))
+                ui.add(egui::DragValue::new(&mut paper.0).speed(3.6 / ppu).range(range.clone()).measure(unit).max_decimals(2).clip_text(true))
                     .labelled_by(width_label.id)
             });
             let height_label = r.cell(|ui| ui.label(tl!(l.height)));
             let h = r.cell(|ui| {
-                ui.add(egui::DragValue::new(&mut paper.1).speed(3.6 / ppu).range(range).measure(unit).max_decimals(2)).labelled_by(height_label.id)
+                ui.add(egui::DragValue::new(&mut paper.1).speed(3.6 / ppu).range(range).measure(unit).max_decimals(2).clip_text(true))
+                    .labelled_by(height_label.id)
             });
             if (w.changed() || h.changed()) && paper.0 != paper.1 {
                 *landscape = paper.0 > paper.1;

@@ -138,14 +138,21 @@ pub(super) const MISSING_ROMAN_FONT: &str = "Cambria";
 /// 3. else as `font`, which [`wordcraft_fonts::word::resolve`] substitutes.
 pub(super) fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
     let settings = &doc.settings;
+    // A fallback list (`Liberation Serif;Times New Roman`) is in a class when one of its
+    // candidates is.
+    let listed = |list: &[String]| {
+        !list.is_empty() && font.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| list.iter().any(|r| r.eq_ignore_ascii_case(f)))
+    };
     let alternate = settings.font_alt_names.iter().find(|(f, _)| f.eq_ignore_ascii_case(font)).map(|(_, alt)| alt.as_str());
-    let roman = settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
+    let roman = listed(&settings.roman_fonts);
     if alternate.is_none() && !roman {
         return font;
     }
     let db = wordcraft_fonts::FontDb::global();
     let installed = |f: &str| db.has_family(f) || db.has_family(wordcraft_fonts::word::charset_base_family(f));
-    if installed(font) {
+    // A fallback list is there when one of its candidates is.
+    let missing = if font.contains(';') { wordcraft_fonts::word::resolve(font, false, false).substituted } else { !installed(font) };
+    if !missing {
         return font;
     }
     // Calibri has no list of its own because the generic sans list is its (Carlito first).
@@ -156,7 +163,7 @@ pub(super) fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
     if let Some(alt) = alternate.map(str::trim).filter(drawable) {
         return alt;
     }
-    let modern_alternate_missing = alternate.is_some() && settings.modern_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
+    let modern_alternate_missing = alternate.is_some() && listed(&settings.modern_fonts);
     // Thai, symbol and fonts with substitutes of their own keep their name: those substitutes
     // draw them, Cambria wouldn't.
     if (roman || modern_alternate_missing)
