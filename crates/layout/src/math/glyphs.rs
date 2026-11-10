@@ -1,6 +1,17 @@
 use super::bx::{Bx, St};
 use super::state::fallback;
-use super::*;
+use super::{C, Construction, Ctx, FaceRef, FontDb, MItem, MathTable, Rgb, glyph_bounds};
+
+pub(super) struct TextAtom<'a> {
+    pub(super) face: FaceRef,
+    pub(super) text: &'a str,
+    pub(super) size: f32,
+    pub(super) level: u8,
+    pub(super) color: Rgb,
+    pub(super) synth: (bool, bool),
+    pub(super) path: &'a [(usize, usize)],
+    pub(super) k0: usize,
+}
 
 impl Ctx {
     pub(super) fn scale(&self, level: u8) -> f32 {
@@ -92,7 +103,16 @@ impl Ctx {
             b.glyph = Some((face, g, attach));
         }
         if !glyphs.is_empty() {
-            b.items.push(MItem::Glyphs { face, size, color, synth_bold: synth.0, synth_italic: synth.1, glyphs, text: text.to_string() });
+            b.items.push(MItem::Glyphs {
+                face,
+                size,
+                color,
+                synth_bold: synth.0,
+                synth_italic: synth.1,
+                glyphs,
+                text: text.to_string(),
+                ranges: crate::missing::cluster_ranges(text, &shaped),
+            });
         }
         b
     }
@@ -121,23 +141,23 @@ impl Ctx {
         if let Some(t) = &self.t {
             b.ic = t.italics.get(&gid).copied().unwrap_or(0.0) * k;
         }
-        b.items.push(MItem::Glyphs { face, size, color, synth_bold: false, synth_italic: false, glyphs: vec![(gid, 0.0, 0.0)], text: String::new() });
+        b.items.push(MItem::Glyphs {
+            face,
+            size,
+            color,
+            synth_bold: false,
+            synth_italic: false,
+            glyphs: vec![(gid, 0.0, 0.0)],
+            text: String::new(),
+            ranges: Vec::new(),
+        });
         b
     }
 
     /// A text atom with caret slots at its character boundaries (`k0`: the unit offset of its
     /// first character).
-    pub(super) fn text_atom(
-        &self,
-        face: FaceRef,
-        text: &str,
-        size: f32,
-        level: u8,
-        color: Rgb,
-        synth: (bool, bool),
-        path: &[(usize, usize)],
-        k0: usize,
-    ) -> Bx {
+    pub(super) fn text_atom(&self, atom: TextAtom<'_>) -> Bx {
+        let TextAtom { face, text, size, level, color, synth, path, k0 } = atom;
         let mut b = self.glyphs(face, text, size, level, color, synth);
         let cuts = std::mem::take(&mut b.cuts);
         for (j, x) in cuts.iter().enumerate() {
@@ -225,7 +245,16 @@ impl Ctx {
         } else {
             b.w = pos * k;
         }
-        b.items.push(MItem::Glyphs { face: self.face, size, color: self.color, synth_bold: false, synth_italic: false, glyphs, text: String::new() });
+        b.items.push(MItem::Glyphs {
+            face: self.face,
+            size,
+            color: self.color,
+            synth_bold: false,
+            synth_italic: false,
+            glyphs,
+            text: String::new(),
+            ranges: Vec::new(),
+        });
         Some(b)
     }
 

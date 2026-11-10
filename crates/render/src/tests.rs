@@ -290,6 +290,67 @@ fn text_darkening_adds_ink_on_screen_only() {
     assert!(!RenderOptions::default().text_darkening);
 }
 
+/// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
+fn grey(img: &Rendered) -> usize {
+    img.pixels.as_chunks::<4>().0.iter().filter(|p| (40..215).contains(&p[0])).count()
+}
+
+/// The first and last pixel columns with any ink.
+fn ink_columns(img: &Rendered) -> (usize, usize) {
+    let w = img.width as usize;
+    let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i % w.max(1)).collect();
+    (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+#[test]
+fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
+    let mut d =
+        Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");
+    // A bundled face at a fixed size, so the pixel thresholds below do not follow the machine's
+    // default-font substitution.
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    // 100 % zoom on a 145 % desktop: glyph edges land between pixels.
+    let scale = 96.0 / 72.0 * 1.45;
+    let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
+    let hinted = render_page(&d, &l.pages[0], scale, &RenderOptions { hinting: true, ..Default::default() });
+    // Fewer grey pixels: the baseline, x-height and cap height fill whole pixel rows. Only
+    // horizontal edges snap (the vertical stems stay put), so on the bundled face the drop is
+    // 4 to 5 %: asked for at least 3 %.
+    let (g0, g1) = (grey(&plain), grey(&hinted));
+    assert!((g1 as f64) < g0 as f64 * 0.97, "grey pixels: plain {g0}, hinted {g1}");
+    // The same weight, as FreeType's light hinting draws it: no darker than a few percent.
+    let (a, b) = (ink(&plain), ink(&hinted));
+    assert!(b as f64 > a as f64 * 0.95 && (b as f64) < a as f64 * 1.12, "ink: plain {a}, hinted {b}");
+    // Nothing moves sideways: the text starts and ends in the same pixel columns.
+    let ((l0, r0), (l1, r1)) = (ink_columns(&plain), ink_columns(&hinted));
+    assert!(l0.abs_diff(l1) <= 1 && r0.abs_diff(r1) <= 1, "plain {l0}..{r0}, hinted {l1}..{r1}");
+    // Off by default: exports and thumbnails are untouched.
+    assert!(!RenderOptions::default().hinting);
+}
+
+#[test]
+fn rotated_or_mirrored_views_are_not_hinted() {
+    let d = Document::from_text("Rotated text stays as the font draws it.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let hint = RenderOptions { hinting: true, ..Default::default() };
+    for view in [
+        Affine::translate((300.0, -50.0)) * Affine::rotate(0.3) * Affine::scale(1.9),
+        Affine::translate((600.0, 0.0)) * Affine::scale_non_uniform(-1.9, 1.9),
+        Affine::scale_non_uniform(1.9, 2.4),
+    ] {
+        let plain = render_region(&d, &l.pages[0], 600, 300, view, &RenderOptions::default());
+        let hinted = render_region(&d, &l.pages[0], 600, 300, view, &hint);
+        assert!(ink(&plain) > 0, "{view:?}");
+        assert_eq!(plain.pixels, hinted.pixels, "{view:?}");
+    }
+    assert!(is_upright(Affine::translate((3.5, 7.25)) * Affine::scale(1.93)));
+    assert!(!is_upright(Affine::scale(f64::NAN)));
+    assert!(!is_upright(Affine::scale(0.0)));
+}
+
 #[test]
 fn page_picture_is_painted_behind_the_text() {
     let mut png = Vec::new();
@@ -305,6 +366,16 @@ fn page_picture_is_painted_behind_the_text() {
         let i = ((300 * img.width + 300) * 4) as usize;
         assert_eq!(&img.pixels[i..i + 3], &[10, 200, 30], "{kind}");
     }
+    // Centred once at its own size (8 px = 6 pt), the rest of the page paper.
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "center".into(), title: String::new() });
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let px = |x: u32, y: u32| {
+        let i = ((y * img.width + x) * 4) as usize;
+        [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+    };
+    assert_eq!(px(img.width / 2, img.height / 2), [10, 200, 30], "centred");
+    assert_eq!(px(5, 5), [255, 255, 255], "only in the middle");
     // An undecodable picture leaves the paper alone.
     d.media.insert("bg.png".into(), Arc::new(b"junk".to_vec()));
     let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -350,6 +421,26 @@ fn read_paper_replaces_the_page_background() {
     assert!(darkest(&plain) < 0x40 && darkest(&on_sepia) <= darkest(&plain) + 8, "{} {}", darkest(&plain), darkest(&on_sepia));
 }
 
+/// The paper the canvas draws under a page before its raster: white, the reading paper, or
+/// the dark paper grey on a dark page, never the document's page color.
+#[test]
+fn blank_paper_is_the_reading_paper_or_white_on_screen() {
+    let mut d = Document::from_text("Hello");
+    d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+    let grey = Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER);
+    for (opts, paper) in [
+        (RenderOptions::default(), Rgb::WHITE),
+        (RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() }, SEPIA_PAPER),
+        (RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() }, grey),
+        (RenderOptions { dark: true, ..Default::default() }, grey),
+    ] {
+        assert_eq!(opts.blank_paper(), paper);
+        if opts.read_paper.is_some() {
+            assert_eq!(opts.paper_of(&d), paper, "the reading paper hides the page color");
+        }
+    }
+}
+
 /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
 /// the header parses), with no real pixel data.
 fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {
@@ -382,14 +473,14 @@ fn decode_budget_is_checked_from_the_header() {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([x as u8, y as u8, 9, 255]));
     img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
     // Decode, the RGBA conversion and the premultiplied copy are charged: two buffers at peak.
-    assert!(decode_pixmap_within(&buf, 1024).is_some());
-    assert!(decode_pixmap_within(&buf, 1023).is_none());
+    assert!(decode_pixmap_within(&buf, wordcraft_doc::picfx::PicFx::default(), 1024).is_some());
+    assert!(decode_pixmap_within(&buf, wordcraft_doc::picfx::PicFx::default(), 1023).is_none());
     // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 copy: 12 bytes a pixel.
     let mut wide = Vec::new();
     let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
     image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
-    assert!(decode_pixmap_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
-    assert!(decode_pixmap_within(&wide, 1536).is_some());
+    assert!(decode_pixmap_within(&wide, wordcraft_doc::picfx::PicFx::default(), 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+    assert!(decode_pixmap_within(&wide, wordcraft_doc::picfx::PicFx::default(), 1536).is_some());
     // A header (valid CRC) claiming 60000x60000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(60_000, 60_000);
     assert_eq!(image_size(&hdr), Some((60_000, 60_000)));
@@ -513,6 +604,7 @@ fn dimmed_header_image_renders() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     hp.insert_object(0, obj, &Default::default()).unwrap();
@@ -525,6 +617,55 @@ fn dimmed_header_image_renders() {
     assert!(!img.to_png().is_empty());
 }
 
+/// A grey picture with brightness and contrast (#1766) is drawn lighter, inline and floating
+/// behind text; one with transparency is faded (and both, the same picture, side by side).
+#[test]
+fn picture_brightness_contrast_transparency() {
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, Wrap};
+    use wordcraft_doc::picfx::PicFx;
+    let mut d = Document::from_text("");
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(4, 4, image::Rgba([100, 100, 100, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let media = d.add_media(png, "png");
+    let pic = |fx: PicFx, x: f32| InlineObject::Image {
+        media: media.clone(),
+        w: 40.0,
+        h: 40.0,
+        alt: String::new(),
+        float: Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 400.0, ..Default::default() },
+        crop: [0.0; 4],
+        fx,
+        ole: None,
+    };
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, pic(PicFx::default(), 100.0), &Default::default()).unwrap();
+    p.insert_object(0, pic(PicFx::new(80_000, -80_000, 0), 200.0), &Default::default()).unwrap();
+    p.insert_object(0, pic(PicFx::new(0, 0, 50_000), 300.0), &Default::default()).unwrap();
+    // The same picture inline, lightened.
+    let mut inline = pic(PicFx::new(80_000, -80_000, 0), 0.0);
+    if let InlineObject::Image { float, .. } = &mut inline {
+        *float = Float::default();
+    }
+    p.insert_object(0, inline, &Default::default()).unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let grey = |x: u32| img.pixel(x, 420);
+    assert_eq!(grey(120), [100, 100, 100, 255]);
+    // Word: 100 → 0.2 · 100 + 224.4 = 244.
+    let light = grey(220);
+    assert!(light[..3].iter().all(|c| c.abs_diff(244) <= 2), "{light:?}");
+    // Half transparent on white paper.
+    let faded = grey(320);
+    assert!(faded[..3].iter().all(|c| c.abs_diff(177) <= 3), "{faded:?}");
+    // Inline at the top margin: lightened, no full-strength grey anywhere up there.
+    let top: Vec<[u8; 4]> = (60..140).flat_map(|y| (60..140).map(move |x| (x, y))).map(|(x, y)| img.pixel(x, y)).collect();
+    assert!(top.iter().filter(|p| p[0].abs_diff(244) <= 2 && p[0] == p[2]).count() > 1000);
+    assert!(!top.iter().any(|p| p[0] == 100));
+}
+
 /// #2892: a rule is stroked with flat ends, as the PDF export and Word draw them. Round caps
 /// used to stick half the width out past every end — a blob over the neighbouring border at
 /// each corner of a table with thick borders, while the exported PDF had square corners.
@@ -532,7 +673,7 @@ fn dimmed_header_image_renders() {
 fn a_thick_rule_ends_flat_not_round() {
     let d = Document::new();
     let rule = |stroke| Draw::Line { x0: 10.0, y0: 10.0, x1: 30.0, y1: 10.0, width: 8.0, color: Rgb::BLACK, stroke, alpha: 1.0, text_bg: None };
-    let shot = |stroke| render_items(&d, &[rule(stroke)], 0.0, 0.0, 40.0, 20.0, 1.0, &RenderOptions::default());
+    let shot = |stroke| render_items(&d, &[rule(stroke)], wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 20.0), 1.0, &RenderOptions::default());
     let ink = |img: &Rendered, x: u32, y: u32| img.pixel(x, y)[3] > 128;
     // An 8 pt rule from x=10 to x=30 covers y 6..14, and nothing beyond either end.
     let img = shot(Stroke::Solid);
@@ -652,7 +793,7 @@ fn legacy_font_effects_are_drawn() {
         let cp = CharProps { size: Some(SIZE), bold: Some(true), ..c };
         d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("HHHH", cp))];
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
-        render_area(&d, &l.pages[0], -offset, -offset, 400.0, 150.0, SCALE, &RenderOptions::default())
+        render_area(&d, &l.pages[0], wordcraft_geom::Rect::new(-offset, -offset, 400.0, 150.0), SCALE, &RenderOptions::default())
     };
     let counts = |img: &Rendered| {
         let (mut dark, mut grey) = (0usize, 0usize);
@@ -874,6 +1015,7 @@ fn metafile_picture_is_drawn_as_vectors() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -910,8 +1052,16 @@ fn a_crop_keeping_a_sliver_fills_the_frame_with_it() {
             let mut d = Document::new();
             let media = d.add_media(bytes.clone(), ext);
             let mut p = wordcraft_doc::Paragraph::new();
-            let obj =
-                wordcraft_doc::para::InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, ole: None };
+            let obj = wordcraft_doc::para::InlineObject::Image {
+                media,
+                w: 70.0,
+                h: 70.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop,
+                fx: Default::default(),
+                ole: None,
+            };
             p.insert_object(0, obj, &Default::default()).unwrap();
             d.body = vec![wordcraft_doc::para_block(p)];
             let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -947,6 +1097,7 @@ fn cosmetic_metafile_pen_is_one_device_pixel_wide() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -993,6 +1144,7 @@ fn metafile_text_records_are_painted() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -1039,6 +1191,7 @@ fn metafile_text_with_a_huge_font_is_left_out() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -1077,6 +1230,7 @@ fn unreadable_metafile_keeps_the_grey_box() {
         alt: String::new(),
         float: Default::default(),
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     p.insert_object(0, obj, &Default::default()).unwrap();
@@ -1232,12 +1386,14 @@ fn hostile_dash_patterns_draw_solid_and_finish() {
     };
     let start = std::time::Instant::now();
     for dash in [vec![1e-30, 1e-30], vec![1e-30], vec![-1.0, 2.0], vec![f32::NAN, 1.0], vec![f32::INFINITY, 1.0], vec![0.0, 0.0]] {
-        let img = render_items(&Document::new(), &[line(dash.clone())], 0.0, 0.0, 100.0, 40.0, 1.0, &RenderOptions::default());
+        let img =
+            render_items(&Document::new(), &[line(dash.clone())], wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 40.0), 1.0, &RenderOptions::default());
         assert!(img.pixel(50, 20)[3] > 200, "{dash:?} draws solid");
     }
     // Milliseconds drawn solid; drawn as dashes they ran past 4 minutes without finishing.
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
-    let dashed = render_items(&Document::new(), &[line(vec![10.0, 10.0])], 0.0, 0.0, 100.0, 40.0, 1.0, &RenderOptions::default());
+    let dashed =
+        render_items(&Document::new(), &[line(vec![10.0, 10.0])], wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 40.0), 1.0, &RenderOptions::default());
     assert!(dashed.pixel(15, 20)[3] > 200 && dashed.pixel(25, 20)[3] == 0, "a normal pattern dashes");
     assert!(safe_dashes([3.0, 1.0], 1000.0).len() == 2);
     assert!(safe_dashes([1e-3, 1e-3], 1000.0).is_empty(), "a million pieces");
@@ -1315,4 +1471,57 @@ fn rounded_rectangle_corners_follow_their_radius() {
 fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
+}
+
+#[test]
+fn paths_far_past_every_canvas_are_not_flattened() {
+    let line = |x: f64| {
+        let mut p = kurbo::BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((x, 0.0), (x, x), (0.0, x));
+        p
+    };
+    assert!(path_extent_ok(Affine::IDENTITY, &line(500.0)));
+    assert!(path_extent_ok(Affine::scale(4.0), &line(200_000.0)), "a large page at a high zoom");
+    assert!(!path_extent_ok(Affine::IDENTITY, &line(1e15)));
+    assert!(!path_extent_ok(Affine::scale(1e12), &line(10.0)));
+    assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
+}
+
+/// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
+/// pixels are what they were before strict export existed (#6005).
+#[test]
+fn undecodable_pictures_keep_their_grey_box_pixels() {
+    let mut whole = Vec::new();
+    image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut whole), image::ImageFormat::Png)
+        .unwrap();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    let mut p = wordcraft_doc::Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &Default::default()).unwrap();
+    }
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let boxes = page_display(&d, &l.pages[0], &opts.display).iter().filter(|i| matches!(i, Draw::Image { .. })).count();
+    assert_eq!(boxes, 3);
+    // FNV-1a of the pixels, recorded before the shared decode check existed.
+    let h = img.pixels.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x79f9f1d3602a9925, "{h:#x}");
 }

@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
+    TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
+};
 
 impl Reader<'_> {
     pub(super) fn read_inline_children(&mut self, sc: &mut StoryCtx, pb: &mut PB, e: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
@@ -95,9 +98,9 @@ impl Reader<'_> {
                 }
             }
             "mc:AlternateContent" => {
-                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_chartex_alternate(sc, k, rels)) {
+                if let Some((o, link)) = self.read_alternate(sc, k, rels) {
                     let props = self.run_props_none(ctx);
-                    self.emit_obj(sc, pb, o, &props);
+                    self.emit_linked_obj(sc, pb, o, &props, link);
                 } else if let Some(c) = children_of_choice(k) {
                     self.read_inline_children(sc, pb, c, rels, ctx, depth + 1);
                 }
@@ -105,7 +108,7 @@ impl Reader<'_> {
             // Some generators write a break directly under the paragraph instead of inside a run.
             "w:br" | "w:cr" => {
                 let props = self.run_props_none(ctx);
-                self.read_run_child(sc, pb, k, &props, rels, &mut None, depth + 1);
+                self.read_run_child(sc, pb, k, (&props, rels), &mut None, depth + 1);
             }
             _ => {}
         }
@@ -131,21 +134,19 @@ impl Reader<'_> {
         };
         let mut note: Option<(NoteKind, u32, Option<String>)> = None;
         for k in r.els() {
-            self.read_run_child(sc, pb, k, &props, rels, &mut note, depth + 1);
+            self.read_run_child(sc, pb, k, (&props, rels), &mut note, depth + 1);
         }
         if let Some((kind, id, custom)) = note.take() {
             self.emit_obj(sc, pb, InlineObject::NoteRef { kind, id, custom: custom.unwrap_or_default() }, &props);
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn read_run_child(
         &mut self,
         sc: &mut StoryCtx,
         pb: &mut PB,
         k: &El,
-        props: &CharProps,
-        rels: &Rels,
+        (props, rels): (&CharProps, &Rels),
         note: &mut Option<(NoteKind, u32, Option<String>)>,
         depth: usize,
     ) {
@@ -236,7 +237,7 @@ impl Reader<'_> {
             },
             "w:drawing" => {
                 if let Some(o) = self.read_drawing(sc, k, rels) {
-                    self.emit_obj(sc, pb, o, props);
+                    self.emit_linked_obj(sc, pb, o, props, Self::drawing_link(k, rels));
                 }
             }
             "w:pict" => {
@@ -297,11 +298,11 @@ impl Reader<'_> {
             ),
             "w:ruby" => self.read_ruby(sc, pb, k, props),
             "mc:AlternateContent" => {
-                if let Some(o) = self.read_ink_alternate(sc, k, rels).or_else(|| self.read_chartex_alternate(sc, k, rels)) {
-                    self.emit_obj(sc, pb, o, props);
+                if let Some((o, link)) = self.read_alternate(sc, k, rels) {
+                    self.emit_linked_obj(sc, pb, o, props, link);
                 } else if let Some(c) = children_of_choice(k) {
                     for x in c.els() {
-                        self.read_run_child(sc, pb, x, props, rels, note, depth + 1);
+                        self.read_run_child(sc, pb, x, (props, rels), note, depth + 1);
                     }
                 }
             }
@@ -372,6 +373,14 @@ impl Reader<'_> {
                 }
             }
             _ => pb.push_text(s, props),
+        }
+    }
+
+    /// [`Self::emit_obj`] for a drawing that carries its own `link`: a link around the run wins.
+    fn emit_linked_obj(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps, link: Option<String>) {
+        match link.filter(|_| props.link.is_none()) {
+            Some(link) => self.emit_obj(sc, pb, o, &CharProps { link: Some(link), ..props.clone() }),
+            None => self.emit_obj(sc, pb, o, props),
         }
     }
 

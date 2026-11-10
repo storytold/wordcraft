@@ -401,6 +401,34 @@ pub(crate) fn each_para(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Para
     }
 }
 
+/// Section breaks brought in from another document keep their page, but their header and
+/// footer ids are that document's: clear them (and the different first page that went with
+/// them) so the sections link to the previous section's headers and footers, as in Word.
+pub(crate) fn unlink_sections(blocks: &mut [Block]) {
+    for b in blocks {
+        each_para(b, 0, &mut |p| {
+            if let Some(sec) = p.section.as_deref_mut() {
+                sec.headers = Default::default();
+                sec.footers = Default::default();
+                sec.title_page = false;
+            }
+        });
+    }
+}
+
+/// Turn an imported document into a fragment of the session's document: bring over the media,
+/// lists and styles it refers to (renumbered so they can't collide with ours).
+fn adopt(s: &mut Session, src: Document) -> Fragment {
+    let mut frag = s.doc.adopt(src);
+    // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
+    let max_w = crate::io::text_width(&s.doc);
+    for b in &mut frag.blocks {
+        crate::io::fit_block_pictures(b, max_w);
+    }
+    unlink_sections(&mut frag.blocks);
+    frag
+}
+
 /// Point a tracked formatting change at its renumbered revision (dropped when it has none).
 fn remap_change<T>(c: &mut Option<Box<wordcraft_doc::props::PropChange<T>>>, rev: &dyn Fn(&mut Option<u32>)) {
     let mut r = c.as_ref().map(|c| c.rev);
@@ -430,40 +458,6 @@ fn remap_table_changes(b: &mut Block, depth: usize, rev: &dyn Fn(&mut Option<u32
             }
         }
     }
-}
-
-/// Section breaks brought in from another document keep their page, but their header and
-/// footer ids are that document's: clear them (and the different first page that went with
-/// them) so the sections link to the previous section's headers and footers, as in Word.
-pub(crate) fn unlink_sections(blocks: &mut [Block]) {
-    for b in blocks {
-        each_para(b, 0, &mut |p| {
-            if let Some(sec) = p.section.as_deref_mut() {
-                sec.headers = Default::default();
-                sec.footers = Default::default();
-                sec.title_page = false;
-            }
-        });
-    }
-}
-
-/// Turn an imported document into a fragment of the session's document: bring over the media,
-/// lists and styles it refers to (renumbered so they can't collide with ours).
-fn adopt(s: &mut Session, src: Document) -> Fragment {
-    let imported = import_resources(&mut s.doc, &src, false);
-    let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
-    // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
-    let max_w = crate::io::text_width(&s.doc);
-    for b in &mut blocks {
-        crate::io::fit_block_pictures(b, max_w);
-    }
-    for b in &mut blocks {
-        imported.remap_block(b);
-    }
-    unlink_sections(&mut blocks);
-    // Text box stories the imported shapes show; pasting gives each a new story of its own.
-    let parts = src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
-    Fragment { blocks, parts }
 }
 
 /// How content from another document is pointed at the resources [`import_resources`] brought
@@ -552,7 +546,7 @@ pub(crate) fn import_resources(doc: &mut Document, src: &Document, reuse: bool) 
         let id = next_abs;
         next_abs = next_abs.saturating_add(1);
         abs_map.insert(a.id, id);
-        doc.numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
+        Arc::make_mut(&mut doc.numbering).abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
     }
     let mut nums = BTreeMap::new();
     let mut next_num = doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
@@ -566,11 +560,11 @@ pub(crate) fn import_resources(doc: &mut Document, src: &Document, reuse: bool) 
         let id = next_num;
         next_num = next_num.saturating_add(1);
         nums.insert(n.id, id);
-        doc.numbering.nums.push(wordcraft_doc::numbering::Num { id, ..num });
+        Arc::make_mut(&mut doc.numbering).nums.push(wordcraft_doc::numbering::Num { id, ..num });
     }
     for st in &src.styles.styles {
         if doc.styles.get(&st.id).is_none() {
-            doc.styles.upsert(st.clone());
+            Arc::make_mut(&mut doc.styles).upsert(st.clone());
         }
     }
     // Tracked changes the source carries point at its own revisions: add them after ours and

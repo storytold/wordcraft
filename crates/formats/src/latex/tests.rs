@@ -134,15 +134,25 @@ fn alignment_declarations_end_with_their_group() {
 #[test]
 fn article_structure() {
     let flow = parse(ARTICLE);
+    assert_article_metadata(&flow);
+    let ps = paras(ARTICLE);
+    assert_article_blocks(&ps);
+    assert_article_formatting(&ps);
+    assert_article_preamble_is_not_text();
+}
+
+fn assert_article_metadata(flow: &Flow) {
     assert_eq!(flow.meta.title, "On Sample Documents");
     assert_eq!(flow.meta.author, "Ada Lovelace Charles Babbage");
-    let ps = paras(ARTICLE);
+}
+
+fn assert_article_blocks(ps: &[Para]) {
     let find = |t: &str| ps.iter().find(|p| p.text().trim() == t).unwrap_or_else(|| panic!("no {t:?} in {:?}", texts(ARTICLE)));
     assert_eq!(find("On Sample Documents").kind, Kind::Title);
     assert_eq!(find("Introduction").kind, Kind::Heading(1));
     assert_eq!(find("Lists").kind, Kind::Heading(2));
-    assert_eq!(find("First").list, Some(ListInfo { ordered: false, level: 0, start: 1 }));
-    assert_eq!(find("Nested one").list, Some(ListInfo { ordered: true, level: 1, start: 1 }));
+    assert_eq!(find("First").list, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }));
+    assert_eq!(find("Nested one").list, Some(ListInfo { ordered: true, level: 1, start: 1, ..Default::default() }));
     assert!(ps.iter().any(|p| p.text().trim() == "b) Nested two" && p.list.is_some()), "{:?}", texts(ARTICLE));
     assert_eq!(find("Quoted text.").kind, Kind::Quote);
     assert_eq!(find("Centered.").align, Some(Align::Center));
@@ -150,6 +160,13 @@ fn article_structure() {
     assert_eq!(find("println!(\"{}\", 1 % 2);").kind, Kind::Code, "verbatim keeps % and indentation");
     assert!(ps.iter().any(|p| p.text() == "    println!(\"{}\", 1 % 2);"));
     assert_eq!(find("A table.").align, Some(Align::Center));
+    let second = ps.iter().find(|p| p.text().starts_with("A second")).unwrap();
+    assert!(second.text().contains("footnote (The note.) and a link."), "{}", second.text());
+    assert!(second.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "link" && f.link.as_deref() == Some("https://example.com"))));
+    assert!(!second.text().contains("comment"));
+}
+
+fn assert_article_formatting(ps: &[Para]) {
     let body = ps.iter().find(|p| p.text().starts_with("This is")).unwrap();
     let has = |t: &str, f: &dyn Fn(&Fmt) -> bool| body.inlines.iter().any(|i| matches!(i, Inline::Text(x, fm) if x == t && f(fm)));
     assert!(has("bold", &|f| f.bold));
@@ -157,10 +174,6 @@ fn article_structure() {
     assert!(has("underlined", &|f| f.underline));
     assert!(has("code", &|f| f.code));
     assert!(body.text().contains("“like this” and dashes – or — with 50% and $5 & more\u{A0}text."), "{}", body.text());
-    let second = ps.iter().find(|p| p.text().starts_with("A second")).unwrap();
-    assert!(second.text().contains("footnote (The note.) and a link."), "{}", second.text());
-    assert!(second.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "link" && f.link.as_deref() == Some("https://example.com"))));
-    assert!(!second.text().contains("comment"));
     let accents = ps.iter().find(|p| p.text().starts_with("Café")).unwrap();
     assert!(accents.page_break, "\\newpage");
     assert!(accents.text().starts_with("Café naïve ça šé and grouped bold after."), "{}", accents.text());
@@ -168,7 +181,9 @@ fn article_structure() {
     assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t.starts_with(" after.") && !f.bold)), "{:?}", accents.inlines);
     assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t.contains("red text") && f.color == Some(Rgb(255, 0, 0)))));
     assert!(accents.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "green" && f.color == Some(Rgb(0, 255, 0)))));
-    // Preamble definitions and layout commands leave no text.
+}
+
+fn assert_article_preamble_is_not_text() {
     let all = texts(ARTICLE).join("\n");
     for gone in ["mathbb", "utf8", "11pt", "today", "sec:intro}", "amsmath", "maths"] {
         assert!(!all.contains(gone), "{gone:?} leaked: {all}");
@@ -309,7 +324,7 @@ fn special_characters_round_trip() {
 
 #[test]
 fn exported_tables_size_their_columns() {
-    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false };
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false, extra: None, kept: None, wrap: None };
     let cell = |s: &str| Cell {
         blocks: vec![FBlock::Para({
             let mut p = Para::default();
@@ -344,7 +359,7 @@ fn urls_preserve_tildes() {
 
 #[test]
 fn exported_borderless_tables_omit_rules() {
-    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true };
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true, extra: None, kept: None, wrap: None };
     let cell = |s: &str| Cell {
         blocks: vec![FBlock::Para({
             let mut p = Para::default();
@@ -433,4 +448,26 @@ fn nested_multicolumn_wrappers_are_bounded() {
     let Some(FBlock::Table(t)) = f.blocks.first() else { panic!("{:?}", f.blocks) };
     assert_eq!((t.rows[0][0].colspan, t.rows[0][0].rowspan), (2, 2));
     assert_eq!(t.rows[0][0].text(), "Both");
+}
+
+#[test]
+fn ligature_characters_split_across_runs_stay_apart() {
+    let d = crate::html::import(
+        "<p><span style=\"font-family:Arial\">a-</span><span style=\"font-family:Georgia\">-b '</span><span style=\"font-family:Arial\">'x</span></p>",
+    );
+    let tex = export(&d);
+    assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
+    let back = import(tex.as_bytes());
+    assert_eq!(back.plain_text(Default::default()).trim(), "a--b ''x", "{tex}");
+}
+
+#[test]
+fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
+    // A 5,000-cell row with spans widened the multirow tracking every later row walks; the
+    // document keeps MAX_COLS cells a row, so the rest are left out while parsing.
+    let wide = vec!["\\multicolumn{63}{c}{x}"; 5000].join("&");
+    let toks = tokenize(&format!("{wide}\\\\ a & b \\\\"));
+    let t = table::table(&toks, "", 0);
+    assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
+    assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }

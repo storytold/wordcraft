@@ -1,4 +1,4 @@
-use super::*;
+use super::{Affine, Arc, Document, FontDb, HashMap, Item, Mutex, Page, Picture, Pixmap, PlacedItem, RenderContext, Seg, Shape, Weak, kurbo, peniko};
 
 /// Upper bound on the bytes the two decoded-media caches keep together (about 256 MB), half each;
 /// past its half a cache starts over.
@@ -67,40 +67,31 @@ const MAX_DECODE_SIDE: u32 = u16::MAX as u32;
 /// Decode an encoded image to a premultiplied pixmap. The dimension limit above and the default
 /// allocation cap (512 MB, what `load_from_memory` applied) bound the decode during paint.
 pub fn decode_pixmap(bytes: &[u8]) -> Option<Pixmap> {
+    decode_pixmap_fx(bytes, wordcraft_doc::picfx::PicFx::default())
+}
+
+/// [`decode_pixmap`] with a picture's brightness and contrast applied (#1711, #1766), under the
+/// same decode limits.
+pub fn decode_pixmap_fx(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx) -> Option<Pixmap> {
     // The shared probe also charges what the decoder holds beside its output (#3644).
     if !wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
         return None;
     }
-    decode_pixmap_within(bytes, wordcraft_geom::MAX_DECODED_BYTES)
+    decode_pixmap_within(bytes, fx, wordcraft_geom::MAX_DECODED_BYTES)
 }
 
-/// [`decode_pixmap`] with an explicit RGBA byte budget (a small one in tests).
-pub(crate) fn decode_pixmap_within(bytes: &[u8], budget: u64) -> Option<Pixmap> {
-    use image::ImageDecoder;
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_DECODE_SIDE);
-    limits.max_image_height = Some(MAX_DECODE_SIDE);
-    let reader = || {
-        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
-        r.limits(limits.clone());
-        Some(r)
-    };
-    // The header gives the size and the decoder's pixel format (16-bit RGBA takes 8 bytes a pixel
-    // before its RGBA8 copy); refuse before the decoder (and the RGBA copy) allocate anything.
-    let (hw, hh, native) = {
-        let d = reader()?.into_decoder().ok()?;
-        let (w, h) = d.dimensions();
-        (w, h, u64::from(d.color_type().bytes_per_pixel()))
-    };
-    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
+/// [`decode_pixmap_fx`] with an explicit RGBA byte budget (a small one in tests).
+pub(crate) fn decode_pixmap_within(bytes: &[u8], fx: wordcraft_doc::picfx::PicFx, budget: u64) -> Option<Pixmap> {
+    // The decision to draw or not is the shared one (`wordcraft_geom::picture`), the one strict
+    // export checks with.
+    let decoded = wordcraft_geom::picture::decode_for_drawing(bytes, budget, MAX_DECODE_SIDE);
+    if let Err(wordcraft_geom::picture::Refusal::TooLarge { width, height }) = &decoded {
         // Logged once a picture: its refusal is cached with it (`pixmap_for`).
-        log::warn!(
-            "a {hw}×{hh} picture of {native} bytes a pixel needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)"
-        );
-        return None;
+        log::warn!("a {width}×{height} picture needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)");
     }
-    let img = reader()?.decode().ok()?.into_rgba8();
+    let mut img = decoded.ok()?.into_rgba8();
     let (w, h) = img.dimensions();
+    fx.apply_rgba(&mut img);
     premul_pixmap(w, h, img.as_raw())
 }
 
@@ -138,8 +129,8 @@ pub fn metafile_size(bytes: &[u8]) -> Option<(f32, f32, &'static str)> {
     if !wordcraft_metafile::is_metafile(bytes) {
         return None;
     }
-    let pic = wordcraft_metafile::parse(bytes).ok()?;
-    let (w, h) = (pic.width, pic.height);
+    // The frame comes from the header where the file has one, so no bitmap is decoded for it.
+    let (w, h) = wordcraft_metafile::size(bytes).ok()?;
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return None;
     }
@@ -263,8 +254,7 @@ pub(crate) fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, 
 
 /// Draws a metafile text run: `tf` maps the run's own space (see [`PlacedItem::Text`]) to the device.
 fn draw_vector_text(ctx: &mut RenderContext, t: &wordcraft_metafile::Text, tf: Affine) {
-    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
-    let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
+    let (face, shaped) = wordcraft_layout::metafile_text_run(t);
     let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
     let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
     let k = lay.em / face.upem.max(1.0);
@@ -319,25 +309,33 @@ fn device_pixel(view: Affine) -> f64 {
     if scale.is_finite() && scale > 1e-9 { 1.0 / scale } else { 1.0 }
 }
 
-/// Largest page-background picture decoded, in pixels (hostile files).
-const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
-
 /// Draw the page's picture or texture fill (Design › Page Color › Fill Effects) behind the content:
 /// tiled at its natural size (96 dpi) for a `tile` fill, stretched over the page otherwise.
 pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
     let Some(pic) = &doc.settings.page_picture else { return };
     let Some(bytes) = doc.media.get(&pic.media) else { return };
-    let (nw, nh) = match image_size(bytes) {
-        Some((w, h)) if w > 0 && h > 0 && (w as u64) * (h as u64) <= MAX_BACKGROUND_PIXELS => (w as f64, h as f64),
-        _ => return,
-    };
-    let Some(pm) = pixmap_for(doc, &pic.media) else { return };
+    let Some((nw, nh)) = wordcraft_geom::picture::background_size(bytes).map(|(w, h)| (f64::from(w), f64::from(h))) else { return };
+    let Some(pm) = pixmap_for(doc, &pic.media, wordcraft_doc::picfx::PicFx::default()) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));
     if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
         return;
     }
     let tile = pic.fill_type.eq_ignore_ascii_case("tile");
+    // Centred once at its natural size (an ODT page background that doesn't repeat).
+    if pic.fill_type.eq_ignore_ascii_case("center") {
+        let (iw, ih) = (0.75 * nw, 0.75 * nh);
+        let (x0, y0) = ((w - iw) / 2.0, (h - ih) / 2.0);
+        ctx.set_transform(view);
+        ctx.set_paint(vello_cpu::Image {
+            image: vello_cpu::ImageSource::Pixmap(pm),
+            sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium).with_extend(peniko::Extend::Pad),
+        });
+        ctx.set_paint_transform(Affine::translate((x0, y0)) * Affine::scale_non_uniform(iw / pw, ih / ph));
+        ctx.fill_rect(&kurbo::Rect::new(x0.max(0.0), y0.max(0.0), (x0 + iw).min(w), (y0 + ih).min(h)));
+        ctx.reset_paint_transform();
+        return;
+    }
     // Tiles at the picture's natural size, whatever size its cached pixmap is kept at.
     let (sx, sy) = if tile { (0.75 * nw / pw, 0.75 * nh / ph) } else { (w / pw, h / ph) };
     let extend = if tile { peniko::Extend::Repeat } else { peniko::Extend::Pad };
@@ -351,14 +349,19 @@ pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &
     ctx.reset_paint_transform();
 }
 
-pub(crate) fn pixmap_for(doc: &Document, key: &str) -> Option<Arc<Pixmap>> {
+pub(crate) fn pixmap_for(doc: &Document, key: &str, fx: wordcraft_doc::picfx::PicFx) -> Option<Arc<Pixmap>> {
     let bytes = doc.media.get(key)?;
-    if let Some(v) = lock(images()).get(key, bytes) {
+    // Corrected pixels are cached apart from the picture's own (the same picture can be shown
+    // both ways).
+    let fx = fx.clamped();
+    let cache_key =
+        if fx.changes_pixels() { std::borrow::Cow::Owned(format!("{key}#fx{},{}", fx.bright, fx.contrast)) } else { std::borrow::Cow::Borrowed(key) };
+    if let Some(v) = lock(images()).get(&cache_key, bytes) {
         return v;
     }
-    let pm = decode_pixmap(bytes).map(|p| Arc::new(cacheable(p)));
+    let pm = decode_pixmap_fx(bytes, fx).map(|p| Arc::new(cacheable(p)));
     let size = pm.as_ref().map_or(0, |p| p.width() as usize * p.height() as usize * 4);
-    lock(images()).insert(key, bytes, pm.clone(), size);
+    lock(images()).insert(&cache_key, bytes, pm.clone(), size);
     pm
 }
 

@@ -3,7 +3,6 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, NumRef};

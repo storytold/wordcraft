@@ -1,7 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::face::HINT_STRIKE;
 use super::face::{BUNDLED, FALLBACK_FAMILY, FontBytes, FontFace, NEXT_ID};
-use super::*;
+use super::{Arc, FileRef, Location, MetadataProvider, Ordering, Size, StringId};
 
 /// Is `f` an East Asian (Chinese, Japanese or Korean) font: do its OS/2 code pages say so
 /// (Shift-JIS, GB2312, Wansung, Big5, Johab), or, without them, does it map common ideographs?
@@ -61,8 +61,16 @@ pub(super) struct CatalogEntry {
 /// The longest name a document's font table gives an embedded font that faces take on.
 pub(super) const MAX_FAMILY_NAME: usize = 128;
 
+/// The longest name read from a font's `name` table, in characters. A record can hold 64K
+/// characters, and each face copies its family into its localized names and into every named
+/// instance, so a small font could claim hundreds of megabytes of names. Real names run to a
+/// few dozen characters.
+pub(super) const MAX_NAME_CHARS: usize = 128;
+
 pub(super) fn name(font: &skrifa::FontRef<'_>, ids: &[StringId]) -> Option<String> {
-    ids.iter().find_map(|id| font.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
+    ids.iter().find_map(|id| {
+        font.localized_strings(*id).english_or_first().map(|s| s.chars().take(MAX_NAME_CHARS).collect::<String>()).filter(|s| !s.is_empty())
+    })
 }
 
 /// The family's names in other languages: localized typographic family names (name ID 16) stand
@@ -70,7 +78,6 @@ pub(super) fn name(font: &skrifa::FontRef<'_>, ids: &[StringId]) -> Option<Strin
 /// font has no typographic names). Bounded: a damaged font can list any number of records.
 fn local_names(f: &skrifa::FontRef<'_>, family: &str, id1: Option<&str>) -> Vec<LocalName> {
     const MAX_NAMES: usize = 64;
-    const MAX_CHARS: usize = 128;
     let typographic = f.localized_strings(StringId::TYPOGRAPHIC_FAMILY_NAME).next().is_some();
     let legacy = if typographic { id1 } else { Some(family) };
     let mut out: Vec<LocalName> = Vec::new();
@@ -81,7 +88,7 @@ fn local_names(f: &skrifa::FontRef<'_>, family: &str, id1: Option<&str>) -> Vec<
             if lang == "en" || lang.starts_with("en-") {
                 continue;
             }
-            let name: String = s.chars().take(MAX_CHARS).collect::<String>().trim().to_string();
+            let name: String = s.chars().take(MAX_NAME_CHARS).collect::<String>().trim().to_string();
             if name.is_empty() || name.eq_ignore_ascii_case(english) || out.iter().any(|n| n.lang == lang && n.name == name) {
                 continue;
             }
@@ -387,6 +394,7 @@ pub(super) fn make_face(
         index,
         bmp: std::sync::OnceLock::new(),
         outline_hinter: std::sync::OnceLock::new(),
+        glyph_styles: std::sync::OnceLock::new(),
         hint_draws: Default::default(),
         hint_slow: Default::default(),
         hinting_off: Default::default(),

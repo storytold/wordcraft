@@ -5,7 +5,9 @@ use super::parts::{MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, 
 use super::position::{Path, Pos, StoryRef};
 use super::settings::{CoreProps, CustomProp, Settings};
 use super::text_walk::{TextMode, notes_and_boxes, story_word_count_of, text_of, walk};
-use super::*;
+use std::sync::Arc;
+
+use super::{BTreeMap, CharProps, Document, InlineObject, Paragraph, SectionProps, StyleSheet, Table, edit, numbering, para, section};
 
 /// [`Document::media`] by content, so adding media is linear in the bytes added rather than a
 /// scan of every earlier image (CWE-407). Rebuilt whenever `media` changed size behind its back;
@@ -60,8 +62,8 @@ impl Document {
             body: vec![para_block(Paragraph::new())],
             last_section: SectionProps::default(),
             parts: BTreeMap::new(),
-            styles: StyleSheet::builtin(),
-            numbering: Numbering::default(),
+            styles: Arc::new(StyleSheet::builtin()),
+            numbering: Arc::default(),
             comments: BTreeMap::new(),
             revisions: Vec::new(),
             settings: Settings::default(),
@@ -74,6 +76,8 @@ impl Document {
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
+            kept: Default::default(),
+            missing_pictures: Default::default(),
         }
     }
 
@@ -150,6 +154,8 @@ impl Document {
             passthrough,
             glossary,
             media_index: _,
+            kept: _,
+            missing_pictures: _,
         } = self;
         let Document {
             body: other_body,
@@ -169,6 +175,8 @@ impl Document {
             passthrough: other_passthrough,
             glossary: other_glossary,
             media_index: _,
+            kept: _,
+            missing_pictures: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
@@ -208,7 +216,9 @@ impl Document {
         if !parent.len().is_multiple_of(3) {
             return None;
         }
+        crate::work::steps(1);
         for ch in parent.chunks(3) {
+            crate::work::steps(1);
             let [b, r, c] = ch else { return None };
             let Block::Table(t) = &**bl.get(*b as usize)? else { return None };
             bl = &t.rows.get(*r as usize)?.cells.get(*c as usize)?.blocks;
@@ -441,8 +451,7 @@ impl Document {
         Ok(id)
     }
 
-    /// Count words like Word's status bar (whitespace-separated tokens containing a letter or digit,
-    /// including generated numbered-list labels).
+    /// Count words like Word's status bar ([`crate::count_words`], plus generated numbered-list labels).
     pub fn word_count(&self) -> usize {
         self.story_word_count(StoryRef::Body)
     }
@@ -733,6 +742,52 @@ impl Document {
         }
     }
 
+    /// [`Document::objects_mut`] for filling in what an object shows from what it is (a chart's
+    /// drawing from its data), which doesn't change the document: the markup kept as read for
+    /// the paragraphs and tables holding them (see [`crate::kept`]) follows them.
+    pub fn fill_objects(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {
+        // The stories (text boxes', notes') as read before, when filling changes one: they stay
+        // as read after it, so the paragraphs showing them keep their markup.
+        let holds = |b: &Arc<Block>| {
+            let mut any = false;
+            edit::each_para(b, 0, &mut |p| any |= p.objects.iter().any(wants));
+            any
+        };
+        let as_read: Vec<u32> = match self.kept.get() {
+            Some(k) if !k.story_fps.is_empty() && self.parts.values().any(|p| p.blocks.iter().any(holds)) => {
+                k.story_fps.iter().filter(|(id, fp)| **fp == crate::kept::story_fingerprint(self, **id)).map(|(id, _)| *id).collect()
+            }
+            _ => Vec::new(),
+        };
+        let mut moves: Vec<crate::kept::Moved> = Vec::new();
+        let mut stories: Vec<&mut Blocks> = vec![&mut self.body];
+        stories.extend(self.parts.values_mut().map(|p| &mut p.blocks));
+        for blocks in stories {
+            for b in blocks.iter_mut() {
+                let mut any = false;
+                edit::each_para(b, 0, &mut |p| any |= p.objects.iter().any(wants));
+                if !any {
+                    continue;
+                }
+                let before = crate::kept::identities(b);
+                edit::each_para_mut(Arc::make_mut(b), 0, &mut |p| {
+                    if p.objects.iter().any(wants) {
+                        p.objects.iter_mut().filter(|o| wants(o)).for_each(&mut *f);
+                        p.touch();
+                    }
+                });
+                moves.push((before, crate::kept::identities(b)));
+            }
+        }
+        let refreshed: Vec<(u32, u64)> = as_read.into_iter().map(|id| (id, crate::kept::story_fingerprint(self, id))).collect();
+        if let Some(k) = self.kept.get_mut() {
+            for (before, after) in moves {
+                k.follow(&before, &after);
+            }
+            k.story_fps.extend(refreshed);
+        }
+    }
+
     /// Repair every paragraph's runs (see [`Paragraph::normalize`]); for models from untrusted
     /// JSON, whose run lengths may overflow, fall short or split a character.
     pub fn normalize_runs(&mut self) {
@@ -793,7 +848,9 @@ impl Document {
                 p.kind = "lpwstr".into();
                 p.value = value.to_string();
             }
-            None => self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string() }),
+            None => {
+                self.custom_props.push(CustomProp { name: name.to_string(), kind: "lpwstr".into(), value: value.to_string(), ..Default::default() })
+            }
         }
     }
 

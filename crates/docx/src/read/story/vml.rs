@@ -1,4 +1,14 @@
-use super::*;
+use super::{
+    Anchor, Arc, CharProps, El, Float, FloatAlign, InlineObject, MAX_STORY_DEPTH, MAX_VML_GROUP_DEPTH, Paragraph, PartKind, Reader, Rels, Rgb,
+    ShapeExtra, ShapeKind, StoryCtx, TextColor, TextWarp, Wrap, int, measure, para_block, vml_color, vml_fill, vml_fraction, vml_preset_kind,
+};
+
+#[derive(Clone, Copy)]
+struct VmlGroupSpace {
+    origin: (f32, f32),
+    scale: (f32, f32),
+    depth: usize,
+}
 
 impl Reader<'_> {
     /// Every legacy VML drawing in one `w:pict`, in document order: a `w:pict` may hold any
@@ -43,7 +53,7 @@ impl Reader<'_> {
         let (ch_w, ch_h) = vml_coordpair(grp, "coordsize").filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((w.max(1.0), h.max(1.0)));
         let (cx, cy) = vml_coordpair(grp, "coordorigin").unwrap_or((0.0, 0.0));
         let mut children = Vec::new();
-        self.vml_group_members(sc, pict, grp, rels, (-cx, -cy, 1.0, 1.0), 0, &mut children);
+        self.vml_group_members(sc, pict, grp, rels, VmlGroupSpace { origin: (-cx, -cy), scale: (1.0, 1.0), depth: 0 }, &mut children);
         if children.is_empty() {
             return None;
         }
@@ -59,11 +69,11 @@ impl Reader<'_> {
         pict: &El,
         g: &El,
         rels: &Rels,
-        t: (f32, f32, f32, f32),
-        depth: usize,
+        space: VmlGroupSpace,
         out: &mut Vec<wordcraft_doc::para::GroupChild>,
     ) {
-        let (x0, y0, sx, sy) = t;
+        let (x0, y0) = space.origin;
+        let (sx, sy) = space.scale;
         let max = crate::units::MAX_LEN_PT;
         let fit = |v: f32, lo: f32| wordcraft_geom::finite(v).clamp(lo, max);
         for e in g.els() {
@@ -77,7 +87,7 @@ impl Reader<'_> {
             let num = |k: &str| vml_style(style, k).and_then(|v| measure(v, 1.0)).map_or(0.0, wordcraft_geom::finite);
             let ((ox, oy), (ew, eh)) = ((num("left"), num("top")), (num("width"), num("height")));
             if e.local() == "group" {
-                if depth >= MAX_VML_GROUP_DEPTH {
+                if space.depth >= MAX_VML_GROUP_DEPTH {
                     continue;
                 }
                 // Its members' space maps onto its own box.
@@ -85,7 +95,7 @@ impl Reader<'_> {
                 let (cox, coy) = vml_coordpair(e, "coordorigin").unwrap_or((0.0, 0.0));
                 let (kx, ky) = (ew / cw, eh / ch);
                 let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
-                self.vml_group_members(sc, pict, e, rels, nt, depth + 1, out);
+                self.vml_group_members(sc, pict, e, rels, VmlGroupSpace { origin: (nt.0, nt.1), scale: (nt.2, nt.3), depth: space.depth + 1 }, out);
                 continue;
             }
             let Some(mut obj) = self.read_vml_shape(sc, pict, e, rels, Some((sx, sy))) else { continue };
@@ -121,10 +131,20 @@ impl Reader<'_> {
             None => vml_float(shape, style, sc.in_hf),
         };
         if let Some(img) = shape.find("v:imagedata") {
-            let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
+            let Some(id) = img.attr("r:id").or_else(|| img.attr("r:pict")) else {
+                // `r:href` names a file outside the package: never fetched.
+                if let Some(href) = img.attr("r:href") {
+                    let target = rels.by_id(href).map_or_else(|| href.to_string(), |r| r.target.clone());
+                    self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+                }
+                return None;
+            };
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None });
+            // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
+            let frac = |k: &str| img.attr(k).and_then(crate::units::vml_number);
+            let fx = wordcraft_doc::picfx::PicFx::from_vml(frac("gain").unwrap_or(1.0), frac("blacklevel").unwrap_or(0.0));
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.
@@ -211,6 +231,15 @@ impl Reader<'_> {
         {
             let id = self.read_textbox(sc, t, rels);
             if let Some(part) = self.doc.parts.get_mut(&id) {
+                // Text direction (#5193), as Word reads it: `mso-layout-flow-alt:bottom-to-top` is
+                // `vert270` whatever `layout-flow` says; otherwise `layout-flow:vertical…` (also
+                // `vertical-ideographic`, our `eaVert`) is `vert`, and anything else horizontal.
+                let tb_style = tb.attr("style").unwrap_or("");
+                if vml_style(tb_style, "mso-layout-flow-alt").is_some_and(|v| v.eq_ignore_ascii_case("bottom-to-top")) {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert270;
+                } else if vml_style(tb_style, "layout-flow").is_some_and(|v| v.to_ascii_lowercase().starts_with("vertical")) {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert;
+                }
                 // Internal margins `inset="l,t,r,b"` (ECMA-376 Part 4 §19.1.2.22), each one left
                 // out keeping Word's default; a bare number is in EMUs, VML's base unit.
                 // `o:insetmode="auto"` leaves them to the application.
@@ -285,11 +314,41 @@ impl Reader<'_> {
         }
         let kind = kind?;
         let mut extra = ShapeExtra { cap, ..Default::default() };
+        // A horizontal rule (`o:hr`, a pasted `<hr>`): across `o:hrpct` tenths of a percent of its
+        // line, or its own width (`o:hrpct="0"`); a width of 0 with no percentage is the whole
+        // line. `o:hralign` places a shorter one (Word, measured: 50 % centred, left, right).
+        // Only a rule in the text, shown: a positioned or hidden one stays a plain shape, which
+        // keeps its placement and visibility when saved.
+        if attr("o:hr").is_some_and(|v| matches!(v.trim(), "t" | "true" | "1")) && float.wrap == Wrap::Inline && !float.hidden {
+            let tenths = attr("o:hrpct").and_then(|v| v.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0);
+            let pct = tenths.map_or(if w > 0.0 { 0.0 } else { 100.0 }, |t| (t / 10.0).min(100.0));
+            let align = match attr("o:hralign").map(|a| a.trim().to_ascii_lowercase()).as_deref() {
+                Some("center") => wordcraft_doc::props::Align::Center,
+                Some("right") => wordcraft_doc::props::Align::Right,
+                _ => wordcraft_doc::props::Align::Left,
+            };
+            let standard = attr("o:hrstd").is_some_and(|v| matches!(v.trim(), "t" | "true" | "1"));
+            extra.hr = Some(wordcraft_doc::connector::HorizontalRule { pct, align, standard });
+        }
         if kind == ShapeKind::Line {
-            // Arrowheads (`v:stroke` startarrow / endarrow): any but `none` is drawn.
-            let arrow = |name: &str| shape.child("v:stroke").and_then(|s| s.attr(name)).is_some_and(|v| v != "none");
-            extra.arrow_start = arrow("startarrow");
-            extra.arrow_end = arrow("endarrow");
+            // Arrowheads (`v:stroke` startarrow / endarrow, with their width and length): any but
+            // `none` is drawn.
+            use wordcraft_doc::connector::{ArrowKind, ArrowSize, ArrowStyle};
+            let stroke = shape.child("v:stroke");
+            let arrow = |end: &str| {
+                let s = stroke?;
+                let kind = s.attr(&format!("{end}arrow")).filter(|v| *v != "none")?;
+                let size = |what: &str| ArrowSize::from_vml(s.attr(&format!("{end}arrow{what}")).unwrap_or("medium"));
+                Some(ArrowStyle { kind: ArrowKind::from_vml(kind), width: size("width"), length: size("length") })
+            };
+            if let Some(style) = arrow("start") {
+                extra.arrow_start = true;
+                extra.start_style = style;
+            }
+            if let Some(style) = arrow("end") {
+                extra.arrow_end = true;
+                extra.end_style = style;
+            }
         }
         if shape.local() == "line" {
             // A line runs `from` → `to` (points, offsets from where its style places it). A preset

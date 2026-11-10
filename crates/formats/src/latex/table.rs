@@ -2,7 +2,7 @@ use super::lex::{Tok, text_symbol};
 use super::limits::MAX_NEST;
 use super::parser::Parser;
 use super::units::{parse_color, spec_widths};
-use super::*;
+use super::{Cell, FTable};
 
 /// Plain text of tokens (arguments that are names, URLs, lengths).
 pub(super) fn raw_text(toks: &[Tok]) -> String {
@@ -98,13 +98,15 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
     if !row.is_empty() {
         rows.push(row);
     }
-    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: !has_rules };
+    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: !has_rules, extra: None, kept: None, wrap: None };
     // Rows still covered by a `\multirow` above, per grid column.
     let mut covering: Vec<u32> = Vec::new();
     for r in rows {
         let mut cells = Vec::new();
         let mut g = 0usize;
-        for cell_toks in r {
+        // A document row keeps MAX_COLS cells; the rest would only widen `covering`, which is
+        // walked once per row.
+        for cell_toks in r.into_iter().take(wordcraft_doc::table::MAX_COLS) {
             let mut cell = Cell::default();
             let mut content = trim_cell(cell_toks);
             // `\multicolumn{n}{spec}{content}`, `\multirow{n}{width}{content}`. Each wrapper

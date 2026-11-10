@@ -1,14 +1,47 @@
-use super::*;
+#[cfg(not(target_arch = "wasm32"))]
+use super::file_browser;
+use super::{
+    WordApp, backstage, canvas, chrome, colors, content_controls, dialogs, documents, keys, now_ms, panes, read_aloud, ribbon, theme, updates_ui,
+    zotero,
+};
+
+use crate::i18n;
 
 impl WordApp {
+    /// A file that wouldn't open (#1103): log it, and say on the status bar which file and why,
+    /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
+    pub fn report_open_failure(&mut self, path: &str, error: &str) -> String {
+        log::warn!("{path}: {error}");
+        let msg = crate::i18n::fmt(crate::tl!("Couldn't open {path}: {error}"), &[("path", &crate::i18n::isolate_path(path)), ("error", error)]);
+        self.status(msg.clone());
+        msg
+    }
+
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
+    }
+
+    /// Write the current preferences out through the host's hook, if it has one (#2716). The
+    /// desktop app saves them at exit; a change that should survive a crash, like taking a
+    /// document off the recent list, needs a save at the moment of the change. `None`: the host
+    /// has no hook or wrote nothing; `Some(Err)`: the write failed, and the status line says so.
+    pub(super) fn save_prefs_now(&mut self) -> Option<Result<(), String>> {
+        let save = self.services.save_prefs.as_ref()?;
+        match save(self) {
+            Ok(true) => Some(Ok(())),
+            // The host wrote nothing (preferences switched off): same as having no hook.
+            Ok(false) => None,
+            Err(e) => {
+                self.status(i18n::fmt(tl!("Could not save the preferences: {error}"), &[("error", &e)]));
+                Some(Err(e))
+            }
+        }
     }
 
     /// Document title for the title bar (and the suggested file name). An untitled document is
     /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {
-        match &self.session.path {
+        let mut title = match &self.session.path {
             Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
             None => match &self.session.file_name {
                 Some(name) => name.clone(),
@@ -17,7 +50,10 @@ impl WordApp {
                 }
                 None => self.session.doc.core.title.clone(),
             },
-        }
+        };
+        // X11 converts window titles to C strings, which cannot contain NUL (#3634).
+        title.retain(|c| c != '\0');
+        if title.is_empty() { tl!("Document1").into() } else { title }
     }
 
     /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
@@ -54,6 +90,7 @@ impl WordApp {
                 if moved(self) {
                     return;
                 }
+                crate::language_packs::bar(self, ui);
                 chrome::status_bar(self, ui);
                 panes::show(self, ui);
             }

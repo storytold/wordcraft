@@ -38,6 +38,129 @@ fn basic_reader() {
 }
 
 #[test]
+fn stylesheet_names_take_unicode_escapes() {
+    // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn stylesheet_names_take_negative_escapes() {
+    // 't' as a signed 16-bit escape: 116 - 65536 = -65420.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u-65420?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn stylesheet_names_honour_the_uc_fallback_count() {
+    // \uc2: two fallback bytes follow each \uN? — here a second `?`.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \uc2\u116??\u105??\u116??\u108??\u101??;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn a_malformed_hex_escape_leaves_no_stray_text() {
+    // A `\'` that is not followed by two hex digits is malformed: the escape itself goes, any
+    // hex digits of a truncated pair go with it, and everything else — non-hex bytes, `}` —
+    // is read as what it is. `\'gZ` keeps "gZ" as text; `\'4}` keeps the closing brace.
+    let rtf = br"{\rtf1\ansi \'gZok\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Normal:gZok");
+
+    // The bytes after a truncated pair must not swallow the group's closing brace or the next
+    // control word: the group and its destination state end where they should. Paragraph text
+    // alone would not show that: `survivor` reads the same inside the bold group, so the run's
+    // formatting is checked too.
+    let rtf = br"{\rtf1\ansi{\b \'4}survivor\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains("survivor")), "{:?}", texts(&f));
+    let survivor_bold = f.blocks.iter().find_map(|b| match b {
+        FBlock::Para(p) => p.inlines.iter().find_map(|i| match i {
+            Inline::Text(t, fmt) if t.contains("survivor") => Some(fmt.bold),
+            _ => None,
+        }),
+        FBlock::Table(_) => None,
+    });
+    assert_eq!(survivor_bold, Some(false), "survivor must not be inside the bold group: {:?}", f.blocks);
+    // The truncated pair's hex digit goes with the escape: no stray "4" is left in the text.
+    assert!(!texts(&f).iter().any(|t| t.contains('4')), "{:?}", texts(&f));
+
+    // A leading `+` is not a hex digit: `\'+4` is no escape: it stays text, not the byte 0x04.
+    let rtf = br"{\rtf1\ansi \'+4z\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Normal:+4z");
+
+    let rtf = br"{\rtf1\ansi{\'}}after\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains("after")), "{:?}", texts(&f));
+
+    // A hex digit that starts a valid pair with the byte after it is part of the escape:
+    // \'4} reads '4' as the escape's byte and leaves `}` to close the group.
+    let rtf = br"{\rtf1\ansi\'4}x\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains('x') && !t.contains('}')), "{:?}", texts(&f));
+}
+
+#[test]
+fn unicode_fallback_uses_the_declared_count() {
+    for (rtf, expected) in [
+        (br"{\rtf1\uc18\u8804less than or equal rest}".as_slice(), "≤ rest"),
+        (br"{\rtf1\uc10\u233\'30\'31\'32\'33\'34\'35\'36\'37\'38\'39 rest}", "é rest"),
+        (br"{\rtf1\uc2\u8804\:ab rest}", "≤b rest"),
+        (br"{\rtf1\uc18\u8804\:12345678901234567 rest}", "≤ rest"),
+        (br"{\rtf1\uc1\u8804\:ab rest}", "≤ab rest"),
+        (br"{\rtf1\uc0\u8804\:ab rest}", "≤ab rest"),
+        (br"{\rtf1\uc9\u233abcdefgh\par VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc1\u233\pard VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc1\u233\cell VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc1\u233\row VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc0\u233\par VISIBLE}", "é\nVISIBLE"),
+        (b"{\\rtf1\\uc9\\u233abcdefgh\\\nVISIBLE}", "éVISIBLE"),
+        (b"{\\rtf1\\uc9\\u233abcdefgh\\\rVISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc9\u233abcdefgh\*VISIBLE}", "éVISIBLE"),
+        (b"{\\rtf1\\uc0\\u233\\\nVISIBLE}", "é\nVISIBLE"),
+        (b"{\\rtf1\\uc0\\u233\\\rVISIBLE}", "é\nVISIBLE"),
+        (br"{\rtf1\uc0\u233\*VISIBLE}", "éVISIBLE"),
+        (br"{\rtf1\uc0\u233X}", "éX"),
+        (br"{\rtf1\uc1\u233?X}", "éX"),
+        (br"{\rtf1{\uc2147483647\u233?}X}", "éX"),
+        (br"{\rtf1\uc-1\u233X}", "éX"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), expected, "{rtf:?}");
+    }
+}
+
+#[test]
+fn unicode_fallback_info_words_preserve_following_metadata() {
+    for (rtf, title, body) in [
+        (br"{\rtf1{\info{\title\uc9\u233abcdefgh\info X}{\author Alice}} Text}".as_slice(), "éX", "Text"),
+        (br"{\rtf1{\info{\title\uc1\u233\info X}{\author Alice}} Text}", "éX", "Text"),
+        (br"{\rtf1{\info{\title\uc0\u233X}{\author Alice}} Text}", "éX", "Text"),
+        (br"{\rtf1\uc0\u233{\info{\title Plain}{\author Alice}}Text}", "Plain", "éText"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.core.title, title, "{rtf:?}");
+        assert_eq!(doc.core.creator, "Alice", "{rtf:?}");
+        assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), body, "{rtf:?}");
+    }
+}
+
+#[test]
+fn unicode_fallback_in_revision_authors_counts_control_words() {
+    for (rtf, expected) in [
+        (br"{\rtf1{\*\revtbl{Unknown;}{\uc9\u233abcdefgh\par Zed;}}{\revised\revauth1 text}}".as_slice(), "éZed"),
+        (br"{\rtf1{\*\revtbl{Unknown;}{\uc0\u233\par Zed;}}{\revised\revauth1 text}}", "éZed"),
+    ] {
+        let doc = import(rtf).unwrap();
+        assert_eq!(doc.revisions.first().map(|r| r.author.as_str()), Some(expected), "{rtf:?}");
+    }
+}
+
+#[test]
 fn paragraph_borders() {
     // A heading with a grey rule under it, as hh.ru résumés write their section titles.
     let rtf = br"{\rtf1\ansi{\colortbl;\red0\green0\blue0;\red216\green216\blue216;}
@@ -457,6 +580,94 @@ fn shppict_imports_one_image_and_skips_legacy_duplicate() -> Result<(), String> 
     Ok(())
 }
 
+/// #4259: `\wmetafile8` and `\emfblip` pictures are kept as WMF/EMF media (they were dropped),
+/// sized from `\picwgoal`/`\pichgoal` and `\picscalex`/`\picscaley`, else from `\picw`/`\pich`
+/// (0.01 mm for a metafile). As Word writes a floating picture: the `\shprslt` copy is read.
+#[test]
+fn metafile_pictures_are_imported() -> Result<(), String> {
+    // A plain WMF: the 9-word header (type 1, version 0x300, 12 words, max record 3), then EOF.
+    let wmf: Vec<u8> = [1u16, 9, 0x300, 12, 0, 0, 3, 0, 0, 3, 0, 0].iter().flat_map(|w| w.to_le_bytes()).collect();
+    let hex: String = wmf.iter().map(|b| format!("{b:02x}")).collect();
+    let images = |rtf: String| -> Result<Vec<model::Img>, String> {
+        let f = parse(rtf.as_bytes())?;
+        Ok(f.blocks
+            .iter()
+            .filter_map(|b| match b {
+                FBlock::Para(p) => Some(p.inlines.clone()),
+                FBlock::Table(_) => None,
+            })
+            .flatten()
+            .filter_map(|i| match i {
+                Inline::Image(img) => Some(img),
+                _ => None,
+            })
+            .collect())
+    };
+    let pict = format!("{{\\pict\\wmetafile8\\picw38761\\pich12832\\picwgoal21972\\pichgoal7272\\picscalex45\\picscaley45 {hex}}}");
+    let shape = format!("{{\\shp{{\\*\\shpinst{{\\sp{{\\sn pib}}{{\\sv {pict}}}}}}}{{\\shprslt{pict}}}}}");
+    let got = images(format!("{{\\rtf1\\ansi Before{shape}After\\par}}"))?;
+    let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+    assert_eq!((img.ext.as_str(), img.data.as_ref()), ("wmf", &wmf));
+    // 21972 twips at 45% is 494.4 pt, shrunk to the 468 pt column like every imported picture.
+    assert_eq!(img.w, 468.0);
+    assert!((img.h - 7272.0 / 20.0 * 0.45 * 468.0 / 494.37).abs() < 0.1, "{}", img.h);
+    // No goal size: the natural size, 2540 × 1270 hundredths of a millimetre = 72 × 36 pt; under
+    // MM_TEXT (`\wmetafile1`) the same numbers are pixels.
+    let hex_of = |b: &[u8]| -> String { b.iter().map(|b| format!("{b:02x}")).collect() };
+    let mut emf = vec![0u8; 88];
+    emf[0] = 1;
+    emf[4] = 88;
+    emf[40..44].copy_from_slice(b" EMF");
+    let emf_hex = hex_of(&emf);
+    let got = images(format!("{{\\rtf1\\ansi{{\\pict\\emfblip\\picw2540\\pich1270 {emf_hex}}}\\par}}"))?;
+    let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+    assert_eq!((img.ext.as_str(), img.w, img.h, img.data.as_ref()), ("emf", 72.0, 36.0, &emf));
+    let got = images(format!("{{\\rtf1\\ansi{{\\pict\\wmetafile1\\picw96\\pich48 {hex}}}\\par}}"))?;
+    let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+    assert_eq!((img.ext.as_str(), img.w, img.h), ("wmf", 72.0, 36.0));
+    // `\picscalex`/`\picscaley` scale the natural size when there is no goal size.
+    let got = images(format!("{{\\rtf1\\ansi{{\\pict\\wmetafile8\\picw2540\\pich1270\\picscalex50\\picscaley200 {hex}}}\\par}}"))?;
+    let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+    assert_eq!((img.w, img.h), (36.0, 72.0));
+    // The other mapping modes use their own units: 0.1 mm, 0.01 in, 0.001 in and twips.
+    for (mode, w, h) in [(2, 254, 127), (4, 100, 50), (5, 1000, 500), (6, 1440, 720)] {
+        let got = images(format!("{{\\rtf1\\ansi{{\\pict\\wmetafile{mode}\\picw{w}\\pich{h} {hex}}}\\par}}"))?;
+        let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+        assert!((img.w - 72.0).abs() < 0.01 && (img.h - 36.0).abs() < 0.01, "mode {mode}: {} x {}", img.w, img.h);
+    }
+    // Hostile: a zero or negative natural size falls back to the default 72 pt square, and bytes
+    // that are no picture at all are dropped, whatever the control word says.
+    let got = images(format!("{{\\rtf1\\ansi{{\\pict\\wmetafile8\\picw0\\pich-5 {hex}}}\\par}}"))?;
+    let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+    assert_eq!((img.w, img.h), (72.0, 72.0));
+    for blip in ["wmetafile8", "emfblip"] {
+        assert!(images(format!("{{\\rtf1\\ansi{{\\pict\\{blip}\\picw2540\\pich1270 0123456789abcdef}}\\par}}"))?.is_empty(), "{blip}");
+    }
+    // Saved as RTF and read back: the same picture, the EMF byte for byte, the WMF without the
+    // placeable header RTF has no room for.
+    let placeable: Vec<u8> = [0xD7u8, 0xCD, 0xC6, 0x9A].into_iter().chain([0u8; 18]).chain(wmf.iter().copied()).collect();
+    for (blip, data, want, ext) in [("emfblip", &emf, &emf, "emf"), ("wmetafile8", &wmf, &wmf, "wmf"), ("wmetafile8", &placeable, &wmf, "wmf")] {
+        let rtf = format!("{{\\rtf1\\ansi{{\\pict\\{blip}\\picw2540\\pich1270 {}}}\\par}}", hex_of(data));
+        let got = images(export(&import(rtf.as_bytes())?))?;
+        let [img] = got.as_slice() else { return Err(format!("{blip}: {} pictures", got.len())) };
+        assert_eq!((img.ext.as_str(), img.data.as_ref(), img.w, img.h), (ext, want, 72.0, 36.0), "{blip}");
+    }
+    // An EMF stored under `.wmf` (a DOCX can) is written as the EMF its bytes are.
+    let mut doc = import(format!("{{\\rtf1\\ansi{{\\pict\\wmetafile8\\picw2540\\pich1270 {hex}}}\\par}}").as_bytes())?;
+    let (key, bytes) = doc.media.iter_mut().next().ok_or("no media")?;
+    assert!(key.ends_with(".wmf"), "{key}");
+    *bytes = std::sync::Arc::new(emf.clone());
+    let rtf = export(&doc);
+    assert!(rtf.contains("\\emfblip") && !rtf.contains("\\wmetafile"), "{rtf}");
+    let got = images(rtf)?;
+    let [img] = got.as_slice() else { return Err(format!("{} pictures", got.len())) };
+    assert_eq!((img.ext.as_str(), img.data.as_ref()), ("emf", &emf));
+    // A placeable header with no records after it has nothing to write: no empty picture group.
+    *doc.media.values_mut().next().ok_or("no media")? = std::sync::Arc::new(placeable[..22].to_vec());
+    assert!(!export(&doc).contains("\\pict"), "an empty metafile is not written");
+    Ok(())
+}
+
 #[test]
 fn unicode_in_info_bookmarks_and_field_instructions() {
     // #435: `\uN` (with its `\ucN` fallback skipped) decodes in every text destination.
@@ -475,9 +686,11 @@ fn unicode_in_info_bookmarks_and_field_instructions() {
 pub(crate) const TRACKED: &[u8] = br"{\rtf1\ansi\deff0{\fonttbl{\f0 Arial;}}{\*\revtbl {Unknown;}{Alice;}{Bob;}}
 \pard Keep {\revised\revauth1\revdttm-1480361314 added }text{\deleted\revauthdel2\revdttmdel-2016341499  gone} end{\revised\revauth1\revdttm-1480361314\deleted\revauthdel2\revdttmdel-2016341499  both}.\par}";
 
+/// A revision's (author, date).
+type Stamp = (String, String);
+
 /// (text, insertion (author, date), deletion (author, date)) of each run of the first paragraph.
-#[allow(clippy::type_complexity)]
-fn tracked_runs(doc: &Document) -> Vec<(String, Option<(String, String)>, Option<(String, String)>)> {
+fn tracked_runs(doc: &Document) -> Vec<(String, Option<Stamp>, Option<Stamp>)> {
     let rev = |i: Option<u32>, kind: wordcraft_doc::RevisionKind| {
         i.map(|i| {
             let r = doc.revisions.get(i as usize).unwrap();
@@ -737,7 +950,7 @@ fn formatting_revisions_read_as_the_spec_writes_them() {
 fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
     use model::{FmtChange, ListInfo};
     // A numbered item Alice centred (it was left-aligned), and a second plain item.
-    let li = Some(ListInfo { ordered: true, level: 0, start: 1 });
+    let li = Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() });
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
     let old = Para { list: li, align: Some(Align::Left), ..Default::default() };
     let mut item = Para { list: li, align: Some(Align::Center), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
@@ -767,7 +980,7 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     // Alice took the paragraph out of a numbered list: it is no list item now, but was one.
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
     item.push_text("Item", &Fmt::default());
     let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
@@ -783,9 +996,9 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
 fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
     use model::{FmtChange, ListInfo};
     let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+    let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para {
-        list: Some(ListInfo { ordered: false, level: 0, start: 1 }),
+        list: Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }),
         fmt_change: Some(Box::new(FmtChange { mark, old })),
         ..Default::default()
     };
@@ -951,6 +1164,7 @@ fn old_formatting_in_a_code_paragraph_has_the_code_font() {
     let mut p = Para { kind: Kind::Code, ..Default::default() };
     p.push_text("x", &Fmt { font: Some("Arial".into()), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() });
     let mut w = Writer {
+        marks: Vec::new(),
         t: Tables { fonts: vec!["Aptos".into()], colors: Vec::new() },
         lists: Vec::new(),
         authors: None,
@@ -1139,6 +1353,40 @@ fn a_code_paragraph_round_trips_without_a_direct_code_font() {
     assert_eq!((f.size, f.bold, f.code, f.font.as_deref()), (None, false, false, None), "{rtf}");
 }
 
+/// Escaped semicolons in a font name stop at the limit, as other characters do (review of #3862).
+#[test]
+fn escaped_semicolons_in_a_font_name_stop_at_the_limit() {
+    let mut r = reader::Reader::default();
+    r.st.dest = state::Dest::FontTbl;
+    for _ in 0..100_000 {
+        r.ch(';');
+    }
+    assert_eq!(r.font_name.len(), model::MAX_FONT_NAME + 1);
+    let rtf = format!(r"{{\rtf1{{\fonttbl{{\f0 {};}}}}\f0 x\par}}", r"\'3b".repeat(model::MAX_FONT_NAME + 1));
+    let runs = text_runs(rtf.as_bytes());
+    assert_eq!(run_fmt(&runs, "x").font, None);
+}
+
+#[test]
+fn a_semicolon_in_a_font_name_round_trips() {
+    // `;` ends a `\fonttbl` entry, so it is written `\'3b` and read back as part of the name (#3740).
+    let fonts = [("one", "Semi;Colon"), ("two", "Semi;Other"), ("three", "Tail;"), ("four", "Line\nBreak")];
+    let mut p = Para::default();
+    for (t, font) in fonts {
+        p.push_text(t, &Fmt { font: Some(font.into()), ..Default::default() });
+    }
+    let flow = Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() };
+    let rtf = export(&model::to_doc(&flow));
+    assert!(rtf.contains(r"Semi\'3bColon;") && !rtf.contains(r"\line"), "{rtf}");
+    let runs = text_runs(rtf.as_bytes());
+    for (t, font) in fonts {
+        assert_eq!(run_fmt(&runs, t).font.as_deref(), Some(font.replace('\n', "").as_str()), "{rtf}");
+    }
+    // A Unicode escape is part of the name too, in a multibyte code page as well; a literal `;` ends it.
+    let runs = text_runs(br"{\rtf1\ansi\ansicpg932{\fonttbl{\f0 A\u59?B;}{\f1 C\'3bD;}}\f0 x {\f1 y}\par}");
+    assert_eq!((run_fmt(&runs, "x ").font.as_deref(), run_fmt(&runs, "y").font.as_deref()), (Some("A;B"), Some("C;D")));
+}
+
 #[test]
 fn a_stylesheet_entry_without_a_number_is_normal() {
     // An entry without `\sN` is style 0; it doesn't replace the entry before it.
@@ -1227,7 +1475,6 @@ fn hostile_formatting_revisions_never_panic() {
 
 #[test]
 fn sections_keep_their_page_columns_numbering_and_headers() {
-    use wordcraft_doc::section::{NumFormat, SectionStart};
     // A4 portrait → landscape restarting at 1 with its own header → continuous two columns
     // → portrait. A `\sectd` inside a footer group is the footer's, not the body's.
     let rtf = br"{\rtf1\ansi\paperw11906\paperh16838\margl1134\margr1134
@@ -1250,6 +1497,14 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     let secs = d.sections();
     assert_eq!(secs.len(), 4, "{secs:?}");
     let s: Vec<&wordcraft_doc::SectionProps> = secs.iter().map(|(_, s)| *s).collect();
+    assert_section_geometry(&s);
+    assert_section_breaks_and_layout(&s);
+    assert_section_headers_and_footers(&d, &s);
+    assert_section_body_boundaries(&d, &secs);
+    assert_section_page_defaults();
+}
+
+fn assert_section_geometry(s: &[&wordcraft_doc::SectionProps]) {
     // Page size and orientation; the document's margins apply to every section.
     for (i, land) in [(0, false), (1, true), (2, true), (3, false)] {
         assert_eq!(s[i].landscape, land, "section {i}");
@@ -1258,7 +1513,10 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
         assert!((s[i].margin_left - 56.7).abs() < 0.1, "section {i}");
         assert!((s[i].header - 35.4).abs() < 0.1, "section {i}");
     }
-    // Break types.
+}
+
+fn assert_section_breaks_and_layout(s: &[&wordcraft_doc::SectionProps]) {
+    use wordcraft_doc::section::{NumFormat, SectionStart};
     assert_eq!(
         s.iter().map(|s| s.start).collect::<Vec<_>>(),
         [SectionStart::NextPage, SectionStart::NextPage, SectionStart::Continuous, SectionStart::OddPage]
@@ -1273,7 +1531,9 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     assert_eq!(s[1].page_num_format, NumFormat::LowerRoman);
     assert_eq!(s[0].page_num_format, NumFormat::Decimal);
     assert!(!s[0].title_page && s[1].title_page && !s[3].title_page);
-    // Headers and footers: sections 1 and 2 have their own; 3 and 4 inherit (none set).
+}
+
+fn assert_section_headers_and_footers(d: &wordcraft_doc::Document, s: &[&wordcraft_doc::SectionProps]) {
     let text = |id: Option<u32>| {
         let p = id.and_then(|id| d.parts.get(&id)).unwrap();
         p.blocks
@@ -1291,6 +1551,9 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     for i in [2, 3] {
         assert_eq!((s[i].headers, s[i].footers), Default::default(), "section {i}");
     }
+}
+
+fn assert_section_body_boundaries(d: &wordcraft_doc::Document, secs: &[(usize, &wordcraft_doc::SectionProps)]) {
     // Each section ends on its own paragraph, after the text it holds.
     let body_text = |i: usize| match d.body.get(i).map(|b| &**b) {
         Some(wordcraft_doc::Block::Para(p)) => p.text.clone(),
@@ -1300,6 +1563,9 @@ fn sections_keep_their_page_columns_numbering_and_headers() {
     assert_eq!(body_text(secs[1].0 - 1), "<table>");
     assert_eq!(body_text(secs[2].0), "Third");
     assert_eq!(body_text(secs[3].0), "Fourth");
+}
+
+fn assert_section_page_defaults() {
     // A landscape document default doesn't turn a section that gives its own portrait page.
     let d = import(br"{\rtf1\ansi\paperw16838\paperh11906\landscape\sectd a\sect\sectd\pgwsxn11906\pghsxn16838 b\par}").unwrap();
     let secs = d.sections();
@@ -1450,8 +1716,42 @@ fn hyperlink_field_targets() {
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \l "heading""#), Some("http://example.com#heading".into()));
     assert_eq!(hyperlink(r#"HYPERLINK \l "heading""#), Some("#heading".into()));
     assert_eq!(hyperlink(r#"Hyperlink "http://example.com""#), Some("http://example.com".into()));
-    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/path\\latest".into()));
+    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/pathlatest".into()));
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \o "Help text""#), Some("http://example.com".into()));
+    // A tooltip or frame before the address, a longer field name, escapes and the writer's `%22`.
+    assert_eq!(hyperlink(r#"HYPERLINK \o "tip" \t "_blank" "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(hyperlink(r#"HYPERLINKX "http://example.com""#), None);
+    assert_eq!(hyperlink(r#"HYPERLINK "C:\\Docs\\f.rtf""#), Some(r"C:\Docs\f.rtf".into()));
+    assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/a%22b""#), Some(r#"http://example.com/a"b"#.into()));
+}
+
+/// A link with a quote in it survives export and import: the writer stores it as `%22`.
+#[test]
+fn a_quote_in_a_link_round_trips() {
+    let rtf = br#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "http://a.b/x%22y"}}{\fldrslt{link}}}\par}"#;
+    let link = |d: &Document| d.body.iter().find_map(|b| b.as_para()?.runs.iter().find_map(|r| r.props.link.clone()));
+    let d = import(rtf).unwrap();
+    assert_eq!(link(&d).as_deref(), Some(r#"http://a.b/x"y"#));
+    let exported = export(&d);
+    assert!(exported.contains("x%22y"), "{exported}");
+    assert_eq!(link(&import(exported.as_bytes()).unwrap()).as_deref(), Some(r#"http://a.b/x"y"#));
+}
+
+/// Backslashes in a link survive export and import, a trailing one and two in a row too.
+#[test]
+fn backslashes_in_a_link_round_trip() {
+    let link = |d: &Document| d.body.iter().find_map(|b| b.as_para()?.runs.iter().find_map(|r| r.props.link.clone()));
+    for target in [r"docs\", r"a\\b", r"..\up\f.doc"] {
+        let mut d = import(br#"{\rtf1\ansi{\field{\*\fldinst{HYPERLINK "x"}}{\fldrslt{link}}}\par}"#).unwrap();
+        for b in d.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+                p.runs.iter_mut().filter(|r| r.props.link.is_some()).for_each(|r| r.props.link = Some(target.into()));
+            }
+        }
+        assert_eq!(link(&d).as_deref(), Some(target));
+        let exported = export(&d);
+        assert_eq!(link(&import(exported.as_bytes()).unwrap()).as_deref(), Some(target), "{exported}");
+    }
 }
 
 #[test]
@@ -1495,4 +1795,35 @@ fn rtf_backslash_space_and_special_breaks() {
     let doc = import(rtf).unwrap();
     let p = doc.body.first().unwrap().as_para().unwrap();
     assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
+}
+
+#[test]
+fn compound_borders_round_trip() {
+    use wordcraft_doc::props::BorderStyle;
+    let lines = [
+        ("brdrtnthsg", BorderStyle::ThinThickSmallGap),
+        ("brdrthtnsg", BorderStyle::ThickThinSmallGap),
+        ("brdrtnthtnsg", BorderStyle::ThinThickThinSmallGap),
+        ("brdrtnthmg", BorderStyle::ThinThickMediumGap),
+        ("brdrthtnmg", BorderStyle::ThickThinMediumGap),
+        ("brdrtnthtnmg", BorderStyle::ThinThickThinMediumGap),
+        ("brdrtnthlg", BorderStyle::ThinThickLargeGap),
+        ("brdrthtnlg", BorderStyle::ThickThinLargeGap),
+        ("brdrtnthtnlg", BorderStyle::ThinThickThinLargeGap),
+    ];
+    let body: String = lines.iter().map(|(w, _)| format!("\\pard\\brdrt\\{w}\\brdrw30 {w}\\par\n")).collect();
+    let rtf = format!("{{\\rtf1\\ansi\n{body}}}");
+    let tops = |d: &wordcraft_doc::Document| -> Vec<Option<BorderStyle>> {
+        d.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .filter(|p| !p.plain_text().is_empty())
+            .map(|p| p.props.borders.and_then(|b| b.top).map(|t| t.style))
+            .collect()
+    };
+    let want: Vec<Option<BorderStyle>> = lines.iter().map(|(_, s)| Some(*s)).collect();
+    let d = import(rtf.as_bytes()).unwrap();
+    assert_eq!(tops(&d), want);
+    let back = import(export(&d).as_bytes()).unwrap();
+    assert_eq!(tops(&back), want);
 }
