@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Native InkML update:** 2026-11-08 · Circular pen widths compose nonuniform fits across resize/save, and zero-pressure ink stays nonpainting in ODT/OTT. Bounded decoder/placement previews retain original sources and picture fallbacks. Separate part/file ink limits protect later charts/SmartArt, including nested DOCX chunks. Full conformance, native editing and Word qualification remain open.
+> **Native InkML update:** 2026-11-09 · ODT/OTT refuses incomplete vector export without a usable fallback while image-only ink remains convertible. Circular pen widths compose nonuniform fits across resize/save; zero-pressure ink stays nonpainting. Bounded previews retain original sources; independent part/file ink limits protect charts/SmartArt. Full conformance, native editing and Word qualification remain open.
 
 > **Ink renderer primitives update:** 2026-11-08 · Native stroke widths and binary mask blending have dedicated display operations; ordinary clips and authored/freeform ink retain their existing behavior. InkML import is a separate change.
 
@@ -156,6 +156,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-09: Native InkML ODT/OTT conversion does not export only the convertible subset of vector strokes when no usable picture fallback exists; it uses available alt text or omits the drawing. Image-only graphics remain convertible. Synthetic missing-fallback and image-item regressions; no readiness change.
 - 2026-11-08: Native InkML review repairs (#5731 split): compose circular pen/tap fitting scales so nonuniform framed resizing keeps its thickness through DOCX saves; mark zero-area swept outlines nonpainting so ODT/OTT does not resurrect their picture. Synthetic before/after, JSON, raster and export regressions; readiness and Word qualification unchanged.
 
 - 2026-11-08: Native InkML decoder/placement (#5731 split): supported strokes render as screen/PDF vectors across inline, floating, direct, group and canvas placements with Hide Ink. Original parts and available pictures survive saves and ODT/OTT fallback export. Independent per-part/file-wide ink work protects later charts/SmartArt. Synthetic fixtures only; native editing, full conformance and Word qualification remain open.

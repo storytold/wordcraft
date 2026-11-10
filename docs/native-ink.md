@@ -1,6 +1,6 @@
 # Native InkML rendering profile
 
-> **Status:** 2026-11-08 · Composed circular-width fitting and zero-area export guards; bounded, partial previews. Synthetic evidence only;
+> **Status:** 2026-11-09 · ODT/OTT refuses incomplete vector export without a usable fallback; image-only ink remains convertible. Composed circular-width fitting and zero-area guards; bounded partial previews. Synthetic evidence only;
 > Word-written file validation and native Word visual comparison remain deferred.
 
 The decoder follows the public [W3C InkML Recommendation](https://www.w3.org/TR/2011/REC-InkML-20110920/).
@@ -84,12 +84,13 @@ so unreadable ink displays a 72 × 36 pt placeholder. Group/canvas members keep 
 and optional pictures. Retained namespaces are handled by the separate retained-XML fix.
 
 Readable picture fallbacks are retained independently of decoded geometry through JSON and
-document adoption. ODT/OTT uses the whole picture where native vectors cannot be represented,
-including group/canvas members; hidden/nonpainting ink does not resurrect a picture. Fully
-zero-area swept nibs, including all-zero-pressure strokes, use the nonpainting sentinel while
-retaining their bounds for placement; a zero-pressure endpoint of a painted run is not discarded.
-Without a
-picture, native path export to ODT/OTT remains unsupported. Screen and PDF still use vectors.
+document adoption. ODT/OTT uses the complete usable picture where native vectors cannot be
+represented, including group/canvas members. Without one, a graphic containing native vector
+content is not reduced to its convertible subset: it becomes alt text when available, otherwise
+it is omitted. Image-only ink remains convertible. Hidden/nonpainting ink does not resurrect a
+picture. Fully zero-area swept nibs, including all-zero-pressure strokes, use the nonpainting
+sentinel while retaining their bounds for placement; a zero-pressure endpoint of a painted run
+is not discarded. ODT/OTT native path export remains unsupported. Screen and PDF still use vectors.
 
 Remaining gaps include nonbinary masks, other application-defined raster/visual semantics,
 general continuous nonlinear/multivariate inverses, alternative re-renderings of already-visible
@@ -113,11 +114,16 @@ InkML §6.1.1's permitted Content MathML subset and is intentionally unsupported
 
 Synthetic tests cover hostile inputs/property generation, geometry/opacity, all placements,
 transforms/resizing, JSON, repeated DOCX saves, original-byte/fallback preservation, editing and
-undo/redo, Hide Ink, painted pixels and vector-only PDF output. Heavy curved/translucent ink
+undo/redo, Hide Ink, painted pixels, vector-only PDF output, and ODT/OTT refusal of incomplete
+vectors when a fallback is absent or missing (while retaining image-only export). Heavy curved/translucent ink
 before later ink, charts and SmartArt retains later items/models, including through nested DOCX
 chunks and save/reopen. No Word-written files or native Word comparison are claimed.
 
 ## Revision history
+
+- 2026-11-09: Refuse ODT/OTT export of a partially convertible native-ink vector when its usable
+  picture fallback is absent; preserve image-only graphics. Synthetic missing-fallback and image
+  item regressions; readiness and Word qualification unchanged.
 
 - 2026-11-08: Fix nonuniform circular-width resize/save consistency and zero-pressure ODT/OTT
   picture resurrection. Synthetic canvas-member, framed-placement, JSON, raster and export

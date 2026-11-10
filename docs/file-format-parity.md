@@ -1,6 +1,6 @@
 # File-format parity with Microsoft Word
 
-> **Native ink update:** 2026-11-08 · Composed circular-width fitting keeps framed resize/save thickness stable; zero-pressure ODT/OTT export stays nonpainting. Bounded InkML vector decoding and all five placements; per-part/file-wide ink work cannot starve charts/SmartArt. Original parts and available pictures remain preserved. Synthetic evidence only; Word qualification remains deferred.
+> **Native ink update:** 2026-11-09 · ODT/OTT refuses incomplete InkML vector export without a usable fallback while image-only graphics remain convertible. Composed circular-width fitting keeps framed resize/save thickness stable; zero-pressure export stays nonpainting. Bounded vector decoding, all five placements and independent ink work limits remain. Original parts and available pictures are preserved. Synthetic evidence only; Word qualification remains deferred.
 
 > **2026-11-08:** `wordcraft-cli convert --strict` refuses a PDF or PNG that would draw an empty box for a character or leave out a picture, including those a DOCX names outside the file or not at all (#6005); never fetched.
 > **2026-11-05:** A Word template opened from the file manager starts a new document based on it, and is never saved over (#3433).
@@ -344,7 +344,10 @@ cycles; no new Word-file comparison is claimed.
 ## Native ink rendering
 
 Supported native ink has bounded vector previews without replacing its authoritative source.
-Unsupported required semantics refuse the whole preview and retain a picture or placeholder.
+Unsupported required semantics refuse the whole preview and retain a picture or placeholder. ODT/OTT
+uses the complete usable picture fallback; without one, it does not export only a convertible vector
+subset. Image-only graphics remain convertible, and unsupported drawings fall back to alt text or
+omission.
 The [native InkML support profile](native-ink.md) lists supported XML, channels, mappings,
 continuations, brushes, application policies, resource limits and remaining gaps. The separate
 namespace and renderer changes provide retained XML and rendering primitives; this layer adds
@@ -352,6 +355,8 @@ decoding, placement and preservation. Evidence is synthetic, not native Word qua
 
 ## Revision history
 
+> 2026-11-09 · ODT/OTT refuses incomplete InkML vector export without a usable picture fallback while preserving image-only conversion; missing-fallback regressions are synthetic, with Word qualification deferred.
+>
 > 2026-11-09 · Retained InkML/MathML namespace declarations and all five bounded Markup Compatibility lists canonicalize scoped aliases through two save/reopen cycles; unknown required/QName namespaces are refused, separate from rendering.
 >
 > 2026-11-08 · Native ink review repairs: compose circular pen/tap fitting scales instead of multiplying successive means, and mark fully zero-area outlines nonpainting before fallback export. Synthetic framed-resize/save, JSON, raster and ODT/OTT controls; direct unframed markup cannot retain arbitrary frame resizing. Word qualification remains deferred.

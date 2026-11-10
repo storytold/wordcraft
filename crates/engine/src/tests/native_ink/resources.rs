@@ -98,6 +98,28 @@ fn graphics(doc: &Document) -> Vec<&wordcraft_doc::graphic::Graphic> {
     out
 }
 
+/// Finds the first graphic mutably in this synthetic document fixture.
+fn first_graphic_mut(doc: &mut Document) -> &mut wordcraft_doc::graphic::Graphic {
+    for block in &mut doc.body {
+        let Block::Para(para) = std::sync::Arc::make_mut(block) else { continue };
+        for object in &mut para.objects {
+            if let InlineObject::Graphic { graphic, .. } = object {
+                return std::sync::Arc::make_mut(graphic);
+            }
+        }
+    }
+    panic!("fixture must contain native ink");
+}
+
+/// Checks whether an ODT-reopened document contains a shape, image, graphic or group drawing.
+fn has_drawing(objects: &[InlineObject]) -> bool {
+    objects.iter().any(|object| match object {
+        InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Shape { .. } => true,
+        InlineObject::Group { children, .. } => children.iter().any(|child| has_drawing(std::slice::from_ref(&child.obj))),
+        _ => false,
+    })
+}
+
 /// Rejected ink must not consume the allowance used by later editable charts and diagrams.
 #[test]
 fn costly_native_ink_does_not_hide_later_charts_or_smart_art() {
@@ -216,6 +238,48 @@ fn native_ink_canvas_member_widths_survive_nonuniform_resize_and_saves() {
         let saved = crate::io::save_bytes("resize.docx", &session.doc).unwrap();
         session = Session::new(crate::io::open_bytes("resize.docx", &saved).unwrap());
         assert!(session.doc.passthrough.values().any(|bytes| bytes.as_slice() == ink.as_bytes()));
+    }
+}
+
+/// Native strokes with no usable picture fallback must not export the taps without their lines.
+#[test]
+fn native_ink_without_usable_fallback_never_exports_partial_strokes() {
+    use wordcraft_doc::graphic::GraphicItem;
+
+    let ink = r#"<ink xmlns="http://www.w3.org/2003/InkML"><trace>0 0,10 0</trace><trace>5 5</trace></ink>"#;
+    let no_fallback = crate::io::open_bytes("no-fallback.docx", &document_with_ink("inline", ink)).unwrap();
+    let mut missing_media = crate::io::open_bytes("missing-media.docx", &with_fallback("inline", ink)).unwrap();
+    let fallback = graphics(&missing_media)[0].ink_fallback.clone().expect("fixture references a fallback");
+    missing_media.media.remove(&fallback);
+
+    for (label, doc) in [("no fallback", no_fallback), ("missing media", missing_media)] {
+        let items = &graphics(&doc)[0].items;
+        assert!(items.iter().any(|item| matches!(item, GraphicItem::Path { .. } | GraphicItem::InkOutline { .. })), "{label}: line missing");
+        assert!(items.iter().any(|item| matches!(item, GraphicItem::Shape { .. })), "{label}: point missing");
+        for name in ["ink-no-fallback.odt", "ink-no-fallback.ott"] {
+            let bytes = crate::io::save_bytes(name, &doc).unwrap();
+            let reopened = crate::io::open_bytes(name, &bytes).unwrap();
+            assert!(
+                !reopened.body.iter().any(|block| matches!(&**block, Block::Para(p) if has_drawing(&p.objects))),
+                "{label}, {name}: a drawing was exported without its complete stroke"
+            );
+        }
+    }
+}
+
+/// Ink whose items are already pictures remains convertible when no separate fallback is set.
+#[test]
+fn native_ink_image_items_still_export_without_a_separate_fallback() {
+    use wordcraft_doc::graphic::GraphicItem;
+
+    let mut doc = crate::io::open_bytes("image-items.docx", &with_fallback("inline", INK)).unwrap();
+    let fallback = graphics(&doc)[0].ink_fallback.clone().expect("fixture references a fallback");
+    first_graphic_mut(&mut doc).ink_fallback = None;
+    first_graphic_mut(&mut doc).items = vec![GraphicItem::Image { rect: [0.0, 0.0, 20.0, 10.0], media: fallback }];
+    for name in ["ink-image-items.odt", "ink-image-items.ott"] {
+        let bytes = crate::io::save_bytes(name, &doc).unwrap();
+        let reopened = crate::io::open_bytes(name, &bytes).unwrap();
+        assert!(reopened.body.iter().any(|block| matches!(&**block, Block::Para(p) if has_preview(&reopened, &p.objects))), "{name}");
     }
 }
 

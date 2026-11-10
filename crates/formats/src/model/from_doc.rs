@@ -721,6 +721,14 @@ fn graphic_inline(
             crop: [0.0; 4],
         }));
     }
+    // `graphic_group` can convert taps to shapes but cannot express native stroke paths. Without
+    // a usable fallback image, refuse the whole vector subset rather than export a partial stroke.
+    if opts.boxes
+        && graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink
+        && graphic.items.iter().any(|item| !matches!(item, wordcraft_doc::graphic::GraphicItem::Image { .. }))
+    {
+        return (!alt.trim().is_empty()).then(|| Inline::Figure(alt.to_string()));
+    }
     if let Some(spec) = graphic.chart.as_ref().filter(|_| opts.boxes) {
         return Some(Inline::Chart(crate::model::Chart {
             spec: spec.clone(),
