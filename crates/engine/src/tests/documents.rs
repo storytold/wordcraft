@@ -597,7 +597,8 @@ fn save_refuses_to_write_over_a_file_changed_on_disk_unless_told_to() {
     run(&mut s, "file.reload", json!({}));
     run(&mut s, "text.insert", json!({"text": "Z"}));
     run(&mut s, "file.save", json!({}));
-    assert_eq!(std::fs::read_to_string(&path).unwrap().trim_end(), "Ztheirs again");
+    assert_eq!(std::fs::read_to_string(&path).unwrap().trim_end(), text(&s), "written, the caret where the reload left it: {}", text(&s));
+    assert!(text(&s).contains('Z') && !s.dirty && !s.changed_on_disk());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -627,4 +628,3 @@ fn every_open_document_is_asked_about_its_file() {
     assert_eq!(s.changed_on_disk_ids(), vec![b]);
     let _ = std::fs::remove_dir_all(&dir);
 }
-

@@ -287,28 +287,32 @@ mod tests {
     /// Keep mine then lets the save through.
     #[test]
     fn save_and_autosave_never_write_over_a_changed_file_unasked() {
-        let (mut app, path) = app_with_file("save", "alpha");
+        // A .docx saved from the app: AutoSave covers only a file saved here, in a format that
+        // keeps everything.
+        let dir = temp_dir("save");
+        let path = dir.join("notes.docx");
+        let mut app = app();
+        app.run("text.insert", json!({"text": "alpha"})).unwrap();
+        app.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
         let id = app.session.document_id();
-        app.run("file.save", json!({})).unwrap();
-        app.autosave_path = Some(path.clone());
-        app.autosave = true;
         assert!(app.autosaves(), "AutoSave covers a file saved here");
         app.run("text.insert", json!({"text": "X"})).unwrap();
-        std::fs::write(&path, "theirs").unwrap();
+        std::fs::write(&path, "their text").unwrap();
         app.autosave_tick(now_ms() + 100_000.0);
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs", "AutoSave waited");
+        assert_eq!(std::fs::read(&path).unwrap(), b"their text", "AutoSave waited");
         assert!(app.session.dirty);
         assert!(app.autosaves(), "and stays on");
         assert_eq!(notice_of(&app, id), Some(&DiskNotice::Unsaved), "the bar asks");
         app.disk_notices.clear();
         assert!(app.run("file.save", json!({})).is_err(), "Save is refused");
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "theirs");
+        assert_eq!(std::fs::read(&path).unwrap(), b"their text");
         assert_eq!(notice_of(&app, id), Some(&DiskNotice::Unsaved), "and puts the bar up");
         app.keep_mine();
         app.run("file.save", json!({})).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap().trim_end(), "Xalpha", "chosen: the document is the file");
+        assert!(std::fs::read(&path).unwrap().starts_with(b"PK"), "chosen: the document is written over the file");
+        assert!(!app.session.dirty && !app.session.changed_on_disk());
         assert!(app.disk_notices.is_empty());
-        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A file that changed but can't be read yet (another program still writing it, say) isn't
