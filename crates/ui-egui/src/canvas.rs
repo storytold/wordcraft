@@ -1419,8 +1419,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         // so the copy pointer stands in (#3453). The selection bar keeps its arrow.
         // Off the paper (the rulers, the grey around and between pages) no text can be typed:
         // the arrow stays. A drag that started on the page keeps its I-beam.
-        let on_paper =
-            latest.is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p)) || app.canvas.unit_drag.is_some() || resp.dragged();
+        let on_paper = latest.is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p))
+            || app.canvas.unit_drag.is_some()
+            || (resp.dragged() && ui.input(|i| i.pointer.press_origin().is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p))));
         let fallback = if in_bar || !on_paper {
             egui::CursorIcon::Default
         } else if app.session.painter.is_some() {

@@ -1190,6 +1190,28 @@ fn the_text_pointer_stays_off_the_grey_around_the_page() {
     h.event(egui::Event::PointerMoved(beside));
     h.step();
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow on the grey beside the page");
+
+    // A drag that starts on the page retains its text pointer after moving off it.
+    h.event(egui::Event::PointerMoved(on_page));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: on_page, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "a drag that began on the page keeps its text pointer");
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
+
+    // A drag that begins in the grey area must not inherit the text cursor merely because the
+    // canvas response is dragged. Keep the pointer off the page for the whole drag.
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    let further_beside = beside + egui::vec2(20.0, 0.0);
+    h.event(egui::Event::PointerMoved(further_beside));
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow during a drag that began in the grey area");
+    h.event(egui::Event::PointerButton { pos: further_beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
 }
 
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the
