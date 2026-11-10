@@ -791,6 +791,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             };
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none()).then_some(c.end + dy);
             let mut cell_items = c.items;
+            let turned = c.turned.is_some();
             if let Some(tn) = c.turned {
                 dy = 0.0;
                 let m = c.margins;
@@ -831,13 +832,15 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             // its text is clipped when drawn.
             // A floating table can sit anywhere: a cell holding one is left alone.
             let (lo, hi) = (c.x, c.x + c.w);
-            let floats = t.rows.get(ri).and_then(|r| r.cells.get(ci)).is_some_and(|cell| {
-                cell.blocks.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(nt) if nt.props.float.is_some()))
-            });
+            let floats = t
+                .rows
+                .get(ri)
+                .and_then(|r| r.cells.get(ci))
+                .is_some_and(|cell| cell.blocks.iter().any(|b| matches!(&**b, wordcraft_doc::Block::Table(nt) if nt.props.float.is_some())));
             let mut cut = false;
             for mut it in cell_items {
                 it.translate(0.0, dy);
-                if c.turned.is_none() && !floats {
+                if !turned && !floats {
                     match crop_to_cell(it, lo, hi) {
                         Cropped::Kept(it) => items.push(it),
                         Cropped::Cut(Some(it)) => {
@@ -913,7 +916,7 @@ fn crop_to_cell(it: Placed, lo: f32, hi: f32) -> Cropped {
             let (a, b) = (rect.x.max(lo), rect.right().min(hi));
             Cropped::Cut((b > a).then(|| Placed::Fill { rect: Rect::new(a, rect.y, b - a, rect.h), color }))
         }
-        Placed::Cell { rect, covered, table, row, cell, story, clip } if past(rect.x, rect.right()) => {
+        Placed::Cell { rect, covered, table, row, cell, story, clip: _ } if past(rect.x, rect.right()) => {
             let (a, b) = (rect.x.max(lo), rect.right().min(hi));
             Cropped::Cut((b > a).then(|| Placed::Cell { rect: Rect::new(a, rect.y, b - a, rect.h), covered, table, row, cell, story, clip: true }))
         }
