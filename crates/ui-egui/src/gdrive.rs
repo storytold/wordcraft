@@ -66,6 +66,9 @@ pub struct DriveLink {
     /// The page listed files since sign-in (so an empty Drive isn't listed every frame).
     pub listed: bool,
     origins: HashMap<u64, Origin>,
+    /// Per document: how many local saves set where it lives (see [`note_local_save`]). A Drive
+    /// upload that ends after a newer one leaves the destination alone.
+    local_saves: HashMap<u64, u64>,
 }
 
 impl DriveLink {
@@ -92,6 +95,21 @@ pub fn intercept_save(app: &mut WordApp, id: &str, params: &Value) -> Option<Res
     }
     destination(app)?;
     Some(imp::run(app, "save", params))
+}
+
+/// After `file.save` / `file.saveAs` ran in the engine: counts a successful save that made a local
+/// file the document's home (the engine set its path to the file written). A copy, such as a
+/// plain-text save to another file, doesn't count.
+pub(crate) fn note_local_save(app: &mut WordApp, id: &str, document: u64, result: &Result<Value, String>) {
+    if !matches!(id, "file.save" | "file.saveAs") || app.session.document_id() != document {
+        return;
+    }
+    let Ok(v) = result else { return };
+    let written = v.get("path").and_then(Value::as_str).map(std::path::Path::new);
+    if written.is_some() && written == app.session.path.as_deref() {
+        let n = app.drive.local_saves.entry(document).or_default();
+        *n = n.wrapping_add(1);
+    }
 }
 
 /// The active document's Drive file, while Drive is where it was last opened from or saved to.
@@ -325,12 +343,12 @@ mod native {
         Open {
             id: String,
         },
-        /// `stamp`: the document's save revision after this save stamped it. Every successful save
-        /// (local or Drive) advances it, so a higher revision when the upload ends means a newer save.
+        /// `local`: the document's local-save count when the upload started; a different count
+        /// when it ends means a newer local save set the document's home.
         Save {
             doc: u64,
             rev: u64,
-            stamp: u32,
+            local: u64,
             target: SaveTarget,
             bytes: Vec<u8>,
             marked_saved: bool,
@@ -355,7 +373,7 @@ mod native {
         Saved {
             doc: u64,
             rev: u64,
-            stamp: u32,
+            local: u64,
             file: DriveFile,
             marked_saved: bool,
         },
@@ -479,8 +497,8 @@ mod native {
         let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
         let marked_saved = crate::state::keeps_everything(&name);
         let rev = app.session.rev();
-        let stamp = app.session.doc.core.revision;
-        let r = send(app, Job::Save { doc, rev, stamp, target, bytes, marked_saved }, "save")?;
+        let local = app.drive.local_saves.get(&doc).copied().unwrap_or(0);
+        let r = send(app, Job::Save { doc, rev, local, target, bytes, marked_saved }, "save")?;
         app.status(i18n::fmt(tl!("Saving {name} to Google Drive…"), &[("name", &name)]));
         Ok(r)
     }
@@ -529,8 +547,8 @@ mod native {
                     drive.list(search.as_deref(), page.as_deref()).map(|(files, next)| Event::Listed { files, next, append })
                 }
                 Job::Open { id } => drive.metadata(&id).and_then(|file| drive.download(&file).map(|bytes| Event::Opened { file, bytes })),
-                Job::Save { doc, rev, stamp, target, bytes, marked_saved } => {
-                    drive.save(&target, &bytes).map(|file| Event::Saved { doc, rev, stamp, file, marked_saved })
+                Job::Save { doc, rev, local, target, bytes, marked_saved } => {
+                    drive.save(&target, &bytes).map(|file| Event::Saved { doc, rev, local, file, marked_saved })
                 }
             };
             emit(r.unwrap_or_else(|error| Event::Failed { what, error, doc }));
@@ -609,14 +627,15 @@ mod native {
                 d.busy = None;
                 open(app, file, &bytes);
             }
-            Event::Saved { doc, rev, stamp, file, marked_saved } => {
+            Event::Saved { doc, rev, local, file, marked_saved } => {
                 d.busy = None;
                 let name = file.name.clone();
                 d.origins.insert(doc, Origin { google_doc: file.is_google_doc(), id: file.id, name: file.name, version: file.version });
                 // Only the document that was saved, and only if nothing was typed while it uploaded.
-                // A save that finished while this one uploaded (a local Save As, or Save to the
-                // same local file) is newer: it keeps the destination it set.
-                if app.session.document_id() == doc && app.session.doc.core.revision == stamp {
+                // A local save that set the document's home while this one uploaded (a Save As,
+                // or Save to the same local file) is newer: it keeps that destination.
+                let newer_local = d.local_saves.get(&doc).copied().unwrap_or(0) != local;
+                if app.session.document_id() == doc && !newer_local {
                     // Drive is now where the document lives: Save goes back there, not to a
                     // local file it was saved to earlier.
                     app.session.path = None;

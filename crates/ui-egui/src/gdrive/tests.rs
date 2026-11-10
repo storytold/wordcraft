@@ -134,36 +134,68 @@ fn save_follows_the_last_destination() {
         size: Some(10),
     };
     let rev = a.session.rev();
-    let stamp = a.session.doc.core.revision;
-    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, stamp, file: file.clone(), marked_saved: true });
+    let local = a.drive.local_saves.get(&doc).copied().unwrap_or(0);
+    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, local, file: file.clone(), marked_saved: true });
     assert!(a.session.path.is_none());
     assert_eq!(a.drive.origin(doc).map(|o| o.id.as_str()), Some("f2"));
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "saved to Drive: Save goes to Drive");
 }
 
-/// A local save that finishes while a Drive upload is still going is newer: the upload ending
-/// doesn't take the destination back to Drive, even for a save to the same local file.
 #[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn a_newer_local_save_keeps_its_destination() {
-    let mut a = app();
-    let doc = a.session.document_id();
-    let local = std::env::temp_dir().join("Essay.docx");
-    a.session.path = Some(local.clone());
-    a.session.stamp_save();
-    let stamp = a.session.doc.core.revision;
-    // The local save during the upload stamps the revision again.
-    a.session.stamp_save();
-    let file = wordcraft_gdrive::DriveFile {
+fn drive_file() -> wordcraft_gdrive::DriveFile {
+    wordcraft_gdrive::DriveFile {
         id: "f2".into(),
         name: "Essay.docx".into(),
         mime_type: wordcraft_gdrive::drive::MIME_DOCX.into(),
         modified_time: String::new(),
         version: "1".into(),
         size: Some(10),
-    };
+    }
+}
+
+/// Runs `during` between a Drive upload starting and ending, then ends the upload.
+#[cfg(not(target_arch = "wasm32"))]
+fn upload_around(a: &mut WordApp, during: impl FnOnce(&mut WordApp)) {
+    let doc = a.session.document_id();
+    let local = a.drive.local_saves.get(&doc).copied().unwrap_or(0);
+    a.session.stamp_save();
+    during(a);
     let rev = a.session.rev();
-    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, stamp, file, marked_saved: true });
-    assert_eq!(a.session.path.as_deref(), Some(local.as_path()), "the newer local save keeps its path");
+    super::native::apply(a, super::native::Event::Saved { doc, rev, local, file: drive_file(), marked_saved: true });
+}
+
+/// A local save that set the document's home while a Drive upload was going is newer: the upload
+/// ending doesn't take the destination back to Drive. A plain-text copy elsewhere isn't such a
+/// save, and a revision stamp already at its maximum doesn't hide one.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_newer_local_save_keeps_its_destination() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let docx = dir.join("Essay.docx");
+    let path = |p: &std::path::Path| json!({"path": p.to_string_lossy()});
+
+    // A Drive document saved locally (Save As) during the upload.
+    let mut a = app();
+    upload_around(&mut a, |a| {
+        a.run("file.saveAs", path(&docx)).unwrap();
+    });
+    assert_eq!(a.session.path.as_deref(), Some(docx.as_path()), "Save As during the upload keeps its path");
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_none(), "Save stays local");
+
+    // Saved again to the same local file, with the revision stamp already at its maximum.
+    a.session.doc.core.revision = u32::MAX;
+    upload_around(&mut a, |a| {
+        a.run("file.save", path(&docx)).unwrap();
+    });
+    assert_eq!(a.session.path.as_deref(), Some(docx.as_path()), "a save to the same file is newer too");
+
+    // A plain-text copy to another file doesn't make that file the document's home: Drive wins.
+    upload_around(&mut a, |a| {
+        a.run("file.saveAs", path(&dir.join("Essay.txt"))).unwrap();
+        assert_eq!(a.session.path.as_deref(), Some(docx.as_path()), "the .txt is a copy");
+    });
+    assert!(a.session.path.is_none(), "the upload makes Drive the home");
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "Save goes to Drive");
+    let _ = std::fs::remove_dir_all(&dir);
 }
