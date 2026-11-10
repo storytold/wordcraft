@@ -1,6 +1,43 @@
 use super::*;
 
 #[test]
+fn whitespace_character_references_are_the_characters_they_name() {
+    // A tab stop and a run of spaces a source writes with references are the author's spacing,
+    // as in a browser and in Word; the source's own indentation is still collapsed.
+    let text = |html: &str| match paras(&parse(html)).first() {
+        Some(p) => p.text(),
+        None => String::new(),
+    };
+    assert_eq!(text("<p>a&#9;b</p>"), "a\tb");
+    assert_eq!(text("<p>a&#32;&#32;b</p>"), "a  b");
+    assert_eq!(text("<p>a&#x20;&#x20;b</p>"), "a  b");
+    assert_eq!(text("<p>&#9;&#9;lead</p>"), "\t\tlead");
+    assert_eq!(text("<p>a\tb</p>"), "a b", "a raw tab in the source is indentation");
+    assert_eq!(text("<p>a&#9; b</p>"), "a\t b", "references and source spaces mix");
+    assert_eq!(text("<p>a&#10;b</p>"), "a b", "a referenced newline collapses as HTML does");
+    // White space between a table's parts is layout, raw or written as a reference: the table
+    // keeps its cells in both spellings and no paragraph grows between its rows.
+    for (written, raw) in [
+        ("<table><tr><td>a</td></tr>&#32;<tr><td>b</td></tr></table>", "<table><tr><td>a</td></tr> <tr><td>b</td></tr></table>"),
+        ("<table><tr><td>a</td>&#9;<td>b</td></tr></table>", "<table><tr><td>a</td>\t<td>b</td></tr></table>"),
+    ] {
+        let (a, b) = (parse(written), parse(raw));
+        let cells = |f: &Flow| match f.blocks.iter().find_map(|x| if let FBlock::Table(t) = x { Some(t) } else { None }) {
+            Some(t) => t
+                .rows
+                .iter()
+                .flat_map(|r| r.iter())
+                .flat_map(|c| c.blocks.iter())
+                .filter_map(|x| if let FBlock::Para(p) = x { Some(p.text()) } else { None })
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        };
+        assert_eq!(cells(&a), cells(&b), "{written}");
+        assert!(cells(&a).iter().any(|c| !c.trim().is_empty()), "{written}: the cells kept their text");
+    }
+}
+
+#[test]
 fn numeric_entity_rejects_sign() {
     assert_eq!(unescape("a&#+65;b"), "a&#+65;b");
     assert_eq!(unescape("a&#x+41;b"), "a&#x+41;b");

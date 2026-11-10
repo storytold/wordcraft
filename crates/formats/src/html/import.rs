@@ -29,7 +29,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
     };
     // The lexer's offsets (a style element's text is cut out by them) are into the normalized text.
     let s: &str = &normalized;
-    let mut lx = Lexer { s, pos: 0 };
+    let mut lx = Lexer::new(s);
     let mut b = Builder::new(images, page);
     let mut guard = 0usize;
     while let Some(t) = lx.next() {
@@ -39,6 +39,7 @@ pub(super) fn parse_in(s: &str, images: ImageLoader, page: bool) -> Flow {
         }
         match t {
             Tok::Text(t) => b.text(&t),
+            Tok::Spaced(t) => b.spaced_text(&t),
             Tok::Start { name, attrs, self_close } => {
                 b.close_head_for_start(&name);
                 if crate::mathml::local(&name) == "math" && !self_close {
