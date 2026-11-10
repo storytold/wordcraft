@@ -80,3 +80,14 @@ fn drive_page_draws_without_a_profile() {
     out.textures_delta.clear();
     assert!(!out.shapes.is_empty());
 }
+
+#[test]
+fn title_says_saved_to_drive_only_for_drive_files() {
+    let mut a = app();
+    let doc = a.session.document_id();
+    assert!(!super::saved_in_drive(&a));
+    a.drive.origins.insert(doc, Origin { id: "g1".into(), name: "Notes".into(), version: "1".into(), google_doc: true });
+    assert!(!super::saved_in_drive(&a), "a Google Doc's Word copy isn't saved anywhere yet");
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "1".into(), google_doc: false });
+    assert!(super::saved_in_drive(&a));
+}

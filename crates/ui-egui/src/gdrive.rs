@@ -109,6 +109,13 @@ fn status(app: &WordApp) -> Value {
     })
 }
 
+/// Whether the active document's saved state is a file in Drive (not a Google Doc's Word copy,
+/// which has no file of its own until it is saved): the title bar then says so instead of
+/// "Not saved".
+pub(crate) fn saved_in_drive(app: &WordApp) -> bool {
+    app.drive.origin(app.session.document_id()).is_some_and(|o| !o.google_doc)
+}
+
 /// Apply the worker's results (each frame).
 pub fn poll(app: &mut WordApp) {
     imp::poll(app);
