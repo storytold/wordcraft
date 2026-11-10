@@ -629,10 +629,7 @@ fn the_info_report_refreshes_after_a_save() {
     assert!(h.query_by_label_contains("Not saved yet").is_none(), "the saved document shows its path");
     // The location row truncates the tail of a long path (`fit_text`), so match on the
     // scratch directory's name, which sits mid-path and survives the cut.
-    assert!(
-        h.query_by_label_contains("wordcraft-ui-info-refresh").is_some(),
-        "the report read again after the save"
-    );
+    assert!(h.query_by_label_contains("wordcraft-ui-info-refresh").is_some(), "the report read again after the save");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
