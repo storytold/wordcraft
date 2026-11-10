@@ -152,3 +152,23 @@ fn a_diagram_is_saved_as_a_group_of_its_drawing() {
     assert!(kinds.contains(&ShapeKind::RoundedRectangle) && kinds.contains(&ShapeKind::Arrow), "{kinds:?}");
     assert!(members.iter().any(|m| m.4 == "Plan"), "its text: {members:?}");
 }
+
+/// A group anchored to a page stays on that page, and a number on another anchor says nothing.
+#[test]
+fn a_group_anchored_to_a_page_stays_on_that_page() {
+    let saved = |attrs: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><draw:g {attrs}><draw:rect svg:x="3cm" svg:y="3cm" svg:width="2cm" svg:height="2cm"/><draw:rect svg:x="6cm" svg:y="3cm" svg:width="2cm" svg:height="2cm"/></draw:g><text:p>One</text:p></office:text></office:body></office:document-content>"#
+        );
+        let d = import(&package(&content, None)).unwrap();
+        crate::odt::tests::export_model(&d).unwrap()
+    };
+    let on_two = saved(r#"text:anchor-type="page" text:anchor-page-number="2""#);
+    let c = content_of(&on_two);
+    assert!(c.contains(r#"text:anchor-type="page" text:anchor-page-number="2""#), "{c}");
+    let back = import(&on_two).unwrap();
+    let again = content_of(&crate::odt::tests::export_model(&back).unwrap());
+    assert!(again.contains(r#"text:anchor-page-number="2""#), "again: {again}");
+    let c = content_of(&saved(r#"text:anchor-type="paragraph" text:anchor-page-number="2""#));
+    assert!(!c.contains(r#"text:anchor-type="page""#) && !c.contains("anchor-page-number"), "{c}");
+}

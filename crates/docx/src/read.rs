@@ -27,7 +27,8 @@ use wordcraft_doc::props::VAlign;
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
 use wordcraft_doc::{
-    Block, Blocks, Comment, Document, InlineObject, PagePicture, Paragraph, PartKind, Revision, RevisionKind, Zoom, ZoomFit, para_block,
+    Block, Blocks, Comment, Document, InlineObject, MissingPicture, MissingPictureReason, PagePicture, Paragraph, PartKind, Revision, RevisionKind,
+    Zoom, ZoomFit, para_block,
 };
 
 use crate::DocxError;
@@ -103,6 +104,8 @@ pub(crate) struct Reader<'p> {
     pub shape_ids: bool,
     /// The main document part's name.
     main: String,
+    /// The part being read (`word/header2.xml`), for naming where a dropped picture was.
+    story: Arc<str>,
     /// The package's content types, read when first needed.
     content_types: Option<ContentTypes>,
     /// Parts kept for charts, diagrams and OLE objects (see `embed`).
@@ -183,6 +186,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         glued: HashSet::new(),
         shape_ids: false,
         main: main.clone(),
+        story: main.as_str().into(),
         content_types: None,
         embedded: EmbeddedManifest::default(),
         txbx_links: Vec::new(),
@@ -190,6 +194,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         group_fill: None,
         chunks,
     };
+    r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
     let part = |t: &str| rels.by_type(t).filter(|x| !x.external).map(|x| x.target.clone());
@@ -230,14 +235,18 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         let ex = part(rt::COMMENTS_EX);
         let ids = part(rt::COMMENTS_IDS);
         let cex = part(rt::COMMENTS_EXTENSIBLE);
+        r.story = p.as_str().into();
         lenient("comments", r.read_comments(&p, ex.as_deref(), ids.as_deref(), cex.as_deref()));
     }
     if let Some(p) = part(rt::FOOTNOTES) {
+        r.story = p.as_str().into();
         lenient("footnotes", r.read_notes(&p, true));
     }
     if let Some(p) = part(rt::ENDNOTES) {
+        r.story = p.as_str().into();
         lenient("endnotes", r.read_notes(&p, false));
     }
+    r.story = main.as_str().into();
     // Bibliography sources live in a custom XML data store (`b:Sources`), related from the
     // package root or the main part; Word's own files sometimes leave the relationship out, so
     // the conventional `customXml/itemN.xml` names are tried too. Each part is read at most once.
