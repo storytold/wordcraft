@@ -123,13 +123,15 @@ mod tests {
         assert_eq!(parse_color("#f00"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("#f00f"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("#0080FF"), Some(Rgb(0, 128, 255)));
-        assert_eq!(parse_color("#0080ff80"), Some(Rgb(0, 128, 255)));
+        assert_eq!(parse_color("#0080FFff"), Some(Rgb(0, 128, 255)));
+        // A colour with alpha is composited over the white page it lands on (#0080ff at 50%).
+        assert_eq!(parse_color("#0080ff80"), Some(Rgb(127, 191, 255)));
         assert_eq!(parse_color("rgb(1, 2, 3)"), Some(Rgb(1, 2, 3)));
         assert_eq!(parse_color("rgb(1 2 3)"), Some(Rgb(1, 2, 3)));
-        assert_eq!(parse_color("rgb(1 2 3 / 50%)"), Some(Rgb(1, 2, 3)));
+        assert_eq!(parse_color("rgb(1 2 3 / 50%)"), Some(Rgb(128, 129, 129)));
         assert_eq!(parse_color("hsl(0, 100%, 50%)"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("hsl(120deg 100% 50%)"), Some(Rgb(0, 255, 0)));
-        assert_eq!(parse_color("hsla(240, 100%, 50%, 0.8)"), Some(Rgb(0, 0, 255)));
+        assert_eq!(parse_color("hsla(240, 100%, 50%, 0.8)"), Some(Rgb(51, 51, 255)));
         assert_eq!(parse_color("navy"), Some(Rgb(0, 0, 128)));
         assert_eq!(parse_color("#zz"), None);
         assert_eq!(parse_color("rgb(1)"), None);
