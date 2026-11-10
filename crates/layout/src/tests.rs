@@ -3568,7 +3568,7 @@ fn a_tab_that_wraps_moves_to_the_next_line_with_its_text() {
 #[test]
 fn a_mid_line_tab_that_wraps_takes_the_first_stop() {
     use wordcraft_doc::props::{TabAlign, TabStop};
-    let mut d = Document::from_text("PrefixPrefixPrefixPrefix\tSynthetic greeting\nNext");
+    let mut d = Document::from_text("PrefixPrefixPrefixPrefixPrefixPrefix\tSynthetic greeting\nNext");
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
         p.indent_right = Some(468.0 - 451.3);
         p.tabs = Some(vec![
@@ -3579,7 +3579,7 @@ fn a_mid_line_tab_that_wraps_takes_the_first_stop() {
     .unwrap();
     let l = lay(&d);
     // The caret before the prefix's last letter: at its end it would be at line 2's start.
-    let (prefix, greeting, next) = (l.caret(&Pos::body(0, 23)).unwrap(), l.caret(&Pos::body(0, 25)).unwrap(), l.caret(&Pos::body(1, 0)).unwrap());
+    let (prefix, greeting, next) = (l.caret(&Pos::body(0, 35)).unwrap(), l.caret(&Pos::body(0, 37)).unwrap(), l.caret(&Pos::body(1, 0)).unwrap());
     assert!(prefix.x > 72.0 + 108.0, "the prefix passes the first stop: {}", prefix.x);
     assert!(greeting.top > prefix.top + 1.0, "the greeting wraps to line 2");
     assert!((greeting.x - 180.0).abs() < 0.5, "the greeting starts at the first stop: {}", greeting.x);
