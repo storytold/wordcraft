@@ -51,6 +51,8 @@ pub struct Probe<'a> {
     pub width: u32,
     pub height: u32,
     peak: u64,
+    /// Whether a PNG has transparency, read from its chunk headers; `None` for other formats.
+    png_alpha: Option<bool>,
 }
 
 /// TIFF compressions decoded within the caller's limits: none, CCITT Group 4, LZW, Deflate (both
@@ -72,9 +74,48 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
         }
         _ => return Err(Refusal::NotAPicture),
     };
+    if format == ImageFormat::Png {
+        let (width, height, native, alpha) = png_chunks(bytes).ok_or_else(|| Refusal::Broken("its PNG header can't be read".into()))?;
+        let (width, height, peak) = sized(width, height, native, 0)?;
+        return Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak, png_alpha: Some(alpha) });
+    }
     let decoder = image::ImageReader::with_format(Cursor::new(bytes), format).into_decoder().map_err(broken)?;
     let (width, height, peak) = measure(&decoder, held)?;
-    Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak })
+    Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak, png_alpha: None })
+}
+
+/// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
+/// a palette to RGB, `tRNS` to an alpha channel) and whether it has transparency, from `IHDR` and
+/// the chunk headers before the image data. The decoder's own header read inflates an ICC profile
+/// (`iCCP`) up to its 512 MiB default limit, for a picture that may only be measured.
+fn png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
+    let be = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+    // The 8-byte signature, then IHDR: length, type, width, height, bit depth, colour type.
+    if bytes.get(12..16) != Some(b"IHDR".as_slice()) {
+        return None;
+    }
+    let (width, height) = (be(16)?, be(20)?);
+    let (depth, color) = (*bytes.get(24)?, *bytes.get(25)?);
+    let mut trns = false;
+    let mut at = 8usize;
+    loop {
+        let len = usize::try_from(be(at)?).ok()?;
+        match bytes.get(at.checked_add(4)?..at.checked_add(8)?)? {
+            b"IDAT" => break,
+            b"IEND" => return None,
+            b"tRNS" => trns = true,
+            _ => {}
+        }
+        at = at.checked_add(12)?.checked_add(len)?;
+    }
+    let (channels, alpha) = match color {
+        0 => (1 + u64::from(trns), trns),
+        2 | 3 => (3 + u64::from(trns), trns),
+        4 => (2, true),
+        6 => (4, true),
+        _ => return None,
+    };
+    Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
 }
 
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
@@ -86,16 +127,20 @@ pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
         let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(dib.as_slice())).map_err(broken)?;
         measure(&decoder, 0)?
     };
-    Ok(Probe { bytes: Cow::Owned(dib), dib: true, format: ImageFormat::Bmp, width, height, peak })
+    Ok(Probe { bytes: Cow::Owned(dib), dib: true, format: ImageFormat::Bmp, width, height, peak, png_alpha: None })
 }
 
 /// A decoder's size and the peak bytes of decoding it, `held` bytes kept beside its output.
 fn measure(decoder: &impl ImageDecoder, held: u64) -> Result<(u32, u32, u64), Refusal> {
     let (width, height) = decoder.dimensions();
+    sized(width, height, u64::from(decoder.color_type().bytes_per_pixel()), held)
+}
+
+/// A `width` × `height` picture of `native` bytes a pixel, with its peak (see [`peak_bytes`]).
+fn sized(width: u32, height: u32, native: u64, held: u64) -> Result<(u32, u32, u64), Refusal> {
     if width == 0 || height == 0 {
         return Err(Refusal::Broken("it has no pixels".into()));
     }
-    let native = u64::from(decoder.color_type().bytes_per_pixel());
     let peak = peak_bytes(width, height, native, held).ok_or(Refusal::TooLarge { width, height })?;
     Ok((width, height, peak))
 }
@@ -104,6 +149,18 @@ impl Probe<'_> {
     /// Bytes decoding takes at its peak.
     pub fn peak_bytes(&self) -> u64 {
         self.peak
+    }
+
+    /// Whether the picture has transparency, from its header: a PNG's from its chunk headers
+    /// (an ICC profile isn't inflated to say), another format's from its decoder.
+    pub fn has_alpha(&self) -> bool {
+        if let Some(alpha) = self.png_alpha {
+            return alpha;
+        }
+        if self.dib {
+            return image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(&*self.bytes)).is_ok_and(|d| d.color_type().has_alpha());
+        }
+        image::ImageReader::with_format(Cursor::new(&*self.bytes), self.format).into_decoder().is_ok_and(|d| d.color_type().has_alpha())
     }
 
     /// Whether decoding fits `budget` bytes.
@@ -135,6 +192,87 @@ impl Probe<'_> {
 /// [`probe`], then [`Probe::decode`] within `budget` bytes.
 pub fn decode(bytes: &[u8], budget: u64) -> Result<DynamicImage, Refusal> {
     probe(bytes)?.decode(budget)
+}
+
+/// Why a picture can't be drawn, as strict export reports it (#6005).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawFailure {
+    /// A picture format we know, but it doesn't decode (damaged, truncated, too large).
+    Undecodable,
+    /// Bytes that are not a picture format we draw.
+    UnsupportedFormat,
+}
+
+impl DrawFailure {
+    /// The words reports use.
+    pub fn label(self) -> &'static str {
+        match self {
+            DrawFailure::Undecodable => "undecodable",
+            DrawFailure::UnsupportedFormat => "unsupported format",
+        }
+    }
+}
+
+impl From<&Refusal> for DrawFailure {
+    fn from(r: &Refusal) -> Self {
+        match r {
+            Refusal::NotAPicture | Refusal::Unsupported(_) => DrawFailure::UnsupportedFormat,
+            Refusal::TooLarge { .. } | Refusal::Broken(_) => DrawFailure::Undecodable,
+        }
+    }
+}
+
+/// Decode a raster picture for drawing: the one decision the PDF export, the raster renderer and
+/// strict export's check all take. The decoder is held to `max_side` pixels a side and the header
+/// is charged against `budget` bytes before anything is allocated. A picture with no pixels or a
+/// side past `max_side` is refused.
+pub fn decode_for_drawing(bytes: &[u8], budget: u64, max_side: u32) -> Result<DynamicImage, Refusal> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
+    let reader = || {
+        let mut r = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|_| Refusal::NotAPicture)?;
+        r.limits(limits.clone());
+        Ok::<_, Refusal>(r)
+    };
+    // Header-only size check before anything is allocated: the decoder's buffer at its own pixel
+    // size (8 bytes for 16-bit RGBA) and the RGBA conversion are charged.
+    let (hw, hh, native) = {
+        let d = reader()?.into_decoder().map_err(broken)?;
+        let (w, h) = d.dimensions();
+        (w, h, u64::from(d.color_type().bytes_per_pixel()))
+    };
+    if !crate::decode_peak_fits(hw, hh, native, budget) {
+        return Err(Refusal::TooLarge { width: hw, height: hh });
+    }
+    let img = reader()?.decode().map_err(broken)?;
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 || w > max_side || h > max_side {
+        return Err(Refusal::Broken("it has no pixels or a side past the limit".into()));
+    }
+    Ok(img)
+}
+
+/// Largest page-background picture the page raster draws, in pixels (hostile files).
+pub const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// The pixel size of a page-background picture the page raster draws (Design > Page Color > Fill
+/// Effects), or None when it leaves the background out: not a raster picture it can read (a
+/// metafile is not) or one with no pixels or more than [`MAX_BACKGROUND_PIXELS`]. The raster and
+/// the strict check both ask this, so they can't drift.
+pub fn background_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    (w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_BACKGROUND_PIXELS).then_some((w, h))
+}
+
+/// Whether a raster picture decodes for drawing, by the rule the exporters use ([`probe`] within
+/// [`crate::MAX_DECODED_BYTES`], then [`decode_for_drawing`] with `max_side`).
+pub fn check_for_drawing(bytes: &[u8], max_side: u32) -> Result<(), DrawFailure> {
+    let fail = |r: Refusal| DrawFailure::from(&r);
+    if !probe(bytes).map_err(fail)?.fits(crate::MAX_DECODED_BYTES) {
+        return Err(DrawFailure::Undecodable);
+    }
+    decode_for_drawing(bytes, crate::MAX_DECODED_BYTES, max_side).map(|_| ()).map_err(fail)
 }
 
 /// Bytes decoding a `width` × `height` picture holds at its peak: the decoder's output (`native`
@@ -207,7 +345,8 @@ fn worst_coefficients(bytes: &[u8]) -> u64 {
 }
 
 /// The compression of a classic TIFF's first image (the one the image crate decodes): 1 when the
-/// tag is missing. None when the header can't be read.
+/// tag is missing. None when the header can't be read, or when the tag appears more than once:
+/// the decoder keeps the last copy, so a harmless first one must not hide a JPEG one after it.
 fn tiff_compression(bytes: &[u8]) -> Option<u16> {
     let le = match bytes.get(..4)? {
         b"II*\0" => true,
@@ -223,21 +362,22 @@ fn tiff_compression(bytes: &[u8]) -> Option<u16> {
         Some(if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) })
     };
     let ifd = usize::try_from(u32_at(4)?).ok()?;
+    let mut found = None;
     for i in 0..usize::from(u16_at(ifd)?) {
         let entry = ifd.checked_add(2)?.checked_add(i.checked_mul(12)?)?;
         if u16_at(entry)? != 259 {
             continue;
         }
-        if u32_at(entry.checked_add(4)?)? != 1 {
+        if found.is_some() || u32_at(entry.checked_add(4)?)? != 1 {
             return None;
         }
-        return match u16_at(entry.checked_add(2)?)? {
-            3 => u16_at(entry.checked_add(8)?),
-            4 => u16::try_from(u32_at(entry.checked_add(8)?)?).ok(),
-            _ => None,
-        };
+        found = Some(match u16_at(entry.checked_add(2)?)? {
+            3 => u16_at(entry.checked_add(8)?)?,
+            4 => u16::try_from(u32_at(entry.checked_add(8)?)?).ok()?,
+            _ => return None,
+        });
     }
-    Some(1)
+    Some(found.unwrap_or(1))
 }
 
 /// A DIB with a V4 or V5 header in the layout the decoder reads. A 32-bit one whose alpha mask
@@ -281,6 +421,18 @@ mod tests {
         out
     }
 
+    #[test]
+    fn drawing_check_tells_unsupported_from_undecodable() {
+        let png = encode(image::RgbaImage::new(4, 4), ImageFormat::Png);
+        assert_eq!(check_for_drawing(&png, 100), Ok(()));
+        assert_eq!(check_for_drawing(b"junk", 100), Err(DrawFailure::UnsupportedFormat));
+        assert_eq!(check_for_drawing(&png[..png.len() - 20], 100), Err(DrawFailure::Undecodable));
+        // A side past the limit is refused, by the same function the exporters draw with.
+        assert_eq!(check_for_drawing(&png, 3), Err(DrawFailure::Undecodable));
+        assert!(decode_for_drawing(&png, crate::MAX_DECODED_BYTES, 100).is_ok());
+        assert_eq!(DrawFailure::Undecodable.label(), "undecodable");
+    }
+
     /// A PNG whose header declares `w` × `h` pixels, with no pixel data.
     fn png_header(w: u32, h: u32) -> Vec<u8> {
         let mut png = encode(image::RgbaImage::new(1, 1), ImageFormat::Png);
@@ -301,6 +453,39 @@ mod tests {
             }
         }
         !c
+    }
+
+    /// `png` with a chunk of `kind` holding `data` placed after IHDR.
+    fn with_chunk(png: &[u8], kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(data);
+        let crc = crc32(&chunk[4..]);
+        chunk.extend_from_slice(&crc.to_be_bytes());
+        let mut out = png.get(..33).unwrap().to_vec();
+        out.extend(chunk);
+        out.extend_from_slice(&png[33..]);
+        out
+    }
+
+    #[test]
+    fn a_png_is_measured_from_its_chunk_headers() {
+        // An ICC profile isn't inflated to measure a picture: one whose deflate stream is junk
+        // (the decoder refused it while reading the header) still measures, and isn't decoded.
+        let rgb = encode(image::RgbImage::new(4, 2), ImageFormat::Png);
+        let icc = with_chunk(&rgb, b"iCCP", b"p\0\0\xFF\xFF\xFF\xFF");
+        let p = probe(&icc).unwrap();
+        assert_eq!((p.width, p.height, p.peak_bytes()), (4, 2, 4 * 2 * 8));
+        assert!(!p.has_alpha());
+        assert_eq!(probe(&rgb).unwrap().peak_bytes(), p.peak_bytes(), "as the decoder measures it");
+        // Transparency: an alpha channel, or tRNS before the image data.
+        assert!(probe(&encode(image::GrayAlphaImage::new(2, 2), ImageFormat::Png)).unwrap().has_alpha());
+        let trns = with_chunk(&rgb, b"tRNS", &[0, 0, 0, 0, 0, 0]);
+        let p = probe(&trns).unwrap();
+        assert!(p.has_alpha());
+        assert_eq!(p.decode(1 << 20).map(|i| i.color().has_alpha()), Ok(true), "the decoder agrees");
+        // No image data: broken.
+        assert!(probe(&rgb[..33]).is_err());
     }
 
     #[test]
@@ -410,6 +595,19 @@ mod tests {
         assert_eq!(tiff_compression(&be), Some(7), "big-endian: the short is left-justified");
         be.truncate(12);
         assert_eq!(tiff_compression(&be), None, "cut short");
+        // A second compression tag (the one the decoder keeps) can't hide behind an allowed first.
+        let mut twice = b"II*\0".to_vec();
+        twice.extend(8u32.to_le_bytes());
+        twice.extend(2u16.to_le_bytes());
+        for compression in [1u32, 7] {
+            twice.extend(259u16.to_le_bytes());
+            twice.extend(3u16.to_le_bytes());
+            twice.extend(1u32.to_le_bytes());
+            twice.extend(compression.to_le_bytes());
+        }
+        twice.extend(0u32.to_le_bytes());
+        assert_eq!(tiff_compression(&twice), None, "duplicate compression tags");
+        assert!(matches!(probe(&twice), Err(Refusal::Unsupported(_))));
         // An uncompressed TIFF reads as before.
         let tiff = encode(image::RgbImage::from_pixel(5, 3, image::Rgb([9, 8, 7])), ImageFormat::Tiff);
         assert_eq!(tiff_compression(&tiff), Some(1));

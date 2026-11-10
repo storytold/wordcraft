@@ -1,5 +1,5 @@
 use super::{
-    Exporter, FaceRef, Fill, FillRule, GlyphId, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_outlines,
+    Exporter, FaceRef, Fill, FillRule, KrillaGlyph, Point, Rgb, Stroke, Surface, Transform, baseline, cluster_ends, fill, glyph_id, glyph_outlines,
     left_to_right, norm, ok, paint_of, rgb, split_clusters, visual_order,
 };
 
@@ -126,7 +126,7 @@ impl Exporter<'_> {
                     Some((_, nx, _, _)) => (nx - x) / size,
                     None => face.advance(*g) as f32 / upem,
                 };
-                KrillaGlyph::new(GlyphId::new(*g), adv, 0.0, (y0 - y) / size, 0.0, r.clone(), None)
+                KrillaGlyph::new(glyph_id(*g), adv, 0.0, (y0 - y) / size, 0.0, r.clone(), None)
             })
             .collect();
         let pushed = italic;
@@ -183,8 +183,7 @@ impl Exporter<'_> {
     /// Draws a metafile text run as PDF text (outlines when the font cannot be embedded). `tf` maps
     /// the run's own space (see [`PlacedItem::Text`]) to the page.
     pub(crate) fn vector_text(&mut self, s: &mut Surface, t: &wordcraft_metafile::Text, tf: kurbo::Affine) {
-        let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
-        let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
+        let (face, shaped) = wordcraft_layout::metafile_text_run(t);
         let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
         let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
         let font = self.font(&face);
@@ -216,7 +215,7 @@ impl Exporter<'_> {
                             None => g.x_advance as f32 / upem,
                         };
                         let dy = lay.glyphs.get(i).map_or(0.0, |p| ((lay.baseline - p.1) / lay.em) as f32);
-                        KrillaGlyph::new(GlyphId::new(g.gid), adv, 0.0, dy, 0.0, start..end, None)
+                        KrillaGlyph::new(glyph_id(g.gid), adv, 0.0, dy, 0.0, start..end, None)
                     })
                     .collect();
                 let x0 = lay.glyphs.first().map_or(0.0, |p| p.0) as f32;
