@@ -975,7 +975,8 @@ fn vml_image_and_inline_drawing() {
 fn negative_src_rect_is_kept() {
     let png: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
     let body = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="635000"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdImg"/><a:srcRect l="-10000" t="-20000" r="5000"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
-    let doc = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let pad = r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="635000"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdImg"/><a:srcRect l="-30000" t="-40000" r="-5000" b="-10000"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#;
+    let doc = format!(r#"<w:document {W_NS}><w:body>{body}{pad}</w:body></w:document>"#);
     let r = rels(&[("rIdImg", "image", "media/pic.png")]);
     let bytes = zip(&[
         ("_rels/.rels", ROOT_RELS.as_bytes()),
@@ -983,14 +984,16 @@ fn negative_src_rect_is_kept() {
         ("word/_rels/document.xml.rels", r.as_bytes()),
         ("word/media/pic.png", png),
     ]);
-    let crop_of = |d: &Document| match &paras(d)[0].objects[0] {
+    let crop_of = |d: &Document, i: usize| match &paras(d)[i].objects[0] {
         InlineObject::Image { crop, .. } => *crop,
         o => panic!("{o:?}"),
     };
     let d = wordcraft_docx::read(&bytes).unwrap();
-    assert_eq!(crop_of(&d), [-0.1, -0.2, 0.05, 0.0]);
+    assert_eq!(crop_of(&d, 0), [-0.1, -0.2, 0.05, 0.0]);
+    assert_eq!(crop_of(&d, 1), [-0.3, -0.4, -0.05, -0.1]);
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
-    assert_eq!(crop_of(&back), [-0.1, -0.2, 0.05, 0.0]);
+    assert_eq!(crop_of(&back, 0), [-0.1, -0.2, 0.05, 0.0]);
+    assert_eq!(crop_of(&back, 1), [-0.3, -0.4, -0.05, -0.1]);
 }
 
 #[test]
