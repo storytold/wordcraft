@@ -121,12 +121,17 @@ impl Handle {
 
 /// Start a session against `url`. Returns immediately; connection progress
 /// arrives as events.
-pub fn spawn(url: impl Into<String>, token: impl Into<String>, client_id: impl Into<String>) -> Handle {
+///
+/// `seed` is the document this session has open, serialized the way the server
+/// snapshots a room. While nothing is accepted yet the task offers it to the
+/// server, which builds a room it has never snapshotted from it instead of
+/// starting blank (ADR WC-0004); a room that exists ignores it.
+pub fn spawn(url: impl Into<String>, token: impl Into<String>, client_id: impl Into<String>, seed: Option<Vec<u8>>) -> Handle {
     let (intents_tx, intents_rx) = mpsc::unbounded_channel();
     let (events_tx, events_rx) = mpsc::unbounded_channel();
     let (url, token, client_id) = (url.into(), token.into(), client_id.into());
     let token = Arc::new(Mutex::new(token));
-    tokio::spawn(run(url, token.clone(), client_id, intents_rx, events_tx));
+    tokio::spawn(run(url, token.clone(), client_id, seed, intents_rx, events_tx));
     Handle { intents: intents_tx, token, events: events_rx }
 }
 
@@ -134,6 +139,7 @@ async fn run(
     url: String,
     token: Arc<Mutex<String>>,
     client_id: String,
+    seed: Option<Vec<u8>>,
     mut intents: mpsc::UnboundedReceiver<Intent>,
     events: mpsc::UnboundedSender<TransportEvent>,
 ) {
@@ -147,7 +153,7 @@ async fn run(
         match tokio_tungstenite::connect_async(&url).await {
             Ok((socket, _)) => {
                 backoff = Duration::from_millis(250);
-                if !session(&mut client, socket, &token, &mut intents, &events).await {
+                if !session(&mut client, socket, &token, seed.as_deref(), &mut intents, &events).await {
                     return;
                 }
                 client.close();
@@ -167,13 +173,25 @@ async fn session(
     client: &mut Client,
     socket: tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
     token: &str,
+    seed: Option<&[u8]>,
     intents: &mut mpsc::UnboundedReceiver<Intent>,
     events: &mpsc::UnboundedSender<TransportEvent>,
 ) -> bool {
     let (mut sink, mut stream) = socket.split();
     let last = if client.version() > 0 { Some(client.version()) } else { None };
-    if send(&mut sink, &client.auth(token, last)).await.is_err() {
+    // Offer the open document only while nothing has been accepted: at a version
+    // above zero the room holds this client's operations already, and the server
+    // ignores a seed for a room it has state for anyway (ADR WC-0004).
+    let seed = seed.filter(|_| client.version() == 0);
+    if send(&mut sink, &client.auth(token, last, seed.is_some())).await.is_err() {
         return !events.is_closed();
+    }
+    if let Some(model) = seed {
+        for frame in wordcraft_collab_client::seed_frames(model) {
+            if send(&mut sink, &frame).await.is_err() {
+                return !events.is_closed();
+            }
+        }
     }
 
     // The first heartbeat is one period away: an immediate ping would race the

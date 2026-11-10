@@ -254,7 +254,7 @@ impl WebShell {
                     // Store the session first, then dial: an app without it makes
                     // no network call.
                     self.app.host_session = Some(session.clone());
-                    match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id) {
+                    match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id, &self.app.session.doc) {
                         Ok(collab) => {
                             self.app.collab = Some(collab);
                             self.app.status(format!("Joined collaboration session {name}"));

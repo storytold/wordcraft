@@ -84,7 +84,7 @@ async fn an_unconfirmed_operation_is_resent_after_a_reconnect() {
         (first, second)
     });
 
-    let mut handle = spawn(format!("ws://{addr}"), "test-token", "alice");
+    let mut handle = spawn(format!("ws://{addr}"), "test-token", "alice", None);
     let event = timeout(WAIT, handle.events.recv()).await.expect("first welcome").expect("event");
     assert!(matches!(event, TransportEvent::Event(Event::Welcome { version: 0, .. })), "{event:?}");
 
@@ -105,4 +105,48 @@ async fn an_unconfirmed_operation_is_resent_after_a_reconnect() {
     let (first, second) = server.await.expect("server task");
     assert_eq!(first.target, Target::new("body", 7, 0));
     assert_eq!(second.kind, OpKind::Primitive);
+}
+
+/// The first connection offers the document this session has open, so a room
+/// the server has never snapshotted starts from it instead of blank
+/// (ADR WC-0004). Nothing is accepted at version 0, so the offer is made.
+#[tokio::test]
+async fn the_first_connection_offers_the_open_document() {
+    let seed = br#"{"body":[],"kept":null}"#.to_vec();
+    let offered = seed.clone();
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let addr = listener.local_addr().expect("address");
+
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.expect("connection");
+        let mut socket = tokio_tungstenite::accept_async(stream).await.expect("handshake");
+        match next_client_msg(&mut socket, "auth").await {
+            ClientMsg::Auth { seed: offering, .. } => assert!(offering, "the auth announces the document"),
+            other => panic!("expected auth, got {other:?}"),
+        }
+        let mut model = Vec::new();
+        loop {
+            match next_client_msg(&mut socket, "seed").await {
+                ClientMsg::Seed { bytes, last } => {
+                    model.extend_from_slice(&bytes);
+                    if last {
+                        break;
+                    }
+                }
+                other => panic!("expected a seed frame, got {other:?}"),
+            }
+        }
+        assert_eq!(model, offered, "the server receives the document the client has open");
+        send_server_msg(
+            &mut socket,
+            &ServerMsg::Welcome { session_id: "s1".into(), role: "editor".into(), version: 0, epoch: 0, participants: Vec::new(), resync: false },
+        )
+        .await;
+        let _ = timeout(Duration::from_secs(1), socket.next()).await;
+    });
+
+    let mut handle = spawn(format!("ws://{addr}"), "test-token", "alice", Some(seed));
+    let event = timeout(WAIT, handle.events.recv()).await.expect("welcome").expect("event");
+    assert!(matches!(event, TransportEvent::Event(Event::Welcome { version: 0, .. })), "{event:?}");
+    server.await.expect("the fake server finished");
 }

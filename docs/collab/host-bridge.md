@@ -56,6 +56,13 @@ single-user mode (the rule from `INTEGRATION.md` §6).
    digest and warnings when no callback is configured.
 4. Without `Message::Session` no network call is made: the feature flag `collab`
    stays off (TASK.md §1).
+5. **The host opens the session after the document is in the app** (ADR WC-0004).
+   The app offers the document it has open as the seed of a room the server has
+   never snapshotted, so `wordcraft:session` sent before the file arrives would
+   seed the room with the empty document the app holds before opening one. The
+   cabinet's order is already document, then session: `index.html?file=…` (or the
+   host's `Message::Open`) is handled first, `session` follows. The app cannot
+   tell the two apart, so this is a contract on the host, not a race it can win.
 
 ## Build note
 

@@ -167,6 +167,20 @@ async fn spawn_server() -> (String, Config) {
     (format!("ws://{addr}/ws"), cfg)
 }
 
+/// The document a test client offers when it joins. Most tests want the room
+/// they used to get — an empty document — and only the seeding tests care what
+/// the copy holds (ADR WC-0004).
+fn blank_model() -> Vec<u8> {
+    serde_json::to_vec(&wordcraft_doc::Document::new()).expect("blank document json")
+}
+
+/// A room, offering the empty document a joining client would bring: a room
+/// nothing is stored for is built from it, a room that has a snapshot ignores it
+/// (ADR WC-0004).
+fn open_room(state: &AppState, doc: &str) -> std::sync::Arc<std::sync::Mutex<crate::RoomState>> {
+    state.room_for(doc, Some(blank_model()), wordcraft_collab::room::Role::Editor).expect("a room").0
+}
+
 async fn connect(
     url: &str,
     cfg: &Config,
@@ -183,10 +197,8 @@ async fn connect_ttl(
     client: &str,
     ttl: i64,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("connect");
-    let auth = ClientMsg::Auth { token: token(cfg, client, role, "wordcraft", ttl), client_id: client.into(), last_version: None };
-    ws.send(Message::Text(serde_json::to_string(&auth).expect("auth json").into())).await.expect("send auth");
-    ws
+    let model = blank_model();
+    connect_full(url, cfg, role, client, None, ttl, Some(&model)).await
 }
 
 async fn connect_from(
@@ -196,10 +208,47 @@ async fn connect_from(
     client: &str,
     last_version: Option<u64>,
 ) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let model = blank_model();
+    connect_full(url, cfg, role, client, last_version, 600, Some(&model)).await
+}
+
+/// Connect and offer `model` as the document this client has open; `None` sends
+/// an auth without a seed, the way a client older than the seeding step does.
+async fn connect_full(
+    url: &str,
+    cfg: &Config,
+    role: &str,
+    client: &str,
+    last_version: Option<u64>,
+    ttl: i64,
+    model: Option<&[u8]>,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
     let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("connect");
-    let auth = ClientMsg::Auth { token: token(cfg, client, role, "wordcraft", 600), client_id: client.into(), last_version };
+    let auth = ClientMsg::Auth { token: token(cfg, client, role, "wordcraft", ttl), client_id: client.into(), last_version, seed: model.is_some() };
     ws.send(Message::Text(serde_json::to_string(&auth).expect("auth json").into())).await.expect("send auth");
+    if let Some(model) = model {
+        for frame in seed_frames(model) {
+            ws.send(Message::Text(serde_json::to_string(&frame).expect("seed json").into())).await.expect("send seed");
+        }
+    }
     ws
+}
+
+/// The chunks a client sends after `Auth { seed: true }` (ADR WC-0004). The
+/// server's own chunk size is a client constant, so the test splits by hand.
+fn seed_frames(model: &[u8]) -> Vec<ClientMsg> {
+    let total = model.len();
+    if total == 0 {
+        return vec![ClientMsg::Seed { bytes: Vec::new(), last: true }];
+    }
+    let mut frames = Vec::new();
+    let mut start = 0;
+    while start < total {
+        let end = (start + 128 * 1024).min(total);
+        frames.push(ClientMsg::Seed { bytes: model[start..end].to_vec(), last: end == total });
+        start = end;
+    }
+    frames
 }
 
 async fn next_msg(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> ServerMsg {
@@ -678,6 +727,11 @@ async fn a_ninth_participant_is_refused() {
 #[tokio::test]
 async fn a_viewer_cannot_write() {
     let (url, cfg) = spawn_server().await;
+    // A room is created by a client that may edit it: the viewer joins the room
+    // an editor already opened (ADR WC-0004).
+    let mut editor = connect(&url, &cfg, "editor", "alice").await;
+    let _ = next_msg(&mut editor).await;
+    let _ = node_of(&mut editor).await;
     let mut viewer = connect(&url, &cfg, "viewer", "carol").await;
     let _ = next_msg(&mut viewer).await;
     let node = node_of(&mut viewer).await;
@@ -763,8 +817,12 @@ async fn a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten() {
     assert_eq!(std::fs::read(dir.join("model.json")).expect("model"), model_before, "the damaged model is left for an operator");
     assert_eq!(std::fs::read(dir.join("meta")).expect("meta"), meta_before);
 
-    // Absence is not damage: a document nothing was stored for still opens.
-    let absent = state.room_for("doc-absent").expect("an absent snapshot opens a room");
+    // Absence is not damage: a document nothing was stored for opens from the
+    // copy a joining client brings (ADR WC-0004).
+    let (absent, seeded) = state
+        .room_for("doc-absent", Some(blank_model()), wordcraft_collab::room::Role::Editor)
+        .expect("an absent snapshot opens a room from the client's copy");
+    assert!(seeded, "the room is built from the copy, not from an empty document");
     assert_eq!(absent.lock().expect("room lock").room.version(), 0, "a new document starts at version 0");
     assert_eq!(state.room_count(), 1);
     let _ = std::fs::remove_dir_all(&data_dir);
@@ -775,7 +833,7 @@ fn a_room_is_restored_from_disk() {
     let cfg = dev_config();
     let doc = "doc-restore";
     let state = AppState::new(cfg.clone());
-    let room = state.room_for(doc).expect("a room");
+    let room = open_room(&state, doc);
     let node = {
         let mut guard = room.lock().expect("room lock");
         guard.room.join(None, false).nodes.first().expect("a node").id
@@ -787,7 +845,7 @@ fn a_room_is_restored_from_disk() {
     drop(state);
 
     let restored = AppState::new(cfg);
-    let room = restored.room_for(doc).expect("a room");
+    let room = open_room(&restored, doc);
     let guard = room.lock().expect("room lock");
     assert_eq!(guard.room.version(), 1, "the snapshot restores the version");
     let text = guard.room.model().session().doc.body.first().and_then(|b| b.as_para()).map(|p| p.text.clone()).unwrap_or_default();
@@ -799,7 +857,7 @@ fn a_retry_after_a_snapshot_restore_is_not_applied_twice() {
     let cfg = dev_config();
     let doc = "doc-dedup-restore";
     let state = AppState::new(cfg.clone());
-    let room = state.room_for(doc).expect("a room");
+    let room = open_room(&state, doc);
     let node = {
         let mut guard = room.lock().expect("room lock");
         guard.room.join(None, false).nodes.first().expect("a node").id
@@ -813,7 +871,7 @@ fn a_retry_after_a_snapshot_restore_is_not_applied_twice() {
 
     // A restart: the room comes back at version 1 with the saved `opId` window.
     let restored = AppState::new(cfg);
-    let room = restored.room_for(doc).expect("a room");
+    let room = open_room(&restored, doc);
     let mut guard = room.lock().expect("room lock");
     assert_eq!(guard.room.version(), 1);
     let again = guard.room.submit("alice", wordcraft_collab::room::Role::Editor, op).expect("the retry is deduplicated");
@@ -828,7 +886,7 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
     let cfg = dev_config();
     let doc = "doc-kept";
     let state = AppState::new(cfg.clone());
-    let room = state.room_for(doc).expect("a room");
+    let room = open_room(&state, doc);
     let source = wordcraft_docx::write(&wordcraft_doc::Document::new()).expect("a source docx");
     let from_file = wordcraft_docx::read_with_password(&source, None).expect("read the source");
     let expected = from_file.kept.get().is_some();
@@ -837,7 +895,7 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
     drop(state);
 
     let restored = AppState::new(cfg);
-    let room = restored.room_for(doc).expect("a room");
+    let room = open_room(&restored, doc);
     let guard = room.lock().expect("room lock");
     assert_eq!(guard.room.model().session().doc.kept.get().is_some(), expected, "kept comes back from the source, not the JSON");
 }
@@ -846,7 +904,7 @@ fn a_restored_room_takes_kept_markup_from_the_source_docx() {
 fn a_shutdown_snapshot_keeps_every_open_room() {
     let cfg = dev_config();
     let state = AppState::new(cfg.clone());
-    let room = state.room_for("doc-shutdown").expect("a room");
+    let room = open_room(&state, "doc-shutdown");
     let node = {
         let mut guard = room.lock().expect("room lock");
         guard.room.join(None, false).nodes.first().expect("a node").id
@@ -858,14 +916,14 @@ fn a_shutdown_snapshot_keeps_every_open_room() {
     drop(state);
 
     let restored = AppState::new(cfg);
-    let room = restored.room_for("doc-shutdown").expect("a room");
+    let room = open_room(&restored, "doc-shutdown");
     assert_eq!(room.lock().expect("room lock").room.version(), 1);
 }
 
 #[test]
 fn a_second_session_needs_the_owner_role() {
     let state = AppState::new(dev_config());
-    let room = state.room_for("doc-lease").expect("a room");
+    let room = open_room(&state, "doc-lease");
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
 
@@ -1048,7 +1106,7 @@ async fn the_transport_client_edits_through_the_server() {
 
     let (url, cfg) = spawn_server().await;
     let token = token(&cfg, "alice", "editor", "wordcraft", 600);
-    let mut handle = wordcraft_collab_ws::spawn(url, token, "alice");
+    let mut handle = wordcraft_collab_ws::spawn(url, token, "alice", Some(blank_model()));
 
     let mut joined = false;
     let mut nodes = None;
@@ -1241,7 +1299,7 @@ fn a_silent_session_loses_the_lease_after_its_ttl() {
     let mut cfg = dev_config();
     cfg.lease_ttl_secs = 0;
     let state = AppState::new(cfg);
-    let room = state.room_for("doc-lease-ttl").expect("a room");
+    let room = open_room(&state, "doc-lease-ttl");
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
     assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
     // The only peer of sid-1 disconnected, and the TTL is zero.
@@ -1559,5 +1617,177 @@ async fn a_lost_cabinet_answer_is_retried_with_the_same_body() {
     let second = requests.recv().await.expect("second attempt");
     let body_of = |request: &str| request.split_once("\r\n\r\n").map(|(_, body)| body.to_string()).unwrap_or_default();
     assert_eq!(body_of(&first), body_of(&second), "a retry is the same body, so it cannot become a second version");
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// The model JSON of a document that holds `text`: the bytes a client with that
+/// document open offers when it joins (ADR WC-0004).
+fn model_with(text: &str) -> Vec<u8> {
+    use wordcraft_collab::room::Model as _;
+    let mut room: wordcraft_collab::room::Room<wordcraft_collab_engine::SessionModel> =
+        wordcraft_collab::room::Room::new(wordcraft_collab_engine::SessionModel::from_document(wordcraft_doc::Document::new()));
+    let node = room.join(None, false).nodes.first().expect("a body node").id;
+    room.submit("seed", wordcraft_collab::room::Role::Editor, insert("seed", 1, 0, node, 0, text)).expect("the seed text");
+    room.model().snapshot()
+}
+
+/// Every snapshot chunk a joining client receives, as one byte string.
+async fn catch_up(ws: &mut tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    loop {
+        match next_msg(ws).await {
+            ServerMsg::Snapshot { bytes: chunk, .. } => bytes.extend_from_slice(&chunk),
+            ServerMsg::Tail { .. } => {}
+            ServerMsg::Nodes { .. } => return bytes,
+            other => panic!("unexpected catch-up frame {other:?}"),
+        }
+    }
+}
+
+/// Finding 3 of §5.26: a room this server has never snapshotted used to start
+/// from an empty document and send that snapshot to the client, which replaced
+/// the document the client had open — unsaved text and all. The first writer now
+/// brings its copy and the room is built from it (ADR WC-0004).
+#[tokio::test]
+async fn a_client_with_an_open_document_seeds_the_room_it_joins() {
+    let cfg = config_for("seeded-room");
+    let (url, _state) = spawn_server_state(cfg.clone()).await;
+    let model = model_with("kept text");
+    let mut alice = connect_full(&url, &cfg, "editor", "alice", None, 600, Some(&model)).await;
+    match next_msg(&mut alice).await {
+        ServerMsg::Welcome { version, resync, .. } => {
+            assert_eq!(version, 0, "a seeded room starts at version 0");
+            assert!(!resync, "the seeding client already holds the room's document");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let node = node_of(&mut alice).await;
+
+    // The room's document is the one the client offered. A second client that
+    // joins with its own copy gets the room's snapshot, and it holds the text
+    // the first client had open — not an empty page.
+    let blank = blank_model();
+    let mut bob = connect_full(&url, &cfg, "editor", "bob", None, 600, Some(&blank)).await;
+    match next_msg(&mut bob).await {
+        ServerMsg::Welcome { resync, .. } => assert!(resync, "a room that exists answers with its snapshot"),
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let snapshot = String::from_utf8(catch_up(&mut bob).await).expect("the model is JSON");
+    assert!(snapshot.contains("kept text"), "the room kept the document the first client had open: {snapshot}");
+
+    // And it is a normal room: an operation lands on the seeded text.
+    let op = insert("alice", 1, 0, node, "kept text".len(), "!");
+    assert!(send_op(&mut alice, op.clone()).await);
+    match next_msg(&mut alice).await {
+        ServerMsg::Applied { applied } => {
+            assert_eq!(applied.op_id, op.op_id);
+            assert_eq!(applied.version, 1);
+        }
+        other => panic!("expected applied, got {other:?}"),
+    }
+}
+
+/// A document this server holds nothing for is refused unless the client brings
+/// a copy: the room is never created blank again (ADR WC-0004). A read-only
+/// session never creates it either.
+#[tokio::test]
+async fn a_join_without_a_seed_is_refused_when_nothing_is_stored() {
+    let cfg = config_for("unseeded-room");
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+
+    let mut alice = connect_full(&url, &cfg, "editor", "alice", None, 600, None).await;
+    match next_msg(&mut alice).await {
+        ServerMsg::Rejected { reject } => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid);
+            assert!(reject.message.contains("no state on this server"), "{}", reject.message);
+            assert!(!reject.retryable, "the client cannot repair what the server does not have");
+        }
+        other => panic!("expected the join to be refused, got {other:?}"),
+    }
+    assert_eq!(state.room_count(), 0, "no empty room may stand in for the document");
+
+    // A viewer with the document open does not create the room: only a role
+    // that may write does.
+    let model = model_with("viewer copy");
+    let mut viewer = connect_full(&url, &cfg, "viewer", "vic", None, 600, Some(&model)).await;
+    match next_msg(&mut viewer).await {
+        ServerMsg::Rejected { reject } => assert!(reject.message.contains("no state on this server"), "{}", reject.message),
+        other => panic!("expected the viewer's join to be refused, got {other:?}"),
+    }
+    assert_eq!(state.room_count(), 0);
+    assert!(state.metrics.render(0).contains("unseeded_joins_total 2"), "{}", state.metrics.render(0));
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// A new document still opens a room: the client that creates it offers its
+/// (empty) document, the room starts at version 0 and ordinary editing follows.
+#[tokio::test]
+async fn a_new_document_still_opens_a_room() {
+    let cfg = config_for("new-document");
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    match next_msg(&mut alice).await {
+        ServerMsg::Welcome { version, resync, .. } => {
+            assert_eq!(version, 0);
+            assert!(!resync, "the client's own empty document is the room");
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let node = node_of(&mut alice).await;
+    assert!(send_op(&mut alice, insert("alice", 1, 0, node, 0, "new")).await);
+    match next_msg(&mut alice).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("expected applied, got {other:?}"),
+    }
+    assert_eq!(state.room_count(), 1);
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// A seed never replaces a room that has state: the stored snapshot is
+/// authoritative and the client that offered a different copy adopts it.
+#[tokio::test]
+async fn a_seed_does_not_replace_a_stored_snapshot() {
+    let cfg = config_for("seed-vs-snapshot");
+    {
+        let state = AppState::new(cfg.clone());
+        let room = open_room(&state, "doc-1");
+        let node = {
+            let mut guard = room.lock().expect("room lock");
+            guard.room.join(None, false).nodes.first().expect("a node").id
+        };
+        let op = insert("seed", 1, 0, node, 0, "stored text");
+        room.lock().expect("room lock").room.submit("seed", wordcraft_collab::room::Role::Editor, op).expect("apply");
+        state.persist("doc-1", &room, None).expect("persist");
+    }
+    // A new process (a new `AppState`) restores the room from the store.
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+    let model = model_with("client text");
+    let mut alice = connect_full(&url, &cfg, "editor", "alice", None, 600, Some(&model)).await;
+    match next_msg(&mut alice).await {
+        ServerMsg::Welcome { resync, .. } => assert!(resync, "the stored snapshot is the answer"),
+        other => panic!("expected welcome, got {other:?}"),
+    }
+    let snapshot = String::from_utf8(catch_up(&mut alice).await).expect("the model is JSON");
+    assert!(snapshot.contains("stored text"), "the stored document is the room: {snapshot}");
+    assert!(!snapshot.contains("client text"), "a seed does not replace a room that has state: {snapshot}");
+    assert_eq!(state.room_count(), 1);
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
+/// A seed that is not a document refuses the handshake instead of opening a room
+/// on garbage.
+#[tokio::test]
+async fn a_seed_that_is_not_a_document_is_refused() {
+    let cfg = config_for("bad-seed");
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+    let mut alice = connect_full(&url, &cfg, "editor", "alice", None, 600, Some(b"not a document")).await;
+    match next_msg(&mut alice).await {
+        ServerMsg::Rejected { reject } => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid);
+            assert!(reject.message.contains("could not be read"), "{}", reject.message);
+        }
+        other => panic!("expected the join to be refused, got {other:?}"),
+    }
+    assert_eq!(state.room_count(), 0);
     let _ = std::fs::remove_dir_all(&cfg.data_dir);
 }

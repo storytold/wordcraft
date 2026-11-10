@@ -40,7 +40,7 @@ use wordcraft_collab_engine::SessionModel;
 pub mod cabinet;
 pub mod store;
 
-use store::{Corrupt, Snapshot, Store};
+use store::{Corrupt, MAX_MODEL, Snapshot, Store};
 
 /// Largest WebSocket frame the server accepts (RFC §9).
 pub const MAX_FRAME: usize = 1 << 20;
@@ -223,6 +223,24 @@ struct Refused {
     bytes: Arc<Vec<u8>>,
 }
 
+/// Why a join did not open a room (ADR WC-0003, ADR WC-0004).
+#[derive(Debug)]
+enum Refusal {
+    /// A snapshot is stored and cannot be opened.
+    Corrupt(Corrupt),
+    /// The document has no state on this server and the client brought no copy.
+    Unseeded,
+    /// The document the client offered is not a model this server can hold.
+    BadSeed(String),
+}
+
+/// Read a document from the model JSON a snapshot or a joining client holds.
+/// The message is the reason, not the content: it goes into a log line or a
+/// refusal, never into an answer that carries the document.
+fn read_model(bytes: &[u8]) -> Result<wordcraft_doc::Document, String> {
+    serde_json::from_slice::<wordcraft_doc::Document>(bytes).map_err(|err| format!("is not a document: {err}"))
+}
+
 impl RoomState {
     fn new(room: Room<SessionModel>, lease_ttl_secs: u64, published: Option<Published>) -> RoomState {
         RoomState {
@@ -262,6 +280,11 @@ pub struct Metrics {
     /// Joins refused because the stored snapshot of the document cannot be
     /// opened (ADR WC-0003). Non-zero means an operator has a file to restore.
     corrupt: AtomicU64,
+    /// Joins refused because the document has no state here and the client
+    /// brought no copy (ADR WC-0004). Non-zero means the first client to open
+    /// the document was older than the seeding step, or a read-only session
+    /// arrived before a writer did.
+    unseeded: AtomicU64,
 }
 
 impl Metrics {
@@ -284,6 +307,7 @@ impl Metrics {
             ("save_copies_total", self.copies.load(Ordering::Relaxed)),
             ("stale_peers_total", self.stale.load(Ordering::Relaxed)),
             ("corrupt_snapshots_total", self.corrupt.load(Ordering::Relaxed)),
+            ("unseeded_joins_total", self.unseeded.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -320,26 +344,31 @@ impl AppState {
         self.store.save(doc, &Snapshot { version, epoch, model, source, dedup, cabinet })
     }
 
-    /// The room of `doc`, restored from its stored snapshot when one exists.
+    /// The room of `doc`, restored from its stored snapshot when one exists, or
+    /// built from the document the joining client offered when it never had one.
     ///
-    /// `Err` means a snapshot is stored and cannot be opened. No room is
-    /// created: a blank room would be persisted over that file on the first
-    /// operation or on the next shutdown and would destroy the only copy of the
-    /// document (ADR WC-0003). The caller refuses the join and leaves the file
-    /// for an operator.
-    fn room_for(&self, doc: &str) -> Result<Arc<Mutex<RoomState>>, Corrupt> {
+    /// The room is never started blank (ADR WC-0004). `Err(Refusal::Corrupt)`
+    /// means a snapshot is stored and cannot be opened: a blank room would be
+    /// persisted over that file on the first operation or on the next shutdown
+    /// and would destroy the only copy of the document (ADR WC-0003).
+    /// `Err(Refusal::Unseeded)` means this server holds nothing for the document
+    /// and the client brought no copy, so any room it could open would be an
+    /// empty page whose snapshot replaces the document the client has open.
+    /// The caller refuses the join and leaves the file for an operator.
+    ///
+    /// The flag says the room was built from this client's seed; it answers the
+    /// join without a snapshot, because the client already holds that state.
+    fn room_for(&self, doc: &str, seed: Option<Vec<u8>>, role: Role) -> Result<(Arc<Mutex<RoomState>>, bool), Refusal> {
         let mut rooms = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Some(room) = rooms.get(doc) {
-            return Ok(room.clone());
+            return Ok((room.clone(), false));
         }
-        let state = match self.store.load(doc) {
+        let (state, seeded) = match self.store.load(doc) {
             Ok(Some(snapshot)) => {
-                let mut document = match serde_json::from_slice::<wordcraft_doc::Document>(&snapshot.model) {
-                    Ok(document) => document,
+                let mut document =
                     // The store already checked; this keeps the room correct on
                     // its own instead of trusting that.
-                    Err(err) => return Err(Corrupt::new("model.json", format!("is not a document: {err}"))),
-                };
+                    read_model(&snapshot.model).map_err(|reason| Refusal::Corrupt(Corrupt::new("model.json", reason)))?;
                 // `Document::kept` is not serialized (ADR-0011): take it from
                 // the source `.docx` so unchanged paragraphs still write their
                 // original markup. Fingerprints only match paragraphs that
@@ -349,24 +378,33 @@ impl AppState {
                 {
                     document.kept = from_file.kept;
                 }
-                RoomState::new(
-                    Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch, snapshot.dedup),
-                    self.cfg.lease_ttl_secs,
-                    snapshot.cabinet,
+                (
+                    RoomState::new(
+                        Room::restore(SessionModel::from_document(document), snapshot.version, snapshot.epoch, snapshot.dedup),
+                        self.cfg.lease_ttl_secs,
+                        snapshot.cabinet,
+                    ),
+                    false,
                 )
             }
-            // Never snapshotted: a new document starts here.
-            Ok(None) => RoomState::new(Room::new(SessionModel::from_document(wordcraft_doc::Document::new())), self.cfg.lease_ttl_secs, None),
+            Ok(None) => {
+                // Only a client that may write can create the room: a read-only
+                // session arriving first waits for one that may edit.
+                let Some(model) = seed.filter(|_| role.can_write()) else { return Err(Refusal::Unseeded) };
+                let document = read_model(&model).map_err(Refusal::BadSeed)?;
+                log::info!("opening the room for {doc} from a joining client's copy ({} bytes of model)", model.len());
+                (RoomState::new(Room::new(SessionModel::from_document(document)), self.cfg.lease_ttl_secs, None), true)
+            }
             Err(corrupt) => {
                 // The refusal is counted here, where the damage is found; the
                 // join path logs it with the path an operator has to look at.
                 Metrics::inc(&self.metrics.corrupt);
-                return Err(corrupt);
+                return Err(Refusal::Corrupt(corrupt));
             }
         };
         let room = Arc::new(Mutex::new(state));
         rooms.insert(doc.to_string(), room.clone());
-        Ok(room)
+        Ok((room, seeded))
     }
 
     pub fn room_count(&self) -> usize {
@@ -438,11 +476,38 @@ async fn refuse_corrupt(sink: &mut futures_util::stream::SplitSink<WebSocket, Me
         "refusing a join for {doc}: its stored snapshot cannot be opened ({corrupt}); restore or remove {}",
         state.store.doc_dir(doc).display()
     );
-    let reject = Reject::new(
-        wordcraft_collab::wire::OpId::new("server", 0),
-        RejectCode::Invalid,
-        "the stored snapshot of this document cannot be opened; an operator must restore or remove it",
-    );
+    refuse(sink, state, "the stored snapshot of this document cannot be opened; an operator must restore or remove it").await;
+}
+
+/// Refuse a join that cannot open a room (ADR WC-0003, ADR WC-0004) and end the
+/// connection. The answer names the situation, not the server's paths: the
+/// client cannot repair either case, and the detail goes to the log without
+/// document content.
+async fn refuse_join(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, doc: &str, refusal: Refusal) {
+    match refusal {
+        Refusal::Corrupt(corrupt) => refuse_corrupt(sink, state, doc, &corrupt).await,
+        Refusal::Unseeded => {
+            Metrics::inc(&state.metrics.unseeded);
+            log::warn!("refusing a join for {doc}: this server has no state for it and the client offered none");
+            refuse(
+                sink,
+                state,
+                "this document has no state on this server yet; it must be opened by a client that may edit it and has the document open",
+            )
+            .await
+        }
+        Refusal::BadSeed(reason) => {
+            log::warn!("refusing a join for {doc}: the document it offered cannot be used ({reason})");
+            refuse(sink, state, "the document this client offered could not be read").await
+        }
+    }
+}
+
+/// Answer a join with a refusal and end the connection. The code is `invalid`
+/// and not retryable: the client cannot fix what the server or an operator has
+/// to.
+async fn refuse(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, state: &AppState, message: &str) {
+    let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, message);
     let _ = send(sink, &ServerMsg::Rejected { reject }, state.cfg.heartbeat).await;
     let _ = sink.close().await;
 }
@@ -451,14 +516,15 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     Metrics::inc(&state.metrics.connections);
     let (mut sink, mut stream) = socket.split();
 
-    let Some((client_id, claims, role, wants_version)) = authenticate(&mut sink, &mut stream, &state).await else {
+    let Some(Handshake { client_id, claims, role, wants_version, seed }) = authenticate(&mut sink, &mut stream, &state).await else {
         return;
     };
-    let room = match state.room_for(&claims.doc) {
-        Ok(room) => room,
-        // Joining would create an empty room whose snapshot overwrites the
-        // stored file on the first operation or on shutdown (ADR WC-0003).
-        Err(corrupt) => return refuse_corrupt(&mut sink, &state, &claims.doc, &corrupt).await,
+    let (room, seeded) = match state.room_for(&claims.doc, seed, role) {
+        Ok(parts) => parts,
+        // Joining would open an empty room whose snapshot overwrites the stored
+        // file (ADR WC-0003) or replaces the document the client has open
+        // (ADR WC-0004).
+        Err(refusal) => return refuse_join(&mut sink, &state, &claims.doc, refusal).await,
     };
     // Every write to this peer is bounded by one heartbeat period: a peer that
     // stopped reading is closed instead of holding the connection open with a
@@ -473,7 +539,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             return;
         }
     };
-    if !send_join(&mut sink, &claims, role, &plan, peers, limit).await {
+    if !send_join(&mut sink, &claims, role, &plan, peers, limit, seeded).await {
         leave(&state, &claims.doc, &room, &client_id);
         return;
     }
@@ -548,11 +614,23 @@ async fn close_stale(sink: &mut futures_util::stream::SplitSink<WebSocket, Messa
     }
 }
 
+/// What the first frames of a connection established (ADR-0008, ADR WC-0004).
+struct Handshake {
+    client_id: String,
+    claims: Claims,
+    role: Role,
+    wants_version: Option<Version>,
+    /// The document the client offered, when it announced a seed. `None` means
+    /// it brought none: this server can only join it to a room that already has
+    /// state.
+    seed: Option<Vec<u8>>,
+}
+
 async fn authenticate(
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     stream: &mut futures_util::stream::SplitStream<WebSocket>,
     state: &AppState,
-) -> Option<(String, Claims, Role, Option<Version>)> {
+) -> Option<Handshake> {
     let first = match timeout(AUTH_TIMEOUT, stream.next()).await {
         Ok(Some(Ok(Message::Text(text)))) => text,
         _ => {
@@ -560,7 +638,7 @@ async fn authenticate(
             return None;
         }
     };
-    let (client_id, claims, wants_version) = match parse_auth(&state.cfg, &first) {
+    let (client_id, claims, wants_version, seeds) = match parse_auth(&state.cfg, &first) {
         Ok(parts) => parts,
         Err(reject) => {
             let _ = send(sink, &ServerMsg::Rejected { reject }, state.cfg.heartbeat).await;
@@ -569,7 +647,48 @@ async fn authenticate(
         }
     };
     let role = Role::parse(&claims.role)?;
-    Some((client_id, claims, role, wants_version))
+    let seed = if seeds {
+        // The token has been checked, so the stream that follows is bounded work
+        // for an authenticated peer only.
+        match read_seed(stream).await {
+            Ok(model) => Some(model),
+            Err(reject) => {
+                let _ = send(sink, &ServerMsg::Rejected { reject }, state.cfg.heartbeat).await;
+                let _ = sink.close().await;
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+    Some(Handshake { client_id, claims, role, wants_version, seed })
+}
+
+/// Read the `Seed` frames that follow `Auth { seed: true }` (ADR WC-0004).
+///
+/// The client sends the document it has open in chunks; the frame with `last`
+/// ends the stream. The handshake is refused when a frame is not a seed, when
+/// the stream stops before its end, or when the document passes the model bound
+/// the store enforces: a seed that would not fit a snapshot is not a room state.
+async fn read_seed(stream: &mut futures_util::stream::SplitStream<WebSocket>) -> Result<Vec<u8>, Reject> {
+    let invalid = |message: String| Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, message);
+    let mut model = Vec::new();
+    loop {
+        let text = match timeout(AUTH_TIMEOUT, stream.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => text,
+            _ => return Err(invalid("the document you offered ended before its last frame".into())),
+        };
+        let ClientMsg::Seed { bytes, last } = parse_client(&text)? else {
+            return Err(invalid("a seed frame must follow an auth that announced one".into()));
+        };
+        if model.len() + bytes.len() > MAX_MODEL {
+            return Err(invalid(format!("the document you offered is over the {MAX_MODEL}-byte model bound")));
+        }
+        model.extend_from_slice(&bytes);
+        if last {
+            return Ok(model);
+        }
+    }
 }
 
 fn register(
@@ -621,19 +740,24 @@ async fn send_join(
     plan: &wordcraft_collab::room::JoinPlan,
     peers: Vec<Participant>,
     limit: Duration,
+    seeded: bool,
 ) -> bool {
+    // The room was built from this client's own copy, so there is nothing to
+    // send back: the snapshot would be the document the client just offered, and
+    // `resync` stays false so the client keeps it (ADR WC-0004).
+    let snapshot = if seeded { None } else { plan.snapshot.clone() };
     let welcome = ServerMsg::Welcome {
         session_id: claims.sid.clone(),
         role: role.as_str().to_string(),
         version: plan.version,
         epoch: plan.epoch,
         participants: peers,
-        resync: plan.snapshot.is_some(),
+        resync: snapshot.is_some(),
     };
     if send(sink, &welcome, limit).await.is_err() {
         return false;
     }
-    if let Some(snapshot) = plan.snapshot.clone() {
+    if let Some(snapshot) = snapshot {
         for msg in snapshot_frames(plan.version, snapshot) {
             if send(sink, &msg, limit).await.is_err() {
                 return false;
@@ -721,7 +845,8 @@ async fn process_frame(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSi
                     .collect();
                 (guard.room.join(Some(last_version), true), peers)
             };
-            send_join(sink, claims, role, &plan, peers, limit).await
+            // The client asked for a snapshot: `seeded` is always false here.
+            send_join(sink, claims, role, &plan, peers, limit, false).await
         }
         ClientMsg::Commit { op_id, expected_version, .. } => {
             let call = CommitCall { client_id, op_id, expected_version };
@@ -731,6 +856,12 @@ async fn process_frame(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSi
         ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }, limit).await.is_ok(),
         ClientMsg::Auth { .. } => {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "already authenticated");
+            send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok()
+        }
+        ClientMsg::Seed { .. } => {
+            // A seed is read only between an auth that announced one and the
+            // welcome (ADR WC-0004); later it belongs to no room state.
+            let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "a seed is only read right after auth");
             send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok()
         }
     }
@@ -930,17 +1061,17 @@ fn now_secs() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|elapsed| elapsed.as_secs()).unwrap_or(0)
 }
 
-fn parse_auth(cfg: &Config, text: &str) -> Result<(String, Claims, Option<Version>), Reject> {
+fn parse_auth(cfg: &Config, text: &str) -> Result<(String, Claims, Option<Version>, bool), Reject> {
     let msg: ClientMsg = serde_json::from_str(text)
         .map_err(|_| Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "the first message must be auth"))?;
-    let ClientMsg::Auth { token, client_id, last_version } = msg else {
+    let ClientMsg::Auth { token, client_id, last_version, seed } = msg else {
         return Err(Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Forbidden, "authenticate first"));
     };
     let claims = verify_token(cfg, &token)?;
     if client_id.is_empty() {
         return Err(Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "clientId is required"));
     }
-    Ok((client_id, claims, last_version))
+    Ok((client_id, claims, last_version, seed))
 }
 
 fn parse_client(text: &str) -> Result<ClientMsg, Reject> {

@@ -308,7 +308,11 @@ pub struct Collab {
 impl Collab {
     /// Connect to `server` with a cabinet JWT. The token is kept by the
     /// transport and never logged, stored in preferences or put in the URL.
-    pub fn connect(server: &str, token: &str, actor: &str, client_id: &str) -> Result<Collab, String> {
+    pub fn connect(server: &str, token: &str, actor: &str, client_id: &str, document: &Document) -> Result<Collab, String> {
+        // The document this window has open is what the server builds a room it
+        // has never snapshotted from (ADR WC-0004); a room that exists ignores
+        // it and answers with its snapshot instead.
+        let seed = serde_json::to_vec(document).map_err(|err| format!("cannot encode the open document: {err}"))?;
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -316,7 +320,7 @@ impl Collab {
             .map_err(|err| format!("cannot start the collaboration runtime: {err}"))?;
         let handle = {
             let _entered = runtime.enter();
-            wordcraft_collab_ws::spawn(server.to_string(), token.to_string(), client_id.to_string())
+            wordcraft_collab_ws::spawn(server.to_string(), token.to_string(), client_id.to_string(), Some(seed))
         };
         Ok(Collab {
             _runtime: runtime,

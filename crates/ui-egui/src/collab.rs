@@ -71,7 +71,7 @@ pub(crate) fn connect(app: &mut WordApp) {
         return;
     };
     let client_id = crate::collab_session::session_client_id("ui", app.session.document_id());
-    match crate::collab_session::Collab::connect(&server, &token, &app.session.author, &client_id) {
+    match crate::collab_session::Collab::connect(&server, &token, &app.session.author, &client_id, &app.session.doc) {
         Ok(collab) => app.collab = Some(collab),
         Err(message) => app.status(message),
     }

@@ -42,6 +42,32 @@ pub fn session_client_id(prefix: &str, document: u64) -> String {
     }
 }
 
+/// One chunk of the document a joining client offers (ADR WC-0004).
+///
+/// The server accepts frames of 1 MiB and a byte array is JSON-encoded as
+/// numbers (up to four characters each), so a chunk stays well inside one frame.
+pub const SEED_CHUNK: usize = 128 * 1024;
+
+/// The `Seed` frames that carry `model` — the document JSON of the client's open
+/// copy — to the server after `Auth { seed: true }` (ADR WC-0004).
+///
+/// The model is the same serialization the server snapshots, so a room built
+/// from these frames holds exactly what the client has; an empty stream still
+/// sends one `last` frame, because the server waits for it.
+pub fn seed_frames(model: &[u8]) -> Vec<ClientMsg> {
+    if model.is_empty() {
+        return vec![ClientMsg::Seed { bytes: Vec::new(), last: true }];
+    }
+    let total = model.len();
+    model
+        .chunks(SEED_CHUNK)
+        .scan(0usize, |sent, chunk| {
+            *sent += chunk.len();
+            Some(ClientMsg::Seed { bytes: chunk.to_vec(), last: *sent == total })
+        })
+        .collect()
+}
+
 /// Where the client is in the session handshake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -181,9 +207,10 @@ impl Client {
     }
 
     /// The auth message that opens the session (ADR-0008: token first, never in
-    /// the URL).
-    pub fn auth(&self, token: &str, last_version: Option<Version>) -> ClientMsg {
-        ClientMsg::Auth { token: token.to_string(), client_id: self.client_id.clone(), last_version }
+    /// the URL). `seed` announces the [`seed_frames`] that follow with the
+    /// document this client has open (ADR WC-0004).
+    pub fn auth(&self, token: &str, last_version: Option<Version>, seed: bool) -> ClientMsg {
+        ClientMsg::Auth { token: token.to_string(), client_id: self.client_id.clone(), last_version, seed }
     }
 
     /// Build the next operation, assign it a `(clientId, seq)` id and queue it

@@ -223,6 +223,24 @@ pub enum ClientMsg {
         client_id: String,
         #[serde(default)]
         last_version: Option<Version>,
+        /// `seed` frames carrying the document this client has open follow
+        /// (ADR WC-0004). The server uses them only for a document it has
+        /// never snapshotted: without one it refuses the join instead of
+        /// starting a blank room. An older client sends no field and cannot
+        /// open a room this server has no state for.
+        #[serde(default)]
+        seed: bool,
+    },
+    /// One chunk of the document a joining client has open, sent right after
+    /// `Auth { seed: true }`; the last chunk sets `last` (ADR WC-0004).
+    ///
+    /// The room is built from these bytes when the server has never
+    /// snapshotted the document, so its first operation lands on the document
+    /// the client is looking at, not on an empty page whose snapshot would
+    /// replace that document.
+    Seed {
+        bytes: Vec<u8>,
+        last: bool,
     },
     Op {
         op: Op,
@@ -450,9 +468,29 @@ mod tests {
 
     #[test]
     fn client_messages_are_tagged() {
-        let msg = ClientMsg::Auth { token: "t".into(), client_id: "c1".into(), last_version: Some(4) };
+        let msg = ClientMsg::Auth { token: "t".into(), client_id: "c1".into(), last_version: Some(4), seed: true };
         let text = serde_json::to_string(&msg).expect("serialize");
         assert!(text.contains("\"type\":\"auth\""), "{text}");
+        assert!(text.contains("\"seed\":true"), "{text}");
+        let back: ClientMsg = serde_json::from_str(&text).expect("deserialize");
+        assert_eq!(msg, back);
+    }
+
+    #[test]
+    fn an_older_auth_without_a_seed_field_parses() {
+        // A client built before the seed frame sent exactly this first frame:
+        // it offers no document, and the server refuses a room it has no state
+        // for instead of the client promising a stream that never comes.
+        let text = r#"{"type":"auth","token":"t","client_id":"c1","last_version":null}"#;
+        let msg: ClientMsg = serde_json::from_str(text).expect("an older client's auth parses");
+        assert!(matches!(msg, ClientMsg::Auth { seed, .. } if !seed));
+    }
+
+    #[test]
+    fn a_seed_chunk_round_trips_through_json() {
+        let msg = ClientMsg::Seed { bytes: b"{\"body\":[]}".to_vec(), last: true };
+        let text = serde_json::to_string(&msg).expect("serialize");
+        assert!(text.contains("\"type\":\"seed\""), "{text}");
         let back: ClientMsg = serde_json::from_str(&text).expect("deserialize");
         assert_eq!(msg, back);
     }

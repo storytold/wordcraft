@@ -407,3 +407,32 @@ fn a_save_copy_chunk_parses_and_the_request_names_an_operation() {
         other => panic!("expected saveCopy, got {other:?}"),
     }
 }
+
+/// The document a joining client offers travels in chunks inside one frame
+/// each, and the server is told which one ends the stream (ADR WC-0004).
+#[test]
+fn seed_frames_split_the_document_and_mark_exactly_one_last_chunk() {
+    let model = vec![b'x'; crate::SEED_CHUNK * 2 + 7];
+    let frames = crate::seed_frames(&model);
+    assert_eq!(frames.len(), 3);
+    let mut rebuilt = Vec::new();
+    let mut lasts = 0;
+    for frame in &frames {
+        match frame {
+            ClientMsg::Seed { bytes, last } => {
+                assert!(!bytes.is_empty(), "a chunk is never empty");
+                assert!(bytes.len() <= crate::SEED_CHUNK);
+                rebuilt.extend_from_slice(bytes);
+                if *last {
+                    lasts += 1;
+                }
+            }
+            other => panic!("expected a seed frame, got {other:?}"),
+        }
+    }
+    assert_eq!(rebuilt, model);
+    assert_eq!(lasts, 1, "one frame ends the stream");
+
+    // An empty document still sends its last frame: the server waits for it.
+    assert!(matches!(crate::seed_frames(b"").as_slice(), [ClientMsg::Seed { bytes, last: true }] if bytes.is_empty()));
+}

@@ -187,6 +187,14 @@ pub struct Collab {
     copy_buffer: CopyBuffer,
     snapshot: Vec<u8>,
     snapshot_version: Version,
+    /// The document this tab has open, serialized the way the server snapshots
+    /// a room. Offered while nothing is accepted yet, so a room the server has
+    /// never snapshotted starts from it instead of blank (ADR WC-0004).
+    ///
+    /// Only the browser dials, so only the wasm build reads it: a native build
+    /// has no socket (`send` refuses).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    seed: Vec<u8>,
     last_presence_ms: f64,
     last_error: Option<String>,
     /// Operations planned before `welcome`; replayed through [`Client::op`] so
@@ -200,8 +208,9 @@ impl Collab {
     /// Dial the session the host sent. The token goes in the first frame, never
     /// in the URL.
     #[cfg(target_arch = "wasm32")]
-    pub fn connect(session: &HostSession, actor: &str, client_id: &str) -> Result<Collab, String> {
+    pub fn connect(session: &HostSession, actor: &str, client_id: &str, document: &wordcraft_doc::Document) -> Result<Collab, String> {
         let role = Role::parse(session.role()).ok_or_else(|| format!("unknown collaboration role {:?}", session.role()))?;
+        let seed = serde_json::to_vec(document).map_err(|err| format!("cannot encode the open document: {err}"))?;
         let transport = socket::Transport::open(session.ws_url())?;
         Ok(Collab {
             client: Client::new(client_id),
@@ -217,6 +226,7 @@ impl Collab {
             copy_buffer: CopyBuffer::default(),
             snapshot: Vec::new(),
             snapshot_version: 0,
+            seed,
             last_presence_ms: 0.0,
             last_error: None,
             waiting: VecDeque::new(),
@@ -294,8 +304,9 @@ impl Collab {
             changed = true;
             match incoming {
                 socket::Incoming::Opened => {
-                    let auth = self.client.auth(&self.token, if self.client.version() > 0 { Some(self.client.version()) } else { None });
-                    let _ = self.send(&auth);
+                    for frame in self.join_frames() {
+                        let _ = self.send(&frame);
+                    }
                 }
                 socket::Incoming::Text(text) => {
                     changed |= self.on_text(&text, session);
@@ -522,6 +533,20 @@ impl Collab {
 
     fn request_snapshot(&mut self) {
         let _ = self.send(&ClientMsg::Resync { last_version: self.client.version() });
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    /// The frames that open a connection: the auth, followed by the document
+    /// this tab has open while nothing is accepted yet (ADR WC-0004). A room
+    /// that already holds state ignores the seed and answers with its snapshot.
+    fn join_frames(&self) -> Vec<ClientMsg> {
+        let seeding = self.client.version() == 0;
+        let last = if seeding { None } else { Some(self.client.version()) };
+        let mut frames = vec![self.client.auth(&self.token, last, seeding)];
+        if seeding {
+            frames.extend(wordcraft_collab_client::seed_frames(&self.seed));
+        }
+        frames
     }
 
     #[cfg(target_arch = "wasm32")]

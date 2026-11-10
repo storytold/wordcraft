@@ -79,6 +79,7 @@ first WebSocket frame must be `auth`.
 | `wordcraft_collab_presence_total` | presence frames |
 | `wordcraft_collab_stale_peers_total` | peers whose outbox overflowed and whose connection was closed (ADR WC-0002) |
 | `wordcraft_collab_corrupt_snapshots_total` | joins refused because the stored snapshot cannot be opened (ADR WC-0003) |
+| `wordcraft_collab_unseeded_joins_total` | joins refused because the document has no state here and the client brought no copy (ADR WC-0004) |
 
 A publication that is not counted in `cabinet_published_total` did not become a
 file version. `cabinet_errors_total` growing while `commits_total` grows is a
@@ -89,6 +90,15 @@ opened and its joins are refused (ADR WC-0003). The log line names the document
 and the file; the document is not lost — restore `model.json`/`meta` (or `prev/`)
 from a backup, or remove `<dataDir>/<doc>/` to start it blank on purpose. The
 counter is per refused join, so a client that keeps reconnecting keeps counting.
+
+`unseeded_joins_total` growing means a client asked for a document this server
+has never snapshotted without offering the document it has open (ADR WC-0004).
+That is the case a viewer, or an app older than the seeding step, meets: the
+room is not created and no empty page replaces anyone's document. The log line
+names the document. The fix is a client that opens the session with the document
+open — a writer seeds the room once, and every later join finds it. A data
+directory that was wiped or a room whose snapshot never reached the disk shows
+the same counter; reopening the document in the app seeds it again.
 
 ## Callback contract (mail-frontend M87)
 

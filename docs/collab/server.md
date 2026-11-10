@@ -71,6 +71,27 @@ not echoed back.
 again after a structural edit moves paths (ADR-0002). Operations are addressed
 by `(nodeId, off)`; index paths never travel as identity.
 
+**A room is never started blank** (ADR WC-0004). A client that opens a document
+this server has never snapshotted brings its copy: it sets `seed` in the auth
+frame and streams the document it has open, in the same JSON the server
+snapshots:
+
+```text
+C→S  {"type":"auth","token":"…","client_id":"alice","last_version":null,"seed":true}
+C→S  {"type":"seed","bytes":[…],"last":false}
+C→S  {"type":"seed","bytes":[…],"last":true}
+S→C  {"type":"welcome","session_id":"…","role":"editor","version":0,"epoch":0,…,"resync":false}
+S→C  {"type":"nodes","nodes":[…]}
+```
+
+The room is built from those bytes, so its first operation lands on the document
+the client is looking at. The seeding client is answered without a snapshot — it
+already holds that state — and keeps its document, selection and undo history. A
+join to a document with no stored state and no seed is refused `invalid` (not
+retryable) and opens no room; so is a seed from a viewer. A room that exists
+ignores the seed and answers with its snapshot, so a stale copy can never
+replace it.
+
 ## Snapshots on disk
 
 A room is snapshotted every 500 operations, after a commit, when its last peer
@@ -97,9 +118,13 @@ first join the store tells three states apart:
 
 | State | When | What the server does |
 |---|---|---|
-| absent | there is no `model.json` | a new room at version 0, as always |
+| absent | there is no `model.json` | the room is built from the copy the joining writer offers (ADR WC-0004); a join that offers none is refused `invalid` |
 | opens | the model is a `wordcraft_doc::Document` within the model bound and every known `meta` line parses | the room is restored from it |
 | damaged | `model.json` or `meta` is unreadable, `meta` has no `version`, a known `meta` value is not a number, a cabinet marker is half-written, the model does not parse or is over the bound | the join is refused `invalid` (not retryable), no room is created, nothing is written over the files |
+
+The absent case no longer means "an empty document": the room is the copy the
+first writer brings, and a client that brings none is refused rather than shown
+a blank page in place of its document (`unseeded_joins_total`).
 
 `dedup.json` and `source.docx` stay forgiving: a damaged window costs a
 duplicated answer across a restart and a missing source costs original markup on
@@ -111,8 +136,12 @@ start a blank document on purpose, remove `<dataDir>/<doc>/`.
 ## Limits (v1)
 
 - WebSocket frame ≤ 1 MiB.
-- Snapshot frames ≤ 512 KiB each.
-- A client must authenticate within 10 s.
+- Snapshot frames ≤ 512 KiB each; seed frames ≤ 128 KiB each (a byte array is
+  JSON-encoded as numbers, so a chunk stays well inside one frame).
+- A client must authenticate within 10 s, and send each seed frame within 10 s
+  once it announced a stream.
+- A seed is bounded by the 64 MiB model bound; a larger document is refused
+  rather than held.
 - Presence is expected at 5–10 Hz; the server does not journal it.
 - One room per document; a room is dropped when its last peer leaves.
 - A peer's outbox holds 512 frames (`Config::peer_queue`). A peer that stops
