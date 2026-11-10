@@ -1305,10 +1305,21 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line(&[(8.0, 8.0), (15.0, 15.0)]);
             pen.line(&[(11.0, 15.0), (15.0, 15.0), (15.0, 11.0)]);
         }
+        "ribbon-options" => {
+            // The strip at the top and the arrow pushing it down: Word's Ribbon Display Options.
+            pen.line(&[(4.0, 4.0), (16.0, 4.0)]);
+            pen.line(&[(7.0, 15.0), (10.0, 9.0), (13.0, 15.0)]);
+        }
         "pin" => {
             pen.line(&[(10.0, 12.0), (10.0, 18.0)]);
             pen.rect(7.0, 2.0, 13.0, 9.0, c);
             pen.line(&[(5.0, 12.0), (15.0, 12.0)]);
+        }
+        "unpin" => {
+            // The same pin lifted off the surface it was stuck in: the gap says it is not held.
+            pen.rect(7.0, 2.0, 13.0, 7.0, c);
+            pen.line(&[(10.0, 7.0), (10.0, 11.0)]);
+            pen.line(&[(5.0, 16.0), (15.0, 16.0)]);
         }
         "plus" => {
             pen.line(&[(10.0, 4.0), (10.0, 16.0)]);

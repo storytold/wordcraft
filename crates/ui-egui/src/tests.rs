@@ -299,17 +299,19 @@ fn press_ctrl_f1(h: &mut egui_kittest::Harness<'static, WordApp>) {
 }
 
 /// #1678: unbound, Ctrl+F1 collapses the ribbon and a second one brings it back (not on
-/// macOS, where Ctrl+F1 is the system's).
+/// macOS, where Ctrl+F1 is the system's). It shows the tabs alone: Word's Ribbon Display Options
+/// menu is the way to auto-hide them too.
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn ctrl_f1_through_the_app_collapses_the_ribbon() {
+    use crate::ribbon::RibbonDisplay;
     let mut h = canvas_harness();
-    assert!(!h.state().ui.ribbon_collapsed);
+    assert_eq!(h.state().ui.ribbon_display, RibbonDisplay::Commands);
     press_ctrl_f1(&mut h);
-    assert!(h.state().ui.ribbon_collapsed, "Ctrl+F1 collapses the ribbon");
+    assert_eq!(h.state().ui.ribbon_display, RibbonDisplay::Tabs, "Ctrl+F1 collapses the ribbon");
     assert!(!h.state().session.view.focus_mode);
     press_ctrl_f1(&mut h);
-    assert!(!h.state().ui.ribbon_collapsed, "and brings it back");
+    assert_eq!(h.state().ui.ribbon_display, RibbonDisplay::Commands, "and brings it back");
 }
 
 /// #1678: a Ctrl+F1 the user binds in Customize Keyboard runs their command through the app,
@@ -321,7 +323,7 @@ fn a_user_bound_ctrl_f1_through_the_app_runs_the_command() {
     h.state_mut().session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+F1": "view.focus"}}));
     press_ctrl_f1(&mut h);
     assert!(h.state().session.view.focus_mode, "the bound command ran");
-    assert!(!h.state().ui.ribbon_collapsed, "the ribbon is unchanged");
+    assert_eq!(h.state().ui.ribbon_display, crate::ribbon::RibbonDisplay::Commands, "the ribbon is unchanged");
 }
 
 /// The caption is Inter semibold, which has no Hebrew (or Arabic, Thai, …), so egui would

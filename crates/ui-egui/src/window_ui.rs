@@ -257,7 +257,8 @@ impl WordApp {
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
             // running.
-            ribbon_collapsed: _,
+            ribbon_display: _,
+            legacy_ribbon_collapsed: _,
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,

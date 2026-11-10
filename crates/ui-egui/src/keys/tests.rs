@@ -70,7 +70,7 @@ fn a_bound_ctrl_f1_beats_the_ribbon_toggle() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
     a.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&json!({"assigned": {"Mod+F1": "view.focus"}}));
     assert!(dispatch(&mut a, Key::F1, Modifiers { ctrl: true, command: true, ..Default::default() }));
-    assert!(a.session.view.focus_mode && !a.ui.ribbon_collapsed);
+    assert!(a.session.view.focus_mode && !a.ui.ribbon_display.collapsed());
 }
 
 /// #1678 review: only Ctrl+F1 gives way to a binding; a user's Alt+Q binding leaves Alt+Q

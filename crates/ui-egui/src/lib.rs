@@ -286,7 +286,14 @@ pub struct UiState {
     /// File › Print settings (#641); not saved.
     #[serde(skip)]
     pub print: print_page::PrintSettings,
-    pub ribbon_collapsed: bool,
+    /// How much of the ribbon is on screen: Word's Ribbon Display Options, the arrow at the tab
+    /// row's far end. An unknown saved value reads the default.
+    #[serde(deserialize_with = "lenient_ribbon_display")]
+    pub ribbon_display: crate::ribbon::RibbonDisplay,
+    /// The collapse switch `ui.json` held before the ribbon display options: read once to migrate
+    /// ([`WordApp::apply_prefs`]), never written. `true` shows the tabs alone.
+    #[serde(rename = "ribbonCollapsed", skip_serializing)]
+    pub(crate) legacy_ribbon_collapsed: Option<bool>,
     /// The Quick Access Toolbar shows in the title bar (#1945). Its menu's Hide Quick Access
     /// Toolbar takes it away; Show Quick Access Toolbar (the ribbon's right-click menu, Customize
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
@@ -451,7 +458,8 @@ impl Default for UiState {
             backstage: false,
             backstage_page: "home".into(),
             print: print_page::PrintSettings::default(),
-            ribbon_collapsed: false,
+            ribbon_display: crate::ribbon::RibbonDisplay::default(),
+            legacy_ribbon_collapsed: None,
             quick_access_toolbar: true,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
@@ -560,6 +568,12 @@ pub fn recent_fonts_from<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<St
         }
     }
     out
+}
+
+/// An unknown saved ribbon display reads as the default rather than discarding the whole `ui.json`.
+fn lenient_ribbon_display<'de, D: serde::Deserializer<'de>>(d: D) -> Result<crate::ribbon::RibbonDisplay, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_str().and_then(crate::ribbon::RibbonDisplay::from_code).unwrap_or_default())
 }
 
 /// An unknown saved position reads as the default.

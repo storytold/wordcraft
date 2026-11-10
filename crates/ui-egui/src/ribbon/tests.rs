@@ -693,9 +693,11 @@ fn tab_strip_never_overlaps_the_right_buttons() {
                 app,
             );
             h.run_steps(3);
-            let buttons: Vec<Rect> =
-                [tl!("Comments"), tl!("Editing"), tl!("Share")].iter().filter_map(|b| h.query_by_label(b).map(|n| n.rect())).collect();
-            assert_eq!(buttons.len(), 3, "{lang} {width}: the three buttons are on the strip");
+            let buttons: Vec<Rect> = [tl!("Comments"), tl!("Editing"), tl!("Share"), tl!("Hide the ribbon"), tl!("Ribbon Display Options")]
+                .iter()
+                .filter_map(|b| h.query_by_label(b).map(|n| n.rect()))
+                .collect();
+            assert_eq!(buttons.len(), 5, "{lang} {width}: the five buttons are on the strip");
             assert!(buttons.iter().all(|b| b.right() <= width + 0.5 && b.left() >= 0.0), "{lang} {width}: buttons inside {buttons:?}");
             for tab in crate::ribbon::TABS.iter().copied().chain(["Table Design", "Table Layout"]) {
                 // A group folded into a button can share the tab's name (Draw): only the node on
@@ -1091,4 +1093,207 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     let before = (size(&a), a.session.undo_depth());
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
+}
+
+/// The peek's state machine: a collapsed ribbon shows its commands while the pointer is on a tab
+/// or over the commands themselves, and the click that collapsed it — a double-click on a tab,
+/// the pin — doesn't peek them straight back: the pointer has to leave the strip once first.
+#[test]
+fn a_collapsed_ribbon_peek_needs_the_pointer_to_have_been_away() {
+    assert_eq!(peek_state(false, false, true), (false, true), "away from the strip: no peek");
+    assert_eq!(peek_state(false, true, true), (true, true), "on a tab: peek");
+    assert_eq!(peek_state(true, true, true), (false, false), "the frame the collapse lands in: not yet");
+    assert_eq!(peek_state(false, true, false), (false, false), "still on that tab, disallowed: no peek");
+    assert_eq!(peek_state(false, false, false), (false, true), "leaving the strip allows it again");
+    assert_eq!(peek_state(false, true, true), (true, true), "and coming back peeks");
+}
+
+/// Word's pin at the far end of the tab row puts the commands away and keeps them there; with
+/// them away, hovering a tab peeks that tab's commands back while the pointer follows them or a
+/// menu of theirs, and leaves them when it goes to the page. The pin is the mouse and touch way
+/// to collapse: until it, the only ways were Ctrl+F1 and a double-click on a tab, neither of
+/// which shows on screen.
+#[test]
+fn the_pin_collapses_the_ribbon_and_a_hovered_tab_peeks_it_open() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Bold").is_some(), "the commands show by default");
+    let pin = h.get_by_label("Hide the ribbon").rect();
+    let share = h.get_by_label("Share").rect();
+    assert!(
+        (pin.center().y - share.center().y).abs() < 1.0 && pin.right() > share.right(),
+        "the pin is at the tab row's far end, right of Share: {pin:?} {share:?}"
+    );
+    h.get_by_label("Hide the ribbon").click();
+    h.run_steps(4);
+    assert!(h.state().ui.ribbon_display.collapsed(), "the pin puts the commands away");
+    assert!(h.query_by_label("Bold").is_none(), "and no peek, since the pointer is on the pin");
+    assert!(h.query_by_label("Insert").is_some(), "the tabs stay");
+    assert!(h.query_by_label("Show the ribbon").is_some(), "the pin asks to show the commands again");
+    // Hovering a tab peeks that tab's own commands, as Word does: the pointer is on Insert, so
+    // Insert's come down and Home's don't. A ribbon command is found by its button, since a group
+    // of the same name adds a plain label.
+    let button = |h: &egui_kittest::Harness<'_, WordApp>, label: &str| {
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).last().unwrap_or_else(|| panic!("no {label} button")).rect()
+    };
+    let commands =
+        |h: &egui_kittest::Harness<'_, WordApp>, label: &str| h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).next().is_some();
+    let tab = h.get_by_label("Insert").rect().center();
+    h.event(egui::Event::PointerMoved(tab));
+    h.run_steps(4);
+    assert!(commands(&h, "Bookmark"), "a hovered tab peeks its own commands");
+    assert!(!commands(&h, "Bold"), "and not the commands of the tab the window is on");
+    // Following them down keeps them…
+    let bookmark = button(&h, "Bookmark").center();
+    h.event(egui::Event::PointerMoved(bookmark));
+    h.run_steps(4);
+    assert!(commands(&h, "Bookmark"), "the pointer is inside the peek");
+    // …and a menu one of them opened keeps the peek too: following it down must not close both.
+    let header = button(&h, "Header");
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, "Header").last().unwrap().click();
+    h.run_steps(4);
+    h.event(egui::Event::PointerMoved(pos2(header.center().x, header.bottom() + 24.0)));
+    h.run_steps(4);
+    assert!(commands(&h, "Bookmark"), "the pointer is in a menu the peek opened");
+    // …and going to the page puts them away again.
+    h.event(egui::Event::PointerMoved(pos2(640.0, 700.0)));
+    h.run_steps(4);
+    assert!(!commands(&h, "Bookmark"), "leaving for the page ends the peek");
+    assert!(h.state().ui.ribbon_display.collapsed(), "the ribbon stays as the pin left it");
+    h.get_by_label("Show the ribbon").click();
+    h.run_steps(4);
+    assert!(!h.state().ui.ribbon_display.collapsed(), "the pin pins them back");
+    assert!(h.query_by_label("Bold").is_some(), "and they stay without the pointer anywhere near");
+}
+
+/// The ribbon's three settings and where each one draws (pure, tested). A peek is a cover, never a
+/// shove: the page keeps its place while the commands are down.
+#[test]
+fn each_ribbon_display_takes_its_place() {
+    use RibbonDisplay::*;
+    assert_eq!(place(Commands, false), Place::Full);
+    assert_eq!(place(Commands, true), Place::Full, "shown, there is nothing to peek");
+    assert_eq!(place(Tabs, false), Place::Strip, "the tabs stay");
+    assert_eq!(place(Tabs, true), Place::StripPeek, "and the commands come down over the page");
+    assert_eq!(place(AutoHide, false), Place::Hidden, "auto-hide takes the tabs with it");
+    assert_eq!(place(AutoHide, true), Place::Reveal, "the top of the window brings both down");
+    // The band is the top few pixels of the space the ribbon would take; nothing else reveals.
+    let top = 100.0;
+    assert!(at_top(Some(pos2(400.0, top - 2.0)), top), "pushed against the edge");
+    assert!(at_top(Some(pos2(400.0, top + REVEAL_H - 1.0)), top), "just inside the band");
+    assert!(!at_top(Some(pos2(400.0, top + REVEAL_H + 1.0)), top), "a pixel past it, no");
+    assert!(!at_top(Some(pos2(400.0, f32::NAN)), top), "and junk never does");
+    assert!(!at_top(None, top), "no pointer, no reveal");
+    assert!(AutoHide.collapsed() && Tabs.collapsed() && !Commands.collapsed());
+    assert_eq!(RibbonDisplay::ALL, [AutoHide, Tabs, Commands], "in Word's menu order");
+}
+
+/// Word's Ribbon Display Options arrow at the tab row's far end: Auto Hide takes the tab row away
+/// with the commands and the top of the window brings the ribbon down over the page, Show Tabs
+/// keeps the row and peeks the commands, and Show Tabs and Commands puts them back in the layout,
+/// where the page gives up its room. The pin only ever toggles the last two.
+#[test]
+fn the_ribbon_display_options_menu_hides_the_tabs_and_the_top_of_the_window_brings_them_back() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let commands =
+        |h: &egui_kittest::Harness<'_, WordApp>, label: &str| h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).next().is_some();
+    let page = |h: &egui_kittest::Harness<'_, WordApp>| h.state().canvas.viewport.map(|v| v.min.y).unwrap_or_default();
+    let options = h.get_by_label("Ribbon Display Options").rect();
+    let pin = h.get_by_label("Hide the ribbon").rect();
+    assert!(
+        (options.center().y - pin.center().y).abs() < 1.0 && options.right() > pin.right(),
+        "the arrow is at the row's far end: {options:?} {pin:?}"
+    );
+    let full = page(&h);
+    assert!(commands(&h, "Bold"), "the ribbon shows its tabs and its commands");
+    // Auto Hide Ribbon: the whole ribbon goes, and the page takes its room.
+    h.get_by_label("Ribbon Display Options").click();
+    h.run_steps(3);
+    h.get_by_label("Auto Hide Ribbon").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.ribbon_display, RibbonDisplay::AutoHide, "the menu sets the display");
+    assert!(h.query_by_label("Insert").is_none(), "auto-hide takes the tab row with the commands");
+    assert!(!commands(&h, "Bold"), "and nothing stays on screen while the pointer is in the page");
+    let hidden = page(&h);
+    assert!(hidden < full, "the page takes the room the ribbon had: {hidden} from {full}");
+    // The pointer pushed to the top brings it all down, over the page rather than pushing it back.
+    h.event(egui::Event::PointerMoved(pos2(640.0, 2.0)));
+    h.run_steps(4);
+    assert!(h.query_by_label("Insert").is_some(), "the top band reveals the tabs");
+    assert!(commands(&h, "Bold"), "and the commands under them");
+    assert_eq!(page(&h), hidden, "the revealed ribbon covers the page: {} vs {hidden}", page(&h));
+    // Following it down stays inside the ribbon, so the arrow can be reached again.
+    h.event(egui::Event::PointerMoved(pos2(options.center().x, options.center().y)));
+    h.run_steps(4);
+    assert!(h.query_by_label("Insert").is_some(), "moving down into the revealed ribbon keeps it open");
+    // Show Tabs: the row comes back into the layout, the commands stay away.
+    h.get_by_label("Ribbon Display Options").click();
+    h.run_steps(3);
+    h.get_by_label("Show Tabs").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.ribbon_display, RibbonDisplay::Tabs, "the second item");
+    assert!(h.query_by_label("Insert").is_some(), "the tab row is on screen again");
+    assert!(!commands(&h, "Bold"), "and the commands are away until a tab is hovered");
+    let strip = page(&h);
+    assert!(hidden < strip && strip < full, "the layout keeps the row's room only: {hidden} < {strip} < {full}");
+    // And the pin toggles the two shown settings, never reaching auto-hide.
+    h.get_by_label("Show the ribbon").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.ribbon_display, RibbonDisplay::Commands, "the pin pins the commands back");
+    assert!(commands(&h, "Bold"), "in the layout, where the page gives up its room again");
+    assert_eq!(page(&h), full, "exactly where it was before the menu");
+}
+
+/// `ui.ribbonDisplay` and `ui.collapseRibbon` report the same setting, junk is refused without
+/// moving it, it is kept between runs, and a `ui.json` from when the ribbon only had a collapse
+/// switch comes back showing the tabs, which is what that switch always meant.
+#[test]
+fn the_ribbon_display_command_reads_sets_and_migrates() {
+    use RibbonDisplay::*;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    assert_eq!(a.run("ui.ribbonDisplay", json!({})).unwrap(), json!({"ribbonDisplay": "commands", "collapsed": false}), "no value reads it");
+    for junk in [json!({"value": "no"}), json!({"value": 0}), json!({"value": null}), json!({"value": ["tabs"]})] {
+        assert!(a.run("ui.ribbonDisplay", junk.clone()).is_err(), "{junk}");
+    }
+    assert_eq!(a.ui.ribbon_display, Commands, "a rejected value keeps the setting");
+    assert_eq!(a.run("ui.ribbonDisplay", json!({"value": "autoHide"})).unwrap()["ribbonDisplay"], "autoHide");
+    assert_eq!(a.run("ui.ribbonDisplay", json!({"value": " TABS "})).unwrap()["collapsed"], true, "trimmed, and the case doesn't matter");
+    assert_eq!(
+        a.run("ui.collapseRibbon", json!({})).unwrap(),
+        json!({"ribbonDisplay": "commands", "collapsed": false}),
+        "away, the pin shows the ribbon"
+    );
+    assert_eq!(a.run("ui.collapseRibbon", json!({})).unwrap()["ribbonDisplay"], "tabs", "and the next click puts the commands away");
+    assert_eq!(a.run("ui.collapseRibbon", json!({})).unwrap()["ribbonDisplay"], "commands");
+    let saved = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved.contains(r#""ribbonDisplay":"commands""#) && !saved.contains("ribbonCollapsed"), "{saved}");
+    for (saved, want) in [(r#"{"ribbonCollapsed": true}"#, Tabs), (r#"{"ribbonCollapsed": false}"#, Commands)] {
+        let mut b = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        b.apply_prefs(serde_json::from_str(saved).unwrap());
+        assert_eq!(b.ui.ribbon_display, want, "{saved}");
+    }
+    let mut c = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    c.apply_prefs(serde_json::from_str(r#"{"ribbonDisplay": "nonsense", "quickAccessToolbar": false}"#).unwrap());
+    assert_eq!((c.ui.ribbon_display, c.ui.quick_access_toolbar), (Commands, false), "junk reads the default and keeps the rest");
 }

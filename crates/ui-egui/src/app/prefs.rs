@@ -41,6 +41,11 @@ impl WordApp {
         if let Some(dark) = self.ui.legacy_dark.take() {
             self.ui.theme = if dark { theme::Appearance::Dark } else { theme::Appearance::Light };
         }
+        // A `ui.json` from before the ribbon display options: its collapse switch keeps the tabs
+        // and puts the commands away, which is what it always meant.
+        if let Some(true) = self.ui.legacy_ribbon_collapsed.take() {
+            self.ui.ribbon_display = crate::ribbon::RibbonDisplay::Tabs;
+        }
         // A `ui.json` from before #822: its interface size was on top of the display scale, so it
         // becomes absolute on the first frame that knows that scale (`logic`). A chosen `uiScale`
         // (the current key) wins; "auto" can't be told from a missing key, so the old size does.

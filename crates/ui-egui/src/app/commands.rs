@@ -578,8 +578,30 @@ impl WordApp {
             }
             "ui.paneDock" => return Some(panes::dock_command(self, p)),
             "ui.collapseRibbon" => {
-                self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
-                json!({"collapsed": self.ui.ribbon_collapsed})
+                // The pin, double-clicking a tab, Ctrl+F1 and ⌘⌥R: the commands go away and the tabs
+                // stay. Auto-hide, which puts the tabs away too, is `ui.ribbonDisplay`.
+                self.ui.ribbon_display = if self.ui.ribbon_display == crate::ribbon::RibbonDisplay::Commands {
+                    crate::ribbon::RibbonDisplay::Tabs
+                } else {
+                    crate::ribbon::RibbonDisplay::Commands
+                };
+                ribbon_display_result(self)
+            }
+            "ui.ribbonDisplay" => {
+                // Word's Ribbon Display Options (the arrow at the tab row's far end): `autoHide`
+                // hides the tabs with the commands and brings both down when the pointer reaches the
+                // top of the window, `tabs` keeps the tab row and peeks a hovered tab's commands
+                // over the page, `commands` shows the ribbon as it is. No value reads it.
+                if let Some(v) = p.get("value") {
+                    let Some(code) = v.as_str() else {
+                        return Some(Err("`value` must be autoHide, tabs or commands".into()));
+                    };
+                    match crate::ribbon::RibbonDisplay::from_code(code) {
+                        Some(d) => self.ui.ribbon_display = d,
+                        None => return Some(Err("`value` must be autoHide, tabs or commands".into())),
+                    }
+                }
+                ribbon_display_result(self)
             }
             "ui.focusRibbon" => {
                 // Focus's "⋯" (#1678): `value` true drops the ribbon down over the page, false
@@ -1104,6 +1126,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.dialog"
             | "ui.closeDialog"
             | "ui.collapseRibbon"
+            | "ui.ribbonDisplay"
             | "ui.quickAccessToolbar"
             | "ui.keytips"
             | "ui.dark"
@@ -1125,6 +1148,12 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.statusCount"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
+}
+
+/// What both ribbon commands report: the display Word's menu sets, and the collapse switch the pin,
+/// double-clicking a tab and Ctrl+F1 have always reported.
+fn ribbon_display_result(app: &WordApp) -> Value {
+    json!({"ribbonDisplay": app.ui.ribbon_display.code(), "collapsed": app.ui.ribbon_display.collapsed()})
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being
