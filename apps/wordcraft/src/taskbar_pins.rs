@@ -70,7 +70,7 @@ fn name_string(data: &[u8]) -> Option<String> {
     let count = usize::from(u16_at(data, at)?);
     let text = data.get(at + 2..)?;
     if flags & IS_UNICODE != 0 {
-        let units: Vec<u16> = text.get(..count * 2)?.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let units: Vec<u16> = text.get(..count * 2)?.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
         String::from_utf16(&units).ok()
     } else {
         Some(String::from_utf8_lossy(text.get(..count)?).into_owned())
@@ -281,7 +281,7 @@ mod tests {
     fn target(data: &[u8]) -> String {
         let info = &data[HEADER_SIZE..];
         let at = u32_at(info, 0x1C).unwrap() as usize;
-        let units: Vec<u16> = info[at..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
+        let units: Vec<u16> = info[at..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|u| *u != 0).collect();
         String::from_utf16(&units).unwrap()
     }
 
@@ -310,7 +310,7 @@ mod tests {
         let mut strings = Vec::new();
         for _ in 0..3 {
             let n = usize::from(u16_at(&link, at).unwrap());
-            let units: Vec<u16> = link[at + 2..at + 2 + n * 2].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+            let units: Vec<u16> = link[at + 2..at + 2 + n * 2].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
             strings.push(String::from_utf16(&units).unwrap());
             at += 2 + n * 2;
         }
