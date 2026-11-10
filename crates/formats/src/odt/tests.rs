@@ -448,8 +448,15 @@ fn narrow_table_columns_keep_their_width() {
         r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Table1.A" style:family="table-column"><style:table-column-properties style:column-width="3pt"/></style:style><style:style style:name="Table1.B" style:family="table-column"><style:table-column-properties style:column-width="100pt"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:style-name="Table1.A"/><table:table-column table:style-name="Table1.B"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
     );
     let doc = import(&package(&content, None)).unwrap();
-    let grid = doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.clone()) } else { None });
-    assert_eq!(grid, Some(vec![3.0, 100.0]));
+    let grid_of = |doc: &wordcraft_doc::Document| {
+        doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.clone()) } else { None })
+    };
+    assert_eq!(grid_of(&doc), Some(vec![3.0, 100.0]));
+    // Saved and opened again, the narrow column is still the file's width.
+    let back = import(&export(&doc).unwrap()).unwrap();
+    let grid = grid_of(&back).unwrap();
+    assert_eq!(grid.len(), 2, "{grid:?}");
+    assert!((grid[0] - 3.0).abs() < 0.01 && (grid[1] - 100.0).abs() < 0.01, "{grid:?}");
 }
 
 #[test]
