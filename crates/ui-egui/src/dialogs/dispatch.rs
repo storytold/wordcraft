@@ -982,6 +982,8 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ok || cancel
 }
 
+/// Modify Style: a style's name, fonts, size, colour, spacing, bold and italic. OK applies them
+/// with `styles.modify`; closing goes back to the dialog it was opened from, if any.
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let Dialog::ModifyStyle { back, resume, id, name, font, font_ea, font_ea_was, asian, size, bold, italic, color, before, after } = d else {
         return false;
@@ -1020,6 +1022,8 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
                     if f == crate::widgets::ADD_FONT {
                         let _ = app.run("font.add", json!({}));
+                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                        let _ = app.run("font.loadSystem", json!({}));
                     } else {
                         *font = app.previews.font_stored(&f);
                     }

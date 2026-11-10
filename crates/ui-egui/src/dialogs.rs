@@ -881,6 +881,8 @@ impl Dialog {
         Dialog::PasteSpecial { formats, choice: 0, payload: kept, note }
     }
 
+    /// Modify Style for the style `id`, showing its formatting as resolved through the styles it
+    /// is based on. `None` when there is no such style.
     pub fn modify_style(app: &WordApp, id: &str) -> Option<Dialog> {
         let st = app.session.doc.styles.get(id)?;
         let rc = app.session.doc.styles.resolve_char(
