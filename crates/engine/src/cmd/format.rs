@@ -164,7 +164,8 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 /// The selection to format: the selection, or the word around a collapsed caret (Word
-/// formats the whole word when the caret is inside one). `None` = caret between words.
+/// formats the whole word when the caret is inside one). `None` = caret between words. The
+/// word's trailing space is left unformatted, as Word's smart selection does (#2927).
 fn target(s: &Session) -> Option<(Pos, Pos)> {
     let (a, b) = s.sel.ordered();
     if a != b {
@@ -175,10 +176,8 @@ fn target(s: &Session) -> Option<(Pos, Pos)> {
     let before = p.text.get(..a.off)?.chars().next_back();
     let after = p.text.get(a.off..)?.chars().next();
     if before.is_some_and(is_w) && after.is_some_and(is_w) {
-        let (x, y) = p.word_at(a.off);
-        // word_at includes trailing spaces; Word formats just the word.
-        let word_end = p.text.get(x..y).map(|w| x + w.trim_end().len()).unwrap_or(y);
-        return Some((Pos { off: x, ..a.clone() }, Pos { off: word_end, ..a }));
+        let (x, y) = p.word_without_trailing_spaces_at(a.off);
+        return Some((Pos { off: x, ..a.clone() }, Pos { off: y, ..a }));
     }
     None
 }

@@ -844,10 +844,11 @@ fn paste_format(s: &mut Session, _: &Value) -> CmdResult {
     let Some((chr, para, sticky)) = s.painter.clone() else { return Err(CmdError::Failed("no formatting copied".into())) };
     let (a, b) = s.sel.ordered();
     if a == b {
-        // No selection: apply paragraph formatting (and word formatting like Word).
+        // No selection: apply paragraph formatting (and word formatting like Word). The word's
+        // trailing space is left unformatted, as Word's smart selection does (#2927).
         let f = s.sel.focus.clone();
         if let Some(pp) = s.doc.para_at(&f) {
-            let (x, y) = pp.word_at(f.off);
+            let (x, y) = pp.word_without_trailing_spaces_at(f.off);
             s.doc.format_range(&Pos { off: x, ..f.clone() }, &Pos { off: y, ..f.clone() }, &|c| *c = chr.cleared().overlaid(&chr))?;
         }
         s.doc.format_paragraphs(&a, &b, &|p| *p = para.clone())?;

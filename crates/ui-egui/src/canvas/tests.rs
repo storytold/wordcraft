@@ -672,7 +672,8 @@ fn multi_click_drag_extends_by_units() {
     multi_drag(&mut h, from, to, 3);
     let sel = h.state().session.sel.clone();
     assert_eq!((sel.anchor, sel.focus), (Pos::body(1, 0), Pos::body(2, 10)), "whole paragraphs");
-    // A plain double-click (no drag) still selects just the word.
+    // A plain double-click (no drag) selects the word and the space after it, as Word's
+    // default does (#2927); the drag extends the same way.
     h.state_mut().run("select.collapse", json!({})).unwrap();
     for _ in 0..40 {
         h.step();

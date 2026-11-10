@@ -10,8 +10,9 @@ pub(super) fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
         // Comment on the word at the caret.
         match s.doc.para_at(&a) {
             Some(para) if !para.is_empty() => {
-                let (x, y) = para.word_at(a.off);
-                let y = para.text.get(x..y).map(|w| x + w.trim_end().len()).unwrap_or(y);
+                // The word, not its trailing space: a comment on a collapsed caret never
+                // shades the space after the word (#2927).
+                let (x, y) = para.word_without_trailing_spaces_at(a.off);
                 (Pos { off: x, ..a.clone() }, Pos { off: y, ..a })
             }
             _ => (a.clone(), a),

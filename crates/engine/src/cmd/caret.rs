@@ -339,7 +339,8 @@ fn select_range(s: &mut Session, v: &Value) -> CmdResult {
 
 /// A unit a selection grows by: what a double-click (word), Ctrl/⌘+click (sentence) or
 /// triple-click (paragraph) selects, and what dragging after it extends by. A click in the
-/// selection bar (the left margin) selects a line; triple-click there the whole document.
+/// selection bar (the left margin) selects a line; triple-click there the whole document. A
+/// double-click takes the word and the spaces after it, as Word's default does (#2927).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
     Word,
@@ -448,7 +449,8 @@ fn select_line(s: &mut Session, v: &Value) -> CmdResult {
 /// Drag after a double-click (words), triple-click (paragraphs) or Ctrl/⌘+click (sentences):
 /// the selection keeps the unit first selected (`start`..`end`) and grows by whole units to
 /// the one under `pos`. Dragging forward anchors at the unit's start; dragging back before it
-/// anchors at its end, as in Word.
+/// anchors at its end, as in Word. Words come with their trailing spaces, so the separators
+/// join the words the drag takes (#2927).
 fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     let unit = p::str(v, "unit")
         .and_then(Unit::parse)
