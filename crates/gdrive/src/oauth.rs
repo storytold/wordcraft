@@ -101,6 +101,38 @@ impl ClientConfig {
     }
 }
 
+/// The folder a browser saves downloads to: `~/Downloads` (`%USERPROFILE%\\Downloads` on Windows).
+pub fn downloads_dir() -> Option<std::path::PathBuf> {
+    let home = if cfg!(windows) { std::env::var_os("USERPROFILE") } else { std::env::var_os("HOME") };
+    home.filter(|h| !h.is_empty()).map(|h| std::path::PathBuf::from(h).join("Downloads"))
+}
+
+/// The newest `client_secret_*.json` in `dir`: the name Google Cloud console gives a downloaded
+/// OAuth client. `None` when there is none.
+pub fn newest_client_file(dir: &Path) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_str().is_some_and(|n| n.starts_with("client_secret_") && n.ends_with(".json")))
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
+        .max_by_key(|(modified, _)| *modified)
+        .map(|(_, path)| path)
+}
+
+/// Imports a client JSON downloaded from Google Cloud console (`{"installed": {…}}`) into
+/// `dir`'s `google-drive.json`: checked first, so a wrong file changes nothing.
+pub fn import_client(dir: &Path, file: &Path) -> Result<ClientConfig> {
+    let text = match std::fs::read(file) {
+        Ok(b) if b.len() <= 64 * 1024 => b,
+        Ok(_) => return Err(Error::NotConfigured(format!("{} is too large for an OAuth client file", file.display()))),
+        Err(e) => return Err(Error::NotConfigured(format!("couldn't read {}: {e}", file.display()))),
+    };
+    let cfg = ClientConfig::from_json(&text)?;
+    write_client(dir, &cfg.client_id, cfg.client_secret.as_deref())?;
+    Ok(cfg)
+}
+
 /// Writes `google-drive.json` in `dir` (File › Options › Accounts): the client ID and secret,
 /// checked first, keeping a `scope` the file already had. Owner-only on Unix.
 pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) -> Result<()> {

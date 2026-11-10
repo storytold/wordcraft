@@ -474,3 +474,30 @@ fn export_names_get_their_types() {
         assert_eq!(drive::mime_for(name), mime, "{name}");
     }
 }
+
+#[test]
+fn a_downloaded_client_file_is_found_and_imported() {
+    let root = std::env::temp_dir().join(format!("wordcraft-gdrive-import-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let downloads = root.join("Downloads");
+    let profile = root.join("profile");
+    std::fs::create_dir_all(&downloads).unwrap();
+    assert_eq!(oauth::newest_client_file(&downloads), None, "nothing to import");
+    std::fs::write(downloads.join("notes.json"), b"{}").unwrap();
+    let older = downloads.join("client_secret_1-old.apps.googleusercontent.com.json");
+    std::fs::write(&older, br#"{"installed": {"client_id": "1-old.apps.googleusercontent.com", "client_secret": "a"}}"#).unwrap();
+    std::thread::sleep(Duration::from_millis(20));
+    let newer = downloads.join("client_secret_2-new.apps.googleusercontent.com.json");
+    std::fs::write(&newer, br#"{"installed": {"client_id": "2-new.apps.googleusercontent.com", "client_secret": "b"}}"#).unwrap();
+    assert_eq!(oauth::newest_client_file(&downloads).as_deref(), Some(newer.as_path()), "the newest client file, never other JSON");
+
+    let cfg = oauth::import_client(&profile, &newer).unwrap();
+    assert_eq!(cfg.client_id, "2-new.apps.googleusercontent.com");
+    assert_eq!(ClientConfig::load(Some(&profile)).unwrap().client_secret.as_deref(), Some("b"));
+
+    // A file that isn't a client changes nothing.
+    std::fs::write(downloads.join("client_secret_bad.json"), b"{\"web\": 1}").unwrap();
+    assert!(oauth::import_client(&profile, &downloads.join("client_secret_bad.json")).is_err());
+    assert_eq!(ClientConfig::load(Some(&profile)).unwrap().client_id, "2-new.apps.googleusercontent.com");
+    let _ = std::fs::remove_dir_all(&root);
+}

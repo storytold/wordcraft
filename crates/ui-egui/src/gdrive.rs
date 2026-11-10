@@ -251,8 +251,9 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
     ui.label(if configured {
         tl!("✓ Registered. Enter a new client below only to replace it.")
     } else {
-        tl!("Not registered yet. See Google Drive in WordCraft's documentation for how to create the client.")
+        tl!("Not registered yet: follow the guided setup below.")
     });
+    setup_guide(app, ui, !configured);
     let id_key = egui::Id::unique("accounts_google_client_id");
     let secret_key = egui::Id::unique("accounts_google_client_secret");
     let mut id = ui.data(|d| d.get_temp::<String>(id_key)).unwrap_or_default();
@@ -316,6 +317,40 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
             ui.label(tl!("Checking your Google account…"));
         }
     }
+}
+
+/// Google Cloud console pages for registering WordCraft (Google offers no API to create a
+/// desktop OAuth client, so these steps happen in the console; Import then fills the fields).
+const SETUP_STEPS: [(&str, &str, &str); 5] = [
+    ("①", "Create a project (or pick one)", "https://console.cloud.google.com/projectcreate"),
+    ("②", "Enable the Google Drive API", "https://console.cloud.google.com/apis/library/drive.googleapis.com"),
+    ("③", "Set up the consent screen: app name and your email (Branding)", "https://console.cloud.google.com/auth/branding"),
+    ("④", "Audience: External, Testing, and add your own Google account as a test user", "https://console.cloud.google.com/auth/audience"),
+    ("⑤", "Create a client of type Desktop app, then click Download JSON", "https://console.cloud.google.com/auth/clients/create"),
+];
+
+/// Step 1's guided setup: links to each Google Cloud console page, then Import, which reads the
+/// client file just downloaded so nobody copies an ID or a secret by hand.
+fn setup_guide(app: &mut WordApp, ui: &mut egui::Ui, open: bool) {
+    egui::CollapsingHeader::new(tl!("Guided setup with Google Cloud (about 5 minutes)")).default_open(open).show(ui, |ui| {
+        for (n, what, url) in SETUP_STEPS {
+            ui.horizontal(|ui| {
+                ui.label(n);
+                ui.label(tl!(what));
+                ui.hyperlink_to(tl!("Open"), url);
+            });
+        }
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button(tl!("Import downloaded file")).clicked() {
+                match app.run("ui.drive.importClient", json!({})) {
+                    Ok(_) => app.status(tl!("Imported the app registration and removed the downloaded file").to_string()),
+                    Err(e) => app.status(e),
+                }
+            }
+            ui.label(tl!("Reads the newest client_secret_….json in Downloads, then deletes it."));
+        });
+    });
 }
 
 /// File › Google Drive.
@@ -633,6 +668,26 @@ mod native {
                 };
                 wordcraft_gdrive::write_client(&dir, id, secret).map_err(|e| e.to_string())?;
                 run(app, "reload", &json!({}))
+            }
+            // Accounts › Guided setup › Import: the client JSON Google Cloud console downloaded.
+            // Without `path`, the newest `client_secret_*.json` in Downloads, deleted once
+            // imported (it holds the secret); with `path`, that file, deleted only with `remove`.
+            "importClient" => {
+                let Some(dir) = app.services.drive_profile.clone() else {
+                    return Err("Google Drive works with the WordCraft desktop app".into());
+                };
+                let (file, remove) = match params.get("path") {
+                    None | Some(Value::Null) => {
+                        let found = wordcraft_gdrive::downloads_dir().and_then(|d| wordcraft_gdrive::newest_client_file(&d));
+                        (found.ok_or("no client_secret_….json in Downloads: download the client's JSON first (step ⑤)")?, true)
+                    }
+                    Some(Value::String(p)) => (std::path::PathBuf::from(p), params.get("remove").and_then(Value::as_bool) == Some(true)),
+                    Some(_) => return Err("`path` must be a string".into()),
+                };
+                wordcraft_gdrive::import_client(&dir, &file).map_err(|e| e.to_string())?;
+                let removed = remove && std::fs::remove_file(&file).is_ok();
+                run(app, "reload", &json!({}))?;
+                Ok(json!({"imported": file.file_name().map(|n| n.to_string_lossy().into_owned()), "removed": removed}))
             }
             // Starts the worker (the page does when it opens): it reads the OAuth client and the
             // keychain, nothing else.
