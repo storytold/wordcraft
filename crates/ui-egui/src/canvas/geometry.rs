@@ -163,6 +163,11 @@ pub(super) fn place_pages(sizes: &[(f32, f32)], markup: f32, scale: f32, cols: u
     (rects, vec2(content_w, y.max(avail.y)))
 }
 
+/// Draft can fit its fixed-width column, while Web and Outline keep their manual zoom.
+fn supports_fit_zoom(mode: wordcraft_layout::ViewMode, fit: &str) -> bool {
+    mode == wordcraft_layout::ViewMode::Print || (mode == wordcraft_layout::ViewMode::Draft && fit == "pageWidth")
+}
+
 pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
     let v = &app.session.view;
     let markup = markup_width(app);
@@ -178,14 +183,13 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
         let bands = rects.iter().map(|r| (0.0, r.height())).collect();
         return Geometry { rects, size, scale, cols: sizes.len().max(1), bands };
     }
-    match v.fit.as_str() {
-        "pageWidth" => scale = ((avail.x - 2.0 * GAP - 20.0) / maxw).clamp(0.1, 6.0),
-        "onePage" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 2.0 * GAP) / maxw).clamp(0.05, 6.0),
-        "multiplePages" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 3.0 * GAP) / (2.0 * maxw)).clamp(0.05, 6.0),
-        _ => {}
-    }
-    if web {
-        scale = PX_PER_PT * v.zoom.clamp(0.1, 5.0);
+    if supports_fit_zoom(v.mode, &v.fit) {
+        match v.fit.as_str() {
+            "pageWidth" => scale = ((avail.x - 2.0 * GAP - 20.0) / maxw).clamp(0.1, 6.0),
+            "onePage" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 2.0 * GAP) / maxw).clamp(0.05, 6.0),
+            "multiplePages" => scale = ((avail.y - 2.0 * GAP) / maxh).min((avail.x - 3.0 * GAP) / (2.0 * maxw)).clamp(0.05, 6.0),
+            _ => {}
+        }
     }
     if !scale.is_finite() {
         scale = PX_PER_PT;
@@ -233,7 +237,7 @@ pub fn geometry(app: &WordApp, l: &DocLayout, avail: egui::Vec2) -> Geometry {
 /// Page Width jumped to 110% (issue #67).
 pub fn sync_fit_zoom(app: &mut WordApp, scale: f32) {
     let v = &mut app.session.view;
-    if v.fit.is_empty() || v.read_mode || v.mode != wordcraft_layout::ViewMode::Print || !scale.is_finite() {
+    if v.fit.is_empty() || v.read_mode || !supports_fit_zoom(v.mode, &v.fit) || !scale.is_finite() {
         return;
     }
     v.zoom = (scale / PX_PER_PT).clamp(0.1, 5.0);
