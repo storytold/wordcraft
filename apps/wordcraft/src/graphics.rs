@@ -7,7 +7,7 @@
 use eframe::{
     NativeOptions,
     egui_wgpu::WgpuSetup,
-    wgpu::{Backends, DeviceType, Dx12Compiler, InstanceFlags},
+    wgpu::{Backends, DeviceDescriptor, DeviceType, Dx12Compiler, InstanceFlags, MemoryHints},
 };
 
 /// wgpu compiles its indirect-call validation compute shaders inside `request_device`. On old
@@ -45,6 +45,21 @@ pub fn configure_indirect_validation(options: &mut NativeOptions, skip: bool) {
     }
     if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
         create.instance_descriptor.flags = create.instance_descriptor.flags.difference(InstanceFlags::VALIDATION_INDIRECT_CALL).with_env();
+    }
+}
+
+/// wgpu's default hints reserve GPU memory in blocks of 64 MB and more. On
+/// DirectX 12 the first host block stays resident in this process, and a page
+/// of text and a ribbon never fill it. `MemoryUsage` starts at 4 MB blocks.
+pub fn with_small_memory_blocks(descriptor: DeviceDescriptor<'static>) -> DeviceDescriptor<'static> {
+    DeviceDescriptor { memory_hints: MemoryHints::MemoryUsage, ..descriptor }
+}
+
+/// Wraps eframe's own device descriptor, so its limits stay as they are.
+pub fn configure_memory_hints(options: &mut NativeOptions) {
+    if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
+        let describe = std::sync::Arc::clone(&create.device_descriptor);
+        create.device_descriptor = std::sync::Arc::new(move |adapter| with_small_memory_blocks(describe(adapter)));
     }
 }
 
@@ -193,6 +208,13 @@ fn probe_dx12(options: &NativeOptions) -> Vec<Dx12Adapter> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_allocates_gpu_memory_in_small_blocks() {
+        let descriptor = with_small_memory_blocks(DeviceDescriptor { label: Some("kept"), ..Default::default() });
+        assert!(matches!(descriptor.memory_hints, MemoryHints::MemoryUsage));
+        assert_eq!(descriptor.label, Some("kept"));
+    }
 
     #[test]
     fn intel_macs_skip_the_indirect_validation_shaders() {
