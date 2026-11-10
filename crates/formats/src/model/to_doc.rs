@@ -122,6 +122,19 @@ struct Builder<'a> {
     /// found once rather than by a scan of every numbering per list.
     next_abstract: u32,
     next_num: u32,
+    /// Ids in use, for when a document already holds `u32::MAX` and the next id wraps.
+    used_abstract: std::collections::HashSet<u32>,
+    used_num: std::collections::HashSet<u32>,
+}
+
+/// The next id from `next` that is not in `used`, wrapping past `u32::MAX` to `min`; marks it used.
+fn free_id(used: &mut std::collections::HashSet<u32>, next: &mut u32, min: u32) -> u32 {
+    let mut id = *next;
+    while !used.insert(id) {
+        id = id.checked_add(1).unwrap_or(min);
+    }
+    *next = id.checked_add(1).unwrap_or(min);
+    id
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -143,7 +156,9 @@ impl<'a> Builder<'a> {
         }
         let next_abstract = doc.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
         let next_num = doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
-        Builder { doc, revs, run_strings: 0, next_abstract, next_num }
+        let used_abstract = doc.numbering.abstracts.iter().map(|a| a.id).collect();
+        let used_num = doc.numbering.nums.iter().map(|n| n.id).collect();
+        Builder { doc, revs, run_strings: 0, next_abstract, next_num, used_abstract, used_num }
     }
 
     /// The document revision for a tracked change, added the first time it is seen.
@@ -297,9 +312,8 @@ impl<'a> Builder<'a> {
             })
             .collect();
         let numbering = &mut self.doc.numbering;
-        let (aid, nid) = (self.next_abstract, self.next_num);
-        self.next_abstract = aid.saturating_add(1);
-        self.next_num = nid.saturating_add(1);
+        let aid = free_id(&mut self.used_abstract, &mut self.next_abstract, 0);
+        let nid = free_id(&mut self.used_num, &mut self.next_num, 1);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels, ..Default::default() });
         numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
@@ -455,4 +469,17 @@ pub fn part_blocks(doc: &mut Document, blocks: &[FBlock]) -> Blocks {
         out.push(para_block(Paragraph::new()));
     }
     out
+}
+
+#[cfg(test)]
+mod free_id_tests {
+    use super::free_id;
+
+    #[test]
+    fn a_document_holding_the_largest_id_still_gets_free_ones() {
+        let mut used: std::collections::HashSet<u32> = [1, 2, u32::MAX].into();
+        let mut next = u32::MAX;
+        let ids: Vec<u32> = (0..3).map(|_| free_id(&mut used, &mut next, 1)).collect();
+        assert_eq!(ids, [3, 4, 5]);
+    }
 }
