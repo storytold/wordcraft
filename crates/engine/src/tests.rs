@@ -6321,6 +6321,46 @@ fn props_colours_take_hex_strings() {
     }
 }
 
+/// The Paragraph dialog's indents in points win over indents in characters, as in Word: a
+/// document from WPS with `w:firstLineChars="400" w:firstLine="1417"` set to a first line of
+/// 2.5 cm keeps 2.5 cm, not four characters. The paragraph's own characters and its style's are
+/// cancelled; a paragraph without any is left without, and characters given with it stay.
+#[test]
+fn para_set_indents_in_points_win_over_indents_in_characters() {
+    use wordcraft_doc::{Path, Pos};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    let own = |s: &Session, i: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props.clone();
+    let shown = |s: &Session, i: usize| s.doc.styles.resolve_para(&own(s, i));
+    {
+        let p = &mut s.doc.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props;
+        (p.indent_first_chars, p.indent_first) = (Some(4.0), Some(70.85));
+    }
+    assert!((shown(&s, 0).indent_first - 70.85).abs() > 1.0, "four characters, not the points beside them");
+    let cm = 2.5 * 72.0 / 2.54;
+
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "para.set", json!({"props": {"indentFirst": cm}}));
+    assert_eq!((own(&s, 0).indent_first, own(&s, 0).indent_first_chars), (Some(cm), Some(0.0)));
+    assert!((shown(&s, 0).indent_first - cm).abs() < 0.01, "2.5 cm on the page");
+
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    run(&mut s, "para.set", json!({"props": {"indentFirst": cm}}));
+    assert_eq!(own(&s, 1).indent_first_chars, None, "no characters to cancel, none written");
+
+    // The style's characters, on the start edge through `onPage`, give way too.
+    run(&mut s, "styles.modify", json!({"style": "Normal", "para": {"indentLeftChars": 2.0}}));
+    run(&mut s, "para.set", json!({"props": {}, "onPage": {"left": 36.0}}));
+    assert_eq!((own(&s, 1).indent_left, own(&s, 1).indent_left_chars), (Some(36.0), Some(0.0)));
+    assert!((shown(&s, 1).indent_left - 36.0).abs() < 0.01);
+
+    // Characters given along with the points are kept.
+    run(&mut s, "para.set", json!({"props": {"indentFirst": 24.0, "indentFirstChars": 2.0}}));
+    assert_eq!(own(&s, 1).indent_first_chars, Some(2.0));
+}
+
 #[test]
 fn para_set_frame_geometry_keeps_anchor_lock_unless_replaced() {
     use wordcraft_doc::props::TextFrame;
