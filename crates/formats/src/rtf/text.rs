@@ -23,17 +23,17 @@ impl Reader {
     }
 
     /// The code page 8-bit text is read in: the current font's, else the default font's, else the
-    /// document's (Windows-1252 when none is named). A symbol default font's page is for document
-    /// text set in it: names in the font table and other destinations, and text in a font selected
-    /// with `\f`, are read in the document's.
+    /// document's (Windows-1252 when none is named). The symbol page is for document text set in a
+    /// symbol font, so it never applies outside the body (names in the font table, `\info` and
+    /// other destinations), and a symbol default font's page does not apply to text in a font
+    /// selected with `\f`.
     fn code_page(&self) -> u16 {
         let document = if self.ansicpg == 0 { 1252 } else { self.ansicpg };
-        let default = self
-            .font_cps
-            .get(&self.deff)
-            .copied()
-            .filter(|&cp| cp != wordcraft_doc::encoding::SYMBOL_CODE_PAGE || (self.st.dest == Dest::Body && !self.st.font_set));
-        self.st.cp.or(default).unwrap_or(document)
+        let symbol = wordcraft_doc::encoding::SYMBOL_CODE_PAGE;
+        let body = self.st.dest == Dest::Body;
+        let current = self.st.cp.filter(|&cp| cp != symbol || body);
+        let default = self.font_cps.get(&self.deff).copied().filter(|&cp| cp != symbol || (body && !self.st.font_set));
+        current.or(default).unwrap_or(document)
     }
 
     /// A byte of 8-bit text (`\'hh` or raw): a single-byte code page decodes it at once; a

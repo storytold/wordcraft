@@ -122,7 +122,8 @@ pub(super) struct St {
     pub(super) field: Option<usize>,
     /// The code page of the current font's charset (`\fcharset`), when it names one.
     pub(super) cp: Option<u16>,
-    /// A font was selected (`\f`) in this group or an enclosing one.
+    /// A font was selected (`\f`) in this group or an enclosing one, and no `\plain` has since
+    /// made the default font current again.
     pub(super) font_set: bool,
     /// Space before/after (`\sb`, `\sa`), line spacing (`\sl`, `\slmult`) and indents
     /// (`\li`, `\ri`, `\fi`), twips.

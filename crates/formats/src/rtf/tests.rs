@@ -396,6 +396,26 @@ fn a_symbol_default_font_reads_only_its_own_text_as_codes() {
     }
 }
 
+/// A font's code page lasts as long as the font: `\pard` keeps both, and `\plain` makes the
+/// default font and its page current again. The symbol page is for body text only, so a symbol
+/// font selected before `\info` leaves the title in the document's code page.
+#[test]
+fn a_code_page_lasts_as_long_as_its_font() {
+    for (rtf, want) in [
+        (&br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil\fcharset2 Symbol;}{\f1\fcharset0 Arial;}}\f1\pard \'93\par}"[..], "\u{201C}"),
+        (br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fnil\fcharset2 Wingdings;}}\f1\pard \'b7\par}", "\u{F0B7}"),
+        (br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fcharset204 Arial CYR;}}\f1\pard \'c4\par}", "Д"),
+        (br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fnil\fcharset2 Wingdings;}}\f1 \'b7\plain \'b7\par}", "\u{F0B7}·"),
+        (br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fnil\fcharset2 Symbol;}{\f1\fcharset0 Arial;}}\f1 \'93\plain \'b7\par}", "\u{201C}\u{F0B7}"),
+        (br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fcharset204 Arial CYR;}}\f1 \'c4\plain \'c4\par}", "ДÄ"),
+    ] {
+        assert_eq!(texts(&parse(rtf).unwrap()), [format!("Normal:{want}")]);
+    }
+    let f = parse(br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fnil\fcharset2 Symbol;}}\f1{\info{\title Caf\'e9}}\'b7\par}").unwrap();
+    assert_eq!(f.meta.title, "Café");
+    assert_eq!(texts(&f), ["Normal:\u{F0B7}"]);
+}
+
 /// #1653: the East Asian code pages (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5) decode their
 /// bytes as a run, so a lead byte and its trail byte decode together, escaped or raw.
 #[test]

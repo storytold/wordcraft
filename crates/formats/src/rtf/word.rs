@@ -92,16 +92,21 @@ impl Reader {
             "uc" => self.st.uc = pv.max(0) as usize,
             "plain" => {
                 self.st.fmt = Fmt { link: self.st.fmt.link.clone(), ..Default::default() };
+                // The default font is current again, and its code page with it.
+                self.st.cp = None;
+                self.st.font_set = false;
                 self.st.rev = RevSt::default();
                 self.st.chg_c = FmtRevSt::default();
                 self.st.hidden = false;
             }
             "pard" => {
                 let field = self.st.field;
-                // Revision marks are character formatting, which `\pard` leaves alone.
+                // Revision marks and the font are character formatting, which `\pard` leaves alone,
+                // so the font's code page stays too.
                 let (dest, fmt, rev, uc, hidden) = (self.st.dest, self.st.fmt.clone(), self.st.rev, self.st.uc, self.st.hidden);
+                let (cp, font_set) = (self.st.cp, self.st.font_set);
                 let chg_c = std::mem::take(&mut self.st.chg_c);
-                self.st = St { dest, fmt, rev, chg_c, uc, hidden, field, ..Default::default() };
+                self.st = St { dest, fmt, rev, chg_c, uc, hidden, field, cp, font_set, ..Default::default() };
             }
             "revised" => self.st.rev.ins = on,
             "deleted" => self.st.rev.del = on,
