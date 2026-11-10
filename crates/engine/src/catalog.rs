@@ -330,6 +330,7 @@ View|Page Movement|Side to Side|view.sideToSide
 View|Show|Ruler|view.ruler
 View|Show|Gridlines|view.gridlines
 View|Show|Navigation Pane|view.navigationPane
+View|Show|Bookmarks|view.bookmarks
 View|Zoom|Zoom|view.zoom
 View|Zoom|100%|view.zoom100
 View|Zoom|One Page|view.onePage

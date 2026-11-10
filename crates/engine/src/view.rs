@@ -100,6 +100,10 @@ pub struct ViewState {
     /// Developer › Design Mode: every content control shows its frame and title.
     #[serde(default)]
     pub design_mode: bool,
+    /// View › Show › Bookmarks: the marks Word draws at each bookmark's start and end (on screen
+    /// only; never printed or exported). Names a program made (`_Toc…`, `_GoBack`) stay hidden.
+    #[serde(default)]
+    pub show_bookmarks: bool,
     /// View › Window › Full Screen (F11): the window fills the screen (#980). The front end
     /// carries it to the window.
     #[serde(default)]
@@ -215,6 +219,7 @@ impl Default for ViewState {
             hide_white_space: false,
             outline: Default::default(),
             design_mode: false,
+            show_bookmarks: false,
             full_screen: false,
         }
     }

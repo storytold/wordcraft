@@ -86,7 +86,7 @@ pub use compare::para_block;
 use document::MediaIndex;
 pub use error::{DocError, Result};
 pub use missing::{MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, MissingPictures, picture_hash};
-pub use parts::{MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
+pub use parts::{BookmarkRange, MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
 pub use position::{Path, Pos, StoryRef};
 pub use settings::{
     COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, OdfLayout, PagePicture, Settings, Source,

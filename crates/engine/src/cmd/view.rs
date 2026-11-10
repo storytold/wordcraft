@@ -75,6 +75,12 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.gridlines", "Gridlines", "View › Show", |s, v| toggle(s, v, |x| &mut x.gridlines))
             .params(r#"{"value"?: bool}"#)
             .pure(),
+        // View › Show › Bookmarks: Word's marks at the start and end of every bookmark a person
+        // named (the program's `_Toc…`, `_Ref…` and `_GoBack` stay hidden). Screen only; nothing
+        // is laid out, printed or exported differently.
+        CommandSpec::new("view.bookmarks", "Bookmarks", "View › Show", |s, v| toggle(s, v, |x| &mut x.show_bookmarks))
+            .params(r#"{"value"?: bool}"#)
+            .pure(),
         // Outlines of table cells (screen only; never printed or exported).
         CommandSpec::new("table.viewGridlines", "View Gridlines", "Table Layout › Table", |s, v| toggle(s, v, |x| &mut x.table_gridlines))
             .params(r#"{"value"?: bool}"#)

@@ -131,3 +131,21 @@ impl PermRange {
         self.group.eq_ignore_ascii_case("everyone")
     }
 }
+
+/// A named bookmark and the range it marks; see [`Document::bookmark_ranges`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BookmarkRange {
+    pub name: String,
+    /// The bookmark's start marker.
+    pub start: Pos,
+    /// Its end marker, or the start when the bookmark has no end.
+    pub end: Pos,
+}
+
+impl BookmarkRange {
+    /// Whether the user chose the name: not one a program made (`_Toc…`, `_Ref…`, `_GoBack`),
+    /// which View › Show › Bookmarks shows and the link dialog offers as a target.
+    pub fn visible(&self) -> bool {
+        !self.name.starts_with('_')
+    }
+}

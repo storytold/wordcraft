@@ -43,6 +43,10 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
             if ui.checkbox(&mut w, tl!("Hide White Space")).changed() {
                 let _ = app.run("view.hideWhiteSpace", json!({"value": w}));
             }
+            let mut b = v.show_bookmarks;
+            if ui.checkbox(&mut b, tl!("Bookmarks")).changed() {
+                let _ = app.run("view.bookmarks", json!({"value": b}));
+            }
         });
     });
     group(ui, "Zoom", None, app, |ui, app| {

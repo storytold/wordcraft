@@ -15,6 +15,7 @@ use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
 mod balloons;
+mod bookmarks;
 mod column_ruler;
 mod context_menu;
 #[cfg(test)]
@@ -1665,6 +1666,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.mini_anchor = crate::mini_toolbar::visible_anchor(anchor_rects, visible_clip);
         // Content controls: the frame of the one the caret is in (all of them in Design Mode).
         crate::content_controls::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        // View › Show › Bookmarks: Word's marks at each bookmark's start and end. The pointer is
+        // only offered while the canvas holds it, so a mark under a ribbon or a dialog says nothing.
+        let mark_hover = resp.hovered().then(|| ui.input(|i| i.pointer.latest_pos())).flatten();
+        bookmarks::paint(app, ui, &painter, &t, &layout, &rects, geo.scale, mark_hover);
         paint_read_aloud_highlight(app, &painter, &layout, &rects, &geo, &t);
         // Caret.
         let focused = resp.has_focus() || app.canvas.focused;

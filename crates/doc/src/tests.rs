@@ -665,6 +665,7 @@ fn object_walks_are_linear_in_the_paragraph() {
     d.body = vec![Arc::new(Block::Para(para_of_objects(objs)))];
     let t = std::time::Instant::now();
     assert_eq!(d.bookmarks().len(), n as usize);
+    assert_eq!(d.bookmark_ranges().len(), n as usize, "one walk per call, however many markers a paragraph holds");
     assert_eq!(d.field_ranges(StoryRef::Body).len(), n as usize);
     let perms = d.perm_ranges();
     assert_eq!(perms.len(), n as usize);
@@ -688,6 +689,33 @@ fn object_walks_are_linear_in_the_paragraph() {
     let end = Pos::body(0, n as usize * w);
     assert_eq!(d.typing_pos(&end), end);
     assert!(t.elapsed().as_secs_f32() < 10.0, "{:?}", t.elapsed());
+}
+
+/// [`Document::bookmark_ranges`]: each start paired with the end of the same name, the latest
+/// still-open one closing first, and a start no end follows kept as a point.
+#[test]
+fn bookmark_ranges_pair_starts_with_their_ends() {
+    let w = para::OBJ.len_utf8();
+    let mark = |name: &str, start: bool| {
+        if start { InlineObject::BookmarkStart { name: name.into() } } else { InlineObject::BookmarkEnd { name: name.into() } }
+    };
+    let mut d = Document::new();
+    // One paragraph: `a` over a nested `b`, a second `b` after the first closes, and `_Toc1`,
+    // which no end marker ever closes.
+    let objs = vec![mark("a", true), mark("_Toc1", true), mark("b", true), mark("b", false), mark("b", true), mark("a", false), mark("b", false)];
+    d.body = vec![Arc::new(Block::Para(para_of_objects(objs)))];
+    let ranges = d.bookmark_ranges();
+    let got: Vec<(&str, usize, usize)> = ranges.iter().map(|r| (r.name.as_str(), r.start.off, r.end.off)).collect();
+    assert_eq!(
+        got,
+        [
+            ("a", 0, 5 * w), // its own end, past the nested bookmark
+            ("_Toc1", w, w), // no end: a point bookmark
+            ("b", 2 * w, 3 * w),
+            ("b", 4 * w, 6 * w),
+        ]
+    );
+    assert_eq!(d.bookmark_ranges().iter().filter(|r| r.visible()).count(), 3, "the program's own bookmark is hidden");
 }
 
 #[test]

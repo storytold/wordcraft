@@ -9950,6 +9950,23 @@ fn hide_white_space_toggles_view_state_only() {
     assert_eq!(s.doc.body.len(), before, "a view option never edits the document");
 }
 
+#[test]
+fn show_bookmarks_toggles_view_state_only() {
+    // View › Show › Bookmarks marks each bookmark on screen (the front end draws it); like
+    // Gridlines it changes no document text and leaves the undo stack alone.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Alpha"}));
+    let (undo, body) = (s.undo_labels(), s.doc.body.len());
+    assert!(!s.view.show_bookmarks);
+    assert_eq!(run(&mut s, "view.bookmarks", json!({}))["value"], true);
+    assert!(s.view.show_bookmarks);
+    assert_eq!(run(&mut s, "view.bookmarks", json!({"value": true}))["value"], true, "setting it again is not an error");
+    assert_eq!(run(&mut s, "view.bookmarks", json!({}))["value"], false);
+    assert_eq!(s.doc.body.len(), body, "a view option never edits the document");
+    assert_eq!(s.undo_labels(), undo, "and is not undoable");
+    assert_eq!(run(&mut s, "view.state", json!({}))["showBookmarks"], false);
+}
+
 /// The first SmartArt (or other graphic) in the body, selected.
 fn select_graphic(s: &mut Session) {
     let (path, off) = (0..s.doc.body.len() as u32)

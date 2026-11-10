@@ -1,7 +1,7 @@
 use super::block::{Block, Blocks, BoxBudget};
 use super::compare::{para_block, same_blocks, same_bytes, same_glossary, same_parts};
 use super::error::{DocError, Result};
-use super::parts::{MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, TextBody, free_id};
+use super::parts::{BookmarkRange, MAX_LINKED_BOXES, NoteSeparators, Part, PartKind, PermRange, TextBody, free_id};
 use super::position::{Path, Pos, StoryRef};
 use super::settings::{CoreProps, CustomProp, Settings};
 use super::text_walk::{TextMode, notes_and_boxes, story_word_count_of, text_of, walk};
@@ -911,6 +911,37 @@ impl Document {
                     if let InlineObject::BookmarkStart { name } = o {
                         out.push((name.clone(), Pos { story: StoryRef::Body, path: path.clone(), off }));
                     }
+                }
+            }
+        }
+        out
+    }
+
+    /// The body's bookmarks with the range each one marks, in document order: its
+    /// [`InlineObject::BookmarkStart`], and its matching [`InlineObject::BookmarkEnd`] (the latest
+    /// still-open start of the same name closes), or the start itself when the file has no end —
+    /// a point bookmark, as Word's collapsed range makes. See [`crate::PermRange`] for the same walk.
+    pub fn bookmark_ranges(&self) -> Vec<BookmarkRange> {
+        let mut out: Vec<BookmarkRange> = Vec::new();
+        // Open ranges by name, latest last (an end closes the latest open range of that name).
+        let mut open: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        for path in self.para_paths(StoryRef::Body) {
+            let Some(p) = self.para(StoryRef::Body, &path) else { continue };
+            for (off, o) in p.objects_with_offsets() {
+                match o {
+                    InlineObject::BookmarkStart { name } => {
+                        let start = Pos { story: StoryRef::Body, path: path.clone(), off };
+                        open.entry(name.clone()).or_default().push(out.len());
+                        out.push(BookmarkRange { name: name.clone(), start: start.clone(), end: start });
+                    }
+                    InlineObject::BookmarkEnd { name } => {
+                        if let Some(i) = open.get_mut(name).and_then(Vec::pop)
+                            && let Some(r) = out.get_mut(i)
+                        {
+                            r.end = Pos { story: StoryRef::Body, path: path.clone(), off };
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
