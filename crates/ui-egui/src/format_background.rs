@@ -543,7 +543,7 @@ fn paint_picture_preview(app: &WordApp, ui: &Ui, p: &egui::Painter, rect: Rect) 
                 // Past the thumbnail limit the pane shows a dashed frame, not the picture:
                 // a 2 GiB selection is refused after a 64 MiB capped read, not held whole.
                 let bytes = if let Some(path) = path {
-                    wordcraft_engine::io::read_file_capped(path, MAX_PREVIEW_BYTES, "image").ok()
+                    read_preview_file(path)
                 } else if let Some(media) = media {
                     app.session.doc.media.get(media).map(|b| b.to_vec())
                 } else {
@@ -596,6 +596,21 @@ fn dashed_frame(p: &egui::Painter, rect: Rect, color: Color32) {
         p.line_segment([pos2(x, rect.min.y), pos2(x, rect.max.y)], stroke);
         x += step;
     }
+}
+
+/// The bytes of the preview picture picked by path: a capped file read on native, where files
+/// open from paths; `None` on the web, where files arrive through the browser as `data`/`media`.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_preview_file(path: &str) -> Option<Vec<u8>> {
+    wordcraft_engine::io::read_file_capped(path, MAX_PREVIEW_BYTES, "image").ok()
+}
+
+/// The bytes of the preview picture picked by path: a capped file read on native, where files
+/// open from paths; `None` on the web, where files arrive through the browser as `data`/`media`.
+#[cfg(target_arch = "wasm32")]
+#[allow(clippy::needless_pass_by_value)]
+fn read_preview_file(_path: &str) -> Option<Vec<u8>> {
+    None
 }
 
 /// Decode `bytes` to a thumbnail the pane can show, bounded (hostile files).
