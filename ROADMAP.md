@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-10 · **Change:** trivial (DOCX: negative picture crop values are kept and the picture is padded, #5194); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -150,6 +150,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-10: DOCX: a negative `a:srcRect` side (Word's compatibility mode) is kept instead of being clamped to 0, so the picture is padded rather than squeezed; the padding is left clear on screen, as in PDF export, and the value round-trips (#5194).
 - 2026-11-08: `wordcraft-cli convert --strict` (#6005) and `render --strict` (#6008): a PDF or PNG export (render: the page it writes) refuses, exit 3 and nothing written, when it would draw a character no font has or leave out a picture (missing part, external target, link only, undecodable or unsupported format); the report is on stderr with one JSON line. Engine: `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and `file.exportPng`, and the pure `file.strictReport`. External picture targets are never fetched. The result depends on the host's installed fonts (#5624); readiness estimates unchanged.
 - 2026-11-05: ODT tables with a usable width keep their column proportions when the file gives only shares (gap 19): LibreOffice's CV template opened and saved with equal columns.
 - 2026-11-05: ODT font sizes reach Asian and complex-script text (gap 19): Chinese text set to 24 pt stayed at the default size in LibreOffice.

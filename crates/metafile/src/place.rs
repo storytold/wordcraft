@@ -19,10 +19,11 @@ const MIN_VISIBLE: f64 = 0.005;
 
 /// The part of a picture's source that `crop` (left, top, right, bottom fractions of the source)
 /// keeps, as fractions of the source: [left, top, width, height], bitmap or metafile alike. Each
-/// side is taken as 0–1 (junk as 0). When the two sides of an axis leave less than 0.5% of it,
-/// the left (top) side stands and 0.5% shows.
+/// side is taken as -1–1 (junk as 0); a negative side pads the source (Word's compatibility
+/// mode), so the window starts before it or ends past it. When the two sides of an axis leave
+/// less than 0.5% of it, the left (top) side stands and 0.5% shows.
 pub fn crop_window(crop: [f32; 4]) -> [f64; 4] {
-    let [l, t, r, b] = crop.map(|v| if v.is_finite() { f64::from(v.clamp(0.0, 1.0)) } else { 0.0 });
+    let [l, t, r, b] = crop.map(|v| if v.is_finite() { f64::from(v.clamp(-1.0, 1.0)) } else { 0.0 });
     let axis = |lo: f64, hi: f64| {
         let lo = lo.min(1.0 - MIN_VISIBLE);
         (lo, (1.0 - lo - hi).max(MIN_VISIBLE))

@@ -16,7 +16,7 @@ pub enum InlineObject {
         alt: String,
         #[serde(default)]
         float: Float,
-        /// Crop (left, top, right, bottom) fractions 0..1.
+        /// Crop (left, top, right, bottom) fractions -1..1; a negative side pads the picture.
         #[serde(default)]
         crop: [f32; 4],
         /// Brightness, contrast and transparency read from the file (see [`crate::picfx`]).
