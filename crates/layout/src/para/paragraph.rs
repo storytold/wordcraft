@@ -76,6 +76,8 @@ struct Shaped<'a> {
     drop_cap_w: f32,
     maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
     check_boxes: Vec<usize>,
+    /// Formulas drawn for `EQ` fields (`\f`, `\r`…), by the field's object index.
+    field_maths: Vec<(usize, Arc<crate::math::MathLayout>)>,
     enclosures: Vec<(usize, Enclosed)>,
     rubies: Vec<RubyLayout>,
     displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
@@ -186,6 +188,7 @@ impl<'a> Shaped<'a> {
             drop_cap_w: 0.0,
             maths: Vec::new(),
             check_boxes: Vec::new(),
+            field_maths: Vec::new(),
             enclosures: Vec::new(),
             rubies: Vec::new(),
             displays: Vec::new(),
@@ -411,7 +414,7 @@ impl<'a> Shaped<'a> {
 
     /// A field: a legacy form field, its code in braces, or its result.
     fn field(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, rc: &Arc<ResolvedChar>) {
-        let InlineObject::Field { instr, result, code, .. } = o else { return };
+        let InlineObject::Field { instr, code, .. } = o else { return };
         let env = cx.env;
         let form = if env.field_codes != *code { None } else { o.legacy_form() };
         if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
@@ -427,7 +430,7 @@ impl<'a> Shaped<'a> {
             }
             self.b.shape_atomic(&field_code_text(instr), slot.start, slot.end, &Arc::new(shaded));
         } else {
-            self.field_result(cx, (instr, result), slot, rc);
+            self.field_result(cx, k, o, slot, rc);
         }
     }
 
@@ -442,16 +445,43 @@ impl<'a> Shaped<'a> {
         self.check_boxes.push(k);
     }
 
-    fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
+    fn field_result(&mut self, cx: &Cx, k: usize, o: &InlineObject, slot: Slot, rc: &Arc<ResolvedChar>) {
+        let InlineObject::Field { instr, result, math, .. } = o else { return };
         let (start, end) = (slot.start, slot.end);
-        match wordcraft_doc::eq::parse_overstrike(instr) {
-            Some(o) => overstrike(&mut self.b, &o, instr, start, end, rc, &mut self.enclosures),
-            None => {
-                let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
-                self.has_page_fields |= page_dep;
-                self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+        // An `EQ \o` field is drawn as an overstrike of its arguments — unless one of them is a
+        // formula overstruck with a blank (`\o\ac(　,\f(5,2))`), which Word draws as the formula.
+        if let Some(o) = wordcraft_doc::eq::parse_overstrike(instr) {
+            if let Some(math) = wordcraft_doc::eq::overstrike_math(&o) {
+                self.field_math(cx, k, &math, slot, rc);
+                return;
             }
+            overstrike(&mut self.b, &o, instr, start, end, rc, &mut self.enclosures);
+            return;
         }
+        // An `EQ` field's formula (`\f`, `\r`…): Word draws it from the code, and the file usually
+        // stores no result (see `wordcraft_doc::eq`). A field made here has no parsed tree yet.
+        if let Some(math) = math {
+            self.field_math(cx, k, &math.math, slot, rc);
+            return;
+        }
+        if let Some(math) = wordcraft_doc::eq::parse_math(instr) {
+            self.field_math(cx, k, &math, slot, rc);
+            return;
+        }
+        let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
+        self.has_page_fields |= page_dep;
+        self.b.shape_atomic(&t, start, end, &linked(rc, instr));
+    }
+
+    /// An `EQ` field's formula, as wide and high as the math layout gives it, like an equation
+    /// object; drawn from [`Shaped::field_maths`].
+    fn field_math(&mut self, cx: &Cx, k: usize, math: &wordcraft_doc::math::Math, slot: Slot, rc: &Arc<ResolvedChar>) {
+        let avail = (cx.env.width - cx.rp.indent_left.max(0.0) - cx.rp.indent_right.max(0.0)).max(12.0);
+        let ml = crate::math::layout_equation(math, "", rc, false, avail, &cx.math_props, &mut self.eq_counter);
+        // The line is at least as tall as the text around it.
+        let (a, d) = self.b.styles.get(slot.style as usize).map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
+        self.b.clusters.push(slot.cluster(ClKind::Object(k), ml.width, (ml.ascent.max(a).max(0.01), ml.descent.max(d))));
+        self.field_maths.push((k, Arc::new(ml)));
     }
 
     /// A footnote or endnote reference: its mark, raised.
@@ -682,7 +712,23 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
-    let Shaped { b, has_page_fields, notes, drop_cap, drop_cap_w, maths, check_boxes, enclosures, rubies, displays, ptabs, left, runs, .. } = sh;
+    let Shaped {
+        b,
+        has_page_fields,
+        notes,
+        drop_cap,
+        drop_cap_w,
+        maths,
+        check_boxes,
+        field_maths,
+        enclosures,
+        rubies,
+        displays,
+        ptabs,
+        left,
+        runs,
+        ..
+    } = sh;
     let mut pl = ParaLayout {
         rp,
         substituted: b.substituted,
@@ -704,6 +750,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         drop_cap_w,
         maths,
         check_boxes,
+        field_maths,
         rubies,
         displays,
         ptabs,

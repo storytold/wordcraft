@@ -79,6 +79,9 @@ struct FieldState {
     /// The font size of each piece of the code (where it starts in `instr`): an enclosure's
     /// style is the size of its symbol and text (see [`wordcraft_doc::eq`]).
     sizes: Vec<(usize, Option<f32>)>,
+    /// The code's runs and where they start in `instr`: an EQ field's formula is drawn with the
+    /// code's superscript runs raised, and a save writes the code's formatting back.
+    runs: Vec<(usize, usize, CharProps)>,
     /// A legacy form field's `w:ffData`, as raw XML.
     form: String,
 }

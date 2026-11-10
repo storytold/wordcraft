@@ -158,7 +158,12 @@ fn set_code(s: &mut Session, v: &Value) -> CmdResult {
     }
     let Some(f) = selected(s).into_iter().next() else { return Err(none_selected()) };
     with_field(s, &f.at, |o| match o {
-        InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } => *instr = code.clone(),
+        // A new code makes the formula read with the old one stale.
+        InlineObject::Field { instr, math, .. } => {
+            *instr = code.clone();
+            *math = None;
+        }
+        InlineObject::FieldStart { instr, .. } => *instr = code.clone(),
         _ => {}
     })?;
     super::references::update_fields(s)?;

@@ -56,12 +56,13 @@ impl Writer<'_> {
                     None => crate::write::math::write_equation(w, linear, *display, math, color),
                 }
             }
-            InlineObject::Field { instr, result, locked, dirty, form, .. } => {
-                self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form }, props)
+            InlineObject::Field { instr, result, locked, dirty, form, math, .. } => {
+                let runs = math.as_ref().map(|m| m.runs.as_slice()).unwrap_or_default();
+                self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form, runs }, props)
             }
             InlineObject::FieldStart { instr, locked, dirty } => {
                 self.rev_open(w, props);
-                self.field_start(w, instr, *locked, *dirty, "", props);
+                self.field_start(w, super::field::FieldStart { instr, locked: *locked, dirty: *dirty, form: "", runs: &[] }, props);
                 self.rev_close(w, props);
             }
             InlineObject::FieldEnd => {

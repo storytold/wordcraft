@@ -636,6 +636,11 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             continue;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
+        // An `EQ` field's formula (`\f`, `\r`…): the field's own layout draws it.
+        if let Some((_, ml)) = pl.field_maths.iter().find(|(k, _)| *k == oi) {
+            equation(&ml.items, cx, base, alpha, opts.placeholders, out);
+            continue;
+        }
         let obj = para.and_then(|p| p.objects.get(oi));
         let modern = doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
         let rect = inline_rect(obj, cx, base, c.adv, (c.obj_h, c.obj_d), pl.rule_room(line, k), modern);

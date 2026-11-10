@@ -103,6 +103,12 @@ pub enum InlineObject {
         /// source's `w:ffData`, raw OOXML kept for round trip. Empty for other fields.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         form: String,
+        /// An `EQ` field's formula, read from its code when the file was opened (`\f` fractions,
+        /// `\r` radicals…): Word draws the formula its code describes, and an exam generator's
+        /// fields carry no stored result to draw instead. `None` means the code's stored result
+        /// is drawn (or nothing). A save writes the code, with the formatting it was read with.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        math: Option<std::sync::Arc<crate::eq::Formula>>,
     },
     /// The start of a field whose result is ordinary content — formatted, possibly spanning
     /// paragraphs — up to the matching [`InlineObject::FieldEnd`]. Imported TOCs and citation

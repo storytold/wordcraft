@@ -1351,6 +1351,7 @@ fn legacy_form_fields_are_drawn() {
         dirty: false,
         code: false,
         form: form.into(),
+        math: None,
     };
     let check_box = |state: &str| format!(r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/>{state}</w:checkBox></w:ffData>"#);
     let draws_of = |o: InlineObject| {
@@ -1395,6 +1396,7 @@ fn legacy_form_fields_are_drawn() {
         dirty: false,
         code: false,
         form: r#"<w:ffData><w:name w:val="List"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Alpha"/><w:listEntry w:val="Beta"/></w:ddList></w:ffData>"#.into(),
+        math: None,
     };
     let (items, _) = draws_of(dd);
     let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
@@ -2848,7 +2850,15 @@ fn headers_and_page_fields() {
     let mut hp = wordcraft_doc::Paragraph::new();
     hp.insert_object(
         0,
-        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();
@@ -9214,7 +9224,7 @@ fn enclosed_characters_draw_a_shape_around_the_text() {
         let e = Enclosure { shape, style, text: "A".into() };
         d.insert_object(
             &Pos::body(0, 2),
-            InlineObject::Field { instr: e.instr(), result: "A".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field { instr: e.instr(), result: "A".into(), locked: false, dirty: false, code: false, form: String::new(), math: None },
             &Default::default(),
         )
         .unwrap();
@@ -9250,7 +9260,15 @@ fn enclosed_characters_draw_a_shape_around_the_text() {
     let mut d = Document::from_text("x");
     d.insert_object(
         &Pos::body(0, 1),
-        InlineObject::Field { instr: "eq \\o(=,/)".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "eq \\o(=,/)".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();
@@ -9258,6 +9276,49 @@ fn enclosed_characters_draw_a_shape_around_the_text() {
     let items = display::page_display(&d, &l.pages[0], &Default::default());
     assert!(!items.iter().any(|i| matches!(i, display::Draw::Shape { .. })));
     assert!(items.iter().any(|i| matches!(i, display::Draw::Glyphs { text, .. } if text.contains("=/"))), "{items:?}");
+}
+
+/// An `EQ` field's formula (`\f`, `\r`): Word draws the formula its code describes, and an exam
+/// generator's fields store no result, so the field must lay out as math rather than as nothing.
+#[test]
+fn eq_field_formulas_lay_out_as_math() {
+    // From the code (`math: None`, a field made by a command), and from the tree the reader
+    // stored while the code's superscript runs were still there.
+    let from_code = InlineObject::Field {
+        instr: "eq \\f(1,2)".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        math: None,
+    };
+    let stored = wordcraft_doc::eq::parse_math("eq \\r(,2)").map(|math| std::sync::Arc::new(wordcraft_doc::eq::Formula { math, runs: Vec::new() }));
+    let from_tree = InlineObject::Field {
+        instr: "eq \\r(,2)".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        math: stored,
+    };
+    for field in [from_code, from_tree] {
+        let mut d = Document::from_text("x  y");
+        d.insert_object(&Pos::body(0, 2), field, &Default::default()).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+            panic!("no body lines")
+        };
+        assert_eq!(para.field_maths.len(), 1, "the formula is laid out");
+        let (k, ml) = &para.field_maths[0];
+        assert!(ml.width > 0.0 && ml.ascent > 0.0, "{ml:?}");
+        assert!(para.clusters.iter().any(|c| c.kind == crate::para::ClKind::Object(*k) && c.adv > 0.0 && c.obj_h > 0.0), "a cluster for the field");
+        // The formula's glyphs are drawn.
+        let items = display::page_display(&d, &l.pages[0], &Default::default());
+        let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+        assert!(text.contains('1') || text.contains('2'), "{text:?}");
+    }
 }
 
 #[test]
@@ -9973,6 +10034,7 @@ fn shared_section_page_totals() {
             dirty: true,
             code: false,
             form: String::new(),
+            math: None,
         };
         let mut footer = Paragraph::new();
         for instr in ["PAGE", "SECTIONPAGES"] {
@@ -10025,8 +10087,15 @@ fn shared_section_page_totals() {
 fn body_page_totals_count_every_page() {
     crate::test_fonts();
     let mut d = Document::from_text("Body-1\nBody-2\nBody-3");
-    let field =
-        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: "9".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        math: None,
+    };
     for i in 0..3 {
         let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
         p.props.page_break_before = Some(i > 0);
@@ -10121,8 +10190,15 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
 #[test]
 fn footer_page_total_needs_one_body_pass() {
     crate::test_fonts();
-    let field =
-        || InlineObject::Field { instr: "NUMPAGES".into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = || InlineObject::Field {
+        instr: "NUMPAGES".into(),
+        result: "9".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        math: None,
+    };
     let mut d = Document::from_text("Body-1\nBody-2\nBody-3");
     for i in 1..3 {
         d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
@@ -10813,7 +10889,15 @@ fn a_hidden_mark_with_a_check_box_keeps_its_room() {
         d.last_section.start = SectionStart::Continuous;
         if boxed {
             let form = r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/></w:checkBox></w:ffData>"#.to_string();
-            let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+            let field = InlineObject::Field {
+                instr: "FORMCHECKBOX".into(),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form,
+                math: None,
+            };
             d.insert_object(&Pos::body(1, 0), field, &Default::default()).unwrap();
         }
         lay(&d).caret(&Pos::body(2, 0)).unwrap()
@@ -11342,7 +11426,15 @@ fn page_field_doc(before: usize, pieces: &[&str]) -> Document {
         let n = p.len();
         p.insert_object(
             n,
-            InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: "PAGE".into(),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                math: None,
+            },
             &Default::default(),
         )
         .unwrap();
@@ -11463,7 +11555,15 @@ fn footnote_page_field_from_a_split_paragraph_shows_its_page() {
     let n = note.len();
     note.insert_object(
         n,
-        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();
@@ -11564,7 +11664,15 @@ fn relaid_paragraphs_keep_their_equation_numbers() {
     let n = p2.len();
     p2.insert_object(
         n,
-        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();
@@ -14289,7 +14397,15 @@ fn layout_cache_invalidates_on_changed_filename() {
     let mut p = Paragraph::new();
     p.insert_object(
         0,
-        InlineObject::Field { instr: "FILENAME".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "FILENAME".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();
@@ -14321,7 +14437,15 @@ fn layout_cache_invalidates_on_changed_filepath() {
     let mut p = Paragraph::new();
     p.insert_object(
         0,
-        InlineObject::Field { instr: r"FILENAME \p".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: r"FILENAME \p".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            math: None,
+        },
         &Default::default(),
     )
     .unwrap();
@@ -14566,7 +14690,8 @@ fn lowered_pictures_and_check_boxes_take_words_line_heights() {
     let box_line = |lead: &str, m: f32, size: u32| {
         let mut d = Document::from_text(lead);
         let form = format!(r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:size w:val="{size}"/></w:checkBox></w:ffData>"#);
-        let field = InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form };
+        let field =
+            InlineObject::Field { instr: "FORMCHECKBOX".into(), result: String::new(), locked: false, dirty: false, code: false, form, math: None };
         let props = wordcraft_doc::CharProps { size: Some(10.0), ..Default::default() };
         let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         p.props.line_spacing = Some(LineSpacing::Multiple(m));
@@ -15210,7 +15335,8 @@ fn a_table_moved_by_a_page_break_shows_its_new_page_number() {
     let mut table = Table::new(1, 1, 468.0);
     let mut first = wordcraft_doc::Paragraph::with_text("Page ", Default::default());
     first.props.page_break_before = Some(true);
-    let page = InlineObject::Field { instr: "PAGE".into(), result: "9".into(), locked: false, dirty: true, code: false, form: String::new() };
+    let page =
+        InlineObject::Field { instr: "PAGE".into(), result: "9".into(), locked: false, dirty: true, code: false, form: String::new(), math: None };
     first.insert_object(first.len(), page, &Default::default()).unwrap();
     table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(first)];
     d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(table)));

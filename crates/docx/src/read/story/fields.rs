@@ -44,6 +44,7 @@ impl Reader<'_> {
             dirty,
             range: false,
             sizes: Vec::new(),
+            runs: Vec::new(),
             form,
         });
     }
@@ -131,10 +132,39 @@ impl Reader<'_> {
                 Item::Obj(o) => result.push_str(o.plain_text()),
             }
         }
-        let (instr, result) = match enclosure(&f) {
+        let enclosure = enclosure(&f);
+        let (instr, result) = match &enclosure {
             // Word writes no result for enclosed characters: the text is their plain text.
-            Some(e) => (e.instr(), if result.is_empty() { e.text } else { result }),
+            Some(e) => (e.instr(), if result.is_empty() { e.text.clone() } else { result }),
             None => (f.instr.trim().to_string(), result),
+        };
+        // Word draws an EQ field's formula from its code, and these files store no result to
+        // show instead: read the formula now, while the code's runs and formatting are here.
+        let math = match &enclosure {
+            Some(_) => None,
+            None => {
+                let trimmed = f.instr.trim();
+                let skip = f.instr.len().saturating_sub(f.instr.trim_start().len());
+                let limit = skip.saturating_add(trimmed.len());
+                let runs: Vec<(usize, usize, CharProps)> = f
+                    .runs
+                    .iter()
+                    .filter_map(|(start, end, props)| {
+                        let a = start.saturating_sub(skip);
+                        let b = (*end).min(limit).saturating_sub(skip).min(trimmed.len());
+                        (a < b).then(|| (a, b, props.clone()))
+                    })
+                    .collect();
+                let raises: Vec<(usize, usize, wordcraft_doc::eq::Raise)> = runs
+                    .iter()
+                    .filter_map(|(start, end, props)| match props.vert_align {
+                        Some(wordcraft_doc::props::VertAlign::Superscript) => Some((*start, *end, wordcraft_doc::eq::Raise::Sup)),
+                        Some(wordcraft_doc::props::VertAlign::Subscript) => Some((*start, *end, wordcraft_doc::eq::Raise::Sub)),
+                        _ => None,
+                    })
+                    .collect();
+                wordcraft_doc::eq::parse_math_with(trimmed, &raises).map(|math| std::sync::Arc::new(wordcraft_doc::eq::Formula { math, runs }))
+            }
         };
         // The visible result owns the field's formatting; empty results keep the begin's.
         let props = f
@@ -147,7 +177,7 @@ impl Reader<'_> {
             })
             .unwrap_or(&f.props)
             .clone();
-        let obj = InlineObject::Field { instr, result, locked: f.locked, dirty: f.dirty, code: false, form: f.form };
+        let obj = InlineObject::Field { instr, result, locked: f.locked, dirty: f.dirty, code: false, form: f.form, math };
         if let Some(parent) = sc.fields.last_mut()
             && !parent.spilled
             && parent.phase == Phase::Instr
@@ -168,7 +198,15 @@ impl Reader<'_> {
             f.spilled = true;
             let form = std::mem::take(&mut f.form);
             pb.push_obj(
-                InlineObject::Field { instr: f.instr.trim().to_string(), result: String::new(), locked: f.locked, dirty: f.dirty, code: false, form },
+                InlineObject::Field {
+                    instr: f.instr.trim().to_string(),
+                    result: String::new(),
+                    locked: f.locked,
+                    dirty: f.dirty,
+                    code: false,
+                    form,
+                    math: None,
+                },
                 &f.props,
             );
             for (it, p) in f.buf.drain(..) {

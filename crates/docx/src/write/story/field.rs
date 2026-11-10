@@ -1,17 +1,29 @@
 use super::toc::is_toc;
 use super::{CharProps, W, Writer, rpr};
 
+/// A field's begin and code, as [`Writer::field_start`] writes them.
+pub(super) struct FieldStart<'a> {
+    pub instr: &'a str,
+    pub locked: bool,
+    pub dirty: bool,
+    pub form: &'a str,
+    pub runs: &'a [(usize, usize, CharProps)],
+}
+
 pub(super) struct FieldData<'a> {
     pub instr: &'a str,
     pub result: &'a str,
     pub locked: bool,
     pub dirty: bool,
     pub form: &'a str,
+    /// The code's runs and their formatting, as read (`eq::Formula::runs`): a superscript `2`
+    /// in `a2` keeps its run. Empty for a field made here, whose code is one run.
+    pub runs: &'a [(usize, usize, CharProps)],
 }
 
 impl Writer<'_> {
     pub(super) fn field(&mut self, w: &mut W, field: FieldData<'_>, props: &CharProps) {
-        let FieldData { instr, result, locked, dirty, form } = field;
+        let FieldData { instr, result, locked, dirty, form, runs } = field;
         if self.toc_hold_end && is_toc(instr) {
             // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).
             self.toc_hold_end = false;
@@ -32,7 +44,7 @@ impl Writer<'_> {
             w.close("w:r");
         };
         self.rev_open(w, props);
-        self.field_start(w, instr, locked, dirty, form, props);
+        self.field_start(w, FieldStart { instr, locked, dirty, form, runs }, props);
         if !result.is_empty() {
             run(w, &|w| {
                 let mut buf = String::new();
@@ -112,7 +124,8 @@ impl Writer<'_> {
     /// A field's begin, instruction and separate runs.
     /// A field's begin, code and separator; `form` is a legacy form field's `w:ffData`, which
     /// belongs inside the begin.
-    pub(super) fn field_start(&self, w: &mut W, instr: &str, locked: bool, dirty: bool, form: &str, props: &CharProps) {
+    pub(super) fn field_start(&self, w: &mut W, f: FieldStart<'_>, props: &CharProps) {
+        let FieldStart { instr, locked, dirty, form, runs } = f;
         let del = self.is_del(props);
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
@@ -136,8 +149,41 @@ impl Writer<'_> {
                 w.close("w:fldChar");
             }
         });
-        let instr_text = format!(" {} ", instr.trim());
-        run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
+        let code = instr.trim();
+        let tag = if del { "w:delInstrText" } else { "w:instrText" };
+        // One run with `props` holding `text` as instruction text.
+        let leaf = |w: &mut W, p: &CharProps, text: &str| {
+            w.open("w:r", &[]);
+            rpr(w, p);
+            w.leaf(tag, &[("xml:space", "preserve")], text);
+            w.close("w:r");
+        };
+        if runs.is_empty() {
+            leaf(w, props, &format!(" {code} "));
+        } else {
+            // The code's runs as read: their own formatting, gaps and all.
+            leaf(w, props, " ");
+            let mut at = 0usize;
+            for (start, end, p) in runs {
+                let (start, end) = (*start, (*end).min(code.len()));
+                if start < at || start >= end {
+                    continue;
+                }
+                if start > at
+                    && let Some(gap) = code.get(at..start)
+                {
+                    leaf(w, props, gap);
+                }
+                if let Some(seg) = code.get(start..end) {
+                    leaf(w, p, seg);
+                }
+                at = end;
+            }
+            if let Some(tail) = code.get(at..).filter(|t| !t.is_empty()) {
+                leaf(w, props, tail);
+            }
+            leaf(w, props, " ");
+        }
         run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
     }
 }

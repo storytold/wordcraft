@@ -176,10 +176,17 @@ impl Reader<'_> {
                     && !f.spilled
                     && f.instr.len() < MAX_INSTR
                 {
+                    let text = k.text();
                     if f.sizes.len() < 64 {
                         f.sizes.push((f.instr.len(), props.size));
                     }
-                    f.instr.push_str(&k.text());
+                    // The code's runs: an EQ field's formula is drawn with the code's superscript
+                    // runs raised, and a save writes the code's formatting back (see `eq::Formula`).
+                    if f.runs.len() < 64 {
+                        let start = f.instr.len();
+                        f.runs.push((start, start.saturating_add(text.len()), props.clone()));
+                    }
+                    f.instr.push_str(&text);
                 }
             }
             "w:tab" => self.emit_text(sc, pb, "\t", props),
@@ -293,7 +300,15 @@ impl Reader<'_> {
             "w:pgNum" => self.emit_obj(
                 sc,
                 pb,
-                InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+                InlineObject::Field {
+                    instr: "PAGE".into(),
+                    result: String::new(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                    math: None,
+                },
                 props,
             ),
             "w:ruby" => self.read_ruby(sc, pb, k, props),
