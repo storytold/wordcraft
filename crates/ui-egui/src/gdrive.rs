@@ -115,6 +115,23 @@ pub(crate) fn exports_to_drive(app: &WordApp) -> bool {
     app.ui.google_drive && app.drive.signed_in == Some(true) && app.drive.export_to_drive
 }
 
+/// File › Export › Google Docs document: shown once Google Drive is on and signed in.
+pub(crate) fn export_google_doc_button(app: &mut WordApp, ui: &mut egui::Ui) {
+    if !app.ui.google_drive || app.drive.signed_in != Some(true) {
+        return;
+    }
+    let label = egui::RichText::new(tl!("Google Docs document (in Google Drive)")).font(crate::theme::medium(13.5));
+    if ui
+        .add(egui::Button::new(label).min_size(egui::vec2(320.0, 34.0)))
+        .on_hover_text(tl!("A copy Drive converts to a Google Doc you can edit in Google Docs; this document doesn't change"))
+        .clicked()
+        && let Err(e) = app.run("ui.drive.export", json!({"format": "gdoc"}))
+    {
+        app.status(e);
+    }
+    ui.add_space(4.0);
+}
+
 /// File › Export's "Save the copy to Google Drive" checkbox, shown once signed in.
 pub(crate) fn export_checkbox(app: &mut WordApp, ui: &mut egui::Ui) {
     if !app.ui.google_drive || app.drive.signed_in != Some(true) {
@@ -577,6 +594,8 @@ mod native {
         Export {
             name: String,
             bytes: Vec<u8>,
+            /// Convert to a Google Doc (the bytes are Word) instead of keeping the format.
+            google_doc: bool,
         },
     }
 
@@ -737,9 +756,12 @@ mod native {
     /// file in My Drive, named after the document. Nothing about the document changes.
     fn export(app: &mut WordApp, params: &Value) -> Result<Value, String> {
         let format = params.get("format").and_then(Value::as_str).unwrap_or_default().to_ascii_lowercase();
-        if !super::EXPORT_FORMATS.contains(&format.as_str()) {
-            return Err(format!("`format` is one of {}", super::EXPORT_FORMATS.join(", ")));
+        // `gdoc`: a Google Doc, uploaded as Word for Drive to convert.
+        let google_doc = format == "gdoc";
+        if !google_doc && !super::EXPORT_FORMATS.contains(&format.as_str()) {
+            return Err(format!("`format` is gdoc or one of {}", super::EXPORT_FORMATS.join(", ")));
         }
+        let format = if google_doc { "docx".to_string() } else { format };
         if app.services.drive_profile.is_none() {
             return Err("Google Drive works with the WordCraft desktop app".into());
         }
@@ -747,7 +769,7 @@ mod native {
         let password = app.session.password.as_ref().map(wordcraft_engine::Password::as_str);
         let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
         let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
-        let r = send(app, Job::Export { name: name.clone(), bytes }, "export")?;
+        let r = send(app, Job::Export { name: name.clone(), bytes, google_doc }, "export")?;
         app.status(i18n::fmt(tl!("Exporting {name} to Google Drive…"), &[("name", &name)]));
         Ok(r)
     }
@@ -831,7 +853,8 @@ mod native {
                 Job::Save { doc, rev, local, target, bytes, marked_saved } => {
                     drive.save(&target, &bytes).map(|file| Event::Saved { doc, rev, local, file, marked_saved })
                 }
-                Job::Export { name, bytes } => drive.save(&SaveTarget::New { name, parent: None }, &bytes).map(Event::Exported),
+                Job::Export { name, bytes, google_doc: true } => drive.create_google_doc(&name, &bytes).map(Event::Exported),
+                Job::Export { name, bytes, google_doc: false } => drive.save(&SaveTarget::New { name, parent: None }, &bytes).map(Event::Exported),
             };
             emit(r.unwrap_or_else(|error| Event::Failed { what, error, doc }));
             if !drive.auth.signed_in() {

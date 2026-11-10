@@ -907,6 +907,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(12.0);
     crate::gdrive::export_checkbox(app, ui);
     crate::print_page::export_formats(app, ui);
+    crate::gdrive::export_google_doc_button(app, ui);
 }
 
 #[cfg(test)]

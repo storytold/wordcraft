@@ -501,3 +501,18 @@ fn a_downloaded_client_file_is_found_and_imported() {
     assert_eq!(ClientConfig::load(Some(&profile)).unwrap().client_id, "2-new.apps.googleusercontent.com");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn a_google_doc_is_a_word_upload_drive_converts() {
+    let fake = Fake::with(vec![token_reply(), (200, file_json("g9", "Essay", drive::MIME_GOOGLE_DOC, "1"))]);
+    let mut d = Drive::new(signed_in(&fake));
+    let file = d.create_google_doc("Essay.docx", b"PKDOCX").unwrap();
+    assert!(file.is_google_doc());
+    let up = &fake.seen()[1];
+    assert_eq!(up.method, Method::Post);
+    let body = String::from_utf8_lossy(&up.body);
+    assert!(body.contains(r#""name":"Essay""#), "no .docx on a Google Doc's name: {body}");
+    assert!(body.contains(&format!(r#""mimeType":"{}""#, drive::MIME_GOOGLE_DOC)), "asks Drive for a Google Doc");
+    assert!(body.contains(&format!("Content-Type: {}\r\n", drive::MIME_DOCX)) && body.contains("PKDOCX"), "the content is Word");
+    assert!(matches!(d.create_google_doc("a\nb", b"PK"), Err(Error::Invalid(_))));
+}

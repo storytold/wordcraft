@@ -23,6 +23,9 @@ flowchart LR
 - **Export to Drive.** Once signed in, File › Export (also the ribbon's **Share** button) offers
   **Save the copy to Google Drive**: the chosen format goes to My Drive as a new file, named after
   the document, instead of a folder on this computer. The document itself doesn't change.
+- **Export as a Google Doc.** Once signed in, File › Export also offers **Google Docs document
+  (in Google Drive)**: WordCraft uploads a Word copy and Drive converts it into a Google Doc you
+  can edit in Google Docs. The document itself doesn't change.
 
 - **Formats.** The list shows Word (`.docx`), OpenDocument (`.odt`), RTF and Google Docs files.
   A Google Doc opens as a Word copy (Drive exports it as `.docx`). Saving it adds a new `.docx`
@@ -130,7 +133,7 @@ headless.
 | `ui.drive.enable` | `{"value"?: bool}`: turns Google Drive on or off (File › Options › Accounts); off by default. Every other command except `status` says how to turn it on |
 | `ui.drive.importClient` | `{"path"?: string, "remove"?: bool}`: imports a client JSON downloaded from Google Cloud console; without `path`, the newest `client_secret_*.json` in Downloads, deleted after import |
 | `ui.drive.client` | `{"clientId": string, "clientSecret"?: string}`: writes `google-drive.json` and reads it again |
-| `ui.drive.export` | `{"format": "pdf"\|"docx"\|"odt"\|"ott"\|"fodt"\|"rtf"\|"html"\|"md"\|"tex"\|"txt"}`: a copy as a new file in My Drive |
+| `ui.drive.export` | `{"format": "gdoc"\|"pdf"\|"docx"\|"odt"\|"ott"\|"fodt"\|"rtf"\|"html"\|"md"\|"tex"\|"txt"}`: a copy as a new file in My Drive (`gdoc`: a Word copy Drive converts to a Google Doc) |
 | `ui.drive.status` | `{enabled, available, signedIn, busy, error, files, morePages, document}`; `document` is the active document's Drive file, if any |
 | `ui.drive.start` | Reads the OAuth client and the keychain (the page does this when it opens) |
 | `ui.drive.reload` | Reads `google-drive.json` again |

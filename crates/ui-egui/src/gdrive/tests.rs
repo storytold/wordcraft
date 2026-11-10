@@ -262,6 +262,7 @@ fn drive_export_formats_all_serialize() {
         assert!(bytes.is_ok_and(|b| !b.is_empty()), "{ext}");
     }
     assert!(a.run("ui.drive.export", json!({"format": "png"})).unwrap_err().contains("one of"));
+    assert!(a.run("ui.drive.export", json!({"format": "gdoc"})).unwrap_err().contains("desktop app"), "gdoc is a format");
     assert!(a.run("ui.drive.export", json!({"format": 3})).is_err());
     assert!(a.run("ui.drive.export", json!({"format": "pdf"})).unwrap_err().contains("desktop app"));
     assert!(!super::exports_to_drive(&a), "not signed in: Export asks for a folder");
