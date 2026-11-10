@@ -1,6 +1,7 @@
+use super::super::NormalizedF32;
 use super::text::GlyphPaint;
 use super::{
-    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, NormalizedF32, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash,
+    Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash,
     Surface, Transform, append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path,
     vector_picture,
 };

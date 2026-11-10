@@ -36,7 +36,7 @@ use krilla::error::KrillaError;
 use krilla::geom::{Path, PathBuilder, Point, Size, Transform};
 use krilla::image::Image;
 use krilla::metadata::DateTime;
-use krilla::num::NormalizedF32;
+pub(crate) use krilla::num::NormalizedF32;
 use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, LineCap, LineJoin, Stroke, StrokeDash};

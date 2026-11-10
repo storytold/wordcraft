@@ -309,9 +309,6 @@ fn device_pixel(view: Affine) -> f64 {
     if scale.is_finite() && scale > 1e-9 { 1.0 / scale } else { 1.0 }
 }
 
-/// Largest page-background picture decoded, in pixels (hostile files).
-const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
-
 /// Draw the page's background fill (Design › Page Color › Fill Effects) behind the content:
 /// gradient, then pattern, then a picture or texture (Word keeps one fill; a file that states
 /// more draws them in that order). A dark page inks the gradient and pattern colours; a picture

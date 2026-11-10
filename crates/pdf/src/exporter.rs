@@ -10,6 +10,7 @@ use super::{
     OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface, Tag, TagGroup,
     TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
+use super::NormalizedF32;
 use wordcraft_doc::picfx::PicFx;
 
 mod draw;
