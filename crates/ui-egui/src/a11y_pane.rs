@@ -10,10 +10,6 @@ use crate::theme::{regular, semibold};
 
 /// Review › Check Accessibility: the findings for the document as it is now.
 pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Accessibility") {
-        let _ = app.run("view.accessibilityPane", json!({"value": false}));
-        return;
-    }
     let issues = issues(app, ui);
     if issues.is_empty() {
         ui.label(egui::RichText::new(tl!("No accessibility issues found.")).weak());
@@ -65,7 +61,7 @@ pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
 
 /// The checker's findings, kept until the document changes.
 fn issues(app: &mut WordApp, ui: &Ui) -> Vec<Value> {
-    let key = egui::Id::new("a11y_issues");
+    let key = egui::Id::unique("a11y_issues");
     let stamp = (app.session.document_id(), app.session.rev());
     if let Some((s, v)) = ui.data(|d| d.get_temp::<((u64, u64), Vec<Value>)>(key))
         && s == stamp
@@ -90,10 +86,6 @@ fn go_to(app: &mut WordApp, issue: &Value) {
 /// Alt Text: the selected picture's, shape's, chart's or group's description and decorative mark,
 /// or the title and description of the table the caret is in.
 pub fn alt_text(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Alt Text") {
-        let _ = app.run("view.altTextPane", json!({"value": false}));
-        return;
-    }
     if let Some((pos, obj)) = wordcraft_engine::cmd::objects::selected(&app.session) {
         let decorative = obj.is_decorative();
         ui.label(egui::RichText::new(tl!("Describe what this object shows, for people who can't see it.")).weak());
@@ -140,7 +132,7 @@ fn still_selected(app: &WordApp, pos: &Pos) -> bool {
 /// A text box editing `current`; the draft lives in egui memory while it has focus (frame-local
 /// buffers lose keystrokes). Returns the new text when editing ends with a change.
 fn draft_box(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, current: &str, enabled: bool, multiline: bool) -> Option<String> {
-    let key = egui::Id::new(key);
+    let key = egui::Id::unique(key);
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| current.to_string());
     let edit = if multiline { egui::TextEdit::multiline(&mut text).desired_rows(5) } else { egui::TextEdit::singleline(&mut text) };
     let r = ui.add_enabled(enabled, edit.desired_width(f32::INFINITY));
