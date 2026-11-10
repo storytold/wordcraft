@@ -631,6 +631,30 @@ fn is_dark(f: &DraftFill) -> bool {
 mod tests {
     use super::*;
 
+    /// A new picture pick drops the cached thumbnail for its path — including a cached failed
+    /// load — so the pane reloads the file instead of repainting the stale entry.
+    #[test]
+    fn a_new_picture_pick_drops_the_stale_preview_cache_entry() {
+        let key = "picked.png".to_string();
+        let tex_id = Id::unique(("formatBackground.picture", &key));
+        // A fill pointing at a missing file caches its failed load. The write lands at the end
+        // of one pass and is visible from the next, as the pane's own repaints do.
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("x")), Default::default());
+        app.background.fill = DraftFill::Picture { path: Some(key.clone()), media: None, data: None, data_key: None, tile: false, transparency: 0.0 };
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_picture_preview(&app, ui, ui.painter(), Rect::from_min_size(pos2(10.0, 10.0), vec2(40.0, 30.0)));
+        })
+        .drop_without_applying_deltas();
+        ctx.run_ui(egui::RawInput::default(), |_| {
+            assert!(matches!(ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(tex_id)), Some(None)), "the failed load is cached");
+        })
+        .drop_without_applying_deltas();
+        // A new pick of the same path clears the entry, so the next repaint reloads the file.
+        crate::file_dialogs::clear_background_preview_cache(&ctx, &key);
+        assert!(ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(tex_id)).is_none(), "the stale entry is gone");
+    }
+
     /// A pattern's marks stop at the rectangle they are painted in: `dkDnDiag`'s strokes run to
     /// y = 2 and `dkUpDiag`'s to y = -1, so without the clip they land over the page's margin in
     /// the preview and over the gallery beside a swatch.

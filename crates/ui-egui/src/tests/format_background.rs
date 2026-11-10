@@ -96,6 +96,19 @@ fn a_cancelled_background_picker_ends_its_request() {
     assert!(!a.background_picture_pending);
 }
 
+/// A new picture pick lands in the draft (the cache-clearing itself is covered inside
+/// `format_background`, where `paint_picture_preview` is visible).
+#[test]
+fn a_new_picture_pick_lands_in_the_draft() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Background")), Default::default());
+    a.ctx = Some(egui::Context::default());
+    a.finish_pick(crate::file_dialogs::AfterPick::BackgroundPicture, Some("picked.png".into())).expect("the pick lands in the draft");
+    assert!(
+        matches!(a.background.fill, crate::format_background::DraftFill::Picture { ref path, .. } if path.as_deref() == Some("picked.png")),
+        "the new pick is the draft"
+    );
+}
+
 /// Two pictures of the same encoded length get different thumbnail cache keys: the head of a PNG
 /// is its signature and header, so sampling only the head would show the first one's thumbnail.
 #[test]

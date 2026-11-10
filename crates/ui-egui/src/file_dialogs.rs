@@ -55,6 +55,12 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     }
 }
 
+/// Drop the Format Background picture-preview cache entry for `path`, so a new pick of a path the
+/// pane already tried — including one that failed to load — reloads the file on the next frame.
+pub(crate) fn clear_background_preview_cache(ctx: &egui::Context, path: &str) {
+    ctx.data_mut(|d| d.remove::<Option<egui::TextureHandle>>(egui::Id::unique(("formatBackground.picture", path))));
+}
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
@@ -264,8 +270,19 @@ impl WordApp {
                     crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
                     _ => (false, 0.0),
                 };
-                self.background.fill =
-                    crate::format_background::DraftFill::Picture { path: Some(path), media: None, data: None, data_key: None, tile, transparency };
+                self.background.fill = crate::format_background::DraftFill::Picture {
+                    path: Some(path.clone()),
+                    media: None,
+                    data: None,
+                    data_key: None,
+                    tile,
+                    transparency,
+                };
+                // A new pick must repaint even when the cache holds this path from before,
+                // including a cached failed load: drop that entry so the next frame reloads it.
+                if let Some(ctx) = self.ctx.clone() {
+                    clear_background_preview_cache(&ctx, &path);
+                }
                 Ok(json!({"pending": "formatBackground"}))
             }
             AfterPick::Font => {
@@ -321,7 +338,33 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 let mut params = settings;
                 params["path"] = json!(path);
+                // Save these pages as PDF is the print job as a file: backgrounds off strips the
+                // fills (as the job does), backgrounds on keeps them. The printer path borrows
+                // this in printing.rs; the file path borrows it here so neither mutates the open
+                // document.
+                let (colour, picture, gradient, pattern) = if self.ui.print_backgrounds {
+                    (None, None, None, None)
+                } else {
+                    (
+                        self.session.doc.settings.page_color.take(),
+                        self.session.doc.settings.page_picture.take(),
+                        self.session.doc.settings.page_gradient.take(),
+                        self.session.doc.settings.page_pattern.take(),
+                    )
+                };
                 let r = self.run("file.printPdf", params);
+                if colour.is_some() {
+                    self.session.doc.settings.page_color = colour;
+                }
+                if picture.is_some() {
+                    self.session.doc.settings.page_picture = picture;
+                }
+                if gradient.is_some() {
+                    self.session.doc.settings.page_gradient = gradient;
+                }
+                if pattern.is_some() {
+                    self.session.doc.settings.page_pattern = pattern;
+                }
                 if r.is_ok() {
                     self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
                 }
