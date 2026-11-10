@@ -3,10 +3,11 @@
 
 use serde_json::json;
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::{Model, Role, Room};
-use wordcraft_collab::wire::{Op, OpId, OpKind, RejectCode, Target};
+use wordcraft_collab::wire::{HistoryAction, Op, OpId, OpKind, RejectCode, Target};
 
 use wordcraft_doc::{Block, CharProps, Document, Paragraph, Path, StoryRef, Table};
 use wordcraft_engine::Session;
@@ -371,6 +372,193 @@ fn a_hundred_page_document_keeps_up_with_edits() {
     }
     assert_eq!(room.version(), 100);
     assert!(!room.model().snapshot().is_empty());
+}
+
+/// One line of the long document: long enough that two paragraphs fill a line,
+/// which is what makes 3000 of them run past a hundred pages.
+fn long_line(index: usize) -> String {
+    format!(
+        "Paragraph {index} of a long document carries a sentence long enough that two of them fill a line of body text, the way a page of ordinary prose does."
+    )
+}
+
+fn long_document(paragraphs: usize) -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    for index in 0..paragraphs {
+        doc.body.push(Arc::new(Block::Para(Paragraph::with_text(&long_line(index), CharProps::default()))));
+    }
+    doc
+}
+
+/// A client of the room: its name, its own session, its own id map and the
+/// version it has seen. The ids are deterministic, so every client builds the
+/// same map the room issues on join (ADR-0002).
+type Replica = (&'static str, Session, NodeIds, u64);
+
+fn replica_of(name: &'static str, document: &Document) -> Replica {
+    let session = Session::new(document.clone());
+    let mut ids = NodeIds::new();
+    SessionModel::from_document(document.clone()).index_nodes(&mut ids);
+    (name, session, ids, 0)
+}
+
+fn paragraph_text(session: &Session, index: usize) -> String {
+    session.doc.body.get(index).and_then(|block| block.as_para()).map(|para| para.text.clone()).unwrap_or_default()
+}
+
+/// Apply one authoritative answer to every client, the way the server's
+/// broadcast does.
+fn broadcast(replicas: &mut [Replica], delta: &serde_json::Value, version: u64) {
+    for replica in replicas {
+        crate::apply_delta(&mut replica.1, &mut replica.2, delta).expect("a replica applies the authoritative delta");
+        replica.3 = version;
+    }
+}
+
+/// Three clients edit three bands of paragraphs in rounds. Each sends the last
+/// version the server answered it, so every round after the first carries a
+/// base behind the head: the room sees parallel edits, not a queue (§5.22).
+fn drive_parallel_edits(
+    room: &mut Room<SessionModel>,
+    nodes: &[u32],
+    replicas: &mut [Replica],
+    per_client: usize,
+) -> (Vec<u64>, Vec<Vec<Op>>, usize) {
+    let mut sequence = vec![0u64; replicas.len()];
+    let mut heard = vec![0u64; replicas.len()];
+    let mut sent: Vec<Vec<Op>> = vec![Vec::new(); replicas.len()];
+    let mut accepted = Vec::new();
+    let mut conflicted = 0;
+    for round in 0..per_client {
+        for client in 0..replicas.len() {
+            let name = replicas[client].0;
+            let index = client * per_client + round;
+            sequence[client] += 1;
+            let marker = format!("{name}{round} ");
+            let edit = op(name, sequence[client], heard[client], OpKind::Primitive, nodes[index], 0, json!({"op": "insert_text", "text": marker}));
+            let applied = room.submit(name, Role::Editor, edit.clone()).expect("an edit on a long document");
+            if applied.conflict {
+                conflicted += 1;
+            }
+            heard[client] = applied.version;
+            accepted.push(applied.version);
+            sent[client].push(edit);
+            let delta = applied.delta.as_ref().expect("a primitive carries its authoritative delta");
+            broadcast(replicas, delta, applied.version);
+        }
+    }
+    (accepted, sent, conflicted)
+}
+
+fn assert_replicas_hold(replicas: &[Replica], server: &serde_json::Value, head: u64) {
+    for (name, session, _, version) in replicas {
+        assert_eq!(*version, head, "{name} saw every version");
+        assert_eq!(&serde_json::to_value(&session.doc).expect("the replica document as json"), server, "{name} converged on the server state");
+    }
+}
+
+/// One marker per edit, none duplicated, and the undone paragraph back to its
+/// original text; every paragraph outside the three bands is untouched.
+fn assert_edits_landed(texts: &[String], names: &[&str], per_client: usize) {
+    for (client, name) in names.iter().enumerate() {
+        for round in 0..per_client {
+            let index = client * per_client + round;
+            let marker = format!("{name}{round} ");
+            if client == 0 && round + 1 == per_client {
+                assert!(!texts[index].contains(&marker), "the undo took alice's last edit back");
+                assert_eq!(texts[index], long_line(index), "the undone paragraph is otherwise untouched");
+            } else {
+                assert_eq!(texts[index].matches(&marker).count(), 1, "one insertion, no duplicate, in paragraph {index}");
+                assert!(texts[index].starts_with(&marker), "the marker leads paragraph {index}");
+            }
+        }
+    }
+    for (index, text) in texts.iter().enumerate().skip(names.len() * per_client) {
+        assert_eq!(text, &long_line(index), "paragraph {index} was not touched");
+    }
+}
+
+/// A client that saw version 0 replays the journal from the initial file: the
+/// tail holds every accepted operation and lands on the same document.
+fn assert_journal_replays(room: &mut Room<SessionModel>, document: &Document, server: &serde_json::Value, accepted: usize) {
+    let (_, mut late, mut late_ids, _) = replica_of("late", document);
+    let tail = room.join(Some(0), false).replay.expect("the journal still holds the whole session");
+    assert_eq!(tail.len(), accepted, "the journal lost no operation");
+    for applied in &tail {
+        let delta = applied.delta.as_ref().expect("every accepted operation carries a delta");
+        crate::apply_delta(&mut late, &mut late_ids, delta).expect("a late replica replays the journal");
+    }
+    assert_eq!(serde_json::to_value(&late.doc).expect("the late replica as json"), *server, "the journal replays to the same document");
+}
+
+/// The long document still paginates, and every replica paginates it alike.
+fn assert_same_pagination(replicas: &mut [Replica]) {
+    let mut pages = Vec::new();
+    for (name, session, _, _) in replicas.iter_mut() {
+        let count = session.layout().pages.len();
+        assert!(count >= 100, "{name} paginates {count} pages, not a hundred");
+        pages.push(count);
+    }
+    assert!(pages.windows(2).all(|pair| pair[0] == pair[1]), "the same pagination on every replica: {pages:?}");
+}
+
+#[test]
+fn three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits() {
+    const PARAGRAPHS: usize = 3000;
+    const PER_CLIENT: usize = 30;
+    let doc = long_document(PARAGRAPHS);
+    let mut room = Room::new(SessionModel::from_document(doc.clone()));
+    let plan = room.join(None, false);
+    let by_path: HashMap<Vec<u32>, u32> = plan.nodes.iter().filter(|node| node.story == "body").map(|node| (node.path.clone(), node.id)).collect();
+    let nodes: Vec<u32> = (0..PARAGRAPHS).map(|index| *by_path.get(&vec![index as u32]).expect("a session id for every paragraph")).collect();
+
+    let mut replicas: Vec<Replica> = ["alice", "bob", "carol"].into_iter().map(|name| replica_of(name, &doc)).collect();
+    let (mut accepted, mut sent, conflicted) = drive_parallel_edits(&mut room, &nodes, &mut replicas, PER_CLIENT);
+    assert_eq!(conflicted, 3 * PER_CLIENT - 1, "every edit but alice's first carried a base behind the head");
+
+    // Alice undoes her newest step while bob's and carol's edits stand. Her
+    // request carries the stale base her replica is at, as a live one would.
+    let step = sent[0].pop().expect("alice edited");
+    let undo = Op {
+        op_id: OpId::new("alice", PER_CLIENT as u64 + 1),
+        base_version: step.base_version,
+        epoch: None,
+        kind: step.kind,
+        target: step.target.clone(),
+        payload: json!({}),
+        history: Some(HistoryAction::Undo { op_id: step.op_id.clone() }),
+    };
+    let answer = room.submit("alice", Role::Editor, undo).expect("an author undoes its own step while others are live");
+    assert_eq!(answer.history, Some(HistoryAction::Undo { op_id: step.op_id.clone() }), "the answer names the history step");
+    accepted.push(answer.version);
+    let delta = answer.delta.as_ref().expect("the inverse carries its authoritative delta");
+    broadcast(&mut replicas, delta, answer.version);
+
+    // Every accepted operation moved the version once, in order: no loss, no
+    // duplicate.
+    assert_eq!(accepted, (1..=accepted.len() as u64).collect::<Vec<u64>>(), "one version per accepted operation");
+    let head = room.version();
+    assert_eq!(head as usize, PER_CLIENT * 3 + 1, "the session holds every edit and the undo, and nothing else");
+
+    // All three replicas hold the server's document and its version.
+    let server = serde_json::to_value(&room.model().session().doc).expect("the server document as json");
+    assert_eq!(room.model().session().doc.body.len(), PARAGRAPHS, "no block was lost or duplicated");
+    assert_replicas_hold(&replicas, &server, head);
+
+    let texts: Vec<String> = (0..PARAGRAPHS).map(|index| paragraph_text(&replicas[0].1, index)).collect();
+    assert_edits_landed(&texts, &["alice", "bob", "carol"], PER_CLIENT);
+
+    assert_journal_replays(&mut room, &doc, &server, accepted.len());
+
+    // A retried operation is answered from the `opId` window instead of landing
+    // a second time.
+    let retry = room.submit("alice", Role::Editor, sent[0][0].clone()).expect("a retry is answered from the window");
+    assert_eq!(retry.version, accepted[0], "the retry is the same answer");
+    assert_eq!(room.version(), head, "a retry does not move the version");
+    assert_eq!(serde_json::to_value(&room.model().session().doc).expect("json"), server, "a retry does not touch the document");
+
+    assert_same_pagination(&mut replicas);
 }
 
 fn format_room(text: &str) -> (Room<SessionModel>, u32) {

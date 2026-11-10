@@ -4,10 +4,12 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `467948fa` plus this status commit — 69 commits over
-  `4b0d3995`; the fork carries the same head and PR #5834 is `MERGEABLE`
-  (§5.21). Its workflows wait as `action_required` for a maintainer to approve
-  them, which is the GitHub rule for a fork PR (§5.2)
+- HEAD at this writing: `a785b611` plus this commit (the §5.22 test and this
+  page) — 70 commits over `4b0d3995` up to `a785b611`, so the branch is two
+  commits ahead of `fork/feature/realtime-collaboration` at `467948fa`, the head
+  of PR #5834 (§5.21, §5.22). The PR is `MERGEABLE`; its workflows wait as
+  `action_required` for a maintainer to approve them, which is the GitHub rule
+  for a fork PR (§5.2)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -279,7 +281,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests |
+| Changes converge without loss or duplicates | done | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -309,14 +311,24 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
-- 329 protocol/adapter/client/server tests, all green; the LibreOffice commit
-  gate stays the one ignored test. The nine crates at this writing:
-  `collab` 51, `collab-doc` 113, `collab-engine` 56, `collab-app` 33,
-  `collab-client` 14, `collab-web` 5, `collab-ws` 1, `wordcraft-web` 9,
-  `collab-server` 47 (their socket scenarios included). §5.18 added 19: 13 unit
+- 349 protocol/adapter/client/server tests, all green; the LibreOffice commit
+  gate stays the one ignored test. The nine crates in this run:
+  `collab` 59, `collab-doc` 113, `collab-engine` 58, `collab-app` 37,
+  `collab-client` 17, `collab-web` 5, `collab-ws` 1, `wordcraft-web` 9,
+  `collab-server` 50 (their socket scenarios included). §5.18 added 19: 13 unit
   tests of the callback client (`cabinet.rs`), 1 store round-trip of the cabinet
   etag, 4 server scenarios with a fake cabinet on loopback and 1 wire test that
   an older `committed` still parses.
+- §5.22 added 1 test to `collab-engine` (57 → 58). Slice run on the build host
+  `agents` from the committed tree: `cargo fmt --all -- --check` EXIT=0,
+  `cargo clippy -p wordcraft-collab-engine --all-targets -- -D warnings` EXIT=0,
+  and `cargo test` over the nine crates above — 349 passed, 0 failed, 1 ignored
+  (the LibreOffice commit gate); `collab-engine` 58/0/0 in 1.23 s, 1.23 s of it
+  the new test.
+- Full gate on the final tree (`cargo xtask ci`, build host `agents`, with
+  `CRAFT_I18N_DIR` and `CRAFT_FONTS_DIR` from the host): all 9 steps passed —
+  fmt, clippy (`--workspace --all-targets -D warnings`), test (5991 passed, 0
+  failed, 11 ignored), i18n-report, language, doctest, assets, layers and wasm.
 - Full gate on the same tree (`cargo xtask ci`, build host `agents`, with
   `CRAFT_I18N_DIR` and `CRAFT_FONTS_DIR` from the host): all 9 steps passed —
   fmt, clippy (`--workspace --all-targets -D warnings`), test (5969 passed, 0
@@ -2202,6 +2214,68 @@ header states.
 **Docs.** The header now names `467948fa` and the mergeable PR; §5.2 asks only
 for the ready flag once CI has run; the §5.4 table and its closing paragraph
 record the push instead of asking for it.
+
+**Follow-up (2026-11-10).** The commit that carried this entry, `a785b611`, is
+local: `git fetch fork feature/realtime-collaboration` still leaves the fork and
+PR #5834 at `467948fa`. The header had said "`467948fa` plus this status
+commit", which read as if the PR already carried it; it now names `a785b611` as
+the last commit below this one and counts the local commits over the PR head.
+Nothing was pushed; the branch, the PR and CI were left alone.
+
+### 5.22 Three replicas on a hundred-page document, one of them undoing under live edits (run 2026-11-10)
+
+TASK.md §8 asks that a large document stay usable with several participants.
+`a_hundred_page_document_keeps_up_with_edits` covered 3000 paragraphs in one
+room with one edit at a time — no replicas, no deltas, no undo. This entry adds
+`crates/collab-engine/src/tests.rs::three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits`.
+No production code changed.
+
+**The document.** 3000 body paragraphs of ~170 characters, two lines each, so
+the layout runs to 189 pages on the build host (`Session::layout().pages.len()`),
+the same count on all three replicas. One room over one `SessionModel`.
+
+**The clients.** `alice`, `bob` and `carol`: each a `Session` built from the same
+file plus its own `NodeIds` (the ids are deterministic, ADR-0002), and each
+applies the authoritative delta of every answer — its own and its peers'.
+
+**Parallel edits.** 30 rounds; in every round the three clients edit one
+paragraph of their own band (0–29, 30–59, 60–89) with a primitive `insert_text`
+carrying a unique marker. Each sends the last version the server answered *it*,
+so 89 of the 90 edits landed with `conflict: true` (ADR-0004) — only alice's
+first, sent at head 0, did not; bob's and carol's first edits already carried a
+base their peer had moved. Typing travels as a primitive because that is what
+the client's diff produces (ADR-0002); a command is an undo barrier (§4) and
+would make the undo half of this test impossible.
+
+**The undo.** Alice undoes her newest step with a `history: undo` request on the
+stale base her replica is at. The room accepts it — her step is newest and nobody
+else touched that paragraph — the answer names the history step and carries the
+inverse's delta, and all three replicas apply it.
+
+**What is asserted.**
+
+- 91 accepted operations with versions 1..=91 in order: one version per
+  operation, no loss, no duplicate; head 91.
+- All three replicas hold the server document (JSON equality) and version 91.
+- Content: one marker in every edited paragraph and never twice; alice's last
+  paragraph is back to its original text; the 2910 paragraphs outside the three
+  bands are byte-equal to the original.
+- The journal holds the whole session: a fresh replica that saw version 0
+  replays all 91 deltas and lands on the same document.
+- A retry of alice's first operation is answered from the `opId` window with
+  version 1 and moves neither the head nor the document.
+- Pagination: 189 pages on each of the three replicas, the same count.
+
+**Run.** Build host `agents`, from the committed tree:
+`cargo test -p wordcraft-collab-engine` 58 passed, 0 failed, 0 ignored (the new
+test 1.23 s); the nine collaboration crates 349 passed, 0 failed, 1 ignored;
+`cargo fmt --all -- --check` EXIT=0; `cargo clippy -p wordcraft-collab-engine
+--all-targets -- -D warnings` EXIT=0; the full `cargo xtask ci` passed all 9
+steps (5991 workspace tests, 0 failed, 11 ignored).
+
+**Scope.** Headless only: no socket, no browser, no server process. It proves the
+room and the engine adapter converge and paginate alike at this size; it does not
+replace the two-client host run (§5.1) or the two-machine run still open in §2.
 
 ## 6. Where things live
 
