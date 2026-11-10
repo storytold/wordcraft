@@ -847,3 +847,24 @@ fn a_block_inside_an_item_gets_no_number() {
     let d = import("1. Install:\n\n   ```\n   cargo build\n   cargo test\n   ```\n\n2. Run\n");
     assert!(numbered(&d)[0].contains("cargo build") && numbered(&d)[0].contains("cargo test"), "the code stays in its item: {:?}", numbered(&d));
 }
+
+/// A code block, quote or heading after a sublist in an item stays in the list: the list's next
+/// item keeps its number in Markdown and HTML (#5723 review).
+#[test]
+fn a_block_after_a_sublist_keeps_the_next_items_number() {
+    for src in
+        ["1. a\n   - sub\n\n   ```\n   code\n   ```\n2. b\n", "1. a\n   - sub\n\n   > quoted\n\n2. b\n", "1. a\n   - sub\n\n   # Heading\n\n2. b\n"]
+    {
+        let d = import(src);
+        let text: String = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>().join("|");
+        for w in ["code", "quoted", "Heading"] {
+            if src.contains(w) {
+                assert!(text.contains(w), "{src:?}: the block's text stays: {text}");
+            }
+        }
+        let md = export(&d);
+        assert!(md.contains("\n2. b"), "{src:?}: {md}");
+        let html = crate::html::export(&d);
+        assert_eq!(html.matches("<ol").count(), 1, "{src:?}: one list: {html}");
+    }
+}
