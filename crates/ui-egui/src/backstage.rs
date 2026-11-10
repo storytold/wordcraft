@@ -92,6 +92,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
+                crate::chrome::note_title_drag(ui.ctx(), band);
                 // The chevron's stroke starts at the content edge.
                 let c = if rtl {
                     pos2(band.max.x - 26.0, band.center().y)
