@@ -93,6 +93,14 @@ impl Reader<'_> {
             self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
             return;
         }
+        // A `HYPERLINK` field with no result has no characters to carry its link (LibreOffice writes a link to
+        // an anchor in another file this way, with the link's text after the field). Keep it as an empty range,
+        // so the field stays in the document and is saved again.
+        if !nested_in_instr && hyperlink_target(&f.instr).is_some() && f.buf.iter().all(|(it, _)| matches!(it, Item::Text(t) if t.is_empty())) {
+            self.emit_obj(sc, pb, InlineObject::FieldStart { instr: f.instr.trim().to_string(), locked: f.locked, dirty: f.dirty }, &f.props);
+            self.emit_obj(sc, pb, InlineObject::FieldEnd, &f.props);
+            return;
+        }
         // A `HYPERLINK` field is a link, as a `w:hyperlink` is: its result stays ordinary content
         // carrying the link, so a tab in it reaches its tab stop and the `PAGEREF` in a table of
         // contents entry (Word for the web writes them this way) stays a field of its own (#2174).
