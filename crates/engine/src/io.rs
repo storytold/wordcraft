@@ -474,6 +474,35 @@ pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts:
     }
 }
 
+/// What a document's file looked like when it was read or last written: enough to tell, with one
+/// `stat` call, that another program has changed it since ([`crate::Session::changed_on_disk`],
+/// #5623). A write that keeps the size and lands within the file system's time resolution goes
+/// unnoticed; the next one is seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskStamp {
+    /// When the file was last changed, as the file system reports it (`None` when it doesn't).
+    pub modified: Option<std::time::SystemTime>,
+    /// Its size in bytes.
+    pub len: u64,
+}
+
+/// The file at `path` as it is now: `None` when there is no regular file there (deleted, a
+/// folder, no permission), so a document whose file is gone is left alone.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn disk_stamp(path: &std::path::Path) -> Option<DiskStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    Some(DiskStamp { modified: meta.modified().ok(), len: meta.len() })
+}
+
+/// The web has no files to watch.
+#[cfg(target_arch = "wasm32")]
+pub fn disk_stamp(_path: &std::path::Path) -> Option<DiskStamp> {
+    None
+}
+
 pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
     open_path_with(path, None).map(|(doc, _)| doc)
 }

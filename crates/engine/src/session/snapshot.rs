@@ -17,6 +17,7 @@ impl Session {
         self.doc.ensure_nonempty();
         self.password = None;
         self.file_name = None;
+        self.disk = None;
         // The old document's equation is gone: its editing session cannot carry over.
         self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
@@ -43,6 +44,47 @@ impl Session {
         self.touch();
         self.dirty = false;
         self.made_rev = self.rev;
+        self.relayout();
+    }
+
+    /// Replace the document's content with `doc`, read again from its file (`file.reload`,
+    /// #5623), under the same id: a window showing it keeps showing it and an agent's id stays
+    /// good. The view (zoom, scroll, Read Mode…) stays, and the caret and selection stay where
+    /// they were when the new content still has that place (clamped otherwise). Like
+    /// [`Session::set_document`] otherwise: the old content is gone, so there is no undo
+    /// history, no versions and no unsaved changes. `stamp` is the file as the caller saw it
+    /// before reading it, what the next change on disk is measured against: taken after the read,
+    /// a write that landed during the read would go unnoticed.
+    pub fn reload_document(&mut self, doc: Document, stamp: Option<crate::io::DiskStamp>) {
+        self.autocap = None;
+        self.note_body_replaced();
+        self.bib_style = doc_bib_style(&doc);
+        self.doc = doc;
+        self.doc.ensure_nonempty();
+        // The old document's equation is gone: its editing session cannot carry over.
+        self.math = None;
+        self.pending = None;
+        self.typing = None;
+        self.also_selected.clear();
+        self.column = None;
+        self.column_mode = false;
+        self.widened = None;
+        self.edit_marks.clear();
+        self.new_header_parts.clear();
+        self.hf_return = None;
+        self.go_back_step = 0;
+        self.clamp_selection();
+        // A copy the replaced content kept stays in the recovery list.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.recovery_slot = Default::default();
+        }
+        self.reset_history();
+        self.clear_versions();
+        self.touch();
+        self.dirty = false;
+        self.made_rev = self.rev;
+        self.disk = stamp;
         self.relayout();
     }
 
@@ -76,6 +118,8 @@ impl Session {
             // The custom dictionary file, like the file path: host wiring, not an edit.
             user_dict_path: _,
             dirty,
+            // The file as it was on disk, like the file path: not an edit.
+            disk: _,
             clipboard: _,
             // Like the clipboard: what the next paste can make a move of.
             pending_move: _,
