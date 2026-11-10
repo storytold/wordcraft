@@ -399,6 +399,10 @@ pub fn first_glyph(face: &FontFace, chars: &[char]) -> u32 {
 }
 
 #[cfg(test)]
+#[path = "../web_embed.rs"]
+mod web_embed;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -622,8 +626,8 @@ mod tests {
         }
         assert_eq!(ui_hebrew_fonts().len(), hebrew_fonts().filter(|f| f.style == "Regular").count());
         // A checkout was embedded (the font dir was set) but it has no Hebrew face: that is a
-        // broken pin, not a build that skipped fonts. The web build embeds only the small faces.
-        if !CRAFT_FONTS.is_empty() && !cfg!(target_arch = "wasm32") {
+        // broken pin, not a build that skipped fonts. The web build keeps this face too.
+        if !CRAFT_FONTS.is_empty() {
             assert!(!ui_hebrew_fonts().is_empty(), "craft-fonts is embedded but has no Regular Hebrew face");
         }
     }
