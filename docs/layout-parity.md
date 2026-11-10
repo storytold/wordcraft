@@ -307,6 +307,7 @@ The front-of-text opt-out is retained from the earlier implementation; this patc
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-02 | trivial | Justified lines (compatibility mode 15): a word after a run of spaces may overrun the line by 0.355 of its width with the whole run before it, not one space; a bookmark in the run doesn't end it. Measured in Word for Windows with runs of 1, 3, 6 and 12 spaces, Latin and Thai. `layout::tests::a_word_after_a_run_of_spaces_overruns_with_the_whole_run` |
 | 2026-11-08 | trivial | Turned inline pictures with no recorded effect extent keep their line to the frame (exchanged near a quarter turn in Word 2013+ layout) and overhang it, cut at the line's top and bottom, as in Word |
 | 2026-11-08 | trivial | Contextual spacing drops the space after a table cell's last paragraph in the Normal style, the end-of-cell mark counting as a Normal paragraph; another style keeps it, and a middle or bottom cell of a split row lines up without the dropped space (#5450) (`layout::tests::contextual_spacing_drops_the_space_after_a_cells_last_normal_paragraph`, `a_bottom_cell_of_a_split_row_ignores_a_dropped_space_after_beside_it`). |
 | 2026-11-04 | trivial | Header table measurements and fitted text-box heights use the page section’s PAGE format; cache reuse follows the field context |
