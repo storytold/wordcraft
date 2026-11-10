@@ -1156,3 +1156,111 @@ fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
     assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
     assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
 }
+
+/// A Save As page whose Browse… asks the host's file dialog, which records the names it is asked
+/// to suggest.
+fn save_as_names() -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
+    save_as_names_for("")
+}
+
+/// [`save_as_names`] for an unnamed document whose body holds `text`.
+fn save_as_names_for(text: &str) -> (egui_kittest::Harness<'static, WordApp>, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
+    let asked: std::rc::Rc<std::cell::RefCell<Vec<String>>> = Default::default();
+    let log = asked.clone();
+    let services = Services {
+        file_dialog: Some(Box::new(move |req| {
+            if let crate::FileDialogRequest::Save { name, .. } = req {
+                log.borrow_mut().push(name);
+            }
+            std::sync::mpsc::channel().1
+        })),
+        ..Default::default()
+    };
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    if !text.is_empty() {
+        a.run("text.insert", json!({"text": text})).unwrap();
+    }
+    a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    (h, asked)
+}
+
+/// Types `name` into Save As › File name, in place of what the field holds.
+fn type_file_name(h: &mut egui_kittest::Harness<'static, WordApp>, name: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name:").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name:").type_text(name);
+    h.run_steps(2);
+}
+
+/// Browse… on the Save As page, then what the host's dialog was asked to suggest (#5800).
+fn browse_suggestion(h: &mut egui_kittest::Harness<'static, WordApp>, asked: &std::rc::Rc<std::cell::RefCell<Vec<String>>>) -> String {
+    asked.borrow_mut().clear();
+    h.get_by_label("Browse…").click();
+    h.run_steps(3);
+    asked.borrow().last().cloned().expect("Browse asked the dialog for a name")
+}
+
+/// Save As has a File name field that starts with what Save would suggest, and Browse… opens the
+/// dialog with the name typed there (#5800).
+#[test]
+fn save_as_file_name_is_what_browse_suggests() {
+    let (mut h, asked) = save_as_names();
+    let stem = h.state().default_save_stem();
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name:").value().as_deref(), Some(stem.as_str()));
+    assert_eq!(browse_suggestion(&mut h, &asked), format!("{stem}.docx"), "untouched, Browse… suggests what it always did");
+    type_file_name(&mut h, "Quarterly review");
+    assert_eq!(browse_suggestion(&mut h, &asked), "Quarterly review.docx");
+}
+
+/// An unnamed document is suggested under its first words (#5793), and the field shows that same
+/// name, so the field and Browse… agree until something is typed.
+#[test]
+fn save_as_file_name_follows_the_first_words_of_an_unnamed_document() {
+    let (mut h, asked) = save_as_names_for("Hello world");
+    assert_eq!(h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File name:").value().as_deref(), Some("Hello world"));
+    assert_eq!(browse_suggestion(&mut h, &asked), "Hello world.docx");
+}
+
+/// A typed extension that WordCraft saves is kept (so it sets the format) and not doubled; any
+/// other text after a dot is part of the name; a name with nothing usable falls back.
+#[test]
+fn save_as_file_name_keeps_its_extension_and_falls_back_when_unusable() {
+    let (mut h, asked) = save_as_names();
+    let stem = h.state().default_save_stem();
+    for (typed, suggested) in
+        [("Letter.docx", "Letter.docx"), ("Notes.PDF", "Notes.PDF"), ("Report v1.2", "Report v1.2.docx"), ("a/b\\c", "a b c.docx")]
+    {
+        type_file_name(&mut h, typed);
+        assert_eq!(browse_suggestion(&mut h, &asked), suggested, "typed {typed:?}");
+    }
+    for nothing in ["  / ", ".docx", "..."] {
+        type_file_name(&mut h, nothing);
+        assert_eq!(browse_suggestion(&mut h, &asked), format!("{stem}.docx"), "typed {nothing:?}");
+    }
+}
+
+/// The cleaning rules for a typed name.
+#[test]
+fn typed_save_names_are_cleaned() {
+    use crate::app::clean_save_name;
+    assert_eq!(clean_save_name("Talk", "docx").as_deref(), Some("Talk.docx"));
+    assert_eq!(clean_save_name("  Talk  ", "docm").as_deref(), Some("Talk.docm"));
+    assert_eq!(clean_save_name("Talk.odt", "docx").as_deref(), Some("Talk.odt"));
+    assert_eq!(clean_save_name("Talk.", "docx").as_deref(), Some("Talk.docx"));
+    assert_eq!(clean_save_name("a/b\\c", "docx").as_deref(), Some("a b c.docx"));
+    assert_eq!(clean_save_name("a\tb", "docx").as_deref(), Some("ab.docx"));
+    for nothing in ["", "   ", "/", ".", "..", ".docx", " .pdf"] {
+        assert_eq!(clean_save_name(nothing, "docx"), None, "{nothing:?}");
+    }
+}

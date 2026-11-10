@@ -753,8 +753,22 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
         ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
         ui.add_space(6.0);
     }
+    // The name the file gets: Browse… opens with it, and the web build downloads under it (#5800).
+    let document = app.session.document_id();
+    let mut name = match &app.ui.save_as_name {
+        Some((id, typed)) if *id == document => typed.clone(),
+        _ => app.default_save_stem(),
+    };
+    // The label sits above the field, so the field lines up with the buttons below it.
+    let label = ui.label(tl!("File name:"));
+    ui.add_space(2.0);
+    if ui.add(egui::TextEdit::singleline(&mut name).desired_width(340.0)).labelled_by(label.id).changed() {
+        app.ui.save_as_name = Some((document, name.clone()));
+    }
+    ui.add_space(8.0);
     if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
-        app.save_as_dialog();
+        let typed = app.ui.save_as_name.as_ref().filter(|(id, _)| *id == document).map(|(_, typed)| typed.clone());
+        app.save_as_dialog_named(typed.as_deref());
     }
     // A Word template in the user templates folder, which File › New lists under Personal (#2852).
     ui.add_space(8.0);
