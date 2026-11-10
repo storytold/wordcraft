@@ -1,12 +1,13 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-09
+- Date: 2026-11-10
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `b027fb1f` plus this status commit — 69 commits over
-  `4b0d3995`; the fork copy still carries the pre-rebase head
-  `a6d6ae90` until it is force-pushed
+- HEAD at this writing: `467948fa` plus this status commit — 69 commits over
+  `4b0d3995`; the fork carries the same head and PR #5834 is `MERGEABLE`
+  (§5.21). Its workflows wait as `action_required` for a maintainer to approve
+  them, which is the GitHub rule for a fork PR (§5.2)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -538,10 +539,11 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    offers the room's file as a copy (§5.19); what remains for it is operational:
    the cabinet's ticket must carry the numeric `fileId` in `doc`, and the shared
    service token must be in both `.env`s.
-2. Force-push the rebased branch (§5.4), then mark PR #5834 ready once CI has run
-   and the pin is acceptable to the maintainers (GitHub reports
-   `action_required` for fork PRs until a maintainer approves, and the PR shows
-   `CONFLICTING` until the force-push).
+2. Mark PR #5834 ready once CI has run and the pin is acceptable to the
+   maintainers. The rebased branch is pushed, the fork and the PR head are the
+   same commit, and the PR is `MERGEABLE` (§5.21); its workflows report
+   `action_required` until a maintainer approves them, the GitHub rule for a
+   fork PR.
 3. Optional hardening: property
    primitives, an offline queue, or a join broadcast that carries the role before
    the first presence frame (presence already carries it, §5.3). (The
@@ -596,16 +598,16 @@ pins the frame of a server built before the field.
 
 ### 5.4 Rebase onto upstream `main` `4b0d3995` (run 2026-11-09)
 
-GitHub reported PR #5834 as `CONFLICTING`: `main` had moved from the branch's
+GitHub reported PR #5834 as conflicting: `main` had moved from the branch's
 merge base `2a0a20ae` to `4b0d3995` (279 files, a new page command API among
 them). The branch was rebased in place, no commit dropped:
 
 | | |
 |---|---|
-| before | `a6d6ae90` — 32 commits over `2a0a20ae` |
+| before | the pre-rebase head — 32 commits over `2a0a20ae` |
 | after | `d39ef64c` — the same 32 commits over `4b0d3995` |
-| backup ref | `backup/pre-rebase-a6d6ae90` (local) |
-| push | not made — the fork needs a manual `--force-with-lease` |
+| backup ref | `backup/pre-rebase-<old head>` (local) |
+| push | made later, after the gates, with a manual `--force-with-lease` (§5.21) |
 
 **Conflicts and how they were resolved.**
 
@@ -637,9 +639,10 @@ them). The branch was rebased in place, no commit dropped:
   failed, 11 ignored. Details and the two environment-only failure modes that
   need `CRAFT_I18N_DIR`/`CRAFT_FONTS_DIR`: §3.
 
-**Still to do by hand:** force-push the rebased branch to `copoka/wordcraft`
-(`git push --force-with-lease fork feature/realtime-collaboration`); the PR page
-stays `CONFLICTING` until then.
+**Push.** After the gates above were green, the rebased branch was force-pushed
+to `copoka/wordcraft` (`git push --force-with-lease fork
+feature/realtime-collaboration`); PR #5834 then reported `MERGEABLE` on the same
+base (§5.21).
 
 ### 5.5 The `opId` window survives a snapshot restore (run 2026-11-09)
 
@@ -2166,6 +2169,39 @@ comment paragraph and both get version 3).
 server; `cargo clippy` for the same crates `--all-targets -- -D warnings`
 clean; `cargo fmt --all -- --check` clean. No push was made, the PR and CI were
 not touched.
+
+### 5.21 The pushed PR head matches the branch (run 2026-11-10)
+
+The header, §5.2 and §5.4 still described the state before the force-push: a
+fork copy on the pre-rebase head, a PR that could not merge until a push. The
+push had already happened, so this entry records the reconciliation. Only
+`docs/collab/STATUS.md` changed; no code, branch, ref or PR was touched.
+
+**What the PR reports** (`gh pr view 5834 --repo storytold/wordcraft --json
+headRefOid,mergeable,mergeStateStatus,headRepository,statusCheckRollup`):
+
+| | |
+|---|---|
+| head | `467948fa105e17ff55194e52a2f31e8d1918c15f` |
+| head repository | `copoka/wordcraft` |
+| base | `4b0d3995` |
+| mergeable | `MERGEABLE` (merge state `UNSTABLE`) |
+| state | `OPEN`, draft |
+| check runs | `CodeRabbit` — completed, skipped |
+
+`UNSTABLE` is the fork rule, not a failure: the four patch workflows (`CI`,
+`Printing`, `Nix`, `SonarCloud`) all ended `action_required`, which is how
+GitHub parks a fork's workflows until a maintainer approves the run. Nothing
+has failed; nothing has run yet.
+
+**Local check.** `git fetch fork feature/realtime-collaboration` leaves
+`fork/feature/realtime-collaboration` at `467948fa`, the same commit as the
+worktree head, and `git rev-list --count 4b0d3995..HEAD` is 69 — the number the
+header states.
+
+**Docs.** The header now names `467948fa` and the mergeable PR; §5.2 asks only
+for the ready flag once CI has run; the §5.4 table and its closing paragraph
+record the push instead of asking for it.
 
 ## 6. Where things live
 
