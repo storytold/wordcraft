@@ -39,6 +39,14 @@ flowchart LR
 
 ## Set up: your own OAuth client
 
+**Quickest way:** File › Options › Accounts › **Guided setup with Google Cloud**. It links straight
+to each Google Cloud console page below. After you click **Download JSON** on the new client,
+**Import downloaded file** reads the newest `client_secret_….json` in your Downloads folder, fills
+in the registration and deletes the download (it holds the secret). Google offers no API for an
+app to create a desktop OAuth client itself, so the console steps stay manual.
+
+The same steps by hand:
+
 WordCraft has no Google client of its own built in. Each person, or their organisation, uses
 their own Google Cloud project, so sign-in never goes through a WordCraft server.
 
@@ -120,6 +128,7 @@ headless.
 | Command | What it does |
 |---|---|
 | `ui.drive.enable` | `{"value"?: bool}`: turns Google Drive on or off (File › Options › Accounts); off by default. Every other command except `status` says how to turn it on |
+| `ui.drive.importClient` | `{"path"?: string, "remove"?: bool}`: imports a client JSON downloaded from Google Cloud console; without `path`, the newest `client_secret_*.json` in Downloads, deleted after import |
 | `ui.drive.client` | `{"clientId": string, "clientSecret"?: string}`: writes `google-drive.json` and reads it again |
 | `ui.drive.export` | `{"format": "pdf"\|"docx"\|"odt"\|"ott"\|"fodt"\|"rtf"\|"html"\|"md"\|"tex"\|"txt"}`: a copy as a new file in My Drive |
 | `ui.drive.status` | `{enabled, available, signedIn, busy, error, files, morePages, document}`; `document` is the active document's Drive file, if any |

@@ -241,6 +241,12 @@ fn the_accounts_client_needs_the_desktop_app() {
     let mut a = app();
     assert!(a.run("ui.drive.client", json!({"clientId": "123-abc.apps.googleusercontent.com"})).is_err());
     assert!(a.run("ui.drive.client", json!({"clientId": 5})).is_err());
+    assert!(a.run("ui.drive.importClient", json!({})).unwrap_err().contains("desktop app"));
+    assert!(a.run("ui.drive.importClient", json!({"path": 3})).is_err());
+    assert!(crate::works_without_document("ui.drive.importClient"));
+    for (_, _, url) in super::SETUP_STEPS {
+        assert!(url.starts_with("https://console.cloud.google.com/"), "{url}");
+    }
     assert!(a.run("file.options", json!({"pane": "accounts"})).is_ok(), "the Accounts pane exists");
 }
 
