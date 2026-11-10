@@ -8163,6 +8163,18 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
         _ => None,
     });
     assert!(yellow.is_some_and(|r| r.x < left.right() && (r.right() - left.right()).abs() < 0.01), "{yellow:?}");
+    // A nested cell that clips of its own (an exact row shorter than its text) still does once cut.
+    let mut exact = inner.clone();
+    exact.rows[0].props.height = Some(6.0);
+    exact.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+    let mut o = outer.clone();
+    o.rows[0].cells[0].blocks[0] = std::sync::Arc::new(wordcraft_doc::Block::Table(exact));
+    let mut d = Document::from_text("Below");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(o)).unwrap();
+    let got = items(&d);
+    let (cut, cut_clip) = cell_of(&got, &[0, 0, 0, 0], 1);
+    assert!((cut.right() - left.right()).abs() < 0.01, "the nested cell is cut at the edge: {cut:?}");
+    assert!(cut_clip, "a cut nested cell keeps the clip its exact row gave it");
     // A nested table that fits is left as it is, even with thick outer lines reaching half their
     // width over the cell's edges.
     let mut fits = inner;
