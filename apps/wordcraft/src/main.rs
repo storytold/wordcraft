@@ -21,6 +21,8 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+#[cfg(target_os = "macos")]
+mod panel_menu;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]

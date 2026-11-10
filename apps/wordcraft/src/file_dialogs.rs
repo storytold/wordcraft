@@ -22,6 +22,8 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use wordcraft_ui_egui::{FileDialogAnswer, FileDialogRequest};
@@ -39,6 +41,10 @@ type Picking = Pin<Box<dyn Future<Output = Vec<rfd::FileHandle>> + Send>>;
 pub struct Launcher {
     queue: Receiver<Request>,
     ctx: egui::Context,
+    /// Dialogs still waiting for their answer.
+    open: Arc<AtomicUsize>,
+    #[cfg(target_os = "macos")]
+    panel_menu: std::cell::RefCell<crate::panel_menu::PanelMenu>,
 }
 
 /// The hook for [`Services::file_dialog`](wordcraft_ui_egui::Services::file_dialog) and the
@@ -51,7 +57,16 @@ pub fn hook(ctx: &egui::Context) -> (Hook, Launcher) {
         let _ = queue_tx.send((req, answer));
         rx
     });
-    (hook, Launcher { queue, ctx: ctx.clone() })
+    (
+        hook,
+        Launcher {
+            queue,
+            ctx: ctx.clone(),
+            open: Arc::default(),
+            #[cfg(target_os = "macos")]
+            panel_menu: Default::default(),
+        },
+    )
 }
 
 impl Launcher {
@@ -64,6 +79,8 @@ impl Launcher {
             #[cfg(all(unix, not(target_os = "macos")))]
             let unparented = picker(rfd::AsyncFileDialog::new(), &req);
             let ctx = self.ctx.clone();
+            let open = Arc::clone(&self.open);
+            self.open.fetch_add(1, Ordering::SeqCst);
             let waiting = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
                 // The pickers only start when first polled: without a system dialog they never do.
                 let picked = match no_system_dialog() {
@@ -78,13 +95,18 @@ impl Launcher {
                     }
                 };
                 let _ = answer.send(picked);
+                open.fetch_sub(1, Ordering::SeqCst);
+                // The next pass also takes the panel's menu bar away (macOS).
                 ctx.request_repaint();
             });
             // The answer's sender went with the closure, so the app sees the dialog as cancelled.
             if let Err(e) = waiting {
+                self.open.fetch_sub(1, Ordering::SeqCst);
                 log::error!("couldn't wait for the file dialog: {e}");
             }
         }
+        #[cfg(target_os = "macos")]
+        self.panel_menu.borrow_mut().sync(self.open.load(Ordering::SeqCst) > 0);
     }
 }
 
