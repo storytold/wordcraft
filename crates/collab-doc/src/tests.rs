@@ -41,6 +41,63 @@ fn two_clients_type_into_one_paragraph() {
     assert_eq!(room.version(), 2);
 }
 
+/// A positional edit computed before another client changed the paragraph
+/// cannot be applied: its author already applied it optimistically and skips
+/// its own echo, so the authoritative delta would land on other characters and
+/// the replica would stay diverged with no resync (ADR WC-0001, STATUS §5.26
+/// finding 1).
+#[test]
+fn a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused() {
+    let mut room = room();
+    let first = node(room.ids_mut(), 0);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, first, 0, json!({"op": "insert_text", "text": "ab"}))).expect("alice types");
+
+    // Bob typed at offset 1 of the empty paragraph before he saw Alice's edit:
+    // the room would insert at offset 1 of `ab`, not where Bob's replica put it.
+    let refused = room
+        .submit("bob", Role::Editor, op("b", 1, 0, OpKind::Primitive, first, 1, json!({"op": "insert_text", "text": "X"})))
+        .expect_err("the offsets no longer describe the paragraph");
+    assert_eq!(refused.code, RejectCode::Stale);
+    assert!(refused.retryable, "the client resyncs instead of ending the session");
+    assert_eq!(body_text(&room, 0), "ab", "a refused edit never reaches the document");
+    assert_eq!(room.version(), 1, "and it takes no version");
+}
+
+/// The guard is per paragraph, not per document: an edit in another paragraph
+/// does not move these offsets, so it still lands on a stale base.
+#[test]
+fn a_stale_text_edit_in_another_paragraph_still_lands() {
+    let mut room = room();
+    let first = node(room.ids_mut(), 0);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Structural, first, 0, json!({"op": "insert_block", "index": 1})))
+        .expect("a second paragraph");
+    let second = node(room.ids_mut(), 1);
+    room.submit("alice", Role::Editor, op("a", 2, 1, OpKind::Primitive, first, 0, json!({"op": "insert_text", "text": "A"})))
+        .expect("alice types in the first paragraph");
+    room.submit("bob", Role::Editor, op("b", 1, 1, OpKind::Primitive, second, 0, json!({"op": "insert_text", "text": "B"})))
+        .expect("the offsets of the second paragraph did not move");
+
+    assert_eq!(body_text(&room, 0), "A");
+    assert_eq!(body_text(&room, 1), "B");
+    assert_eq!(room.version(), 3);
+}
+
+/// A client's own earlier operations are in both texts in the same order, so a
+/// fast typist sending several primitives on one base is not refused.
+#[test]
+fn a_clients_own_earlier_edits_do_not_trip_the_guard() {
+    let mut room = room();
+    let first = node(room.ids_mut(), 0);
+    room.submit("alice", Role::Editor, op("a", 1, 0, OpKind::Primitive, first, 0, json!({"op": "insert_text", "text": "a"}))).expect("first key");
+    room.submit("alice", Role::Editor, op("a", 2, 0, OpKind::Primitive, first, 1, json!({"op": "insert_text", "text": "b"})))
+        .expect("second key on the same base");
+    room.submit("alice", Role::Editor, op("a", 3, 0, OpKind::Primitive, first, 2, json!({"op": "insert_text", "text": "c"})))
+        .expect("third key on the same base");
+
+    assert_eq!(body_text(&room, 0), "abc");
+    assert_eq!(room.version(), 3);
+}
+
 #[test]
 fn undoing_an_insert_removes_exactly_that_text() {
     let mut room = room();

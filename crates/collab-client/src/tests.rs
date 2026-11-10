@@ -149,6 +149,30 @@ fn a_stale_rejection_asks_for_a_resync() {
 }
 
 #[test]
+fn a_refused_stale_edit_is_not_resent_after_the_resync() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 7,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    let op = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "x"}));
+    let reject = Reject::new(op.op_id.clone(), RejectCode::Stale, "the paragraph changed since this edit was made; resync");
+    assert!(matches!(client.on(ServerMsg::Rejected { reject }), Event::Resync { .. }));
+    assert_eq!(client.pending().len(), 0, "the same offsets are what the refusal is about");
+    assert!(client.unconfirmed().is_empty(), "a reconnect must not replay it");
+
+    // A lease refusal was never examined, so its operation waits for the retry.
+    let op = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "y"}));
+    let reject = Reject::new(op.op_id, RejectCode::Lease, "another session holds the file");
+    let _ = client.on(ServerMsg::Rejected { reject });
+    assert_eq!(client.pending().len(), 1, "the reconnect resends it");
+}
+
+#[test]
 fn a_non_retryable_rejection_is_reported_and_keeps_the_queue() {
     let mut client = Client::new("alice");
     let _ = client.on(ServerMsg::Welcome {

@@ -9,9 +9,36 @@ use std::collections::HashMap;
 use serde_json::Value;
 
 use crate::ids::NodeIds;
-use crate::journal::{DedupWindow, Journal};
+use crate::journal::{DedupWindow, Entry, Journal};
 use crate::undo::{UndoStacks, UndoStep};
-use crate::wire::{Applied, HistoryAction, NodeRef, Op, OpId, Reject, RejectCode, Version};
+use crate::wire::{Applied, HistoryAction, NodeRef, Op, OpId, OpKind, Reject, RejectCode, Version};
+
+/// Whether a primitive's payload addresses a byte offset in a paragraph, so its
+/// result depends on the text around that offset (ADR WC-0001).
+fn positions_text(name: &str) -> bool {
+    matches!(name, "insert_text" | "delete_range" | "replace_range" | "split_para" | "merge_para")
+}
+
+fn touches_node_text(delta: &Value, node: u32) -> bool {
+    delta.get("nodeId").and_then(Value::as_u64) == Some(u64::from(node)) && delta.get("op").and_then(Value::as_str).is_some_and(positions_text)
+}
+
+/// Whether an accepted operation changed the text of `node` (ADR WC-0001).
+fn changes_text_of(entry: &Entry, node: u32) -> bool {
+    let in_delta = |delta: &Value| {
+        if delta.get("op").and_then(Value::as_str) == Some("transaction") {
+            return delta.get("ops").and_then(Value::as_array).is_some_and(|ops| ops.iter().any(|one| touches_node_text(one, node)));
+        }
+        touches_node_text(delta, node)
+    };
+    if entry.applied.delta.as_ref().is_some_and(in_delta) {
+        return true;
+    }
+    // A command's delta names only the command. Its inverse tells whether the
+    // command rewrote the paragraph's characters (a case change, an enclosure):
+    // a formatting-only inverse carries no `text` and moves no offset.
+    entry.inverse.iter().any(|inverse| inverse.target.node_id == node && inverse.payload.get("text").is_some())
+}
 
 /// What an accepted operation changed, and how to undo it (ADR-0010).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -202,6 +229,36 @@ impl<M: Model> Room<M> {
         self.ids.iter().map(|(id, key)| NodeRef { id: id.0, story: key.story.clone(), path: key.path.clone() }).collect()
     }
 
+    /// Refuse an offset-based edit whose base no longer describes the paragraph
+    /// it was computed on (ADR WC-0001).
+    ///
+    /// The author applied its own primitive optimistically and skips its own
+    /// echo (`SyncState::apply`), while the room computes every delta on the
+    /// head. A change another client made in the same paragraph therefore
+    /// invalidates the offsets the pending edit used, and applying that delta
+    /// over the optimistic text edits the wrong characters: the replica would
+    /// keep a document the server does not have, with nothing to pull it back
+    /// (`STATUS.md` §5.26 finding 1). `Stale` is retryable, so the client asks
+    /// for a snapshot and continues from the authoritative state.
+    ///
+    /// The check is per paragraph: an edit in another paragraph does not move
+    /// the offsets, so it still lands on a stale base. Operations of the same
+    /// client are exempt: the author applied them locally in the same order, so
+    /// its own earlier keystrokes are already in both texts.
+    fn stale_positional(&self, op: &Op) -> Option<Reject> {
+        let positional = op.payload.get("op").and_then(Value::as_str).is_some_and(positions_text);
+        if op.kind != OpKind::Primitive || !positional || op.base_version >= self.journal.head() {
+            return None;
+        }
+        let node = op.target.node_id;
+        let changed = self
+            .journal
+            .entries_since(op.base_version)
+            .into_iter()
+            .any(|entry| entry.applied.op_id.client != op.op_id.client && changes_text_of(entry, node));
+        changed.then(|| Reject::new(op.op_id.clone(), RejectCode::Stale, "the paragraph changed since this edit was made; resync"))
+    }
+
     /// Submit an operation for `actor` (the JWT `sub`).
     pub fn submit(&mut self, actor: &str, role: Role, op: Op) -> Result<Applied, Reject> {
         if !role.can_write() {
@@ -229,6 +286,9 @@ impl<M: Model> Room<M> {
         self.journal.check(&op)?;
         if let Some(history) = op.history.clone() {
             return self.submit_history(actor, &op, history);
+        }
+        if let Some(reject) = self.stale_positional(&op) {
+            return Err(reject);
         }
         // A command that allocates ids must land on the head: the author ran it
         // optimistically on its own state, and only when both states are the

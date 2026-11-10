@@ -298,6 +298,14 @@ impl Client {
             ServerMsg::Rejected { reject } => {
                 // A refused undo/redo leaves its stack where it was.
                 self.history_pending.remove(&reject.op_id);
+                // An operation refused `stale` or `gone` is not resent: the
+                // offsets or the node it names are exactly what the refusal is
+                // about, so replaying it after the resync would recreate the
+                // divergence (ADR WC-0001). A `lease` or `tokenExpired` refusal
+                // was never looked at and stays queued for the reconnect.
+                if matches!(reject.code, RejectCode::Stale | RejectCode::Gone) {
+                    self.pending.retain(|pending| pending.op.op_id != reject.op_id);
+                }
                 if reject.retryable || reject.code == RejectCode::Gone {
                     self.state = State::Resyncing;
                     return Event::Resync { reason: reject.message.clone() };

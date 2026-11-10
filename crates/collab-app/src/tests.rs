@@ -1393,3 +1393,46 @@ fn refused_copy_chunks_join_until_last_and_restart_on_a_new_version() {
     assert_eq!(next.bytes, b"new", "the older chunk is dropped when a new version opens the copy");
     assert_eq!(next.sha256, "bb", "the metadata follows the version that opened the copy");
 }
+
+/// A positional edit sent on a base the room has left behind is refused, and
+/// its author resyncs to the authoritative document instead of keeping a
+/// replica the server does not have (ADR WC-0001, STATUS §5.26 finding 1).
+#[test]
+fn a_stale_positional_edit_resyncs_instead_of_diverging() {
+    let mut pair = FormatPair::new(&[""]);
+    pair.mine.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    let before = pair.mine.doc.clone();
+    pair.mine.run("text.insert", &json!({"text": "A"})).expect("alice types");
+    let plan = pair.alice.plan(&before, &pair.mine, "text.insert", &json!({"text": "A"})).expect("a plan").remove(0);
+    let step = op_from("alice", 1, pair.alice.version, &plan, None);
+    let echo = pair.room.submit("Alice", Role::Editor, step).expect("alice's edit lands");
+    assert_eq!(pair.alice.apply(&echo, &mut pair.mine).expect("own echo is skipped"), Outcome::Quiet);
+    assert_eq!(text(&pair.mine), "A");
+
+    // Bob typed into the same paragraph without Alice's version: his replica has
+    // its own text where the room already has `A`.
+    pair.theirs.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 0 });
+    let before = pair.theirs.doc.clone();
+    pair.theirs.run("text.insert", &json!({"text": "B"})).expect("bob types");
+    let plan = pair.peer.plan(&before, &pair.theirs, "text.insert", &json!({"text": "B"})).expect("a plan").remove(0);
+    let step = op_from("bob", 1, pair.peer.version, &plan, None);
+    assert_eq!(pair.peer.version, 0, "bob never saw Alice's edit");
+    let refused = pair.room.submit("Bob", Role::Editor, step).expect_err("the paragraph moved under the offsets");
+    assert_eq!(refused.code, RejectCode::Stale);
+    assert!(refused.retryable, "the client resyncs instead of ending the session");
+    assert_eq!(text(&pair.theirs), "B", "the optimistic text is still there, and it is not the server's");
+
+    // What the transport does on a retryable refusal: take the room's model and
+    // replace the document (`Snapshot` → `SyncState::take_snapshot`).
+    let plan = pair.room.join(None, false);
+    let snapshot = plan.snapshot.expect("the resync carries the model");
+    let doc: Document = serde_json::from_slice(&snapshot).expect("the room's document");
+    pair.theirs.set_document(doc);
+    pair.peer.set_nodes(&plan.nodes);
+    assert_eq!(text(&pair.theirs), "A", "bob converges on the authoritative text");
+    assert_eq!(
+        serde_json::to_value(&pair.theirs.doc).expect("json"),
+        serde_json::to_value(&pair.mine.doc).expect("json"),
+        "both replicas hold the same document"
+    );
+}
