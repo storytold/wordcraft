@@ -86,6 +86,40 @@ fn background_at_caret_follows_page_colour_highlight_and_dark_mode() {
     assert_eq!(background_at(&d, &page, &light, x, y), Rgb::WHITE, "past the highlight");
 }
 
+/// The caret sits over the page's fill, not the paper beneath it: a gradient's mean stop and a
+/// pattern's back colour, each composited over the paper, are what the caret contrasts against.
+#[test]
+fn background_at_caret_follows_gradient_and_pattern_fills() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = Document::from_text("Hello WordCraft");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = l.pages[0].clone();
+    let light = RenderOptions::default();
+    d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+    assert_eq!(background_at(&d, &page, &light, 72.0, 72.0), Rgb(0x10, 0x10, 0x40), "a solid fill is the page colour");
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0x00, 0x00, 0x00), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0xFF, 0xFF, 0xFF), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 90.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let g = background_at(&d, &page, &light, 72.0, 72.0);
+    assert!((g.0 as i32 - 0x80).abs() < 3 && (g.1 as i32 - 0x80).abs() < 3 && (g.2 as i32 - 0x80).abs() < 3, "the mean stop over white: {g:?}");
+    d.settings.page_gradient = None;
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "pct50".into(), fore: Rgb::BLACK, back: Rgb(0x33, 0x66, 0x99), transparency: 50.0 });
+    let p = background_at(&d, &page, &light, 72.0, 72.0);
+    // The back colour at half transparency over white: each channel halfway to 255.
+    assert_eq!(p, Rgb(0x99, 0xB3, 0xCC), "the pattern back over the paper: {p:?}");
+    d.settings.page_pattern = None;
+    assert_eq!(background_at(&d, &page, &light, 72.0, 72.0), Rgb(0x10, 0x10, 0x40), "clearing the fill shows the page colour");
+}
+
 /// #299: a filled shape colours the caret's background only inside its outline: an
 /// ellipse's corner shows what lies beneath, its centre the fill.
 #[test]

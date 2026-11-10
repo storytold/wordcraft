@@ -194,6 +194,36 @@ impl RenderOptions {
         self.ink(self.read_paper.or(base).unwrap_or(self.paper))
     }
 
+    /// The colour a reader sees behind the page's text: a gradient's mean stop or a pattern's
+    /// back colour, composited over the underlying paper, else `paper_of`. Solid fills need no
+    /// compositing: the page colour is the visible background. A gradient or pattern fill stores
+    /// its first stop or back colour in `page_color` for older readers, so readers must not use
+    /// `page_color` for those fills (that is the fill, not the paper underneath).
+    pub fn visible_fill(&self, doc: &Document) -> Rgb {
+        let paper = self.read_paper.unwrap_or(self.paper);
+        if let Some(g) = &doc.settings.page_gradient {
+            if !g.stops.is_empty() {
+                let (mut r, mut gg, mut b, mut a) = (0.0f32, 0.0, 0.0, 0.0f32);
+                for s in &g.stops {
+                    r += s.color.0 as f32;
+                    gg += s.color.1 as f32;
+                    b += s.color.2 as f32;
+                    a += (1.0 - s.transparency.clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
+                }
+                let n = g.stops.len() as f32;
+                let alpha = (a / n).clamp(0.0, 1.0);
+                let mix = |fill: f32, under: u8| (fill / n * alpha + under as f32 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
+                return self.ink(Rgb(mix(r, paper.0), mix(gg, paper.1), mix(b, paper.2)));
+            }
+        }
+        if let Some(p) = &doc.settings.page_pattern {
+            let alpha = (1.0 - p.transparency.clamp(0.0, 100.0) / 100.0).clamp(0.0, 1.0);
+            let mix = |over: u8, under: u8| (over as f32 * alpha + under as f32 * (1.0 - alpha)).round().clamp(0.0, 255.0) as u8;
+            return self.ink(Rgb(mix(p.back.0, paper.0), mix(p.back.1, paper.1), mix(p.back.2, paper.2)));
+        }
+        self.paper_of(doc)
+    }
+
     /// The on-screen color of paper with no page color: [`RenderOptions::read_paper`], else
     /// [`RenderOptions::paper`]. White Read Mode paper on a dark page is the dark paper grey.
     pub fn blank_paper(&self) -> Rgb {
@@ -340,7 +370,8 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
 /// pictures and turned or rotated content are left out. The caret takes its colour from this
 /// so it shows against whatever lies behind it (#299).
 pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, y: f32) -> Rgb {
-    let paper = opts.paper_of(doc);
+    // The caret sits over the page's fill, not the paper beneath it.
+    let paper = opts.visible_fill(doc);
     if !(x.is_finite() && y.is_finite()) {
         return paper;
     }

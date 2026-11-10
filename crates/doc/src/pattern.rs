@@ -145,8 +145,13 @@ impl PagePattern {
                 t.strokes.push([0.0, 0.75, 1.0, 0.75, 0.03]);
             }
             "smCheck" => {
-                for (x, y) in [(0.0, 0.0), (0.5, 0.25), (0.25, 0.5), (0.75, 0.75), (0.5, 0.0), (0.0, 0.25), (0.75, 0.5), (0.25, 0.75)] {
-                    t.rects.push([x, y, 0.25, 0.25]);
+                // A true checkerboard: dark where row + column is even, one 0.25 square a cell.
+                for row in 0..4 {
+                    for col in 0..4 {
+                        if (row + col) % 2 == 0 {
+                            t.rects.push([col as f32 * 0.25, row as f32 * 0.25, 0.25, 0.25]);
+                        }
+                    }
                 }
             }
             "lgCheck" => {
@@ -182,5 +187,25 @@ mod tests {
         assert!(!unknown.tile().strokes.is_empty());
         assert_eq!(PagePattern { transparency: 250.0, ..Default::default() }.sanitized().transparency, 100.0);
         assert_eq!(PagePattern { transparency: f32::NAN, ..Default::default() }.sanitized().transparency, 0.0);
+    }
+
+    /// `smCheck` is a true 4x4 checkerboard: columns alternate on every row. The old list drew
+    /// paired 0.25-by-0.5 bricks (two stacked squares of one colour), not single squares.
+    #[test]
+    fn small_checker_alternates_every_row() {
+        let t = PagePattern { preset: "smCheck".into(), ..Default::default() }.tile();
+        let mut dark = [[false; 4]; 4];
+        for [x, y, _, _] in t.rects {
+            let (col, row) = ((x * 4.0).round() as usize, (y * 4.0).round() as usize);
+            assert!(col < 4 && row < 4, "a square sits on the 4x4 grid: [{x}, {y}]");
+            assert!(!dark[row][col], "one square per cell: [{x}, {y}]");
+            dark[row][col] = true;
+        }
+        assert_eq!(dark.iter().flatten().filter(|&&d| d).count(), 8, "half the cells are dark");
+        for (r, row) in dark.iter().enumerate() {
+            for (c, &d) in row.iter().enumerate() {
+                assert_eq!(d, (r + c) % 2 == 0, "row {r} col {c} alternates");
+            }
+        }
     }
 }
