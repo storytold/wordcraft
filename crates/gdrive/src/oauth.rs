@@ -101,6 +101,43 @@ impl ClientConfig {
     }
 }
 
+/// Writes `google-drive.json` in `dir` (File › Options › Accounts): the client ID and secret,
+/// checked first, keeping a `scope` the file already had. Owner-only on Unix.
+pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) -> Result<()> {
+    let path = dir.join(CONFIG_FILE);
+    let scope = std::fs::read(&path)
+        .ok()
+        .filter(|b| b.len() <= 64 * 1024)
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v.get("scope").and_then(|x| x.as_str()).map(str::to_string));
+    let cfg = ClientConfig::new(client_id, client_secret, scope.as_deref())?;
+    let mut v = serde_json::json!({ "client_id": cfg.client_id });
+    if let Some(secret) = &cfg.client_secret {
+        v["client_secret"] = secret.as_str().into();
+    }
+    if let Some(scope) = scope {
+        v["scope"] = scope.into();
+    }
+    let text = serde_json::to_vec_pretty(&v).map_err(|e| Error::Protocol(e.to_string()))?;
+    let io = |e: std::io::Error| Error::NotConfigured(format!("couldn't write {}: {e}", path.display()));
+    std::fs::create_dir_all(dir).map_err(io)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&path).map_err(io)?;
+    // `mode` only applies to a new file: an older one made by hand becomes owner-only too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(io)?;
+    }
+    std::io::Write::write_all(&mut file, &text).map_err(io)
+}
+
 /// The consent page URL. `redirect` is the loopback address that will receive the code.
 pub fn auth_url(cfg: &ClientConfig, redirect: &str, challenge: &str, state: &str) -> String {
     let q = form(&[

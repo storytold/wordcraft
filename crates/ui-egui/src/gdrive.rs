@@ -81,16 +81,38 @@ impl DriveLink {
 /// Handle `ui.drive.*`. `None` when `id` isn't one.
 pub fn command(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     let name = id.strip_prefix("ui.drive.")?;
-    if name == "status" {
-        return Some(Ok(status(app)));
+    match name {
+        "status" => return Some(Ok(status(app))),
+        "enable" => return Some(enable(app, params)),
+        _ if !app.ui.google_drive => return Some(Err(OFF.into())),
+        _ => {}
     }
     Some(imp::run(app, name, params))
+}
+
+const OFF: &str = "Google Drive is off; turn it on in File › Options › Accounts";
+
+/// `ui.drive.enable {value}`: turns Google Drive on or off (File › Options › Accounts). No value
+/// reads it. Turning it off leaves the sign-in in the keychain, so turning it on again needs none.
+fn enable(app: &mut WordApp, params: &Value) -> Result<Value, String> {
+    match params.get("value") {
+        None | Some(Value::Null) => {}
+        Some(Value::Bool(on)) => {
+            app.ui.google_drive = *on;
+            if !on && app.ui.backstage_page == "drive" {
+                app.ui.backstage_page = "home".into();
+            }
+        }
+        Some(_) => return Err("`value` must be true or false".into()),
+    }
+    Ok(json!({"enabled": app.ui.google_drive}))
 }
 
 /// `file.save` for a document that came from Drive (no `path` given): saves back to Drive.
 /// `None` when the document isn't a Drive document, so the ordinary save runs.
 pub fn intercept_save(app: &mut WordApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
-    if id != "file.save" || params.get("path").is_some_and(|p| !p.is_null()) {
+    // Turned off: an ordinary save (it asks where, since the document has no local path).
+    if id != "file.save" || !app.ui.google_drive || params.get("path").is_some_and(|p| !p.is_null()) {
         return None;
     }
     destination(app)?;
@@ -126,6 +148,7 @@ fn status(app: &WordApp) -> Value {
     let d = &app.drive;
     let origin = destination(app);
     json!({
+        "enabled": app.ui.google_drive,
         "available": d.unavailable.is_none() && app.services.drive_profile.is_some(),
         "unavailable": d.unavailable,
         "signedIn": d.signed_in,
@@ -149,6 +172,100 @@ pub fn poll(app: &mut WordApp) {
     imp::poll(app);
 }
 
+/// File › Options at its Accounts pane.
+fn open_accounts(app: &mut WordApp) {
+    app.ui.options_pane = "accounts".into();
+    let _ = app.run("ui.backstage", json!({"value": true, "page": "options"}));
+}
+
+/// File › Options › Accounts: turn Google Drive on, add the Google client, sign in or out.
+pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
+    ui.add_space(6.0);
+    ui.label(egui::RichText::new(tl!("Google Drive")).font(crate::theme::semibold(15.0)));
+    ui.add_space(2.0);
+    let mut on = app.ui.google_drive;
+    if ui.checkbox(&mut on, tl!("Use Google Drive (File › Google Drive: open from Drive and save back)")).changed() {
+        let _ = app.run("ui.drive.enable", json!({"value": on}));
+    }
+    ui.label(tl!("WordCraft talks to Google Drive directly: the Google Drive desktop app isn't needed."));
+    if !app.ui.google_drive {
+        return;
+    }
+    if app.services.drive_profile.is_none() {
+        ui.label(tl!("Google Drive works with the WordCraft desktop app."));
+        return;
+    }
+    if app.drive.signed_in.is_none() && app.drive.busy.is_none() && app.drive.unavailable.is_none() {
+        let _ = app.run("ui.drive.start", json!({}));
+    }
+    ui.add_space(10.0);
+    // The client: an OAuth client of type Desktop app from the person's own Google Cloud project.
+    let configured = app.drive.unavailable.is_none();
+    ui.label(if configured {
+        tl!("Google client: set up. Enter a new one below to replace it.")
+    } else {
+        tl!("Google client: not set up. Create an OAuth client of type Desktop app in your own Google Cloud project (see Google Drive in WordCraft's documentation), then enter it here.")
+    });
+    let id_key = egui::Id::unique("accounts_google_client_id");
+    let secret_key = egui::Id::unique("accounts_google_client_secret");
+    let mut id = ui.data(|d| d.get_temp::<String>(id_key)).unwrap_or_default();
+    let mut secret = ui.data(|d| d.get_temp::<String>(secret_key)).unwrap_or_default();
+    egui::Grid::new("accounts_google_client").num_columns(2).show(ui, |ui| {
+        let l = ui.label(tl!("Client ID:")).id;
+        ui.add(egui::TextEdit::singleline(&mut id).desired_width(380.0).hint_text("1234-abc.apps.googleusercontent.com")).labelled_by(l);
+        ui.end_row();
+        let l = ui.label(tl!("Client secret:")).id;
+        ui.add(egui::TextEdit::singleline(&mut secret).password(true).desired_width(380.0)).labelled_by(l);
+        ui.end_row();
+    });
+    if ui.add_enabled(!id.trim().is_empty(), egui::Button::new(tl!("Save client"))).clicked() {
+        let secret_param = if secret.trim().is_empty() { Value::Null } else { Value::from(secret.trim()) };
+        match app.run("ui.drive.client", json!({"clientId": id.trim(), "clientSecret": secret_param})) {
+            Ok(_) => {
+                id.clear();
+                secret.clear();
+                app.status(tl!("Saved the Google client").to_string());
+            }
+            Err(e) => app.status(e),
+        }
+    }
+    ui.data_mut(|d| {
+        d.insert_temp(id_key, id);
+        d.insert_temp(secret_key, secret);
+    });
+    if !configured {
+        return;
+    }
+    ui.add_space(10.0);
+    match (app.drive.signed_in, app.drive.busy) {
+        (Some(true), _) => {
+            ui.label(tl!("Signed in to Google."));
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Open File › Google Drive")).clicked() {
+                    let _ = app.run("ui.backstage", json!({"value": true, "page": "drive"}));
+                }
+                if ui.add_enabled(app.drive.busy.is_none(), egui::Button::new(tl!("Sign out"))).clicked() {
+                    let _ = app.run("ui.drive.signOut", json!({}));
+                }
+            });
+        }
+        (_, Some("signIn")) => {
+            ui.label(tl!("Finish signing in in your browser."));
+            if ui.button(tl!("Cancel")).clicked() {
+                let _ = app.run("ui.drive.cancel", json!({}));
+            }
+        }
+        (Some(false), busy) => {
+            if ui.add_enabled(busy.is_none(), egui::Button::new(tl!("Sign in with Google"))).clicked() {
+                let _ = app.run("ui.drive.signIn", json!({}));
+            }
+        }
+        (None, _) => {
+            ui.label(tl!("Checking your Google account…"));
+        }
+    }
+}
+
 /// File › Google Drive.
 pub fn page(app: &mut WordApp, ui: &mut egui::Ui) {
     use egui::vec2;
@@ -158,17 +275,32 @@ pub fn page(app: &mut WordApp, ui: &mut egui::Ui) {
         ui.label(tl!("Google Drive works with the WordCraft desktop app."));
         return;
     }
+    if !app.ui.google_drive {
+        ui.label(tl!("Google Drive is off. Turn it on in File › Options › Accounts."));
+        ui.add_space(12.0);
+        if ui.button(tl!("Open Accounts")).clicked() {
+            open_accounts(app);
+        }
+        return;
+    }
     if app.drive.signed_in.is_none() && app.drive.busy.is_none() && app.drive.unavailable.is_none() {
         let _ = app.run("ui.drive.start", json!({}));
     }
     if let Some(why) = app.drive.unavailable.clone() {
-        ui.label(tl!("To use Google Drive, WordCraft needs an OAuth client from your own Google Cloud project. See Google Drive in WordCraft's documentation for the steps."));
+        ui.label(tl!(
+            "To use Google Drive, WordCraft needs an OAuth client from your own Google Cloud project. Add it in File › Options › Accounts."
+        ));
         ui.add_space(8.0);
         ui.label(why);
         ui.add_space(12.0);
-        if ui.button(tl!("Try again")).clicked() {
-            let _ = app.run("ui.drive.reload", json!({}));
-        }
+        ui.horizontal(|ui| {
+            if ui.button(tl!("Open Accounts")).clicked() {
+                open_accounts(app);
+            }
+            if ui.button(tl!("Try again")).clicked() {
+                let _ = app.run("ui.drive.reload", json!({}));
+            }
+        });
         return;
     }
     let busy = app.drive.busy;
@@ -428,6 +560,21 @@ mod native {
                 Ok(json!({"cancelled": app.drive.busy == Some("signIn")}))
             }
             "signOut" => send(app, Job::SignOut, "signOut"),
+            // File › Options › Accounts: writes `google-drive.json`, then reads it again.
+            "client" => {
+                let text = |k: &str| match params.get(k) {
+                    None | Some(Value::Null) => Ok(None),
+                    Some(Value::String(s)) => Ok(Some(s.as_str())),
+                    Some(_) => Err(format!("`{k}` must be a string")),
+                };
+                let id = text("clientId")?.ok_or("`clientId` is required")?;
+                let secret = text("clientSecret")?;
+                let Some(dir) = app.services.drive_profile.clone() else {
+                    return Err("Google Drive works with the WordCraft desktop app".into());
+                };
+                wordcraft_gdrive::write_client(&dir, id, secret).map_err(|e| e.to_string())?;
+                run(app, "reload", &json!({}))
+            }
             // Starts the worker (the page does when it opens): it reads the OAuth client and the
             // keychain, nothing else.
             "start" => worker(app).map(|_| json!({"started": true})),

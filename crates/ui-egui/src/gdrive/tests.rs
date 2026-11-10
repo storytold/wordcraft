@@ -4,8 +4,15 @@ use super::Origin;
 use crate::WordApp;
 use crate::services::Services;
 
-fn app() -> WordApp {
+fn app_off() -> WordApp {
     WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
+}
+
+/// An app with Google Drive turned on (File › Options › Accounts).
+fn app() -> WordApp {
+    let mut a = app_off();
+    a.run("ui.drive.enable", json!({"value": true})).unwrap();
+    a
 }
 
 #[test]
@@ -103,6 +110,8 @@ fn drive_pages_commands_work_with_no_document_but_save_needs_one() {
         "ui.drive.signOut",
         "ui.drive.list",
         "ui.drive.open",
+        "ui.drive.enable",
+        "ui.drive.client",
     ] {
         assert!(crate::works_without_document(id), "{id} works with no document");
     }
@@ -198,4 +207,39 @@ fn a_newer_local_save_keeps_its_destination() {
     assert!(a.session.path.is_none(), "the upload makes Drive the home");
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "Save goes to Drive");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Off until turned on in File › Options › Accounts: the commands say so, Save is an ordinary
+/// save, and turning it off leaves File › Google Drive.
+#[test]
+fn google_drive_is_off_until_turned_on() {
+    let mut a = app_off();
+    assert_eq!(a.run("ui.drive.status", json!({})).unwrap()["enabled"], json!(false));
+    assert_eq!(a.run("ui.drive.enable", json!({})).unwrap(), json!({"enabled": false}), "no value reads it");
+    let r = a.run("ui.drive.list", json!({})).unwrap_err();
+    assert!(r.contains("Options › Accounts"), "{r}");
+    let doc = a.session.document_id();
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false });
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_none(), "off: Save isn't Drive's");
+    assert!(a.run("ui.drive.enable", json!({"value": "yes"})).is_err());
+
+    a.run("ui.drive.enable", json!({"value": true})).unwrap();
+    assert!(a.ui.google_drive);
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "on: Save goes to Drive");
+    a.ui.backstage_page = "drive".into();
+    a.run("ui.drive.enable", json!({"value": false})).unwrap();
+    assert_eq!(a.ui.backstage_page, "home", "turning it off leaves the page");
+    // The setting is kept between runs in ui.json.
+    let saved = serde_json::to_value(&a.ui).unwrap();
+    assert_eq!(saved["googleDrive"], json!(false));
+}
+
+/// File › Options › Accounts saves the Google client: refused without the desktop hook, and a
+/// non-string ID never panics.
+#[test]
+fn the_accounts_client_needs_the_desktop_app() {
+    let mut a = app();
+    assert!(a.run("ui.drive.client", json!({"clientId": "123-abc.apps.googleusercontent.com"})).is_err());
+    assert!(a.run("ui.drive.client", json!({"clientId": 5})).is_err());
+    assert!(a.run("file.options", json!({"pane": "accounts"})).is_ok(), "the Accounts pane exists");
 }

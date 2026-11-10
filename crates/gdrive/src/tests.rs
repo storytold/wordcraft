@@ -445,3 +445,25 @@ fn mime_for_names() {
     assert_eq!(drive::mime_for("a"), drive::MIME_DOCX);
     let _ = pkce::random_token(0).unwrap();
 }
+
+#[test]
+fn write_client_checks_the_id_keeps_the_scope_and_reads_back() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-client-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(matches!(oauth::write_client(&dir, "  ", None), Err(Error::NotConfigured(_))), "an empty ID is refused");
+    assert!(!dir.join(oauth::CONFIG_FILE).exists(), "nothing written for a bad ID");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(oauth::CONFIG_FILE), br#"{"client_id": "old", "scope": "file"}"#).unwrap();
+    oauth::write_client(&dir, " 123-abc.apps.googleusercontent.com ", Some("s3cret")).unwrap();
+    let cfg = ClientConfig::load(Some(&dir)).unwrap();
+    assert_eq!(cfg.client_id, "123-abc.apps.googleusercontent.com");
+    assert_eq!(cfg.client_secret.as_deref(), Some("s3cret"));
+    assert_eq!(cfg.scope, oauth::SCOPE_DRIVE_FILE, "the file's scope is kept");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(dir.join(oauth::CONFIG_FILE)).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "owner-only");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
