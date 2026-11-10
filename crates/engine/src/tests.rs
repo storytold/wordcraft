@@ -3690,6 +3690,27 @@ fn select_text_ends_the_match_before_hidden_text() {
     assert!(runs.iter().any(|t| t == "SECRET"), "{runs:?}");
 }
 
+#[test]
+fn select_text_skips_tracked_deletions_in_the_default_projection() {
+    // A tracked-deleted `foo` sits before a visible `foo`: the default search selects the one
+    // document.text returns, and `includeHidden` still reaches the deleted occurrence.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo bar foo"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "select.text", json!({"text": "foo bar"}));
+    run(&mut s, "text.insert", json!({"text": "baz"}));
+    // The inserted `baz` sits over the deleted `foo bar`, which stays in the paragraph.
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "baz foo");
+    // The default search skips the deleted occurrence: it selects the visible `foo` (raw 11..14).
+    let r = run(&mut s, "select.text", json!({"text": "foo"}));
+    assert_eq!(r["anchor"]["off"], json!(11), "{r}");
+    assert_eq!(r["focus"]["off"], json!(14), "{r}");
+    // `includeHidden` searches the raw text: it reaches the deleted occurrence (raw 3..6).
+    let r = run(&mut s, "select.text", json!({"text": "foo", "includeHidden": true}));
+    assert_eq!(r["anchor"]["off"], json!(3), "{r}");
+    assert_eq!(r["focus"]["off"], json!(6), "{r}");
+}
+
 /// The author of the revision `rid` points to.
 fn author_of(s: &Session, rid: Option<u32>) -> Option<String> {
     rid.and_then(|r| s.doc.revisions.get(r as usize)).map(|r| r.author.clone())

@@ -482,9 +482,10 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     }
     // The search runs over each paragraph's visible projection — the text document.text returns —
     // so an agent selects the text it read back, and a match that exists only in the projection
-    // (hidden characters inside or before it) is still found. `includeHidden` searches the raw
-    // paragraph text and counts occurrences inside hidden runs too. A projection match may span
-    // hidden characters between the visible ones; replacing the selection rewrites both.
+    // (hidden or tracked-deleted characters inside or before it) is still found. `includeHidden`
+    // searches the raw paragraph text and counts occurrences inside hidden and tracked-deleted
+    // runs too. A projection match may span hidden characters between the visible ones; replacing
+    // the selection rewrites both.
     let include_hidden = p::bool(v, "includeHidden").unwrap_or(false);
     let mut count = 0;
     let story = super::story_param(s, v);
@@ -499,7 +500,8 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
         let mut chars: Vec<(usize, usize, usize)> = Vec::with_capacity(p.text.len());
         let mut v = 0;
         for (r, c) in p.run_ranges() {
-            let hidden = !include_hidden && !r.is_empty() && s.doc.styles.resolve_char(style, c).hidden;
+            let hidden =
+                !include_hidden && !r.is_empty() && (c.del.is_some() || s.doc.styles.resolve_char(style, c).hidden);
             for (i, ch) in p.text[r.clone()].char_indices() {
                 if hidden {
                     continue;
