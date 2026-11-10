@@ -206,7 +206,8 @@ fn a_default_part_left_out_is_words_own() {
         let d = wordcraft_docx::read(&docx("<w:p><w:r><w:t>Text</w:t></w:r></w:p>", &rels, &parts)).unwrap();
         let c = d.styles.resolve_char(None, &Default::default());
         let after = d.styles.resolve_para(&ParaProps::default()).space_after;
-        (c.font, c.size, c.complex().size, after)
+        let cs = c.complex().size;
+        (c.font, c.size, cs, after)
     };
     let s = |f: &str| f.to_string();
     // No defaults: the theme's body font (Aptos without a theme), 12 pt, 15 pt, 8 pt after.
@@ -218,7 +219,10 @@ fn a_default_part_left_out_is_words_own() {
     // Run defaults present: theirs, Times New Roman where they name no font, the spec's 10 pt.
     let tnr = s("Times New Roman");
     assert_eq!(read("<w:docDefaults><w:rPrDefault><w:rPr/></w:rPrDefault></w:docDefaults>", true), (tnr.clone(), 10.0, 10.0, 8.0));
-    assert_eq!(read(r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>"#, false), (tnr, 12.0, 12.0, 8.0));
+    assert_eq!(
+        read(r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>"#, false),
+        (tnr, 12.0, 12.0, 8.0)
+    );
     // Fonts the run defaults name stay theirs.
     let named = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>"#;
     assert_eq!(read(named, false), (s("Georgia"), 10.0, 10.0, 0.0));

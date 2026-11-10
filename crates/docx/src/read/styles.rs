@@ -118,14 +118,12 @@ impl Reader<'_> {
                 }
             }
         }
-        if let Some(dd) = root.child("w:docDefaults") {
-            if let Some(p) = dd.child("w:pPrDefault").and_then(|d| d.child("w:pPr")) {
-                sheet.default_para = self.pc.ppr(p).0;
-                // Word makes no paragraph a text frame from the document defaults: the sizeless
-                // top-left `w:framePr` Apple Pages writes there would put every paragraph, the
-                // headers' and footers' included, at the page's corner (#2360).
-                sheet.default_para.frame = None;
-            }
+        if let Some(p) = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).and_then(|d| d.child("w:pPr")) {
+            sheet.default_para = self.pc.ppr(p).0;
+            // Word makes no paragraph a text frame from the document defaults: the sizeless
+            // top-left `w:framePr` Apple Pages writes there would put every paragraph, the
+            // headers' and footers' included, at the page's corner (#2360).
+            sheet.default_para.frame = None;
         }
         if sheet.default_chr.size.is_none() {
             sheet.default_chr.size = Some(10.0);
