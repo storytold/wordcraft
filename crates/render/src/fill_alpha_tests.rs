@@ -31,6 +31,30 @@ fn legacy_ink_keeps_its_width_clamp_and_native_ink_refuses_invalid_widths() {
     }
 }
 
+/// Culling uses the same resolved legacy width as painting, including at the viewport edge.
+#[test]
+fn legacy_ink_culling_uses_effective_width() {
+    let area = Rect::new(0.0, 0.0, 20.0, 20.0);
+    for (width, expected) in
+        [(f32::NAN, 1.0), (f32::INFINITY, 1.0), (f32::NEG_INFINITY, 1.0), (0.0, 0.25), (-1.0, 0.25), (0.01, 0.25), (400.0, 200.0)]
+    {
+        for y in [10.0, -0.05] {
+            let render = |width| {
+                render_items(
+                    &Document::new(),
+                    &[Draw::Ink { pts: vec![(4.0, y), (16.0, y)], color: Rgb::BLACK, width, alpha: 1.0 }],
+                    area,
+                    8.0,
+                    &RenderOptions::default(),
+                )
+            };
+            let control = render(expected);
+            assert!(control.pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0), "control did not paint, width={width}, y={y}");
+            assert!(render(width).pixels == control.pixels, "width={width}, y={y}");
+        }
+    }
+}
+
 /// Mask-aware clipping must not change isolated compositing for ordinary clip contents.
 #[test]
 fn ordinary_clips_keep_isolated_compositing() {
