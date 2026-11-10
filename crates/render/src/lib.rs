@@ -199,7 +199,12 @@ impl RenderOptions {
     /// compositing: the page colour is the visible background. A gradient or pattern fill stores
     /// its first stop or back colour in `page_color` for older readers, so readers must not use
     /// `page_color` for those fills (that is the fill, not the paper underneath).
+    ///
+    /// Read Mode's paper replaces the document's page background, fill included.
     pub fn visible_fill(&self, doc: &Document) -> Rgb {
+        if self.read_paper.is_some() {
+            return self.paper_of(doc);
+        }
         let paper = self.read_paper.unwrap_or(self.paper);
         if let Some(g) = &doc.settings.page_gradient
             && !g.stops.is_empty()

@@ -116,6 +116,9 @@ fn background_at_caret_follows_gradient_and_pattern_fills() {
     let p = background_at(&d, &page, &light, 72.0, 72.0);
     // The back colour at half transparency over white: each channel halfway to 255.
     assert_eq!(p, Rgb(0x99, 0xB3, 0xCC), "the pattern back over the paper: {p:?}");
+    // Read Mode's paper replaces the fill, so the caret contrasts against the reading paper.
+    let reading = RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() };
+    assert_eq!(background_at(&d, &page, &reading, 72.0, 72.0), SEPIA_PAPER, "Read Mode's paper hides the pattern");
     d.settings.page_pattern = None;
     assert_eq!(background_at(&d, &page, &light, 72.0, 72.0), Rgb(0x10, 0x10, 0x40), "clearing the fill shows the page colour");
 }
