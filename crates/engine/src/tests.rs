@@ -18,6 +18,7 @@ mod fonts;
 mod ime_noop;
 mod para_tools;
 mod revision_checks;
+mod themes;
 mod typing;
 mod wordart;
 

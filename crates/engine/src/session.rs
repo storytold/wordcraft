@@ -63,6 +63,12 @@ pub struct Session {
     /// `None`, so an agent's words stay in memory and never change the person's dictionary.
     /// Add to Dictionary and File › Options › Proofing save through it (#40).
     pub user_dict_path: Option<std::path::PathBuf>,
+    /// The themes folder, if the host wired one up ([`Session::load_custom_themes`]): where custom
+    /// colour and font sets and saved themes are kept. `None` (headless sessions, tests, the web)
+    /// keeps them in memory only.
+    pub themes_dir: Option<std::path::PathBuf>,
+    /// Custom colour sets, font sets and themes (Design › Colors, Fonts, Themes; #1869).
+    pub custom_themes: crate::cmd::themes::CustomThemes,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,
