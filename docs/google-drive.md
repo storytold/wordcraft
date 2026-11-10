@@ -48,8 +48,9 @@ their own Google Cloud project, so sign-in never goes through a WordCraft server
    yourself: user type *External*, publishing status *Testing*, and add your own Google
    account under **Test users**.
 3. Under **Clients**, create an OAuth client ID of type **Desktop app**, then download its JSON.
-4. In WordCraft, go to **File › Options › Accounts**, tick **Use Google Drive**, enter the
-   client ID and secret from that JSON and click **Save client**, then **Sign in with Google**.
+4. In WordCraft, go to **File › Options › Accounts** and tick **Use Google Drive**. Under
+   **1 App registration**, enter the client ID and secret from that JSON and click **Save
+   registration**. Under **2 Your Google account**, click **Sign in with Google**.
    That writes `google-drive.json` (owner-only) for you. Or save the JSON yourself as
    `google-drive.json` in WordCraft's profile folder:
    - macOS: `~/Library/Application Support/WordCraft/`
@@ -75,6 +76,10 @@ Google documents the secret of a Desktop-app client as not confidential. Keep it
 repositories anyway: it identifies your project.
 
 ## How sign-in works
+
+The client ID and secret are the *app's* registration, not your credentials: they tell Google
+which app is asking. Your own sign-in, including 2-Step Verification (MFA), passkeys, security
+keys and Workspace SSO, happens on Google's page and never passes through WordCraft.
 
 WordCraft follows Google's flow for installed apps:
 
