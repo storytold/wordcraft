@@ -52,6 +52,35 @@ pub struct PdfOptions {
     pub numeral: NumeralMode,
 }
 
+/// How many characters of the watermark text the PDF draws.
+pub const WATERMARK_MAX_CHARS: usize = 200;
+
+impl PdfOptions {
+    /// What a page shows when drawn into the PDF: no marks or dimming, tracked changes as markup
+    /// only with `include_markup`. The one place that says so; strict export (#6005) checks the
+    /// same display list.
+    pub fn display_options(&self) -> wordcraft_layout::display::DisplayOptions {
+        wordcraft_layout::display::DisplayOptions {
+            marks: false,
+            dim_header: false,
+            dim_body: false,
+            markup: self.include_markup,
+            placeholders: false,
+            ..Default::default()
+        }
+    }
+
+    /// How [`crate::export`] lays a document out for these options.
+    pub fn layout_options(&self) -> wordcraft_layout::LayoutOptions {
+        wordcraft_layout::LayoutOptions {
+            hide_deleted: !self.include_markup,
+            comment_balloons: self.comments,
+            numeral: self.numeral,
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for PdfOptions {
     /// Keep ordinary document export unchanged unless a print layout is requested.
     fn default() -> Self {
