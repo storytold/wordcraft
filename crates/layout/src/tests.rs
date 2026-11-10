@@ -13,6 +13,7 @@ mod float_top;
 mod grid;
 mod ligature;
 pub(crate) mod linear;
+mod missing_glyphs;
 mod nbsp;
 mod nested_cant_split;
 mod numeral;

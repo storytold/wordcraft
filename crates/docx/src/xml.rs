@@ -157,6 +157,112 @@ fn requirement_prefix(uri: &[u8]) -> &'static str {
     }
 }
 
+const MAX_MC_VALUES: usize = 64;
+const MAX_MC_VALUE_LEN: usize = 128;
+const MAX_MC_VALUE_BYTES: usize = 16 * 1024;
+
+/// Checks a whitespace-separated markup-compatibility list before allocating or resolving it.
+fn mc_values<'a>(value: &'a str, attribute: &str) -> Result<Vec<&'a str>, DocxError> {
+    if value.len() > MAX_MC_VALUE_BYTES {
+        return Err(DocxError::Limit(format!("oversized value in {attribute}")));
+    }
+    let values: Vec<_> = value.split_whitespace().take(MAX_MC_VALUES + 1).collect();
+    if values.len() > MAX_MC_VALUES || values.iter().any(|value| value.len() > MAX_MC_VALUE_LEN) {
+        return Err(DocxError::Limit(format!("too many or oversized values in {attribute}")));
+    }
+    Ok(values)
+}
+
+/// Rewrites `mc:Ignorable` and `mc:MustUnderstand` namespace-prefix lists while their bindings
+/// are still in scope. Unresolvable ignorable prefixes retain the reader's existing drop policy;
+/// an unresolvable `MustUnderstand` prefix is an error because it cannot safely be honoured.
+fn normalize_mc_prefixes(reader: &mut NsReader<&[u8]>, attribute: &str, value: &str, extra: &[(&'static str, &str)]) -> Result<String, DocxError> {
+    let mut normalized = Vec::new();
+    for prefix in mc_values(value, attribute)? {
+        if !valid_ncname(prefix, false) {
+            if attribute == "mc:Ignorable" {
+                continue;
+            }
+            return Err(DocxError::Xml(format!("invalid namespace prefix in {attribute}")));
+        }
+        let name = format!("{prefix}:ignored");
+        match reader.resolver_mut().resolve_attribute(QName(name.as_bytes())).0 {
+            ResolveResult::Bound(namespace) => {
+                let canonical = prefix_for(namespace.as_ref(), if attribute == "mc:Ignorable" { &[] } else { extra });
+                if canonical == "?" {
+                    if attribute == "mc:Ignorable" {
+                        continue;
+                    }
+                    return Err(DocxError::Xml(format!("unknown namespace prefix in {attribute}")));
+                }
+                normalized.push(canonical);
+            }
+            _ if attribute == "mc:Ignorable" => {}
+            _ => return Err(DocxError::Xml(format!("unbound namespace prefix in {attribute}"))),
+        }
+    }
+    Ok(normalized.join(" "))
+}
+
+/// Rewrites qualified-name lists in `mc:ProcessContent`, `mc:PreserveElements`, and
+/// `mc:PreserveAttributes` before the element's namespace declarations are discarded. Values
+/// whose namespace cannot be represented by this tree are refused rather than serialized with
+/// an undeclared or incorrectly rebound prefix.
+fn normalize_mc_qnames(reader: &mut NsReader<&[u8]>, attribute: &str, value: &str, extra: &[(&'static str, &str)]) -> Result<String, DocxError> {
+    mc_values(value, attribute)?
+        .into_iter()
+        .map(|token| {
+            let Some((prefix, local)) = token.split_once(':') else {
+                return Err(DocxError::Xml(format!("unqualified name in {attribute}")));
+            };
+            if !valid_ncname(prefix, false) || !valid_ncname(local, true) {
+                return Err(DocxError::Xml(format!("invalid qualified name in {attribute}")));
+            }
+            match reader.resolver_mut().resolve_attribute(QName(token.as_bytes())).0 {
+                ResolveResult::Bound(namespace) => {
+                    let canonical = prefix_for(namespace.as_ref(), extra);
+                    if canonical == "?" {
+                        return Err(DocxError::Xml(format!("unknown namespace prefix in {attribute}")));
+                    }
+                    Ok(format!("{canonical}:{local}"))
+                }
+                _ => Err(DocxError::Xml(format!("unbound namespace prefix in {attribute}"))),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| values.join(" "))
+}
+
+/// XML 1.0 NCName syntax, with the markup-compatibility wildcard allowed only as a whole local part.
+fn valid_ncname(value: &str, wildcard: bool) -> bool {
+    if wildcard && value == "*" {
+        return true;
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    is_ncname_start(first) && chars.all(is_ncname_char)
+}
+
+/// Is `c` a legal non-colon XML 1.0 NCName start character?
+fn is_ncname_start(c: char) -> bool {
+    let n = c as u32;
+    c == '_'
+        || c.is_ascii_alphabetic()
+        || matches!(n,
+            0x00C0..=0x00D6 | 0x00D8..=0x00F6 | 0x00F8..=0x02FF | 0x0370..=0x037D |
+            0x037F..=0x1FFF | 0x200C..=0x200D | 0x2070..=0x218F | 0x2C00..=0x2FEF |
+            0x3001..=0xD7FF | 0xF900..=0xFDCF | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF
+        )
+}
+
+/// Is `c` a legal non-colon XML 1.0 NCName continuation character?
+fn is_ncname_char(c: char) -> bool {
+    let n = c as u32;
+    is_ncname_start(c) || c.is_ascii_digit() || matches!(n, 0x002D | 0x002E | 0x00B7 | 0x0300..=0x036F | 0x203F..=0x2040)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
     El(El),
@@ -365,6 +471,7 @@ pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
     parse_with(bytes, &[], true)
 }
 
+/// Parses XML with optional namespace aliases and strict end-tag validation.
 fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
@@ -445,27 +552,10 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                                 .collect::<Vec<_>>()
                                 .join(" ")
                         }
-                    } else if aname == "mc:Ignorable" {
-                        // These aliases can occur locally on retained extensions too.
-                        // Unknown namespaces have no serialized names in this tree.
-                        let prefixes: Vec<_> = val.split_whitespace().take(65).collect();
-                        if prefixes.len() > 64 || prefixes.iter().any(|p| p.len() > 128) {
-                            return Err(DocxError::Limit("too many or oversized ignorable prefixes".into()));
-                        }
-                        prefixes
-                            .into_iter()
-                            .filter_map(|prefix| {
-                                let qualified = format!("{prefix}:ignored");
-                                match r.resolver_mut().resolve_attribute(QName(qualified.as_bytes())).0 {
-                                    ResolveResult::Bound(ns) => {
-                                        let p = prefix_for(ns.as_ref(), &[]);
-                                        (p != "?").then_some(p)
-                                    }
-                                    _ => None,
-                                }
-                            })
-                            .collect::<Vec<_>>()
-                            .join(" ")
+                    } else if matches!(aname.as_str(), "mc:Ignorable" | "mc:MustUnderstand") {
+                        normalize_mc_prefixes(&mut r, &aname, &val, extra)?
+                    } else if matches!(aname.as_str(), "mc:ProcessContent" | "mc:PreserveElements" | "mc:PreserveAttributes") {
+                        normalize_mc_qnames(&mut r, &aname, &val, extra)?
                     } else {
                         val
                     };
@@ -790,6 +880,54 @@ mod tests {
         let e = parse(x).unwrap();
         let values: Vec<_> = e.children("mc:Choice").map(|c| c.attr("Requires")).collect();
         assert_eq!(values, [Some("wpi"), Some("?"), Some("?")]);
+    }
+
+    #[test]
+    fn markup_compatibility_qname_values_survive_prefix_canonicalization() {
+        let x = br#"<mc:Choice xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:ink="http://www.w3.org/2003/InkML" xmlns:future="urn:future" mc:ProcessContent="math:* ink:trace" mc:PreserveElements="math:* ink:trace" mc:PreserveAttributes="math:id ink:*" mc:MustUnderstand="math ink"/>"#;
+        let e = parse(x).unwrap();
+        assert_eq!(e.attr("mc:ProcessContent"), Some("mml:* ink:trace"));
+        assert_eq!(e.attr("mc:PreserveElements"), Some("mml:* ink:trace"));
+        assert_eq!(e.attr("mc:PreserveAttributes"), Some("mml:id ink:*"));
+        assert_eq!(e.attr("mc:MustUnderstand"), Some("mml ink"));
+
+        // Bindings are scoped at the element carrying the MC attribute, including local
+        // rebindings. Wildcard local names survive, while unknown and unbound references fail
+        // rather than leaving undeclared prefixes in serialized markup.
+        let x = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:alias="http://www.w3.org/1998/Math/MathML" xmlns:pen="http://www.w3.org/2003/InkML"><mc:Choice mc:ProcessContent="alias:*"><x xmlns:alias="http://www.w3.org/2003/InkML" mc:PreserveElements="alias:trace"/></mc:Choice></r>"#;
+        let first = parse(x).unwrap().to_xml();
+        assert!(first.contains(r#"mc:ProcessContent="mml:*""#), "{first}");
+        assert!(first.contains(r#"mc:PreserveElements="ink:trace""#), "{first}");
+        let second = parse(first.as_bytes()).unwrap().to_xml();
+        assert_eq!(parse(second.as_bytes()).unwrap().to_xml(), second);
+
+        let unknown =
+            br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:alias="urn:future" mc:ProcessContent="alias:item"/>"#;
+        assert!(parse(unknown).is_err());
+        let unbound = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:PreserveAttributes="missing:id"/>"#;
+        assert!(parse(unbound).is_err());
+        let unknown_required = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:MustUnderstand="missing"/>"#;
+        assert!(parse(unknown_required).is_err());
+        let ignorable_unknown = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="future"/>"#;
+        assert_eq!(parse(ignorable_unknown).unwrap().attr("mc:Ignorable"), Some(""));
+        let malformed = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:alias="urn:math" mc:ProcessContent="alias:bad:name"/>"#;
+        assert!(parse(malformed).is_err());
+        let too_many = format!(
+            r#"<r xmlns:mc="{}" xmlns:mml="{}" mc:ProcessContent="{}"/>"#,
+            NAMESPACES[6].1,
+            NAMESPACES[10].1,
+            vec!["mml:math"; MAX_MC_VALUES + 1].join(" ")
+        );
+        assert!(matches!(parse(too_many.as_bytes()), Err(DocxError::Limit(_))));
+        let too_long = format!(
+            r#"<r xmlns:mc="{}" xmlns:mml="{}" mc:PreserveElements="mml:{}"/>"#,
+            NAMESPACES[6].1,
+            NAMESPACES[10].1,
+            "a".repeat(MAX_MC_VALUE_LEN)
+        );
+        assert!(matches!(parse(too_long.as_bytes()), Err(DocxError::Limit(_))));
+        let oversized_value = format!(r#"<r xmlns:mc="{}" mc:Ignorable="{}"/>"#, NAMESPACES[6].1, " ".repeat(MAX_MC_VALUE_BYTES + 1));
+        assert!(matches!(parse(oversized_value.as_bytes()), Err(DocxError::Limit(_))));
     }
 
     #[test]
