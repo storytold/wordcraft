@@ -80,10 +80,10 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
-    /// Mark index entries from the picked concordance file (References › Insert Index ›
-    /// AutoMark…).
+    /// Mark index entries in `document` from the picked concordance file (References › Insert
+    /// Index › AutoMark…).
     #[cfg(not(target_arch = "wasm32"))]
-    AutoMark,
+    AutoMark { document: u64 },
 }
 
 /// What to do once Save As has written the document.
@@ -291,11 +291,21 @@ impl WordApp {
                 self.load_recipients(json!({"path": path}))
             }
             #[cfg(not(target_arch = "wasm32"))]
-            AfterPick::AutoMark => {
+            AfterPick::AutoMark { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                // The document it was asked for may wait behind another one by now: it is shown
+                // and marked, never the one in front. A closed one is not marked at all.
+                let shown = if document == self.session.document_id() {
+                    Ok(())
+                } else if self.session.is_open(document) {
+                    self.show_document(document)
+                } else {
+                    Err("the document to mark has been closed".to_string())
+                };
                 // Read here, as the person picked it (a file on a network share included), and
                 // marked from its rows: the command's `path` refuses network paths.
-                let r = wordcraft_engine::cmd::index::read_concordance(std::path::Path::new(&path))
+                let r = shown
+                    .and_then(|()| wordcraft_engine::cmd::index::read_concordance(std::path::Path::new(&path)))
                     .and_then(|rows| self.run("references.autoMark", json!({"entries": rows})));
                 match &r {
                     Ok(v) => {
@@ -484,10 +494,12 @@ impl WordApp {
     }
 
     /// References › Insert Index › AutoMark…: pick a concordance file, then mark the entries its
-    /// table lists (desktop: the browser can't hand the engine a file by path).
+    /// table lists in the document shown now (desktop: the browser can't hand the engine a file
+    /// by path).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn pick_concordance(&mut self) -> Result<Value, String> {
-        match self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::AutoMark) {
+        let after = AfterPick::AutoMark { document: self.session.document_id() };
+        match self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, after) {
             Asked::Done(r) => r,
             Asked::Pending => Ok(json!({"pending": "autoMark"})),
             Asked::Busy => Ok(json!({"busy": true})),

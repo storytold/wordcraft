@@ -439,7 +439,7 @@ fn automark_marks_entries_from_the_picked_concordance_file() {
     use egui::accesskit::Role;
     use egui_kittest::kittest::Queryable;
 
-    use crate::file_dialogs::{FileDialogAnswer, FileDialogRequest};
+    use crate::file_dialogs::{AfterPick, FileDialogAnswer, FileDialogRequest};
     type Shown = std::rc::Rc<std::cell::RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
 
     let dir = std::env::temp_dir().join(format!("wordcraft-ui-automark-{}", std::process::id()));
@@ -500,6 +500,30 @@ fn automark_marks_entries_from_the_picked_concordance_file() {
     answer(&shown, Some(&broken));
     let e = a.poll_file_dialog().unwrap().unwrap_err();
     assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(e.as_str()));
+    assert!(instrs(a).is_empty());
+
+    // The pick marks the document AutoMark was asked for, though another is in front by the time
+    // the file is picked (a script opened it meanwhile): that document is shown again and marked.
+    let asked_for = a.session.document_id();
+    let picked = Some(concordance.to_string_lossy().into_owned());
+    a.execute("file.new", json!({})).unwrap();
+    a.execute("text.insert", json!({"text": "Kiln and glaze in another document."})).unwrap();
+    let other = a.session.document_id();
+    assert_ne!(other, asked_for);
+    let r = a.finish_pick(AfterPick::AutoMark { document: asked_for }, picked.clone());
+    assert_eq!(r.unwrap()["marked"], 2);
+    assert_eq!(a.session.document_id(), asked_for, "the document it was asked for is shown");
+    assert_eq!(instrs(a).len(), 2);
+    a.execute("view.switchWindows", json!({"id": other})).unwrap();
+    assert_eq!(a.session.document_id(), other);
+    assert!(instrs(a).is_empty(), "the document in front was left alone");
+
+    // Closed before the file is picked, it is not marked, and nor is the document in front.
+    a.execute("file.closeDocument", json!({"id": asked_for, "force": true})).unwrap();
+    let e = a.finish_pick(AfterPick::AutoMark { document: asked_for }, picked).unwrap_err();
+    assert_eq!(e, "the document to mark has been closed");
+    assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(e.as_str()));
+    assert_eq!(a.session.document_id(), other);
     assert!(instrs(a).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
