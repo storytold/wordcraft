@@ -107,7 +107,7 @@ With **Regular expressions** on (Search Options), Replace with expands capture g
 
 Find selects the Results tab, including when it prefills selected text. Editing the search query also reveals matching or empty results. Manual Headings and Pages navigation remains available until the next search action.
 
-Footnote and endnote editing keeps body and note text at normal opacity, on light and dark pages. Headers and footers still dim outside their editing context (#2545): their text, borders and shading, not their pictures, shapes and charts, which Word shows at full strength (a letterhead's page frame keeps its colours).
+Footnote and endnote editing keeps body and note text at normal opacity, on light and dark pages. Headers and footers still dim outside their editing context (#2545): their text, borders and shading, not their pictures, shapes and charts, which Word shows at full strength (a letterhead's page frame keeps its colours), each in its place among the text: a picture in front of a shaded header paragraph stays in front of it.
 
 Protected typing at editable-region boundaries (#3614) walks consecutive permission starts or ends without repeated paragraph-prefix counts or ID-vector searches. Existing author matching, start-before-end movement, typing and Enter behavior, refusals and saved content remain unchanged. Native desktop behavior has not been newly tested.
 Aligned copy drags keep their locked document coordinate when middle-button scrolling moves the page, and Ctrl/Command+Shift can start on a secondary selected object. Plain Ctrl and Shift clicks keep their existing selection behavior (#4764).
