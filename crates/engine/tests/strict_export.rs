@@ -172,7 +172,7 @@ fn strict_report_changes_nothing() {
 
 fn garbage_background(d: &mut Document) {
     d.media.insert("bg.bin".into(), std::sync::Arc::new(b"this is not a picture".to_vec()));
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.bin".into(), fill_type: "stretch".into(), title: String::new() });
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.bin".into(), fill_type: "stretch".into(), title: String::new(), transparency: 0.0 });
 }
 
 #[test]
@@ -200,7 +200,7 @@ fn a_decodable_page_background_picture_passes() {
         .unwrap();
     let mut doc = Document::from_text("Hello");
     doc.media.insert("bg.png".into(), std::sync::Arc::new(png));
-    doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "stretch".into(), title: String::new() });
+    doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "stretch".into(), title: String::new(), transparency: 0.0 });
     let mut s = Session::new(doc);
     assert_eq!(s.run("file.strictReport", &json!({})).unwrap()["strict"], "passed");
 }
@@ -214,7 +214,7 @@ fn a_picture_wider_than_the_pdf_draws_is_refused_for_pdf_only() {
         .unwrap();
     let mut doc = Document::from_text("Hello");
     doc.media.insert("wide.png".into(), std::sync::Arc::new(png));
-    doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "wide.png".into(), fill_type: "stretch".into(), title: String::new() });
+    doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "wide.png".into(), fill_type: "stretch".into(), title: String::new(), transparency: 0.0 });
     let mut s = Session::new(doc);
     assert_eq!(s.run("file.strictReport", &json!({})).unwrap()["strict"], "failed", "PDF");
     assert_eq!(s.run("file.strictReport", &json!({"page": 1})).unwrap()["strict"], "passed", "PNG");
