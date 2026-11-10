@@ -206,6 +206,8 @@ impl WordApp {
             quit_requested: _,
             autosave: _,
             zotero: _,
+            // One Google account for the app; Drive origins are keyed by document id.
+            drive: _,
             ctx: _,
             read_aloud_error: _,
             saves_in_flight: _,

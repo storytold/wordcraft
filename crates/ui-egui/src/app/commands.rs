@@ -142,6 +142,12 @@ impl WordApp {
             }
             return r;
         }
+        if let Some(r) = crate::gdrive::command(self, id, &params).or_else(|| crate::gdrive::intercept_save(self, id, &params)) {
+            if let Err(e) = &r {
+                self.status(e.clone());
+            }
+            return r;
+        }
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));

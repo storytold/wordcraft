@@ -1,0 +1,100 @@
+# Google Drive
+
+WordCraft opens documents from Google Drive and saves them back without a sync client. Go to
+**File › Google Drive**, sign in with Google, pick a document and click **Open**. Save then sends
+your changes back to the same file in Drive. You can also save any document to My Drive.
+
+- **Formats.** The list shows Word (`.docx`), OpenDocument (`.odt`), RTF and Google Docs files.
+  A Google Doc opens as a Word copy (Drive exports it as `.docx`). Saving it adds a new `.docx`
+  file beside the original, so the Google Doc itself is never overwritten.
+- **Conflicts.** Before saving, WordCraft checks the file's Drive version. If the file changed
+  since you opened it (someone edited it in Drive, or another device saved it), nothing is
+  overwritten. The save is refused, and **Save a Copy** saves your version as a new file.
+  Drive v3 has no conditional update, so a change landing in the fraction of a second between
+  that check and the upload isn't caught.
+- **No local file.** A document opened from Drive has no path on disk. It isn't added to
+  the recent files, and File › Save never writes it beside the app. Save As still saves a local
+  copy wherever you choose. Local recovery copies work as for any unsaved document.
+- **Desktop only.** The web build answers that Drive needs the desktop app.
+
+## Set up: your own OAuth client
+
+WordCraft has no Google client of its own built in. Each person, or their organisation, uses
+their own Google Cloud project, so sign-in never goes through a WordCraft server.
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create a project (or
+   choose one) and enable the **Google Drive API**.
+2. Set up the **OAuth consent screen** (Google Auth Platform › Branding / Audience). For
+   yourself: user type *External*, publishing status *Testing*, and add your own Google
+   account under **Test users**.
+3. Under **Clients**, create an OAuth client ID of type **Desktop app**, then download its JSON.
+4. Save that JSON as `google-drive.json` in WordCraft's profile folder:
+   - macOS: `~/Library/Application Support/WordCraft/`
+   - Windows: `%APPDATA%\WordCraft\`
+   - Linux and BSD: `$XDG_CONFIG_HOME/wordcraft/` (usually `~/.config/wordcraft/`)
+   - or the folder named by `WORDCRAFT_PROFILE_DIR`
+5. In WordCraft, go to File › Google Drive. Click **Try again** if the page was already open,
+   then click **Sign in with Google**.
+
+The file can also be written by hand:
+
+```json
+{ "client_id": "1234-abc.apps.googleusercontent.com", "client_secret": "…", "scope": "drive" }
+```
+
+`scope` is `"drive"` (the default: list and open any document in your Drive) or `"file"` (Drive's
+`drive.file` scope: only files WordCraft created). With `"file"`, Drive documents made elsewhere
+don't appear in the list.
+`WORDCRAFT_GOOGLE_CLIENT_ID` and `WORDCRAFT_GOOGLE_CLIENT_SECRET` in the environment take
+precedence over the file.
+
+Google documents the secret of a Desktop-app client as not confidential. Keep it out of
+repositories anyway: it identifies your project.
+
+## How sign-in works
+
+WordCraft follows Google's flow for installed apps:
+
+1. It listens on `127.0.0.1` on a free port.
+2. It opens Google's consent page in your browser, with a PKCE challenge (RFC 7636) and a random
+   `state`.
+3. Google redirects the browser to that port with a one-time code. WordCraft checks `state`
+   and exchanges the code for tokens.
+
+There is no embedded browser, and WordCraft never sees your Google password. The **refresh token** is kept in the system
+keychain: Keychain on macOS, Credential Manager on Windows, Secret Service on Linux and the BSDs.
+It is never written to a file. If no keychain is available, sign-in lasts until you quit.
+**Sign out** revokes the token at Google and removes it from the keychain. A token revoked
+elsewhere (from your Google account's security page, say) signs WordCraft out the next time it
+calls Drive.
+
+All network calls run on a background thread, never while you type.
+
+## Commands
+
+These are app commands. They work through the control channel and MCP bridged to the app, not
+headless.
+
+| Command | What it does |
+|---|---|
+| `ui.drive.status` | `{available, signedIn, busy, error, files, morePages, document}`; `document` is the active document's Drive file, if any |
+| `ui.drive.start` | Reads the OAuth client and the keychain (the page does this when it opens) |
+| `ui.drive.reload` | Reads `google-drive.json` again |
+| `ui.drive.signIn` | Opens the consent page in the browser and waits up to 5 minutes |
+| `ui.drive.cancel` | Stops waiting for the browser |
+| `ui.drive.signOut` | Revokes and forgets the sign-in |
+| `ui.drive.list` | `{"search"?: string, "more"?: bool}`: documents, newest first, 100 at a time |
+| `ui.drive.open` | `{"id": string}`: opens a file from the list |
+| `ui.drive.save` | `{"name"?: string, "copy"?: bool}`: back to the file it came from; with `name` or `copy`, a new file in My Drive |
+
+Each command except `status` returns at once with `{"started": …}`. Read `ui.drive.status` for
+the result. `file.save` without a `path` on a document from Drive runs `ui.drive.save`.
+
+## Code
+
+- `crates/gdrive` (`wordcraft-gdrive`, standalone): OAuth (`oauth.rs`, `pkce.rs`,
+  `loopback.rs`), Drive v3 (`drive.rs`), keychain (`store.rs`, the `keyring` crate,
+  MIT OR Apache-2.0), and an HTTP seam (`http.rs`, `ureq` with rustls). Tests use a scripted
+  transport and an in-memory store. They never reach the network or the keychain.
+- `crates/ui-egui/src/gdrive.rs`: the worker thread, the commands and the page. It runs only when
+  the desktop app sets `Services::drive_profile`.

@@ -7,7 +7,7 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
-const PAGES: [(&str, &str, &str); 11] = [
+const PAGES: [(&str, &str, &str); 12] = [
     ("home", "Home", "homeFolder"),
     ("new", "New", "blankPage"),
     ("open", "Open", "open"),
@@ -15,6 +15,7 @@ const PAGES: [(&str, &str, &str); 11] = [
     ("recover", "Recover", "recover"),
     ("save", "Save", "save"),
     ("saveAs", "Save As", "saveAs"),
+    ("drive", "Google Drive", "cloudDrive"),
     ("print", "Print", "print"),
     ("export", "Export", "export"),
     ("close", "Close", "close"),
@@ -203,6 +204,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     "saveAs" => save_as_page(app, ui),
                     "info" => info_page(app, ui),
                     "recover" => recovery_page(app, ui),
+                    "drive" => crate::gdrive::page(app, ui),
                     "print" | "export" => export_page(app, ui),
                     "options" => crate::options::page(app, ui),
                     _ => home_page(app, ui),
@@ -301,7 +303,7 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
 
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
-    matches!(page, "home" | "new" | "open" | "options")
+    matches!(page, "home" | "new" | "open" | "drive" | "options")
 }
 
 fn heading(ui: &mut Ui, s: &str) {

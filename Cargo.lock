@@ -7455,6 +7455,7 @@ name = "wordcraft-ui-egui"
 version = "0.18.1"
 dependencies = [
  "accesskit_consumer",
+ "base64 0.23.1",
  "cfb",
  "chrono",
  "craft-i18n",
@@ -7475,6 +7476,7 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
+ "wordcraft-gdrive",
  "wordcraft-geom",
  "wordcraft-layout",
  "wordcraft-render",

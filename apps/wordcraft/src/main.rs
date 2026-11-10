@@ -389,6 +389,8 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         save_prefs: Some(Box::new(try_save_prefs)),
+        // File › Google Drive reads its OAuth client from `google-drive.json` here (docs/google-drive.md).
+        drive_profile: wordcraft_control_key::settings_dir(),
         ..Default::default()
     }
 }
