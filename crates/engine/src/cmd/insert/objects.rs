@@ -137,7 +137,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     let max_w = crate::cmd::page::laid_out_sect(s).text_width();
     let (mut w, mut h) = (natural_w, natural_h);
     if let Some(want) = width {
-        let k = want.max(4.0) / w.max(1.0);
+        // At most 22 inches, as for icons: a huge width made the height of a tall picture infinite.
+        let k = want.clamp(4.0, 1584.0) / w.max(1.0);
         w *= k;
         h *= k;
     }
@@ -145,7 +146,16 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
         h *= max_w / w;
         w = max_w;
     }
-    let obj = InlineObject::Image { media: key.clone(), w, h, alt: alt.to_string(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let obj = InlineObject::Image {
+        media: key.clone(),
+        w,
+        h,
+        alt: alt.to_string(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     // A selected Drawing Canvas takes it in.
     if let Some(i) = crate::cmd::canvas::add_member(s, obj.clone())? {
         return Ok(json!({"media": key, "canvasMember": i}));

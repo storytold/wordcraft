@@ -31,7 +31,7 @@ impl Reader<'_> {
                         let cap_font = first.runs.first().and_then(|r| r.props.font.clone());
                         let text_font = p.runs.first().and_then(|r| r.props.font.clone());
                         if cap_font.is_some() && cap_font != text_font {
-                            for r in &mut first.runs {
+                            for r in first.runs.iter_mut().filter(|r| r.props.font == cap_font) {
                                 r.props.font = text_font.clone();
                             }
                             props.drop_cap_font = cap_font;
@@ -290,14 +290,14 @@ impl Reader<'_> {
 
     pub fn read_section(&mut self, s: &El, rels: &Rels) -> wordcraft_doc::SectionProps {
         let mode = self.doc.settings.multiple_pages();
-        let (mut sp, refs) = sectpr(s);
+        let (mut sp, refs) = sectpr(&self.pc, s);
         sheet_from_page(&mut sp, s, mode);
         // §17.13.5.32: the section's properties before a tracked change (no header references).
         if let Some(ch) = s.child("w:sectPrChange") {
             let old = ch
                 .child("w:sectPr")
                 .map(|o| {
-                    let mut old = sectpr(o).0;
+                    let mut old = sectpr(&self.pc, o).0;
                     sheet_from_page(&mut old, o, mode);
                     old
                 })
