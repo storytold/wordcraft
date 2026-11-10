@@ -14,10 +14,9 @@ const MAX_TRACKED_WORD_CHARS: usize = 128;
 const TOP_WORDS: usize = 10;
 
 const STOPWORDS: &[&str] = &[
-    "the", "and", "that", "this", "with", "have", "from", "they", "will", "would", "there",
-    "their", "what", "about", "which", "when", "your", "were", "been", "into", "than", "then",
-    "them", "these", "some", "could", "other", "also", "just", "like", "more", "very", "for",
-    "are", "was", "but", "not", "you",
+    "the", "and", "that", "this", "with", "have", "from", "they", "will", "would", "there", "their", "what", "about", "which", "when", "your",
+    "were", "been", "into", "than", "then", "them", "these", "some", "could", "other", "also", "just", "like", "more", "very", "for", "are", "was",
+    "but", "not", "you",
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -131,12 +130,8 @@ pub fn analyze(text: &str) -> WritingStats {
     let mut chars = text.char_indices().peekable();
     while let Some((byte_index, c)) = chars.next() {
         let next = chars.peek().map(|(_, next)| *next);
-        let inner_apostrophe = (c == '\'' || c == '\u{2019}')
-            && word_start.is_some()
-            && next.is_some_and(char::is_alphabetic);
-        let decimal_point = c == '.'
-            && previous.is_some_and(|p: char| p.is_ascii_digit())
-            && next.is_some_and(|n| n.is_ascii_digit());
+        let inner_apostrophe = (c == '\'' || c == '\u{2019}') && word_start.is_some() && next.is_some_and(char::is_alphabetic);
+        let decimal_point = c == '.' && previous.is_some_and(|p: char| p.is_ascii_digit()) && next.is_some_and(|n| n.is_ascii_digit());
 
         if c.is_alphanumeric() || inner_apostrophe || decimal_point {
             word_start.get_or_insert(byte_index);
@@ -205,11 +200,7 @@ pub fn flesch_reading_ease_label(score: f64) -> &'static str {
 
 fn minutes_label(minutes: f64) -> String {
     let seconds = (minutes * 60.0).round().max(0.0) as u64;
-    if seconds < 60 {
-        format!("{seconds} sec")
-    } else {
-        format!("{} min {} sec", seconds / 60, seconds % 60)
-    }
+    if seconds < 60 { format!("{seconds} sec") } else { format!("{} min {} sec", seconds / 60, seconds % 60) }
 }
 
 impl fmt::Display for WritingStats {
@@ -218,12 +209,7 @@ impl fmt::Display for WritingStats {
         writeln!(f, "Sentences:           {}", self.sentences)?;
         writeln!(f, "Avg words/sentence:  {:.1}", self.avg_words_per_sentence)?;
         writeln!(f, "Longest sentence:    {} words", self.longest_sentence_words)?;
-        writeln!(
-            f,
-            "Flesch reading ease: {:.1} ({})",
-            self.flesch_reading_ease,
-            flesch_reading_ease_label(self.flesch_reading_ease)
-        )?;
+        writeln!(f, "Flesch reading ease: {:.1} ({})", self.flesch_reading_ease, flesch_reading_ease_label(self.flesch_reading_ease))?;
         writeln!(f, "Grade level:         {:.1}", self.flesch_kincaid_grade)?;
         writeln!(f, "Reading time:        {}", minutes_label(self.reading_minutes))?;
         writeln!(f, "Speaking time:       {}", minutes_label(self.speaking_minutes))?;

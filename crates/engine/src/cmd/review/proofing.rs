@@ -48,11 +48,7 @@ pub(super) fn readability(s: &mut Session, v: &Value) -> CmdResult {
     let document_scope = s.sel.is_collapsed() || crate::cmd::objects::object_selection(s).is_some();
     let text = if document_scope { s.counted_text() } else { s.selected_text() };
     let stats = crate::writing_stats::analyze(&text);
-    let top_words: Vec<Value> = stats
-        .top_words
-        .iter()
-        .map(|(word, count)| json!({"word": word, "count": count}))
-        .collect();
+    let top_words: Vec<Value> = stats.top_words.iter().map(|(word, count)| json!({"word": word, "count": count})).collect();
 
     Ok(json!({
         "scope": if document_scope { "document" } else { "selection" },
