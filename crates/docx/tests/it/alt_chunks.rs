@@ -287,15 +287,104 @@ fn match_src_keeps_a_word_chunks_own_formatting() {
         // Ours stays ours either way.
         assert_eq!(look(0), (12.4, 11.0, false));
         if match_src {
-            // The chunk's own Normal (its 12 pt, Word's no space after) and its Subtitle (not italic).
+            // The chunk's own Normal (its 12 pt, Word's no space after); its last paragraph stands
+            // on our Subtitle (our defaults' 10 pt after) with its text as the chunk's (12 pt, not
+            // italic), as in Word (`a_match_src_chunks_last_paragraph_stands_on_our_style`).
             assert_eq!(look(1), (0.0, 12.0, false));
-            assert_eq!(look(2), (0.0, 12.0, false));
+            assert_eq!(look(2), (10.0, 12.0, false));
         } else {
             // Without it the chunk takes our styles (our Subtitle stands on our defaults).
             assert_eq!(look(1), (12.4, 11.0, false));
             assert_eq!(look(2), (10.0, 11.0, true));
         }
     }
+}
+
+/// Word brings a `w:matchSrc` chunk in as it inserts a file: the chunk's last paragraph keeps only
+/// its own paragraph formatting, on our style of its style's id, and its text the look the chunk
+/// gave it; a last paragraph in a style we don't have keeps the chunk's style (Word for Microsoft
+/// 365, these documents opened and saved again).
+#[test]
+fn a_match_src_chunks_last_paragraph_stands_on_our_style() {
+    use wordcraft_doc::Align;
+    let ours = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="248" w:line="248" w:lineRule="exact"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:i/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:b/></w:rPr></w:style>"#;
+    let theirs = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="MyInd"><w:name w:val="My Ind"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/><w:jc w:val="right"/></w:pPr><w:rPr><w:b/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:sz w:val="40"/></w:rPr></w:style>"#;
+    let styled = |style: &str, ppr: &str, text: &str| {
+        let s = if style.is_empty() { String::new() } else { format!(r#"<w:pStyle w:val="{style}"/>"#) };
+        format!(r#"<w:p><w:pPr>{s}{ppr}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+    };
+    #[derive(Debug, PartialEq)]
+    struct Look {
+        style: Option<String>,
+        before: f32,
+        after: f32,
+        left: f32,
+        align: Align,
+        size: f32,
+        bold: bool,
+        italic: bool,
+    }
+    let read_last = |chunk_body: &str, after: &str| {
+        let inner = package_styled(chunk_body, None, Some(theirs));
+        let body = format!(r#"{}<w:altChunk r:id="rIdC"><w:altChunkPr><w:matchSrc/></w:altChunkPr></w:altChunk>{after}"#, p("Ours"));
+        let d = read(&package_styled(&body, Some(("docx", DOCX_MAIN, &inner)), Some(ours))).unwrap();
+        let look = |i: usize| match &*d.body[i] {
+            Block::Para(p) => {
+                let para = d.styles.resolve_para(&p.props);
+                let chr = d.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0));
+                Look {
+                    style: p.props.style.clone(),
+                    before: para.space_before,
+                    after: para.space_after,
+                    left: para.indent_left,
+                    align: para.align,
+                    size: chr.size,
+                    bold: chr.bold,
+                    italic: chr.italic,
+                }
+            }
+            b => panic!("{b:?}"),
+        };
+        (look(1), look(2), (d.body.len() > 3).then(|| look(3)))
+    };
+    let on = |style: Option<&str>, before, after, left, align, bold| Look {
+        style: style.map(str::to_string),
+        before,
+        after,
+        left,
+        align,
+        size: 12.0,
+        bold,
+        italic: false,
+    };
+    // A first paragraph in Subtitle keeps the chunk's look; the last, in Normal, gets our Normal's
+    // spacing (12.4 pt exact lines, 12.4 after) under its 12 pt text.
+    let (first, last, _) = read_last(&format!("{}{}", styled("Subtitle", "", "SubFirst"), p("PlainLast")), "");
+    assert_eq!((first.left, first.align, first.size, first.italic), (0.0, Align::Left, 12.0, false));
+    assert_eq!(last, on(None, 0.0, 12.4, 0.0, Align::Left, false));
+    // Last in Quote: our Quote (our defaults' 10 pt after, no indent: the chunk's 36 pt is its
+    // style's), not italic.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Quote", "", "QuoteLast")), "");
+    assert_eq!(last, on(Some("Quote"), 0.0, 10.0, 0.0, Align::Left, false));
+    // Last in Subtitle, a paragraph of ours after it: our Subtitle, centred; ours is untouched.
+    let (_, last, next) = read_last(&format!("{}{}", p("Plain"), styled("Subtitle", "", "SubLast")), &p("HostAfter"));
+    assert_eq!(last, on(Some("Subtitle"), 0.0, 10.0, 0.0, Align::Center, false));
+    let next = next.unwrap();
+    assert_eq!((next.after, next.size), (12.4, 11.0));
+    // Its own paragraph formatting comes along: space before, alignment.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("", r#"<w:spacing w:before="60"/>"#, "BeforeLast")), "");
+    assert_eq!(last, on(None, 3.0, 12.4, 0.0, Align::Left, false));
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Quote", r#"<w:jc w:val="right"/>"#, "QuoteRightLast")), "");
+    assert_eq!(last, on(Some("Quote"), 0.0, 10.0, 0.0, Align::Right, false));
+    // A style we don't have comes along, and the last paragraph keeps it: 18 pt in, right, bold.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("MyInd", "", "MyIndLast")), "");
+    assert_eq!((last.style.as_deref(), last.left, last.align, last.bold, last.size), (Some("MyInd"), 18.0, Align::Right, true, 12.0));
+    // A run's character style still beats its paragraph's style: 20 pt from the chunk's Strong,
+    // not bold like ours, not italic like our Subtitle (Word folds the style into the run; here
+    // it comes along renamed).
+    let strong = r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:rPr><w:rStyle w:val="Strong"/></w:rPr><w:t>Big</w:t></w:r></w:p>"#;
+    let (_, last, _) = read_last(&format!("{}{strong}", p("Plain")), "");
+    assert_eq!((last.style.as_deref(), last.size, last.bold, last.italic), (Some("Subtitle"), 20.0, false, false));
 }
 
 #[test]

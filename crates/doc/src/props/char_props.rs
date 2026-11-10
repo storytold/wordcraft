@@ -499,6 +499,38 @@ impl CharProps {
         self
     }
 
+    /// Direct formatting that, laid over `base`, gives `self`'s look (both the formatting of a
+    /// style chain): the fields that differ, and each that `base` sets and `self` leaves unset at
+    /// the value an unset field resolves to (off, [`DEFAULT_FONT_SIZE`], automatic colour…). What
+    /// a run moved from one style to another keeps, as Word does bringing a chunk's last
+    /// paragraph in on the document's style of that name. No character style.
+    pub fn against(&self, base: &CharProps) -> CharProps {
+        let mut out = self.clone().minus(base);
+        out.style = None;
+        macro_rules! unset_as {
+            ($($f:ident = $v:expr),* $(,)?) => {$(
+                if self.$f.is_none() && base.$f.is_some() && base.$f != Some($v) {
+                    out.$f = Some($v);
+                }
+            )*};
+        }
+        unset_as!(
+            bold = false, italic = false, strike = false, double_strike = false, caps = false, small_caps = false, hidden = false,
+            outline = false, shadow = false, emboss = false, engrave = false, no_proof = false, rtl = false, cs = false,
+            size = DEFAULT_FONT_SIZE, underline = Underline::None, color = TextColor::Auto, highlight = Highlight::None,
+            vert_align = VertAlign::Baseline, spacing = 0.0, scale = 100.0, position = 0.0, kern = 0.0, emphasis = EmphasisMark::None,
+            font = crate::styles::BODY_FONT.to_string(),
+        );
+        // The complex-script values fall back to the plain ones.
+        unset_as!(
+            size_cs = self.size.unwrap_or(DEFAULT_FONT_SIZE),
+            bold_cs = self.bold.unwrap_or(false),
+            italic_cs = self.italic.unwrap_or(false),
+            font_cs = self.font.clone().unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
+        );
+        out
+    }
+
     fn minus_text_style(&mut self, base: &CharProps) {
         drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl);
