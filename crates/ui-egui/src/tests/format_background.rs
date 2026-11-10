@@ -1,6 +1,6 @@
 //! Draw › Edit › Format Background drives the page's fill through its pane, one undo step an Apply.
 
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use crate::WordApp;
@@ -201,4 +201,15 @@ fn preview_paints_the_multi_stop_gradient_apply_sends() {
     // Fewer than two document stops fall back to the two endpoints.
     let fallback = crate::format_background::Draft::gradient_stops(&[], wordcraft_doc::Rgb::BLACK, wordcraft_doc::Rgb::WHITE, 25.0);
     assert_eq!(fallback.iter().map(|s| s.pos).collect::<Vec<_>>(), [0.0, 100.0]);
+}
+
+/// A pattern swatch reports its state as selected, not as disabled: every swatch but one would
+/// otherwise be announced greyed out to a screen reader while still clickable.
+#[test]
+fn unselected_pattern_swatches_are_not_reported_disabled() {
+    let mut h = app_with_pane();
+    h.get_by_label("Pattern").click();
+    h.run_steps(3);
+    let swatch = h.get_by_label("Light horizontal");
+    assert!(!swatch.accesskit_node().is_disabled(), "an unselected swatch is clickable, not disabled");
 }

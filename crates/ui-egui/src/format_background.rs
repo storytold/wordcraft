@@ -411,7 +411,7 @@ fn pattern_swatch(ui: &mut Ui, preset: &str, fore: Rgb, back: Rgb, on: bool) -> 
         egui::StrokeKind::Inside,
     );
     let name = wordcraft_doc::PATTERN_PRESETS.iter().find(|p| p.name == preset).map_or(preset, |p| p.label);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, name));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, name));
     resp.on_hover_text(name)
 }
 
