@@ -355,6 +355,12 @@ pub(crate) fn check_before(s: &Session, id: &str, params: &Value) -> Result<bool
             _ => {}
         }
     }
+    // Zotero's document preferences (custom properties, #1323) are untracked document state too:
+    // refused under tracked changes, like the properties above. Other modes judge them by what
+    // they change.
+    if mode == "trackedChanges" && id == "Document_setDocumentData" {
+        return Err(CmdError::Disabled(format!("{id}: stop protection before changing the document's preferences; they can't be tracked")));
+    }
     if let Some(why) = greyed_out(s, id, || Facts::of(s)) {
         return Err(CmdError::Disabled(format!("{id}: {why}")));
     }
