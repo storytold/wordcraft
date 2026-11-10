@@ -13,7 +13,7 @@ fn an_odt_is_saved_and_opened_with_a_password() {
     assert!(io::needs_password(&none), "{none}");
     let wrong = io::open_bytes_with("secret.odt", &enc, Some("nope")).unwrap_err();
     assert!(io::wrong_password(&wrong), "{wrong}");
-    let (opened, encrypted) = io::open_bytes_with("secret.odt", &enc, Some("hunter2")).unwrap();
+    let (opened, encrypted, _) = io::open_bytes_with("secret.odt", &enc, Some("hunter2")).unwrap();
     assert!(encrypted);
     assert_eq!(opened.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect::<Vec<_>>(), ["Private notes."]);
 }
@@ -32,7 +32,7 @@ fn an_odt_template_opens_and_saves_as_a_template_with_a_password_too() {
     assert!(io::can_encrypt("letter.ott"));
     let enc = io::save_bytes_with("letter.ott", &doc, Some("pw"), &Default::default()).unwrap();
     assert!(wordcraft_formats::odt::is_encrypted(&enc));
-    let (back, encrypted) = io::open_bytes_with("letter.ott", &enc, Some("pw")).unwrap();
+    let (back, encrypted, _) = io::open_bytes_with("letter.ott", &enc, Some("pw")).unwrap();
     assert!(encrypted && back.body.iter().filter_map(|b| b.as_para()).any(|p| p.text == "Letterhead."));
     assert!(io::OPEN_EXTS.contains(&"ott") && io::SAVE_EXTS.contains(&"ott"));
 }
