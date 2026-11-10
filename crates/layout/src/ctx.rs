@@ -470,6 +470,7 @@ pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(
 #[cfg(test)]
 #[path = "tests/ctx_textbox.rs"]
 mod textbox_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
