@@ -77,6 +77,7 @@ first WebSocket frame must be `auth`.
 | `wordcraft_collab_cabinet_errors_total` | commits not stored (token, size, exhausted retry) |
 | `wordcraft_collab_save_copies_total` | refused copies the owner took to save |
 | `wordcraft_collab_presence_total` | presence frames |
+| `wordcraft_collab_stale_peers_total` | peers whose outbox overflowed and whose connection was closed (ADR WC-0002) |
 
 A publication that is not counted in `cabinet_published_total` did not become a
 file version. `cabinet_errors_total` growing while `commits_total` grows is a

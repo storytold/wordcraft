@@ -32,7 +32,7 @@ without one. The token is never logged.
 
 - `GET /healthz` — `ok` when the process is serving.
 - `GET /metrics` — Prometheus text: rooms, connections, applied operations,
-  rejects, commits, presence frames.
+  rejects, commits, presence frames, stale peers.
 - `GET /ws` — WebSocket; the first frame must be `auth`.
 
 ## Development token
@@ -99,6 +99,12 @@ cannot replay the operation itself either.
 - A client must authenticate within 10 s.
 - Presence is expected at 5–10 Hz; the server does not journal it.
 - One room per document; a room is dropped when its last peer leaves.
+- A peer's outbox holds 512 frames (`Config::peer_queue`). A peer that stops
+  reading overflows it: the operation it missed is counted in
+  `stale_peers_total`, the peer is marked stale and its connection ends, so the
+  client reconnects with `lastVersion` and resyncs (ADR WC-0002). Every write to
+  a peer is bounded by the heartbeat period (10 s), so a stalled socket is
+  closed even when no further frame arrives.
 
 ## Commit
 

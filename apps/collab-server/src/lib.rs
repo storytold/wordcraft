@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use axum::Router;
@@ -49,6 +49,9 @@ pub const SNAPSHOT_CHUNK: usize = 512 * 1024;
 pub const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
 /// Presence is dropped after this without a heartbeat (ADR-0006).
 pub const PRESENCE_TTL: Duration = Duration::from_secs(30);
+/// Frames a peer's connection may hold before the peer counts as not reading
+/// (ADR WC-0002).
+pub const PEER_QUEUE: usize = 512;
 
 /// Server configuration from the environment.
 #[derive(Clone, Debug)]
@@ -66,6 +69,14 @@ pub struct Config {
     /// The cabinet commit callback (M87). `None` keeps the commit server-side
     /// only: the file is built and the host owns the storage.
     pub cabinet: Option<CabinetConfig>,
+    /// How often a connected peer is pinged, and the longest any single write
+    /// to it may take before the peer counts as gone (ADR WC-0002). Also the
+    /// interval at which a peer whose outbox overflowed is closed.
+    pub heartbeat: Duration,
+    /// Frames one peer's outbox holds before the peer counts as not reading
+    /// (ADR WC-0002). 512 in production; tests keep it small so the overflow is
+    /// reachable without a stalled megabyte-sized socket buffer.
+    pub peer_queue: usize,
 }
 
 impl Config {
@@ -79,7 +90,7 @@ impl Config {
         let data_dir = std::env::var("COLLAB_DATA_DIR").map(PathBuf::from).unwrap_or_else(|_| PathBuf::from("collab-data"));
         let lease_ttl_secs = std::env::var("COLLAB_LEASE_TTL_SECS").ok().and_then(|value| value.parse().ok()).unwrap_or(120);
         let cabinet = cabinet_from_env()?;
-        Ok(Config { bind, jwt_secret, jwt_pem, data_dir, lease_ttl_secs, cabinet })
+        Ok(Config { bind, jwt_secret, jwt_pem, data_dir, lease_ttl_secs, cabinet, heartbeat: PRESENCE_TTL / 3, peer_queue: PEER_QUEUE })
     }
 }
 
@@ -120,10 +131,58 @@ pub struct Claims {
 }
 
 /// One connected client.
+#[derive(Clone)]
 struct Peer {
     role: Role,
     sid: String,
     out: mpsc::Sender<ServerMsg>,
+    /// Set when a document frame could not be queued for this peer: its outbox
+    /// is full, so it has already missed an accepted operation. Its connection
+    /// ends instead of staying open with a document the room has moved past
+    /// (ADR WC-0002).
+    stale: Arc<Stale>,
+}
+
+impl Peer {
+    fn new(role: Role, sid: &str, out: mpsc::Sender<ServerMsg>) -> Peer {
+        Peer { role, sid: sid.to_string(), out, stale: Arc::new(Stale::default()) }
+    }
+}
+
+/// A peer that missed a document frame: the flag is what the connection loop
+/// reads, the notification is what wakes it out of a write that is stuck
+/// because the peer stopped reading. Without the notification the loop is
+/// inside that write and cannot look at the flag (ADR WC-0002).
+#[derive(Default)]
+struct Stale {
+    flag: AtomicBool,
+    wake: tokio::sync::Notify,
+}
+
+impl Stale {
+    /// Mark the peer stale; `true` the first time only.
+    fn mark(&self) -> bool {
+        let first = !self.flag.swap(true, Ordering::Relaxed);
+        self.wake.notify_one();
+        first
+    }
+    fn is_set(&self) -> bool {
+        self.flag.load(Ordering::Relaxed)
+    }
+
+    /// Resolves when the peer is marked stale. The permit `notify_one` leaves
+    /// behind is taken here, so a mark that lands between two writes is not
+    /// lost.
+    async fn wait(&self) {
+        self.wake.notified().await;
+    }
+}
+
+impl std::fmt::Debug for Stale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `Notify` is not `Debug`; the flag is what matters in a failure message.
+        f.debug_struct("Stale").field("set", &self.is_set()).finish()
+    }
 }
 
 /// A document room and its connected peers.
@@ -178,6 +237,9 @@ pub struct Metrics {
     publish_errors: AtomicU64,
     /// Refused copies the owner took to save (TASK.md §6).
     copies: AtomicU64,
+    /// Peer outboxes that overflowed: each one missed a document frame and was
+    /// closed (ADR WC-0002).
+    stale: AtomicU64,
 }
 
 impl Metrics {
@@ -198,6 +260,7 @@ impl Metrics {
             ("cabinet_conflicts_total", self.publish_conflicts.load(Ordering::Relaxed)),
             ("cabinet_errors_total", self.publish_errors.load(Ordering::Relaxed)),
             ("save_copies_total", self.copies.load(Ordering::Relaxed)),
+            ("stale_peers_total", self.stale.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -348,22 +411,28 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
         return;
     };
     let room = state.room_for(&claims.doc);
-    let (tx, mut rx) = mpsc::channel::<ServerMsg>(512);
-    let (plan, peers) = match register(&room, &client_id, &claims.sid, role, &tx, wants_version) {
+    // Every write to this peer is bounded by one heartbeat period: a peer that
+    // stopped reading is closed instead of holding the connection open with a
+    // document the room no longer has (ADR WC-0002).
+    let limit = state.cfg.heartbeat;
+    let (tx, mut rx) = mpsc::channel::<ServerMsg>(state.cfg.peer_queue.max(1));
+    let (plan, peers, stale) = match register(&room, &client_id, &claims.sid, role, &tx, wants_version) {
         Ok(parts) => parts,
         Err(reject) => {
-            let _ = send(&mut sink, &ServerMsg::Rejected { reject }).await;
+            let _ = send(&mut sink, &ServerMsg::Rejected { reject }, limit).await;
             let _ = sink.close().await;
             return;
         }
     };
-    if !send_join(&mut sink, &claims, role, &plan, peers).await {
+    if !send_join(&mut sink, &claims, role, &plan, peers, limit).await {
         leave(&state, &claims.doc, &room, &client_id);
         return;
     }
     announce_join(&room, &client_id, role);
 
-    let mut heartbeat = interval(PRESENCE_TTL / 3);
+    let conn = Conn { state: &state, room: &room, claims: &claims, role, client_id: &client_id, limit };
+
+    let mut heartbeat = interval(state.cfg.heartbeat);
     heartbeat.tick().await; // the first tick is immediate; the first frame stays an answer
     loop {
         tokio::select! {
@@ -373,24 +442,61 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(_)) => continue,
                 };
-                if !process_frame(&state, &room, &mut sink, &claims, role, &client_id, &text).await {
+                if !process_frame(&conn, &mut sink, &text).await {
                     break;
                 }
             }
             outgoing = rx.recv() => {
                 let Some(msg) = outgoing else { break };
-                if send(&mut sink, &msg).await.is_err() {
+                // The outbox overflowed while this peer was not reading: the
+                // accepted operation it missed is gone from its queue, so the
+                // connection ends here and the client reconnects and resyncs.
+                // `stale.wait()` cancels a write that is stuck on that peer, so
+                // the close does not wait for the write bound.
+                if stale.is_set() {
+                    close_stale(&mut sink, limit).await;
                     break;
+                }
+                tokio::select! {
+                    _ = stale.wait() => {
+                        close_stale(&mut sink, limit).await;
+                        break;
+                    }
+                    sent = send(&mut sink, &msg, limit) => {
+                        if sent.is_err() {
+                            break;
+                        }
+                    }
                 }
             }
             _ = heartbeat.tick() => {
-                if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                // The queue drop happens while this loop is blocked on a write,
+                // so the flag can only be read here or on the next frame; the
+                // heartbeat is what guarantees a stale peer is noticed even
+                // when nothing else arrives.
+                if stale.is_set() {
+                    close_stale(&mut sink, limit).await;
+                    break;
+                }
+                let ping = timeout(limit, sink.send(Message::Ping(Vec::new().into()))).await;
+                if !matches!(ping, Ok(Ok(()))) {
                     break;
                 }
             }
         }
     }
     leave(&state, &claims.doc, &room, &client_id);
+}
+
+/// End a connection whose outbox overflowed. The peer has already missed an
+/// accepted operation, so the version it holds can no longer catch up from its
+/// own queue; closing makes the client reconnect with its `lastVersion`, and
+/// the join answers with the journal tail or a snapshot (ADR WC-0002).
+async fn close_stale(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, limit: Duration) {
+    log::warn!("closing a peer whose outbox overflowed: it missed an accepted operation");
+    if timeout(limit, sink.send(Message::Close(None))).await.is_err() {
+        log::warn!("the stale peer did not take the close frame; dropping the socket");
+    }
 }
 
 async fn authenticate(
@@ -408,7 +514,7 @@ async fn authenticate(
     let (client_id, claims, wants_version) = match parse_auth(&state.cfg, &first) {
         Ok(parts) => parts,
         Err(reject) => {
-            let _ = send(sink, &ServerMsg::Rejected { reject }).await;
+            let _ = send(sink, &ServerMsg::Rejected { reject }, state.cfg.heartbeat).await;
             let _ = sink.close().await;
             return None;
         }
@@ -424,7 +530,7 @@ fn register(
     role: Role,
     tx: &mpsc::Sender<ServerMsg>,
     wants_version: Option<Version>,
-) -> Result<(wordcraft_collab::room::JoinPlan, Vec<Participant>), Reject> {
+) -> Result<(wordcraft_collab::room::JoinPlan, Vec<Participant>, Arc<Stale>), Reject> {
     let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
     const MAX_PARTICIPANTS: usize = 8;
     if guard.peers.len() >= MAX_PARTICIPANTS && !guard.peers.contains_key(client_id) {
@@ -446,13 +552,17 @@ fn register(
     }
     guard.lease_seen = std::time::Instant::now();
     let plan = guard.room.join(wants_version, false);
-    guard.peers.insert(client_id.to_string(), Peer { role, sid: sid.to_string(), out: tx.clone() });
+    let peer = Peer::new(role, sid, tx.clone());
+    // The connection keeps the flag, so a queue drop on any path (present)
+    // or future one closes *this* connection (ADR WC-0002).
+    let stale = peer.stale.clone();
+    guard.peers.insert(client_id.to_string(), peer);
     let peers = guard
         .peers
         .iter()
         .map(|(id, peer)| Participant { client_id: id.clone(), role: peer.role.as_str().to_string(), color: None, presence: None })
         .collect();
-    Ok((plan, peers))
+    Ok((plan, peers, stale))
 }
 
 async fn send_join(
@@ -461,6 +571,7 @@ async fn send_join(
     role: Role,
     plan: &wordcraft_collab::room::JoinPlan,
     peers: Vec<Participant>,
+    limit: Duration,
 ) -> bool {
     let welcome = ServerMsg::Welcome {
         session_id: claims.sid.clone(),
@@ -470,21 +581,21 @@ async fn send_join(
         participants: peers,
         resync: plan.snapshot.is_some(),
     };
-    if send(sink, &welcome).await.is_err() {
+    if send(sink, &welcome, limit).await.is_err() {
         return false;
     }
     if let Some(snapshot) = plan.snapshot.clone() {
         for msg in snapshot_frames(plan.version, snapshot) {
-            if send(sink, &msg).await.is_err() {
+            if send(sink, &msg, limit).await.is_err() {
                 return false;
             }
         }
     } else if let Some(tail) = plan.replay.clone()
-        && send(sink, &ServerMsg::Tail { entries: tail }).await.is_err()
+        && send(sink, &ServerMsg::Tail { entries: tail }, limit).await.is_err()
     {
         return false;
     }
-    send(sink, &ServerMsg::Nodes { nodes: plan.nodes.clone() }).await.is_ok()
+    send(sink, &ServerMsg::Nodes { nodes: plan.nodes.clone() }, limit).await.is_ok()
 }
 
 /// Tell the peers already in the room who just joined and with what role, so
@@ -495,29 +606,34 @@ async fn send_join(
 /// claim (ADR-0008), never from the wire, and the newcomer is not echoed its own
 /// join: it learns the existing peers from `welcome`.
 fn announce_join(room: &Arc<Mutex<RoomState>>, client_id: &str, role: Role) {
-    let targets: Vec<mpsc::Sender<ServerMsg>> = {
+    let targets: Vec<Peer> = {
         let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.out.clone()).collect()
+        guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.clone()).collect()
     };
     let msg = ServerMsg::Presence { client_id: client_id.to_string(), role: role.as_str().to_string(), state: serde_json::json!({}) };
-    for tx in targets {
+    for peer in &targets {
         // Presence is droppable; a full queue must not stall the room.
-        let _ = tx.try_send(msg.clone());
+        queue_ephemeral(peer, &msg);
     }
 }
 
-async fn process_frame(
-    state: &AppState,
-    room: &Arc<Mutex<RoomState>>,
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    claims: &Claims,
+/// One authenticated connection: what a frame handler needs to answer it.
+#[derive(Clone, Copy)]
+struct Conn<'a> {
+    state: &'a AppState,
+    room: &'a Arc<Mutex<RoomState>>,
+    claims: &'a Claims,
     role: Role,
-    client_id: &str,
-    text: &str,
-) -> bool {
+    client_id: &'a str,
+    /// The write bound: one heartbeat period (ADR WC-0002).
+    limit: Duration,
+}
+
+async fn process_frame(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, text: &str) -> bool {
+    let Conn { state, room, claims, role, client_id, limit } = *conn;
     let msg = match parse_client(text) {
         Ok(msg) => msg,
-        Err(reject) => return send(sink, &ServerMsg::Rejected { reject }).await.is_ok(),
+        Err(reject) => return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok(),
     };
     {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
@@ -527,22 +643,22 @@ async fn process_frame(
     }
     if now_secs() >= claims.exp {
         let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TokenExpired, "the session token expired");
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     match msg {
-        ClientMsg::Op { op } => handle_op(state, room, sink, claims, role, client_id, op).await,
+        ClientMsg::Op { op } => handle_op(conn, sink, op).await,
         ClientMsg::Presence { state: presence } => {
             Metrics::inc(&state.metrics.presence);
             // Ephemeral state goes to the other participants; the author already
             // knows its own caret and the cabinet's UI keeps it locally.
-            let targets: Vec<mpsc::Sender<ServerMsg>> = {
+            let targets: Vec<Peer> = {
                 let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-                guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.out.clone()).collect()
+                guard.peers.iter().filter(|(id, _)| id.as_str() != client_id).map(|(_, peer)| peer.clone()).collect()
             };
             let msg = ServerMsg::Presence { client_id: client_id.to_string(), role: role.as_str().to_string(), state: presence };
-            for tx in targets {
+            for peer in &targets {
                 // Presence is droppable; a full queue must not stall the room.
-                let _ = tx.try_send(msg.clone());
+                queue_ephemeral(peer, &msg);
             }
             true
         }
@@ -556,37 +672,30 @@ async fn process_frame(
                     .collect();
                 (guard.room.join(Some(last_version), true), peers)
             };
-            send_join(sink, claims, role, &plan, peers).await
+            send_join(sink, claims, role, &plan, peers, limit).await
         }
         ClientMsg::Commit { op_id, expected_version, .. } => {
             let call = CommitCall { client_id, op_id, expected_version };
-            handle_commit(state, room, sink, claims, role, call).await
+            handle_commit(conn, sink, call).await
         }
-        ClientMsg::SaveCopy { op_id } => handle_save_copy(state, room, sink, op_id, role).await,
-        ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }).await.is_ok(),
+        ClientMsg::SaveCopy { op_id } => handle_save_copy(conn, sink, op_id).await,
+        ClientMsg::Ping { ts } => send(sink, &ServerMsg::Pong { ts }, limit).await.is_ok(),
         ClientMsg::Auth { .. } => {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "already authenticated");
-            send(sink, &ServerMsg::Rejected { reject }).await.is_ok()
+            send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok()
         }
     }
 }
 
-async fn handle_op(
-    state: &AppState,
-    room: &Arc<Mutex<RoomState>>,
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    claims: &Claims,
-    role: Role,
-    client_id: &str,
-    op: wordcraft_collab::wire::Op,
-) -> bool {
+async fn handle_op(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, op: wordcraft_collab::wire::Op) -> bool {
+    let Conn { state, room, claims, role, client_id, limit } = *conn;
     // An operation id names its author. A peer that could put another client's
     // id on the wire would make the victim skip the answer as its own echo and
     // then, on its own retry, get a cached answer for an edit it never made.
     if op.op_id.client != client_id {
         Metrics::inc(&state.metrics.rejects);
         let reject = Reject::new(op.op_id.clone(), RejectCode::Invalid, "the operation id belongs to another client");
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     let structural = op.kind.is_structural();
     let result = {
@@ -608,14 +717,14 @@ async fn handle_op(
             // A command that allocates ids carries them on the answer; peers
             // apply the delta instead of replacing the whole map.
             let delta_sent = applied.nodes.is_some();
-            broadcast(room, client_id, ServerMsg::Applied { applied }, sink).await;
+            broadcast(state, room, client_id, ServerMsg::Applied { applied }, sink).await;
             let nodes = {
                 let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
                 let moved = guard.room.take_nodes_changed();
                 if !delta_sent && (structural || moved) { Some(guard.room.nodes()) } else { None }
             };
             if let Some(nodes) = nodes {
-                broadcast(room, "", ServerMsg::Nodes { nodes }, sink).await;
+                broadcast(state, room, "", ServerMsg::Nodes { nodes }, sink).await;
             }
             let due = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.should_snapshot();
             if due && let Err(message) = state.persist(&claims.doc, room, None) {
@@ -625,7 +734,7 @@ async fn handle_op(
         }
         Err(reject) => {
             Metrics::inc(&state.metrics.rejects);
-            send(sink, &ServerMsg::Rejected { reject }).await.is_ok()
+            send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok()
         }
     }
 }
@@ -639,34 +748,28 @@ struct CommitCall<'a> {
     expected_version: Version,
 }
 
-async fn handle_commit(
-    state: &AppState,
-    room: &Arc<Mutex<RoomState>>,
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-    claims: &Claims,
-    role: Role,
-    call: CommitCall<'_>,
-) -> bool {
+async fn handle_commit(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, call: CommitCall<'_>) -> bool {
+    let Conn { state, room, claims, role, limit, .. } = *conn;
     let CommitCall { client_id, op_id, expected_version } = call;
     if !role.can_commit() {
         let reject = Reject::new(op_id, RejectCode::Forbidden, "only the owner commits");
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     let version = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.version();
     if expected_version != version {
         let reject = Reject::new(op_id, RejectCode::Conflict, format!("head is version {version}"));
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     let (bytes, warnings) = match build_docx(room) {
         Ok(built) => built,
         Err(message) => {
             let reject = Reject::new(op_id, RejectCode::Invalid, message);
-            return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+            return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
         }
     };
     if bytes.len() > MAX_DOCUMENT {
         let reject = Reject::new(op_id, RejectCode::TooLarge, format!("the built file is {} bytes", bytes.len()));
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     Metrics::inc(&state.metrics.commits);
     let sha256 = hex(&sha2::Sha256::digest(&bytes));
@@ -706,7 +809,7 @@ async fn handle_commit(
             let notice =
                 ServerMsg::Error { code: "cabinetConflict".into(), message: format!("{message}; save a copy or reopen the file"), retryable: true };
             let _ = state.persist(&claims.doc, room, Some(bytes));
-            broadcast(room, client_id, notice, sink).await;
+            broadcast(state, room, client_id, notice, sink).await;
             return true;
         }
         Some(Err(error)) => {
@@ -720,7 +823,7 @@ async fn handle_commit(
             };
             let _ = state.persist(&claims.doc, room, Some(bytes));
             let reject = Reject::new(op_id, code, error.to_string());
-            return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+            return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
         }
         None => None,
     };
@@ -730,7 +833,7 @@ async fn handle_commit(
     }
     // The version and etag are the cabinet's; every peer shows them, so the
     // participants panel never claims a save the cabinet did not take.
-    broadcast(room, client_id, ServerMsg::Committed { version, sha256, warnings, cabinet }, sink).await;
+    broadcast(state, room, client_id, ServerMsg::Committed { version, sha256, warnings, cabinet }, sink).await;
     true
 }
 
@@ -738,20 +841,19 @@ async fn handle_commit(
 /// room built, chunked like a snapshot, to this peer only. Nothing is written
 /// to the cabinet (TASK.md §6).
 async fn handle_save_copy(
-    state: &AppState,
-    room: &Arc<Mutex<RoomState>>,
+    conn: &Conn<'_>,
     sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     op_id: wordcraft_collab::wire::OpId,
-    role: Role,
 ) -> bool {
+    let Conn { state, room, role, limit, .. } = *conn;
     if !role.can_commit() {
         let reject = Reject::new(op_id, RejectCode::Forbidden, "only the owner saves a copy of a refused commit");
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     let refused = room.lock().unwrap_or_else(|poison| poison.into_inner()).refused.clone();
     let Some(refused) = refused else {
         let reject = Reject::new(op_id, RejectCode::Conflict, "there is no refused commit to save; commit again to see the conflict");
-        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     };
     Metrics::inc(&state.metrics.copies);
     let mut offset = 0;
@@ -765,7 +867,7 @@ async fn handle_save_copy(
             bytes: refused.bytes[offset..end].to_vec(),
             last,
         };
-        if send(sink, &chunk).await.is_err() {
+        if send(sink, &chunk, limit).await.is_err() {
             return false;
         }
         if last {
@@ -796,24 +898,64 @@ fn parse_client(text: &str) -> Result<ClientMsg, Reject> {
     serde_json::from_str(text).map_err(|_| Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "malformed message"))
 }
 
-async fn send(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, msg: &ServerMsg) -> Result<(), ()> {
+/// Write one frame to a peer, bounded by the heartbeat period. A write that
+/// does not finish in time means the peer stopped reading: the caller ends the
+/// connection and the client reconnects and resyncs (ADR WC-0002).
+async fn send(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, msg: &ServerMsg, limit: Duration) -> Result<(), ()> {
     let text = serde_json::to_string(msg).map_err(|_| ())?;
-    sink.send(Message::Text(text.into())).await.map_err(|_| ())
+    match timeout(limit, sink.send(Message::Text(text.into()))).await {
+        Ok(result) => result.map_err(|_| ()),
+        Err(_) => Err(()),
+    }
+}
+
+/// Queue one document frame for a peer. `false` means the peer missed it: its
+/// outbox is full or its connection is gone. A full outbox marks the peer
+/// stale — it has already missed an accepted operation — and its connection is
+/// closed instead of staying open with a document the room moved past
+/// (ADR WC-0002). Counted once per peer.
+fn queue(state: &AppState, peer: &Peer, msg: &ServerMsg) -> bool {
+    match peer.out.try_send(msg.clone()) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            if peer.stale.mark() {
+                Metrics::inc(&state.metrics.stale);
+                log::warn!("a peer's outbox is full: it missed a document frame and will be closed");
+            }
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => false,
+    }
+}
+
+/// Queue an ephemeral frame (presence, a leave notice). Droppable by design: a
+/// full outbox must not stall the room, and a lost presence frame is repaired
+/// by the next one (ADR-0006). It never marks a peer stale, because it carries
+/// no document state.
+fn queue_ephemeral(peer: &Peer, msg: &ServerMsg) {
+    let _ = peer.out.try_send(msg.clone());
 }
 
 /// Send to every peer of the room (`broadcast` includes the sender, so the
 /// author sees the authoritative version too).
-async fn broadcast(room: &Arc<Mutex<RoomState>>, sender: &str, msg: ServerMsg, sink: &mut futures_util::stream::SplitSink<WebSocket, Message>) {
-    let targets: Vec<mpsc::Sender<ServerMsg>> = {
+async fn broadcast(
+    state: &AppState,
+    room: &Arc<Mutex<RoomState>>,
+    sender: &str,
+    msg: ServerMsg,
+    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+) {
+    let targets: Vec<Peer> = {
         let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        guard.peers.iter().filter(|(id, _)| id.as_str() != sender).map(|(_, peer)| peer.out.clone()).collect()
+        guard.peers.iter().filter(|(id, _)| id.as_str() != sender).map(|(_, peer)| peer.clone()).collect()
     };
-    for tx in targets {
-        // Bounded: a client that stops reading drops messages instead of
-        // growing the server; its next answer has a version gap and it resyncs.
-        let _ = tx.try_send(msg.clone());
+    for peer in &targets {
+        // Bounded: a client that stops reading loses the frame instead of
+        // growing the server, and is closed rather than left stale: the frame
+        // it missed is an accepted operation it can no longer derive.
+        let _ = queue(state, peer, &msg);
     }
-    let _ = send(sink, &msg).await;
+    let _ = send(sink, &msg, state.cfg.heartbeat).await;
 }
 
 fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &str) {
@@ -822,12 +964,12 @@ fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &
         guard.peers.remove(client_id)
     };
     if gone.is_some() {
-        let targets: Vec<mpsc::Sender<ServerMsg>> = {
+        let targets: Vec<Peer> = {
             let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-            guard.peers.values().map(|peer| peer.out.clone()).collect()
+            guard.peers.values().cloned().collect()
         };
-        for tx in targets {
-            let _ = tx.try_send(ServerMsg::Left { client_id: client_id.to_string() });
+        for peer in &targets {
+            queue_ephemeral(peer, &ServerMsg::Left { client_id: client_id.to_string() });
         }
     }
     let empty = {

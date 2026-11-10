@@ -32,7 +32,16 @@ fn token_sid(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64, sid: &str
 
 fn dev_config() -> Config {
     let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}", std::process::id()));
-    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir, lease_ttl_secs: 120, cabinet: None }
+    Config {
+        bind: "127.0.0.1:0".into(),
+        jwt_secret: Some("test-secret".into()),
+        jwt_pem: None,
+        data_dir: dir,
+        lease_ttl_secs: 120,
+        cabinet: None,
+        heartbeat: crate::PRESENCE_TTL / 3,
+        peer_queue: crate::PEER_QUEUE,
+    }
 }
 
 /// A cabinet on loopback: each accepted connection is answered with the next
@@ -91,13 +100,19 @@ fn config_with_cabinet(cfg: &Config, url: &str) -> Config {
 }
 
 async fn spawn_server_with(cfg: Config) -> String {
+    spawn_server_state(cfg).await.0
+}
+
+/// The same server, with the state kept so a test can read its counters.
+async fn spawn_server_state(cfg: Config) -> (String, AppState) {
     let state = AppState::new(cfg);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
+    let served = state.clone();
     tokio::spawn(async move {
-        let _ = axum::serve(listener, app(state)).await;
+        let _ = axum::serve(listener, app(served)).await;
     });
-    format!("ws://{addr}/ws")
+    (format!("ws://{addr}/ws"), state)
 }
 
 async fn next_committed_cabinet(
@@ -428,6 +443,129 @@ async fn expect_presence(
             other => panic!("expected presence for {client}, got {other:?}"),
         }
     }
+}
+
+#[tokio::test]
+async fn a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale() {
+    // Finding 5 of §5.26: an operation accepted while a peer's outbox is full
+    // was dropped from that outbox, and if nothing else followed the peer stayed
+    // connected with a version it could not reach. The peer is now marked stale
+    // and its connection ends; it reconnects with `lastVersion` and catches up.
+    // A fresh data directory: rooms are restored from disk, so a snapshot
+    // another test left behind would change the room this test pushes into.
+    let mut cfg = config_for("stalled-reader");
+    // A short heartbeat and a small outbox make the overflow reachable in a
+    // test; production keeps `PRESENCE_TTL / 3` and `PEER_QUEUE`.
+    cfg.heartbeat = Duration::from_millis(250);
+    cfg.peer_queue = 4;
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let mut stalled = connect(&url, &cfg, "editor", "bob").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+    let _ = next_msg(&mut stalled).await;
+    let _ = node_of(&mut stalled).await;
+    // From here the "bob" socket is never read: the server's writes to it fill
+    // the socket buffer and then its outbox.
+
+    let payload = "x".repeat(64 * 1024);
+    let mut version = 0u64;
+    let mut left = false;
+    for seq in 1..=400u64 {
+        let op = insert("alice", seq, version, node, 0, &payload);
+        loop {
+            assert!(send_op(&mut alice, op.clone()).await, "the sender stays connected");
+            match next_msg(&mut alice).await {
+                ServerMsg::Applied { applied } if applied.op_id == op.op_id => {
+                    version = applied.version;
+                    break;
+                }
+                ServerMsg::Applied { .. } => continue,
+                ServerMsg::Rejected { reject } if reject.op_id == op.op_id => {
+                    // The room's operation rate limit: wait out the window and
+                    // resend the same operation (the answer dedups by op id).
+                    tokio::time::sleep(Duration::from_millis(1100)).await;
+                }
+                ServerMsg::Left { client_id } if client_id == "bob" => {
+                    // The stalled peer was closed; keep waiting for the answer
+                    // to the operation already in flight, so the head below is
+                    // the room's, not one op behind it.
+                    left = true;
+                    continue;
+                }
+                ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+                other => panic!("unexpected frame while pushing: {other:?}"),
+            }
+        }
+        if left {
+            break;
+        }
+    }
+    assert!(left, "the stalled peer was closed instead of staying connected (head version {version})");
+    assert_eq!(state.metrics.stale.load(std::sync::atomic::Ordering::Relaxed), 1, "the drop in the outbox is what marked the peer stale");
+
+    // The server ended the connection: its buffered frames end in a close (or
+    // the socket is gone after a write that timed out).
+    let closed = timeout(Duration::from_secs(20), async {
+        loop {
+            match stalled.next().await {
+                None | Some(Ok(Message::Close(_))) | Some(Err(_)) => return true,
+                Some(Ok(_)) => continue,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(closed, "the stalled socket was closed by the server");
+
+    // The client comes back with what it last saw (version 0: it never read the
+    // frames the server dropped) and the join answers with the journal tail or
+    // a snapshot, so it ends on the room's head instead of its stale copy.
+    let mut bob = connect_from(&url, &cfg, "editor", "bob", Some(0)).await;
+    let resync = match next_msg(&mut bob).await {
+        ServerMsg::Welcome { version: head, resync, .. } => {
+            assert_eq!(head, version, "the reconnected peer sees the room's head");
+            resync
+        }
+        other => panic!("expected welcome, got {other:?}"),
+    };
+    let mut replayed = false;
+    let mut snapshotted = false;
+    loop {
+        match next_msg(&mut bob).await {
+            ServerMsg::Tail { entries } => replayed = entries.iter().any(|entry| entry.version == version),
+            ServerMsg::Snapshot { .. } => snapshotted = true,
+            ServerMsg::Nodes { .. } => break,
+            other => panic!("unexpected catch-up frame {other:?}"),
+        }
+    }
+    assert_eq!(resync, snapshotted, "the join said which catch-up it sends");
+    assert!(replayed || snapshotted, "the reconnected peer caught up to version {version}");
+}
+
+#[tokio::test]
+async fn a_full_outbox_marks_the_peer_stale_once() {
+    // The flag itself, without a socket: the first frame fits, the second finds
+    // the outbox full and marks the peer stale; a third drop is the same event.
+    let state = AppState::new(dev_config());
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let peer = crate::Peer::new(wordcraft_collab::room::Role::Editor, "sid", tx);
+    let msg = ServerMsg::Applied {
+        applied: wordcraft_collab::wire::Applied {
+            op_id: OpId::new("bob", 1),
+            version: 1,
+            epoch: 0,
+            delta: None,
+            nodes: None,
+            conflict: false,
+            history: None,
+        },
+    };
+    assert!(crate::queue(&state, &peer, &msg), "the first frame fits");
+    assert!(!crate::queue(&state, &peer, &msg), "the outbox is full");
+    assert!(peer.stale.is_set(), "the peer is marked stale");
+    assert!(!crate::queue(&state, &peer, &msg));
+    assert_eq!(state.metrics.stale.load(std::sync::atomic::Ordering::Relaxed), 1, "counted once per peer");
 }
 
 #[tokio::test]
@@ -1066,7 +1204,16 @@ fn a_silent_session_loses_the_lease_after_its_ttl() {
 fn config_for(name: &str) -> Config {
     let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    Config { bind: "127.0.0.1:0".into(), jwt_secret: Some("test-secret".into()), jwt_pem: None, data_dir: dir, lease_ttl_secs: 120, cabinet: None }
+    Config {
+        bind: "127.0.0.1:0".into(),
+        jwt_secret: Some("test-secret".into()),
+        jwt_pem: None,
+        data_dir: dir,
+        lease_ttl_secs: 120,
+        cabinet: None,
+        heartbeat: crate::PRESENCE_TTL / 3,
+        peer_queue: crate::PEER_QUEUE,
+    }
 }
 
 /// The M87 path with two clients: the room posts the built `.docx` to the
