@@ -78,7 +78,7 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
 /// The flow formatting of a run with properties `props`: with `opts.chars`, its extra formatting,
 /// its custom character style by name (only its direct formatting then its own) and a
 /// monospaced font by its name.
-fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> Fmt {
+fn run_fmt(doc: &Document, para_style: Option<&str>, props: &CharProps, in_code: bool, opts: FlowOpts) -> Fmt {
     let mut f = fmt_of(doc, props, in_code);
     if !opts.chars {
         return f;
@@ -104,6 +104,16 @@ fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> 
     if let Some(id) = custom {
         f.extra.get_or_insert_with(Default::default).style = Some(id.to_string());
     }
+    // A size stated without a complex-script size leaves the complex size to what is above it
+    // (a style's, or this size where none says one): said where it isn't this size, since a
+    // writer that gives every script the one size would otherwise change it.
+    let sized = props.size.is_some() || custom.is_some_and(|id| doc.styles.chain(id).iter().any(|s| s.chr.size.is_some()));
+    if props.size_cs.is_none() && sized && f.extra.as_ref().is_none_or(|x| x.size_cs.is_none()) {
+        let cs = doc.styles.resolve_char(para_style, props).size_cs;
+        if f.size != Some(cs) {
+            f.extra.get_or_insert_with(Default::default).size_cs = Some(cs);
+        }
+    }
     if f.code {
         f.code = false;
         f.font = e.shown_font().map(Arc::from);
@@ -116,11 +126,15 @@ fn run_fmt(doc: &Document, props: &CharProps, in_code: bool, opts: FlowOpts) -> 
 fn extra_of(e: &CharProps) -> Option<Box<CharProps>> {
     let set = |v: Option<bool>| v.filter(|b| *b);
     let x = CharProps {
-        underline: e.underline.filter(|u| !matches!(u, Underline::None | Underline::Single)),
+        // What it turns off, over what the style of its paragraph or span turns on, too.
+        bold: e.bold.filter(|b| !*b),
+        italic: e.italic.filter(|b| !*b),
+        strike: e.strike.filter(|b| !*b),
+        underline: e.underline.filter(|u| *u != Underline::Single),
         underline_color: e.underline_color,
         double_strike: set(e.double_strike),
-        caps: set(e.caps),
-        small_caps: set(e.small_caps),
+        caps: e.caps,
+        small_caps: e.small_caps,
         hidden: set(e.hidden),
         spacing: e.spacing.filter(|v| *v != 0.0 && v.is_finite()),
         scale: e.scale.filter(|v| *v != 100.0 && v.is_finite()),
@@ -182,6 +196,9 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         tabs
     });
     let style = p.style.clone().filter(|id| is_custom_style(doc, id));
+    // Its own, else its custom style's: the kind doesn't say (it stops at Heading 6, and is the
+    // heading style's where the style is based on one).
+    let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = wordcraft_doc::props::ParaProps {
         tabs,
         shading: p.shading,
@@ -191,7 +208,7 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),
-        outline_level: p.outline_level,
+        outline_level,
         widow_control: p.widow_control.filter(|w| !*w),
         // Hyphenated (the document hyphenates and the paragraph doesn't opt out): `Some(false)`.
         suppress_hyphens: (doc.settings.auto_hyphenation && p.suppress_hyphens != Some(true)).then_some(false),
@@ -413,14 +430,25 @@ fn flow_comment(doc: &Document, c: &wordcraft_doc::Comment, parent: Option<u32>,
     FComment { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), resolved: c.resolved, parent, blocks }
 }
 
+/// Whether `li`, the list of heading `p`, is the number its outline level has from its heading
+/// style's list, not a list of its own: it states that level, and the heading style of that level
+/// numbers with that list there. Past Heading 6 no such style gives the written outline a number.
+fn numbered_by_outline(doc: &Document, p: &Paragraph, li: &ListInfo) -> bool {
+    use wordcraft_doc::props::NumRef;
+    p.props.outline_level == Some(li.level)
+        && li.level < 6
+        && doc.styles.para_style_props(&format!("Heading{}", li.level + 1)).0.numbering == Some(NumRef { num: li.list, level: li.level })
+}
+
 /// A paragraph's list membership as the flow keeps it: without the list's identity and label
-/// unless `opts` asks for them, and none for a heading numbered only through its style, which a
-/// format with heading numbering of its own (ODT's outline style) numbers instead.
-fn flow_list(kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
+/// unless `opts` asks for them, and none for a heading numbered only through its style or
+/// [`numbered_by_outline`], which a format with heading numbering of its own (ODT's outline style)
+/// numbers instead, in its first six levels.
+fn flow_list(doc: &Document, kind: Kind, list: Option<ListInfo>, p: &Paragraph, opts: FlowOpts) -> Option<ListInfo> {
     let mut li = list?;
     if !opts.lists {
         (li.list, li.label) = (0, None);
-    } else if matches!(kind, Kind::Heading(_)) && p.props.numbering.is_none() {
+    } else if matches!(kind, Kind::Heading(_)) && li.level < 6 && (p.props.numbering.is_none() || numbered_by_outline(doc, p, &li)) {
         return None;
     }
     Some(li)
@@ -458,7 +486,7 @@ pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
 fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let tracked = opts.tracked;
     let (kind, list) = para_kind(doc, p);
-    let list = flow_list(kind, list, p, opts);
+    let list = flow_list(doc, kind, list, p, opts);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.takes_room()) };
     let mut out = Para {
@@ -494,7 +522,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         // Formats that keep hidden text get it, marked hidden.
         let hidden_text = (props.hidden.unwrap_or(false) && !opts.chars) || (props.del.is_some() && !tracked);
         let hidden_obj = (props.hidden.unwrap_or(false) && !opts.chars) || props.del.is_some();
-        let mut f = run_fmt(doc, props, in_code, opts);
+        let mut f = run_fmt(doc, p.props.style.as_deref(), props, in_code, opts);
         if tracked {
             (f.ins, f.del) = rev_marks(doc, props);
             f.fmt_change = props.fmt_change.as_deref().map(|c| Box::new(FmtChange { mark: rev_mark(doc, c.rev), old: fmt_of(doc, &c.old, in_code) }));
