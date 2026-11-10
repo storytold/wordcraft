@@ -375,6 +375,11 @@ pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
     SmartArtTypeResult::Changed
 }
 
+/// Only a changed frame after a drag has started joins the previous opacity undo step.
+fn should_join_opacity_undo(changed: bool, was_dragging: bool) -> bool {
+    changed && was_dragging
+}
+
 /// Side of an item's colour button, points.
 const SWATCH: f32 = 18.0;
 
@@ -417,7 +422,8 @@ fn color_button(app: &mut WordApp, ui: &mut Ui, g: &SmartArtSpec, i: usize) {
             // Only the frames after a drag's first change join its undo step; a key press or a typed
             // value starts its own.
             let gesture = egui::Id::unique(("smart_art_opacity_gesture", i));
-            if ui.data(|d| d.get_temp::<bool>(gesture)).unwrap_or(false) {
+            let was_dragging = ui.data(|d| d.get_temp::<bool>(gesture)).unwrap_or(false);
+            if should_join_opacity_undo(slider.changed(), was_dragging) {
                 app.session.join_next_undo();
             }
             ui.data_mut(|d| d.insert_temp(gesture, slider.dragged()));
@@ -739,5 +745,45 @@ mod drag_tests {
         a.run("smartArt.moveItem", json!({"index": 0, "slot": 2, "level": 0})).unwrap();
         let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
         assert_eq!(g.items[2].opacity, Some(40));
+    }
+
+    #[test]
+    fn opacity_key_or_typed_change_has_its_own_undo_step() {
+        assert!(!should_join_opacity_undo(true, false));
+        assert!(!should_join_opacity_undo(false, true));
+
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "venn"})).unwrap();
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000"})).unwrap();
+        if should_join_opacity_undo(true, false) {
+            a.session.join_next_undo();
+        }
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 40})).unwrap();
+
+        a.run("edit.undo", json!({})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[0].color.unwrap().hex(), "FF0000");
+        assert_eq!(g.items[0].opacity, None, "one undo removes only the opacity change");
+    }
+
+    #[test]
+    fn opacity_drag_frames_share_one_undo_step() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.smartArt", json!({"layout": "venn"})).unwrap();
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000"})).unwrap();
+
+        // The first changed drag frame starts its own step; later frames join it.
+        assert!(!should_join_opacity_undo(true, false));
+        a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": 20})).unwrap();
+        for opacity in [40, 60] {
+            assert!(should_join_opacity_undo(true, true));
+            a.session.join_next_undo();
+            a.run("smartArt.itemColor", json!({"index": 0, "color": "FF0000", "opacity": opacity})).unwrap();
+        }
+
+        a.run("edit.undo", json!({})).unwrap();
+        let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).unwrap();
+        assert_eq!(g.items[0].color.unwrap().hex(), "FF0000");
+        assert_eq!(g.items[0].opacity, None, "one undo reverts all frames of the drag");
     }
 }
