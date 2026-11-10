@@ -63,14 +63,6 @@ pub(super) fn kind_of(t: &str) -> ShapeKind {
         "down-arrow" | "downArrow" => ShapeKind::ArrowDown,
         "star5" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
-        "hexagon" => ShapeKind::Hexagon,
-        "octagon" => ShapeKind::Octagon,
-        "regular-pentagon" | "pentagon" => ShapeKind::Pentagon,
-        "parallelogram" => ShapeKind::Parallelogram,
-        "trapezoid" => ShapeKind::Trapezoid,
-        "cross" | "plus" => ShapeKind::Plus,
-        "chevron" => ShapeKind::Chevron,
-        "decagon" => ShapeKind::Decagon,
         "line" | "straightConnector1" => ShapeKind::Line,
         _ => ShapeKind::Rectangle,
     }
@@ -191,24 +183,21 @@ pub(super) fn freeform(name: &str, a: &Attrs, w: f32, h: f32) -> Option<wordcraf
 mod preset_tests {
     use super::*;
 
-    /// #1534: each polygonal preset is written as a custom shape and read back as itself.
+    /// #1534: each polygonal preset is written as a custom shape of its ODF type, so other
+    /// programs draw their own. Reading stays with the shape's own geometry (`geometry.rs`).
     #[test]
-    fn polygonal_presets_round_trip_through_their_draw_type() {
-        for kind in [
-            ShapeKind::Hexagon,
-            ShapeKind::Octagon,
-            ShapeKind::Pentagon,
-            ShapeKind::Parallelogram,
-            ShapeKind::Trapezoid,
-            ShapeKind::Plus,
-            ShapeKind::Chevron,
-            ShapeKind::Decagon,
+    fn polygonal_presets_are_written_as_custom_shapes() {
+        for (kind, ty) in [
+            (ShapeKind::Hexagon, "hexagon"),
+            (ShapeKind::Octagon, "octagon"),
+            (ShapeKind::Pentagon, "regular-pentagon"),
+            (ShapeKind::Parallelogram, "parallelogram"),
+            (ShapeKind::Trapezoid, "trapezoid"),
+            (ShapeKind::Plus, "cross"),
+            (ShapeKind::Chevron, "chevron"),
+            (ShapeKind::Decagon, "ooxml-decagon"),
         ] {
-            let (element, ty) = element_of(kind);
-            assert_eq!(element, "draw:custom-shape", "{kind:?}");
-            let ty = ty.unwrap_or_default();
-            assert_eq!(kind_of(ty), kind, "{kind:?} via {ty}");
-            assert!(!unknown_preset(ty), "{ty}");
+            assert_eq!(element_of(kind), ("draw:custom-shape", Some(ty)), "{kind:?}");
         }
     }
 }
