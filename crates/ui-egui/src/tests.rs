@@ -7282,6 +7282,33 @@ fn saving_and_exporting_keep_the_view_where_it_is() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #6012: the status bar's page indicator opens the Navigation pane on its Pages tab, as Word's
+/// does; hovering it tints it. Go To stays on Ctrl+G / F5.
+#[test]
+fn the_page_indicator_opens_the_navigation_panes_pages_tab() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    assert!(!h.state().session.view.nav_pane, "the pane starts closed");
+    h.get_by_label("Page 1 of 1").click();
+    h.run_steps(3);
+    assert!(h.state().session.view.nav_pane, "the click opened the Navigation pane");
+    assert_eq!(h.state().ui.nav_tab, "pages", "on its Pages tab");
+    assert!(h.state().dialog.is_none(), "no Go To dialog: {:?}", h.state().dialog.as_ref().map(|d| d.name()));
+    // A click on the indicator's text again leaves the pane open (the click is a press, not a
+    // toggle), as in Word.
+    h.get_by_label("Page 1 of 1").click();
+    h.run_steps(2);
+    assert!(h.state().session.view.nav_pane);
+}
+
 /// Go to Footer into a footer just made — empty, so the caret at its start also "selects the
 /// whole story" — brings the footer into view (it stayed at the header).
 #[test]

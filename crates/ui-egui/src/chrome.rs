@@ -746,12 +746,16 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
                     };
                     // A status item: its text, after an icon when it has one (one click target).
+                    // Hovering it tints it, as Word's status bar items are, and a click is a press.
                     let st_icon = |ui: &mut Ui, icon: Option<&str>, s: &str| {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
                         let w = text_width(ui.painter(), s, &font, track, t.text_dim);
                         let lead = if icon.is_some() { 17.0 } else { 0.0 };
                         let (r, resp) = ui.allocate_exact_size(vec2(lead + w + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(r, 4.0, t.hover);
+                        }
                         if let Some(icon) = icon {
                             let ir = Rect::from_min_size(pos2(crate::rtl::lead_left(rtl, r, 0.0, 13.0), r.center().y - 6.5), vec2(13.0, 13.0));
                             icons::paint(ui.painter(), ir, icon, t.icon, t.accent);
@@ -771,11 +775,14 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         resp
                     };
                     let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
+                    // The page in view: a click opens the Navigation pane's Pages tab, as Word's
+                    // page indicator does (Go To stays on Ctrl+G / F5, #6012).
                     if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                        .on_hover_text(tl!("Go To (⌘⌥G)"))
+                        .on_hover_text(tl!("Navigation pane: Pages"))
                         .clicked()
                     {
-                        let _ = app.run("ui.dialog", json!({"name": "goto"}));
+                        app.ui.nav_tab = "pages".into();
+                        let _ = app.run("view.navigationPane", json!({"value": true}));
                     }
                     // The live count: words (the default, as Word's status bar counts), characters
                     // with spaces, or characters without spaces — whichever the person chose (#2797).
