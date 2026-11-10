@@ -5880,11 +5880,11 @@ fn theme_change_updates_the_page_on_the_next_frame() {
     let mut a = app();
     theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
     assert!(!a.page_is_dark());
-    let before = canvas::view_key(&a, false, None);
+    let before = canvas::view_key(&a, false, None, true);
     a.run("ui.theme", json!({"value": "dark"})).unwrap();
     theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
     assert!(a.page_is_dark());
-    assert_ne!(canvas::view_key(&a, false, None), before);
+    assert_ne!(canvas::view_key(&a, false, None, true), before);
     a.run("ui.theme", json!({"value": "light"})).unwrap();
     theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
     assert!(!a.page_is_dark());
