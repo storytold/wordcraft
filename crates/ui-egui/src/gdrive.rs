@@ -245,6 +245,9 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
     ui.label(tl!(
         "An OAuth client of type Desktop app from your own Google Cloud project. It identifies WordCraft to Google: it isn't your password or your Google account, and Google treats a desktop app's secret as not confidential."
     ));
+    ui.label(tl!(
+        "Why both steps? Google lets only registered apps reach Drive. The registration says which app is asking; your sign-in (step 2) says who you are and that you allow it. WordCraft has no shared registration of its own (no WordCraft server between you and Google), so you register it once in your own project, then just sign in."
+    ));
     ui.label(if configured {
         tl!("✓ Registered. Enter a new client below only to replace it.")
     } else {
