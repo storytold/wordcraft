@@ -27,6 +27,7 @@ mod state;
 #[cfg(test)]
 pub(crate) use comments::comment_draft;
 use comments::comments;
+pub(crate) use comments::discard_comment_drafts;
 #[cfg(test)]
 pub(crate) use comments::draft_reply;
 pub(crate) use comments::{

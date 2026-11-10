@@ -105,6 +105,14 @@ pub(crate) fn has_comment_drafts(app: &WordApp) -> bool {
     d.document == app.session.document_id() && !(d.edits.is_empty() && d.replies.is_empty())
 }
 
+/// Drop the shown document's drafts: after a reload from disk (#5623) they were written into the
+/// content as it was (one Undo away), or refused, and the new content isn't theirs.
+pub(crate) fn discard_comment_drafts(app: &mut WordApp) {
+    let d = drafts(app);
+    d.edits.clear();
+    d.replies.clear();
+}
+
 /// Tests: a reply typed under comment `id` and not written yet.
 #[cfg(test)]
 pub(crate) fn draft_reply(app: &mut WordApp, id: u32, text: &str) {

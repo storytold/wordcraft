@@ -1091,6 +1091,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "file.newFromTemplate"
             | "file.listTemplates"
             | "file.open"
+            | "file.reload"
             | "file.close"
             | "file.options"
             | "file.setAuthor"
@@ -1136,7 +1137,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being
-/// typed is written before them (#1348).
+/// typed is written before them (#1348). A reload from disk (#5623) replaces the content too: the
+/// draft goes into the content as it was, which the reload keeps one Undo away.
 fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
     matches!(
         id,
@@ -1144,6 +1146,7 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
             | "file.saveAs"
             | "file.saveTemplate"
             | "file.open"
+            | "file.reload"
             | "file.exportPdf"
             | "file.exportPng"
             | "file.print"

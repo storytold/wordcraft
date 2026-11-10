@@ -115,12 +115,15 @@ impl WordApp {
     }
 
     /// The bar's Reload for the document on screen: read the file again, the document's own
-    /// version one Undo away.
+    /// version one Undo away. A comment or reply still being typed is written into that version
+    /// first (`file.reload` flushes drafts, #1348), so Undo brings it back too; a draft the
+    /// document refused goes with the content it was typed against.
     pub(crate) fn reload_from_disk(&mut self) {
         let id = self.session.document_id();
         match self.run("file.reload", json!({"force": true})) {
             Ok(_) => {
                 self.disk_notices.retain(|(d, _)| *d != id);
+                crate::panes::discard_comment_drafts(self);
                 self.status(tl!("Reloaded from disk. Undo brings your version back."));
             }
             Err(e) => {
@@ -419,6 +422,15 @@ mod tests {
         assert_eq!(app.check_disk_change(), vec![(id, DiskChange::Asked)], "the draft is unsaved work");
         assert_eq!(app.disk_notice(), Some(&DiskNotice::Unsaved));
         assert_eq!(text(&app), "alpha", "nothing was lost");
+        // Reload: the draft is written into the version one Undo away, not left for the new
+        // content, where a comment with the same number may be another one.
+        app.reload_from_disk();
+        assert_eq!(text(&app), "theirs", "Reload takes the file's content");
+        assert!(!crate::panes::has_comment_drafts(&app), "no draft waits for the new content");
+        assert!(app.disk_notices.is_empty());
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&app), "alpha", "Undo brings the old content back");
+        assert!(app.session.doc.comments.values().any(|c| c.parent.is_some()), "with the typed reply in it");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
