@@ -3,7 +3,7 @@ use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
-use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
+use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef, table};
 
 #[derive(Clone)]
 pub(crate) struct PageBuilder<'a> {
@@ -526,7 +526,7 @@ pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u3
                         .0
                         .first()
                         .and_then(|i| blocks.get(*i as usize))
-                        .is_some_and(|b| matches!(&**b, Block::Table(t) if t.props.float.is_none())) =>
+                        .is_some_and(|b| matches!(&**b, Block::Table(t) if table::float(ctx, t).is_none())) =>
             {
                 Some(rect)
             }

@@ -10329,6 +10329,194 @@ fn a_text_frame_in_a_cell_floats_beside_the_text() {
     assert!(frame.x > text.x + 200.0, "right-aligned in the cell: {} vs {}", frame.x, text.x);
 }
 
+/// A table whose cells' paragraphs all carry the same text frame stands in it (adjacent
+/// paragraphs with identical frame properties form one frame, ECMA-376 Part 1 §17.3.1.11), and
+/// the whole table is placed where the frame says, as in Word's print of such a form: a form laid
+/// out beside another, framed at the page's right half. WordCraft placed each cell's paragraph apart at the frame's offset, out of
+/// its cell, and the frame's exact height stretched each row to a page of its own.
+#[test]
+fn a_table_in_a_text_frame_floats_where_the_frame_says() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Before");
+    let frame = TextFrame {
+        w: Some(200.0),
+        h: Some(500.0),
+        h_exact: true,
+        x: 300.0,
+        y: 10.0,
+        h_anchor: "page".into(),
+        v_anchor: "text".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let mut t = Table::new(3, 1, 180.0);
+    for (i, row) in t.rows.iter_mut().enumerate() {
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default());
+        p.props.frame = Some(frame.clone());
+        row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1, "one page, not a page per framed paragraph");
+    let at = |r: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, r, 0, 0]), off: 0 }).unwrap();
+    let rows = [at(0), at(1), at(2)];
+    for r in &rows {
+        assert!(r.x > 300.0 && r.x < 330.0, "in the cell, at the frame's place on the page: {}", r.x);
+    }
+    let before = l.caret(&Pos { story: StoryRef::Body, path: Path::top(0), off: 0 }).unwrap();
+    assert!(rows[0].top < before.top + 40.0, "beside the text it stands by: {} vs {}", rows[0].top, before.top);
+    for w in rows.windows(2) {
+        let gap = w[1].top - w[0].top;
+        assert!(gap > 5.0 && gap < 40.0, "rows a line apart, not stretched by the frame's height: {gap}");
+    }
+}
+
+/// Before Word 2013 layout a text frame's offset places a framed table's first cell text, as a
+/// floating table's does, so its border sits a cell margin left of the frame's place; from mode 15
+/// the border stands there. Word for Windows' print of a 3x2 table framed 300pt from the page's
+/// left edge: the cell text starts at 300.1pt in mode 11 and at 305.7pt in mode 15. WordCraft put
+/// the border at the frame's place in every mode.
+#[test]
+fn a_framed_tables_cell_text_starts_at_the_frames_offset_before_word_2013() {
+    use wordcraft_doc::props::TextFrame;
+    let text_x = |mode: u32| {
+        let mut d = Document::from_text("Before");
+        d.settings.compat_mode = mode;
+        let frame = TextFrame { x: 300.0, h_anchor: "page".into(), v_anchor: "text".into(), wrap: "around".into(), ..Default::default() };
+        let mut t = Table::new(2, 2, 150.0);
+        for row in t.rows.iter_mut() {
+            for cell in row.cells.iter_mut() {
+                let mut p = wordcraft_doc::Paragraph::with_text("Cell", Default::default());
+                p.props.frame = Some(frame.clone());
+                cell.blocks = vec![wordcraft_doc::para_block(p)];
+            }
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 0 }).unwrap().x
+    };
+    let (legacy, modern) = (text_x(11), text_x(15));
+    assert!((legacy - 300.0).abs() < 0.5, "mode 11: the cell text at the frame's offset: {legacy}");
+    assert!(modern - legacy > 4.0 && modern - legacy < 7.0, "mode 15: a cell margin further in: {modern} vs {legacy}");
+}
+
+/// A frame doesn't break across pages: a table in one taller than the page's text area stays
+/// whole, where WordCraft let it run across pages like a table in the text.
+#[test]
+fn a_table_in_a_text_frame_taller_than_the_page_stays_whole() {
+    use wordcraft_doc::props::{HeightRule, TextFrame};
+    let mut d = Document::from_text("Before");
+    let frame = TextFrame { x: 300.0, h_anchor: "page".into(), v_anchor: "text".into(), wrap: "around".into(), ..Default::default() };
+    let mut t = Table::new(3, 1, 180.0);
+    for (i, row) in t.rows.iter_mut().enumerate() {
+        row.props.height = Some(300.0);
+        row.props.height_rule = HeightRule::AtLeast;
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default());
+        p.props.frame = Some(frame.clone());
+        row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let page = |r: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, r, 0, 0]), off: 0 }).unwrap().page;
+    assert_eq!([page(1), page(2)], [page(0), page(0)], "every row on one page, not split across pages");
+}
+
+/// A framed table wraps text as its frame says: around it, above and below only
+/// (`notBeside`), or not at all (`none`, text runs over it). WordCraft wrapped text around it
+/// whatever the frame said.
+#[test]
+fn a_table_in_a_text_frame_wraps_text_as_the_frame_says() {
+    use wordcraft_doc::props::TextFrame;
+    let place = |wrap: &str| {
+        let mut d = Document::from_text(&format!("Before\n{}", "Text after the table. ".repeat(30)));
+        let frame = TextFrame { h_anchor: "margin".into(), v_anchor: "text".into(), wrap: wrap.into(), ..Default::default() };
+        let mut t = Table::new(3, 1, 180.0);
+        for (i, row) in t.rows.iter_mut().enumerate() {
+            let mut p = wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default());
+            p.props.frame = Some(frame.clone());
+            row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        }
+        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let last_row = l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 2, 0, 0]), off: 0 }).unwrap();
+        let text = l.caret(&Pos { story: StoryRef::Body, path: Path::top(2), off: 0 }).unwrap();
+        (last_row, text)
+    };
+    let (row, text) = place("around");
+    assert!(text.x > 200.0 && text.top < row.top, "beside the table: {text:?}");
+    let (row, text) = place("notBeside");
+    assert!(text.top > row.top, "below the table, not beside it: {text:?} {row:?}");
+    let (row, text) = place("none");
+    assert!(text.x < 100.0 && text.top < row.top, "over the table, at the margin: {text:?}");
+}
+
+/// A framed table that doesn't fit below the text before it moves to the next page with its
+/// anchor, laid out again there: a PAGE field in its cells shows that page's number, and the text
+/// boxes in it count once.
+#[test]
+fn a_framed_table_moved_to_the_next_page_shows_that_pages_number() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text(&"Body text line.\n".repeat(40));
+    let frame = TextFrame { x: 300.0, h_anchor: "page".into(), v_anchor: "text".into(), wrap: "around".into(), ..Default::default() };
+    let mut t = Table::new(3, 1, 180.0);
+    for row in &mut t.rows {
+        let mut p = wordcraft_doc::Paragraph::with_text("Page ", Default::default());
+        p.props.frame = Some(frame.clone());
+        p.insert_object(
+            5,
+            InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+            &Default::default(),
+        )
+        .unwrap();
+        row.props.height = Some(150.0);
+        row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    d.insert_block(StoryRef::Body, &Path::top(38), wordcraft_doc::Block::Table(t)).unwrap();
+    text_box_at(&mut d, &Pos { story: StoryRef::Body, path: Path(vec![38, 0, 0, 0]), off: 0 }, "Box", 40.0, 20.0, Default::default());
+    let l = lay(&d);
+    // Its text box counts once: the first layout, thrown away, doesn't count.
+    assert_eq!(l.text_boxes, 1);
+    let shown: Vec<(usize, String)> = l
+        .pages
+        .iter()
+        .enumerate()
+        .flat_map(|(pi, page)| {
+            page.items.iter().filter_map(move |it| match it {
+                Placed::Lines { story: StoryRef::Body, para, .. } => Some(para.shown.iter().map(move |x| (pi, x.1.clone())).collect::<Vec<_>>()),
+                _ => None,
+            })
+        })
+        .flatten()
+        .collect();
+    assert_eq!(shown.len(), 3, "a PAGE result per row: {shown:?}");
+    let anchor = l.caret(&Pos { story: StoryRef::Body, path: Path::top(37), off: 0 }).unwrap().page;
+    assert!(shown.iter().all(|(pi, n)| *pi == anchor + 1 && *n == (pi + 1).to_string()), "on the next page, saying so: {shown:?}");
+}
+
+/// A footnote referenced in a framed table goes to the bottom of the page the table lands on.
+#[test]
+fn a_footnote_in_a_framed_table_is_placed() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Before");
+    let note = wordcraft_doc::Paragraph::with_text("The note text.", Default::default()).styled("FootnoteText");
+    let id = d.add_part(wordcraft_doc::PartKind::Footnote, vec![wordcraft_doc::para_block(note)]);
+    let frame = TextFrame { x: 300.0, h_anchor: "page".into(), v_anchor: "text".into(), wrap: "around".into(), ..Default::default() };
+    let mut t = Table::new(1, 1, 180.0);
+    let mut p = wordcraft_doc::Paragraph::with_text("Cell", Default::default());
+    p.props.frame = Some(frame);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    d.insert_object(
+        &Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, 0]), off: 4 },
+        InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() },
+        &Default::default(),
+    )
+    .unwrap();
+    let l = lay(&d);
+    let c = l.caret_on(&Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 }, 0);
+    assert!(c.is_some_and(|c| c.top > 600.0), "the note is at the page's bottom: {c:?}");
+}
+
 /// Word has no frames inside a text box: a paragraph there whose style carries a frame (a
 /// letterhead's "Weld" and "Governor" styles, framed at the page's left) runs in the box's text
 /// like any other. WordCraft placed each one apart at the frame's offset, so two of them in a row
