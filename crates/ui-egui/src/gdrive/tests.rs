@@ -134,8 +134,36 @@ fn save_follows_the_last_destination() {
         size: Some(10),
     };
     let rev = a.session.rev();
-    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, file, marked_saved: true });
+    let stamp = a.session.doc.core.revision;
+    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, stamp, file: file.clone(), marked_saved: true });
     assert!(a.session.path.is_none());
     assert_eq!(a.drive.origin(doc).map(|o| o.id.as_str()), Some("f2"));
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "saved to Drive: Save goes to Drive");
+}
+
+/// A local save that finishes while a Drive upload is still going is newer: the upload ending
+/// doesn't take the destination back to Drive, even for a save to the same local file.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_newer_local_save_keeps_its_destination() {
+    let mut a = app();
+    let doc = a.session.document_id();
+    let local = std::env::temp_dir().join("Essay.docx");
+    a.session.path = Some(local.clone());
+    a.session.stamp_save();
+    let stamp = a.session.doc.core.revision;
+    // The local save during the upload stamps the revision again.
+    a.session.stamp_save();
+    let file = wordcraft_gdrive::DriveFile {
+        id: "f2".into(),
+        name: "Essay.docx".into(),
+        mime_type: wordcraft_gdrive::drive::MIME_DOCX.into(),
+        modified_time: String::new(),
+        version: "1".into(),
+        size: Some(10),
+    };
+    let rev = a.session.rev();
+    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, stamp, file, marked_saved: true });
+    assert_eq!(a.session.path.as_deref(), Some(local.as_path()), "the newer local save keeps its path");
+    assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_none(), "Save stays local");
 }

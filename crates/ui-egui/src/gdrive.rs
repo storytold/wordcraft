@@ -318,9 +318,23 @@ mod native {
     enum Job {
         SignIn,
         SignOut,
-        List { search: Option<String>, page: Option<String> },
-        Open { id: String },
-        Save { doc: u64, rev: u64, target: SaveTarget, bytes: Vec<u8>, marked_saved: bool },
+        List {
+            search: Option<String>,
+            page: Option<String>,
+        },
+        Open {
+            id: String,
+        },
+        /// `stamp`: the document's save revision after this save stamped it. Every successful save
+        /// (local or Drive) advances it, so a higher revision when the upload ends means a newer save.
+        Save {
+            doc: u64,
+            rev: u64,
+            stamp: u32,
+            target: SaveTarget,
+            bytes: Vec<u8>,
+            marked_saved: bool,
+        },
     }
 
     pub(super) enum Event {
@@ -341,6 +355,7 @@ mod native {
         Saved {
             doc: u64,
             rev: u64,
+            stamp: u32,
             file: DriveFile,
             marked_saved: bool,
         },
@@ -464,7 +479,8 @@ mod native {
         let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
         let marked_saved = crate::state::keeps_everything(&name);
         let rev = app.session.rev();
-        let r = send(app, Job::Save { doc, rev, target, bytes, marked_saved }, "save")?;
+        let stamp = app.session.doc.core.revision;
+        let r = send(app, Job::Save { doc, rev, stamp, target, bytes, marked_saved }, "save")?;
         app.status(i18n::fmt(tl!("Saving {name} to Google Drive…"), &[("name", &name)]));
         Ok(r)
     }
@@ -513,8 +529,8 @@ mod native {
                     drive.list(search.as_deref(), page.as_deref()).map(|(files, next)| Event::Listed { files, next, append })
                 }
                 Job::Open { id } => drive.metadata(&id).and_then(|file| drive.download(&file).map(|bytes| Event::Opened { file, bytes })),
-                Job::Save { doc, rev, target, bytes, marked_saved } => {
-                    drive.save(&target, &bytes).map(|file| Event::Saved { doc, rev, file, marked_saved })
+                Job::Save { doc, rev, stamp, target, bytes, marked_saved } => {
+                    drive.save(&target, &bytes).map(|file| Event::Saved { doc, rev, stamp, file, marked_saved })
                 }
             };
             emit(r.unwrap_or_else(|error| Event::Failed { what, error, doc }));
@@ -593,12 +609,14 @@ mod native {
                 d.busy = None;
                 open(app, file, &bytes);
             }
-            Event::Saved { doc, rev, file, marked_saved } => {
+            Event::Saved { doc, rev, stamp, file, marked_saved } => {
                 d.busy = None;
                 let name = file.name.clone();
                 d.origins.insert(doc, Origin { google_doc: file.is_google_doc(), id: file.id, name: file.name, version: file.version });
                 // Only the document that was saved, and only if nothing was typed while it uploaded.
-                if app.session.document_id() == doc {
+                // A save that finished while this one uploaded (a local Save As, or Save to the
+                // same local file) is newer: it keeps the destination it set.
+                if app.session.document_id() == doc && app.session.doc.core.revision == stamp {
                     // Drive is now where the document lives: Save goes back there, not to a
                     // local file it was saved to earlier.
                     app.session.path = None;
