@@ -44,7 +44,7 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.remove_date_time {
         w.empty("w:removeDateAndTime", &[]);
     }
-    if s.page_color.is_some() || s.page_picture.is_some() {
+    if s.page_color.is_some() || s.page_picture.is_some() || s.page_gradient.is_some() || s.page_pattern.is_some() {
         w.empty("w:displayBackgroundShape", &[]);
     }
     if s.mirror_margins {

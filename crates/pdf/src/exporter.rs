@@ -1,3 +1,4 @@
+use super::NormalizedF32;
 use super::export::Fit;
 use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_right, split_clusters, visual_order};
 use super::options::{PdfError, PdfOptions};
@@ -221,7 +222,12 @@ impl Exporter<'_> {
     }
 
     pub(crate) fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
-        if let Some(c) = self.doc.settings.page_color
+        // `page_color` is only the fallback older readers use for a gradient (its first stop) or
+        // a pattern (its back colour). Painting it under the fill composites a translucent fill
+        // over itself, so the screen renderer ignores it the same way.
+        if self.doc.settings.page_gradient.is_none()
+            && self.doc.settings.page_pattern.is_none()
+            && let Some(c) = self.doc.settings.page_color
             && let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h))
         {
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |_, s| {
@@ -231,8 +237,26 @@ impl Exporter<'_> {
                 s.set_fill(None);
             });
         }
+        if let Some(g) = self.doc.settings.page_gradient.clone() {
+            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_gradient(s, &g, w, h));
+        }
+        if let Some(p) = self.doc.settings.page_pattern.clone() {
+            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_pattern(s, &p, w, h));
+        }
         if let Some(pic) = self.doc.settings.page_picture.clone() {
-            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.page_picture(s, &pic, w, h));
+            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
+                let alpha = 1.0 - pic.transparency.clamp(0.0, 100.0) / 100.0;
+                if alpha <= 0.0 {
+                    return;
+                }
+                if alpha < 1.0 {
+                    s.push_opacity(NormalizedF32::new(alpha).unwrap_or(NormalizedF32::ONE));
+                }
+                me.page_picture(s, &pic, w, h);
+                if alpha < 1.0 {
+                    s.pop();
+                }
+            });
         }
         if let Some(wm) = self.doc.settings.watermark.clone()
             && !wm.text.trim().is_empty()

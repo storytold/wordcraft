@@ -1,3 +1,5 @@
+use super::fill::Gradient;
+use super::pattern::PagePattern;
 use super::{Deserialize, Rgb, Serialize, math, section, styles};
 
 /// A bibliography source.
@@ -91,6 +93,11 @@ pub struct Settings {
     pub page_color: Option<Rgb>,
     /// Picture or texture page background (Design › Page Color › Fill Effects), drawn over the colour.
     pub page_picture: Option<PagePicture>,
+    /// Gradient page background (Fill Effects › Gradient), drawn over the colour and under a
+    /// picture, as Word draws its one fill.
+    pub page_gradient: Option<Gradient>,
+    /// Pattern page background (Fill Effects › Pattern).
+    pub page_pattern: Option<PagePattern>,
     pub watermark: Option<Watermark>,
     /// Theme fonts (major = headings, minor = body).
     pub major_font: String,
@@ -225,6 +232,54 @@ pub struct PagePicture {
     pub fill_type: String,
     /// `o:title` of the fill (texture name), kept for round trip.
     pub title: String,
+    /// How much of the fill shows through, percent (100 = invisible); `v:fill/@opacity`.
+    pub transparency: f32,
+}
+
+/// The page's background fills (Design › Page Color › Fill Effects), taken together so every
+/// take-and-restore site strips the same four fields: a missed field would leak a fill into a
+/// print job or preview that asked for none.
+#[derive(Clone, Debug, Default)]
+pub struct PageFills {
+    pub page_color: Option<Rgb>,
+    pub page_picture: Option<PagePicture>,
+    pub page_gradient: Option<Gradient>,
+    pub page_pattern: Option<PagePattern>,
+}
+
+impl PageFills {
+    /// Take the fills out of `settings`, leaving none behind; [`PageFills::restore`] puts them back.
+    pub fn take(settings: &mut Settings) -> Self {
+        PageFills {
+            page_color: settings.page_color.take(),
+            page_picture: settings.page_picture.take(),
+            page_gradient: settings.page_gradient.take(),
+            page_pattern: settings.page_pattern.take(),
+        }
+    }
+
+    /// Put taken fills back into `settings`. Only fields that were `Some` are written, so a fill
+    /// set while they were out (none of today's callers set one) is not clobbered.
+    pub fn restore(self, settings: &mut Settings) {
+        if self.page_color.is_some() {
+            settings.page_color = self.page_color;
+        }
+        if self.page_picture.is_some() {
+            settings.page_picture = self.page_picture;
+        }
+        if self.page_gradient.is_some() {
+            settings.page_gradient = self.page_gradient;
+        }
+        if self.page_pattern.is_some() {
+            settings.page_pattern = self.page_pattern;
+        }
+    }
+
+    /// Take the fills when `strip` is true, else keep them and return an empty guard: the call
+    /// site's `restore` then writes nothing back.
+    pub fn take_unless(keep: bool, settings: &mut Settings) -> Self {
+        if keep { PageFills::default() } else { PageFills::take(settings) }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -302,6 +357,8 @@ impl Default for Settings {
             consecutive_hyphen_limit: 0,
             page_color: None,
             page_picture: None,
+            page_gradient: None,
+            page_pattern: None,
             watermark: None,
             major_font: styles::HEADING_FONT.into(),
             minor_font: styles::BODY_FONT.into(),

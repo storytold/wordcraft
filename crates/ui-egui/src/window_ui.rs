@@ -25,6 +25,10 @@ pub(crate) struct WindowUi {
     pub(crate) spelling_review: Option<crate::proofing_pane::SpellingForm>,
     pub(crate) status_msg: Option<(String, f64)>,
     pub(crate) previews: previews::Previews,
+    /// The Format Background pane's unsaved fill, and the web picture picker it asked for: each
+    /// window keeps its own, so switching away and back doesn't drop a draft.
+    pub(crate) background: crate::format_background::Draft,
+    pub(crate) background_picture_pending: bool,
     pub(crate) change_picture_target: Option<String>,
     pub(crate) recipient_list_pending: bool,
     pub(crate) dialog_pick: Option<String>,
@@ -98,6 +102,8 @@ impl WindowUi {
             spelling_review: None,
             status_msg: None,
             previews: Default::default(),
+            background: Default::default(),
+            background_picture_pending: false,
             change_picture_target: None,
             recipient_list_pending: false,
             dialog_pick: None,
@@ -225,6 +231,8 @@ impl WordApp {
             spelling_review,
             status_msg,
             previews,
+            background,
+            background_picture_pending,
             change_picture_target,
             recipient_list_pending,
             dialog_pick,
@@ -325,6 +333,8 @@ impl WordApp {
             spelling_review,
             status_msg,
             previews,
+            background,
+            background_picture_pending,
             change_picture_target,
             recipient_list_pending,
             dialog_pick,
@@ -394,10 +404,24 @@ mod tests {
         a.canvas.ime_preedit_range = Some(0..2);
         a.canvas.scroll_to_caret = false;
         a.canvas.nav_to_caret = true;
+        a.background = crate::format_background::Draft {
+            loaded: true,
+            doc,
+            base: 3,
+            fill: crate::format_background::DraftFill::Pattern {
+                preset: "dkUpDiag".into(),
+                fore: wordcraft_doc::Rgb(1, 2, 3),
+                back: wordcraft_doc::Rgb(4, 5, 6),
+                transparency: 10.0,
+            },
+        };
+        a.background_picture_pending = true;
 
         let mut w = WindowUi::new(doc);
         a.swap_window(&mut w);
         assert!(a.dialog.is_none() && a.status_msg.is_none());
+        assert!(!a.background.loaded && !a.background_picture_pending, "a new window has no background draft");
+        assert!(w.background.loaded && matches!(w.background.fill, crate::format_background::DraftFill::Pattern { .. }));
         assert!(a.canvas.ime_preedit.is_empty() && a.canvas.ime_preedit_range.is_none());
         assert!(a.canvas.scroll_to_caret && !a.canvas.nav_to_caret, "a new window goes to the caret");
         assert_eq!(a.ui.tab, crate::DEFAULT_TAB);
@@ -411,6 +435,10 @@ mod tests {
         assert!(!a.canvas.scroll_to_caret && a.canvas.nav_to_caret);
         assert_eq!(a.ui.tab, "Insert");
         assert!(w.dialog.is_none() && w.tab == crate::DEFAULT_TAB);
+        assert!(
+            a.background.loaded && a.background_picture_pending && matches!(a.background.fill, crate::format_background::DraftFill::Pattern { .. }),
+            "the first window's unsaved background draft came back"
+        );
         assert_eq!((a.session.document_id(), a.session.rev(), a.ui.recent_count), (doc, rev, 7));
         assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "Kept");
     }

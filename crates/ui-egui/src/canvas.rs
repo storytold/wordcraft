@@ -1436,7 +1436,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     {
         let opts = page_render_options(app, dim_body);
         let bg = if on_visible_page(&rects, &geo.bands, p) {
-            opts.paper_of(&app.session.doc)
+            opts.visible_fill(&app.session.doc)
         } else {
             let c = Tokens::get(ui.ctx()).canvas;
             wordcraft_doc::props::Rgb(c.r(), c.g(), c.b())

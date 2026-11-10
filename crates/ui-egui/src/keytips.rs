@@ -267,6 +267,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Pencil", "draw.pencil"),
             c("Highlighter", "draw.highlighter"),
             m("Add Pen", "draw.addPen"),
+            p("Format Background", "view.formatBackgroundPane", serde_json::json!({"value": true})),
             c("Ink to Shape", "draw.inkToShape"),
             c("Ink to Math", "draw.inkToMath"),
             c("Drawing Canvas", "insert.canvas"),

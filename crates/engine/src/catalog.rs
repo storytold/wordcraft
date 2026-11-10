@@ -203,6 +203,7 @@ Draw|Pens|Pen|draw.pen
 Draw|Pens|Pencil|draw.pencil
 Draw|Pens|Highlighter|draw.highlighter
 Draw|Pens|Add Pen|draw.addPen
+Draw|Edit|Format Background|view.formatBackgroundPane
 Draw|Convert|Ink to Shape|draw.inkToShape
 Draw|Convert|Ink to Math|draw.inkToMath
 Draw|Insert|Drawing Canvas|insert.canvas
@@ -216,6 +217,7 @@ Design|Document Formatting|Effects|design.effects
 Design|Document Formatting|Set as Default|design.setDefault
 Design|Page Background|Watermark|design.watermark
 Design|Page Background|Page Color|design.pageColor
+Design|Page Background|Fill Effects|design.pageFill
 Design|Page Background|Page Borders|design.pageBorders
 Layout|Page Setup|Margins|layout.margins
 Layout|Page Setup|Orientation|layout.orientation

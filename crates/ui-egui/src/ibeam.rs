@@ -113,6 +113,26 @@ mod tests {
         assert_eq!(h.state().session.sel, sel, "hovering leaves the selection alone");
     }
 
+    /// Format Background review: over an opaque dark fill on light paper the drawn I-beam
+    /// contrasts with the fill (`visible_fill`), not the paper beneath it.
+    #[test]
+    fn a_drawn_i_beam_contrasts_with_the_visible_fill() {
+        use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+        use wordcraft_doc::wordart::GradStop;
+        let mut h = window(true, false);
+        h.state_mut().session.doc.settings.page_gradient = Some(Gradient {
+            stops: vec![
+                GradStop { pos: 0.0, color: wordcraft_doc::props::Rgb::BLACK, transparency: 0.0 },
+                GradStop { pos: 100.0, color: wordcraft_doc::props::Rgb::BLACK, transparency: 0.0 },
+            ],
+            kind: GradientKind::Linear { angle: 90.0, scaled: false },
+            tile: None,
+            rot_with_shape: false,
+            flip: GradientFlip::None,
+        });
+        assert_eq!(hover_page(&mut h), (CursorIcon::None, Some(Color32::WHITE)), "an opaque black fill");
+    }
+
     /// #1746 review: at 100%, 125%, 150% and 200% scaling the fill and the edge of a stroke centred
     /// on a snapped position both start and end on whole physical pixels.
     #[test]

@@ -47,7 +47,19 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
 
 /// Minimal base64 (standard alphabet, padding optional, whitespace ignored).
 pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
-    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    decode_capped(s, usize::MAX)
+}
+/// [`base64_decode`], refusing past `max` decoded bytes: the output check runs per byte, so an
+/// input far past the limit is refused before the whole of it is held. `None` is bad data;
+/// `Some(None)` decoded fine but past the limit; `Some(Some(..))` is within it.
+pub fn base64_decode_bounded(s: &str, max: usize) -> Option<Option<Vec<u8>>> {
+    decode_capped(s, max).map(|b| (b.len() <= max).then_some(b))
+}
+fn decode_capped(s: &str, max: usize) -> Option<Vec<u8>> {
+    fn valid(c: u8) -> bool {
+        matches!(c, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'-' | b'/' | b'_' | b'=' | b' ' | b'\n' | b'\r' | b'\t')
+    }
+    let mut out = Vec::new();
     let mut buf = 0u32;
     let mut n = 0;
     for c in s.bytes() {
@@ -66,6 +78,15 @@ pub fn base64_decode(s: &str) -> Option<Vec<u8>> {
             n -= 8;
             out.push((buf >> n) as u8);
             buf &= (1 << n) - 1;
+            if out.len() > max {
+                // Past the limit: the rest is only scanned for bad data, not held.
+                return if s.bytes().all(valid) {
+                    out.truncate(max + 1);
+                    Some(out)
+                } else {
+                    None
+                };
+            }
         }
     }
     Some(out)

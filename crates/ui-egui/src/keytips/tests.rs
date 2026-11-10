@@ -126,6 +126,24 @@ fn every_keytip_command_is_registered() {
     assert!(missing.is_empty(), "unregistered: {missing:#?}");
 }
 
+/// The Format Background badge opens the pane. The command without a value toggles it, which
+/// would close an open pane and drop the draft it hasn't applied.
+#[test]
+fn the_format_background_badge_opens_the_pane() {
+    let params = controls("Draw")
+        .into_iter()
+        .find_map(|c| match c.target {
+            Target::Cmd { id: "view.formatBackgroundPane", params } => Some(params),
+            _ => None,
+        })
+        .expect("the badge is on the Draw tab");
+    assert_eq!(params, serde_json::json!({"value": true}));
+    let mut a = app();
+    a.run("view.formatBackgroundPane", serde_json::json!({"value": true})).unwrap();
+    a.run("view.formatBackgroundPane", params).unwrap();
+    assert!(a.session.view.format_background_pane, "an open pane stays open");
+}
+
 #[test]
 fn letters_are_unique_inside_every_tab() {
     let a = app();

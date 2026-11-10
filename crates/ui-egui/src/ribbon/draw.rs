@@ -53,6 +53,9 @@ pub(super) fn draw(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    group(ui, "Edit", None, app, |ui, app| {
+        big(ui, app, "formatBackground", "Format\nBackground", "view.formatBackgroundPane", json!({"value": true}), false);
+    });
     group(ui, "Convert", None, app, |ui, app| {
         let on = app.session.view.draw.ink_to_shape;
         big_toggle(ui, app, "inkToShape", "Ink to\nShape", "draw.inkToShape", on);

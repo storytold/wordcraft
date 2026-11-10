@@ -55,12 +55,20 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
     }
 }
 
+/// Drop the Format Background picture-preview cache entry for `path`, so a new pick of a path the
+/// pane already tried — including one that failed to load — reloads the file on the next frame.
+pub(crate) fn clear_background_preview_cache(ctx: &egui::Context, path: &str) {
+    ctx.data_mut(|d| d.remove::<Option<egui::TextureHandle>>(egui::Id::unique(("formatBackground.picture", path))));
+}
+
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
     /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
     OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
+    /// The Format Background pane's picture fill (a draft until Apply).
+    BackgroundPicture,
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
@@ -256,6 +264,27 @@ impl WordApp {
                 };
                 self.insert_or_change_picture(json!({"path": path}))
             }
+            AfterPick::BackgroundPicture => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                let (tile, transparency) = match &self.background.fill {
+                    crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
+                    _ => (false, 0.0),
+                };
+                self.background.fill = crate::format_background::DraftFill::Picture {
+                    path: Some(path.clone()),
+                    media: None,
+                    data: None,
+                    data_key: None,
+                    tile,
+                    transparency,
+                };
+                // A new pick must repaint even when the cache holds this path from before,
+                // including a cached failed load: drop that entry so the next frame reloads it.
+                if let Some(ctx) = self.ctx.clone() {
+                    clear_background_preview_cache(&ctx, &path);
+                }
+                Ok(json!({"pending": "formatBackground"}))
+            }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.add_fonts(vec![path])
@@ -309,7 +338,13 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 let mut params = settings;
                 params["path"] = json!(path);
+                // Save these pages as PDF is the print job as a file: backgrounds off strips the
+                // fills (as the job does), backgrounds on keeps them. The printer path borrows
+                // this in printing.rs; the file path borrows it here so neither mutates the open
+                // document.
+                let fills = wordcraft_doc::PageFills::take_unless(self.ui.print_backgrounds, &mut self.session.doc.settings);
                 let r = self.run("file.printPdf", params);
+                fills.restore(&mut self.session.doc.settings);
                 if r.is_ok() {
                     self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &crate::i18n::isolate_path(&path))]));
                 }
@@ -456,11 +491,22 @@ impl WordApp {
     }
 
     pub(crate) fn pick_picture(&mut self) {
+        self.background_picture_pending = false;
         if let Some(f) = &self.services.open_async {
             f("picture");
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+    }
+
+    /// Pick the page background's picture (the pane's draft takes the picked file).
+    pub(crate) fn pick_background_picture(&mut self) {
+        if let Some(f) = &self.services.open_async {
+            self.background_picture_pending = true;
+            f("picture");
+            return;
+        }
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::BackgroundPicture);
     }
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).

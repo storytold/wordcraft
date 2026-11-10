@@ -309,6 +309,145 @@ fn device_pixel(view: Affine) -> f64 {
     if scale.is_finite() && scale > 1e-9 { 1.0 / scale } else { 1.0 }
 }
 
+/// Draw the page's background fill (Design › Page Color › Fill Effects) behind the content:
+/// gradient, then pattern, then a picture or texture (Word keeps one fill; a file that states
+/// more draws them in that order). A dark page inks the gradient and pattern colours; a picture
+/// keeps its own, as [`RenderOptions::dark`] says.
+pub(crate) fn draw_page_background(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
+    draw_page_gradient(ctx, doc, page, view, opts);
+    draw_page_pattern(ctx, doc, page, view, opts);
+    let alpha = doc.settings.page_picture.as_ref().map_or(1.0, |p| 1.0 - p.transparency.clamp(0.0, 100.0) / 100.0);
+    if alpha <= 0.0 {
+        return;
+    }
+    if alpha < 1.0 {
+        ctx.push_opacity_layer(alpha);
+    }
+    draw_page_picture(ctx, doc, page, view);
+    if alpha < 1.0 {
+        ctx.pop_layer();
+    }
+}
+
+/// A linear gradient page background, at its angle (0° = left to right, 90° = top to bottom) and
+/// each stop's transparency.
+fn draw_page_gradient(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
+    use wordcraft_doc::fill::GradientKind;
+    let Some(g) = &doc.settings.page_gradient else { return };
+    let (w, h) = (f64::from(page.w), f64::from(page.h));
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return;
+    }
+    let angle = match g.kind {
+        GradientKind::Linear { angle, .. } if angle.is_finite() => f64::from(angle),
+        _ => 90.0,
+    };
+    let (dx, dy) = (angle.to_radians().cos(), angle.to_radians().sin());
+    // The line through the page's centre long enough to cover both corners.
+    let len = w * dx.abs() + h * dy.abs();
+    let (cx, cy) = (w / 2.0, h / 2.0);
+    let stops: Vec<peniko::ColorStop> = g
+        .stops
+        .iter()
+        .filter(|s| s.pos.is_finite())
+        .map(|s| {
+            peniko::ColorStop::from((
+                (f64::from(s.pos) / 100.0).clamp(0.0, 1.0) as f32,
+                crate::color(opts.ink(s.color), 1.0 - s.transparency.clamp(0.0, 100.0) / 100.0),
+            ))
+        })
+        .collect();
+    if stops.len() < 2 {
+        return;
+    }
+    ctx.set_transform(view);
+    ctx.set_paint(
+        peniko::Gradient::new_linear((cx - dx * len / 2.0, cy - dy * len / 2.0), (cx + dx * len / 2.0, cy + dy * len / 2.0))
+            .with_stops(stops.as_slice()),
+    );
+    ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w, h));
+}
+
+/// A pattern page background: the preset's tile, repeated over the page at 8 points.
+fn draw_page_pattern(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine, opts: &crate::RenderOptions) {
+    let Some(p) = &doc.settings.page_pattern else { return };
+    let (w, h) = (f64::from(page.w), f64::from(page.h));
+    if !(w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return;
+    }
+    let p = wordcraft_doc::PagePattern { fore: opts.ink(p.fore), back: opts.ink(p.back), ..p.sanitized() };
+    let Some(pm) = pattern_pixmap(&p) else { return };
+    const TILE: f32 = 8.0;
+    let alpha = 1.0 - p.transparency / 100.0;
+    if alpha <= 0.0 {
+        return;
+    }
+    ctx.set_transform(view);
+    ctx.set_paint(vello_cpu::Image {
+        image: vello_cpu::ImageSource::Pixmap(pm.clone()),
+        sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium).with_extend(peniko::Extend::Repeat),
+    });
+    let side = f64::from(pm.width().max(1));
+    ctx.set_paint_transform(Affine::scale(f64::from(TILE) / side));
+    if alpha < 1.0 {
+        ctx.push_opacity_layer(alpha);
+    }
+    ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w, h));
+    if alpha < 1.0 {
+        ctx.pop_layer();
+    }
+    ctx.reset_paint_transform();
+}
+
+/// Pixels on a side of a pattern's tile: 4 per point at the 8-point tile, so ink edges are soft.
+const PATTERN_TILE_PX: u32 = 32;
+
+/// The tile of `p` as a small premultiplied pixmap, its ink over its paper colour, for the
+/// renderer to repeat (the PDF draws the same geometry as vector marks).
+fn pattern_pixmap(p: &wordcraft_doc::PagePattern) -> Option<Arc<Pixmap>> {
+    let tile = p.tile();
+    let (fore, back) = (p.fore, p.back);
+    let side = PATTERN_TILE_PX as usize;
+    let mut data = Vec::with_capacity(side * side * 4);
+    const SUB: usize = 3;
+    for y in 0..side {
+        for x in 0..side {
+            let mut hits = 0u32;
+            for sy in 0..SUB {
+                for sx in 0..SUB {
+                    let fx = (x as f32 + (sx as f32 + 0.5) / SUB as f32) / side as f32;
+                    let fy = (y as f32 + (sy as f32 + 0.5) / SUB as f32) / side as f32;
+                    if in_pattern_tile(&tile, fx, fy) {
+                        hits += 1;
+                    }
+                }
+            }
+            let k = hits as f32 / (SUB * SUB) as f32;
+            let mix = |a: u8, b: u8| (f32::from(a) * k + f32::from(b) * (1.0 - k)) as u8;
+            data.push(vello_cpu::color::PremulRgba8 { r: mix(fore.0, back.0), g: mix(fore.1, back.1), b: mix(fore.2, back.2), a: 255 });
+        }
+    }
+    Some(Arc::new(Pixmap::from_parts(data, PATTERN_TILE_PX as u16, PATTERN_TILE_PX as u16)))
+}
+
+/// Whether the point (`x`, `y`) in a unit tile is inked.
+fn in_pattern_tile(t: &wordcraft_doc::PatternTile, x: f32, y: f32) -> bool {
+    for [rx, ry, rw, rh] in &t.rects {
+        if x >= *rx && x <= rx + rw && y >= *ry && y <= ry + rh {
+            return true;
+        }
+    }
+    for [x0, y0, x1, y1, width] in &t.strokes {
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let len2 = dx * dx + dy * dy;
+        let k = if len2 > 0.0 { (((x - x0) * dx + (y - y0) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        let (px, py) = (x0 + dx * k, y0 + dy * k);
+        if (x - px).hypot(y - py) <= width / 2.0 {
+            return true;
+        }
+    }
+    t.dots.iter().any(|[cx, cy, r]| (x - cx).hypot(y - cy) <= *r)
+}
 /// Draw the page's picture or texture fill (Design › Page Color › Fill Effects) behind the content:
 /// tiled at its natural size (96 dpi) for a `tile` fill, stretched over the page otherwise.
 pub(crate) fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {

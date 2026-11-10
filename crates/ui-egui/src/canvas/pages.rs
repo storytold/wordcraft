@@ -13,8 +13,8 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hint
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
-    format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
-        .hash(&mut h);
+    let s = &app.session.doc.settings;
+    format!("{:?}{:?}{:?}{:?}{:?}", s.page_color, s.page_picture, s.page_gradient, s.page_pattern, s.watermark).hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
     // A page drawn without a dragged object must not pass for the page with it: the drag starts
     // and ends change the key once each, so the page is rendered again then and only then.

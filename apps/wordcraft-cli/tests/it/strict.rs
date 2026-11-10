@@ -476,7 +476,8 @@ fn a_metafile_page_background_fails_strict_for_png_but_not_for_pdf() {
     let d = dir("emf-background");
     let mut doc = Document::from_text("text");
     doc.media.insert("bg.emf".into(), std::sync::Arc::new(emf_with_text("abc")));
-    doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.emf".into(), fill_type: "frame".into(), title: String::new() });
+    doc.settings.page_picture =
+        Some(wordcraft_doc::PagePicture { media: "bg.emf".into(), fill_type: "frame".into(), title: String::new(), transparency: 0.0 });
     let input = d.join("in.json");
     std::fs::write(&input, serde_json::to_vec(&doc).unwrap()).unwrap();
     let png = d.join("out.png");

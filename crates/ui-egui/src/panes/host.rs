@@ -52,6 +52,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     if !open.contains(&Pane::FormatShape) {
         crate::format_shape::forget_drag(ui.ctx());
     }
+    if !open.contains(&Pane::FormatBackground) {
+        crate::format_background::forget(app);
+    }
     route_f6(app, ui.ctx());
     let states: Vec<(Pane, PaneState)> = open.iter().map(|pane| (*pane, pane_state(app, *pane))).collect();
     let out = PaneHost::new(app.window_id(HOST))

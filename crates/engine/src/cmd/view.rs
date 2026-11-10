@@ -137,6 +137,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool}"#)
         .pure(),
+        CommandSpec::new("view.formatBackgroundPane", "Format Background Pane", "Draw › Edit", |s, v| {
+            toggle(s, v, |x| &mut x.format_background_pane)
+        })
+        .params(r#"{"value"?: bool}"#)
+        .pure(),
         CommandSpec::new("view.newWindow", "New Window", "View › Window", |s, _| {
             s.push_ui_request(json!({"open": "newWindow"}));
             sel_result(s)

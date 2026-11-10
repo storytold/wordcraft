@@ -2795,7 +2795,8 @@ fn page_background_picture_round_trips() {
     let mut d = Document::new();
     d.settings.page_color = Some(Rgb(0xFF, 0xFF, 0xCC));
     d.media.insert("paper.png".into(), Arc::new(png.clone()));
-    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "paper.png".into(), fill_type: "tile".into(), title: "Paper".into() });
+    d.settings.page_picture =
+        Some(wordcraft_doc::PagePicture { media: "paper.png".into(), fill_type: "tile".into(), title: "Paper".into(), transparency: 0.0 });
     let r = rt(&d);
     let pic = r.settings.page_picture.as_ref().expect("picture kept");
     assert_eq!((pic.fill_type.as_str(), pic.title.as_str()), ("tile", "Paper"));
@@ -2803,6 +2804,136 @@ fn page_background_picture_round_trips() {
     assert_eq!(r.settings.page_color, d.settings.page_color);
     // Saved again, it is still there.
     assert!(rt(&r).settings.page_picture.is_some());
+}
+
+/// A gradient page background (`v:background/v:fill type="gradient"`) survives a save with its two
+/// stops, angle and transparency.
+#[test]
+fn page_background_gradient_round_trips() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut d = Document::new();
+    d.settings.page_color = Some(Rgb(0x10, 0x20, 0x30));
+    d.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0x10, 0x20, 0x30), transparency: 20.0 },
+            GradStop { pos: 100.0, color: Rgb(0xFA, 0xFB, 0xFC), transparency: 20.0 },
+        ],
+        kind: GradientKind::Linear { angle: 135.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    let r = rt(&d);
+    let g = r.settings.page_gradient.as_ref().expect("gradient kept");
+    assert_eq!(g.stops.iter().map(|s| (s.pos, s.color)).collect::<Vec<_>>(), [(0.0, Rgb(0x10, 0x20, 0x30)), (100.0, Rgb(0xFA, 0xFB, 0xFC))]);
+    assert!(g.stops.iter().all(|s| (s.transparency - 20.0).abs() < 1.0), "{:?}", g.stops);
+    assert!(matches!(g.kind, GradientKind::Linear { angle, .. } if (angle - 135.0).abs() < 0.01), "{:?}", g.kind);
+    assert!(r.settings.page_picture.is_none() && r.settings.page_pattern.is_none());
+    // Saved again, it is still there.
+    assert!(rt(&r).settings.page_gradient.is_some());
+}
+
+/// A gradient's or pattern's `w:color` is the fallback the writer derives for older readers, so
+/// reading it back must not turn it into an explicit page colour: clearing the fill would then
+/// show a solid colour the user never chose.
+#[test]
+fn a_derived_fill_fallback_is_not_read_as_a_page_color() {
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let mut g = Document::new();
+    g.settings.page_gradient = Some(Gradient {
+        stops: vec![
+            GradStop { pos: 0.0, color: Rgb(0x10, 0x20, 0x30), transparency: 0.0 },
+            GradStop { pos: 100.0, color: Rgb(0xFA, 0xFB, 0xFC), transparency: 0.0 },
+        ],
+        kind: GradientKind::Linear { angle: 135.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: GradientFlip::None,
+    });
+    assert!(g.settings.page_color.is_none(), "the fixture starts with no explicit page colour");
+    let r = rt(&g);
+    assert!(r.settings.page_gradient.is_some());
+    assert_eq!(r.settings.page_color, None, "the gradient's first stop is its fallback, not the page's colour");
+
+    let mut p = Document::new();
+    p.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "dkUpDiag".into(), fore: Rgb(0x33, 0x66, 0x99), back: Rgb(0xEE, 0xE8, 0xD8), transparency: 0.0 });
+    let r = rt(&p);
+    assert!(r.settings.page_pattern.is_some());
+    assert_eq!(r.settings.page_color, None, "the pattern's back colour is its fallback, not the page's colour");
+}
+
+/// A pattern page background (`v:background/v:fill type="pattern"`) survives a save with its
+/// preset and two colours.
+#[test]
+fn page_background_pattern_round_trips() {
+    let mut d = Document::new();
+    d.settings.page_pattern =
+        Some(wordcraft_doc::PagePattern { preset: "dkUpDiag".into(), fore: Rgb(0x33, 0x66, 0x99), back: Rgb(0xEE, 0xE8, 0xD8), transparency: 0.0 });
+    d.settings.page_color = Some(Rgb(0xEE, 0xE8, 0xD8));
+    let r = rt(&d);
+    let p = r.settings.page_pattern.as_ref().expect("pattern kept");
+    assert_eq!((p.preset.as_str(), p.fore, p.back), ("dkUpDiag", Rgb(0x33, 0x66, 0x99), Rgb(0xEE, 0xE8, 0xD8)));
+    assert!(r.settings.page_gradient.is_none() && r.settings.page_picture.is_none());
+    assert!(rt(&r).settings.page_pattern.is_some());
+}
+
+/// VML's `angle` runs counter-clockwise from a top-to-bottom blend, so an explicit 0 is a vertical
+/// blend (the model's 90°) and the first stop is `color`, not `color2`. Saving gives VML's angle
+/// back, so a file's own direction and colour order survive.
+#[test]
+fn page_background_gradient_reads_vml_angle_and_writes_its_inverse() {
+    use wordcraft_doc::fill::GradientKind;
+    let markup = r#"<w:background w:color="102030"><v:background id="_x0000_s1025"><v:fill type="gradient" color="FF0000" color2="0000FF" angle="0"/></v:background></w:background>"#;
+    let d = crate::fixtures::read_markup(markup);
+    let g = d.settings.page_gradient.as_ref().expect("gradient read");
+    assert_eq!(g.stops.iter().map(|s| (s.pos, s.color)).collect::<Vec<_>>(), [(0.0, Rgb(255, 0, 0)), (100.0, Rgb(0, 0, 255))]);
+    assert!(matches!(g.kind, GradientKind::Linear { angle, .. } if (angle - 90.0).abs() < 0.01), "{:?}", g.kind);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let parts = crate::fixtures::unzip(&bytes);
+    let xml = String::from_utf8_lossy(&parts["word/document.xml"]).to_string();
+    let fill = xml.split("<v:fill ").nth(1).unwrap_or("").split("/>").next().unwrap_or("");
+    assert!(fill.contains(r#"angle="0.00""#), "the blend is still top to bottom: {fill}");
+    assert!(fill.contains(r#"color="FF0000""#) && fill.contains(r#"color2="0000FF""#), "{fill}");
+    // A quarter turn the other way, as VML states it, comes back as the model's 45°.
+    let right = crate::fixtures::read_markup(&markup.replace(r#"angle="0""#, r#"angle="315""#));
+    assert!(
+        matches!(right.settings.page_gradient.as_ref().map(|g| g.kind), Some(GradientKind::Linear { angle, .. }) if (angle - 135.0).abs() < 0.01)
+    );
+}
+
+/// VML `opacity` in each form Word and other writers give it: a fraction (`0.75`), a percentage
+/// (`75%`) and 1/65536ths (`49152f`) are all a quarter transparent; `0` is fully transparent and
+/// `1` fully opaque.
+#[test]
+fn page_background_reads_vml_opacity_forms() {
+    let transparency = |opacity: &str| {
+        let markup = format!(
+            r#"<w:background w:color="FFFFFF"><v:background id="_x0000_s1025"><v:fill type="pattern" pattern="pct20" color="000000" color2="FFFFFF" opacity="{opacity}"/></v:background></w:background>"#
+        );
+        crate::fixtures::read_markup(&markup).settings.page_pattern.expect("pattern read").transparency
+    };
+    for form in ["0.75", "75%", "49152f"] {
+        assert!((transparency(form) - 25.0).abs() < 0.01, "{form} is three quarters opaque");
+    }
+    assert_eq!(transparency("0"), 100.0);
+    assert_eq!(transparency("1"), 0.0);
+    assert_eq!(transparency("not a number"), 0.0);
+}
+
+/// A `v:fill` with an unknown pattern preset and a picture relationship keeps the picture: only
+/// known presets take the pattern branch, the rest fall through to the picture handling.
+#[test]
+fn page_background_with_unknown_pattern_preset_keeps_its_picture() {
+    let markup = r#"<w:background w:color="102030"><v:background id="_x0000_s1025"><v:fill type="pattern" pattern="notAPreset" r:id="rIdBg" color="000000" color2="FFFFFF"/></v:background></w:background>"#;
+    let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R'];
+    let d = crate::fixtures::read_markup_with(markup, &[("rIdBg", "image", "media/bg.png")], &[("word/media/bg.png", png)]);
+    assert!(d.settings.page_pattern.is_none(), "an unknown preset is not a pattern");
+    let pic = d.settings.page_picture.as_ref().expect("the fill keeps its picture");
+    assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png));
+    assert_eq!(d.settings.page_color, wordcraft_doc::props::Rgb::parse("102030"));
 }
 
 /// #2601: Drop Cap Options — a dropped cap with its lines, distance from the text and font, and

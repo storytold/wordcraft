@@ -440,6 +440,14 @@ impl WordApp {
         let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let mut placed_picture = false;
         for (name, bytes) in files {
+            // The web picker says a cancelled dialog with an empty entry: nothing arrived, and a
+            // request waiting on the picker (Format Background's picture, a recipient list) ends,
+            // so the next dropped file is treated as the drop it is.
+            if name.is_empty() && bytes.is_empty() {
+                self.background_picture_pending = false;
+                self.recipient_list_pending = false;
+                continue;
+            }
             let lower = name.to_ascii_lowercase();
             let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lower.ends_with(e));
             // Any recipient file ends the pending picker request, so a later .txt drop opens normally.
@@ -453,6 +461,28 @@ impl WordApp {
                 self.run("font.add", json!({"name": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}))
             } else if list {
                 self.load_recipients(json!({"csv": wordcraft_engine::io::decode_text(&bytes)}))
+            } else if img && std::mem::take(&mut self.background_picture_pending) {
+                // Format Background's picker: the image becomes the pane's draft picture. Past
+                // the page-picture limit it is refused before the base64 encode and hashing, so
+                // a huge web selection can't exhaust the tab before `design.pageFill` sees it.
+                let (tile, transparency) = match &self.background.fill {
+                    crate::format_background::DraftFill::Picture { tile, transparency, .. } => (*tile, *transparency),
+                    _ => (false, 0.0),
+                };
+                if bytes.len() as u64 > crate::paste_picture::MAX_FILE_BYTES {
+                    self.status(tl!("The picture is larger than 200 MB."));
+                    Err("the picture is larger than 200 MB".to_string())
+                } else {
+                    // Hash the picture once, when the picker hands it over, not on every repaint.
+                    let data = Some(wordcraft_engine::cmd::insert::base64_encode(&bytes));
+                    let doc_id = self.session.document_id();
+                    let data_key = crate::format_background::picture_cache_key(&None, &data, &None, doc_id, |m| {
+                        self.session.doc.media.get(m).map_or(0, |b| b.len())
+                    });
+                    self.background.fill =
+                        crate::format_background::DraftFill::Picture { path: None, media: None, data, data_key, tile, transparency };
+                    Ok(json!({"pending": "formatBackground"}))
+                }
             } else if img {
                 self.caret_after_placed_picture(placed_picture);
                 let r = self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));

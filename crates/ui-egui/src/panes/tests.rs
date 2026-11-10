@@ -273,6 +273,7 @@ fn pane_bodies_fit_the_narrowest_pane() {
         Pane::Accessibility,
         Pane::AltText,
         Pane::FormatShape,
+        Pane::FormatBackground,
         Pane::RestrictEditing,
         Pane::Comments,
     ];

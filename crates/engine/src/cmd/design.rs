@@ -2,8 +2,10 @@
 
 use serde_json::{Value, json};
 use std::sync::Arc;
+use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
-use wordcraft_doc::{Watermark, styles};
+use wordcraft_doc::wordart::GradStop;
+use wordcraft_doc::{PagePattern, Watermark, styles};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
@@ -75,9 +77,20 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("design.pageColor", "Page Color", "Design › Page Background", |s, v| {
             s.doc.settings.page_color = p::str(v, "color").and_then(Rgb::parse);
             s.doc.settings.page_picture = None;
+            s.doc.settings.page_gradient = None;
+            s.doc.settings.page_pattern = None;
             sel_result(s)
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
+        CommandSpec::new("design.pageFill", "Format Background", "Design › Page Background", page_fill).params(
+            r#"{"fill": "none|solid|gradient|picture|pattern", "color"?: "RRGGBB" (solid), "start"?: "RRGGBB", "end"?: "RRGGBB", "stops"?: [{"pos": 0-100, "color": "RRGGBB", "transparency"?: 0-100}], "angle"?: degrees, "preset"?: pattern name (see design.pageFills), "fore"?: "RRGGBB", "back"?: "RRGGBB", "media"?: picture media key | "path"?: image file path | "data"?: base64 image (picture fill: exactly one of media, path, data), "tile"?: bool, "transparency"?: 0-100}"#,
+        ),
+        CommandSpec::new("design.pageFills", "Background Fills", "Design › Page Background", |_, _| {
+            Ok(json!({
+                "patterns": wordcraft_doc::PATTERN_PRESETS.iter().map(|p| json!({"name": p.name, "label": p.label})).collect::<Vec<_>>(),
+            }))
+        })
+        .pure(),
         CommandSpec::new("design.pageBorders", "Page Borders", "Design › Page Background", page_borders).params(
             r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
         ),
@@ -245,6 +258,171 @@ fn scale_font_sizes(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     sel_result(s)
+}
+
+/// Design › Page Background › Fill Effects: no fill, a solid colour, a two-stop (or multi-stop)
+/// gradient, a pattern, or a picture or texture. Every change is one undo step and replaces the
+/// page's previous fill.
+fn page_fill(s: &mut Session, v: &Value) -> CmdResult {
+    let kind = p::req_str(v, "fill")?;
+    let transparency = transparency(v, 0.0)?;
+    let set_color = |s: &mut Session| {
+        s.doc.settings.page_picture = None;
+        s.doc.settings.page_gradient = None;
+        s.doc.settings.page_pattern = None;
+    };
+    match kind {
+        "none" => {
+            s.doc.settings.page_color = None;
+            set_color(s);
+        }
+        "solid" => {
+            let color = hex(v, "color").ok_or_else(|| CmdError::Params("`color` (RRGGBB) is required for a solid fill".into()))?;
+            s.doc.settings.page_color = Some(color);
+            set_color(s);
+        }
+        "gradient" => {
+            let stops = gradient_stops(s, v)?;
+            let angle = p::f32(v, "angle").unwrap_or(90.0).rem_euclid(360.0);
+            let g =
+                Gradient { stops, kind: GradientKind::Linear { angle, scaled: false }, tile: None, rot_with_shape: false, flip: GradientFlip::None };
+            // A gradient with one colour is that colour: Word writes a solid fill then.
+            if g.stops.len() < 2 {
+                let color = g.stops.first().map_or(Rgb::WHITE, |s| s.color);
+                s.doc.settings.page_color = Some(color);
+                set_color(s);
+            } else {
+                s.doc.settings.page_gradient = Some(g);
+                s.doc.settings.page_picture = None;
+                s.doc.settings.page_pattern = None;
+                s.doc.settings.page_color = s.doc.settings.page_gradient.as_ref().and_then(|g| g.stops.first()).map(|s| s.color);
+            }
+        }
+        "pattern" => {
+            let preset = p::str(v, "preset").unwrap_or("ltDnDiag");
+            if !PagePattern::known(preset) {
+                return Err(CmdError::Params(format!("unknown pattern preset `{preset}`")));
+            }
+            let fore = hex(v, "fore").unwrap_or(Rgb::BLACK);
+            let back = hex(v, "back").unwrap_or(Rgb::WHITE);
+            s.doc.settings.page_pattern = Some(PagePattern { preset: preset.to_string(), fore, back, transparency });
+            s.doc.settings.page_picture = None;
+            s.doc.settings.page_gradient = None;
+            s.doc.settings.page_color = Some(back);
+        }
+        "picture" => {
+            let media = picture_media(s, v)?;
+            let tile = p::bool(v, "tile").unwrap_or(false);
+            s.doc.settings.page_picture =
+                Some(wordcraft_doc::PagePicture { media, fill_type: if tile { "tile" } else { "frame" }.into(), title: String::new(), transparency });
+            s.doc.settings.page_gradient = None;
+            s.doc.settings.page_pattern = None;
+            s.doc.settings.page_color = None;
+        }
+        other => return Err(CmdError::Params(format!("unknown fill `{other}`"))),
+    }
+    sel_result(s)
+}
+
+/// A `RRGGBB` parameter (`#` and lower case taken), None when absent or not a colour.
+fn hex(v: &Value, k: &str) -> Option<Rgb> {
+    p::str(v, k).and_then(Rgb::parse)
+}
+
+/// A transparency parameter in percent: absent is `default`, out of range is clamped, a value
+/// that isn't a finite number is refused.
+fn transparency(v: &Value, default: f32) -> Result<f32, CmdError> {
+    match v.get("transparency") {
+        None => Ok(default),
+        Some(x) => match x.as_f64() {
+            Some(n) if n.is_finite() => Ok((n as f32).clamp(0.0, 100.0)),
+            _ => Err(CmdError::Params("`transparency` must be a finite percent".into())),
+        },
+    }
+}
+
+/// The gradient's stops: `stops` when given (2–8, each with a finite `pos`, a colour and an
+/// optional transparency), else the `start` and `end` colours at 0% and 100%.
+fn gradient_stops(s: &Session, v: &Value) -> Result<Vec<GradStop>, CmdError> {
+    let overall = transparency(v, 0.0)?;
+    let accent = s.doc.settings.theme_colors.get(4).copied().unwrap_or(Rgb(0x15, 0x60, 0x82));
+    let Some(list) = v.get("stops") else {
+        let start = hex(v, "start").unwrap_or(accent);
+        let end = hex(v, "end").unwrap_or(Rgb::WHITE);
+        return Ok(vec![GradStop { pos: 0.0, color: start, transparency: overall }, GradStop { pos: 100.0, color: end, transparency: overall }]);
+    };
+    let list = list.as_array().filter(|a| (2..=8).contains(&a.len())).ok_or_else(|| CmdError::Params("`stops` needs 2 to 8 stops".into()))?;
+    let mut stops = Vec::with_capacity(list.len());
+    for stop in list {
+        let pos = stop.get("pos").and_then(Value::as_f64).ok_or_else(|| CmdError::Params("each stop needs a `pos`".into()))?;
+        if !pos.is_finite() {
+            return Err(CmdError::Params("a stop's `pos` must be finite".into()));
+        }
+        let color =
+            stop.get("color").and_then(Value::as_str).and_then(Rgb::parse).ok_or_else(|| CmdError::Params("each stop needs a `color`".into()))?;
+        let t = match stop.get("transparency") {
+            None => overall,
+            Some(x) => match x.as_f64() {
+                Some(n) if n.is_finite() => (n as f32).clamp(0.0, 100.0),
+                _ => return Err(CmdError::Params("a stop's `transparency` must be a finite percent".into())),
+            },
+        };
+        stops.push(GradStop { pos: (pos as f32).clamp(0.0, 100.0), color, transparency: t });
+    }
+    stops.sort_by(|a, b| a.pos.total_cmp(&b.pos));
+    Ok(stops)
+}
+
+/// The media key of the page background picture: an existing `media` key, encoded `data`, or a
+/// `path`. The image must be one the app can decode (hostile files are refused before the
+/// document keeps them). A file past the 200 MB picture limit and base64 past the same limit
+/// decoded are refused before the whole input is held: the read stops past the limit, and the
+/// decode refuses past it (whitespace still ignored, padding optional).
+const MAX_PAGE_PICTURE_BYTES: u64 = 200 << 20;
+fn picture_media(s: &mut Session, v: &Value) -> Result<String, CmdError> {
+    // One check for a file, base64 data and an existing media entry: the renderer can only draw
+    // these, so an entry holding anything else (say a DOCX relationship's bytes) is refused
+    // before the fill replaces the previous one.
+    let supported = |bytes: &[u8]| wordcraft_geom::picture::probe(bytes).is_ok() || wordcraft_render::metafile_size(bytes).is_some();
+    if let Some(key) = p::str(v, "media") {
+        return match s.doc.media.get(key) {
+            Some(b) if b.is_empty() => Err(CmdError::Params("`media` is not a picture in this document".into())),
+            Some(b) if supported(b) => Ok(key.to_string()),
+            Some(_) => Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into())),
+            None => Err(CmdError::Params("`media` is not a picture in this document".into())),
+        };
+    }
+    let bytes = if let Some(d) = p::str(v, "data") {
+        super::insert::base64_decode_bounded(d, MAX_PAGE_PICTURE_BYTES as usize)
+            .ok_or_else(|| CmdError::Params("bad base64 data".into()))?
+            .and_then(|b| (b.len() as u64 <= MAX_PAGE_PICTURE_BYTES).then_some(b))
+            .ok_or_else(|| CmdError::Failed("image is larger than 200 MB".into()))?
+    } else if let Some(path) = p::str(v, "path") {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = path;
+            return Err(CmdError::Failed("reading files by path isn't available on the web".into()));
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            crate::io::read_file_capped(path, MAX_PAGE_PICTURE_BYTES, "image").map_err(map_image_too_large)?
+        }
+    } else {
+        return Err(CmdError::Params("`path`, `data` or `media` is required for a picture fill".into()));
+    };
+    if !supported(&bytes) {
+        return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
+    }
+    // A metafile's bytes probe as WMF or EMF, not as a raster image: the key carries the
+    // metafile's own extension (as `place_picture` does), so the media key names the bytes'
+    // actual format.
+    let ext = wordcraft_render::metafile_size(&bytes).map(|(_, _, ext)| ext).unwrap_or_else(|| super::insert::image_ext(&bytes));
+    Ok(s.doc.add_media(bytes, ext))
+}
+/// `read_file_capped` reports a capped file as larger than N MB with the file's own wording;
+/// a page picture keeps the command's long-standing message.
+fn map_image_too_large(e: String) -> CmdError {
+    if e.contains("is larger than") { CmdError::Failed("image is larger than 200 MB".into()) } else { CmdError::Failed(e) }
 }
 
 fn watermark(s: &mut Session, v: &Value) -> CmdResult {

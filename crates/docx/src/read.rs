@@ -18,14 +18,17 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::control::{ControlEvent, ControlKind, control_events, pair_events};
+use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
+use wordcraft_doc::pattern::PagePattern;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::props::VAlign;
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
+use wordcraft_doc::wordart::GradStop;
 use wordcraft_doc::{
     Block, Blocks, Comment, Document, InlineObject, MissingPicture, MissingPictureReason, PagePicture, Paragraph, PartKind, Revision, RevisionKind,
     Zoom, ZoomFit, para_block,
@@ -273,20 +276,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         lenient("customXml bibliography", r.read_bibliography(path, &mut seen_sources));
     }
 
-    if let Some(bg) = root.child("w:background").and_then(|b| b.attr("w:color")).and_then(Rgb::parse) {
-        r.doc.settings.page_color = Some(bg);
-    }
-    // A picture or texture fill: `w:background/v:background/v:fill` with a relationship id.
-    if let Some(fill) = root.child("w:background").and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) {
-        let rid = fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid"));
-        if let Some(media) = rid.and_then(|id| r.media_for(&rels, id)) {
-            r.doc.settings.page_picture = Some(PagePicture {
-                media,
-                fill_type: fill.attr("type").unwrap_or("").chars().take(32).collect(),
-                title: fill.attr("o:title").unwrap_or("").chars().take(255).collect(),
-            });
-        }
-    }
+    read_page_background(&mut r, &root, &rels);
     if let Some(body) = root.child("w:body") {
         let mut sc = StoryCtx::default();
         let mut blocks = Blocks::new();
@@ -444,6 +434,72 @@ fn link_text_boxes(doc: &mut Document, mut links: Vec<(u32, u32, u32)>) {
             }
         }
     }
+}
+
+/// The page background: `w:background/@w:color`, then its VML fill (`v:background/v:fill`), a
+/// picture or texture, a gradient or a pattern (ECMA-376 §17.15.1.13 and VML's `fill`).
+fn read_page_background(r: &mut Reader<'_>, root: &El, rels: &Rels) {
+    let background = root.child("w:background");
+    let bg_color = background.and_then(|b| b.attr("w:color")).and_then(Rgb::parse);
+    // A gradient's `w:color` is its first stop and a pattern's its back colour: the writer derives
+    // it for older readers, so reading it back must not turn it into an explicit page colour.
+    let Some(fill) = background.and_then(|b| b.child("v:background")).and_then(|b| b.child("v:fill")) else {
+        r.doc.settings.page_color = bg_color;
+        return;
+    };
+    let kind = fill.attr("type").unwrap_or("");
+    let transparency = fill.attr("opacity").map_or(0.0, opacity_percent);
+    if kind.eq_ignore_ascii_case("gradient") {
+        let start = fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::WHITE);
+        let end = fill.attr("color2").and_then(Rgb::parse).unwrap_or(start);
+        // VML's angle runs counter-clockwise from a top-to-bottom blend: an omitted or explicit 0
+        // is a vertical blend (the model's 90°), and the writer gives the inverse (0 for 90°).
+        let vml = fill.attr("angle").and_then(|a| a.trim().parse::<f32>().ok()).filter(|a| a.is_finite()).unwrap_or(0.0);
+        let angle = (90.0 - vml).rem_euclid(360.0);
+        let stops = vec![GradStop { pos: 0.0, color: start, transparency }, GradStop { pos: 100.0, color: end, transparency }];
+        let gradient =
+            Gradient { stops, kind: GradientKind::Linear { angle, scaled: false }, tile: None, rot_with_shape: false, flip: GradientFlip::None };
+        r.doc.settings.page_gradient = wordcraft_doc::fill::Fill::Gradient(Arc::new(gradient)).sanitized().and_then(|g| match g {
+            wordcraft_doc::fill::Fill::Gradient(g) => Some((*g).clone()),
+            _ => None,
+        });
+        // The fallback colour belongs to the gradient, not to the page.
+        r.doc.settings.page_color = if r.doc.settings.page_gradient.is_some() { None } else { bg_color };
+    } else if kind.eq_ignore_ascii_case("pattern") && PagePattern::known(&fill.attr("pattern").unwrap_or("").chars().take(64).collect::<String>()) {
+        // Only a known preset is a pattern: an unknown or absent one falls through to the
+        // picture-relationship handling below, so a fill with both keeps its picture.
+        let preset: String = fill.attr("pattern").unwrap_or("").chars().take(64).collect();
+        r.doc.settings.page_pattern = Some(PagePattern {
+            preset,
+            fore: fill.attr("color").and_then(Rgb::parse).or(bg_color).unwrap_or(Rgb::BLACK),
+            back: fill.attr("color2").and_then(Rgb::parse).unwrap_or(Rgb::WHITE),
+            transparency,
+        });
+        // The back colour is the pattern's, not an explicit page colour.
+        r.doc.settings.page_color = None;
+    } else if let Some(media) =
+        fill.attr("r:id").or_else(|| fill.attr("r:embed")).or_else(|| fill.attr("o:relid")).and_then(|id| r.media_for(rels, id))
+    {
+        r.doc.settings.page_picture = Some(PagePicture {
+            media,
+            fill_type: kind.chars().take(32).collect(),
+            title: fill.attr("o:title").unwrap_or("").chars().take(255).collect(),
+            transparency,
+        });
+        r.doc.settings.page_color = bg_color;
+    } else {
+        r.doc.settings.page_color = bg_color;
+    }
+}
+
+/// VML `opacity` as percent *transparent*: `"0.75"`, `"75%"` and its 1/65536ths form
+/// (`"49152f"`) are three quarters opaque (a quarter transparent, as on Word's Fill Effects
+/// transparency slider), `"1"` (or nothing) fully opaque and `"0"` fully transparent.
+fn opacity_percent(v: &str) -> f32 {
+    let Some(n) = shape_style::vml_fraction(v).filter(|n| n.is_finite()) else { return 0.0 };
+    // A bare number above 1 is a percentage, as some writers give it.
+    let transparent = if n > 1.0 { 100.0 - n } else { 100.0 * (1.0 - n) };
+    transparent.clamp(0.0, 100.0)
 }
 
 /// Drop the drawing ids read with shapes, except those connectors are glued to (so a shape
