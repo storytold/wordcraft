@@ -305,7 +305,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **partial**: finding 1 closed (§5.28), finding 5 open | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. The silent divergence of §5.26 finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`); ADR `docs/collab/adr/0001-positional-edit-guard.md`. Still open: an operation accepted while a peer's queue is full is dropped, so that peer can stay connected and stale (§5.26 finding 5). Plan: a per-peer stale flag that closes the socket on the next heartbeat, then the fix with a stalled-reader test (§5.27) |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). The six other §5.26 findings (2, 3, 6, 8, 9, 10) remain open: they are separate failure modes (snapshot safety, room seeding, connection identity, session status, per-document connections, token renewal), named in §4 |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -443,18 +443,22 @@ Results at this writing:
 - Web collab has been run with two clients only inside one headless browser
   (two iframes through a cabinet-like host page, §5.1). Two real machines, the
   real cabinet page and its storage, and the visible commit status stay manual.
-- **Convergence has one known gap left** (§5.26 findings 1 and 5, §5.27,
-  §5.28). Finding 1 is closed: the room refuses a positional text primitive
+- **Convergence's silent-divergence class is closed** (§5.26 findings 1 and 5,
+  §5.27, §5.28, §5.29). Finding 1: the room refuses a positional text primitive
   whose base is behind another client's change of the same paragraph (`stale`,
-  retryable) and its author resyncs instead of keeping a diverged replica
-  (`docs/collab/adr/0001-positional-edit-guard.md`, `925bb0c9`). The cost is
-  named there: two concurrent edits inside one paragraph can now cost the
-  unconfirmed keystrokes of the later author, who continues from the snapshot.
-  Finding 5 is open: an operation accepted while a peer's queue is full is
-  dropped, so that peer can stay connected and stale. It needs a per-peer stale
-  flag that closes the socket, then a test with a stalled reader. Until then
-  the TASK.md criterion "converge without loss or duplicates" is **partial**
-  (§2), not done.
+  retryable) and its author resyncs (`docs/collab/adr/0001-positional-edit-guard.md`,
+  `925bb0c9`). Finding 5: a document frame dropped from a peer's full outbox
+  marks that peer stale, cancels the write it is stuck in and ends its
+  connection; every write to a peer is bounded by the heartbeat period, so the
+  client reconnects with `lastVersion` and receives the journal tail or a
+  snapshot (`docs/collab/adr/0002-stale-peer-close.md`, `264afd18`). The price is
+  named in both ADRs: a forced resync can cost the unconfirmed keystrokes of the
+  client that resyncs, which continues from the snapshot. Six findings of §5.26
+  stay open, each with its own slice: a corrupt snapshot becomes an empty room
+  (2), a room without a snapshot starts blank (3), a participant can register
+  another's `client_id` (6), a failed edit leaves the session reporting
+  `InSync` (8), the connection is app-wide while documents are per window (9),
+  and a session event replaces the client and drops its unconfirmed edits (10).
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -2813,6 +2817,103 @@ operation was dropped from a full queue, with a stalled-reader test; that is
 what keeps the convergence criterion at **partial** with finding 1 closed.
 Findings 2, 3, 6, 8, 9 and 10 follow, each with its own test. The rebase for
 text primitives stays the design target and will supersede ADR WC-0001.
+
+### 5.29 Finding 5: a peer that missed an accepted operation is closed, not left stale (run 2026-11-11)
+
+**What the defect was.** Each peer has a bounded outbox and `broadcast` hands it
+an accepted operation with `try_send`, so one slow client cannot grow the server.
+When the outbox was full the frame was dropped silently and the connection stayed
+open: the client learns about a gap only from a later frame, so with nothing
+following it kept a document the room had moved past and still reported itself
+in sync. A full outbox means the peer stopped reading, which is the same failure
+as the stalled reader (§5.26 finding 5, `apps/collab-server/src/lib.rs`).
+
+**The decision.** `docs/collab/adr/0002-stale-peer-close.md` (ADR WC-0002;
+repository-local, it does not consume a protocol ADR number). It compares
+relying on the next frame, a stale flag plus a closed connection, an unbounded
+or blocking outbox, and dropping the peer from the room while keeping its socket;
+it picks the flag. The ADR also states the addition the flag alone cannot
+provide: a flag read by a loop that is inside the blocked write is never read,
+and that write is blocked precisely because the peer stopped reading.
+
+**What the code does** (`264afd18`, 6 files, +533/−96).
+
+- `apps/collab-server/src/lib.rs`: `Peer` carries a `Stale` (an `AtomicBool` plus
+  a `tokio::sync::Notify`). A document frame a peer's outbox cannot take marks
+  the peer stale, counts `wordcraft_collab_stale_peers_total` once per peer and
+  logs a warning without document content; presence and `left` stay droppable
+  and never mark a peer (ADR-0006). The connection loop closes a stale peer
+  before its next write, wakes out of a write that is stuck on that peer through
+  the notification, and checks the flag on every heartbeat — so a drop noticed
+  while the loop is busy with an inbound frame still ends the connection on the
+  next tick. `send` is bounded by the heartbeat period, as are the ping and the
+  join frames, so a socket that stops taking bytes without ever filling the
+  outbox is closed too. Closing runs the existing `leave`, so the other peers
+  get `left` and the client reconnects with `lastVersion` and takes the journal
+  tail or a snapshot.
+- `Config` gains `heartbeat` (`PRESENCE_TTL / 3`, the write bound and the close
+  interval) and `peer_queue` (512, `PEER_QUEUE`), so the tests can reach the
+  overflow without a megabyte-sized socket buffer instead of changing the
+  production bound.
+- The frame handlers take one `Conn` (state, room, claims, role, client id,
+  write bound) instead of seven arguments, which is what the write bound would
+  otherwise have grown into.
+- `docs/collab/rfc.md` §4.4 has a row for a peer that stops reading; §5 says
+  presence never marks a peer stale. `server.md` names the outbox bound and the
+  write bound; `production.md` lists the new counter.
+
+**Tests** (two new; the third is the path the close relies on).
+
+- `apps/collab-server/src/tests.rs`:
+  `a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale` —
+  Alice pushes 64 KiB edits while Bob's socket is never read; the server marks
+  Bob stale (`stale_peers_total == 1`), Alice sees `left{bob}`, Bob's socket
+  ends, and Bob's reconnect with `lastVersion: 0` reports the room's head and
+  replays the journal tail (or a snapshot), so it catches up instead of staying
+  stale.
+- `a_full_outbox_marks_the_peer_stale_once` — the flag without a socket: the
+  first frame fits a one-slot outbox, the second is dropped and marks the peer,
+  a third is the same event (counted once).
+- `a_reconnecting_client_catches_up_from_the_journal` still passes.
+
+**The tests fail without the fix.** On the build host, with the flag never set,
+`a_peer_that_stops_reading…` fails on the counter (`0 != 1`); with the write
+bound removed as well, the peer is never closed and the test fails at
+`the stalled peer was closed instead of staying connected (head version 400)` —
+the finding reproduced.
+
+**What ran** (build host `agents`, `scripts/remote-build.sh`, from this tree):
+
+- `cargo fmt --all -- --check` → **EXIT=0**.
+- `cargo clippy -p wordcraft-collab-server -p wordcraft-collab-client
+  --all-targets -- -D warnings` → **EXIT=0**.
+- `cargo test` over `collab`, `collab-server`, `collab-client`, `collab-doc`,
+  `collab-app` → **286 passed, 0 failed, 1 ignored** (`collab` 59, `collab-doc`
+  116, `collab-client` 19, `collab-app` 39, `collab-server` 53 passed / 1
+  ignored — the LibreOffice commit gate). The slice added 2 tests:
+  `collab-server` 51 → 53.
+- `.github/workflows/` untouched, no manifest or lock change, no
+  `main`-touching step.
+
+**Local head.** `264afd18` — `collab: close a peer whose outbox overflowed
+instead of leaving it stale`; this page is one more commit on top of it and the
+only file it changes.
+
+| | |
+|---|---|
+| head | `264afd18` |
+| files | `apps/collab-server/src/lib.rs` +232/−90, `apps/collab-server/src/tests.rs` +151/−4, `docs/collab/adr/0002-stale-peer-close.md` +139, `docs/collab/server.md` +7/−1, `docs/collab/rfc.md` +3/−1, `docs/collab/production.md` +1 |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27 and §5.28: from
+`upstream/`, `git push fork HEAD:refs/heads/feature/realtime-collaboration` — a
+fast-forward from `af9a43a2`, no rebase and no force. Then a maintainer's
+approval of the runs on the new head. In the code, findings 2, 3, 6, 8, 9 and 10
+remain (§4), each with its own slice and test; finding 2 (a corrupt snapshot
+becomes an empty room) is the next data-safety one. Both convergence findings
+are now closed, so §2's criterion reads **done** with the price the two ADRs
+name; the six remaining findings are separate failure modes and are not hidden
+by that row.
 
 ## 6. Where things live
 
