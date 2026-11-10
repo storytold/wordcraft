@@ -304,10 +304,8 @@ fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool),
     {
         Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
     }
-    if is_plain_text {
-        if let Some(np) = s.prefs.default_no_proof {
-            Arc::make_mut(&mut doc.styles).default_chr.no_proof = Some(np);
-        }
+    if is_plain_text && let Some(np) = s.prefs.default_no_proof {
+        Arc::make_mut(&mut doc.styles).default_chr.no_proof = Some(np);
     }
     Ok((doc, encrypted))
 }
