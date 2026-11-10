@@ -8137,7 +8137,8 @@ fn a_nested_table_wider_than_its_cell_is_cut_off_at_the_cells_edges() {
     let (right, _) = cell_of(&got, &[0], 1);
     assert!(clipped, "the outer cell clips the nested table's text");
     // Nothing of the nested table reaches into the next cell: no line, no fill, no cell area.
-    let edge = left.right() + 0.01;
+    // (The outer table's own lines run on over half of the line between the cells.)
+    let edge = left.right() + 1.0;
     let inside = |x: f32| x > edge && x < right.right() - 0.01;
     for it in &got {
         match it {
