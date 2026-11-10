@@ -253,14 +253,28 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
 /// relationship, and Word fetches the attached template when it opens the document: from
 /// another machine, the recipient's computer connects there and can send it their NTLM
 /// credentials (#6101). The person at the keyboard may still attach one, as in Word.
+///
+/// A path holding a character a file can't carry is refused too, as written or percent-encoded:
+/// the writer drops such a character, so `\0\\host\share` would be saved as `\\host\share`.
 pub(crate) fn check_from_automation(path: &str) -> Result<(), CmdError> {
     let path = path.trim();
-    if crate::automation::active() && (has_url_scheme(path) || local_path(path, None).is_none()) {
+    if crate::automation::active() && (has_dropped_char(path) || has_url_scheme(path) || local_path(path, None).is_none()) {
         return Err(CmdError::Failed(format!(
             "automation path rejected: the attached template must be a file on this computer, not a network or device path or a URL: {path}"
         )));
     }
     Ok(())
+}
+
+/// Whether `t` holds a control character or one of the two noncharacters XML leaves out
+/// (U+FFFE, U+FFFF), as written or, in a `file:` URL, percent-encoded. The file writers drop
+/// these noncharacters and every control but tab, line feed, carriage return and the C1 range;
+/// those few are kept, but no template path has one either. What is checked must be what is
+/// saved.
+fn has_dropped_char(t: &str) -> bool {
+    let dropped = |c: char| c.is_control() || matches!(c, '\u{FFFE}' | '\u{FFFF}');
+    let file_url = t.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("file:"));
+    t.chars().any(dropped) || (file_url && percent_decode(t).chars().any(dropped))
 }
 
 /// Whether `t` starts with a URL scheme other than `file:` (`https:`, also `http:\\host\…`
@@ -657,6 +671,49 @@ mod tests {
             assert_eq!(s.doc.settings.attached_template.as_deref(), Some(path), "{path}");
             assert_eq!(s.doc.styles.get("Heading1").unwrap().chr.size, Some(31.0), "{path}: the template's content");
         }
+    }
+
+    /// #6101: a character a file can't carry is dropped when the document is saved, so a path
+    /// that hides another machine behind one would be saved as that machine's. Automation can't
+    /// attach a path holding one, as written or percent-encoded in a `file:` URL; a `%` in a
+    /// plain file name is only a `%`.
+    #[test]
+    fn automation_cannot_hide_a_remote_template_behind_a_dropped_character() {
+        use crate::automation::from_automation;
+        let hidden = "\u{0}\\\\evil.example\\share\\T.dotx";
+        // From the keyboard it goes in, and the saved file names the other machine.
+        let mut s = Session::new(Document::new());
+        s.run("tools.attachTemplate", &json!({"path": hidden})).unwrap();
+        let saved = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        assert_eq!(saved.settings.attached_template.as_deref(), Some("\\\\evil.example\\share\\T.dotx"));
+
+        let data = crate::cmd::insert::base64_encode(&wordcraft_docx::write(&template()).unwrap());
+        for path in [
+            hidden,
+            "file:\u{0}//evil.example/share/T.dotx",
+            "\\\u{1}\\evil.example\\share\\T.dotx",
+            "/\u{FFFE}/evil.example/share/T.dotx",
+            "\u{FFFF}file://evil.example/share/T.dotx",
+            "file:%00//evil.example/share/T.dotx",
+            "FILE:%0a//evil.example/share/T.dotx",
+            "ht\ttps://evil.example/T.dotx",
+            "Templates\u{7f}\\Report.dotx",
+        ] {
+            let mut s = Session::new(Document::new());
+            for (id, params) in [
+                ("tools.attachTemplate", json!({"path": path})),
+                ("file.newFromTemplate", json!({"path": path, "data": data})),
+                ("file.newFromTemplate", json!({"path": path})),
+            ] {
+                let e = from_automation(|| s.run(id, &params)).unwrap_err().to_string();
+                assert!(e.starts_with("automation path rejected: the attached template must be a file on this computer"), "{id} {path:?}: {e}");
+            }
+            assert_eq!((s.documents().len(), s.doc.settings.attached_template.as_deref()), (1, None), "{path:?}");
+        }
+        // Not a URL: the name has a `%` in it, and the file is on this computer.
+        let mut s = Session::new(Document::new());
+        from_automation(|| s.run("tools.attachTemplate", &json!({"path": "C:\\Templates\\100%09 done.dotx"}))).unwrap();
+        assert_eq!(s.doc.settings.attached_template.as_deref(), Some("C:\\Templates\\100%09 done.dotx"));
     }
 
     #[test]

@@ -137,7 +137,9 @@ machine makes the recipient's computer connect there, and on Windows that can se
 credentials (NTLM). So automation can't attach one (#6101): `tools.attachTemplate` and
 `file.newFromTemplate` refuse a `path` that isn't a file on this computer, before anything is
 read. That covers `\\server\share\...`, `//server/...`, `\\?\UNC\...`, `\??\UNC\...` and other
-device paths, `file://server/...`, and URLs. The error is
+device paths, `file://server/...`, and URLs. A path with a control character or U+FFFE or
+U+FFFF in it, written out or percent-encoded in a `file:` URL, is refused as well: the saved
+file drops most of them, so the path saved would not be the path checked. The error is
 `automation path rejected: the attached template must be a file on this computer, not a network or device path or a URL: …`.
 
 Automation here means MCP (headless or `--connect`), any request on the app's control channel
