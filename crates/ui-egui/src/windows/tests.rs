@@ -778,6 +778,7 @@ fn newly_opened_window_does_not_exceed_screen_width() {
     std::fs::remove_dir_all(doc2.parent().unwrap()).ok();
 }
 
+/// Verifies that secondary viewports register ViewportInput and sync scroll speed settings even without queued control inputs.
 #[test]
 fn secondary_viewport_syncs_touchpad_scroll_speed_without_control_input() {
     let ctx = backend();

@@ -253,6 +253,7 @@ pub(crate) struct ViewportInput {
 }
 
 impl egui::Plugin for ViewportInput {
+    /// Plugin debug name for egui's diagnostics.
     fn debug_name(&self) -> &'static str {
         "wordcraft_viewport_input"
     }
