@@ -4,12 +4,13 @@
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `90eaa7dc` plus this commit (the join announcement and
-  this page) — 71 commits over `4b0d3995` up to `90eaa7dc`, so the branch is
-  three commits ahead of `fork/feature/realtime-collaboration` at `467948fa`,
-  the head of PR #5834 (§5.21, §5.22). The PR is `MERGEABLE`; its workflows wait
-  as `action_required` for a maintainer to approve them, which is the GitHub
-  rule for a fork PR (§5.2)
+- HEAD at this writing: `39f2e1a4` plus this commit (the lock fix and this page)
+  — 73 commits over `4b0d3995` up to `39f2e1a4`, so the branch is four commits
+  ahead of `fork/feature/realtime-collaboration` at `467948fa`, the head of PR
+  #5834 (§5.21–§5.23). The PR is `MERGEABLE`; a maintainer approved the
+  workflows on 2026-11-10, `Nix` and `SonarCloud` passed, `Printing` failed on
+  a stale `Cargo.lock` and is fixed on the branch (§5.23), so the PR needs a
+  push and a fresh run (§5.2)
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -389,7 +390,9 @@ Results at this writing:
   `ribbon::tests::ribbon_groups_fit_above_their_labels` and
   `theme::tests::interface_symbols_have_glyphs` — and all three live in files
   unchanged against `main`. `cargo metadata --locked` accepted the rebased lock
-  and the CI run did not modify it.
+  and the CI run did not modify it. A later commit added a server dependency
+  without the lock edge and broke `--locked`; §5.23 records the fix
+  (`39f2e1a4`) and the gates that re-verified it.
 - After the `opId`-window change (§5.5) the affected crates were re-run on the
   build host from the committed tree: `cargo test -p wordcraft-collab` (45
   passed), `cargo test -p wordcraft-collab-server -p wordcraft-collab-client`
@@ -566,9 +569,11 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    service token must be in both `.env`s.
 2. Mark PR #5834 ready once CI has run and the pin is acceptable to the
    maintainers. The rebased branch is pushed, the fork and the PR head are the
-   same commit, and the PR is `MERGEABLE` (§5.21); its workflows report
-   `action_required` until a maintainer approves them, the GitHub rule for a
-   fork PR.
+   same commit, and the PR is `MERGEABLE` (§5.21). A maintainer approved the
+   workflows on 2026-11-10: `Nix` and `SonarCloud` passed, `Printing` failed on
+   a stale `Cargo.lock` rather than on code, and `39f2e1a4` fixes it (§5.23).
+   The PR head still needs the next push to pick that commit up and a fresh run
+   to go green.
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -2301,6 +2306,60 @@ steps (5991 workspace tests, 0 failed, 11 ignored).
 **Scope.** Headless only: no socket, no browser, no server process. It proves the
 room and the engine adapter converge and paginate alike at this size; it does not
 replace the two-client host run (§5.1) or the two-machine run still open in §2.
+
+### 5.23 CI `Printing` failed on a stale `Cargo.lock`, not on code (run 2026-11-10)
+
+A maintainer approved the paused workflows on PR head `467948fa`. Run
+`42720338000` (`Printing`) failed in both matrix legs — `Print (macos-latest)`
+and `Print (windows-latest)`, job `Native app and UI Clippy` — at
+
+```
+cargo clippy -p wordcraft -p wordcraft-ui-egui --all-targets --locked -- -D warnings
+error: cannot update the lock file .../Cargo.lock because --locked was passed to prevent this
+```
+
+`Formatting` passed in the same job and the test steps were skipped; `Nix`
+(`42720338487`) and `SonarCloud` (`42720338454`) on the same head completed
+successfully, and the `CI` gate (`42720338676`) was still running.
+
+**What cargo wanted to change.** Running `cargo metadata --format-version 1`
+on the build host leaves a one-line diff: the `wordcraft-collab-server` entry in
+`Cargo.lock` does not list `base64 0.23.1`, although the crate declares it
+(`base64 = { workspace = true }`, `apps/collab-server/Cargo.toml:23`) and uses
+it (`cabinet.rs` base64-encodes the commit body). `79ecdc34` added both the
+dependency and `cabinet.rs` but not `Cargo.lock`; base64 0.23.1 was already in
+the graph through other packages, so local builds resolve fine and cargo adds
+the edge to the lock silently. Those builds run on the `agents` host
+(`scripts/remote-build.sh`), whose `Cargo.lock` never comes back into the
+repository, so CI's `--locked` was the first run to see the stale edge.
+
+**The fix.** One line in `Cargo.lock` (commit `39f2e1a4`); no manifest changed.
+
+**The three patch warnings are neither the failure nor the branch's.** The same
+log prints `patch egui_demo_lib / egui_inspection / egui_system_font_provider
+was not used in the crate graph`. The identical three warnings appear on
+`origin/main` `4b0d3995` with `cargo metadata --locked` EXIT=0, and
+`git diff origin/main -- Cargo.toml` is empty: they come from upstream's patch
+table and are pre-existing noise. Deleting them would edit a manifest the PR
+does not otherwise touch, so they were left alone.
+
+**The fork URL is not the failure either.** The log shows `Updating git
+repository https://github.com/copoka/craft-libs` completing before the lock
+error. `craft-web-host` is pinned there deliberately (ADR-0016 §3, `7666e2b1`),
+because the collaboration host messages are not in `storytold/craft-libs` yet;
+dropping the pin would take the web session out of the build.
+
+**Gates** (build host `agents`, cargo 1.99.1, from the committed tree at
+`39f2e1a4`): `cargo metadata --locked` EXIT=0 and does not modify the lock
+(`git status --short Cargo.lock` clean after the commit); `cargo fmt --all --
+--check` EXIT=0; the failing CI command itself, `cargo clippy -p wordcraft -p
+wordcraft-ui-egui --all-targets --locked -- -D warnings`, EXIT=0 (50 s);
+`cargo test --locked --all-targets` over the eight collaboration crates
+(`collab`, `-doc`, `-engine`, `-client`, `-ws`, `-web`, `-app`, `-server`) 341
+passed, 0 failed, 1 ignored (the LibreOffice commit gate); `cargo clippy
+--locked` over the same crates `--all-targets -- -D warnings` EXIT=0.
+
+Nothing was pushed: the fix reaches CI with the next push of the branch.
 
 ## 6. Where things live
 
