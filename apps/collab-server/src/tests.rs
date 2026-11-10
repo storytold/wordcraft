@@ -556,6 +556,31 @@ async fn a_viewer_cannot_write() {
     }
 }
 
+#[tokio::test]
+async fn an_operation_cannot_carry_another_clients_id() {
+    let (url, cfg) = spawn_server().await;
+    let mut alice = connect(&url, &cfg, "editor", "alice").await;
+    let _ = next_msg(&mut alice).await;
+    let node = node_of(&mut alice).await;
+
+    // Authenticated as `alice`, the frame claims `bob`'s id: the room must
+    // refuse it, not file it in bob's id space.
+    assert!(send_op(&mut alice, insert("bob", 1, 0, node, 0, "forged")).await);
+    match next_msg(&mut alice).await {
+        ServerMsg::Rejected { reject } => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid);
+            assert!(reject.message.contains("another client"), "{}", reject.message);
+        }
+        other => panic!("expected rejection, got {other:?}"),
+    }
+    // Nothing was applied: alice's own operation still lands at version 1.
+    assert!(send_op(&mut alice, insert("alice", 1, 0, node, 0, "mine")).await);
+    match next_msg(&mut alice).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("expected applied, got {other:?}"),
+    }
+}
+
 #[test]
 fn a_room_is_restored_from_disk() {
     let cfg = dev_config();

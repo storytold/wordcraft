@@ -110,6 +110,27 @@ fn a_version_gap_asks_for_a_snapshot() {
 }
 
 #[test]
+fn a_replayed_answer_for_a_confirmed_operation_is_not_applied_twice() {
+    let mut client = Client::new("alice");
+    let _ = client.on(ServerMsg::Welcome {
+        session_id: "s".into(),
+        role: "editor".into(),
+        version: 0,
+        epoch: 0,
+        participants: Vec::new(),
+        resync: false,
+    });
+    // The room re-broadcasts the cached answer when the author retries an
+    // operation it already applied. A peer that has it confirmed must ignore
+    // the replay instead of applying its delta a second time.
+    let answer = applied(OpId::new("bob", 1), 1, 0);
+    assert!(matches!(client.on(answer.clone()), Event::Applied { .. }));
+    assert!(matches!(client.on(answer), Event::None));
+    assert_eq!(client.version(), 1);
+    assert!(client.was_confirmed(&OpId::new("bob", 1)));
+}
+
+#[test]
 fn a_stale_rejection_asks_for_a_resync() {
     let mut client = Client::new("alice");
     let _ = client.on(ServerMsg::Welcome {

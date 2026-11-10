@@ -280,6 +280,12 @@ impl Client {
                 Event::None
             }
             ServerMsg::Applied { applied } => {
+                // A retry of an operation the room already applied comes back
+                // as the cached answer, broadcast to every peer. A replica that
+                // applied it the first time must not apply its delta again.
+                if self.was_confirmed(&applied.op_id) {
+                    return Event::None;
+                }
                 if applied.version > self.version + 1 {
                     // A message went missing (a dropped queue on the server, a
                     // half-closed socket): a snapshot is cheaper than guessing.

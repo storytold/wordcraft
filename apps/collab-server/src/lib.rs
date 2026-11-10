@@ -580,6 +580,14 @@ async fn handle_op(
     client_id: &str,
     op: wordcraft_collab::wire::Op,
 ) -> bool {
+    // An operation id names its author. A peer that could put another client's
+    // id on the wire would make the victim skip the answer as its own echo and
+    // then, on its own retry, get a cached answer for an edit it never made.
+    if op.op_id.client != client_id {
+        Metrics::inc(&state.metrics.rejects);
+        let reject = Reject::new(op.op_id.clone(), RejectCode::Invalid, "the operation id belongs to another client");
+        return send(sink, &ServerMsg::Rejected { reject }).await.is_ok();
+    }
     let structural = op.kind.is_structural();
     let result = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
