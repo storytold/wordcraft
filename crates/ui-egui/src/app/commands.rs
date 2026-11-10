@@ -220,6 +220,7 @@ impl WordApp {
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
         };
+        crate::gdrive::note_local_save(self, id, document, &r);
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;
             // The body (or the whole document) was replaced under the same id — setText, a
