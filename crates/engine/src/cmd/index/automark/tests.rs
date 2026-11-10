@@ -116,6 +116,32 @@ fn automark_reads_tab_separated_lines_without_a_table() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A web page works as a concordance file, and only the file itself is read: the picture it
+/// names stays where it is, though opening the page to edit it brings the picture in.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_web_page_concordance_is_read_without_its_pictures() {
+    let dir = scratch("html");
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    std::fs::write(dir.join("logo.png"), &png).unwrap();
+    let page = dir.join("concordance.html");
+    let html = r#"<p><img src="logo.png" alt="Logo"></p><table><tr><td>Kiln</td><td>Kilns</td></tr><tr><td>Press</td><td></td></tr></table>"#;
+    std::fs::write(&page, html).unwrap();
+    assert_eq!(crate::io::open_path(&page).unwrap().media.len(), 1, "opened to edit, the page brings its picture");
+    assert!(crate::io::open_path_up_to(&page, MAX_FILE).unwrap().media.is_empty(), "read for its rows, it doesn't");
+    assert_eq!(read_concordance(&page).unwrap(), vec![("Kiln".to_string(), "Kilns".to_string()), ("Press".into(), String::new())]);
+
+    let mut s = session(POTTERY);
+    let r = s.run("references.autoMark", &json!({"path": page.to_string_lossy()})).unwrap();
+    assert_eq!(r, json!({"marked": 2, "terms": 2}));
+    assert_eq!(marked_text(&s)[2], r#"The Press{XE "Press"}, the press."#);
+    assert!(s.doc.media.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Files AutoMark can't use are errors that change nothing and leave no undo step: a missing
 /// file, a folder, noise in a document's clothing, a file over 32 MB (never read), no file at
 /// all, and a network path (refused before anything looks at it). Files it can read but that

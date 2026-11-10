@@ -484,31 +484,28 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let bytes = read_document(path)?;
-    open_read(path, &bytes, password, region)
-}
-
-/// [`open_path`] for a file of at most `max` bytes, for a file read for what it lists (AutoMark's
-/// concordance file) rather than to edit: a larger one is refused before it is read.
-#[cfg(not(target_arch = "wasm32"))]
-pub fn open_path_up_to(path: &std::path::Path, max: u64) -> Result<Document, String> {
-    let bytes = read_document_up_to(path, max)?;
-    open_read(path, &bytes, None, &wordcraft_geom::Region::default()).map(|(doc, _)| doc)
-}
-
-/// The document in `bytes`, read from `path`.
-#[cfg(not(target_arch = "wasm32"))]
-fn open_read(path: &std::path::Path, bytes: &[u8], password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
     let name = path.to_string_lossy();
     if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
         // Pictures referenced by a relative path load from beside the HTML file.
         let images = LocalImages::new(path.parent().unwrap_or(std::path::Path::new("")));
-        let html = wordcraft_formats::html::decode(bytes);
+        let html = wordcraft_formats::html::decode(&bytes);
         let mut doc = wordcraft_formats::html::import_on(&html, &|src| images.load(src), &region_page(region));
         fit_pictures(&mut doc);
         opened(&mut doc);
         return Ok((doc, false));
     }
-    open_bytes_in(&name, bytes, password, region)
+    open_bytes_in(&name, &bytes, password, region)
+}
+
+/// The document in the file at `path`, for a file read for what it lists (AutoMark's concordance
+/// file) rather than to edit or show. A file of more than `max` bytes is refused before it is
+/// read, and nothing but the file is read or kept: the pictures an HTML file names stay where
+/// they are, and the fonts a document embeds are not loaded.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn open_path_up_to(path: &std::path::Path, max: u64) -> Result<Document, String> {
+    let bytes = read_document_up_to(path, max)?;
+    let page = region_page(&wordcraft_geom::Region::default());
+    read_bytes(&path.to_string_lossy(), &bytes, None, &page).map(|(doc, _)| doc)
 }
 
 /// Largest document file opened by path.
