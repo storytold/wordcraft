@@ -823,7 +823,9 @@ pub(super) fn style_prints(doc: &Document) -> std::collections::BTreeMap<String,
 /// What WordCraft would write of `doc`'s style definitions: all of them, used or not.
 fn model_styles(doc: &Document) -> String {
     let ids = |custom: fn(&Document, &str) -> bool| doc.styles.styles.iter().filter(|s| custom(doc, &s.id)).map(|s| s.id.clone()).collect();
-    let page = [(String::new(), doc.last_section.clone())];
+    // The first section, as a save writes the document-wide line numbering from it.
+    let first = doc.sections().first().map_or_else(|| doc.last_section.clone(), |(_, s)| (*s).clone());
+    let page = [(String::new(), first)];
     let xml = styles_xml(doc, &page, &[], "", &ids(model::is_custom_style));
     let text = char_styles(doc, &ids(model::is_custom_char_style));
     xml.replacen("</office:styles>", &format!("{text}</office:styles>"), 1)

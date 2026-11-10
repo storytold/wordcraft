@@ -623,3 +623,26 @@ fn a_name_space_on_the_font_declarations_goes_with_them() {
         assert!(part.contains(r#"xmlns:x="urn:example:x""#), "{part}");
     }
 }
+
+/// Line numbering changed in the first of two sections is saved: the file's own definition stays
+/// only while the section the save writes it from is as read (#5702 review).
+#[test]
+fn line_numbering_changed_in_the_first_section_is_saved() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><text:linenumbering-configuration text:number-lines="true" text:offset="0.25in" style:num-format="1" text:number-position="left" text:increment="5" text:restart-on-page="true"/><style:style style:name="Opening" style:family="paragraph" style:master-page-name="Other"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout><style:page-layout style:name="pm2"><style:page-layout-properties fo:page-width="11in" fo:page-height="8.5in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/><style:master-page style:name="Other" style:page-layout-name="pm2"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>One.</text:p><text:p text:style-name="Opening">Two.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = package(&content, Some(&styles));
+    let mut d = import(&bytes).unwrap();
+    assert_eq!(d.sections().len(), 2, "two sections");
+    let first = d.body.iter_mut().find_map(|b| match std::sync::Arc::make_mut(b) {
+        wordcraft_doc::Block::Para(p) => p.section.as_deref_mut(),
+        _ => None,
+    });
+    let first = first.expect("the first section");
+    first.line_numbers.as_mut().expect("line numbering as read").count_by = 3;
+    let s = styles_of(&export(&d).unwrap());
+    assert!(s.contains(r#"text:increment="3""#) && !s.contains(r#"text:increment="5""#), "the change: {s}");
+}
