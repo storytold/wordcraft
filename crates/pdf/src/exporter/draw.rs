@@ -80,7 +80,7 @@ impl Exporter<'_> {
                 };
                 let Some(clip) = clip else { return };
                 s.push_clip_path(&clip, &FillRule::NonZero);
-                self.picture(s, rect, media, &[0.0; 4], 1.0);
+                self.picture(s, rect, media, &[0.0; 4], 1.0, PicFx::default());
                 s.pop();
             }
             Draw::Ink { pts, color, width, alpha } => {

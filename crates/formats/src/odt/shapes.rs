@@ -63,6 +63,14 @@ pub(super) fn kind_of(t: &str) -> ShapeKind {
         "down-arrow" | "downArrow" => ShapeKind::ArrowDown,
         "star5" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
+        "hexagon" => ShapeKind::Hexagon,
+        "octagon" => ShapeKind::Octagon,
+        "regular-pentagon" | "pentagon" => ShapeKind::Pentagon,
+        "parallelogram" => ShapeKind::Parallelogram,
+        "trapezoid" => ShapeKind::Trapezoid,
+        "cross" | "plus" => ShapeKind::Plus,
+        "chevron" => ShapeKind::Chevron,
+        "decagon" => ShapeKind::Decagon,
         "line" | "straightConnector1" => ShapeKind::Line,
         _ => ShapeKind::Rectangle,
     }
@@ -124,6 +132,15 @@ pub(super) fn element_of(kind: ShapeKind) -> (&'static str, Option<&'static str>
         ShapeKind::ArrowDown => custom("down-arrow"),
         ShapeKind::Star => custom("star5"),
         ShapeKind::Heart => custom("heart"),
+        ShapeKind::Hexagon => custom("hexagon"),
+        ShapeKind::Octagon => custom("octagon"),
+        ShapeKind::Pentagon => custom("regular-pentagon"),
+        ShapeKind::Parallelogram => custom("parallelogram"),
+        ShapeKind::Trapezoid => custom("trapezoid"),
+        ShapeKind::Plus => custom("cross"),
+        ShapeKind::Chevron => custom("chevron"),
+        // ODF has no decagon of its own: the DrawingML name, which the reader accepts back.
+        ShapeKind::Decagon => custom("ooxml-decagon"),
         ShapeKind::Freeform => ("draw:path", None),
         ShapeKind::Rectangle | ShapeKind::TextBox => ("draw:rect", None),
     }
@@ -167,5 +184,31 @@ pub(super) fn freeform(name: &str, a: &Attrs, w: f32, h: f32) -> Option<wordcraf
             path::regular(corners, concave, sharpness, w, h)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod preset_tests {
+    use super::*;
+
+    /// #1534: each polygonal preset is written as a custom shape and read back as itself.
+    #[test]
+    fn polygonal_presets_round_trip_through_their_draw_type() {
+        for kind in [
+            ShapeKind::Hexagon,
+            ShapeKind::Octagon,
+            ShapeKind::Pentagon,
+            ShapeKind::Parallelogram,
+            ShapeKind::Trapezoid,
+            ShapeKind::Plus,
+            ShapeKind::Chevron,
+            ShapeKind::Decagon,
+        ] {
+            let (element, ty) = element_of(kind);
+            assert_eq!(element, "draw:custom-shape", "{kind:?}");
+            let ty = ty.unwrap_or_default();
+            assert_eq!(kind_of(ty), kind, "{kind:?} via {ty}");
+            assert!(!unknown_preset(ty), "{ty}");
+        }
     }
 }

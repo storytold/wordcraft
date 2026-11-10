@@ -1027,7 +1027,8 @@ fn draw_shape_picture(ctx: &mut RenderContext, doc: &Document, fr: &Frame, it: &
     let outline = if clip.is_empty() { shape_path(*kind, r, *corner) } else { wordcraft_layout::display::seg_path(clip) };
     ctx.set_transform(fr.view);
     ctx.push_clip_layer(&outline);
-    let image = Draw::Image { rect: *rect, media: media.clone(), crop: [0.0; 4], alpha: 1.0, alt: String::new(), decorative: false };
+    let image =
+        Draw::Image { rect: *rect, media: media.clone(), crop: [0.0; 4], alpha: 1.0, fx: Default::default(), alt: String::new(), decorative: false };
     draw(ctx, doc, &image, fr.view, fr.visible, fr.opts);
     ctx.pop_layer();
 }
