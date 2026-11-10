@@ -90,10 +90,13 @@ pub(super) struct Body<'a> {
     pub(super) spaces_left: usize,
     para_cont: bool,
     /// Open lists: (style name, item open, item used).
-    lists: Vec<(Option<String>, bool)>,
+    lists: Vec<super::numbering::OpenList>,
     item_used: Vec<bool>,
+    numbering: super::numbering::Lists,
+    sequences: super::sequences::Sequences,
+    sequence_body: bool,
     /// Lists outside the table cells being read, and the list number there.
-    lists_saved: Vec<(Vec<(Option<String>, bool)>, Vec<bool>, u32)>,
+    lists_saved: Vec<(Vec<super::numbering::OpenList>, Vec<bool>, u32)>,
     tables: Vec<TableB>,
     cells: Vec<Cell>,
     /// How many containers each open cell's content makes open (its top level, where sections
@@ -209,7 +212,6 @@ pub(super) struct Body<'a> {
     last_list: Option<u32>,
     next_list: u32,
     list_xml_ids: HashMap<String, u32>,
-    item_start: Option<u32>,
     /// Comments by `office:name`: their flow ids; and the next flow id.
     comment_names: HashMap<String, u32>,
     next_comment: u32,
@@ -249,6 +251,9 @@ impl<'a> Body<'a> {
             lists: Vec::new(),
             lists_saved: Vec::new(),
             item_used: Vec::new(),
+            numbering: Default::default(),
+            sequences: Default::default(),
+            sequence_body: false,
             tables: Vec::new(),
             cells: Vec::new(),
             cell_tops: Vec::new(),
@@ -310,7 +315,6 @@ impl<'a> Body<'a> {
             last_list: None,
             next_list: 1,
             list_xml_ids: HashMap::new(),
-            item_start: None,
         }
     }
 
@@ -337,7 +341,6 @@ impl<'a> Body<'a> {
         }
         self.list_id = id;
         self.last_list = Some(id);
-        self.item_start = None;
     }
 
     /// [`Body::feed_at`] for a section hidden (§19.818 `text:display="none"`): what it holds is
@@ -371,17 +374,16 @@ impl<'a> Body<'a> {
 
     /// [`Body::feed_at`] for a top-level list (§5.3.1): kept whole, as read, when each of its
     /// paragraphs is (a paragraph's own markup can't say how its list numbers and draws its
-    /// labels: a label followed by a space, a picture bullet, an unnumbered header). Not one
-    /// continuing another by its `xml:id`, which WordCraft may write anew (one without its own
-    /// is given one, for a list continuing it to name). `None` when it took the event.
+    /// labels: a label followed by a space, a picture bullet, an unnumbered header). The writer
+    /// only keeps a continuation when its referenced list was also kept. A list without its
+    /// own ID is given one by the writer. `None` when it took the event.
     fn whole_list(&mut self, ev: Ev, at: (usize, usize)) -> Option<Ev> {
         match &ev {
-            Ev::Start(q, a)
+            Ev::Start(q, _)
                 if q == "text:list"
                     && self.kept_list.is_none()
                     && self.lists.is_empty()
                     && self.para.is_none()
-                    && get(a, "text:continue-list").is_none()
                     && !self.raw.is_empty()
                     && self.in_text
                     && self.skip == 0
@@ -949,12 +951,30 @@ impl Body<'_> {
             p.kind = Kind::Rule;
         }
         if let Some(lv) = self.lists.len().checked_sub(1)
-            && self.lists.last().is_some_and(|l| l.1)
+            && self.lists.last().is_some_and(|l| l.item_open)
         {
-            let style = self.lists.iter().rev().find_map(|l| l.0.clone());
-            let level = style.and_then(|s| self.styles.lists.get(&s)).and_then(|v| v.get(lv.min(9)).copied()).unwrap_or_default();
-            let start = self.item_start.take().unwrap_or(level.start);
-            p.list = Some(ListInfo { ordered: level.ordered, level: lv.min(8) as u8, start, list: self.list_id, label: level.label });
+            if lv > 8 {
+                model::dropped(model::Dropped::OdtNumbering);
+            }
+            if let Some(list) = self.lists.last_mut() {
+                let definition = list.definitions.last().map(|(_, level)| level);
+                let ordered = definition.is_some_and(|l| l.format != wordcraft_doc::section::NumFormat::Bullet);
+                let default_start = definition.map_or(1, |l| l.start);
+                list.emitted = true;
+                p.list = Some(ListInfo {
+                    ordered,
+                    level: lv.min(8) as u8,
+                    start: list.start.unwrap_or(default_start),
+                    list: self.list_id,
+                    label: Default::default(),
+                });
+                p.explicit_list = Some(model::ExplicitList {
+                    id: list.group,
+                    level: lv.min(8) as u8,
+                    definitions: list.definitions.clone(),
+                    start: list.start.take(),
+                });
+            }
             self.para_cont = self.item_used.last().copied().unwrap_or(false);
             if let Some(u) = self.item_used.last_mut() {
                 *u = true;
@@ -1063,6 +1083,14 @@ impl Body<'_> {
             prev.kept = None;
             return;
         }
+        if cont {
+            if let Some(explicit) = p.explicit_list.take()
+                && p.spacing.left.is_none()
+            {
+                p.spacing.left = explicit.definitions.last().map(|(_, definition)| definition.indent);
+            }
+            p.list = None;
+        }
         c.push(FBlock::Para(p));
     }
 
@@ -1165,6 +1193,7 @@ impl Body<'_> {
     fn start(&mut self, q: &str, a: &Attrs) {
         self.depth += 1;
         if q == "office:text" {
+            self.sequence_body = true;
             self.in_text = true;
             return;
         }
@@ -1243,7 +1272,7 @@ impl Body<'_> {
                 change_mark(&self.regions, &mut self.active_ins, RevisionKind::Insert, start, a);
                 change_mark(&self.regions, &mut self.active_fmt, RevisionKind::Format, start, a);
             }
-            "note" | "annotation" | "text-box" | "sequence-decls" | "forms" | "variable-decls" | "user-field-decls" | "index-title-template" => {
+            "note" | "annotation" | "text-box" | "forms" | "variable-decls" | "user-field-decls" | "index-title-template" => {
                 self.skip = 1;
             }
             // Drawing shapes (ODF 1.3 §10.3) anchored in the text, with their text.
@@ -1581,6 +1610,31 @@ impl Body<'_> {
                 return true;
             }
         }
+        let calculated = if q.starts_with("text:") {
+            match local(q) {
+                "sequence-decl" => {
+                    self.sequences.declare(a);
+                    return true;
+                }
+                "sequence" => {
+                    let value = if self.sequence_body && !self.in_tc { self.sequences.render(a) } else { None };
+                    if value.is_none() && self.sequence_body && !self.in_tc {
+                        super::sequences::unsupported();
+                    }
+                    value
+                }
+                "sequence-ref" if get(a, "text:reference-format") == Some("value") => {
+                    let value = self.sequences.reference(a);
+                    if value.is_none() && self.sequence_body && !self.in_tc {
+                        super::sequences::unsupported();
+                    }
+                    value
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         if q.starts_with("text:")
             && self.frame.is_none()
             && let Some(instr) = super::fields::instr_of(local(q), a, |n| self.styles.date_picture(n).map(String::from))
@@ -1589,7 +1643,21 @@ impl Body<'_> {
                 .then(|| get(a, "text:ref-name").map(str::trim).filter(|n| !n.is_empty() && n.len() <= 1024).map(String::from))
                 .flatten();
             let fixed = get(a, "text:fixed").is_some_and(|v| v.trim() == "true");
-            self.field = Some(OpenField { instr, result: String::new(), name: q.to_string(), depth: self.depth, fmt: self.cur_fmt(), anchor, fixed });
+            self.field = Some(OpenField {
+                calculated,
+                instr,
+                result: String::new(),
+                name: q.to_string(),
+                depth: self.depth,
+                fmt: self.cur_fmt(),
+                anchor,
+                fixed,
+            });
+            return true;
+        }
+        if let Some(value) = calculated {
+            self.push_text(&value);
+            self.skip = 1;
             return true;
         }
         match local(q) {
@@ -1713,7 +1781,26 @@ impl Body<'_> {
                     self.start_list_id(a);
                 }
                 if self.lists.len() < 64 {
-                    self.lists.push((get(a, "text:style-name").map(String::from), false));
+                    let style = get(a, "text:style-name").map(String::from).or_else(|| self.lists.last().and_then(|l| l.style.clone()));
+                    let start = style
+                        .and_then(|name| self.styles.explicit_levels.get(&name))
+                        .and_then(|levels| levels.get(self.lists.len().min(8)))
+                        .map(|level| level.start)
+                        .unwrap_or(1);
+                    let mut opened = self.numbering.open(a, &self.lists, start);
+                    let mut definitions = self.lists.last().map(|l| l.definitions.as_ref().clone()).unwrap_or_default();
+                    let level = self.lists.len().min(8);
+                    let definition = opened
+                        .style
+                        .as_ref()
+                        .and_then(|name| self.styles.explicit_levels.get(name))
+                        .and_then(|levels| levels.get(level))
+                        .cloned()
+                        .unwrap_or_else(|| super::numbering::definition("list-level-style-bullet", &Attrs::new(), level));
+                    definitions.truncate(level);
+                    definitions.push((level as u8, definition));
+                    opened.definitions = std::sync::Arc::new(definitions);
+                    self.lists.push(opened);
                     self.item_used.push(false);
                 } else {
                     self.skip = 1;
@@ -1721,13 +1808,12 @@ impl Body<'_> {
             }
             "list-item" | "list-header" => {
                 // An item restarting the numbering begins a list of its own from there.
-                if let Some(v) = get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()) {
+                if get(a, "text:start-value").and_then(|v| v.trim().parse::<u32>().ok()).is_some() {
                     self.list_id = self.new_list_id();
                     self.last_list = Some(self.list_id);
-                    self.item_start = Some(v.min(32_767));
                 }
                 if let Some(l) = self.lists.last_mut() {
-                    l.1 = true;
+                    l.item(a, local(q) == "list-header");
                 }
                 if let Some(u) = self.item_used.last_mut() {
                     *u = false;
@@ -1793,6 +1879,7 @@ impl Body<'_> {
             return;
         }
         if q == "office:text" {
+            self.sequence_body = false;
             self.end_field();
             if self.note.is_some() {
                 self.end_note();
@@ -1856,13 +1943,15 @@ impl Body<'_> {
             }
             "list" => {
                 self.end_para();
-                self.lists.pop();
+                if let Some(list) = self.lists.pop() {
+                    self.numbering.close(list, self.lists.len());
+                }
                 self.item_used.pop();
             }
             "list-item" | "list-header" => {
                 self.end_para();
                 if let Some(l) = self.lists.last_mut() {
-                    l.1 = false;
+                    l.item_open = false;
                 }
             }
             "table-cell" => {

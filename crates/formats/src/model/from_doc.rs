@@ -259,12 +259,14 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
     };
     let list = rp.numbering.and_then(|n| {
         let lv = doc.numbering.level(n.num, n.level)?;
+        let mut label = super::types::Label::of_level(lv.format, &lv.text).placed(lv.indent, lv.hanging, lv.align);
+        label.sequential_letters = lv.sequential_letters;
         Some(ListInfo {
             ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None),
             level: n.level.min(8),
             start: lv.start,
             list: n.num,
-            label: Some(super::types::Label::of_level(lv.format, &lv.text).placed(lv.indent, lv.hanging, lv.align)),
+            label: Some(label),
         })
     });
     (kind, list)
@@ -492,6 +494,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
     let mut out = Para {
         kind,
         list,
+        explicit_list: None,
         align: p.props.align,
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
@@ -535,6 +538,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                     let next = Para {
                         kind,
                         list: None,
+                        explicit_list: None,
                         align: p.props.align,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),

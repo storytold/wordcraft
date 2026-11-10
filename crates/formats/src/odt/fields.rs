@@ -148,7 +148,7 @@ pub(super) fn instr_of(local: &str, a: &Attrs, picture: impl Fn(&str) -> Option<
             let target = name("text:ref-name")?;
             match (local, get(a, "text:reference-format").map(str::trim)) {
                 (_, Some("page")) => Some(format!("PAGEREF {target} \\h")),
-                ("reference-ref", Some("text") | None) | ("sequence-ref", Some("category-and-value")) => Some(format!("REF {target} \\h")),
+                ("reference-ref", Some("text") | None) | ("sequence-ref", Some("category-and-value" | "value")) => Some(format!("REF {target} \\h")),
                 _ => None,
             }
         }

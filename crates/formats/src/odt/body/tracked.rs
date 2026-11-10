@@ -28,7 +28,7 @@ pub(in crate::odt) struct DelState {
     pub(in crate::odt) cells: usize,
     pub(in crate::odt) lists_saved: usize,
     pub(in crate::odt) fmt: usize,
-    pub(in crate::odt) lists: Vec<(Option<String>, bool)>,
+    pub(in crate::odt) lists: Vec<super::super::numbering::OpenList>,
     pub(in crate::odt) item_used: Vec<bool>,
     /// Insertions open inside the deleted content (text inserted, then deleted).
     pub(in crate::odt) ins: Vec<(String, RevMark)>,

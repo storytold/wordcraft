@@ -61,6 +61,8 @@ pub(crate) enum Dropped {
     Spaces,
     /// Markdown table rows and columns past the table limits or the document's cell budget.
     TableCells,
+    OdtSequence,
+    OdtNumbering,
 }
 
 impl Dropped {
@@ -71,6 +73,8 @@ impl Dropped {
             Dropped::RunStrings => {
                 format!("import: the document's runs carry more than {MAX_RUN_STRINGS} bytes of links and font names; later runs lose them")
             }
+            Dropped::OdtSequence => "import: unsupported ODT sequence formula, reference or chapter numbering; cached field text retained".into(),
+            Dropped::OdtNumbering => "import: unsupported ODT numbering property or unresolved list reference".into(),
             Dropped::StyleName => format!("import: style names longer than {MAX_FONT_NAME} bytes are cut short"),
             Dropped::Spaces => {
                 "import: the document's `text:s` elements ask for more spaces than it keeps; past that each stands for one".to_string()
@@ -568,6 +572,8 @@ impl Affix {
 /// shown (`1.2.`), or, for a bulleted level, its bullet (as the prefix).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Label {
+    /// Alphabetic labels use a, …, z, aa, ab instead of repeated letters.
+    pub sequential_letters: bool,
     pub format: wordcraft_doc::section::NumFormat,
     pub prefix: Affix,
     pub suffix: Affix,
@@ -586,6 +592,7 @@ impl Label {
         let mut b = [0u8; 4];
         let prefix = bullet.map(|c| Affix::new(c.encode_utf8(&mut b))).unwrap_or_default();
         Label {
+            sequential_letters: false,
             format: wordcraft_doc::section::NumFormat::Bullet,
             prefix,
             suffix: Affix::default(),
@@ -640,6 +647,7 @@ impl Label {
             text.rfind('%').map(|i| i + text.get(i + 1..).and_then(|r| r.chars().next()).map_or(1, |c| 1 + c.len_utf8())).unwrap_or(text.len());
         let shown = text.matches('%').count().clamp(1, 9) as u8;
         Label {
+            sequential_letters: false,
             format,
             prefix: Affix::new(text.get(..first).unwrap_or("")),
             suffix: Affix::new(text.get(last.min(text.len())..).unwrap_or("")),
@@ -667,10 +675,24 @@ pub struct Spacing {
     pub after_auto: bool,
 }
 
+/// Exact imported numbering; ListInfo retains the structural list used by flow writers.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExplicitList {
+    /// Shared numbering instance.
+    pub id: u32,
+    /// Zero-based nesting depth.
+    pub level: u8,
+    /// Shared level definitions from the source list style.
+    pub definitions: std::sync::Arc<Vec<(u8, wordcraft_doc::numbering::Level)>>,
+    /// Item restart, when stated or beginning an independent list.
+    pub start: Option<u32>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Para {
     pub kind: Kind,
     pub list: Option<ListInfo>,
+    pub explicit_list: Option<ExplicitList>,
     pub align: Option<Align>,
     pub page_break: bool,
     /// Keep the paragraph on the same page as the next one (ODT `fo:keep-with-next`).

@@ -85,7 +85,7 @@ pub(in crate::odt) struct OpenNote {
     pub(in crate::odt) fmt: Vec<Fmt>,
     pub(in crate::odt) xml_space_end: bool,
     pub(in crate::odt) para_cont: bool,
-    pub(in crate::odt) lists: Vec<(Option<String>, bool)>,
+    pub(in crate::odt) lists: Vec<super::super::numbering::OpenList>,
     pub(in crate::odt) item_used: Vec<bool>,
     pub(in crate::odt) list_id: u32,
     /// Stack heights when the note began: what the note opens and leaves open goes with it.
@@ -101,6 +101,7 @@ pub(in crate::odt) struct OpenField {
     pub(in crate::odt) instr: String,
     /// Its shown text so far.
     pub(in crate::odt) result: String,
+    pub(in crate::odt) calculated: Option<String>,
     /// Its element's name and depth.
     pub(in crate::odt) name: String,
     pub(in crate::odt) depth: usize,
@@ -325,7 +326,8 @@ impl Body<'_> {
 
     /// Put the field read so far into the paragraph.
     pub(in crate::odt) fn end_field(&mut self) {
-        let Some(OpenField { instr, result, mut fmt, anchor, fixed, .. }) = self.field.take() else { return };
+        let Some(OpenField { instr, result, calculated, mut fmt, anchor, fixed, .. }) = self.field.take() else { return };
+        let result = calculated.unwrap_or(result);
         fmt.ins = self.open_insertion();
         if self.para.is_none() {
             self.start_para(None, None);

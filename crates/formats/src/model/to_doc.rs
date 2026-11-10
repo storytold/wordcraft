@@ -232,6 +232,8 @@ struct Builder<'a> {
     chains: Vec<(u32, String)>,
     /// Tables made at the top of the flow so far (see `wordcraft_doc::kept`).
     top_tables: usize,
+    explicit_lists: std::collections::HashMap<u32, u32>,
+    explicit_nums: std::collections::HashMap<(u32, u8), (Arc<Vec<(u8, Level)>>, u32)>,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -256,6 +258,8 @@ impl<'a> Builder<'a> {
             doc,
             revs,
             run_strings: 0,
+            explicit_lists: Default::default(),
+            explicit_nums: Default::default(),
             comments: Default::default(),
             lists: Default::default(),
             ranged: super::types::ranged_anchors(blocks),
@@ -724,6 +728,7 @@ impl<'a> Builder<'a> {
                 match labels.get(i).copied().flatten() {
                     Some(l) if ordered && l.format != wordcraft_doc::section::NumFormat::Bullet => {
                         level.format = l.format;
+                        level.sequential_letters = l.sequential_letters;
                         level.text = l.text(i as u8);
                     }
                     Some(l) if !ordered => {
@@ -747,11 +752,38 @@ impl<'a> Builder<'a> {
             })
             .collect();
         let numbering = Arc::make_mut(&mut self.doc.numbering);
-        let aid = numbering.abstracts.iter().map(|a| a.id + 1).max().unwrap_or(0);
+        let aid = numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
         numbering.abstracts.push(AbstractNum { id: aid, name: None, levels, ..Default::default() });
-        let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
+        let nid = numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
         numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
+    }
+
+    fn explicit_list(&mut self, source: &super::types::ExplicitList) -> u32 {
+        let key = (source.id, source.level);
+        if source.start.is_none()
+            && let Some((definition, num)) = self.explicit_nums.get(&key)
+            && *definition == source.definitions
+        {
+            return *num;
+        }
+        let abstract_id = if let Some(id) = self.explicit_lists.get(&source.id) {
+            *id
+        } else {
+            let id = self.doc.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
+            Arc::make_mut(&mut self.doc.numbering).abstracts.push(AbstractNum { id, levels: levels_for(ListKind::Numbered), ..Default::default() });
+            self.explicit_lists.insert(source.id, id);
+            id
+        };
+        let num = self.doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1);
+        Arc::make_mut(&mut self.doc.numbering).nums.push(Num {
+            id: num,
+            abstract_id,
+            start_overrides: source.start.map(|start| vec![(source.level, start)]).unwrap_or_default(),
+            level_overrides: source.definitions.as_ref().clone(),
+        });
+        self.explicit_nums.insert(key, (source.definitions.clone(), num));
+        num
     }
 
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
@@ -759,6 +791,12 @@ impl<'a> Builder<'a> {
         let mut i = 0;
         while let Some(b) = blocks.get(i) {
             match b {
+                FBlock::Para(p) if p.explicit_list.is_some() => {
+                    if let Some(source) = &p.explicit_list {
+                        let num = self.explicit_list(source);
+                        out.push(para_block(self.para(p, Some(num))));
+                    }
+                }
                 FBlock::Para(p) if p.list.is_some() => {
                     // A run of consecutive list paragraphs is one list, until an item of another
                     // list or (when the source doesn't tell lists apart) a top-level item of the
@@ -769,6 +807,9 @@ impl<'a> Builder<'a> {
                     let mut top: Option<bool> = None;
                     let id = p.list.map_or(0, |l| l.list);
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
+                        if q.explicit_list.is_some() {
+                            break;
+                        }
                         let Some(li) = q.list else { break };
                         if li.list != id {
                             break;
