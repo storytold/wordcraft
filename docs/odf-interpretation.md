@@ -1,6 +1,6 @@
 # How WordCraft interprets OpenDocument files
 
-> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-05 · **Change:** trivial (a document's language: kept on any save, and stated when written from the model); previously major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
+> **Last reviewed:** 2026-11-02 · **Last updated:** 2026-11-10 · **Change:** trivial (ODT double borders use their three line widths); previously trivial (a document's language: kept on any save, and stated when written from the model); previously major (no more settings: one choice for each case the standard leaves open); previously trivial (what is written as read: unchanged paragraphs with drawings, comments, changes or marks too); previously minor (the two presets are Microsoft Word style and LibreOffice style; CLI values listed one by one); previously minor (deviations from the standard listed; ODF 1.2 → 1.3 checked); previously major (new: the ODF interpretation profile and the list of every case)
 
 OpenDocument (ODF 1.3, OASIS) leaves some of a document's look to the application. Part 3 §16.2
 says that when no style sets a property and the standard gives no default, "an
@@ -18,12 +18,12 @@ knows of, so none gets lost.
 2. **What the standard leaves open, WordCraft decides once.** Each case listed below has one
    choice, the one WordCraft makes for its own and Word documents, and no setting. LibreOffice's
    choice (and Collabora's, which shares its engine) is listed beside it, measured black-box in
-   LibreOffice 24 where it isn't documented, because a file made there can look different here.
+   LibreOffice 24 (or the version stated in the row) where it isn't documented, because a file made there can look different here.
 3. **A value the file states is the file's.** WordCraft's choices fill in only what the file (its
-   styles, defaults and `settings.xml`) leaves unsaid. Three cases are not missing values but
+   styles, defaults and `settings.xml`) leaves unsaid. Some cases are not missing values but
    stated ones whose meaning the standard leaves open: how a header's stated height and spacing
    combine, what a stated width of 0 draws at, and a frame position stated against something the
-   standard doesn't define for its anchor. They are marked *(meaning)* below.
+   standard doesn't define for its anchor, and conflicting border widths. They are marked *(meaning)* below.
    `formats::odt::tests_more::unstated` checks that stated values are kept.
 4. **A deviation from the standard is made only out of necessity**: where the files in
    circulation contradict it and following it would damage every such file. Each one is listed
@@ -49,6 +49,7 @@ knows of, so none gets lost.
 | How the space between two paragraphs adds up when the document doesn't say | not defined (`fo:margin-top`/`-bottom` refer to XSL's margins; whether XSL's space resolution, which keeps the larger, comes with them is not said); LibreOffice's `AddParaTableSpacing` setting says when present (false: the larger) | the larger of the two (as Word) | their sum |
 | Widow and orphan control when neither the default paragraph style, Standard nor the paragraph's style states `fo:widows`/`fo:orphans` | §20.312, §20.244 refer to XSL's widows and orphans (initial value 2); whether that default comes with the reference is not said | on: 2 lines (XSL's initial value, and Word's) | off (a first or last line can stand alone at a page's edge) |
 | *(meaning)* Whether a columned section's columns end balanced when nothing follows it on the page, and when it doesn't say | §20.428 `text:dont-balance-text-columns`: no default, and its value descriptions contradict its name (WordCraft reads the name; so does LibreOffice) | as Word: only when text follows on the same page | balanced |
+| *(meaning)* The three line widths disagree with the `fo:border` width | §20.243 `style:border-line-width` gives inner stroke, gap and outer stroke; §20.183 gives the border width | Use the three widths for paragraph and cell double borders, rounded to 1/20 pt and capped to a 12 pt band; write their sum as `fo:border` | Same: uses the three widths and rewrites `fo:border` as their sum. LibreOffice 26.8.2.2, synthetic paragraph bottom border: `0.7pt 0.2pt 0.05pt` overrides `2pt`, `0.5pt` and `0.95pt`; saves `0.96pt double` and `0.025cm 0.007cm 0.002cm` (three decimal places), and raises the 0.05 pt stroke to 0.1 pt in PDF. |
 
 ## Law: what the standard defines and WordCraft follows
 
@@ -164,6 +165,7 @@ from public bug reports and ONLYOFFICE's converter test snapshots):
 
 | Date | Change |
 |---|---|
+| 2026-11-10 | Double borders use the three line widths when they disagree with `fo:border`; LibreOffice 26.8.2.2 black-box observations recorded. |
 | 2026-11-05 | A document's language is read from its default style or Standard and written back from the model. It was lost when a style or list definition changed (numbering, a new style), and readers then showed the document in their own default language. Styles written from the model no longer say English for a document that isn't. A language's script (`fo:script`) is kept with it, and a style with no parent takes the default style's language when Standard's differs. |
 | 2026-11-04 | The settings removed: File › Options › Advanced › OpenDocument files, `file.options` `odf`, `WORDCRAFT_ODF`, the LibreOffice style and custom values. WordCraft makes one choice for each case the standard leaves open, the one the default made, so nothing changes for a document opened with the default. What a file states is still followed, its `TabsRelativeToIndent` and `AddParaTableSpacing` among it. LibreOffice's choices stay listed beside WordCraft's. |
 | 2026-11-04 | How WordCraft writes ODF: unchanged paragraphs and tables with drawings, comments, tracked changes, notes or marks are written as read too (the text said from the model); what is edited, and the cases left in the element audit, from the model. |

@@ -604,6 +604,9 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
         }
         any = true;
     }
+    if b.style == BorderStyle::Double {
+        b.width /= 2.4; // ODF gives the total band; the model gives Word's line width.
+    }
     any.then_some(b)
 }
 
@@ -757,12 +760,30 @@ fn table_cell_properties(a: &Attrs, s: &mut StyleInfo) {
     }
 }
 
+/// ODF 1.3 §20.243: inner stroke, gap and outer stroke, with side values taking precedence.
+fn line_widths(a: &Attrs) -> [Option<[f32; 3]>; 4] {
+    ["top", "left", "bottom", "right"].map(|side| {
+        let key = format!("style:border-line-width-{side}");
+        let value = get(a, &key).or_else(|| get(a, "style:border-line-width"))?;
+        let parts: Vec<_> = value.split_whitespace().take(4).map(length).collect::<Option<_>>()?;
+        let widths: [f32; 3] = parts.try_into().ok()?;
+        if !widths.iter().all(|v| v.is_finite() && (0.0..=1584.0).contains(v)) {
+            return None;
+        }
+        Some(widths)
+    })
+}
+
 /// A table-cell style's `fo:border*` and `fo:padding*` (a side's own value wins over the
 /// shorthand) into `s`.
 fn cell_borders_and_padding(a: &Attrs, s: &mut StyleInfo) {
     let all = get(a, "fo:border").and_then(parse_border);
-    let side = |k: &str| get(a, k).and_then(parse_border).or(all);
-    let (top, left, bottom, right) = (side("fo:border-top"), side("fo:border-left"), side("fo:border-bottom"), side("fo:border-right"));
+    let widths = line_widths(a);
+    let [top, left, bottom, right] =
+        ["top", "left", "bottom", "right"].map(|side| get(a, &format!("fo:border-{side}")).and_then(parse_border).or(all));
+    let [top, left, bottom, right] = [(top, widths[0]), (left, widths[1]), (bottom, widths[2]), (right, widths[3])].map(|(line, widths)| {
+        line.map(|line| if line.style == BorderStyle::Double { widths.and_then(|widths| line.double_widths(widths)).unwrap_or(line) } else { line })
+    });
     if top.is_some() || left.is_some() || bottom.is_some() || right.is_some() {
         s.cell_borders = Some(Borders { top, left, bottom, right, ..Default::default() });
     }
@@ -980,24 +1001,28 @@ const MAX_PADDING: f32 = 1584.0;
 /// `fo:padding*` as its distance from the text (Word's 31 pt at most beside a line); a side
 /// with padding and no line is an invisible border holding it. `None` when none is stated.
 fn border_sides(a: &Attrs) -> Option<Borders> {
+    let widths = line_widths(a);
     let all = get(a, "fo:border").and_then(parse_border);
     let pad_all = get(a, "fo:padding").and_then(length);
-    let side = |b: &str, p: &str| {
+    let side = |b: &str, p: &str, widths: Option<[f32; 3]>| {
         let pad = get(a, p).and_then(length).or(pad_all).filter(|v| v.is_finite() && *v > 0.0);
         // Padding without a line still takes room (LibreOffice): a side with no line holds it.
         let Some(mut line) = get(a, b).and_then(parse_border).or(all) else {
             return pad.map(|sp| Border { style: BorderStyle::None, width: 0.0, color: None, space: sp.min(MAX_PADDING) });
         };
+        if line.style == BorderStyle::Double {
+            line = widths.and_then(|widths| line.double_widths(widths)).unwrap_or(line);
+        }
         if let Some(sp) = pad {
             line.space = if line.is_visible() { sp.min(31.0) } else { sp.min(MAX_PADDING) };
         }
         Some(line)
     };
     let b = Borders {
-        top: side("fo:border-top", "fo:padding-top"),
-        left: side("fo:border-left", "fo:padding-left"),
-        bottom: side("fo:border-bottom", "fo:padding-bottom"),
-        right: side("fo:border-right", "fo:padding-right"),
+        top: side("fo:border-top", "fo:padding-top", widths[0]),
+        left: side("fo:border-left", "fo:padding-left", widths[1]),
+        bottom: side("fo:border-bottom", "fo:padding-bottom", widths[2]),
+        right: side("fo:border-right", "fo:padding-right", widths[3]),
         ..Default::default()
     };
     (b.top.is_some() || b.left.is_some() || b.bottom.is_some() || b.right.is_some()).then_some(b)

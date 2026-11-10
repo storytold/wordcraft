@@ -1442,3 +1442,138 @@ fn meta_modified_date_keeps_a_negative_offset() {
     assert_eq!(super::import::read_changes(meta("2024-03-05T13:45:00.25").as_bytes()).1, "2024-03-05T13:45:00Z");
     assert_eq!(super::import::read_changes(meta("").as_bytes()).1, "");
 }
+
+#[test]
+fn double_cell_borders_round_to_compound_patterns() {
+    use wordcraft_doc::props::BorderStyle::*;
+    for (value, expected, width) in [
+        ("2pt 1pt 1pt", ThinThickSmallGap, 4.0),
+        ("1pt 1pt 2pt", ThickThinSmallGap, 4.0),
+        ("2pt 2pt 1pt", ThinThickMediumGap, 5.0),
+        ("1pt 2pt 2pt", ThickThinMediumGap, 5.0),
+        ("2pt 4pt 1pt", ThinThickLargeGap, 7.0),
+        ("1pt 4pt 2pt", ThickThinLargeGap, 7.0),
+        ("2.1pt 1pt 1pt", ThinThickSmallGap, 4.1),
+        ("1pt 2pt 1pt", Double, 4.0),
+        ("1pt 1pt 1pt", Double, 3.0),
+        ("-1pt 2pt 3pt", Double, 6.0),
+        ("1pt 2pt", Double, 6.0),
+        ("1pt 2pt 3pt 4pt", Double, 6.0),
+        ("NaNpt 2pt 3pt", Double, 6.0),
+        ("3e38in 2pt 3pt", Double, 6.0),
+        ("2000pt 2pt 3pt", Double, 6.0),
+        ("0pt 0pt 0pt", Double, 6.0),
+    ] {
+        let borders = imported_double_borders(value, "");
+        for border in [borders.top, borders.left, borders.bottom, borders.right] {
+            let border = border.unwrap();
+            assert_eq!(border.style.word(), expected, "{value}");
+            if width != 6.0 {
+                let parts: Vec<f32> = value.split_whitespace().map(|part| part.trim_end_matches("pt").parse().unwrap()).collect();
+                assert_eq!(border.style.stroke_widths(), Some(parts.try_into().unwrap()));
+            } else {
+                assert_eq!(border.style, Double);
+            }
+            let factor = 0.6 * expected.compound_pattern().unwrap().iter().sum::<f32>();
+            assert!((border.width - width / factor).abs() < 0.001, "{value}: {}", border.width);
+        }
+    }
+}
+
+#[test]
+fn double_cell_borders_cap_total_width_and_keep_side_overrides() {
+    use wordcraft_doc::props::BorderStyle::*;
+    let borders =
+        imported_double_borders("792pt 792pt 1584pt", r#"style:border-line-width-right="2pt 4pt 1pt" fo:border-bottom="3pt solid #123456""#);
+    for border in [borders.top, borders.left] {
+        let border = border.unwrap();
+        assert_eq!(border.width, 5.0);
+        assert_eq!(border.style.word(), ThickThinSmallGap);
+    }
+    assert_eq!(borders.right.unwrap().style.word(), ThinThickLargeGap);
+    assert!((borders.right.unwrap().width - 7.0 / 4.2).abs() < 0.001);
+    assert_eq!(borders.bottom.unwrap().style, Single);
+    assert_eq!(borders.bottom.unwrap().width, 3.0);
+}
+
+fn imported_double_borders(value: &str, overrides: &str) -> wordcraft_doc::props::Borders {
+    let content = format!(
+        r##"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="Base" style:family="table-cell"><style:table-cell-properties fo:border="6pt double #000000" style:border-line-width="{value}" {overrides}/></style:style>
+        <style:style style:name="Cell" style:family="table-cell" style:parent-style-name="Base"/>
+        </office:automatic-styles><office:body><office:text><table:table><table:table-row><table:table-cell table:style-name="Cell"><text:p>Cell</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let wordcraft_doc::Block::Table(table) = doc.body[0].as_ref() else { panic!("table") };
+    table.rows[0].cells[0].props.borders.unwrap()
+}
+
+#[test]
+fn mapped_double_borders_survive_regenerated_odt_cell_styles() {
+    let borders = imported_double_borders("2pt 1pt 1pt", "");
+    let mut doc = wordcraft_doc::Document::new();
+    let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
+    table.props.style = None;
+    table.rows[0].cells[0].props.borders = Some(borders);
+    doc.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0), wordcraft_doc::Block::Table(table)).unwrap();
+    let saved = import(&export(&doc).unwrap()).unwrap();
+    let wordcraft_doc::Block::Table(table) = saved.body[0].as_ref() else { panic!("table") };
+    let got = table.rows[0].cells[0].props.borders.unwrap();
+    for (got, expected) in [(got.top, borders.top), (got.left, borders.left), (got.bottom, borders.bottom), (got.right, borders.right)] {
+        let (got, expected) = (got.unwrap(), expected.unwrap());
+        assert_eq!(got, expected);
+    }
+}
+
+#[test]
+fn double_border_total_width_converts_at_odt_boundary() {
+    use wordcraft_doc::props::{Border, BorderStyle};
+    let border = Border { style: BorderStyle::Double, width: 1.25, color: None, space: 0.0 };
+    let value = super::writer::odf_border(Some(border));
+    assert_eq!(value, "3pt double #000000");
+    assert_eq!(super::styles::parse_border(&value).unwrap().width, 1.25);
+}
+
+#[test]
+fn compound_cell_border_writer_preserves_model_widths() {
+    use wordcraft_doc::props::{Border, BorderStyle::*, Borders};
+    for style in [Double, ThinThickSmallGap, ThickThinSmallGap, ThinThickMediumGap, ThickThinMediumGap, ThinThickLargeGap, ThickThinLargeGap] {
+        let mut doc = wordcraft_doc::Document::new();
+        let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
+        table.props.style = Option::None;
+        let border = Border { style, width: 1.25, color: Some(wordcraft_doc::Rgb(12, 34, 56)), space: 0.0 };
+        table.rows[0].cells[0].props.borders = Some(Borders::all(border));
+        doc.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0), wordcraft_doc::Block::Table(table)).unwrap();
+        let saved = import(&export(&doc).unwrap()).unwrap();
+        let wordcraft_doc::Block::Table(table) = saved.body[0].as_ref() else { panic!("table") };
+        let borders = table.rows[0].cells[0].props.borders.unwrap();
+        for got in [borders.top, borders.left, borders.bottom, borders.right] {
+            let got = got.unwrap();
+            assert_eq!(got.style.word(), style);
+            assert_eq!(got.color, border.color);
+            assert!((got.width - border.width).abs() < 0.01, "{style:?}: {}", got.width);
+        }
+    }
+}
+
+#[test]
+fn exact_double_cell_border_overrides_parent_and_round_trips() {
+    use wordcraft_doc::props::BorderStyle;
+    let content = format!(
+        r##"<office:document-content {NS_T}><office:automatic-styles>
+        <style:style style:name="Base" style:family="table-cell"><style:table-cell-properties fo:border="2pt solid #ff0000"/></style:style>
+        <style:style style:name="Cell" style:family="table-cell" style:parent-style-name="Base"><style:table-cell-properties fo:border="none" fo:border-bottom="0.75pt double #000000" style:border-line-width-bottom="0.1pt 0.2pt 0.45pt"/></style:style>
+        </office:automatic-styles><office:body><office:text><table:table><table:table-row><table:table-cell table:style-name="Cell"><text:p>Cell</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+    );
+    let doc = import(&package(&content, None)).unwrap();
+    let borders = |doc: &wordcraft_doc::Document| {
+        let wordcraft_doc::Block::Table(table) = doc.body[0].as_ref() else { panic!("table") };
+        table.rows[0].cells[0].props.borders.unwrap()
+    };
+    let expected = borders(&doc);
+    let bottom = expected.bottom.unwrap();
+    assert_eq!(bottom.style, BorderStyle::DoubleWidths { inner: 2, gap: 4, outer: 9 });
+    assert_eq!(bottom.style.stroke_widths(), Some([0.1, 0.2, 0.45]));
+    assert!([expected.top, expected.left, expected.right].iter().all(|side| !side.unwrap().is_visible()));
+    assert_eq!(borders(&import(&export_model(&doc).unwrap()).unwrap()), expected);
+}

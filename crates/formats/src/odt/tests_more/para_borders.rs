@@ -80,6 +80,22 @@ fn borders_and_background_round_trip() {
     let (g, w) = (got.borders.expect("borders"), want.borders.expect("borders"));
     for (a, b) in [(g.top, w.top), (g.left, w.left), (g.bottom, w.bottom), (g.right, w.right)] {
         let (a, b) = (a.expect("side"), b.expect("side"));
-        assert_eq!((a.style, a.width, a.color, a.space), (b.style, b.width, b.color, b.space));
+        assert_eq!((a.style.word(), a.color, a.space), (b.style, b.color, b.space));
+        // The ODF total-to-model conversion can round the last binary digit.
+        assert!((a.width - b.width).abs() < 0.00001);
+    }
+}
+
+#[test]
+fn exact_double_paragraph_border_uses_line_widths_and_round_trips() {
+    for width in ["0.95", "2", "0.5"] {
+        let doc = open(&format!(r##"fo:border-bottom="{width}pt double #000000" style:border-line-width-bottom="0.7pt 0.2pt 0.05pt""##), "Ruled");
+        let expected = props(&doc).borders.unwrap().bottom.unwrap();
+        assert_eq!(expected.style.stroke_widths(), Some([0.7, 0.2, 0.05]));
+        let bytes = crate::odt::tests::export_model(&doc).unwrap();
+        let xml = crate::odt::tests::content_of(&bytes);
+        assert!(xml.contains(r#"style:border-line-width-bottom="0.7pt 0.2pt 0.05pt""#), "{xml}");
+        assert!(xml.contains(r##"fo:border-bottom="0.95pt double #000000""##), "{xml}");
+        assert_eq!(props(&import(&bytes).unwrap()).borders.unwrap().bottom.unwrap(), expected);
     }
 }

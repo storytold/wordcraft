@@ -591,8 +591,8 @@ pub(crate) fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             Placed::Fill { rect, color } if rect.y < limit => {
                 out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color });
             }
-            Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
-                out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
+            Placed::Rule { side, x0, y0, x1, y1, border } if y0.min(y1) < limit => {
+                out.push(Placed::Rule { side, x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
             }
             Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
@@ -688,19 +688,19 @@ pub(crate) fn push_para(
         // All four lines lie beyond their distance from the text; top and bottom reach the corners.
         if let Some(t) = b.top.filter(|t| e.top > 0.0 && t.is_visible()) {
             let ty = y - t.space - t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: ty, x1: rx, y1: ty, border: t });
+            items.push(Placed::Rule { side: crate::BorderSide::Top, x0: lx, y0: ty, x1: rx, y1: ty, border: t });
         }
         if let Some(t) = b.bottom.filter(|t| e.bottom > 0.0 && t.is_visible()) {
             let by = y + h + t.space + t.width / 2.0;
-            items.push(Placed::Rule { x0: lx, y0: by, x1: rx, y1: by, border: t });
+            items.push(Placed::Rule { side: crate::BorderSide::Bottom, x0: lx, y0: by, x1: rx, y1: by, border: t });
         }
         if let Some(t) = b.left.filter(Border::is_visible) {
             let bx = lx + t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
+            items.push(Placed::Rule { side: crate::BorderSide::Left, x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
         if let Some(t) = b.right.filter(Border::is_visible) {
             let bx = rx - t.width / 2.0;
-            items.push(Placed::Rule { x0: bx, y0: top, x1: bx, y1: bottom, border: t });
+            items.push(Placed::Rule { side: crate::BorderSide::Right, x0: bx, y0: top, x1: bx, y1: bottom, border: t });
         }
     }
     y + h

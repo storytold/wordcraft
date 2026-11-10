@@ -153,7 +153,14 @@ fn separator_rules(blocks: &Blocks, items: &[Placed]) -> Vec<Placed> {
                 }
                 let (Some(a), Some(b)) = (line.cl_left(k), line.cl_right(k)) else { continue };
                 let ry = y + line.top - first.top + line.height / 2.0;
-                rules.push(Placed::Rule { x0: x + a.min(b), y0: ry, x1: x + a.max(b), y1: ry, border: Border::single(0.5) });
+                rules.push(Placed::Rule {
+                    side: crate::BorderSide::Top,
+                    x0: x + a.min(b),
+                    y0: ry,
+                    x1: x + a.max(b),
+                    y1: ry,
+                    border: Border::single(0.5),
+                });
             }
         }
     }
@@ -261,9 +268,9 @@ impl NoteBox {
                     head.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, cut - rect.y), color });
                     tail.push(Placed::Fill { rect: Rect::new(rect.x, cut, rect.w, rect.y + rect.h - cut), color });
                 }
-                Placed::Rule { x0, y0, x1, y1, border } => {
-                    head.push(Placed::Rule { x0, y0: y0.min(cut), x1, y1: y1.min(cut), border });
-                    tail.push(Placed::Rule { x0, y0: y0.max(cut), x1, y1: y1.max(cut), border });
+                Placed::Rule { side, x0, y0, x1, y1, border } => {
+                    head.push(Placed::Rule { side, x0, y0: y0.min(cut), x1, y1: y1.min(cut), border });
+                    tail.push(Placed::Rule { side, x0, y0: y0.max(cut), x1, y1: y1.max(cut), border });
                 }
                 // Not split (cuts avoid them): stays above.
                 other => head.push(other),
@@ -312,7 +319,7 @@ pub(crate) fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>,
         pb.y += 12.0;
         let (x, ry) = (pb.col_x(), pb.y);
         if let Some(pg) = pb.page() {
-            pg.items.push(Placed::Rule { x0: x, y0: ry, x1: x + NOTE_SEP_W, y1: ry, border: Border::single(0.5) });
+            pg.items.push(Placed::Rule { side: crate::BorderSide::Top, x0: x, y0: ry, x1: x + NOTE_SEP_W, y1: ry, border: Border::single(0.5) });
         }
         pb.y += 8.0;
     }

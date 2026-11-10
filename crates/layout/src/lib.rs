@@ -93,7 +93,7 @@ use notes::{NOTE_SEP, note_numbers};
 use page::item_bottom;
 use pass::layout_pass;
 pub use pass::now_ms;
-pub use placed::{HfSlot, Placed, turn_point, turn_rect, unturn_point};
+pub use placed::{BorderSide, HfSlot, Placed, turn_point, turn_rect, unturn_point};
 pub use strict::{MAX_PDF_PICTURE_SIDE, MAX_PNG_PICTURE_SIDE, StrictOutput, media_check, undecodable_pictures};
 pub use substituted::MAX_SUBSTITUTED;
 

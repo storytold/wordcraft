@@ -385,7 +385,7 @@ fn a_kept_outline_holds_on_to_its_pictures_allocation() {
 /// the header clones every one of them: they all count against the repeat budget.
 #[test]
 fn a_clipped_group_costs_its_members_when_a_header_repeats() {
-    let rule = || Placed::Rule { x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Default::default() };
+    let rule = || Placed::Rule { side: crate::BorderSide::Top, x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Default::default() };
     let clip = |items: Vec<Placed>| Placed::Clip { rect: Rect::new(0.0, 0.0, 10.0, 10.0), spin: Default::default(), items };
     let big = usize::MAX;
     assert_eq!(placed_cost(&rule(), big), 1);
@@ -411,7 +411,7 @@ fn a_clipped_group_costs_its_members_when_a_header_repeats() {
 /// The linked-box work budget counts a clipped group's members, nested groups included.
 #[test]
 fn flow_work_counts_clip_members() {
-    let rule = || Placed::Rule { x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Default::default() };
+    let rule = || Placed::Rule { side: crate::BorderSide::Top, x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Default::default() };
     let clip = |items: Vec<Placed>| Placed::Clip { rect: Rect::new(0.0, 0.0, 10.0, 10.0), spin: Default::default(), items };
     let mut deep = clip((0..100).map(|_| rule()).collect());
     for _ in 0..12 {

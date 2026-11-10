@@ -15252,3 +15252,35 @@ fn turned_cell_float_keeps_its_along_text_offset() {
         assert!((confined.y - reference.y).abs() < 0.01, "{direction:?}: {confined:?} vs {reference:?}");
     }
 }
+
+#[test]
+fn compound_borders_keep_physical_sides_in_tables_paragraphs_and_pages() {
+    let border = Border { style: BorderStyle::ThinThickSmallGap, width: 4.0, color: None, space: 2.0 };
+    let mut d = Document::from_text("Paragraph");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.borders = Some(Borders::all(border));
+    d.last_section.page_borders = Some(Borders::all(border));
+    let mut table = Table::new(1, 1, 200.0);
+    table.props.style = None;
+    table.rows[0].cells[0].props.borders = Some(Borders::all(border));
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(table)).unwrap();
+    let layout = lay(&d);
+    let rules: Vec<_> = layout.pages[0]
+        .items
+        .iter()
+        .filter_map(|p| match p {
+            Placed::Rule { side, x0, y0, x1, y1, border: b } if *b == border => Some((*side, *x0, *y0, *x1, *y1)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(rules.len(), 12);
+    for [(top, _, yt, _, yt1), (bottom, _, yb, _, yb1), (left, xl, _, xl1, _), (right, xr, _, xr1, _)] in rules.as_chunks::<4>().0 {
+        assert_eq!(
+            (*top, *bottom, *left, *right),
+            (crate::BorderSide::Top, crate::BorderSide::Bottom, crate::BorderSide::Left, crate::BorderSide::Right)
+        );
+        assert_eq!((yt, yb, xl, xr), (yt1, yb1, xl1, xr1));
+        assert!(yt < yb && xl < xr);
+    }
+    let draws = display::page_display(&d, &layout.pages[0], &display::DisplayOptions::default());
+    assert_eq!(draws.iter().filter(|d| matches!(d, display::Draw::Line { stroke: display::Stroke::Solid, .. })).count(), 24);
+}

@@ -422,18 +422,41 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     }
 }
 
-/// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
-fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
-    Draw::Line {
-        x0,
-        y0,
-        x1,
-        y1,
-        width: if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) },
-        color: b.color.unwrap_or(Rgb::BLACK),
-        stroke: border_stroke(b.style),
-        alpha,
-        text_bg: None,
+/// Keep Word's line width for Double/Triple; expand only the thin/thick styles.
+fn rule(from: (f32, f32), to: (f32, f32), side: crate::BorderSide, b: &Border, alpha: f32, out: &mut Vec<Draw>) {
+    let (x0, y0) = from;
+    let (x1, y1) = to;
+    let width = if b.width.is_finite() { b.width.clamp(0.0, 12.0) } else { 0.0 };
+    let mut line = |offset: f32, width: f32, stroke| {
+        let (nx, ny) = side.inward();
+        out.push(Draw::Line {
+            x0: x0 + nx * offset,
+            y0: y0 + ny * offset,
+            x1: x1 + nx * offset,
+            y1: y1 + ny * offset,
+            width,
+            color: b.color.unwrap_or(Rgb::BLACK),
+            stroke,
+            alpha,
+            text_bg: None,
+        });
+    };
+    let mut compound = |pattern: &[f32], unit: f32| {
+        let mut edge = -unit * pattern.iter().sum::<f32>() / 2.0;
+        for (index, part) in pattern.iter().enumerate() {
+            let width = part * unit;
+            if index % 2 == 0 && width > 0.0 {
+                line(edge + width / 2.0, width, Stroke::Solid);
+            }
+            edge += width;
+        }
+    };
+    if let Some([inner, gap, outer]) = b.style.stroke_widths() {
+        compound(&[outer, gap, inner], (12.0 / (outer + gap + inner)).min(1.0));
+    } else if let Some(pattern) = b.style.compound_pattern().filter(|_| !matches!(b.style, BorderStyle::Double | BorderStyle::Triple)) {
+        compound(pattern, (width * 0.6).max(0.25));
+    } else {
+        line(0.0, if b.style == BorderStyle::Thick { width.max(1.5) } else { width.max(0.25) }, border_stroke(b.style));
     }
 }
 
@@ -441,10 +464,10 @@ fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
 // Note: border drawn outside text advance, reserve width in line breaking if overlap shows.
 pub(super) fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out: &mut Vec<Draw>) {
     let (l, r) = (x0 - b.space, x1 + b.space);
-    out.push(rule(l, top, r, top, b, alpha));
-    out.push(rule(l, bottom, r, bottom, b, alpha));
-    out.push(rule(l, top, l, bottom, b, alpha));
-    out.push(rule(r, top, r, bottom, b, alpha));
+    rule((l, top), (r, top), crate::BorderSide::Top, b, alpha, out);
+    rule((l, bottom), (r, bottom), crate::BorderSide::Bottom, b, alpha, out);
+    rule((l, top), (l, bottom), crate::BorderSide::Left, b, alpha, out);
+    rule((r, top), (r, bottom), crate::BorderSide::Right, b, alpha, out);
 }
 
 fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, out: &mut Vec<Draw>) {
@@ -456,7 +479,7 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, a
 fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
-        Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
+        Placed::Rule { side, x0, y0, x1, y1, border } => rule((*x0, *y0), (*x1, *y1), *side, border, alpha, out),
         Placed::Image { rect, media, crop, spin, fx, .. } => {
             let alpha = alpha * fx.opacity();
             spun(
@@ -747,5 +770,165 @@ mod tests_warp_lookups {
         let (a, b, _) = crate::tests::cost_ratio(1, || scan(&short), || scan(&long));
         eprintln!("text-box warp suffix: {a:.6}s -> {b:.6}s for 1000 calls with one million trailing bytes");
         assert!(b <= a * 8.0 + 0.005, "text-box warp lookup scanned the suffix: {a:.6}s -> {b:.6}s");
+    }
+}
+
+#[cfg(test)]
+mod compound_border_tests {
+    use super::*;
+    use crate::BorderSide;
+
+    fn geometry(draws: &[Draw]) -> Vec<(f32, f32, f32, f32, f32)> {
+        draws
+            .iter()
+            .map(|d| {
+                let Draw::Line { x0, y0, x1, y1, width, stroke, color, alpha, .. } = d else { panic!("line") };
+                assert_eq!(*stroke, Stroke::Solid);
+                assert_eq!(*color, Rgb(12, 34, 56));
+                assert_eq!(*alpha, 0.5);
+                (*x0, *y0, *x1, *y1, *width)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn exact_double_strokes_keep_their_widths() {
+        for side in [BorderSide::Top, BorderSide::Bottom] {
+            let border = Border { color: Some(Rgb(12, 34, 56)), ..Default::default() }.double_widths([0.7, 0.2, 0.05]).unwrap();
+            let mut out = Vec::new();
+            rule((0.0, 10.0), (100.0, 10.0), side, &border, 0.5, &mut out);
+            let lines = geometry(&out);
+            assert_eq!(lines.len(), 2);
+            for (line, offset, width) in [(lines[0], -0.45, 0.05), (lines[1], 0.125, 0.7)] {
+                assert_eq!(line.4, width);
+                assert!((line.1 - (10.0 + side.inward().1 * offset)).abs() < 1e-6);
+                assert_eq!(line.1, line.3);
+            }
+            assert!(((lines[0].1 - lines[1].1).abs() - 0.575).abs() < 1e-6);
+        }
+        for (style, expected) in [
+            (BorderStyle::DoubleWidths { inner: 255, gap: 255, outer: 255 }, vec![4.0, 4.0]),
+            (BorderStyle::DoubleWidths { inner: 14, gap: 4, outer: 0 }, vec![0.7]),
+            (BorderStyle::DoubleWidths { inner: 0, gap: 0, outer: 0 }, vec![]),
+        ] {
+            let mut out = Vec::new();
+            rule((0.0, 0.0), (100.0, 0.0), BorderSide::Top, &Border { style, ..Default::default() }, 1.0, &mut out);
+            let widths: Vec<_> = out
+                .iter()
+                .map(|draw| match draw {
+                    Draw::Line { width, .. } => *width,
+                    _ => panic!("line"),
+                })
+                .collect();
+            assert_eq!(widths, expected);
+        }
+    }
+
+    #[test]
+    fn double_and_triple_keep_word_width_and_stroke_kind() {
+        for (style, stroke) in [(BorderStyle::Double, Stroke::Double), (BorderStyle::Triple, Stroke::Triple)] {
+            for width in [0.0_f32, 0.1, 0.5, 0.75, 2.0] {
+                let mut out = Vec::new();
+                rule((0., 10.), (100., 10.), BorderSide::Top, &Border { style, width, color: None, space: 0.0 }, 1.0, &mut out);
+                assert!(
+                    matches!(out.as_slice(), [Draw::Line { width: w, stroke: s, y0: 10.0, y1: 10.0, .. }] if *w == width.max(0.25) && *s == stroke)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn thin_thick_strokes_keep_a_minimum_width() {
+        for width in [0.0, 0.01, f32::NAN, f32::INFINITY] {
+            let mut out = Vec::new();
+            rule(
+                (0., 10.),
+                (100., 10.),
+                BorderSide::Top,
+                &Border { style: BorderStyle::ThinThickSmallGap, width, color: None, space: 0.0 },
+                1.0,
+                &mut out,
+            );
+            assert_eq!(out.len(), 2);
+            for draw in out {
+                assert!(matches!(draw, Draw::Line { width, y0, y1, .. } if width >= 0.25 && width.is_finite() && y0.is_finite() && y1.is_finite()));
+            }
+        }
+    }
+
+    #[test]
+    fn compound_borders_scale_strokes_and_gaps_by_model_width() {
+        use BorderStyle::*;
+        for (style, parts) in [
+            (ThinThickSmallGap, vec![1., 1., 2.]),
+            (ThickThinSmallGap, vec![2., 1., 1.]),
+            (ThinThickMediumGap, vec![1., 2., 2.]),
+            (ThickThinMediumGap, vec![2., 2., 1.]),
+            (ThinThickLargeGap, vec![1., 4., 2.]),
+            (ThickThinLargeGap, vec![2., 4., 1.]),
+            (ThinThickThinSmallGap, vec![1., 1., 2., 1., 1.]),
+            (ThinThickThinMediumGap, vec![1., 2., 2., 2., 1.]),
+            (ThinThickThinLargeGap, vec![1., 4., 2., 4., 1.]),
+        ] {
+            let total: f32 = parts.iter().sum();
+            let b = Border { style, width: 1.0 / 0.6, color: Some(Rgb(12, 34, 56)), space: 0.0 };
+            let mut out = Vec::new();
+            rule((0., 10.), (100., 10.), BorderSide::Top, &b, 0.5, &mut out);
+            let mut edge = 10. - total / 2.;
+            let mut expected = Vec::new();
+            for (i, width) in parts.into_iter().enumerate() {
+                if i % 2 == 0 {
+                    expected.push((0., edge + width / 2., 100., edge + width / 2., width));
+                }
+                edge += width;
+            }
+            assert_eq!(geometry(&out), expected, "{style:?}");
+        }
+    }
+
+    #[test]
+    fn compound_stroke_order_comes_from_the_side_not_endpoint_direction() {
+        let b = Border { style: BorderStyle::ThinThickSmallGap, width: 1.0 / 0.6, color: Some(Rgb(12, 34, 56)), space: 0.0 };
+        for (side, from, to, expected) in [
+            (BorderSide::Top, (0., 10.), (100., 10.), vec![(0., 8.5, 100., 8.5, 1.), (0., 11., 100., 11., 2.)]),
+            (BorderSide::Bottom, (0., 10.), (100., 10.), vec![(0., 11.5, 100., 11.5, 1.), (0., 9., 100., 9., 2.)]),
+            (BorderSide::Left, (10., 0.), (10., 100.), vec![(8.5, 0., 8.5, 100., 1.), (11., 0., 11., 100., 2.)]),
+            (BorderSide::Right, (10., 0.), (10., 100.), vec![(11.5, 0., 11.5, 100., 1.), (9., 0., 9., 100., 2.)]),
+        ] {
+            let mut out = Vec::new();
+            rule(from, to, side, &b, 0.5, &mut out);
+            assert_eq!(geometry(&out), expected);
+            out.clear();
+            rule(to, from, side, &b, 0.5, &mut out);
+            let reversed: Vec<_> = geometry(&out).into_iter().map(|(a, b, c, d, w)| (c, d, a, b, w)).collect();
+            assert_eq!(reversed, expected);
+        }
+    }
+
+    #[test]
+    fn turned_compound_rules_keep_their_inward_side() {
+        let doc = Document::new();
+        let authors = Authors::new(&doc);
+        let border = Border { style: BorderStyle::ThinThickSmallGap, width: 1.0 / 0.6, color: Some(Rgb(12, 34, 56)), space: 0.0 };
+        for side in [BorderSide::Top, BorderSide::Bottom, BorderSide::Left, BorderSide::Right] {
+            let original = Placed::Rule { side, x0: 0., y0: 0., x1: 100., y1: 0., border };
+            let mut before = Vec::new();
+            item_in(&doc, &original, &DisplayOptions::default(), &authors, 0.5, Spin::default(), &mut before);
+            for turn in [TextDirection::Up, TextDirection::Down] {
+                let mut placed = original.clone();
+                placed.turn(turn, 200., 300.);
+                let mut after = Vec::new();
+                item_in(&doc, &placed, &DisplayOptions::default(), &authors, 0.5, Spin::default(), &mut after);
+                let expected: Vec<_> = geometry(&before)
+                    .into_iter()
+                    .map(|(a, b, c, d, w)| {
+                        let (a, b) = crate::turn_point(turn, 200., 300., a, b);
+                        let (c, d) = crate::turn_point(turn, 200., 300., c, d);
+                        (a, b, c, d, w)
+                    })
+                    .collect();
+                assert_eq!(geometry(&after), expected);
+            }
+        }
     }
 }

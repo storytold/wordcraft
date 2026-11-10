@@ -35,7 +35,8 @@ fn a_shared_edge_belongs_to_both_cells() {
     // A2's top is "none" but A1's bottom draws it.
     assert_eq!(side(c[2].borders, |b| b.top), Some((BorderStyle::Single, 0.5)));
     // Each cell's own lines.
-    assert_eq!(side(c[2].borders, |b| b.bottom), Some((BorderStyle::Double, 2.0)));
+    // ODF states the total band; Double occupies 2.4 times the model width.
+    assert_eq!(side(c[2].borders, |b| b.bottom), Some((BorderStyle::Double, 2.0 / 2.4)));
     assert_eq!(c[2].borders.and_then(|b| b.bottom).and_then(|b| b.color), Some(Rgb(255, 0, 0)));
     assert_eq!(side(c[3].borders, |b| b.bottom), Some((BorderStyle::Dashed, 0.5)));
 }

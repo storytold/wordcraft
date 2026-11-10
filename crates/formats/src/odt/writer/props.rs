@@ -332,6 +332,7 @@ pub(in crate::odt) fn border_attrs(b: Option<Borders>) -> String {
         let shown = line.filter(|l| l.is_visible());
         p.push_str(&format!(" fo:border-{side}=\"{}\"", odf_border(shown)));
         if let Some(l) = shown {
+            p.push_str(&line_width_attr(side, l));
             p.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.clamp(0.0, 31.0))));
         } else if let Some(l) = line.filter(padded) {
             p.push_str(&format!(" fo:padding-{side}=\"{}\"", pt(l.space.min(1584.0))));
@@ -340,18 +341,34 @@ pub(in crate::odt) fn border_attrs(b: Option<Borders>) -> String {
     p
 }
 
+pub(in crate::odt) fn line_width_attr(side: &str, border: Border) -> String {
+    let widths = border.style.stroke_widths().or_else(|| {
+        let [outer, gap, inner] = border.style.compound_pattern()? else { return None };
+        if !border.width.is_finite() {
+            return None;
+        }
+        let unit = (border.width.max(0.0) * 0.6).min(12.0 / (outer + gap + inner));
+        Some([inner * unit, gap * unit, outer * unit])
+    });
+    widths.map_or_else(String::new, |[inner, gap, outer]| format!(" style:border-line-width-{side}=\"{} {} {}\"", pt(inner), pt(gap), pt(outer)))
+}
+
 /// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line.
 pub(in crate::odt) fn odf_border(b: Option<Border>) -> String {
     let Some(b) = b.filter(|b| b.is_visible() && b.width.is_finite()) else { return "none".into() };
     let style = match b.style {
-        BorderStyle::Double | BorderStyle::Triple => "double",
+        style if style.stroke_widths().is_some() || style.compound_pattern().is_some() => "double",
         BorderStyle::Dotted => "dotted",
         BorderStyle::Dashed => "dashed",
         BorderStyle::DotDash => "dot-dash",
         _ => "solid",
     };
     let color = b.color.unwrap_or(Rgb(0, 0, 0)).hex().to_ascii_lowercase();
-    format!("{} {style} #{color}", pt(b.width.clamp(0.05, 12.0)))
+    let total = b
+        .style
+        .stroke_widths()
+        .map_or_else(|| b.width * b.style.compound_pattern().map_or(1.0, |p| 0.6 * p.iter().sum::<f32>()), |parts| parts.iter().sum());
+    format!("{} {style} #{color}", pt(total.clamp(0.05, 12.0)))
 }
 
 pub(in crate::odt) fn parent_style(k: Kind) -> &'static str {
