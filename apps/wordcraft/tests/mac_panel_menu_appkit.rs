@@ -6,6 +6,7 @@
 #[path = "../src/panel_menu.rs"]
 mod panel_menu;
 
+/// ⌘X, ⌘C, ⌘V and ⌘A each have an item in the panel's menu bar that sends the matching edit action.
 #[cfg(target_os = "macos")]
 fn assert_panel_shortcuts(app: &objc2_app_kit::NSApplication, usual: &objc2_app_kit::NSMenu) {
     use objc2::sel;
@@ -24,6 +25,7 @@ fn assert_panel_shortcuts(app: &objc2_app_kit::NSApplication, usual: &objc2_app_
     }
 }
 
+/// Shows and hides the panel's menu bar against a stand-in for the usual one.
 #[cfg(target_os = "macos")]
 fn main() {
     use objc2::MainThreadMarker;
