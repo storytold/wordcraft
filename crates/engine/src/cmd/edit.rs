@@ -204,7 +204,10 @@ fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
         Some(f) => {
-            let d = f.to_document();
+            let mut d = f.to_document();
+            if d.media.is_empty() {
+                d.media = s.doc.media.clone();
+            }
             (wordcraft_formats::html::export_fragment(&d), wordcraft_formats::rtf::export(&d))
         }
         None => (String::new(), String::new()),

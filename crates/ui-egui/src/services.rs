@@ -1,5 +1,5 @@
 use super::state::DefaultApp;
-use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing};
+use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing, system_clipboard};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -73,6 +73,10 @@ pub struct Services {
     /// pasted equation from (#1297). `true` when the text and HTML are there; otherwise the copy's
     /// text goes through egui as usual.
     pub set_clipboard_rich: Option<Box<dyn Fn(&str, &str, &str, &str) -> bool>>,
+    /// Desktop: publish one picture's pixels, HTML and text together without clearing formats.
+    pub set_clipboard_image: Option<Box<dyn Fn(&system_clipboard::CopyImage, &str, &str) -> bool>>,
+    /// Whether the clipboard still contains this process's last copy.
+    pub clipboard_is_own: Option<Box<dyn Fn() -> bool>>,
     /// Desktop: the RTF on the system clipboard, where the platform offers it (#687).
     pub clipboard_rtf: Option<Box<dyn Fn() -> Option<String>>>,
     /// Desktop: the names of the formats on the system clipboard (MIME types, Windows format

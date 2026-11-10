@@ -100,6 +100,7 @@ impl WordApp {
                 ..UiState::default()
             },
             services,
+            clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
             integrated_titlebar: false,

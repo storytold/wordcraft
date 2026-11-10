@@ -68,7 +68,10 @@ fn set_html_text(html: &str, text: &str) -> bool {
         }
         let set = slot.as_mut().map(|c| if html.is_empty() { c.set_text(text) } else { c.set().html(html, Some(text)) });
         match set {
-            Some(Ok(())) => true,
+            Some(Ok(())) => {
+                platform::record_own();
+                true
+            }
             Some(Err(e)) => {
                 log::warn!("clipboard: {e}");
                 *slot = None;
@@ -77,6 +80,50 @@ fn set_html_text(html: &str, text: &str) -> bool {
             None => false,
         }
     })
+}
+
+/// Put a copied picture on the clipboard: its pixels, with HTML and text beside it where the
+/// platform takes them. `false` when it couldn't be set.
+pub fn set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, text: &str) -> bool {
+    if platform::set_image(image, html, text) {
+        return true;
+    }
+    if !platform::can_set() {
+        return false;
+    }
+    let set = set_image_arboard(image);
+    if set {
+        platform::after_set_image(image, html, text);
+    }
+    set
+}
+
+fn set_image_arboard(image: &wordcraft_ui_egui::system_clipboard::CopyImage) -> bool {
+    WRITER.with(|w| {
+        let Ok(mut slot) = w.try_borrow_mut() else { return false };
+        if slot.is_none() {
+            *slot = open();
+        }
+        let img = arboard::ImageData { width: image.width, height: image.height, bytes: std::borrow::Cow::Borrowed(&image.rgba) };
+        let set = slot.as_mut().map(|c| c.set().image(img));
+        match set {
+            Some(Ok(())) => {
+                platform::record_own();
+                true
+            }
+            Some(Err(e)) => {
+                log::warn!("clipboard image: {e}");
+                *slot = None;
+                false
+            }
+            None => false,
+        }
+    })
+}
+
+/// Whether the system clipboard still holds WordCraft's last copy.
+pub fn is_own() -> bool {
+    platform::is_own()
 }
 
 /// The clipboard's text.
@@ -180,6 +227,36 @@ mod platform {
         get_mime_types_ordered(ClipboardType::Regular, Seat::Unspecified).unwrap_or_default()
     }
 
+    const OWNER_MIME: &str = "application/x-wordcraft-owner";
+
+    fn owner_token() -> [u8; 16] {
+        static TOKEN: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+        *TOKEN.get_or_init(|| {
+            let mut b = [0u8; 16];
+            let _ = getrandom::fill(&mut b);
+            b
+        })
+    }
+
+    static X11_OWNER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    pub fn record_own() {
+        if !wayland() {
+            let win = x11::owner_window().unwrap_or(0);
+            X11_OWNER.store(win, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    pub fn is_own() -> bool {
+        if wayland() {
+            if formats().iter().any(|m| m == OWNER_MIME) { read(OWNER_MIME, 16).is_some_and(|b| b == owner_token()) } else { false }
+        } else {
+            let current = x11::owner_window().unwrap_or(0);
+            let recorded = X11_OWNER.load(std::sync::atomic::Ordering::Relaxed);
+            recorded != 0 && current == recorded
+        }
+    }
+
     /// Whether arboard sets the clipboard natively: X11, or Wayland with data-control.
     pub fn can_set() -> bool {
         !wayland()
@@ -206,6 +283,7 @@ mod platform {
                 sources.push(offer(mime, data));
             }
         }
+        sources.push(MimeSource { source: Source::Bytes(owner_token().to_vec().into()), mime_type: MimeType::Specific(OWNER_MIME.into()) });
         match Options::new().copy_multi(sources) {
             Ok(()) => true,
             Err(e) => {
@@ -214,6 +292,35 @@ mod platform {
             }
         }
     }
+
+    pub fn set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, text: &str) -> bool {
+        use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
+
+        if !wayland() {
+            return false;
+        }
+        let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) else {
+            return false;
+        };
+        let offer = |mime: &str, data: &str| MimeSource { source: Source::Bytes(data.as_bytes().into()), mime_type: MimeType::Specific(mime.into()) };
+        let mut sources = vec![MimeSource { source: Source::Bytes(png.into()), mime_type: MimeType::Specific("image/png".into()) }];
+        if !text.is_empty() {
+            sources.push(offer("text/plain;charset=utf-8", text));
+        }
+        if !html.is_empty() {
+            sources.push(offer("text/html", html));
+        }
+        sources.push(MimeSource { source: Source::Bytes(owner_token().to_vec().into()), mime_type: MimeType::Specific(OWNER_MIME.into()) });
+        match Options::new().copy_multi(sources) {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("clipboard image: {e}");
+                false
+            }
+        }
+    }
+
+    pub fn after_set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) {}
 
     /// Wayland copies carry their RTF already; X11 ones can't (see the module docs).
     pub fn add_rtf(_rtf: &str) {}
@@ -341,6 +448,13 @@ mod platform {
             let reply = r.convert(target, cap, true)?;
             (reply.type_ != incr).then_some(reply.value)
         }
+
+        pub fn owner_window() -> Option<Window> {
+            let (conn, _) = x11rb::connect(None).ok()?;
+            let clipboard = atom(&conn, "CLIPBOARD")?;
+            let reply = conn.get_selection_owner(clipboard).ok()?.reply().ok()?;
+            (reply.owner != x11rb::NONE).then_some(reply.owner)
+        }
     }
 
     #[cfg(test)]
@@ -415,6 +529,20 @@ mod platform {
         Ok(out)
     }
 
+    const OWNER_FORMAT: &str = "WordCraft Copy Owner";
+
+    pub fn record_own() {
+        let Some(format) = raw::register_format(OWNER_FORMAT) else { return };
+        let Ok(_open) = Clipboard::new_attempts(10) else { return };
+        let _ = raw::set_without_clear(format.get(), &[1u8]);
+    }
+
+    pub fn is_own() -> bool {
+        let Some(format) = raw::register_format(OWNER_FORMAT) else { return false };
+        let Ok(_open) = Clipboard::new_attempts(10) else { return false };
+        raw::is_format_avail(format.get())
+    }
+
     pub fn can_set() -> bool {
         true
     }
@@ -422,6 +550,28 @@ mod platform {
     /// arboard sets the text and HTML.
     pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
         false
+    }
+
+    pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
+        false
+    }
+
+    pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
+        if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) {
+            if let Some(format) = raw::register_format("PNG") {
+                if let Ok(_open) = Clipboard::new_attempts(10) {
+                    let _ = raw::set_without_clear(format.get(), &png);
+                }
+            }
+        }
+        if !html.is_empty() {
+            if let Some(format) = raw::register_format("HTML Format") {
+                if let Ok(_open) = Clipboard::new_attempts(10) {
+                    let _ = raw::set_without_clear(format.get(), html.as_bytes());
+                }
+            }
+        }
+        record_own();
     }
 
     /// Add "Rich Text Format" to what arboard just set, NUL-terminated as is usual.
@@ -479,6 +629,19 @@ mod platform {
         None
     }
 
+    static LAST_CHANGE_COUNT: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(-1);
+
+    pub fn record_own() {
+        let count = NSPasteboard::generalPasteboard().changeCount();
+        LAST_CHANGE_COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn is_own() -> bool {
+        let count = NSPasteboard::generalPasteboard().changeCount();
+        let recorded = LAST_CHANGE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        recorded >= 0 && count == recorded
+    }
+
     pub fn can_set() -> bool {
         true
     }
@@ -486,6 +649,21 @@ mod platform {
     /// arboard sets the text and HTML.
     pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
         false
+    }
+
+    pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
+        false
+    }
+
+    pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
+        let board = NSPasteboard::generalPasteboard();
+        if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) {
+            let _ = board.setData_forType(Some(&NSData::with_bytes(&png)), &NSString::from_str("public.png"));
+        }
+        if !html.is_empty() {
+            let _ = board.setString_forType(&NSString::from_str(html), &NSString::from_str("public.html"));
+        }
+        record_own();
     }
 
     /// Add RTF to the pasteboard item arboard just wrote (it cleared the pasteboard first).
@@ -530,9 +708,21 @@ mod platform {
         true
     }
 
+    pub fn record_own() {}
+
+    pub fn is_own() -> bool {
+        false
+    }
+
     pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
         false
     }
+
+    pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
+        false
+    }
+
+    pub fn after_set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) {}
 
     pub fn add_rtf(_rtf: &str) {}
 

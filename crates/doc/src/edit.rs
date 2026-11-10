@@ -20,6 +20,9 @@ pub struct Fragment {
     /// gives each box a new story made from these.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parts: BTreeMap<u32, Part>,
+    /// Media items referenced by objects in this fragment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::byte_store")]
+    pub media: BTreeMap<String, Arc<Vec<u8>>>,
 }
 
 impl Fragment {
@@ -30,6 +33,8 @@ impl Fragment {
     pub fn to_document(&self) -> Document {
         let mut d = Document::new();
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
+        d.parts = self.parts.clone();
+        d.media = self.media.clone();
         d
     }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
@@ -974,7 +979,8 @@ impl Document {
         // Half a content control (one marker without the other) isn't copied.
         crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
-        Fragment { blocks, parts }
+        let media = self.media_of_blocks(&blocks);
+        Fragment { blocks, parts, media }
     }
 
     /// A copy of the block at `path` (a whole table, say) as a fragment, with its text boxes.
@@ -996,7 +1002,8 @@ impl Document {
     fn fragment_of(&self, mut blocks: Vec<Block>) -> Fragment {
         crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
-        Fragment { blocks, parts }
+        let media = self.media_of_blocks(&blocks);
+        Fragment { blocks, parts, media }
     }
 
     /// The table whose whole text `a..b` covers when the range runs across its cells: from the
@@ -1038,7 +1045,8 @@ impl Document {
     pub fn body_fragment(&self) -> Fragment {
         let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();
         let parts = self.text_box_parts(&blocks);
-        Fragment { blocks, parts }
+        let media = self.media_of_blocks(&blocks);
+        Fragment { blocks, parts, media }
     }
 
     /// Another document's body as a fragment of this one, to insert: the media, lists, styles,
@@ -1207,7 +1215,7 @@ impl Document {
         }
         let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
         blocks.iter_mut().for_each(|b| link.block(b));
-        Fragment { blocks, parts }
+        Fragment { blocks, parts, media: self.media.clone() }
     }
 
     /// [`Self::adopt_with`] as blocks to place in a story directly (a reader building one): its
@@ -1215,7 +1223,7 @@ impl Document {
     /// id the reader hasn't given out (ranges it holds aren't in this document yet); it moves past
     /// the adopted ones.
     pub fn adopt_blocks(&mut self, src: Document, keep_styles: bool, perms: &mut u32) -> Vec<Block> {
-        let Fragment { mut blocks, parts } = self.adopt_in(src, keep_styles, perms);
+        let Fragment { mut blocks, parts, .. } = self.adopt_in(src, keep_styles, perms);
         let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         blocks
@@ -1237,6 +1245,33 @@ impl Document {
                 each_para(b, 0, &mut |p| todo.extend(box_ids(p)));
             }
             out.insert(id, part.clone());
+        }
+        out
+    }
+
+    /// Media items referenced by objects in `blocks`, nested text box stories included.
+    pub fn media_of_blocks(&self, blocks: &[Block]) -> BTreeMap<String, Arc<Vec<u8>>> {
+        let mut keys = std::collections::BTreeSet::new();
+        let mut collect_para = |p: &Paragraph| {
+            for o in &p.objects {
+                if let InlineObject::Image { media, .. } = o {
+                    keys.insert(media.clone());
+                }
+            }
+        };
+        for b in blocks {
+            each_para(b, 0, &mut collect_para);
+        }
+        for part in self.text_box_parts(blocks).values() {
+            for b in &part.blocks {
+                each_para(b, 0, &mut collect_para);
+            }
+        }
+        let mut out = BTreeMap::new();
+        for k in keys {
+            if let Some(data) = self.media.get(&k) {
+                out.insert(k, data.clone());
+            }
         }
         out
     }
@@ -1389,6 +1424,11 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
+        for (k, v) in &frag.media {
+            if !self.media.contains_key(k) {
+                self.media.insert(k.clone(), v.clone());
+            }
+        }
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).
         let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
         let mut blocks = Vec::with_capacity(frag.blocks.len());
