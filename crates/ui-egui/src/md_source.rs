@@ -33,9 +33,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let doc_id = app.session.document_id();
     let id = box_id(doc_id);
     let mut changed = false;
-    let mut truncated = false;
+    let mut refused = false;
     {
         let Some(src) = app.session.md_source.as_mut() else { return };
+        if src.reset_undo {
+            src.reset_undo = false;
+            reset_undo_history(ui.ctx(), doc_id);
+        }
         if src.loses_content {
             egui::Frame::NONE.fill(t.hover).inner_margin(egui::Margin::symmetric(12, 6)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -44,6 +48,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ));
             });
         }
+        let has_input = ui.input(|i| i.events.iter().any(|e| !matches!(e, egui::Event::PointerMoved(_))));
+        let prev_text = if has_input { Some(src.text.clone()) } else { None };
+        let prev_caret = src.caret;
         egui::ScrollArea::vertical().id_salt(id).auto_shrink(false).show(ui, |ui| {
             let size = ui.available_size();
             let mut out = egui::TextEdit::multiline(&mut src.text)
@@ -59,10 +66,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 .show(ui);
             changed = out.response.changed();
             if changed && src.text.len() > wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES {
-                let limit = src.text.floor_char_boundary(wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES);
-                src.text.truncate(limit);
-                src.caret = src.caret.min(limit);
-                truncated = true;
+                if let Some(prev) = prev_text {
+                    src.text = prev;
+                    src.caret = prev_caret;
+                } else {
+                    let limit = src.text.floor_char_boundary(wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES);
+                    src.text.truncate(limit);
+                    src.caret = src.caret.min(limit);
+                }
+                changed = false;
+                refused = true;
+                src.place_caret = true;
             }
             let caret_changed = if src.place_caret {
                 src.place_caret = false;
@@ -87,7 +101,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     }
-    if truncated {
+    if refused {
         app.status(tl!("Markdown Source takes up to 2 MB of text"));
     }
     if changed {
@@ -118,6 +132,16 @@ pub(crate) fn invalidate_undo_cache(ctx: &egui::Context, document: u64) {
     ctx.data_mut(|d| d.remove::<CachedUndoState>(undo_cache_id(document)));
 }
 
+/// Clears the stored typing history for `document`'s Markdown Source text box and invalidates the cache.
+pub(crate) fn reset_undo_history(ctx: &egui::Context, document: u64) {
+    let id = box_id(document);
+    if let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) {
+        state.clear_undoer();
+        state.store(ctx, id);
+    }
+    invalidate_undo_cache(ctx, document);
+}
+
 /// A text box's state for its typing history: the selection and the text.
 type Typed = (CCursorRange, String);
 
@@ -125,7 +149,10 @@ type Typed = (CCursorRange, String);
 fn history(app: &WordApp) -> Option<(egui::Context, egui::text_edit::TextEditState, egui::util::undoer::Undoer<Typed>, Typed)> {
     let ctx = app.ctx.clone()?;
     let src = app.session.md_source.as_ref()?;
-    let state = egui::text_edit::TextEditState::load(&ctx, box_id(app.session.document_id()))?;
+    let mut state = egui::text_edit::TextEditState::load(&ctx, box_id(app.session.document_id()))?;
+    if src.reset_undo {
+        state.clear_undoer();
+    }
     let undoer = state.undoer();
     let caret_chars = src.text[..src.text.floor_char_boundary(src.caret)].chars().count();
     let range = state.cursor.char_range().unwrap_or(CCursorRange::one(CCursor::new(caret_chars)));
@@ -136,6 +163,9 @@ fn history(app: &WordApp) -> Option<(egui::Context, egui::text_edit::TextEditSta
 pub fn can_undo(app: &WordApp, redo: bool) -> bool {
     let Some(ctx) = app.ctx.as_ref() else { return false };
     let doc_id = app.session.document_id();
+    if app.session.md_source.as_ref().is_some_and(|s| s.reset_undo) {
+        reset_undo_history(ctx, doc_id);
+    }
     let cache_key = undo_cache_id(doc_id);
     if let Some(cached) = ctx.data(|d| d.get_temp::<CachedUndoState>(cache_key)) {
         return if redo { cached.can_redo } else { cached.can_undo };
@@ -174,6 +204,7 @@ mod tests {
     use super::*;
     use egui_kittest::kittest::Queryable;
 
+    /// Builds a test harness for Markdown Source UI integration tests.
     fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -204,6 +235,7 @@ mod tests {
         (a, dir)
     }
 
+    /// Verifies Markdown Source pane displays text and captures keyboard focus.
     #[test]
     fn the_pane_shows_the_text_and_takes_the_keyboard() {
         let (mut a, dir) = opened("keys");
@@ -216,6 +248,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Verifies typing in source view marks document dirty and Ctrl+S saves it.
     #[test]
     fn typing_is_an_unsaved_change_and_ctrl_s_saves_it() {
         let (mut a, dir) = opened("save");
@@ -233,6 +266,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Verifies QAT undo and redo arrows work for typing in the source pane.
     #[test]
     fn the_arrows_undo_and_redo_typing_in_the_pane() {
         let (mut a, dir) = opened("arrows");
@@ -257,6 +291,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Verifies rewrite warning stays displayed for twenty seconds on the status bar.
     #[test]
     fn the_rewrite_warning_stays_longer_than_other_messages() {
         let (mut a, dir) = opened("warning");
@@ -269,6 +304,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Verifies formatting ribbon controls are greyed out while Markdown Source pane is active.
     #[test]
     fn the_ribbon_greys_out_edits_while_the_pane_is_open() {
         let (mut a, dir) = opened("grey");
@@ -279,22 +315,72 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Verifies that typing beyond `MAX_SOURCE_BYTES` truncates at boundary and warns.
+    /// Verifies that typing or pasting beyond `MAX_SOURCE_BYTES` is refused, keeping the previous text and warning.
     #[test]
-    fn text_exceeding_max_source_bytes_is_truncated_and_warns() {
+    fn text_exceeding_max_source_bytes_is_refused_and_warns() {
         let (mut a, dir) = opened("oversize");
         a.run("view.markdownSource", json!({})).unwrap();
         let limit = wordcraft_engine::cmd::md_source::MAX_SOURCE_BYTES;
         let half = limit / 2;
-        a.session.md_source.as_mut().unwrap().text = "é".repeat(half);
+        let original = format!("START {} END", "é".repeat(half - 10));
+        let original_len = original.len();
+        a.session.md_source.as_mut().unwrap().text = original.clone();
         let mut h = harness(a);
         h.run();
-        h.event(egui::Event::Text("ééééé".into()));
+        h.event(egui::Event::Text("é".repeat(100)));
         h.run();
-        let text_len = h.state().session.md_source.as_ref().unwrap().text.len();
-        assert_eq!(text_len, limit);
+        let current_text = h.state().session.md_source.as_ref().unwrap().text.clone();
+        assert_eq!(current_text, original, "over-limit text must be refused without truncating document end");
+        assert_eq!(current_text.len(), original_len);
         let status = h.state().status_msg.as_ref().map(|(s, _)| s.as_str());
         assert_eq!(status, Some("Markdown Source takes up to 2 MB of text"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Verifies that pointer movement alone does not take a snapshot or alter Markdown Source state.
+    #[test]
+    fn pointer_movement_does_not_mutate_or_affect_markdown_source() {
+        let (mut a, dir) = opened("pointer");
+        a.run("view.markdownSource", json!({})).unwrap();
+        let mut h = harness(a);
+        h.run();
+        let before_text = h.state().session.md_source.as_ref().unwrap().text.clone();
+        h.event(egui::Event::PointerMoved(egui::pos2(100.0, 200.0)));
+        h.run();
+        assert_eq!(h.state().session.md_source.as_ref().unwrap().text, before_text);
+        assert!(!h.state().session.dirty);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Verifies that reopening Markdown Source after formatted edits resets undo history
+    /// so that previous visit edits cannot be restored by Undo.
+    #[test]
+    fn reopening_pane_resets_undo_history_from_previous_visit() {
+        let (mut a, dir) = opened("reopen_undo");
+        a.run("view.markdownSource", json!({})).unwrap();
+        let mut h = harness(a);
+        h.run();
+        h.event(egui::Event::Text("First visit. ".into()));
+        h.run();
+        assert!(crate::chrome::qat_enabled(h.state(), "edit.undo"), "undo enabled after typing");
+
+        // Leave pane back to formatted view
+        h.state_mut().run("view.markdownSource", json!({})).unwrap();
+        h.run();
+        assert!(h.state().session.md_source.is_none(), "left source view");
+
+        // Make formatted edits in document
+        h.state_mut().run("text.insert", json!({"text": "Formatted edit. "})).unwrap();
+        h.run();
+
+        // Reopen pane
+        h.state_mut().run("view.markdownSource", json!({})).unwrap();
+        h.run();
+
+        // Undo must NOT be enabled for the Markdown pane, and edit.undo must return error
+        assert!(!crate::chrome::qat_enabled(h.state(), "edit.undo"), "undo must be reset on reopening pane");
+        assert!(h.state_mut().run("edit.undo", json!({})).is_err(), "undo command must fail when nothing typed in current visit");
+
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

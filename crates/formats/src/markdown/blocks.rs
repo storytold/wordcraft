@@ -220,8 +220,13 @@ pub fn parse_with_lines(text: &str) -> (model::Flow, Vec<usize>) {
 /// [`import_on`] returning the document and the 0-based starting line of each top-level block.
 pub fn import_on_with_lines(text: &str, page: &wordcraft_doc::SectionProps) -> (Document, Vec<usize>) {
     model::begin_import();
-    let (flow, lines) = parse_with_lines(text);
-    (model::to_doc_in(&flow, page.clone()), lines)
+    let (flow, mut lines) = parse_with_lines(text);
+    let doc = model::to_doc_in(&flow, page.clone());
+    if doc.body.len() > lines.len() {
+        let end_line = text.as_bytes().iter().filter(|&&b| b == b'\n').count();
+        lines.resize(doc.body.len(), end_line);
+    }
+    (doc, lines)
 }
 
 /// Leading tabs → spaces (tab stops of 4); the rest of the line is kept.
@@ -481,6 +486,7 @@ fn join_lines(lines: &[String]) -> String {
     s
 }
 
+/// Creates a single code block paragraph for an indented code line.
 fn code_para(line: &str) -> FBlock {
     let mut p = Para::new(Kind::Code);
     p.push_text(line, &Fmt::default());
@@ -700,6 +706,7 @@ fn parse_quote(lines: &[String], i: &mut usize, ctx: &BlockCtx<'_>, out: &mut Ve
     }
 }
 
+/// Computes columns and byte count for spaces following a list item marker.
 fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
     let mut cols = 0;
     let mut bytes = 0;

@@ -22,6 +22,7 @@ impl WordApp {
         msg
     }
 
+    /// Sets a temporary status message in the bottom status bar.
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
     }

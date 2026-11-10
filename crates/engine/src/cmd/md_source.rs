@@ -35,6 +35,8 @@ pub struct MdSource {
     pub caret: usize,
     /// The front end still has to put its caret at `caret` and show it.
     pub place_caret: bool,
+    /// The front end still has to reset its typing history from earlier visits.
+    pub reset_undo: bool,
     /// Markdown can't represent all of the document: applying a changed text loses something.
     pub loses_content: bool,
     /// When the front end last applied the text while it was being typed, on its own clock.
@@ -43,10 +45,14 @@ pub struct MdSource {
     entry_text: Arc<str>,
     /// The document on entry, which that text stands for: back to it, nothing is lost.
     entry_doc: Arc<Document>,
+    /// The line each top-level block of `entry_doc` starts on.
+    entry_lines: Vec<usize>,
     /// The text the document now holds.
     applied: Arc<str>,
     /// The visit has its undo step.
     has_step: bool,
+    /// The undo mark recorded when the visit took its undo step, if one was taken.
+    step: Option<u64>,
     /// The line each top-level block starts on, from the last parse.
     block_lines: Vec<usize>,
 }
@@ -70,10 +76,10 @@ pub struct FileText {
 }
 
 impl FileText {
-    /// A file's bytes as its text, if they can be written back as they are: UTF-8 without a byte
-    /// order mark, not empty, and no longer than the view takes.
+    /// A file's bytes as its text, if they can be written back as they are: valid UTF-8,
+    /// not empty, and no longer than the view takes.
     pub fn from_bytes(bytes: &[u8]) -> Self {
-        let keep = !bytes.is_empty() && bytes.len() <= MAX_SOURCE_BYTES && !bytes.starts_with(b"\xEF\xBB\xBF");
+        let keep = !bytes.is_empty() && bytes.len() <= MAX_SOURCE_BYTES;
         let saved = keep.then(|| std::str::from_utf8(bytes).ok()).flatten().map(str::to_string);
         Self { saved, latest: None, cached_exact: RefCell::new(None) }
     }
@@ -187,8 +193,10 @@ fn text(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(caret) = v.get("caret").and_then(Value::as_u64) {
         let caret = usize::try_from(caret).unwrap_or(usize::MAX).min(src.text.len());
         src.caret = src.text.floor_char_boundary(caret);
+        src.place_caret = true;
     }
     if edited {
+        src.place_caret = true;
         s.dirty = true;
     }
     let mut result = json!({"caret": src.caret, "losesContent": src.loses_content});
@@ -214,7 +222,7 @@ fn enter(s: &mut Session) -> Result<(), CmdError> {
         None => {
             let text = wordcraft_formats::markdown::export(&s.doc);
             if text.len() > MAX_SOURCE_BYTES {
-                return Err(CmdError::Params(too_long()));
+                return Err(CmdError::Failed(too_long()));
             }
             let (doc, lines) = parse_with_lines(&s.doc, &text);
             let loses_content = !doc.same_content(&s.doc);
@@ -225,16 +233,20 @@ fn enter(s: &mut Session) -> Result<(), CmdError> {
     let line = block_lines.get(block).copied().unwrap_or(0);
     let caret = line_start_byte(&text, line);
     let text_arc: Arc<str> = Arc::from(text.as_str());
+    let entry_lines = block_lines.clone();
     s.md_source = Some(MdSource {
         caret,
         place_caret: true,
+        reset_undo: true,
         loses_content,
         applied_at_ms: 0.0,
         entry_doc: Arc::new(s.doc.clone()),
+        entry_lines,
         entry_text: text_arc.clone(),
         applied: text_arc,
         text,
         has_step: false,
+        step: None,
         block_lines,
     });
     Ok(())
@@ -243,12 +255,20 @@ fn enter(s: &mut Session) -> Result<(), CmdError> {
 /// Leaves Markdown Source view, applying changes to the document model.
 fn leave(s: &mut Session) {
     // `Session::run` took a step for this command: the visit's first, or one too many.
+    // If the toggle was joined to an earlier edit (`join_next_undo`), it created no checkpoint.
     let had_step = s.md_source.as_ref().is_some_and(|src| src.has_step);
-    if had_step {
+    let step = s.md_source.as_ref().and_then(|src| src.step);
+    let mark = s.undo_mark();
+    let toggle_created_step = step.is_some_and(|step| mark > step);
+    if toggle_created_step {
         s.drop_last_undo_step();
     }
+    let mark_after = s.undo_mark();
     if let Some(src) = s.md_source.as_mut() {
         src.has_step = true;
+        if src.step.is_none() {
+            src.step = Some(mark_after);
+        }
     }
     apply(s);
     if let Some(src) = s.md_source.take()
@@ -262,17 +282,20 @@ fn leave(s: &mut Session) {
 /// The text into the document, if it has edits the document lacks. Its first change in a visit
 /// takes the visit's undo step. Save, AutoSave and crash recovery see the text this way.
 pub fn apply(s: &mut Session) {
-    let (text, entry_text, entry_doc, has_step, block_lines) = {
+    let (text, entry_text, entry_doc, has_step, entry_lines) = {
         let Some(src) = s.md_source.as_ref().filter(|src| src.is_pending()) else { return };
         if src.text.len() > MAX_SOURCE_BYTES {
             return;
         }
-        (src.text.clone(), src.entry_text.clone(), src.entry_doc.clone(), src.has_step, src.block_lines.clone())
+        (src.text.clone(), src.entry_text.clone(), src.entry_doc.clone(), src.has_step, src.entry_lines.clone())
     };
-    let (doc, lines) = if text == *entry_text { ((*entry_doc).clone(), block_lines) } else { parse_with_lines(&s.doc, &text) };
-    if !has_step {
+    let (doc, lines) = if text == *entry_text { ((*entry_doc).clone(), entry_lines) } else { parse_with_lines(&s.doc, &text) };
+    let step = if !has_step {
         s.checkpoint(LABEL);
-    }
+        Some(s.undo_mark())
+    } else {
+        s.md_source.as_ref().and_then(|src| src.step)
+    };
     s.doc = doc;
     s.note_body_replaced();
     s.math = None;
@@ -284,6 +307,7 @@ pub fn apply(s: &mut Session) {
         src.applied = Arc::from(text.as_str());
         src.block_lines = lines;
         src.has_step = true;
+        src.step = step;
     }
 }
 
@@ -374,6 +398,7 @@ mod tests {
 
     const SAMPLE: &str = "# Title\n\nFirst paragraph.\n\n## Second\n\n- one\n- two\n\nLast **bold** paragraph.\n";
 
+    /// Creates a test session with a Markdown document and a dummy path.
     fn session(md: &str) -> Session {
         let mut s = Session::new(crate::io::open_bytes("a.md", md.as_bytes()).unwrap());
         s.path = Some(PathBuf::from("/tmp/wordcraft-md-source-test.md"));
@@ -381,14 +406,17 @@ mod tests {
         s
     }
 
+    /// Runs the Markdown Source text command with `text`.
     fn set_text(s: &mut Session, text: &str) {
         s.run(TEXT, &json!({"text": text})).unwrap();
     }
 
+    /// Extracts the plain body text of `s`.
     fn body_text(s: &Session) -> String {
         s.doc.plain_text(StoryRef::Body)
     }
 
+    /// Verifies entering and leaving without changes does not mutate document or add undo step.
     #[test]
     fn a_visit_that_changes_nothing_is_no_edit() {
         let mut s = session(SAMPLE);
@@ -404,6 +432,7 @@ mod tests {
         assert_eq!(s.undo_depth(), depth, "and no undo step");
     }
 
+    /// Verifies edited source text becomes document upon leaving and one undo reverts the visit.
     #[test]
     fn an_edited_text_becomes_the_document_and_one_undo_takes_it_back() {
         let mut s = session(SAMPLE);
@@ -422,12 +451,14 @@ mod tests {
 
     static TEST_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+    /// Generates a unique temporary directory for test file isolation.
     fn unique_temp_dir(tag: &str) -> PathBuf {
         let n = TEST_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
         std::env::temp_dir().join(format!("wordcraft-md-{tag}-{}-{n}-{nanos}", std::process::id()))
     }
 
+    /// Verifies saving within source view writes text to disk while keeping view open and preserving undo.
     #[test]
     fn save_writes_the_text_and_the_visit_stays_one_undo_step() {
         let dir = unique_temp_dir("source-save");
@@ -455,6 +486,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Verifies returning to the original entry text restores formatting that Markdown cannot represent and maps the caret using entry block lines.
     #[test]
     fn going_back_to_the_entry_text_restores_what_markdown_cannot_hold() {
         let mut s = session(SAMPLE);
@@ -467,10 +499,34 @@ mod tests {
         apply(&mut s);
         assert!(!s.doc.same_content(&before));
         set_text(&mut s, &text);
+        let last_off = text.find("Last ").unwrap_or(0);
+        s.run(TEXT, &json!({"caret": last_off})).unwrap();
         s.run(TOGGLE, &json!({})).unwrap();
         assert!(s.doc.same_content(&before));
+        assert_eq!(s.sel.focus.path.0.first().copied(), Some(5));
     }
 
+    /// Verifies that leaving Markdown Source with `join_next_undo` after an applied edit keeps the visit's undo checkpoint.
+    #[test]
+    fn leaving_joined_after_an_applied_edit_keeps_the_visits_undo_step() {
+        let mut s = session(SAMPLE);
+        let before = body_text(&s);
+        s.run(TOGGLE, &json!({})).unwrap();
+        set_text(&mut s, "# Intermediate\n");
+        apply(&mut s);
+        assert_eq!(s.undo_depth(), 1);
+        set_text(&mut s, "# Final\n");
+        s.join_next_undo();
+        s.run(TOGGLE, &json!({"value": false})).unwrap();
+        assert!(s.md_source.is_none());
+        assert!(body_text(&s).contains("Final"));
+        assert_eq!(s.undo_depth(), 1);
+        assert!(s.can_undo());
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(body_text(&s), before);
+    }
+
+    /// Verifies that opening an unedited Markdown file reports no content loss on entry.
     #[test]
     fn markdown_the_document_came_from_is_not_reported_as_lost() {
         let s = &mut session(SAMPLE);
@@ -478,6 +534,7 @@ mod tests {
         assert!(!s.md_source.as_ref().unwrap().loses_content);
     }
 
+    /// Verifies standard document editing commands are disabled while Markdown Source view is open.
     #[test]
     fn edits_are_refused_while_the_text_is_open_and_nothing_is_lost() {
         let mut s = session(SAMPLE);
@@ -492,6 +549,7 @@ mod tests {
         assert_eq!(s.md_source.as_ref().unwrap().text, "# Kept\n");
     }
 
+    /// Verifies switching view mode leaves Markdown Source view and applies edits.
     #[test]
     fn changing_the_view_leaves_with_the_edits() {
         let mut s = session(SAMPLE);
@@ -503,6 +561,7 @@ mod tests {
         assert_eq!(s.view.mode, ViewMode::Web);
     }
 
+    /// Verifies only unprotected Markdown files without tracked changes can enter Markdown Source.
     #[test]
     fn only_markdown_files_without_tracking_or_protection_enter() {
         let mut s = Session::new(Document::from_text("Text"));
@@ -522,6 +581,7 @@ mod tests {
         s.run(TOGGLE, &json!({})).unwrap();
     }
 
+    /// Verifies source text exceeding limit is refused with CmdError::Failed.
     #[test]
     fn a_text_too_long_is_refused() {
         let mut s = session(SAMPLE);
@@ -531,10 +591,11 @@ mod tests {
         s.run(TOGGLE, &json!({})).unwrap();
         s.set_document(Document::from_text(&"x".repeat(MAX_SOURCE_BYTES + 1)));
         s.path = Some(PathBuf::from("/tmp/a.md"));
-        assert!(matches!(s.run(TOGGLE, &json!({})), Err(CmdError::Params(_))));
+        assert!(matches!(s.run(TOGGLE, &json!({})), Err(CmdError::Failed(_))));
         assert!(s.md_source.is_none());
     }
 
+    /// Verifies caret stays synchronized with its paragraph when entering and leaving source view.
     #[test]
     fn the_caret_stays_with_its_paragraph_both_ways() {
         let mut s = session(SAMPLE);
@@ -557,6 +618,28 @@ mod tests {
         assert!(para.plain_text().contains("Last"), "{:?}", para.plain_text());
     }
 
+    /// Verifies that the caret in the trailing paragraph appended after a final table maps to the end of the text.
+    #[test]
+    fn caret_in_appended_paragraph_after_final_table_stays_at_end() {
+        let md = "| Col1 | Col2 |\n|---|---|\n| Val1 | Val2 |\n";
+        let mut s = session(md);
+        let trailing_para = s
+            .doc
+            .para_paths(StoryRef::Body)
+            .into_iter()
+            .find(|path| path.0.first() == Some(&1))
+            .expect("document ending in a table must have an appended paragraph");
+        s.sel = Selection::caret(Pos { story: StoryRef::Body, path: trailing_para, off: 0 });
+
+        s.run(TOGGLE, &json!({})).unwrap();
+        let src = s.md_source.as_ref().unwrap();
+        assert_eq!(src.caret, src.text.len(), "caret must land after the table at the end of the text");
+
+        s.run(TOGGLE, &json!({})).unwrap();
+        assert_eq!(s.sel.focus.path.0.first(), Some(&1), "caret must stay in the appended paragraph after table");
+    }
+
+    /// Verifies hostile carets and texts do not panic.
     #[test]
     fn hostile_carets_and_texts_do_not_panic() {
         let mut s = session(SAMPLE);
@@ -570,6 +653,7 @@ mod tests {
         }
     }
 
+    /// Verifies a parked document preserves its Markdown Source text.
     #[test]
     fn a_parked_document_keeps_its_text() {
         let mut s = session(SAMPLE);
@@ -602,17 +686,20 @@ mod tests {
         (s, path)
     }
 
+    /// Saves the session document via `file.save`.
     fn save(s: &mut Session) -> Value {
         s.run("file.save", &json!({})).unwrap()
     }
 
+    /// Removes the temporary test folder created for `path`.
     fn done(path: &std::path::Path) {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
+    /// Verifies unedited Markdown files are written back byte-for-byte upon save.
     #[test]
     fn a_file_saved_without_edits_is_written_back_byte_for_byte() {
-        for (dir, text) in [("plain", OWN.to_string()), ("crlf", OWN.replace('\n', "\r\n"))] {
+        for (dir, text) in [("plain", OWN.to_string()), ("crlf", OWN.replace('\n', "\r\n")), ("bom", format!("\u{FEFF}{OWN}"))] {
             let (mut s, path) = open_file(dir, "own.md", text.as_bytes());
             assert_eq!(save(&mut s)["rewritten"], false, "{dir}");
             assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "{dir}");
@@ -620,6 +707,19 @@ mod tests {
         }
     }
 
+    /// Verifies BOM-prefixed Markdown files retain original bytes when saved without edits.
+    #[test]
+    fn a_bom_prefixed_file_saved_without_edits_retains_its_original_bytes() {
+        let bom = [b"\xEF\xBB\xBF".as_slice(), OWN.as_bytes()].concat();
+        let (mut s, path) = open_file("bom-exact", "own.md", &bom);
+        assert!(!s.md_file.is_empty(), "BOM file text must be kept");
+        assert_eq!(save(&mut s)["rewritten"], false);
+        let read = std::fs::read(&path).unwrap();
+        assert_eq!(read, bom, "Saved bytes must match original BOM bytes byte-for-byte");
+        done(&path);
+    }
+
+    /// Verifies Markdown Source view displays the file's own unedited text.
     #[test]
     fn the_view_shows_the_files_own_text() {
         let (mut s, path) = open_file("view", "own.md", OWN.as_bytes());
@@ -630,6 +730,7 @@ mod tests {
         done(&path);
     }
 
+    /// Verifies edits made directly in Markdown Source view are saved as typed.
     #[test]
     fn edits_in_the_view_are_saved_as_typed() {
         let (mut s, path) = open_file("typed", "own.md", OWN.as_bytes());
@@ -648,6 +749,7 @@ mod tests {
         done(&path);
     }
 
+    /// Verifies formatted edits force re-exporting the document on save with a warning.
     #[test]
     fn an_edit_in_the_formatted_view_writes_the_document_out_again_once_with_a_warning() {
         let (mut s, path) = open_file("formatted", "own.md", OWN.as_bytes());
@@ -661,6 +763,7 @@ mod tests {
         done(&path);
     }
 
+    /// Verifies undoing back to original kept text restores original formatting.
     #[test]
     fn undoing_back_to_a_kept_text_finds_it_again() {
         // A formatted edit undone.
@@ -684,11 +787,11 @@ mod tests {
         done(&path);
     }
 
+    /// Verifies files that cannot go back as they were are written out without rewriting warnings.
     #[test]
     fn files_that_cannot_go_back_as_they_were_are_written_out_without_a_warning() {
-        let bom = [b"\xEF\xBB\xBF".as_slice(), OWN.as_bytes()].concat();
         let latin1 = b"Caf\xE9 au lait.\n".to_vec();
-        for (dir, bytes) in [("bom", bom), ("latin1", latin1), ("empty", Vec::new())] {
+        for (dir, bytes) in [("latin1", latin1), ("empty", Vec::new())] {
             let (mut s, path) = open_file(dir, "own.md", &bytes);
             assert!(s.md_file.is_empty(), "{dir}");
             s.run("text.insert", &json!({"text": "New "})).unwrap();
@@ -705,6 +808,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Verifies markdown source text command sets place_caret flag on explicit carets and edits.
+    #[test]
+    fn markdown_source_text_command_sets_place_caret() {
+        let mut s = session(SAMPLE);
+        s.run(TOGGLE, &json!({})).unwrap();
+        assert!(s.md_source.as_ref().unwrap().place_caret);
+        s.md_source.as_mut().unwrap().place_caret = false;
+        s.run(TEXT, &json!({"caret": 3})).unwrap();
+        assert!(s.md_source.as_ref().unwrap().place_caret);
+        s.md_source.as_mut().unwrap().place_caret = false;
+        s.run(TEXT, &json!({"text": "# Changed\n"})).unwrap();
+        assert!(s.md_source.as_ref().unwrap().place_caret);
+    }
+
+    /// Verifies caret finds its matching line in file's own text.
     #[test]
     fn the_caret_finds_its_line_in_the_files_own_text() {
         let (mut s, path) = open_file("caret", "own.md", OWN.as_bytes());
@@ -722,6 +840,7 @@ mod tests {
         done(&path);
     }
 
+    /// Verifies opening another document over session closes Markdown Source view.
     #[test]
     fn opening_over_the_document_closes_the_view() {
         let mut s = session(SAMPLE);
@@ -730,6 +849,7 @@ mod tests {
         assert!(s.md_source.is_none());
     }
 
+    /// Verifies invalid and negative carets are refused with CmdError::Params.
     #[test]
     fn invalid_and_negative_carets_are_refused() {
         let mut s = session(SAMPLE);
@@ -739,6 +859,7 @@ mod tests {
         }
     }
 
+    /// Verifies markdown source text command is marked as mutating.
     #[test]
     fn markdown_source_text_is_not_marked_pure() {
         let s = session(SAMPLE);

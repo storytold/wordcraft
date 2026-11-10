@@ -776,6 +776,7 @@ fn exported_link_destinations_read_back_unchanged() {
     assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
 }
 
+/// Verifies that trailing escaped hashes on headings survive round-trip export.
 #[test]
 fn heading_trailing_hash_survives_round_trip() {
     let heading = |md: &str| {
@@ -798,6 +799,7 @@ fn heading_trailing_hash_survives_round_trip() {
     }
 }
 
+/// Verifies that block line mapping tracks source-line indexes accurately across definitions.
 #[test]
 fn block_line_mapping() {
     let md = "# Title\n\nFirst paragraph.\n\n## Second\n\n- one\n- two\n\n```\ncode\n```\n\nLast paragraph.\n";
@@ -818,6 +820,7 @@ fn block_line_mapping() {
     assert_eq!(lines[1], 4, "paragraph on line 4 after definition on line 3");
 }
 
+/// Verifies linear remapping of original lines after removing definitions.
 #[test]
 fn remap_original_lines_cases() {
     let mut lines = vec![0, 1, 2, 3, 4];
