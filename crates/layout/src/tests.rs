@@ -14504,6 +14504,62 @@ fn minimum_insets_move_rows() {
     }
 }
 
+/// The move-on rule reads every row's minimum height (insets included) while the table is being
+/// placed, also once the rows are on their way to the pages: a 200 pt at-least row with 10 pt
+/// cell margins needs 220 pt, so with 205 pt left it starts the next page whole, after a run of
+/// rows placed before it and right under a header row (where the whole table moves on).
+#[test]
+fn minimum_insets_move_rows_after_other_rows_and_under_headers() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let body = 648.0;
+    let room = 205.0;
+    let plain = ParaProps {
+        line_spacing: Some(LineSpacing::Exactly(10.0)),
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        widow_control: Some(false),
+        keep_lines: Some(false),
+        keep_next: Some(false),
+        ..Default::default()
+    };
+    // (rows before the at-least row, whether they are header rows)
+    for (before, header) in [(12usize, false), (1, true)] {
+        let mut d = Document::from_text("Filler");
+        let filler = body - room - before as f32 * 10.0;
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props = ParaProps { line_spacing: Some(LineSpacing::Exactly(filler)), ..plain.clone() };
+        let mut table = Table::new(before + 1, 1, 400.0);
+        table.props.style = None;
+        table.props.cell_margins = Some([10.0, 0.0, 10.0, 0.0]);
+        for row in table.rows.iter_mut().take(before) {
+            row.props.height = Some(10.0);
+            row.props.height_rule = HeightRule::Exact;
+            row.props.header = header;
+        }
+        let row = &mut table.rows[before];
+        row.props.height = Some(200.0);
+        row.props.height_rule = HeightRule::AtLeast;
+        let mut p = Paragraph::with_text(&vec!["Line"; 35].join("\n"), Default::default());
+        p.props = plain.clone();
+        row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        d.body.push(Arc::new(Block::Table(table)));
+        let l = lay(&d);
+        let pages_of = |r: usize| -> Vec<usize> {
+            l.pages
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.items.iter().any(|it| matches!(it, Placed::Cell { row, table, .. } if *row == r && table.0.len() == 1)))
+                .map(|(n, _)| n)
+                .collect()
+        };
+        assert_eq!(pages_of(before).first(), Some(&1), "before={before}, header={header}: the at-least row starts the next page whole");
+        if header {
+            assert_eq!(pages_of(0).first(), Some(&1), "the header row isn't left alone at the bottom of the first page");
+        } else {
+            assert_eq!(pages_of(0), vec![0], "the rows before it stay on the first page");
+        }
+    }
+}
+
 #[test]
 fn split_border_follows_content() {
     use wordcraft_doc::props::{HeightRule, LineSpacing};

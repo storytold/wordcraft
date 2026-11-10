@@ -174,6 +174,9 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     }
     let width = pb.col_w();
     let mut tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    // Each row's minimum height (insets included), read now: placing the rows may move them out
+    // of `tl`, and the move-on rule below still needs every row's.
+    let minima: Vec<f32> = tl.rows.iter().map(|r| r.min_height).collect();
     if let Some(f) = t.props.float.filter(|_| !pb.web) {
         // Before Word 2013 layout (compatibility mode 15) an offset places the first cell's text,
         // so the edge sits a cell margin further out.
@@ -230,7 +233,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     // Measured in Word: an at-least row's minimum height is reserved, not split. Where less room
     // than that is left on a page that already holds something, the row starts the next page
     // whole; a row taller than a page then splits from the top of that page.
-    let short_of_min = |ri: usize, room: f32| tl.rows.get(ri).is_some_and(|row| row.min_height > room + 0.01);
+    let short_of_min = |ri: usize, room: f32| minima.get(ri).is_some_and(|&min| min > room + 0.01);
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
     // after them can't start under them there, the table starts on the next page.
     let first = header_rows.len();
