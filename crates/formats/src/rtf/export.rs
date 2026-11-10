@@ -560,6 +560,9 @@ impl Writer {
     }
 
     fn picture(&mut self, img: &model::Img, out: &mut String) {
+        if !can_write_picture(&img.ext, &img.data) {
+            return;
+        }
         // A metafile's `\picw`/`\pich` are its size in 0.01 mm (#4259).
         let hundredths = ((img.w * 2540.0 / 72.0).round() as i64, (img.h * 2540.0 / 72.0).round() as i64);
         let (data, blip) = match img.ext.as_str() {
@@ -883,6 +886,24 @@ fn level_def(ordered: bool, l: usize) -> String {
             ch as u32 as i16
         )
     }
+}
+
+/// Whether the RTF writer keeps a picture with this extension ([`model::media_ext`]) and bytes:
+/// PNG, JPEG and the metafiles (EMF, WMF, #4259) go in as they are, other formats only when they
+/// can be read within the decode limit to re-encode as PNG (not SVG, nor a bitmap declaring huge
+/// dimensions, which are left out). Only the header is read: this runs after every edit.
+pub fn can_write_picture(ext: &str, data: &[u8]) -> bool {
+    match ext {
+        "png" | "jpeg" | "jpg" => return true,
+        // A metafile is written as it is, but a placeable header with nothing after it leaves no picture.
+        "emf" | "wmf" if !data.starts_with(&[1, 0, 0, 0]) => {
+            let body = if data.starts_with(&[0xD7, 0xCD, 0xC6, 0x9A]) { data.get(22..).unwrap_or_default() } else { data };
+            return !body.is_empty();
+        }
+        "emf" | "wmf" => return true,
+        _ => {}
+    }
+    wordcraft_geom::picture::probe(data).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES))
 }
 
 /// RTF text of a document.
