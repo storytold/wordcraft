@@ -1163,6 +1163,35 @@ fn an_armed_format_painter_changes_the_pointer() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the selection bar keeps its arrow");
 }
 
+/// The text pointer shows over the paper only: the grey beside a page keeps the arrow.
+#[test]
+fn the_text_pointer_stays_off_the_grey_around_the_page() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 4)).expect("caret");
+    let y = c.top + c.height / 2.0;
+    let on_page = page_to_screen(h.state_mut(), c.page, c.x, y).expect("on screen");
+    let beside = page_to_screen(h.state_mut(), c.page, -40.0, y).expect("on screen");
+    h.event(egui::Event::PointerMoved(on_page));
+    h.step();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "text pointer on the paper");
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow on the grey beside the page");
+}
+
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the
 /// painter goes off again (it was only dragging across the text that painted it).
 #[test]
