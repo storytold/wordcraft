@@ -2931,8 +2931,8 @@ fn cache_reuses_unchanged_paragraphs() {
 }
 
 /// The paragraph after a heading kept with it is measured before the heading is placed. That
-/// layout goes into the cache under the key it is placed with, so it is laid out once, and the
-/// pages are those of the uncached measurement (proofing on measures without the cache).
+/// layout goes into the cache under the key it is placed with, so it is laid out once, with
+/// proofing off or on, and proofing moves nothing.
 #[test]
 fn kept_headings_measure_the_next_paragraph_through_the_cache() {
     let mut d = Document::new();
@@ -2949,7 +2949,9 @@ fn kept_headings_measure_the_next_paragraph_through_the_cache() {
     assert!(l.pages.len() > 2, "{}", l.pages.len());
     assert_eq!(c.len(), d.body.len(), "one layout per paragraph");
     assert_eq!(c.misses, d.body.len() as u64, "each paragraph laid out once");
-    let proofed = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..Default::default() });
+    let mut c = LayoutCache::new();
+    let proofed = layout(&d, &mut c, &LayoutOptions { proofing: true, ..Default::default() });
+    assert_eq!(c.misses, d.body.len() as u64, "each paragraph laid out once with proofing on");
     let starts = |l: &DocLayout| (0..d.body.len()).map(|i| l.caret(&Pos::body(i, 0)).map(|c| (c.page, c.top.to_bits()))).collect::<Vec<_>>();
     assert_eq!(starts(&l), starts(&proofed));
 }

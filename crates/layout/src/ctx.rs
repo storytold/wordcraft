@@ -270,7 +270,7 @@ impl Ctx<'_> {
     }
 
     /// `p` laid out on its own, as the paragraph after a kept one is measured before it is placed
-    /// (no wrap areas, proofing, typed word or resized text boxes), through the cache when
+    /// (no wrap areas, typed word or resized text boxes), through the cache when
     /// [`Ctx::para_labelled`] would lay it out with those same inputs: it is then not laid out a
     /// second time when it is placed. Counts nothing (list labels, equation numbers, page totals).
     /// `None` when the inputs differ.
@@ -279,7 +279,7 @@ impl Ctx<'_> {
             .objects
             .iter()
             .any(|o| matches!(o, InlineObject::Shape { story: Some(_), float, .. } if float.wrap == Wrap::Inline && float.rot == 0.0));
-        if self.opts.proofing || self.boxes.inside() || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
+        if self.boxes.inside() || resized || self.hide_deleted != self.opts.hides_deleted(StoryRef::Body) {
             return None;
         }
         let kept = (self.eq_count, self.uses_totals);
