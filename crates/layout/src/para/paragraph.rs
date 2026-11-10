@@ -525,8 +525,34 @@ impl<'a> BreakText<'a> {
 /// Mark the clusters a line may break after.
 fn mark_break_opportunities(clusters: &mut [Cluster], bt: &BreakText, rp: &ResolvedPara) {
     let opps: std::collections::HashSet<usize> = break_positions(&bt.text, rp).into_iter().filter_map(|i| bt.to_para(i)).collect();
-    for c in clusters {
+    for c in clusters.iter_mut() {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    }
+    glue_objects(clusters);
+}
+
+/// An inline picture that takes room on the line is a character of the word it touches: Word
+/// keeps it and the text right after it (no space between) on one line. Zero-size objects
+/// (float anchors, empty separators) keep their break.
+///
+/// Touching pictures (only markers between them) go with that word as one unit, as in Word:
+/// `glue` is where the run of sized pictures starts while only pictures and markers follow it;
+/// markers between them and the text keep no break either.
+pub(crate) fn glue_objects(clusters: &mut [Cluster]) {
+    let mut glue: Option<usize> = None;
+    for i in 0..clusters.len() {
+        let Some(kind) = clusters.get(i).map(|c| (c.kind, c.adv > 0.0 || c.obj_h > 0.0)) else { break };
+        match kind {
+            (ClKind::Marker, _) => {}
+            (ClKind::Text, _) => {
+                for c in glue.and_then(|g| clusters.get_mut(g..i)).into_iter().flatten() {
+                    c.break_after = false;
+                }
+                glue = None;
+            }
+            (ClKind::Object(_), true) => glue = glue.or(Some(i)),
+            _ => glue = None,
+        }
     }
 }
 

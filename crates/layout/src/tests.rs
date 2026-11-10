@@ -18,6 +18,8 @@ mod nbsp;
 mod nested_cant_split;
 mod numeral;
 mod pages;
+mod picture_glue;
+mod picture_glue_touching;
 mod styleref;
 mod table_contact;
 mod textbox;
