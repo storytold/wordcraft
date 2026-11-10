@@ -1,5 +1,6 @@
 use super::doc_state::{CellRange, EDIT_MARKS, Selection};
 use super::{CharProps, Document, PartKind, Path, Pos, Session, StoryRef, ViewMode, untitled_name};
+use std::sync::Arc;
 
 impl Session {
     /// Remember the caret as the place of an edit, for Go Back. Edits in the same paragraph as
@@ -298,5 +299,19 @@ pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
     let (_, w, h) = region.paper();
     d.last_section.page_w = w;
     d.last_section.page_h = h;
+    d
+}
+
+/// A new blank document with the Normal template preferences applied: default language and
+/// default proofing setting (`default_no_proof`). This is the document a user gets when
+/// starting with the Start screen off, or when File › New creates a blank document.
+pub fn normal_document(s: &Session) -> Document {
+    let mut d = blank_document(&s.region());
+    if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
+        Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
+    }
+    if let Some(np) = s.prefs.default_no_proof {
+        Arc::make_mut(&mut d.styles).default_chr.no_proof = Some(np);
+    }
     d
 }

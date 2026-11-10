@@ -26,7 +26,7 @@ mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
-use wordcraft_engine::Session;
+use wordcraft_engine::{Session, normal_document};
 use wordcraft_ui_egui::{
     Services, UiState, WordApp,
     window_geometry::{RawWindowState, WindowGeometry, reachable, take_rescue},
@@ -594,12 +594,15 @@ fn main() -> eframe::Result {
             load_user_dictionary(&mut app);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
-            // A region chosen in File › Options replaces the system's for the first blank
-            // document too (#838).
-            if !sample && app.session.prefs.region.is_some() {
-                let doc = app.session.blank_document();
+            // Apply Normal template preferences (default language, default_no_proof) to the
+            // startup document when the Start screen is off (#838, CodeRabbit review).
+            if !sample {
+                let doc = normal_document(&app.session);
                 app.replace_startup_document(doc);
             }
+            // A region chosen in File › Options replaces the system's for the first blank
+            // document too (#838). This is handled by normal_document() which uses the session's
+            // region (already updated from prefs above).
             app.watch_desktop_theme(&cc.egui_ctx);
             if prefs_enabled()
                 && let Some(dir) = wordcraft_control_key::settings_dir()

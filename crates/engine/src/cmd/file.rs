@@ -287,20 +287,18 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
 /// in the editing language.
 fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+    let (mut doc, encrypted, is_plain_text) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
         if bytes.is_empty() {
-            (normal_document(s), false)
+            (normal_document(s), false, true)
         } else {
             crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
+        (normal_document(s), false, true)
     } else {
         crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
-    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
-    let is_plain_text = matches!(ext.as_str(), "txt" | "text" | "md" | "markdown");
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
         && is_plain_text
     {

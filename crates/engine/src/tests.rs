@@ -7463,7 +7463,7 @@ fn password_protected_documents_round_trip() {
     // Saving again keeps the password, as Word does.
     run(&mut t, "text.insert", json!({"text": "Q3 "}));
     run(&mut t, "file.save", json!({}));
-    let (doc, encrypted) = crate::io::open_path_with(&path, Some("hunter2")).unwrap();
+    let (doc, encrypted, _) = crate::io::open_path_with(&path, Some("hunter2")).unwrap();
     assert!(encrypted && doc.plain_text(StoryRef::Body).contains("Q3"));
 
     // Removing the password saves the document unencrypted.
