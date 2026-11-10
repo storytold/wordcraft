@@ -243,3 +243,36 @@ fn the_accounts_client_needs_the_desktop_app() {
     assert!(a.run("ui.drive.client", json!({"clientId": 5})).is_err());
     assert!(a.run("file.options", json!({"pane": "accounts"})).is_ok(), "the Accounts pane exists");
 }
+
+/// Every format File › Export offers for Google Drive is written from bytes, so the copy can be
+/// uploaded; the command refuses others and needs the desktop app.
+#[test]
+fn drive_export_formats_all_serialize() {
+    let mut a = app();
+    a.session = wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Synthetic export text"));
+    let opts = wordcraft_engine::cmd::file::export_options(&a.session, &json!({}));
+    for ext in super::EXPORT_FORMATS {
+        let bytes = wordcraft_engine::io::save_bytes_with(&format!("Copy.{ext}"), &a.session.doc, None, &opts);
+        assert!(bytes.is_ok_and(|b| !b.is_empty()), "{ext}");
+    }
+    assert!(a.run("ui.drive.export", json!({"format": "png"})).unwrap_err().contains("one of"));
+    assert!(a.run("ui.drive.export", json!({"format": 3})).is_err());
+    assert!(a.run("ui.drive.export", json!({"format": "pdf"})).unwrap_err().contains("desktop app"));
+    assert!(!super::exports_to_drive(&a), "not signed in: Export asks for a folder");
+}
+
+/// A Drive export is a copy: the document keeps its home and its unsaved changes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_drive_export_changes_nothing_about_the_document() {
+    let mut a = app();
+    let local = std::env::temp_dir().join("Essay.docx");
+    a.session.path = Some(local.clone());
+    a.session.dirty = true;
+    let mut file = drive_file();
+    file.name = "Essay.pdf".into();
+    super::native::apply(&mut a, super::native::Event::Exported(file));
+    assert_eq!(a.session.path.as_deref(), Some(local.as_path()));
+    assert!(a.session.dirty);
+    assert!(a.drive.origin(a.session.document_id()).is_none());
+}

@@ -471,8 +471,19 @@ pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
         ("Plain text (*.txt)", "txt"),
         ("Page image (*.png)", "png"),
     ] {
+        // To Google Drive (File › Options › Accounts): only the formats written from bytes.
+        let to_drive = crate::gdrive::exports_to_drive(app);
+        if to_drive && !crate::gdrive::EXPORT_FORMATS.contains(&ext) {
+            continue;
+        }
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
-            app.export_dialog(ext);
+            if to_drive {
+                if let Err(e) = app.run("ui.drive.export", json!({"format": ext})) {
+                    app.status(e);
+                }
+            } else {
+                app.export_dialog(ext);
+            }
         }
         ui.add_space(4.0);
     }

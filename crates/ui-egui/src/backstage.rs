@@ -905,6 +905,7 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Export");
     ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
     ui.add_space(12.0);
+    crate::gdrive::export_checkbox(app, ui);
     crate::print_page::export_formats(app, ui);
 }
 

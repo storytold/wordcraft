@@ -467,3 +467,10 @@ fn write_client_checks_the_id_keeps_the_scope_and_reads_back() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn export_names_get_their_types() {
+    for (name, mime) in [("a.pdf", "application/pdf"), ("a.html", "text/html"), ("a.md", "text/markdown"), ("a.odt", drive::MIME_ODT)] {
+        assert_eq!(drive::mime_for(name), mime, "{name}");
+    }
+}
