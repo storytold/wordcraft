@@ -732,3 +732,14 @@ fn recipient_cap_is_reported_and_edits_that_exceed_it_are_refused() {
     let r = s.run("mailings.recipients", &json!({"rows": rows, "fields": fields})).unwrap();
     assert_eq!((r["records"].clone(), r["dropped"].clone()), (json!(49_382), json!(618)));
 }
+
+/// A scalar entry is not a record, so it takes no slot under the cap.
+#[test]
+fn a_scalar_row_does_not_take_a_record_slot() {
+    let mut s = Session::new(Document::from_text("Hello"));
+    let fields: Vec<String> = (1..=80).map(|i| format!("F{i}")).collect();
+    let mut rows: Vec<Value> = vec![json!(1)];
+    rows.extend((0..50_000).map(|_| json!({})));
+    let r = s.run("mailings.recipients", &json!({"rows": rows, "fields": fields})).unwrap();
+    assert_eq!((r["records"].clone(), r.get("dropped")), (json!(50_000), None));
+}

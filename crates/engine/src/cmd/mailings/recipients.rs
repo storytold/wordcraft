@@ -130,16 +130,20 @@ fn table_from_rows(fields: Option<&Vec<Value>>, arr: &[Value]) -> Result<(Vec<St
             headers
         }
     };
+    // Only arrays and objects are records; a scalar entry takes no slot under the cap.
+    let valid = |r: &&Value| r.is_array() || r.is_object();
+    let keep = max_records(headers.len());
     let rows = arr
         .iter()
-        .take(max_records(headers.len()))
-        .filter_map(|r| match r {
-            Value::Array(cells) => Some((0..headers.len()).map(|i| cells.get(i).map(cell).unwrap_or_default()).collect()),
-            Value::Object(o) => Some(headers.iter().map(|h| o.get(h).map(cell).unwrap_or_default()).collect()),
-            _ => None,
+        .filter(valid)
+        .take(keep)
+        .map(|r| match r {
+            Value::Array(cells) => (0..headers.len()).map(|i| cells.get(i).map(cell).unwrap_or_default()).collect(),
+            Value::Object(o) => headers.iter().map(|h| o.get(h).map(cell).unwrap_or_default()).collect(),
+            _ => Vec::new(),
         })
         .collect();
-    let dropped = arr.len().saturating_sub(max_records(headers.len()));
+    let dropped = arr.iter().filter(valid).count().saturating_sub(keep);
     Ok((headers, rows, dropped))
 }
 
