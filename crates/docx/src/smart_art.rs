@@ -86,6 +86,8 @@ enum Paint {
     None,
     /// Theme accent `n` (1–6), lightened to `tint` (thousandths of a percent kept) when set.
     Accent(usize, Option<u32>),
+    /// A colour of its own, lightened to `tint` when set.
+    Rgb(Rgb, Option<u32>),
     /// The theme's light background colour.
     Light,
 }
@@ -148,6 +150,22 @@ impl Sh {
             tb: b,
             dark_text: false,
         }
+    }
+
+    /// Accent fills and outlines in item `i`'s own colour, when it has one. Light outlines
+    /// keep the theme's background colour so adjacent nodes remain separated.
+    fn recolor(&mut self, spec: &SmartArtSpec, i: usize) {
+        let Some(c) = spec.items.get(i).and_then(|it| it.color) else { return };
+        for p in [&mut self.fill, &mut self.line] {
+            if let Paint::Accent(_, tint) = *p {
+                *p = Paint::Rgb(c, tint);
+            }
+        }
+    }
+
+    fn item(mut self, spec: &SmartArtSpec, i: usize) -> Sh {
+        self.recolor(spec, i);
+        self
     }
 
     fn with_text(mut self, text: Vec<(String, bool)>) -> Sh {
@@ -226,7 +244,7 @@ fn basic_list(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         let in_row = if r + 1 == rows { n - r * cols } else { cols };
         let x0 = (w - (in_row as f32 * bw + (in_row - 1) as f32 * gx)) / 2.0;
         let b = [x0 + c as f32 * (bw + gx), y0 + r as f32 * (bh + gy), bw, bh];
-        out.push(Sh::node("rect", b, spec.colors.accent(k)).with_text(paras(spec, i, true)));
+        out.push(Sh::node("rect", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)));
     }
     out
 }
@@ -247,11 +265,14 @@ fn process(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         let mut a = Sh::node("rightArrow", [gx + (gap - aw) / 2.0, h / 2.0 - ah / 2.0, aw, ah], spec.colors.accent(k - 1));
         a.fill = Paint::Accent(spec.colors.accent(k - 1), Some(60_000));
         a.line = Paint::None;
+        if let Some(&i) = tops.get(k - 1) {
+            a.recolor(spec, i);
+        }
         out.push(a);
     }
     for (k, &i) in tops.iter().enumerate() {
         let b = [k as f32 * (nw + gap), y, nw, nh];
-        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).with_text(paras(spec, i, true)));
+        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)));
     }
     out
 }
@@ -294,6 +315,9 @@ fn cycle(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
                 a.rot = (mid + 90.0).rem_euclid(360.0);
                 a.fill = Paint::Accent(spec.colors.accent(k), Some(60_000));
                 a.line = Paint::None;
+                if let Some(&i) = tops.get(k) {
+                    a.recolor(spec, i);
+                }
                 out.push(a);
             }
         }
@@ -301,7 +325,7 @@ fn cycle(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     for (k, &i) in tops.iter().enumerate() {
         let (x, y) = if n == 1 { (cx, cy) } else { polar(cx, cy, r, angle(k, n)) };
         let b = [x - d / 2.0, y - d / 2.0, d, d];
-        out.push(Sh::node("ellipse", b, spec.colors.accent(k)).with_text(paras(spec, i, true)).text_box(inset(b, ROUND_INSET)));
+        out.push(Sh::node("ellipse", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)).text_box(inset(b, ROUND_INSET)));
     }
     out
 }
@@ -360,19 +384,19 @@ fn hierarchy(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         let (px, pb) = (cx(i), top(i) + nh);
         let ct = ks.first().map_or(pb, |&k| top(k));
         let mid = (pb + ct) / 2.0;
-        out.push(Sh::line(px, pb, px, mid, accent));
+        out.push(Sh::line(px, pb, px, mid, accent).item(spec, i));
         let xs: Vec<f32> = ks.iter().map(|&k| cx(k)).collect();
         let (lo, hi) = xs.iter().fold((px, px), |(lo, hi), &x| (lo.min(x), hi.max(x)));
         if hi - lo > 0.5 {
-            out.push(Sh::line(lo, mid, hi, mid, accent));
+            out.push(Sh::line(lo, mid, hi, mid, accent).item(spec, i));
         }
         for x in xs {
-            out.push(Sh::line(x, mid, x, ct, accent));
+            out.push(Sh::line(x, mid, x, ct, accent).item(spec, i));
         }
     }
     for i in 0..n {
         let b = [cx(i) - nw / 2.0, top(i), nw, nh];
-        out.push(Sh::node("roundRect", b, spec.colors.accent(i)).with_text(paras(spec, i, false)));
+        out.push(Sh::node("roundRect", b, spec.colors.accent(i)).item(spec, i).with_text(paras(spec, i, false)));
     }
     out
 }
@@ -400,7 +424,7 @@ fn pyramid(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
             let mid_w = (top_w + bot_w) / 2.0 * 0.8;
             s.text_box([w / 2.0 - mid_w / 2.0, b[1] + bh * 0.08, mid_w, bh * 0.84])
         };
-        out.push(sh.with_text(paras(spec, i, true)));
+        out.push(sh.item(spec, i).with_text(paras(spec, i, true)));
     }
     out
 }
@@ -418,7 +442,7 @@ fn radial(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     if n == 0 {
         let d = m * 0.5;
         let b = [cx - d / 2.0, cy - d / 2.0, d, d];
-        out.push(Sh::node("ellipse", b, spec.colors.accent(0)).with_text(paras(spec, 0, false)).text_box(inset(b, ROUND_INSET)));
+        out.push(Sh::node("ellipse", b, spec.colors.accent(0)).item(spec, 0).with_text(paras(spec, 0, false)).text_box(inset(b, ROUND_INSET)));
         return out;
     }
     let step = if n == 1 { 1.0 } else { (std::f32::consts::PI / n as f32).sin() };
@@ -432,14 +456,14 @@ fn radial(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     let at = |k: usize| polar(cx, cy, r, angle(k, n));
     for k in 0..n {
         let (x, y) = at(k);
-        out.push(Sh::line(cx, cy, x, y, spec.colors.accent(0)));
+        out.push(Sh::line(cx, cy, x, y, spec.colors.accent(0)).item(spec, 0));
     }
     let bc = [cx - dc / 2.0, cy - dc / 2.0, dc, dc];
-    out.push(Sh::node("ellipse", bc, spec.colors.accent(0)).with_text(paras(spec, 0, false)).text_box(inset(bc, ROUND_INSET)));
+    out.push(Sh::node("ellipse", bc, spec.colors.accent(0)).item(spec, 0).with_text(paras(spec, 0, false)).text_box(inset(bc, ROUND_INSET)));
     for (k, &i) in spokes.iter().enumerate() {
         let (x, y) = at(k);
         let b = [x - ds / 2.0, y - ds / 2.0, ds, ds];
-        out.push(Sh::node("ellipse", b, spec.colors.accent(k + 1)).with_text(paras(spec, i, true)).text_box(inset(b, ROUND_INSET)));
+        out.push(Sh::node("ellipse", b, spec.colors.accent(k + 1)).item(spec, i).with_text(paras(spec, i, true)).text_box(inset(b, ROUND_INSET)));
     }
     out
 }
@@ -457,7 +481,7 @@ fn matrix(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     for (k, &i) in tops.iter().enumerate() {
         let (r, c) = (k / cols, k % cols);
         let b = [x0 + c as f32 * cell + gap / 2.0, y0 + r as f32 * cell + gap / 2.0, cell - gap, cell - gap];
-        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).with_text(paras(spec, i, true)).text_box(inset(b, 0.1)));
+        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)).text_box(inset(b, 0.1)));
     }
     out
 }
@@ -478,22 +502,22 @@ fn venn(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         (x, y, deg)
     };
     let mut out = Vec::new();
-    for (j, _) in tops.iter().enumerate() {
+    for (j, &i) in tops.iter().enumerate() {
         let (x, y, _) = place(j);
         let mut s = Sh::node("ellipse", [x - r, y - r, 2.0 * r, 2.0 * r], spec.colors.accent(j));
         s.fill = Paint::Accent(spec.colors.accent(j), Some(40_000));
         s.alpha = Some(60_000);
         s.line = Paint::None;
-        out.push(s);
+        out.push(s.item(spec, i));
     }
     // Every outline over every fill, so each circle shows whole.
-    for (j, _) in tops.iter().enumerate() {
+    for (j, &i) in tops.iter().enumerate() {
         let (x, y, _) = place(j);
         let mut s = Sh::node("ellipse", [x - r, y - r, 2.0 * r, 2.0 * r], spec.colors.accent(j));
         s.fill = Paint::None;
         s.line = Paint::Accent(spec.colors.accent(j), None);
         s.line_w = 1.5;
-        out.push(s);
+        out.push(s.item(spec, i));
     }
     for (j, &i) in tops.iter().enumerate() {
         let (x, y, deg) = place(j);
@@ -552,6 +576,23 @@ fn paint(w: &mut W, p: Paint, alpha: Option<u32>) {
         Paint::Light => {
             w.open("a:solidFill", &[]);
             w.empty("a:schemeClr", &[("val", "lt1")]);
+            w.close("a:solidFill");
+        }
+        Paint::Rgb(c, tint) => {
+            w.open("a:solidFill", &[]);
+            let val = c.hex();
+            if tint.is_none() && alpha.is_none() {
+                w.empty("a:srgbClr", &[("val", &val)]);
+            } else {
+                w.open("a:srgbClr", &[("val", &val)]);
+                if let Some(t) = tint {
+                    w.empty("a:tint", &[("val", &t.to_string())]);
+                }
+                if let Some(a) = alpha {
+                    w.empty("a:alpha", &[("val", &a.to_string())]);
+                }
+                w.close("a:srgbClr");
+            }
             w.close("a:solidFill");
         }
         Paint::Accent(n, tint) => {
@@ -743,7 +784,16 @@ pub fn data_xml(spec: &SmartArtSpec, drawing_rel: &str) -> String {
         let (node, cxn, par, sib) = item_ids(i);
         w.open("dgm:pt", &[("modelId", &node)]);
         w.empty("dgm:prSet", &[]);
-        w.empty("dgm:spPr", &[]);
+        match it.color {
+            Some(c) => {
+                w.open("dgm:spPr", &[]);
+                w.open("a:solidFill", &[]);
+                w.empty("a:srgbClr", &[("val", &c.hex())]);
+                w.close("a:solidFill");
+                w.close("dgm:spPr");
+            }
+            None => w.empty("dgm:spPr", &[]),
+        }
         w.open("dgm:t", &[]);
         w.empty("a:bodyPr", &[]);
         w.empty("a:lstStyle", &[]);
@@ -1062,7 +1112,9 @@ pub(crate) fn spec_of(data: &El) -> Option<SmartArtSpec> {
         .zip(&levels)
         .map(|(p, l)| {
             let text: String = p.child("dgm:t")?.child("a:p")?.children("a:r").filter_map(|r| r.child("a:t")).map(|t| t.text()).collect();
-            Some(SmartArtItem { text, level: (*l)? })
+            let color =
+                p.child("dgm:spPr").and_then(|s| s.child("a:solidFill")).and_then(|f| f.child("a:srgbClr")).and_then(|c| Rgb::parse(c.attr("val")?));
+            Some(SmartArtItem { text, level: (*l)?, color })
         })
         .collect::<Option<Vec<_>>>()?;
     let spec = SmartArtSpec { layout, items, colors }.sanitized();
@@ -1136,6 +1188,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_items_own_colour_is_saved_drawn_and_read_back() {
+        let mut spec = SmartArtSpec::sample(SmartArtLayout::Process);
+        spec.items[1].color = Some(Rgb(0x12, 0x34, 0x56));
+        let spec = spec.sanitized();
+        assert_eq!(spec_of(&parse(&data_xml(&spec, "rId9"))).as_ref(), Some(&spec));
+        let drawing = drawing_xml(&spec, 400.0, 250.0);
+        assert_eq!(drawing.matches("<a:srgbClr val=\"123456\"").count(), 2, "the step and the arrow after it");
+        let plain = drawing_xml(&SmartArtSpec::sample(SmartArtLayout::Process), 400.0, 250.0);
+        assert!(!plain.contains("srgbClr"));
     }
 
     #[test]
