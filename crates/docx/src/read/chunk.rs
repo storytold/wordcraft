@@ -44,17 +44,30 @@ pub struct ReadOptions<'a> {
 
 impl Reader<'_> {
     /// Bring the chunk `e` names into `out` where it stands (`depth`: of the XML around it).
+    /// A chunk it leaves out is named in [`Document::skipped_parts`], so whoever opens the file is
+    /// told (a chunk without `r:id` names no content and is only dropped).
     pub(crate) fn read_alt_chunk(&mut self, sc: &mut StoryCtx, e: &El, rels: &Rels, out: &mut Blocks, depth: usize) {
-        let Some(part) = e.attr("r:id").and_then(|id| part_of(rels, id, rt::AF_CHUNK)) else { return };
+        let Some(id) = e.attr("r:id") else { return };
+        let Some(part) = part_of(rels, id, rt::AF_CHUNK) else {
+            // An external target (a web address) or a relationship that isn't there.
+            let name = rels.by_id(id).map_or_else(|| format!("alternative format chunk {id}"), |r| r.target.clone());
+            self.skip_chunk(name);
+            return;
+        };
         let pkg = self.pkg;
         let Some(bytes) = pkg.get(&part) else {
             log::warn!("docx: alternative format chunk {part} is missing");
+            // An entry the package couldn't read is named by the package already.
+            if !pkg.skipped().iter().any(|s| s.eq_ignore_ascii_case(&part)) {
+                self.skip_chunk(part);
+            }
             return;
         };
         // Every chunk's bytes count against one budget for the whole file, however often the same
         // part is named and however deep chunks nest.
         if self.chunks.left == 0 || bytes.len() as u64 > self.chunks.bytes {
             log::warn!("docx: more than {MAX_CHUNKS} alternative format chunks or {MAX_TOTAL} bytes of them; the rest are left out");
+            self.skip_chunk(part);
             return;
         }
         self.chunks.left -= 1;
@@ -66,8 +79,13 @@ impl Reader<'_> {
         let doc = if is_docx { self.read_nested(bytes, depth) } else { self.chunks.import.and_then(|f| f(&chunk)) };
         let Some(mut doc) = doc else {
             log::warn!("docx: alternative format chunk {part} ({ct}) is in a format WordCraft can't bring in");
+            self.skip_chunk(part);
             return;
         };
+        // What a nested document left out is left out of this one too.
+        for inner in std::mem::take(&mut doc.skipped_parts) {
+            self.skip_chunk(format!("{part}: {inner}"));
+        }
         // The chunk flows in the section it stands in; its own section breaks don't come along.
         for b in &mut doc.body {
             if let Block::Para(p) = &**b
@@ -99,6 +117,14 @@ impl Reader<'_> {
         // Bookmarks and comment marks read before the chunk stay before it.
         self.flush_pending_before(sc, out, &mut blocks);
         out.extend(blocks.into_iter().map(Arc::new));
+    }
+
+    /// Name the chunk `name` as left out, once however often the file names it; past
+    /// [`MAX_CHUNKS`] names the rest go unnamed (a hostile file can name a million).
+    fn skip_chunk(&mut self, name: String) {
+        if self.doc.skipped_parts.len() < MAX_CHUNKS && !self.doc.skipped_parts.contains(&name) {
+            self.doc.skipped_parts.push(name);
+        }
     }
 
     /// A WordprocessingML chunk: its document, read with the same importer and what is left of

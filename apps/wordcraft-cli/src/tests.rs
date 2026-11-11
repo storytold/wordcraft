@@ -532,6 +532,48 @@ fn script_failure_names_the_command_and_writes_nothing() {
     assert!(!dir.join("out.docx").exists());
 }
 
+fn damage_settings_part(path: &Path) {
+    let mut bytes = std::fs::read(path).unwrap();
+    let name_at = bytes.windows(17).position(|w| w == b"word/settings.xml").expect("settings entry name is in the DOCX");
+    let at = name_at.checked_sub(30).expect("local file header precedes its name");
+    let read_u16 = |range| bytes.get(at + range..at + range + 2).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(u16::from_le_bytes).map(usize::from);
+    let name_len = read_u16(26).expect("local name length is present");
+    let extra_len = read_u16(28).expect("local extra length is present");
+    let data = name_at.checked_add(name_len).and_then(|at| at.checked_add(extra_len)).expect("settings data offset does not overflow");
+    *bytes.get_mut(data).expect("settings data has a byte to corrupt") ^= 0xFF;
+    std::fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn damaged_docx_cli_saves_refuse_overwrite_and_report_command_refusals() {
+    let dir = script_dir("damaged-save");
+    let source = dir.join("damaged.docx");
+    run(&args(&["run", "--template", "blank", "--save", &source.to_string_lossy()])).unwrap();
+    damage_settings_part(&source);
+    let original = std::fs::read(&source).unwrap();
+
+    let source_arg = source.to_string_lossy().into_owned();
+    let copy = dir.join("recovered.docx");
+    assert!(run(&args(&["run", "--file", &source_arg, "--save", &copy.to_string_lossy()])).is_ok());
+    assert!(copy.exists(), "saving a recovery copy remains allowed");
+    assert_eq!(std::fs::read(&source).unwrap(), original, "saving a recovery copy must preserve the damaged source");
+
+    let error = run(&args(&["run", "--file", &source_arg, "--save", &source_arg])).unwrap_err().to_string();
+    assert!(error.contains("refusing to replace source"), "{error}");
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+
+    let error = run(&args(&["run", "--file", &source_arg, "--cmd", "file.save"])).unwrap_err().to_string();
+    assert!(error.contains("refusing to replace source"), "{error}");
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+
+    let command = json!({"command":"file.open","params":{"path":source_arg}});
+    let script_text = serde_json::to_string(&json!({"commands":[command,"file.save"]})).unwrap();
+    let script = write_script(&dir, &script_text);
+    let error = run(&args(&["run", "--script", &script])).unwrap_err().to_string();
+    assert!(error.contains("refusing to replace source"), "{error}");
+    assert_eq!(std::fs::read(&source).unwrap(), original);
+}
+
 #[test]
 fn script_rejects_junk_empty_missing_and_huge_input() {
     let dir = script_dir("junk");
