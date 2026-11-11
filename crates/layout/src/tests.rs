@@ -9247,6 +9247,68 @@ fn tight_wrap_follows_an_ellipse() {
     assert_eq!(through, tight);
 }
 
+/// #6316: how many of seven empty paragraphs (the first anchoring a 200pt-tall rectangle at the
+/// column's left with `wrap`) go in the `free` points it leaves on its right (column edge to its
+/// wrap area, 9pt from text included), in compatibility mode `mode`.
+fn empty_lines_beside(wrap: wordcraft_doc::para::Wrap, free: f32, mode: u32) -> usize {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind};
+    let w = 468.0 - 9.0 - free;
+    let mut d = Document::from_text("");
+    d.settings.compat_mode = mode;
+    let float = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 9.0, ..Default::default() };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w,
+        h: 200.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    for i in 1..7 {
+        d.insert_block(StoryRef::Body, &Path::top(i), wordcraft_doc::Block::Para(Default::default())).unwrap();
+    }
+    let l = lay(&d);
+    let lines: Vec<(f32, f32)> =
+        l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { y, para, .. } = i { Some((para.lines[0].left, *y)) } else { None }).collect();
+    let Some(top) = lines.iter().map(|l| l.1).reduce(f32::min) else { return 0 };
+    lines.iter().filter(|(left, y)| *left >= w + 9.0 - 0.01 && *y < top + 200.0).count()
+}
+
+/// #6316: Word puts a line beside a floating picture or shape when the gap between the column
+/// edge and the object's wrap area is at least 18pt, for square, tight and through wrapping; a
+/// tight-wrapped cover with 17.55 and 19.15pt gaps was pushed onto three pages by a 20pt minimum.
+#[test]
+fn text_goes_beside_a_float_in_an_18pt_gap() {
+    crate::test_fonts();
+    use wordcraft_doc::para::Wrap;
+    let current = wordcraft_doc::COMPAT_MODE_CURRENT;
+    for wrap in [Wrap::Square, Wrap::Tight, Wrap::Through] {
+        assert_eq!(empty_lines_beside(wrap, 18.1, current), 7, "{wrap:?} 18.1");
+        assert_eq!(empty_lines_beside(wrap, 17.9, current), 0, "{wrap:?} 17.9");
+    }
+}
+
+/// Before Word 2013 layout (mode 14 and below) a line goes beside a tight or through object in
+/// a 9pt gap; square wrapping still needs 18.
+#[test]
+fn tight_wrap_needs_only_9pt_beside_it_before_word_2013_layout() {
+    crate::test_fonts();
+    use wordcraft_doc::para::Wrap;
+    for wrap in [Wrap::Tight, Wrap::Through] {
+        assert_eq!(empty_lines_beside(wrap, 9.1, 14), 7, "{wrap:?} 9.1");
+        assert_eq!(empty_lines_beside(wrap, 8.9, 14), 0, "{wrap:?} 8.9");
+        assert_eq!(empty_lines_beside(wrap, 9.1, wordcraft_doc::COMPAT_MODE_CURRENT), 0, "{wrap:?} 9.1 in mode 15");
+    }
+    assert_eq!(empty_lines_beside(Wrap::Square, 17.9, 14), 0);
+    assert_eq!(empty_lines_beside(Wrap::Square, 18.1, 14), 7);
+}
+
 #[test]
 fn contour_wrap_turns_with_the_object() {
     crate::test_fonts();
