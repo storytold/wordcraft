@@ -17,17 +17,23 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
-                                              tracked changes in pdf/png, a comment list in html/md/txt
+                                              tracked changes in pdf/png, a comment list in html/md/txt;
+                                              --strict (pdf or png output only) writes nothing and exits 3
+                                              if a character can't be drawn or a picture is missing or
+                                              undecodable; the report is on stderr, with one JSON line
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
-  wordcraft-cli render <file> <out.png> [--page N] [--scale S]
+  wordcraft-cli render <file> <out.png> [--page N] [--scale S] [--strict]
+                                              --strict writes nothing and exits 3 if a character on the
+                                              page can't be drawn or a picture is missing or undecodable
+                                              (report on stderr, as for convert --strict)
   wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
                     [--save OUT] [--print] [--author NAME]
                                               run commands headlessly, then save (--author names
@@ -77,6 +83,14 @@ fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
 }
 
+/// A failure whose message may carry text from a file or from the engine's reading of one (a
+/// picture's part name, a parse error quoting the input): control, bidi and invisible characters
+/// are escaped, so it can't forge or spoof a line (the CLI's own messages, which have line breaks
+/// on purpose, are not routed through here). Backslashes stay: messages quote Windows paths.
+fn engine_error(e: impl fmt::Display) -> Failure {
+    Failure::Error(escape_text(&e.to_string(), false))
+}
+
 /// The error every subcommand gives when a required path is not there.
 fn missing_argument() -> Failure {
     format!("missing argument\n\n{USAGE}").into()
@@ -85,11 +99,11 @@ fn missing_argument() -> Failure {
 /// Open a document for a subcommand. A password-protected Word file needs its password
 /// ([`password_from`]). As in the app, a document opened with one is saved with it again, so
 /// `convert` does not quietly write a copy the password no longer protects.
-fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
+fn open(path: &Path, password: Option<&str>) -> Result<Session, Failure> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
     let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
+    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region).map_err(engine_error)?;
     let mut s = session(doc);
     s.path = Some(path.into());
     if encrypted {
@@ -198,7 +212,7 @@ fn listed_text(doc: &wordcraft_doc::Document) -> Result<String, String> {
 /// The command also checks whether the open document is protected: this name determines which
 /// named editing exceptions the session can use, so the flag must not bypass that check.
 fn set_author(s: &mut Session, name: &str) -> Result<(), String> {
-    s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| format!("--author: {e}"))
+    s.run("file.setAuthor", &json!({"name": name})).map(|_| ()).map_err(|e| escape_text(&format!("--author: {e}"), false))
 }
 
 fn arg_value(args: &[String], name: &str) -> Option<String> {
@@ -310,10 +324,12 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
+    OptionSpec { name: "--strict", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
 const RENDER_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--strict", takes_value: false },
     OptionSpec { name: "--page", takes_value: true },
     OptionSpec { name: "--scale", takes_value: true },
     OptionSpec { name: "--password", takes_value: true },
@@ -350,6 +366,9 @@ enum Failure {
     /// Whoever read stdout closed it (`wordcraft-cli commands --json | head`): there is nobody left
     /// to write to, so stop quietly and exit 0 like other command-line tools.
     StdoutClosed,
+    /// `convert --strict` refused: the text for stderr (the report's lines, then its JSON line).
+    /// Exit status 3.
+    Strict(String),
 }
 
 impl fmt::Display for Failure {
@@ -357,6 +376,7 @@ impl fmt::Display for Failure {
         match self {
             Failure::Error(e) => f.write_str(e),
             Failure::StdoutClosed => f.write_str("stdout closed"),
+            Failure::Strict(report) => f.write_str(report),
         }
     }
 }
@@ -402,11 +422,80 @@ fn valid_connect_addr(addr: &str) -> bool {
     !host.is_empty() && port.parse::<u16>().is_ok()
 }
 
+/// A failed `--strict` export: a strict refusal becomes [`Failure::Strict`] carrying what stderr
+/// shows (each line of the report as `wordcraft-cli: …`, then its JSON on one line, from
+/// `file.strictReport` for `page` of a page image, else the PDF); any other error is an ordinary
+/// failure.
+fn refusal(s: &mut Session, e: wordcraft_engine::CmdError, markup: bool, page: Option<u64>) -> Failure {
+    if !matches!(&e, wordcraft_engine::CmdError::Failed(m) if m.starts_with("strict: ")) {
+        return engine_error(e);
+    }
+    let mut params = json!({"markup": markup});
+    if let Some(page) = page {
+        params["page"] = json!(page);
+    }
+    Failure::Strict(match s.run("file.strictReport", &params).map_err(|e| e.to_string()) {
+        Ok(json) => {
+            let mut text = String::new();
+            for line in report_lines(&json) {
+                text += &format!("wordcraft-cli: {}\n", escape_peer(&line));
+            }
+            text + &json_line_safe(&json.to_string())
+        }
+        Err(e) => format!("wordcraft-cli: strict: refused, and the report could not be made: {}", escape_text(&e, false)),
+    })
+}
+
+/// The report's human lines, from its JSON (the engine's `StrictReport::lines`).
+fn report_lines(json: &Value) -> Vec<String> {
+    wordcraft_engine::strict::lines_from_json(json)
+}
+
+/// `convert <in> <out>`: `rest` is the command line after `convert`, `open` opens the input.
+fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Session, Failure>) -> Result<(), Failure> {
+    validate_options("convert", rest, CONVERT_OPTIONS)?;
+    // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
+    let format = match find_option_arg(rest, "--format") {
+        OptionArg::Absent => None,
+        OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+        OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+        OptionArg::Value(value) => Some(value),
+    };
+    let paths = positionals(rest, CONVERT_OPTIONS);
+    let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
+    let markup = rest.iter().any(|a| a == "--markup");
+    let strict = rest.iter().any(|a| a == "--strict");
+    // Before the input is opened: a wrong output type is a usage error, not a file error.
+    let to_png = o.to_ascii_lowercase().ends_with(".png");
+    if strict && !(to_png || o.to_ascii_lowercase().ends_with(".pdf")) {
+        return Err("convert: --strict needs a .pdf or .png output".into());
+    }
+    let password = password_from(rest)?;
+    let mut s = open(&i, password.as_deref())?;
+    if rest.iter().any(|a| a == "--update-fields") {
+        s.run("references.updateFields", &json!({})).map_err(engine_error)?;
+    }
+    let r = if to_png {
+        s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))
+    } else {
+        let mut params = json!({"path": o, "markup": markup, "strict": strict});
+        if let Some(f) = format {
+            params["format"] = json!(f);
+        }
+        s.run("file.save", &params)
+    };
+    if let Err(e) = r {
+        return Err(if strict { refusal(&mut s, e, markup, to_png.then_some(1)) } else { engine_error(e) });
+    }
+    eprintln!("wrote {o}");
+    Ok(())
+}
+
 fn load_run_script(rest: &[String], script_path: Option<&Path>) -> Result<Option<script::Script>, Failure> {
     match arg_value(rest, "--script") {
         Some(path) if !path.starts_with("--") => {
             let source = script_path.unwrap_or(Path::new(&path));
-            Ok(Some(script::load(source)?))
+            Ok(Some(script::load(source).map_err(engine_error)?))
         }
         _ if rest.iter().any(|arg| arg == "--script") => Err("run: --script requires a value".into()),
         _ => Ok(None),
@@ -438,42 +527,13 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         return write_stdout(|o| write!(o, "{USAGE}"));
     }
     match cmd {
-        "convert" => {
-            validate_options("convert", &rest, CONVERT_OPTIONS)?;
-            // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = match find_option_arg(&rest, "--format") {
-                OptionArg::Absent => None,
-                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
-                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
-                OptionArg::Value(value) => Some(value),
-            };
-            let paths = positionals(&rest, CONVERT_OPTIONS);
-            let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
-            let markup = rest.iter().any(|a| a == "--markup");
-            let password = password_from(&rest)?;
-            let mut s = open(&i, password.as_deref())?;
-            if rest.iter().any(|a| a == "--update-fields") {
-                s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
-            }
-            let r = if o.to_ascii_lowercase().ends_with(".png") {
-                s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
-            } else {
-                let mut params = json!({"path": o, "markup": markup});
-                if let Some(f) = format {
-                    params["format"] = json!(f);
-                }
-                s.run("file.save", &params)
-            };
-            r.map_err(|e| e.to_string())?;
-            eprintln!("wrote {o}");
-            Ok(())
-        }
+        "convert" => run_convert(&rest, open),
         "info" => {
             validate_options("info", &rest, PASSWORD_OPTIONS)?;
             let paths = positionals(&rest, PASSWORD_OPTIONS);
             let password = password_from(&rest)?;
             let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
-            let info = serde_json::to_string_pretty(&s.run("file.info", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
+            let info = serde_json::to_string_pretty(&s.run("file.info", &json!({})).map_err(engine_error)?).unwrap_or_default();
             write_stdout(|o| writeln!(o, "{info}"))
         }
         "text" => {
@@ -489,7 +549,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let paths = positionals(&rest, PASSWORD_OPTIONS);
             let password = password_from(&rest)?;
             let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
-            let tree = serde_json::to_string_pretty(&s.run("document.inspect", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
+            let tree = serde_json::to_string_pretty(&s.run("document.inspect", &json!({})).map_err(engine_error)?).unwrap_or_default();
             write_stdout(|o| writeln!(o, "{tree}"))
         }
         "render" => {
@@ -503,7 +563,17 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let page = parse_page_arg("render", &rest)?.unwrap_or(1);
             let scale = parse_scale_arg("render", &rest)?.unwrap_or(2.0);
             let mut s = open(&i, password.as_deref())?;
-            let r = s.run("file.exportPng", &json!({"path": o, "page": page, "scale": scale})).map_err(|e| e.to_string())?;
+            let strict = rest.iter().any(|a| a == "--strict");
+            let mut params = json!({"path": o, "page": page, "scale": scale, "strict": strict});
+            if strict {
+                // The check and its report must see the page as it is written.
+                params["markup"] = json!(false);
+            }
+            let r = match s.run("file.exportPng", &params) {
+                Ok(r) => r,
+                Err(e) if strict => return Err(refusal(&mut s, e, false, Some(page))),
+                Err(e) => return Err(engine_error(e)),
+            };
             write_stdout(|o| writeln!(o, "{r}"))
         }
         "run" => {
@@ -522,8 +592,8 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     let mut s = session(wordcraft_doc::Document::new());
                     let first = s.document_id();
                     let params = t.map_or_else(|| json!({}), |t| json!({"template": t}));
-                    s.run("file.new", &params).map_err(|e| e.to_string())?;
-                    s.close_document(first).map_err(|e| e.to_string())?;
+                    s.run("file.new", &params).map_err(engine_error)?;
+                    s.close_document(first).map_err(engine_error)?;
                     s
                 }
             };
@@ -532,7 +602,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             }
             let print = rest.iter().any(|a| a == "--print");
             for (n, (id, params)) in script.iter().flat_map(|c| c.commands.iter()).enumerate() {
-                let r = s.run(id, params).map_err(|e| format!("command {} ({id}): {e}", n + 1))?;
+                let r = s.run(id, params).map_err(|e| engine_error(format!("command {} ({id}): {e}", n + 1)))?;
                 if print {
                     write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                 }
@@ -542,10 +612,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 if rest.get(i).map(String::as_str) == Some("--cmd") {
                     let spec = rest.get(i + 1).ok_or("--cmd needs a value")?;
                     let (id, params) = match spec.split_once('=') {
-                        Some((id, p)) => (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| format!("{id}: bad JSON params: {e}"))?),
+                        Some((id, p)) => {
+                            (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| engine_error(format!("{id}: bad JSON params: {e}")))?)
+                        }
                         None => (spec.clone(), json!({})),
                     };
-                    let r = s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
+                    let r = s.run(&id, &params).map_err(|e| engine_error(format!("{id}: {e}")))?;
                     if print {
                         write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                     }
@@ -565,7 +637,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     return Err(format!("{out}: is a folder, not a file").into());
                 }
                 if !out.to_ascii_lowercase().ends_with(".png") {
-                    wordcraft_engine::io::save_bytes(out, &s.doc)?;
+                    wordcraft_engine::io::save_bytes(out, &s.doc).map_err(engine_error)?;
                 }
             }
             for out in outputs {
@@ -581,7 +653,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 } else {
                     s.run("file.save", &json!({"path": out}))
                 };
-                r.map_err(|e| e.to_string())?;
+                r.map_err(engine_error)?;
                 eprintln!("wrote {out}");
             }
             Ok(())
@@ -680,10 +752,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut s = open(file, None)?;
             for spec in rest.iter().zip(rest.iter().skip(1)).filter(|(a, _)| *a == "--cmd").map(|(_, v)| v) {
                 let (id, params) = match spec.split_once('=') {
-                    Some((id, p)) => (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| format!("{id}: bad JSON params: {e}"))?),
+                    Some((id, p)) => {
+                        (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| engine_error(format!("{id}: bad JSON params: {e}")))?)
+                    }
                     None => (spec.clone(), json!({})),
                 };
-                s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
+                s.run(&id, &params).map_err(|e| engine_error(format!("{id}: {e}")))?;
             }
             let mut opts = wordcraft_zotero::client::Options::default();
             if let Some(p) = arg_value(&rest, "--port") {
@@ -700,13 +774,13 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 r
             })
-            .map_err(|e| e.to_string())?;
+            .map_err(engine_error)?;
             for a in &host.alerts {
                 eprintln!("Zotero: {}", escape_peer(a));
             }
             eprintln!("{} calls, {}", out.calls, if out.completed { "completed" } else { "ended without completing (cancelled?)" });
             if let Some(o) = arg_value(&rest, "--save") {
-                s.run("file.save", &json!({"path": o})).map_err(|e| e.to_string())?;
+                s.run("file.save", &json!({"path": o})).map_err(engine_error)?;
                 eprintln!("wrote {o}");
             }
             Ok(())
@@ -730,17 +804,57 @@ fn clip(s: &str) -> String {
 /// overrides are shown as escapes (`\\`, `\n`, `\u{1b}`), so it can't end its line, drive the
 /// terminal or pass for other output.
 fn escape_peer(s: &str) -> String {
+    escape_text(s, true)
+}
+
+/// Whether `c` must not reach a terminal as itself: a control character, a line or paragraph
+/// separator, a bidi control, or one that shows nothing (soft hyphen, zero-width characters, word
+/// joiners, the byte order mark, tag characters), which can hide or reorder what a line says.
+fn is_unsafe_char(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00ad}'
+                | '\u{061c}'
+                | '\u{200b}'..='\u{200f}'
+                | '\u{2028}'..='\u{202e}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{feff}'
+                | '\u{e0000}'..='\u{e007f}'
+        )
+}
+
+/// [`escape_peer`], with backslashes escaped only when `backslash` (error messages quote Windows
+/// paths, and a backslash can't forge or hide anything).
+fn escape_text(s: &str, backslash: bool) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
         match c {
-            '\\' => out.push_str("\\\\"),
+            '\\' if backslash => out.push_str("\\\\"),
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') => {
-                out.extend(c.escape_unicode())
-            }
+            c if is_unsafe_char(c) => out.extend(c.escape_unicode()),
             c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A JSON line safe to print: serde escapes control characters below U+0020 but not the other
+/// characters [`is_unsafe_char`] names, which a crafted file could put in a report. They become
+/// `\uXXXX` escapes (a surrogate pair above U+FFFF), so the line parses to the same value and
+/// can't drive or spoof a terminal.
+fn json_line_safe(json: &str) -> String {
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if is_unsafe_char(c) {
+            for unit in c.encode_utf16(&mut [0u16; 2]) {
+                out.push_str(&format!("\\u{unit:04x}"));
+            }
+        } else {
+            out.push(c);
         }
     }
     out
@@ -785,6 +899,10 @@ fn main() -> ExitCode {
         Err(Failure::Error(e)) => {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE
+        }
+        Err(Failure::Strict(report)) => {
+            eprintln!("{report}");
+            ExitCode::from(3)
         }
     }
 }
