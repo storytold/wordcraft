@@ -524,16 +524,24 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // columns, or the table's start border in a one-column table (measured in Word for Windows,
     // inside lines of 0 to 6pt, one to three columns, a percentage or a width in points, and lines
     // from the table style's header row, last column and column bands).
-    let rtl_start_shift =
+    // In a table cell that half moves to the other side: the start-aligned table keeps only its
+    // start border's outer half from the cell's right edge, and the end-aligned one stands that
+    // half in from the cell's left edge (measured too: inside lines of 0 to 6pt, one and two
+    // columns, outer tables with 1.5pt and 6pt lines).
+    let rtl_shift =
         if new_borders && rtl { t.rows.first().map_or(0.0, |r| outer_half(side_border(r, r.cells.len().saturating_sub(1), false))) } else { 0.0 };
+    let (rtl_start_shift, rtl_end_shift) = if depth > 1 { (0.0, rtl_shift) } else { (rtl_shift, 0.0) };
     let x = match (t.props.align, rtl) {
-        // Word 2013+ centres a left-to-right table's outer edges, its borders' outer halves included
-        // (measured in Word for Windows, a percentage or a width in points, unequal lines).
+        // Word 2013+ centres a table halfway between where it stands start- and end-aligned: for a
+        // left-to-right table that centres its outer edges, its borders' outer halves included
+        // (measured in Word for Windows, a percentage or a width in points, unequal lines, at the
+        // top level and in a cell).
         (Some(Align::Center), false) if new_borders => (avail - total + start_half - end_half) / 2.0,
+        (Some(Align::Center), true) if new_borders => (avail - total - start_half - rtl_start_shift + rtl_end_shift) / 2.0,
         (Some(Align::Center), _) => (avail - total) / 2.0,
         // End alignment: the right margin, or the left one in a right-to-left table.
         (Some(Align::Right), false) => avail - total - end_offset,
-        (Some(Align::Right), true) => rtl_end_offset,
+        (Some(Align::Right), true) => rtl_end_offset + rtl_end_shift,
         (_, true) => avail - total - start_offset - rtl_start_shift,
         (_, false) => start_offset,
     };

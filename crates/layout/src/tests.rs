@@ -7495,6 +7495,73 @@ fn table_edges_by_direction_and_compatibility_mode() {
     }
 }
 
+/// Measured in Word for Windows (compatibility mode 15, fixed 300pt right-to-left tables of one
+/// and two columns, start borders of 0.75 and 6pt, inside lines of 0 to 6pt, at the top level and
+/// in the cell of a table with 1.5pt or 6pt lines; 112 tables, border lines read off PDF exports):
+/// - in a cell, a start-aligned table keeps only its start border's outer half from the cell's
+///   right edge, and an end-aligned one stands in from the cell's left edge by half its first
+///   row's last cell's start border (where at the top level the start-aligned one moves by it);
+/// - a centred table stands halfway between where it does start- and end-aligned, at the top
+///   level and in a cell.
+#[test]
+fn a_right_to_left_table_centred_or_in_a_cell_stands_where_word_puts_it() {
+    let line = |w: f32| Some(Border { style: if w > 0.0 { BorderStyle::Single } else { BorderStyle::None }, width: w, color: None, space: 0.0 });
+    // The right-to-left table's cells' (left, right) edges, first cell first, and the (left,
+    // right) of the text room of the cell it is in.
+    let edges = |align: Option<Align>, start: f32, inside: f32, nested: bool| {
+        let mut d = Document::from_text("");
+        d.settings.compat_mode = 15;
+        let b = line(1.5);
+        let mut t = Table::new(1, 2, 300.0);
+        t.props.width = Some(300.0);
+        t.props.fixed = true;
+        t.props.align = align;
+        t.props.bidi_visual = true;
+        t.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+        t.props.borders = Some(Borders { top: b, left: line(start), bottom: b, right: line(0.75), between: b, inside_v: line(inside) });
+        let inner = Arc::new(wordcraft_doc::Block::Table(t));
+        d.body = if nested {
+            let mut outer = Table::new(1, 1, 450.0);
+            outer.props.width = Some(450.0);
+            outer.props.fixed = true;
+            outer.props.cell_margins = Some([0.0, 3.75, 0.0, 3.75]);
+            outer.props.borders = Some(Borders { top: b, left: b, bottom: b, right: b, between: b, inside_v: b });
+            outer.rows[0].cells[0].blocks = vec![inner, wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())];
+            vec![Arc::new(wordcraft_doc::Block::Table(outer))]
+        } else {
+            vec![inner]
+        };
+        let l = lay(&d);
+        let mut cells: Vec<(usize, (f32, f32))> = Vec::new();
+        let mut room = (f32::NAN, f32::NAN);
+        for item in &l.pages[0].items {
+            if let Placed::Cell { rect, table, cell, .. } = item {
+                if nested && table.0.len() == 1 {
+                    room = (rect.x + 3.75, rect.x + rect.w - 3.75);
+                } else {
+                    cells.push((*cell, (rect.x, rect.x + rect.w)));
+                }
+            }
+        }
+        cells.sort_by_key(|c| c.0);
+        (cells.into_iter().map(|c| c.1).collect::<Vec<_>>(), room)
+    };
+    let near = |a: f32, b: f32| (a - b).abs() < 0.01;
+    for nested in [false, true] {
+        for (start, inside) in [(6.0, 0.0), (6.0, 1.5), (0.75, 1.5), (0.75, 6.0)] {
+            let (s, room) = edges(None, start, inside, nested);
+            let (e, _) = edges(Some(Align::Right), start, inside, nested);
+            let (c, _) = edges(Some(Align::Center), start, inside, nested);
+            let what = format!("in a cell {nested}, start {start}, inside {inside}");
+            if nested {
+                assert!(near(s[0].1, room.1 - start / 2.0), "{what}: start-aligned {s:?}, room {room:?}");
+                assert!(near(e[1].0, room.0 + inside / 2.0), "{what}: end-aligned {e:?}, room {room:?}");
+            }
+            assert!(near(c[1].0, (s[1].0 + e[1].0) / 2.0), "{what}: centred {c:?}, start-aligned {s:?}, end-aligned {e:?}");
+        }
+    }
+}
+
 /// Measured in Word for Windows (compatibility mode 15, fixed 400pt tables with three columns,
 /// their only borders a table style's 1.5pt ones): a header-row part with a 6pt inside line draws
 /// both lines between the columns 6pt wide, and a last-column part with a 6pt left border the
