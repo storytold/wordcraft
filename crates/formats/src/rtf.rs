@@ -5,7 +5,9 @@
 //! older readers), document info, page setup, paragraph formatting (`\pard`, alignment, page
 //! break before), character formatting (`\b \i \ul \strike \super \sub \f \fs \cf \chcbpat`),
 //! hyperlinks as `HYPERLINK` fields, bookmarks, pictures (`\pngblip` / `\jpegblip`), tables
-//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading), footnotes and
+//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading, alignment, width,
+//! borders, row heights), tracked changes of table, row, cell and section formatting
+//! (`\oldtprops` with `\trauth`/`\trdate`, `\oldsprops` with `\srauth`/`\srdate`), footnotes and
 //! endnotes (`{\super\chftn}{\footnote[\ftnalt] …}`) and comments (`{\*\atrfstart n}` …
 //! `{\*\atrfend n}` around the commented text, then `{\*\atnid initials}{\*\atnauthor name}`
 //! `\chatn{\*\annotation{\*\atnref n}{\*\atndate …}` text `}`).

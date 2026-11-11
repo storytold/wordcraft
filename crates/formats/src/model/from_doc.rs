@@ -1125,6 +1125,12 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                     Some(Box::new(crate::model::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),
                 width: None,
+                // A tracked change of its formatting, for formats that keep revisions (RTF); its
+                // width only when that changed.
+                fmt_change: c.props.fmt_change.as_deref().filter(|_| tracked.tracked).map(|ch| {
+                    let width = ch.old.width.filter(|w| Some(*w) != c.props.width);
+                    Box::new(FmtChange { mark: rev_mark(doc, ch.rev), old: wordcraft_doc::props::CellProps { width, ..ch.old.clone() } })
+                }),
             });
         }
         rows.push(cells);
@@ -1133,8 +1139,9 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
     let visible = |b: &Option<wordcraft_doc::props::Borders>| b.as_ref().is_some_and(|b| b.any_visible());
     let borderless =
         t.props.style.is_none() && !visible(&t.props.borders) && t.rows.iter().flat_map(|r| &r.cells).all(|c| !visible(&c.props.borders));
-    // Formats that keep them get the table's alignment, width and row heights.
-    let extra = tracked.paras.then(|| {
+    // Formats that keep them get the table's alignment, width and row heights; formats that keep
+    // revisions (RTF) its borders too, and its and its rows' tracked formatting changes.
+    let extra = (tracked.paras || tracked.tracked).then(|| {
         use wordcraft_doc::props::HeightRule;
         let heights = t
             .rows
@@ -1154,6 +1161,22 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
             fixed: t.props.fixed,
             space: [t.props.space_before, t.props.space_after],
             header_rows: t.rows.iter().take_while(|r| r.props.header).count(),
+            // Formats that keep cell formatting have the table's borders in its cells.
+            borders: t.props.borders.filter(|_| !bake),
+            fmt_change: t
+                .props
+                .fmt_change
+                .as_deref()
+                .filter(|_| tracked.tracked)
+                .map(|c| Box::new(FmtChange { mark: rev_mark(doc, c.rev), old: c.old.clone() })),
+            row_changes: if tracked.tracked {
+                t.rows
+                    .iter()
+                    .map(|r| r.props.fmt_change.as_deref().map(|c| Box::new(FmtChange { mark: rev_mark(doc, c.rev), old: c.old.clone() })))
+                    .collect()
+            } else {
+                Vec::new()
+            },
         }
     });
     // Kept whole for formats that ask for it: its header rows count even without the rest.

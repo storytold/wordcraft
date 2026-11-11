@@ -1827,3 +1827,249 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+
+/// A document of "Before", a table and "After".
+fn doc_with_table(t: wordcraft_doc::Table, revisions: Vec<wordcraft_doc::Revision>) -> Document {
+    use wordcraft_doc::props::CharProps;
+    let mut doc = doc_with(
+        vec![wordcraft_doc::Paragraph::with_text("Before", CharProps::default()), wordcraft_doc::Paragraph::with_text("After", CharProps::default())],
+        revisions,
+    );
+    doc.body.insert(1, std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+    doc
+}
+
+fn first_table(doc: &Document) -> &wordcraft_doc::Table {
+    doc.body.iter().find_map(|b| b.as_table()).expect("a table")
+}
+
+/// The three authors of the section and table tests, by revision index.
+fn three_authors() -> Vec<wordcraft_doc::Revision> {
+    use wordcraft_doc::{Revision, RevisionKind};
+    vec![
+        Revision::new(RevisionKind::Format, "Alice", "2024-03-15T10:30:00Z"),
+        Revision::new(RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z"),
+        Revision::new(RevisionKind::Format, "Carol", "2023-06-01T12:00:00Z"),
+    ]
+}
+
+#[test]
+fn section_formatting_changes_round_trip() {
+    use wordcraft_doc::props::PropChange;
+    use wordcraft_doc::section::SectionStart;
+    use wordcraft_doc::{Block, RevisionKind, SectionProps};
+    // Alice turned the first section landscape with other margins; Bob gave the last two columns.
+    let mut d = doc_with(
+        vec![wordcraft_doc::Paragraph::with_text("one", Default::default()), wordcraft_doc::Paragraph::with_text("two", Default::default())],
+        three_authors(),
+    );
+    let old1 = SectionProps::default();
+    let mut s1 = SectionProps { page_w: 792.0, page_h: 612.0, landscape: true, margin_left: 90.0, margin_right: 54.0, ..Default::default() };
+    s1.fmt_change = PropChange::boxed(0, old1);
+    if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.section = Some(Box::new(s1));
+    }
+    let old2 = SectionProps { start: SectionStart::NextPage, ..Default::default() };
+    d.last_section = SectionProps { start: SectionStart::Continuous, ..Default::default() };
+    d.last_section.columns.count = 2;
+    d.last_section.fmt_change = PropChange::boxed(1, old2);
+    let rtf = export(&d);
+    assert!(rtf.contains("{\\*\\oldsprops \\sectd\\sbkpage\\pgwsxn12240\\pghsxn15840\\marglsxn1440\\margrsxn1440"), "{rtf}");
+    assert!(rtf.contains("\\srauth1\\srdate-1480361314"), "{rtf}");
+    assert!(rtf.contains("\\srauth2\\srdate-2016341499"), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let secs = back.sections();
+    assert_eq!(secs.len(), 2, "{rtf}");
+    let (first, last) = (secs[0].1, secs[1].1);
+    assert!(first.landscape && (first.page_w - 792.0).abs() < 0.1, "the section keeps its formatting now");
+    assert!((first.margin_left - 90.0).abs() < 0.1 && (first.margin_right - 54.0).abs() < 0.1);
+    let c = first.fmt_change.as_deref().expect("the first section's change read back");
+    assert_eq!(rev_of(&back, Some(c.rev)), Some((RevisionKind::Format, "Alice".into(), "2024-03-15T10:30:00Z".into())));
+    assert!(!c.old.landscape && (c.old.page_w - 612.0).abs() < 0.1 && (c.old.page_h - 792.0).abs() < 0.1);
+    assert!((c.old.margin_left - 72.0).abs() < 0.1 && (c.old.margin_right - 72.0).abs() < 0.1);
+    assert_eq!((last.start, last.columns.count), (SectionStart::Continuous, 2));
+    let c = last.fmt_change.as_deref().expect("the last section's change read back");
+    assert_eq!(rev_of(&back, Some(c.rev)), Some((RevisionKind::Format, "Bob".into(), "2025-01-02T08:05:00Z".into())));
+    assert_eq!((c.old.start, c.old.columns.count), (SectionStart::NextPage, 1));
+    // A section without a change writes none and reads none.
+    let plain = export(&wordcraft_doc::Document::from_text("a"));
+    assert!(!plain.contains("oldsprops") && !plain.contains("\\srauth"), "{plain}");
+    assert!(import(plain.as_bytes()).unwrap().last_section.fmt_change.is_none());
+}
+
+#[test]
+fn table_row_and_cell_formatting_changes_round_trip() {
+    use wordcraft_doc::props::{Border, Borders, CellProps, HeightRule, PropChange, RowProps, TableProps};
+    use wordcraft_doc::{Align, RevisionKind, Rgb};
+    // Alice widened, centred and bordered the table; Bob made its first row exactly 30 pt high;
+    // Carol shaded and bordered a cell of the second row. The third row has no change of its own.
+    let mut t = wordcraft_doc::Table::new(3, 2, 300.0);
+    t.props.style = None;
+    let old_table = TableProps { width: Some(200.0), align: Some(Align::Left), ..t.props.clone() };
+    t.props.width = Some(300.0);
+    t.props.align = Some(Align::Center);
+    t.props.borders = Some(Borders::all(Border::single(1.0)));
+    t.props.fmt_change = PropChange::boxed(0, old_table);
+    let row = &mut t.rows[0].props;
+    (row.height, row.height_rule) = (Some(30.0), HeightRule::Exact);
+    row.fmt_change = PropChange::boxed(1, RowProps::default());
+    let cell = &mut t.rows[1].cells[1].props;
+    let old_cell = cell.clone();
+    cell.shading = Some(Rgb(255, 255, 0));
+    cell.borders = Some(Borders::box_(Border::single(1.5)));
+    cell.fmt_change = PropChange::boxed(2, CellProps { shading: None, ..old_cell });
+    let rtf = export(&doc_with_table(t, three_authors()));
+    assert!(rtf.contains("\\trqc\\trftsWidth3\\trwWidth6000\\trbrdrt"), "{rtf}");
+    assert_eq!(rtf.matches("{\\*\\oldtprops \\trowd").count(), 3, "{rtf}");
+    assert!(rtf.contains("{\\*\\oldtprops \\trowd\\trgaph108\\trleft0\\trql\\trftsWidth3\\trwWidth4000"), "{rtf}");
+    // One author and date per row: Bob's (his row), Carol's (her cell's), Alice's (the table's).
+    assert!(rtf.contains("{\\*\\revtbl {Unknown;}{Bob;}{Carol;}{Alice;}}"), "{rtf}");
+    for words in ["\\trauth1\\trdate-2016341499", "\\trauth2\\trdate", "\\trauth3\\trdate-1480361314"] {
+        assert!(rtf.contains(words), "{words}: {rtf}");
+    }
+    let back = import(rtf.as_bytes()).unwrap();
+    let t = first_table(&back);
+    let rev = |c: Option<u32>| rev_of(&back, c).map(|r| (r.0, r.1));
+    // The table now, and before Alice's change.
+    assert_eq!((t.props.width, t.props.align), (Some(300.0), Some(Align::Center)), "{rtf}");
+    assert_eq!(t.props.borders.and_then(|b| b.inside_v).map(|b| b.width), Some(1.0));
+    let c = t.props.fmt_change.as_deref().expect("the table's change read back");
+    assert_eq!(rev(Some(c.rev)), Some((RevisionKind::Format, "Alice".into())));
+    assert_eq!((c.old.width, c.old.align, c.old.borders), (Some(200.0), Some(Align::Left), None));
+    // The first row now, and before Bob's change.
+    let r0 = &t.rows[0].props;
+    assert_eq!((r0.height, r0.height_rule), (Some(30.0), HeightRule::Exact));
+    let c = r0.fmt_change.as_deref().expect("the first row's change read back");
+    assert_eq!(rev(Some(c.rev)), Some((RevisionKind::Format, "Bob".into())));
+    assert_eq!((c.old.height, c.old.height_rule), (None, HeightRule::Auto));
+    // Carol's cell now, and before her change; the other cells and rows have none.
+    let cell = &t.rows[1].cells[1].props;
+    assert_eq!(cell.shading, Some(Rgb(255, 255, 0)));
+    assert_eq!(cell.borders.and_then(|b| b.top).map(|b| b.width), Some(1.5));
+    let c = cell.fmt_change.as_deref().expect("the cell's change read back");
+    assert_eq!(rev(Some(c.rev)), Some((RevisionKind::Format, "Carol".into())));
+    assert_eq!(c.old.shading, None);
+    assert_ne!(c.old.borders.and_then(|b| b.top).map(|b| b.width), Some(1.5));
+    assert_eq!(c.old.width, cell.width, "its width didn't change");
+    let changed_cells = t.rows.iter().flat_map(|r| &r.cells).filter(|c| c.props.fmt_change.is_some()).count();
+    assert_eq!(changed_cells, 1);
+    assert!(t.rows[1].props.fmt_change.is_none() && t.rows[2].props.fmt_change.is_none(), "{rtf}");
+}
+
+#[test]
+fn table_and_row_formatting_round_trip() {
+    use wordcraft_doc::Align;
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule};
+    // What a table change is about, kept without one: the table's width (points or percent),
+    // alignment and borders, each row's height and keeping together, a cell's preferred width.
+    let mut t = wordcraft_doc::Table::new(2, 2, 400.0);
+    t.props.style = None;
+    t.props.width_pct = Some(80.0);
+    t.props.align = Some(Align::Right);
+    t.props.borders = Some(Borders { top: Some(Border { style: BorderStyle::Double, ..Border::single(0.75) }), ..Default::default() });
+    (t.rows[0].props.height, t.rows[0].props.height_rule) = (Some(24.0), HeightRule::AtLeast);
+    (t.rows[1].props.height, t.rows[1].props.height_rule) = (Some(40.0), HeightRule::Exact);
+    t.rows[1].props.cant_split = true;
+    let rtf = export(&doc_with_table(t, Vec::new()));
+    assert!(rtf.contains("\\trqr\\trftsWidth2\\trwWidth4000\\trbrdrt\\brdrdb\\brdrw15\\trrh480"), "{rtf}");
+    assert!(rtf.contains("\\trrh-800\\trkeep") && rtf.contains("\\clftsWidth3\\clwWidth4000\\cellx4000"), "{rtf}");
+    assert!(!rtf.contains("oldtprops") && !rtf.contains("\\trauth"), "{rtf}");
+    let back = import(rtf.as_bytes()).unwrap();
+    let t = first_table(&back);
+    assert_eq!((t.props.width, t.props.width_pct, t.props.align), (None, Some(80.0), Some(Align::Right)));
+    assert_eq!(t.props.borders.and_then(|b| b.top).map(|b| (b.style, b.width)), Some((BorderStyle::Double, 0.75)));
+    let rows: Vec<_> = t.rows.iter().map(|r| (r.props.height, r.props.height_rule, r.props.cant_split, r.props.fmt_change.is_none())).collect();
+    assert_eq!(rows, vec![(Some(24.0), HeightRule::AtLeast, false, true), (Some(40.0), HeightRule::Exact, true, true)]);
+    assert!(t.props.fmt_change.is_none());
+}
+
+#[test]
+fn section_and_table_revisions_read_as_the_spec_writes_them() {
+    use wordcraft_doc::props::HeightRule;
+    use wordcraft_doc::{Align, RevisionKind, Rgb};
+    // RTF 1.9.1: `{\*\oldsprops …}` with `\srauth`/`\srdate` after a section's words, and
+    // `{\*\oldtprops …}` with `\trauth`/`\trdate` in a row's definition, the tracking words
+    // also inside the group ("Old Properties": `<oldprop>` ends with `<trackinginfo>`). The
+    // row's definition is repeated before `\row`, as Word 2002 and later write it.
+    let rtf = br"{\rtf1\ansi{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}{\*\revtbl {Unknown;}{Alice;}{Bob;}}
+\sectd\lndscpsxn\pgwsxn15840\pghsxn12240{\*\oldsprops \sectd\pgwsxn12240\pghsxn15840\srauth2\srdate-2016341499}
+\pard Text\par
+\trowd\trqc\trrh400{\*\oldtprops \trowd\trql\trrh400\clcbpat1\cellx2000\clcbpat1\cellx4000}\trauth1\trdate-1480361314\clcbpat2\cellx2000\clcbpat1\cellx4000
+\pard\intbl a\cell b\cell
+\trowd\trqc\trrh400{\*\oldtprops \trowd\trql\trrh400\clcbpat1\cellx2000\clcbpat1\cellx4000}\trauth1\trdate-1480361314\clcbpat2\cellx2000\clcbpat1\cellx4000\row
+\pard After\par}";
+    let doc = import(rtf).unwrap();
+    let s = &doc.last_section;
+    assert!(s.landscape);
+    let c = s.fmt_change.as_deref().expect("the section's change");
+    assert_eq!(rev_of(&doc, Some(c.rev)), Some((RevisionKind::Format, "Bob".into(), "2025-01-02T08:05:00Z".into())));
+    assert!(!c.old.landscape && (c.old.page_w - 612.0).abs() < 0.1);
+    let t = first_table(&doc);
+    assert_eq!(t.props.align, Some(Align::Center));
+    let c = t.props.fmt_change.as_deref().expect("the table's change");
+    assert_eq!(rev_of(&doc, Some(c.rev)), Some((RevisionKind::Format, "Alice".into(), "2024-03-15T10:30:00Z".into())));
+    assert_eq!(c.old.align, Some(Align::Left));
+    // The row's height was the same before: the row has no change of its own.
+    let r = &t.rows[0];
+    assert_eq!((r.props.height, r.props.height_rule, r.props.fmt_change.is_none()), (Some(20.0), HeightRule::AtLeast, true));
+    let shading: Vec<_> = r.cells.iter().map(|c| (c.props.shading, c.props.fmt_change.as_deref().map(|c| c.old.shading))).collect();
+    assert_eq!(shading, vec![(Some(Rgb(0, 0, 255)), Some(Some(Rgb(255, 0, 0)))), (Some(Rgb(255, 0, 0)), None)]);
+    // A change that alters nothing the reader keeps stays the row's, with who made it and when.
+    let doc = import(br"{\rtf1{\*\revtbl {Unknown;}{Alice;}}\trowd{\*\oldtprops \trowd\cellx2000}\trauth1\cellx2000\pard\intbl a\cell\row}").unwrap();
+    let c = first_table(&doc).rows[0].props.fmt_change.as_deref().map(|c| rev_of(&doc, Some(c.rev)).map(|r| r.1));
+    assert_eq!(c, Some(Some("Alice".to_string())));
+}
+
+#[test]
+fn hostile_section_and_table_revisions_never_panic() {
+    let text = |rtf: &[u8]| import(rtf).map(|d| d.plain_text(wordcraft_doc::StoryRef::Body)).unwrap_or_default();
+    // Old formatting outside a table or a section, unterminated, nested, in a header, with
+    // structure and text inside, huge and negative numbers: the text is kept, nothing panics.
+    for (rtf, want) in [
+        (&br"{\rtf1{\*\oldtprops \trowd\cellx100}x\par}"[..], "x"),
+        (br"{\rtf1\trowd{\*\oldtprops \trowd\clcbpat99\cellx100 junk\cell\row\par}\cellx100\pard\intbl a\cell\row y\par}", "a"),
+        (br"{\rtf1\sectd{\*\oldsprops \sectd\pgwsxn-5\margl99999999 junk\par\sect}\srauth-7\srdate4294967295 z\par}", "z"),
+        (br"{\rtf1{\header{\*\oldsprops \lndscpsxn}h\par}\sectd b\par}", "b"),
+        (br"{\rtf1\trowd{\*\oldtprops {\*\oldtprops \trql}{\*\oldsprops \lndscpsxn}\trrh-2147483648\trwWidth2147483647\trftsWidth3}\cellx100\pard\intbl c\cell\row}", "c"),
+    ] {
+        let got = text(rtf);
+        assert!(got.contains(want) && !got.contains("junk"), "{got:?}: {}", String::from_utf8_lossy(rtf));
+    }
+    let doc = import(br"{\rtf1{\header{\*\oldsprops \lndscpsxn}h\par}\sectd b\par}").unwrap();
+    assert!(doc.last_section.fmt_change.is_none(), "a header's old section formatting is not the body's");
+    let doc = import(br"{\rtf1\trowd\trrh-2147483648\trwWidth2147483647\trftsWidth3\trauth999999\trdate-1\cellx100\pard\intbl c\cell\row}").unwrap();
+    let t = first_table(&doc);
+    assert!(t.props.width.is_some_and(|w| w <= 1584.0) && t.rows[0].props.height.is_some_and(|h| h <= 1584.0));
+    for bad in [
+        &br"{\rtf1\trowd{\*\oldtprops \trowd\clbrdrt\brdrs"[..],
+        br"{\rtf1\sectd{\*\oldsprops \sectd\lndscpsxn",
+        br"{\rtf1\trauth\trdate\srauth\srdate{\*\oldtprops}{\*\oldsprops}",
+    ] {
+        let _ = import(bad);
+    }
+    // Many cells, deep nesting.
+    let mut many = String::from("{\\rtf1\\trowd{\\*\\oldtprops \\trowd");
+    for i in 1..2_000 {
+        many.push_str(&format!("\\clcbpat1\\cellx{}", i * 10));
+    }
+    many.push_str("}\\cellx100\\pard\\intbl m\\cell\\row}");
+    assert!(text(many.as_bytes()).contains('m'));
+    let mut deep = String::from("{\\rtf1\\trowd");
+    for _ in 0..20_000 {
+        deep.push_str("{\\*\\oldtprops \\trql");
+    }
+    deep.push_str("\\cellx100 d\\cell\\row}");
+    let _ = import(deep.as_bytes());
+}
+
+#[test]
+fn table_borders_dont_show_where_a_cell_names_none() {
+    // Word draws the sides each cell names: the table's own borders (`\trbrdr…`, kept since
+    // #6334) don't fill in the sides a cell leaves out or turns off.
+    let doc = import(br"{\rtf1\ansi\trowd\trbrdrt\brdrs\trbrdrl\brdrs\trbrdrb\brdrs\trbrdrr\brdrs\trbrdrv\brdrs\clbrdrt\brdrs\cellx2000\clbrdrt\brdrs\clbrdrl\brdrnone\cellx4000\pard\intbl a\cell b\cell\row}").unwrap();
+    let t = first_table(&doc);
+    assert!(t.props.borders.and_then(|b| b.left).is_some_and(|b| b.is_visible()));
+    let cell = t.rows[0].cells[1].props.borders.expect("the cell's own borders");
+    assert!(cell.top.is_some_and(|b| b.is_visible()));
+    assert!(cell.left.is_some_and(|b| !b.is_visible()) && cell.bottom.is_some_and(|b| !b.is_visible()), "{cell:?}");
+}

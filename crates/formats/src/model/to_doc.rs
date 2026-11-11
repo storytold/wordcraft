@@ -847,6 +847,23 @@ impl<'a> Builder<'a> {
             tb.props.fixed |= x.fixed;
             let space = |v: Option<f32>| v.filter(|v| v.is_finite() && *v > 0.0).map(|v| v.min(1584.0));
             (tb.props.space_before, tb.props.space_after) = (space(x.space[0]), space(x.space[1]));
+            if x.borders.is_some() {
+                tb.props.borders = x.borders;
+            }
+            // Before a tracked change: the alignment, width and borders the flow keeps, over the
+            // rest of the table's properties as they are now.
+            if let Some(c) = &x.fmt_change {
+                let o = &c.old;
+                let old = wordcraft_doc::props::TableProps {
+                    align: o.align,
+                    width: o.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0)),
+                    width_pct: o.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(|p| p.min(100.0)),
+                    borders: o.borders,
+                    fmt_change: None,
+                    ..tb.props.clone()
+                };
+                tb.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
+            }
         }
         for (ri, r) in rows {
             let mut row = wordcraft_doc::Row { props: RowProps::default(), cells: Vec::new(), controls: Default::default() };
@@ -859,6 +876,19 @@ impl<'a> Builder<'a> {
                 row.props.height_rule = if exact { wordcraft_doc::props::HeightRule::Exact } else { wordcraft_doc::props::HeightRule::AtLeast };
             }
             row.props.cant_split = t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true));
+            if let Some(c) = t.extra.as_ref().and_then(|x| x.row_changes.get(ri)).and_then(Option::as_deref) {
+                let o = &c.old;
+                let height = o.height.filter(|h| h.is_finite() && *h > 0.0).map(|h| h.min(1584.0));
+                let old = RowProps {
+                    height,
+                    height_rule: if height.is_some() { o.height_rule } else { wordcraft_doc::props::HeightRule::Auto },
+                    cant_split: o.cant_split,
+                    header: o.header,
+                    fmt_change: None,
+                    ..row.props.clone()
+                };
+                row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
+            }
             let mut g = 0usize;
             for c in r.iter().take(wordcraft_doc::table::MAX_COLS) {
                 let span = (c.colspan.clamp(1, 63) as usize).min(cols.saturating_sub(g).max(1));
@@ -880,22 +910,33 @@ impl<'a> Builder<'a> {
                     let media = self.doc.add_media(p.img.data.as_ref().clone(), &p.img.ext);
                     Box::new(wordcraft_doc::props::CellPicture { media, size: [p.img.w, p.img.h], repeat: p.repeat, align: p.align })
                 });
-                row.cells.push(wordcraft_doc::Cell {
-                    props: CellProps {
-                        width: Some(w),
-                        span: span as u32,
-                        vmerge,
-                        shading: c.shading,
-                        borders: c.borders,
-                        margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
-                        valign: c.valign,
-                        text_direction: c.direction,
-                        picture,
-                        ..Default::default()
-                    },
-                    blocks,
-                    controls: Default::default(),
-                });
+                let mut props = CellProps {
+                    width: Some(w),
+                    span: span as u32,
+                    vmerge,
+                    shading: c.shading,
+                    borders: c.borders,
+                    margins: c.margins.filter(|m| m.iter().all(|v| v.is_finite())).map(|m| m.map(|v| v.clamp(0.0, 1584.0))),
+                    valign: c.valign,
+                    text_direction: c.direction,
+                    picture,
+                    ..Default::default()
+                };
+                // Before a tracked change: the shading, borders, vertical alignment and width the
+                // flow keeps, over the rest of the cell's properties as they are now.
+                if let Some(ch) = &c.fmt_change {
+                    let o = &ch.old;
+                    let old = CellProps {
+                        shading: o.shading,
+                        borders: o.borders,
+                        valign: o.valign,
+                        width: o.width.filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(1584.0)).or(props.width),
+                        fmt_change: None,
+                        ..props.clone()
+                    };
+                    props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &ch.mark), old);
+                }
+                row.cells.push(wordcraft_doc::Cell { props, blocks, controls: Default::default() });
             }
             if row.cells.is_empty() {
                 row.cells.push(wordcraft_doc::Cell::empty());
@@ -988,6 +1029,19 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
     doc.core.created = m.created.clone();
     doc.ensure_nonempty();
     doc
+}
+
+/// The revision of `doc` for a tracked formatting change made by `m`'s author at its date: the
+/// one it has, else a new one. For a change an importer adds to the document itself (a
+/// section's), as [`to_doc`] adds the flow's.
+pub fn format_revision(doc: &mut Document, m: &RevMark) -> u32 {
+    let same = |r: &Revision| r.kind == RevisionKind::Format && r.move_name.is_none() && r.author == m.author && r.date == m.date;
+    if let Some(i) = doc.revisions.iter().position(same) {
+        return u32::try_from(i).unwrap_or(u32::MAX);
+    }
+    let i = u32::try_from(doc.revisions.len()).unwrap_or(u32::MAX);
+    doc.revisions.push(Revision::new(RevisionKind::Format, m.author.clone(), m.date.clone()));
+    i
 }
 
 /// `blocks` as document blocks of `doc` (their pictures go into its media), for a header,

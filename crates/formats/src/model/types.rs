@@ -872,6 +872,10 @@ pub struct Cell {
     /// The width, points, the source gives a cell spanning one column (HTML): see
     /// [`FTable::widths_from_cells`].
     pub width: Option<f32>,
+    /// Tracked change of the cell's formatting: who made it, and the properties before it
+    /// (formats that keep revisions: RTF). Only its shading, borders, vertical alignment and
+    /// width are kept, the rest is the cell's as it is now; no width is the width it has now.
+    pub fmt_change: Option<Box<FmtChange<wordcraft_doc::props::CellProps>>>,
 }
 
 /// A cell's background picture: the picture at its own size, how it fills the cell, and where an
@@ -898,6 +902,7 @@ impl Default for Cell {
             direction: Default::default(),
             picture: None,
             width: None,
+            fmt_change: None,
         }
     }
 }
@@ -954,6 +959,15 @@ pub struct TableExtra {
     /// ODT's `table:table-header-rows`). Its header cells ([`FCell::header`]) may be more: a
     /// table style's header row is one too.
     pub header_rows: usize,
+    /// Its own borders (RTF `\trbrdr…`), outside and between its cells.
+    pub borders: Option<wordcraft_doc::props::Borders>,
+    /// Tracked change of its formatting: who made it, and the properties before it (formats
+    /// that keep revisions: RTF). Only its alignment, width and borders are kept, the rest is
+    /// the table's as it is now.
+    pub fmt_change: Option<Box<FmtChange<wordcraft_doc::props::TableProps>>>,
+    /// Tracked change of each row's formatting, by row: only its height, keeping together and
+    /// repeating as a header row are kept.
+    pub row_changes: Vec<Option<Box<FmtChange<wordcraft_doc::props::RowProps>>>>,
 }
 
 impl FTable {
