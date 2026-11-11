@@ -116,6 +116,23 @@ fn drive_pages_commands_work_with_no_document_but_save_needs_one() {
         assert!(crate::works_without_document(id), "{id} works with no document");
     }
     assert!(!crate::works_without_document("ui.drive.save"), "saving needs a document");
+    assert!(!crate::works_without_document("ui.drive.export"), "exporting needs a document");
+}
+
+/// A new registration isn't written while Drive is busy (signing in, say): the worker would keep
+/// using the old client while the file held the new one.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_busy_drive_keeps_the_old_registration() {
+    let dir = Scratch::new("busy");
+    let mut a = app();
+    a.services.drive_profile = Some(dir.to_path_buf());
+    a.drive.busy = Some("signIn");
+    let r = a.run("ui.drive.client", json!({"clientId": "123-abc.apps.googleusercontent.com"}));
+    assert!(r.is_err_and(|e| e.contains("busy")), "refused while busy");
+    assert!(!dir.join("google-drive.json").exists(), "nothing written");
+    let r = a.run("ui.drive.importClient", json!({"path": dir.join("client_secret_x.json").to_string_lossy()}));
+    assert!(r.is_err_and(|e| e.contains("busy")), "import refused while busy");
 }
 
 /// Save follows the last destination: a local Save As makes Save local; saving to Drive again
@@ -179,7 +196,7 @@ fn upload_around(a: &mut WordApp, during: impl FnOnce(&mut WordApp)) {
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn a_newer_local_save_keeps_its_destination() {
-    let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-{}", std::process::id()));
+    let dir = Scratch::new("save");
     std::fs::create_dir_all(&dir).unwrap();
     let docx = dir.join("Essay.docx");
     let path = |p: &std::path::Path| json!({"path": p.to_string_lossy()});
@@ -206,7 +223,6 @@ fn a_newer_local_save_keeps_its_destination() {
     });
     assert!(a.session.path.is_none(), "the upload makes Drive the home");
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "Save goes to Drive");
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Off until turned on in File › Options › Accounts: the commands say so, Save is an ordinary
@@ -291,4 +307,37 @@ fn drive_exports_drop_the_documents_extension() {
     assert_eq!(super::export_stem(&a), "Essay");
     a.session.file_name = Some("v1.2 notes".into());
     assert_eq!(super::export_stem(&a), "v1.2 notes", "only a document extension is dropped");
+}
+
+/// A temporary folder of its own for one test, removed when the test ends (even by a panic).
+pub(crate) struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    pub(crate) fn new(tag: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-{tag}-{}-{n}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Scratch {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }

@@ -281,12 +281,16 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
         // In the browser a save is a download, so it saves right away.
-        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+        // A document from Google Drive saves back to Drive.
+        "save" if app.session.path.is_none() && app.services.download.is_none() && !crate::gdrive::saves_to_drive(app) => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
             let r = app.run("file.save", json!({}));
-            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
+            // A Drive save runs in the background (`started`) and reports in the status bar.
+            if r.is_ok_and(|v| {
+                v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some() || v.get("started").is_some()
+            }) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             } else {

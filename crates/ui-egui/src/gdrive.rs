@@ -218,6 +218,12 @@ pub(crate) fn saved_in_drive(app: &WordApp) -> bool {
     destination(app).is_some_and(|o| !o.google_doc)
 }
 
+/// Whether File › Save sends the active document to Drive (`intercept_save` takes it): a Drive
+/// file goes back to that file, a Google Doc's Word copy to a new file beside it.
+pub(crate) fn saves_to_drive(app: &WordApp) -> bool {
+    app.ui.google_drive && destination(app).is_some()
+}
+
 /// Apply the worker's results (each frame).
 pub fn poll(app: &mut WordApp) {
     imp::poll(app);
@@ -283,7 +289,9 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
         ui.add(egui::TextEdit::singleline(&mut secret).password(true).desired_width(380.0)).labelled_by(l);
         ui.end_row();
     });
-    if ui.add_enabled(!id.trim().is_empty(), egui::Button::new(tl!("Save registration"))).clicked() {
+    // Not while Drive is busy (signing in, say): the worker would keep using the old client.
+    let idle = app.drive.busy.is_none_or(|b| b == "starting");
+    if ui.add_enabled(idle && !id.trim().is_empty(), egui::Button::new(tl!("Save registration"))).clicked() {
         let secret_param = if secret.trim().is_empty() { Value::Null } else { Value::from(secret.trim()) };
         match app.run("ui.drive.client", json!({"clientId": id.trim(), "clientSecret": secret_param})) {
             Ok(_) => {
@@ -309,7 +317,7 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
     }
     match (app.drive.signed_in, app.drive.busy) {
         (Some(true), _) => {
-            ui.label(tl!("✓ Signed in. WordCraft keeps only a sign-in token, in the system keychain; Sign out revokes it at Google."));
+            ui.label(tl!("✓ Signed in. WordCraft keeps only a sign-in token: in the system keychain when there is one, otherwise until you quit. Sign out forgets it and asks Google to revoke it."));
             ui.horizontal(|ui| {
                 if ui.button(tl!("Open File › Google Drive")).clicked() {
                     let _ = app.run("ui.backstage", json!({"value": true, "page": "drive"}));
@@ -650,6 +658,15 @@ mod native {
         app.drive.worker.as_ref().ok_or_else(|| "Google Drive didn't start".to_string())
     }
 
+    /// A new client is written only while no Drive job runs: `reload` would refuse it, and the
+    /// worker would go on with the old client while the file on disk held the new one.
+    fn idle(app: &WordApp) -> Result<(), String> {
+        if app.drive.busy.is_some_and(|b| b != "starting") {
+            return Err("Google Drive is busy; wait or cancel first".into());
+        }
+        Ok(())
+    }
+
     fn send(app: &mut WordApp, job: Job, busy: &'static str) -> Result<Value, String> {
         if let Some(b) = app.drive.busy.filter(|b| *b != "starting") {
             return Err(format!("Google Drive is still busy ({b})"));
@@ -685,6 +702,7 @@ mod native {
                 let Some(dir) = app.services.drive_profile.clone() else {
                     return Err("Google Drive works with the WordCraft desktop app".into());
                 };
+                idle(app)?;
                 wordcraft_gdrive::write_client(&dir, id, secret).map_err(|e| e.to_string())?;
                 run(app, "reload", &json!({}))
             }
@@ -695,6 +713,7 @@ mod native {
                 let Some(dir) = app.services.drive_profile.clone() else {
                     return Err("Google Drive works with the WordCraft desktop app".into());
                 };
+                idle(app)?;
                 let (file, remove) = match params.get("path") {
                     None | Some(Value::Null) => {
                         let found = wordcraft_gdrive::downloads_dir().and_then(|d| wordcraft_gdrive::newest_client_file(&d));
@@ -713,9 +732,7 @@ mod native {
             "start" => worker(app).map(|_| json!({"started": true})),
             // Reads `google-drive.json` again (after setting it up) by starting a new worker.
             "reload" => {
-                if app.drive.busy.is_some_and(|b| b != "starting") {
-                    return Err("Google Drive is busy; wait or cancel first".into());
-                }
+                idle(app)?;
                 app.drive.worker = None;
                 app.drive.unavailable = None;
                 app.drive.signed_in = None;
