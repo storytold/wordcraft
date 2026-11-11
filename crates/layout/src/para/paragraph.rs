@@ -3,7 +3,7 @@ use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
-use super::lines::break_lines;
+use super::lines::{break_lines, text_cluster_source};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use wordcraft_fonts::ShapeContext;
@@ -520,6 +520,11 @@ impl<'a> BreakText<'a> {
     fn to_para(&self, i: usize) -> Option<usize> {
         if self.skipped { self.ends.binary_search_by_key(&i, |end| end.0).ok().and_then(|k| self.ends.get(k)).map(|end| end.1) } else { Some(i) }
     }
+
+    /// Maps a paragraph byte offset back to its offset in visible text.
+    fn to_visible(&self, i: usize) -> Option<usize> {
+        if self.skipped { self.ends.binary_search_by_key(&i, |end| end.1).ok().and_then(|k| self.ends.get(k)).map(|end| end.0) } else { Some(i) }
+    }
 }
 
 /// Mark the clusters a line may break after.
@@ -679,6 +684,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut skip = sh.left.clone();
     skip.extend(sh.bare.iter().cloned());
     let bt = BreakText::new(&p.text, skip);
+    let mut has_thai = !crate::kinsoku::thai_text_runs(&bt.text).is_empty();
     mark_break_opportunities(&mut sh.b.clusters, &bt, &rp);
     let label = list_label(&cx, &mut sh.b, mark_style);
     let joined_cluster_starts = joined_cluster_starts(p, &sh.b.clusters);
@@ -711,6 +717,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         enclosures,
         auto_space,
     };
+    has_thai |= pl.shown.iter().any(|(_, text, _)| text.chars().any(crate::kinsoku::is_thai_text_char));
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&bt.text, |i| bt.to_para(i), &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
@@ -721,7 +728,28 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    let thai_justify_after: Vec<usize> = if has_thai {
+        pl.clusters
+            .windows(2)
+            .enumerate()
+            .filter_map(|(i, pair)| {
+                let (left, right) = (pair.first()?, pair.get(1)?);
+                let a = text_cluster_source(&pl, p, i)?.chars().next_back()?;
+                let b = text_cluster_source(&pl, p, i + 1)?.chars().next()?;
+                if !crate::kinsoku::is_thai_text_char(a) || !crate::kinsoku::is_thai_text_char(b) {
+                    return None;
+                }
+                if p.text.get(left.start..left.end)?.contains(OBJ) || p.text.get(right.start..right.end)?.contains(OBJ) {
+                    return None;
+                }
+                let visible = bt.to_visible(left.end)?;
+                crate::kinsoku::is_safe_line_break(&bt.text, visible).then_some(i)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    break_lines(&mut pl, p, env, mark_style, env.label.as_ref().map(|(_, l)| l), has_thai, &thai_justify_after);
     if gone {
         collapse(&mut pl);
     }

@@ -68,6 +68,43 @@ fn reads_a_hand_written_flat_opc_package() {
     assert_eq!(doc.media.len(), 1);
 }
 
+#[test]
+fn reads_distinct_distributed_alignments_from_paragraphs_and_inherited_styles() {
+    let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?mso-application progid="Word.Document"?>
+<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <pkg:part pkg:name="/_rels/.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml">
+    <pkg:xmlData><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships></pkg:xmlData>
+  </pkg:part>
+  <pkg:part pkg:name="/word/_rels/document.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml">
+    <pkg:xmlData><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships></pkg:xmlData>
+  </pkg:part>
+  <pkg:part pkg:name="/word/document.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml">
+    <pkg:xmlData><w:document><w:body>
+      <w:p><w:pPr><w:jc w:val="distribute"/></w:pPr><w:r><w:t>regular</w:t></w:r></w:p>
+      <w:p><w:pPr><w:jc w:val="thaiDistribute"/></w:pPr><w:r><w:t>thai</w:t></w:r></w:p>
+      <w:p><w:pPr><w:pStyle w:val="ThaiChild"/></w:pPr><w:r><w:t>inherited</w:t></w:r></w:p>
+      <w:p><w:pPr><w:pStyle w:val="ThaiChild"/><w:jc w:val="distribute"/></w:pPr><w:r><w:t>override</w:t></w:r></w:p>
+    </w:body></w:document></pkg:xmlData>
+  </pkg:part>
+  <pkg:part pkg:name="/word/styles.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml">
+    <pkg:xmlData><w:styles>
+      <w:style w:type="paragraph" w:styleId="ThaiBase"><w:name w:val="Thai Base"/><w:pPr><w:jc w:val="thaiDistribute"/></w:pPr></w:style>
+      <w:style w:type="paragraph" w:styleId="ThaiChild"><w:name w:val="Thai Child"/><w:basedOn w:val="ThaiBase"/></w:style>
+    </w:styles></pkg:xmlData>
+  </pkg:part>
+</pkg:package>"#;
+
+    let doc = read_xml(xml.as_bytes()).expect("read hand-written alignment package");
+    let ps = paras(&doc);
+    assert_eq!(ps[0].props.align, Some(Align::Distribute));
+    assert_eq!(ps[1].props.align, Some(Align::ThaiDistribute));
+    assert_eq!(ps[2].props.align, None);
+    assert_eq!(doc.styles.resolve_para(&ps[2].props).align, Align::ThaiDistribute);
+    assert_eq!(ps[3].props.align, Some(Align::Distribute));
+    assert_eq!(doc.styles.resolve_para(&ps[3].props).align, Align::Distribute);
+}
+
 /// A Word 2003 XML Document, hand-written from the Office 2003 XML Reference Schemas.
 fn wordml_2003_sample() -> String {
     let png = tiny_png_b64();
