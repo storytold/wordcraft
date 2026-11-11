@@ -371,22 +371,12 @@ pub(crate) fn window_minimize_button(ui: &mut Ui, t: &Tokens, height: f32) -> eg
 /// Window caption controls (Minimize, Maximize/Restore, Close) for non-macOS windows.
 pub(crate) fn window_controls(ui: &mut Ui, height: f32) {
     let t = Tokens::get(ui.ctx());
-    let rtl = ui.layout().prefer_right_to_left();
     let prev_spacing = ui.spacing().item_spacing;
     ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
-    if rtl {
-        window_close_button(ui, &t, height);
-        window_maximize_button(ui, &t, height);
-        window_minimize_button(ui, &t, height);
-    } else {
-        window_minimize_button(ui, &t, height);
-        window_maximize_button(ui, &t, height);
-        window_close_button(ui, &t, height);
-    }
+    window_close_button(ui, &t, height);
+    window_maximize_button(ui, &t, height);
+    window_minimize_button(ui, &t, height);
     ui.spacing_mut().item_spacing = prev_spacing;
-    if rtl {
-        ui.add_space(6.0);
-    }
 }
 
 /// Resize zone thickness along an edge, and the side of a corner zone (matching native resize borders).
@@ -428,6 +418,8 @@ struct HandOff {
 /// input brings no release of its own: where the OS does send it (Windows, X11), nothing is added,
 /// so no second release can turn into a click. If this input already brings a new press, do not
 /// append a release after it either, so the new interaction is not ended before a drag starts.
+/// Clear any stale drag via `ctx.stop_dragging()` so a compositor-consumed release does not leave
+/// the previous widget dragging into the new interaction.
 /// Call from `raw_input_hook`.
 pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
     let Some(h) = ctx.data(|d| d.get_temp::<HandOff>(resize_handed_off_id())) else { return };
@@ -439,6 +431,7 @@ pub fn release_after_os_resize(ctx: &egui::Context, raw: &mut egui::RawInput) {
     if let Some(pos) = ctx.input(|i| i.pointer.latest_pos()).filter(|_| !os_released && !os_pressed && ctx.input(|i| i.pointer.primary_down())) {
         raw.events.push(egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, modifiers: ctx.input(|i| i.modifiers) });
     }
+    ctx.stop_dragging();
     let pass = ctx.cumulative_pass_nr();
     ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { released: Some(pass), ..h }));
 }
@@ -612,7 +605,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                         }
                         ui.add_space(8.0);
-                        if app.ui.show_discord {
+                        if app.ui.show_discord && full.width() >= 900.0 {
                             let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
                             ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
                             icons::paint(
@@ -634,7 +627,14 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                             }
                             ui.add_space(8.0);
                         }
-                        search_box(app, ui, control_h);
+                        let search_w = if full.width() < 800.0 {
+                            130.0
+                        } else if full.width() < 950.0 {
+                            180.0
+                        } else {
+                            SEARCH_BOX_W
+                        };
+                        search_box(app, ui, search_w, control_h);
                         right_start = if rtl { ui.min_rect().max.x } else { ui.min_rect().min.x };
                     });
                 })
@@ -778,11 +778,11 @@ pub(crate) fn title_search_open(app: &WordApp, ctx: &egui::Context) -> bool {
 
 /// The Search box being typed in: a text box in its place and the results under it. `false`
 /// once it closes: a command or the find ran, Escape, or a click outside both.
-fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSearch) -> bool {
+fn typing_search(app: &mut WordApp, ui: &mut Ui, box_w: f32, control_h: f32, s: &mut TitleSearch) -> bool {
     if s.swallow {
         ui.ctx().input_mut(|i| i.events.retain(|e| !crate::dialogs::swallow_shortcut_text(&mut s.swallow, e)));
     }
-    let ph = tl!("Search commands and help");
+    let ph = if box_w < 180.0 { tl!("Search") } else { tl!("Search commands and help") };
     // The box takes the keys from its first frame: focused before it reads this frame's input,
     // so what is typed straight after Alt+Q goes into it. It takes the focus back whenever it lost
     // it, except to one of its results (Tab moves there, so a keyboard user can pick one), and
@@ -798,7 +798,7 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
     }
     let typing = ui.memory(|m| m.has_focus(id));
     let edit = ui.add_sized(
-        vec2(SEARCH_BOX_W, control_h),
+        vec2(box_w, control_h),
         egui::TextEdit::singleline(&mut s.query).id(id).hint_text(ph).align(if crate::rtl::on() {
             Align2::RIGHT_CENTER
         } else {
@@ -842,12 +842,12 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
 
 /// Search ("Tell me"): a box that opens command search. In the title bar, and in the Commands bar
 /// of Full Screen (#1678). Clicked (or Alt+Q), it takes the typing in place (#5398).
-fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
+fn search_box(app: &mut WordApp, ui: &mut Ui, box_w: f32, control_h: f32) {
     let frame = ui.ctx().cumulative_frame_nr();
     ui.ctx().data_mut(|d| d.insert_temp(app.window_id("title_search_shown"), frame));
     let id = app.window_id("title_search");
     if let Some(mut s) = ui.ctx().data(|d| d.get_temp::<TitleSearch>(id)) {
-        let open = typing_search(app, ui, control_h, &mut s);
+        let open = typing_search(app, ui, box_w, control_h, &mut s);
         ui.ctx().data_mut(|d| {
             if open {
                 d.insert_temp(id, s);
@@ -859,8 +859,8 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     }
     let t = Tokens::get(ui.ctx());
     let rtl = crate::rtl::on();
-    let (r, resp) = ui.allocate_exact_size(vec2(SEARCH_BOX_W, control_h), Sense::click());
-    let ph = tl!("Search commands and help");
+    let (r, resp) = ui.allocate_exact_size(vec2(box_w, control_h), Sense::click());
+    let ph = if box_w < 180.0 { tl!("Search") } else { tl!("Search commands and help") };
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     icons::paint(
@@ -941,7 +941,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             }
         } else {
             ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {
-                search_box(app, ui, 22.0);
+                search_box(app, ui, SEARCH_BOX_W, 22.0);
             });
         }
     });

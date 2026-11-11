@@ -1,4 +1,5 @@
 use super::*;
+use egui_kittest::kittest::{NodeT, Queryable};
 
 fn ctx() -> egui::Context {
     let ctx = egui::Context::default();
@@ -526,9 +527,11 @@ fn window_controls_drawn_and_functional_on_non_macos() {
         a,
     );
     h.run_steps(4);
-    assert!(h.ctx.read_response(window_close_button_id()).is_some(), "Close button is drawn");
-    assert!(h.ctx.read_response(window_maximize_button_id()).is_some(), "Maximize button is drawn");
-    assert!(h.ctx.read_response(window_minimize_button_id()).is_some(), "Minimize button is drawn");
+    let close = h.ctx.read_response(window_close_button_id()).expect("Close button is drawn");
+    let max = h.ctx.read_response(window_maximize_button_id()).expect("Maximize button is drawn");
+    let min = h.ctx.read_response(window_minimize_button_id()).expect("Minimize button is drawn");
+    assert!(close.rect.min.x > max.rect.min.x, "Close is to the right of Maximize in LTR");
+    assert!(max.rect.min.x > min.rect.min.x, "Maximize is to the right of Minimize in LTR");
 
     let click = |h: &mut egui_kittest::Harness<'_, WordApp>, id| {
         let at = h.ctx.read_response(id).expect("button is drawn").rect.center();
@@ -811,4 +814,113 @@ fn release_after_os_resize_injects_release_when_no_new_press() {
 
     assert_eq!(raw.events.len(), 1, "synthetic release should be injected");
     assert!(matches!(raw.events[0], egui::Event::PointerButton { pressed: false, .. }), "synthetic release has pressed: false");
+}
+
+/// #4311: In RTL, window controls row fills left-to-right from min.x, so Close button is at the
+/// outer left corner.
+#[test]
+fn window_controls_in_rtl_places_close_at_outer_edge() {
+    let arabic = crate::i18n::fixture_lang("ar", "");
+    crate::i18n::set_current(arabic);
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(1440.0, 900.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                crate::i18n::set_current(arabic);
+                crate::rtl::sync(&ctx);
+                if app.fonts_frames < 2 {
+                    app.fonts_frames += 1;
+                    return;
+                }
+                title_bar(app, ui);
+            },
+            a,
+        );
+    h.run_steps(4);
+    let close = h.ctx.read_response(window_close_button_id()).expect("Close button is drawn");
+    let max = h.ctx.read_response(window_maximize_button_id()).expect("Maximize button is drawn");
+    let min = h.ctx.read_response(window_minimize_button_id()).expect("Minimize button is drawn");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    assert!(close.rect.min.x < max.rect.min.x, "Close is at the outer left edge in RTL");
+    assert!(max.rect.min.x < min.rect.min.x, "Maximize is to the left of Minimize in RTL");
+}
+
+/// #4311: At the supported minimum window width (760 pt), secondary controls compact so the
+/// centered document title remains visible and clickable.
+#[test]
+fn title_bar_at_minimum_width_shows_document_title() {
+    let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(760.0, 600.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            if app.fonts_frames < 2 {
+                app.fonts_frames += 1;
+                return;
+            }
+            title_bar(app, ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    let has_title =
+        h.query_all_by_role(egui::accesskit::Role::Button).any(|n| n.accesskit_node().label().as_deref().is_some_and(|l| l.contains("Document1")));
+    assert!(has_title, "Document title is rendered at 760 pt width");
+}
+
+/// #4311: If a widget was being dragged when an OS resize hand-off occurred, and the next input
+/// brings a new press without a release, release_after_os_resize clears the stale drag so the new
+/// interaction is not blocked.
+#[test]
+fn release_after_os_resize_clears_stale_drag_and_preserves_new_interaction() {
+    let ctx = ctx();
+    let old_id = egui::Id::unique("stale_drag_widget");
+    let new_id = egui::Id::unique("new_drag_widget");
+    let new_pos = egui::pos2(300.0, 200.0);
+
+    // Initial pass: register the new widget so it exists in egui's widget hit-map
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.interact(egui::Rect::from_min_size(new_pos, egui::vec2(50.0, 50.0)), new_id, egui::Sense::click_and_drag());
+    });
+
+    // Old widget was being dragged from a resize interaction
+    ctx.set_dragged_id(old_id);
+    assert!(ctx.is_being_dragged(old_id), "old widget is being dragged");
+
+    // Hand-off occurs at this pass
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(resize_handed_off_id(), HandOff { pass, released: None }));
+
+    // Run a pass to advance cumulative_pass_nr
+    let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+        ui.interact(egui::Rect::from_min_size(new_pos, egui::vec2(50.0, 50.0)), new_id, egui::Sense::click_and_drag());
+    });
+
+    // Now a new press arrives for the new widget at new_pos without prior release
+    let mut raw = egui::RawInput {
+        events: vec![
+            egui::Event::PointerMoved(new_pos),
+            egui::Event::PointerButton { pos: new_pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+        ],
+        ..Default::default()
+    };
+
+    release_after_os_resize(&ctx, &mut raw);
+
+    // Stale drag is cleared immediately
+    assert!(!ctx.is_being_dragged(old_id), "stale drag on old widget is stopped");
+
+    // New press is preserved in raw events
+    assert_eq!(raw.events.len(), 2, "new pointer moved and press are preserved");
+    assert!(matches!(raw.events[1], egui::Event::PointerButton { pressed: true, .. }));
+
+    // Running a frame with the new press allows the new widget to sense press/drag
+    let _ = ctx.run_ui(raw, |ui| {
+        let r = ui.interact(egui::Rect::from_min_size(new_pos, egui::vec2(50.0, 50.0)), new_id, egui::Sense::click_and_drag());
+        assert!(r.is_pointer_button_down_on(), "new widget senses the new press");
+    });
 }
