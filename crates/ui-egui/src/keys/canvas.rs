@@ -4,7 +4,7 @@ use super::ime::{
     note_ime_application_change, publish_ime_receipt,
 };
 use super::shortcuts::{
-    EquationReplacementDrop, dispatch, equation_key, is_context_menu_key, is_modifier_key, is_paste_release, is_paste_special_release,
+    EquationReplacementDrop, dispatch, ends_accent, equation_key, is_context_menu_key, is_modifier_key, is_paste_release, is_paste_special_release,
     is_shift_delete, paste_release_modifiers,
 };
 use super::{Key, Modifiers, WordApp, json};
@@ -213,13 +213,21 @@ fn drop_refused_replacement(app: &mut WordApp, e: &egui::Event, b: &mut Batch) -
 fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes: bool) -> bool {
     // An Alt shortcut (Alt+Shift+D, Alt+F7…) may also send its key's text; it isn't typed.
     match &e {
-        egui::Event::Key { pressed: true, .. } => {
+        egui::Event::Key { key, pressed: true, modifiers, .. } => {
             app.canvas.swallow_text = false;
             app.canvas.alt_code_echo = None;
             app.canvas.ime_join_text = None;
             // A key between a deletion and its text means that text is fresh input, not the
             // replacement the deletion promised (even when the key runs no command).
             app.session.clear_ime_text_join();
+            // A waiting accent key (Ctrl+' …) ends on a key that types nothing or a shortcut;
+            // Escape only cancels it (#6328).
+            if app.session.accent_waiting().is_some() && ends_accent(*key, *modifiers) {
+                app.session.cancel_accent();
+                if *key == Key::Escape {
+                    return true;
+                }
+            }
         }
         egui::Event::Text(_) if std::mem::take(&mut app.canvas.swallow_text) => return true,
         egui::Event::Text(t) => {
@@ -230,7 +238,10 @@ fn prefilter(app: &mut WordApp, ctx: &egui::Context, e: &egui::Event, alt_codes:
             }
         }
         // Focus elsewhere (another window) ends an Alt code unfinished.
-        egui::Event::WindowFocused(false) => app.canvas.alt_code.clear(),
+        egui::Event::WindowFocused(false) => {
+            app.canvas.alt_code.clear();
+            app.session.cancel_accent();
+        }
         _ => {}
     }
     if alt_codes && app.session.math.is_none() && alt_code_event(app, e) {

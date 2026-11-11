@@ -71,6 +71,11 @@ impl Session {
         let ime_text_join = self.ime_text_join.take();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        // A waiting accent key (Ctrl+' …, #6328) accents the first character typed next; any
+        // other edit, caret move or selection forgets it. The accented text is what runs, is
+        // recorded in a macro and is repeated.
+        let accented = self.accent_params(id, spec.mutates, params);
+        let params: &Value = &accented;
         let join = join
             || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
             || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
