@@ -281,6 +281,9 @@ pub struct CanvasScroll {
     /// input time it last grew. Only used with animation effects off.
     zoom_pending: f32,
     zoom_time: f64,
+    /// Ctrl/⌘+Line-wheel zoom is being eased in over several frames by egui; compensation for
+    /// line scroll speed must persist across empty frames until easing completes.
+    line_zoom_smoothing: bool,
 }
 
 impl CanvasScroll {
@@ -377,6 +380,7 @@ impl CanvasScroll {
     /// on top of the anchor correction that keeps the pointer's page point in place (#1743).
     pub fn cancel(&mut self) {
         self.hit_edge();
+        self.line_zoom_smoothing = false;
     }
 
     /// Scrolling continues without new input: keep repainting.
@@ -392,29 +396,40 @@ impl CanvasScroll {
         // Fingers on a touch screen are measured directly, never eased.
         if input.multi_touch().is_some() {
             self.zoom_pending = 0.0;
+            self.line_zoom_smoothing = false;
             return input.zoom_delta();
         }
         if animate {
             self.zoom_pending = 0.0;
-            let factor = opts.line_scroll_speed / InputOptions::default().line_scroll_speed;
-            let has_line_wheel = input.events.iter().any(|e| {
-                matches!(
-                    e,
-                    Event::MouseWheel {
-                        unit: MouseWheelUnit::Line,
-                        modifiers,
-                        ..
-                    } if modifiers.matches_any(opts.zoom_modifier)
-                )
-            });
-            if has_line_wheel && factor > 0.0 && (factor - 1.0).abs() > 1e-4 {
-                let z = input.zoom_delta();
-                if z.is_finite() && z > 0.0 {
-                    return (z.ln() / factor).exp();
+            let pinch: f32 = input.events.iter().filter_map(|e| if let Event::Zoom(factor) = e { Some(*factor) } else { None }).product();
+            let pinch = if pinch.is_finite() && pinch > 0.0 { pinch } else { 1.0 };
+
+            for e in &input.events {
+                if let Event::MouseWheel { unit, modifiers, .. } = e
+                    && modifiers.matches_any(opts.zoom_modifier)
+                {
+                    match unit {
+                        MouseWheelUnit::Line => self.line_zoom_smoothing = true,
+                        MouseWheelUnit::Point | MouseWheelUnit::Page => self.line_zoom_smoothing = false,
+                    }
                 }
             }
-            return input.zoom_delta();
+
+            let total_z = input.zoom_delta();
+            let wheel_z = if pinch != 1.0 && total_z.is_finite() && total_z > 0.0 { total_z / pinch } else { total_z };
+
+            let factor = opts.line_scroll_speed / InputOptions::default().line_scroll_speed;
+            if self.line_zoom_smoothing {
+                if (wheel_z - 1.0).abs() <= 1e-6 {
+                    self.line_zoom_smoothing = false;
+                } else if factor > 0.0 && factor.is_finite() && (factor - 1.0).abs() > 1e-4 && wheel_z.is_finite() && wheel_z > 0.0 {
+                    let comp_wheel_z = (wheel_z.ln() / factor).exp();
+                    return (pinch * comp_wheel_z).clamp(0.01, 100.0);
+                }
+            }
+            return (pinch * wheel_z).clamp(0.01, 100.0);
         }
+        self.line_zoom_smoothing = false;
         let mut zoom = 1.0_f32;
         let mut turned = 0.0_f32;
         for event in &input.events {

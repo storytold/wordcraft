@@ -8356,46 +8356,81 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
     // 1. Establish baseline zoom with Normal speed
     a.ui.scroll_speed = crate::scroll::ScrollSpeed::Normal;
     let mut baseline_eased_line_zoom = 1.0;
+    let mut baseline_cumulative_line_zoom = 1.0;
     let mut baseline_discrete_line_zoom = 1.0;
     let mut baseline_eased_point_zoom = 1.0;
+    let mut baseline_cumulative_point_zoom = 1.0;
     let mut baseline_discrete_point_zoom = 1.0;
+    let mut baseline_pinch_zoom = 1.0;
 
-    // Line baseline:
+    // Line baseline across full smoothing:
     let ctx_line_base = egui::Context::default();
     a.logic(&ctx_line_base);
     let opts_line_base = ctx_line_base.options(|o| o.input_options);
+    let mut canvas_scroll_base = crate::scroll::CanvasScroll::default();
     ctx_line_base
         .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
-            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
-            baseline_eased_line_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_line_base, true));
+            baseline_eased_line_zoom = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+            baseline_cumulative_line_zoom *= baseline_eased_line_zoom;
             let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
             baseline_discrete_line_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_line_base, false));
         })
         .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_line_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                baseline_cumulative_line_zoom *= ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+            })
+            .drop_without_applying_deltas();
+    }
 
-    // Point baseline:
+    // Point baseline across full smoothing:
     let ctx_point_base = egui::Context::default();
     a.logic(&ctx_point_base);
     let opts_point_base = ctx_point_base.options(|o| o.input_options);
+    let mut canvas_scroll_point_base = crate::scroll::CanvasScroll::default();
     ctx_point_base
         .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
-            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
-            baseline_eased_point_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_point_base, true));
+            baseline_eased_point_zoom = ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            baseline_cumulative_point_zoom *= baseline_eased_point_zoom;
             let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
             baseline_discrete_point_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_point_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                baseline_cumulative_point_zoom *= ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Pinch baseline:
+    let ctx_pinch_base = egui::Context::default();
+    a.logic(&ctx_pinch_base);
+    let opts_pinch_base = ctx_pinch_base.options(|o| o.input_options);
+    ctx_pinch_base
+        .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            baseline_pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch_base, true));
         })
         .drop_without_applying_deltas();
 
     assert!((baseline_discrete_line_zoom - default_notch_zoom).abs() < 1e-3, "discrete line zoom equals notch zoom");
     assert!(baseline_eased_line_zoom > 1.0 && baseline_eased_line_zoom < default_notch_zoom, "eased line zoom begins in first frame");
+    assert!(
+        (baseline_cumulative_line_zoom - default_notch_zoom).abs() < 1e-3,
+        "cumulative completed eased line zoom matches default notch zoom ({baseline_cumulative_line_zoom} vs {default_notch_zoom})"
+    );
     assert!(baseline_eased_point_zoom > 1.0, "point zoom applies in eased mode");
     assert!(baseline_discrete_point_zoom > 1.0, "point zoom applies in discrete mode");
+    assert!((baseline_pinch_zoom - 1.25).abs() < 1e-4, "pinch zoom matches pinch factor");
 
-    // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings
+    // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings and smoothing frames
     for speed in [crate::scroll::ScrollSpeed::Slow, crate::scroll::ScrollSpeed::Normal, crate::scroll::ScrollSpeed::Fast] {
         a.ui.scroll_speed = speed;
 
-        // Test Line-wheel zoom invariance:
+        // Test Line-wheel zoom invariance across multiple frames:
         let ctx_line = egui::Context::default();
         a.logic(&ctx_line);
         let opts = ctx_line.options(|o| o.input_options);
@@ -8409,13 +8444,15 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
             "scroll zoom speed remains unscaled default so point-wheel zoom is unchanged"
         );
 
+        let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
+        let mut cumulative_line_zoom = 1.0;
         ctx_line
             .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
-                let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
                 let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                cumulative_line_zoom *= eased_zoom;
                 assert!(
                     (eased_zoom - baseline_eased_line_zoom).abs() < 1e-5,
-                    "eased line zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_line_zoom})"
+                    "first frame eased line zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_line_zoom})"
                 );
 
                 let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
@@ -8427,17 +8464,32 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
             })
             .drop_without_applying_deltas();
 
-        // Test Point-wheel zoom invariance:
+        // Advance through subsequent empty frames until line smoothing completes
+        for f in 1..25 {
+            ctx_line
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    cumulative_line_zoom *= ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_line_zoom - baseline_cumulative_line_zoom).abs() < 1e-3,
+            "cumulative completed line zoom for speed {speed:?} matches baseline ({cumulative_line_zoom} vs {baseline_cumulative_line_zoom})"
+        );
+
+        // Test Point-wheel zoom invariance across multiple frames:
         let ctx_point = egui::Context::default();
         a.logic(&ctx_point);
         let opts_point = ctx_point.options(|o| o.input_options);
+        let mut canvas_scroll_point = crate::scroll::CanvasScroll::default();
+        let mut cumulative_point_zoom = 1.0;
         ctx_point
             .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
-                let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
-                let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts_point, true));
+                let eased_zoom = ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                cumulative_point_zoom *= eased_zoom;
                 assert!(
                     (eased_zoom - baseline_eased_point_zoom).abs() < 1e-5,
-                    "eased point zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_point_zoom})"
+                    "first frame eased point zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_point_zoom})"
                 );
 
                 let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
@@ -8445,6 +8497,33 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
                 assert!(
                     (discrete_zoom - baseline_discrete_point_zoom).abs() < 1e-5,
                     "discrete CanvasScroll::zoom point delta for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_point_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        for f in 1..25 {
+            ctx_point
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    cumulative_point_zoom *= ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_point_zoom - baseline_cumulative_point_zoom).abs() < 1e-3,
+            "cumulative completed point zoom for speed {speed:?} matches baseline ({cumulative_point_zoom} vs {baseline_cumulative_point_zoom})"
+        );
+
+        // Test pinch gesture independence from scroll speed settings:
+        let ctx_pinch = egui::Context::default();
+        a.logic(&ctx_pinch);
+        let opts_pinch = ctx_pinch.options(|o| o.input_options);
+        ctx_pinch
+            .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+                let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+                let pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch, true));
+                assert!(
+                    (pinch_zoom - baseline_pinch_zoom).abs() < 1e-5,
+                    "pinch zoom for speed {speed:?} matches baseline ({pinch_zoom} vs {baseline_pinch_zoom})"
                 );
             })
             .drop_without_applying_deltas();
