@@ -116,6 +116,23 @@ impl P {
     fn peek_at(&self, k: usize) -> Option<char> {
         self.c.get(self.i + k).copied()
     }
+    /// Length of the number at the cursor (0 if none), as Word reads one: digits, where a `.` or `,`
+    /// continues it only when a digit follows (`2.5`, `3.14`, `1,000`), and a leading `.` before a
+    /// digit starts one (`.5`). A trailing point (`2.`) isn't part of it.
+    fn number_len(&self) -> usize {
+        let digit = |k: usize| self.peek_at(k).is_some_and(|c| c.is_ascii_digit());
+        if !digit(0) && !(self.peek() == Some('.') && digit(1)) {
+            return 0;
+        }
+        let mut k = 0;
+        loop {
+            match self.peek_at(k) {
+                Some(c) if c.is_ascii_digit() => k += 1,
+                Some('.' | ',') if digit(k + 1) => k += 1,
+                _ => return k,
+            }
+        }
+    }
     fn tired(&mut self) -> bool {
         self.steps += 1;
         self.steps > MAX_STEPS || self.depth > MAX_DEPTH
@@ -241,6 +258,14 @@ impl P {
         }
         if c.is_ascii_alphabetic() {
             return self.word(stops);
+        }
+        // A number is one item, so a script or a fraction takes all of it (`10^3`, `2.5/3`), as Word
+        // reads it (#6229).
+        let n = self.number_len();
+        if n > 0 {
+            let t: String = self.c.get(self.i..self.i + n).unwrap_or(&[]).iter().collect();
+            self.i += n;
+            return vec![MNode::Run(MRun::new(t))];
         }
         self.i += 1;
         vec![text(c)]
@@ -624,10 +649,18 @@ impl P {
                 }
             }
             Some(c) if is_prefix(c) || closer(c).is_some() => self.atom(stops),
-            Some(c) if c.is_ascii_digit() => {
+            Some(c) if c.is_ascii_digit() || self.number_len() > 0 => {
+                // A number by `number_len`'s rule (`2.5`, `1,000`, `.5`; `x^2.` keeps the point out),
+                // and letters after it stay in the script (`V_10a`, #1609).
                 let start = self.i;
-                while self.peek().is_some_and(|k| k.is_alphanumeric() || k == '.') {
-                    self.i += 1;
+                while let Some(k) = self.peek() {
+                    if k.is_alphanumeric() {
+                        self.i += 1;
+                    } else if matches!(k, '.' | ',') && self.peek_at(1).is_some_and(|n| n.is_ascii_digit()) {
+                        self.i += 2;
+                    } else {
+                        break;
+                    }
                 }
                 let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();
                 vec![MNode::Run(MRun::new(t))]
