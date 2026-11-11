@@ -1,6 +1,6 @@
 #[cfg(test)]
 use super::TALL_GROUPS;
-use super::buttons::{BIG_ICON_Y, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, bg, label_line};
+use super::buttons::{CONTENT_H, DROPDOWN, LABEL_H, bg};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {

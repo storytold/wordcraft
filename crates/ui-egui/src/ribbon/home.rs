@@ -26,10 +26,8 @@ pub(super) fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
-
 /// Home › Font, row 1: the font name, size and the text-size steps.
 fn font_row1(ui: &mut Ui, app: &mut WordApp, st: &Value) {
-
     let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
     let warning = app.font_box_warning(&font);
     let font = app.previews.font_shown(&font);
@@ -58,11 +56,7 @@ fn font_row1(ui: &mut Ui, app: &mut WordApp, st: &Value) {
             app.run("format.font", json!({"name": f}))
         };
     }
-    let size = st
-        .get("size")
-        .and_then(Value::as_f64)
-        .map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") })
-        .unwrap_or_default();
+    let size = st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { format!("{s}") }).unwrap_or_default();
     let sizes: Vec<String> =
         wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
     if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, tl!("Font Size"))
@@ -101,14 +95,7 @@ fn font_row2(ui: &mut Ui, app: &mut WordApp, st: &Value) {
     );
     small(ui, app, "strike", None, "Strikethrough", crate::widgets::ButtonAction::new("format.strikethrough", json!({}), flag("strike")));
     small(ui, app, "subscript", None, "Subscript", crate::widgets::ButtonAction::new("format.subscript", json!({}), flag("subscript")));
-    small(
-        ui,
-        app,
-        "superscript",
-        None,
-        "Superscript",
-        crate::widgets::ButtonAction::new("format.superscript", json!({}), flag("superscript")),
-    );
+    small(ui, app, "superscript", None, "Superscript", crate::widgets::ButtonAction::new("format.superscript", json!({}), flag("superscript")));
     small(ui, app, "charborder", None, "Character Border", crate::widgets::ButtonAction::new("format.border", json!({}), flag("border")));
     small(ui, app, "enclose", None, "Enclose Characters", crate::widgets::ButtonAction::new("format.enclose", json!({}), false));
     ui.add_space(4.0);
@@ -144,24 +131,15 @@ fn font_row3(ui: &mut Ui, app: &mut WordApp) {
     );
     let fc = app.canvas.last_font_color.clone();
     let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-    split(
-        ui,
-        app,
-        "fontcolor",
-        "Font Color",
-        crate::widgets::ButtonAction::new("format.color", json!({"color": fc}), false),
-        sw,
-        |ui, app| {
-            mi(ui, app, "Automatic", "format.color", json!({"color": "auto"}));
-            let theme = app.session.doc.settings.theme_colors.clone();
-            crate::colors::menu(ui, app, &theme, Target::cmd("format.color").remember(Remember::FontColor));
-        },
-    );
+    split(ui, app, "fontcolor", "Font Color", crate::widgets::ButtonAction::new("format.color", json!({"color": fc}), false), sw, |ui, app| {
+        mi(ui, app, "Automatic", "format.color", json!({"color": "auto"}));
+        let theme = app.session.doc.settings.theme_colors.clone();
+        crate::colors::menu(ui, app, &theme, Target::cmd("format.color").remember(Remember::FontColor));
+    });
 }
 
 /// Home › Paragraph: the list commands.
 fn para_lists_row(ui: &mut Ui, app: &mut WordApp, lists: &wordcraft_engine::cmd::para::ListButtons) {
-
     split(ui, app, "bullets", "Bullets", crate::widgets::ButtonAction::new("para.bullets", json!({}), lists.bullets), None, |ui, app| {
         ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
         ui.horizontal(|ui| {
@@ -183,29 +161,21 @@ fn para_lists_row(ui: &mut Ui, app: &mut WordApp, lists: &wordcraft_engine::cmd:
         });
         mi(ui, app, "None", "para.bullets", json!({"off": true}));
     });
-    split(
-        ui,
-        app,
-        "numbering",
-        "Numbering",
-        crate::widgets::ButtonAction::new("para.numbering", json!({}), lists.numbering),
-        None,
-        |ui, app| {
-            for (l, k) in [
-                ("1. 2. 3.", "numbered"),
-                ("1) 2) 3)", "numberedParen"),
-                ("I. II. III.", "outline"),
-                ("A. B. C.", "upperLetter"),
-                ("a) b) c)", "lowerLetter"),
-                ("i. ii. iii.", "lowerRoman"),
-            ] {
-                mi(ui, app, l, "para.numbering", json!({"kind": k}));
-            }
-            ui.separator();
-            mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
-            mi(ui, app, "None", "para.numbering", json!({"off": true}));
-        },
-    );
+    split(ui, app, "numbering", "Numbering", crate::widgets::ButtonAction::new("para.numbering", json!({}), lists.numbering), None, |ui, app| {
+        for (l, k) in [
+            ("1. 2. 3.", "numbered"),
+            ("1) 2) 3)", "numberedParen"),
+            ("I. II. III.", "outline"),
+            ("A. B. C.", "upperLetter"),
+            ("a) b) c)", "lowerLetter"),
+            ("i. ii. iii.", "lowerRoman"),
+        ] {
+            mi(ui, app, l, "para.numbering", json!({"kind": k}));
+        }
+        ui.separator();
+        mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
+        mi(ui, app, "None", "para.numbering", json!({"off": true}));
+    });
     split(
         ui,
         app,
@@ -255,7 +225,6 @@ fn para_indent_row(ui: &mut Ui, app: &mut WordApp, marks: bool) {
 
 /// Home › Paragraph: the four alignments and the two text directions.
 fn para_align_row(ui: &mut Ui, app: &mut WordApp, align: wordcraft_doc::Align) {
-
     use wordcraft_doc::Align as A;
     small(ui, app, "alignLeft", None, "Align Left", crate::widgets::ButtonAction::new("para.alignLeft", json!({}), align == A::Left));
     small(ui, app, "alignCenter", None, "Center", crate::widgets::ButtonAction::new("para.alignCenter", json!({}), align == A::Center));
@@ -297,31 +266,23 @@ fn para_spacing_row(ui: &mut Ui, app: &mut WordApp, rtl: bool) {
             crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
         },
     );
-    split(
-        ui,
-        app,
-        "borders",
-        "Borders",
-        crate::widgets::ButtonAction::new("para.borders", json!({"kind": "bottom"}), false),
-        None,
-        |ui, app| {
-            for (l, k) in [
-                ("Bottom Border", "bottom"),
-                ("Top Border", "top"),
-                ("Left Border", "left"),
-                ("Right Border", "right"),
-                ("No Border", "none"),
-                ("All Borders", "all"),
-                ("Outside Borders", "outside"),
-                ("Inside Borders", "inside"),
-            ] {
-                mi(ui, app, l, "para.borders", json!({"kind": k}));
-            }
-            ui.separator();
-            mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
-            mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
-        },
-    );
+    split(ui, app, "borders", "Borders", crate::widgets::ButtonAction::new("para.borders", json!({"kind": "bottom"}), false), None, |ui, app| {
+        for (l, k) in [
+            ("Bottom Border", "bottom"),
+            ("Top Border", "top"),
+            ("Left Border", "left"),
+            ("Right Border", "right"),
+            ("No Border", "none"),
+            ("All Borders", "all"),
+            ("Outside Borders", "outside"),
+            ("Inside Borders", "inside"),
+        ] {
+            mi(ui, app, l, "para.borders", json!({"kind": k}));
+        }
+        ui.separator();
+        mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
+        mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
+    });
 }
 
 pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
@@ -341,21 +302,21 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Font", Some("format.fontDialog"), app, |ui, app| {
         stack(ui, |ui| {
-        if crate::ribbon_fit::wide(ui.ctx()) {
-            // Word's wide Home (from 1520 pt): the same controls in two rows.
-            crate::widgets::row(ui, |ui| font_row1(ui, app, &st));
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| {
-                font_row2(ui, app, &st);
-                font_row3(ui, app);
-            });
-        } else {
-            crate::widgets::row(ui, |ui| font_row1(ui, app, &st));
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| font_row2(ui, app, &st));
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| font_row3(ui, app));
-        }
+            if crate::ribbon_fit::wide(ui.ctx()) {
+                // Word's wide Home (from 1520 pt): the same controls in two rows.
+                crate::widgets::row(ui, |ui| font_row1(ui, app, &st));
+                ui.add_space(3.0);
+                crate::widgets::row(ui, |ui| {
+                    font_row2(ui, app, &st);
+                    font_row3(ui, app);
+                });
+            } else {
+                crate::widgets::row(ui, |ui| font_row1(ui, app, &st));
+                ui.add_space(3.0);
+                crate::widgets::row(ui, |ui| font_row2(ui, app, &st));
+                ui.add_space(3.0);
+                crate::widgets::row(ui, |ui| font_row3(ui, app));
+            }
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
@@ -366,27 +327,27 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
         let marks = app.session.view.marks;
         stack(ui, |ui| {
-        if crate::ribbon_fit::wide(ui.ctx()) {
-            // Word's wide Home (from 1520 pt): lists and indents in row 1, the rest in row 2.
-            crate::widgets::row(ui, |ui| {
-                para_lists_row(ui, app, &lists);
-                para_indent_row(ui, app, marks);
-            });
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| {
-                para_align_row(ui, app, align);
-                para_spacing_row(ui, app, rtl);
-            });
-        } else {
-            crate::widgets::row(ui, |ui| para_lists_row(ui, app, &lists));
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| {
-                para_indent_row(ui, app, marks);
-                para_align_row(ui, app, align);
-            });
-            ui.add_space(3.0);
-            crate::widgets::row(ui, |ui| para_spacing_row(ui, app, rtl));
-        }
+            if crate::ribbon_fit::wide(ui.ctx()) {
+                // Word's wide Home (from 1520 pt): lists and indents in row 1, the rest in row 2.
+                crate::widgets::row(ui, |ui| {
+                    para_lists_row(ui, app, &lists);
+                    para_indent_row(ui, app, marks);
+                });
+                ui.add_space(3.0);
+                crate::widgets::row(ui, |ui| {
+                    para_align_row(ui, app, align);
+                    para_spacing_row(ui, app, rtl);
+                });
+            } else {
+                crate::widgets::row(ui, |ui| para_lists_row(ui, app, &lists));
+                ui.add_space(3.0);
+                crate::widgets::row(ui, |ui| {
+                    para_indent_row(ui, app, marks);
+                    para_align_row(ui, app, align);
+                });
+                ui.add_space(3.0);
+                crate::widgets::row(ui, |ui| para_spacing_row(ui, app, rtl));
+            }
         });
     });
     // Advanced paragraph tools (#5043): conversions and cleanup over the selection, or the

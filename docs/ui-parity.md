@@ -176,7 +176,8 @@ control-row count (1, 2 or 3; a 5 is a menu with nested rows) at the width where
 | Help | Help | 450: 3 → 550: 1 |
 
 The planner keeps a section's natural rows while it fits and collapses it to one row below the
-measured narrow breakpoint; two-row states beyond the implemented sections are not modelled yet.
+measured narrow breakpoint. Home's wide two-row forms are modelled for Font and Paragraph (from 1520 logical
+points, 1900 px at 125%); other tabs' two-row states are not modelled yet.
 
 ## Revision history
 
