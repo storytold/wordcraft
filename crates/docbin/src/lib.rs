@@ -431,7 +431,8 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
 
 /// Read a Word 6.0/95 file ([`word6`]): its main text, with its character and paragraph
 /// formatting and table rows translated to Word 97 sprms, through the same walk as a Word 97 file.
-/// Styles and the other stories are not read yet, and a section mark reads as a page break.
+/// Its paragraph styles are read too; character styles and the other stories are not yet, and a
+/// section mark reads as a page break.
 fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
     let fib = word6::Fib6::parse(word)?;
     let content = word6::content(word, &fib)?;
@@ -442,6 +443,8 @@ fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_
         doc.core = core;
     }
     doc.body.clear();
+    // The paragraph styles, built as for Word 97 files from their translated formatting.
+    doc.styles = Arc::new(fmt::stylesheet(&content.styles, &content.fonts, stsh::StandardFonts::default()));
     let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
     // As for Word 97 files: the text read can't exceed twice the stream, nor the absolute ceiling.
     let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
@@ -455,7 +458,7 @@ fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_
         chpx_bins: &content.chpx,
         papx_bins: &content.papx,
         fonts: &content.fonts,
-        raw_styles: &[],
+        raw_styles: &content.styles,
         sheet: &sheet,
         notes: &[],
         marks: &[],

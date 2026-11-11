@@ -9,6 +9,61 @@ use crate::{DocbinError, read};
 /// Where the text starts: right after the FIB, as in every observed file.
 const TEXT_AT: u32 = 0x300;
 
+/// One stylesheet entry as Word 6/95 stores it.
+#[derive(Clone, Copy, Default)]
+struct Std<'a> {
+    /// The built-in style id, or 0x0FFE for a user-defined style.
+    sti: u16,
+    /// 1 paragraph, 2 character.
+    sgc: u16,
+    /// The base style's index, or 0x0FFF.
+    base: u16,
+    name: &'a str,
+    /// Paragraph sprms (paragraph styles only).
+    papx: &'a [u8],
+    /// Character sprms.
+    chpx: &'a [u8],
+}
+
+/// The stylesheet bytes for `styles`: the 14-byte header (count, fixed-part size 8, …), then per
+/// style a size and the entry, or 0 for an empty slot.
+fn stylesheet(styles: &[Option<Std>]) -> Vec<u8> {
+    let mut v = vec![14u8, 0];
+    for w in [styles.len() as u16, 8, 1, 0x4B, 0x0F, 0, 0] {
+        v.extend_from_slice(&w.to_le_bytes());
+    }
+    for (istd, st) in styles.iter().enumerate() {
+        let Some(st) = st else {
+            v.extend_from_slice(&[0, 0]);
+            continue;
+        };
+        let cupx: u16 = if st.sgc == 1 { 2 } else { 1 };
+        let mut e = Vec::new();
+        for w in [st.sti, st.sgc | st.base << 4, cupx, 0] {
+            e.extend_from_slice(&w.to_le_bytes());
+        }
+        e.push(st.name.len() as u8);
+        e.extend_from_slice(st.name.as_bytes());
+        e.push(0);
+        let upx = |e: &mut Vec<u8>, bytes: &[u8]| {
+            if e.len() % 2 == 1 {
+                e.push(0);
+            }
+            e.extend_from_slice(&(bytes.len() as u16).to_le_bytes());
+            e.extend_from_slice(bytes);
+        };
+        if st.sgc == 1 {
+            let mut papx = (istd as u16).to_le_bytes().to_vec();
+            papx.extend_from_slice(st.papx);
+            upx(&mut e, &papx);
+        }
+        upx(&mut e, st.chpx);
+        v.extend_from_slice(&(e.len() as u16).to_le_bytes());
+        v.extend_from_slice(&e);
+    }
+    v
+}
+
 /// What a test Word 6.0/95 file holds. Offsets in `runs` and `pieces` are into `text`.
 #[derive(Clone, Default)]
 struct Doc6<'a> {
@@ -33,6 +88,10 @@ struct Doc6<'a> {
     prcs: &'a [&'a [u8]],
     /// The FIB's character set word at 0x14.
     chse: u16,
+    /// The style of each paragraph run (0, Normal, when absent or shorter than `paras`).
+    para_styles: &'a [u16],
+    /// The stylesheet: one entry per style index, `None` for an empty slot.
+    styles: &'a [Option<Std<'a>>],
     /// The main text's length in characters, when it isn't the stored bytes' (16-bit text).
     ccp: Option<u32>,
 }
@@ -48,7 +107,7 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
 /// Append one FKP page for `runs` and its bin table, and return the bin table's (fc, lcb). A
 /// character page has a 1-byte entry per run and CHPXs (byte count + grpprl); a paragraph page
 /// has 7-byte entries and PAPXs (word count + style 0 + grpprl padded to whole words).
-fn fkp(w: &mut Vec<u8>, runs: &[(u32, u32, &[u8])], papx: bool) -> (u32, u32) {
+fn fkp(w: &mut Vec<u8>, runs: &[(u32, u32, &[u8])], papx: bool, istds: &[u16]) -> (u32, u32) {
     let (Some(first), Some(last)) = (runs.first(), runs.last()) else { return (0, 0) };
     w.resize(w.len().div_ceil(512) * 512, 0);
     let pn = (w.len() / 512) as u16;
@@ -63,7 +122,7 @@ fn fkp(w: &mut Vec<u8>, runs: &[(u32, u32, &[u8])], papx: bool) -> (u32, u32) {
     let mut top = 511usize;
     for (k, (_, _, g)) in runs.iter().enumerate() {
         let body: Vec<u8> = if papx {
-            let mut b = vec![0u8, 0];
+            let mut b = istds.get(k).copied().unwrap_or(0).to_le_bytes().to_vec();
             b.extend_from_slice(g);
             if b.len() % 2 == 1 {
                 b.push(0);
@@ -104,10 +163,15 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
     };
     let mut pairs: Vec<(usize, u32, u32)> = Vec::new();
     for (pair, runs, papx) in [(12, d.runs, false), (13, d.paras, true)] {
-        let (fc, lcb) = fkp(&mut w, runs, papx);
+        let (fc, lcb) = fkp(&mut w, runs, papx, d.para_styles);
         if lcb > 0 {
             pairs.push((pair, fc, lcb));
         }
+    }
+    if !d.styles.is_empty() {
+        let st = stylesheet(d.styles);
+        pairs.push((1, w.len() as u32, st.len() as u32));
+        w.extend_from_slice(&st);
     }
     if !d.fonts.is_empty() || d.raw_fonts.is_some() {
         let mut ffn = vec![0u8, 0];
@@ -518,16 +582,129 @@ fn a_field_shows_its_cached_result() {
     assert!(!text.contains("DATE"), "{text:?}");
 }
 
+/// A fixture's paragraph styles: Normal, an empty slot, then "Mine" (user-defined, centred, bold, on
+/// Normal) and "Heading" stored under a local name with sti 1.
+const STYLES: &[Option<Std>] = &[
+    Some(Std { sti: 0, sgc: 1, base: 0x0FFF, name: "Standard", papx: &[], chpx: &[0x61, 0x09, 0x04] }),
+    None,
+    Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name: "Mine", papx: &[0x05, 0x01], chpx: &[0x55, 0x01] }),
+    Some(Std { sti: 1, sgc: 1, base: 0, name: "Überschrift 1", papx: &[0x08, 0x01], chpx: &[0x55, 0x81, 0x63, 0x20, 0x00] }),
+];
+
+/// Each paragraph's style name, through the document's style sheet.
+fn style_names(doc: &wordcraft_doc::Document) -> Vec<String> {
+    doc.body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .map(|p| p.props.style.as_deref().and_then(|id| doc.styles.get(id)).map_or(String::new(), |s| s.name.clone()))
+        .collect()
+}
+
+#[test]
+fn paragraphs_take_their_styles() {
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, &[]), (2, 4, &[]), (4, 6, &[])];
+    let d = Doc6 { text: b"A\rB\rC\r", paras, para_styles: &[0, 2, 3], styles: STYLES, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    // A built-in style goes by its built-in name, whatever the file stores (as in Word).
+    assert_eq!(style_names(&doc), ["Normal", "Mine", "Heading 1"]);
+}
+
+#[test]
+fn styles_carry_their_formatting_and_base() {
+    let d = Doc6 { text: b"A\r", styles: STYLES, ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let mine = doc.styles.styles.iter().find(|s| s.name == "Mine").expect("Mine");
+    assert_eq!(mine.para.align, Some(wordcraft_doc::props::Align::Center));
+    assert_eq!(mine.chr.bold, Some(true));
+    assert_eq!(mine.based_on.as_deref().and_then(|id| doc.styles.get(id)).map(|s| s.name.as_str()), Some("Normal"));
+    let heading = doc.styles.styles.iter().find(|s| s.name == "Heading 1").expect("Heading 1");
+    assert_eq!((heading.para.keep_next, heading.chr.size), (Some(true), Some(16.0)));
+}
+
+#[test]
+fn bulleted_styles_frame_past_their_numbering() {
+    // 0x0D (1 byte) and 0x0C (a count byte and its bytes) before the indents, as in the corpus.
+    let mut papx = vec![0x05, 0x03, 0x0D, 0x0B, 0x11, 0x1C, 0x01, 0x13, 0xE4, 0xFE, 0x0C, 4, 0xFF, 0x01, 0x00, 0x08];
+    papx.extend_from_slice(&[0x0E, 0x01, 0x2C, 0x00, 0x1D, 0x60, 0x1A, 0xF8, 0xFF, 0x25, 0x02, 0x10, 0x68, 0x01]);
+    let styles = &[Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", papx: &papx, ..Default::default() })];
+    let doc = read(&word6_file(&Doc6 { text: b"A\r", styles, ..Default::default() })).expect("opens");
+    let normal = doc.styles.get("Normal").expect("Normal");
+    assert_eq!((normal.para.indent_left, normal.para.indent_first, normal.para.indent_right), (Some(14.2), Some(-14.2), Some(18.0)));
+}
+
+#[test]
+fn a_runs_language_or_its_styles_chooses_the_code_page_without_a_font() {
+    // No font named anywhere: the style's language decides (Russian -> Windows-1251), as in Word.
+    let styles = &[Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", chpx: &[0x61, 0x19, 0x04], ..Default::default() })];
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts: FONTS, styles, ..Default::default() };
+    assert_eq!(texts(&d), ["Да"]);
+    // The run's own language outranks the style's.
+    let runs: &[(u32, u32, &[u8])] = &[(0, 3, &[0x61, 0x09, 0x04])];
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts: FONTS, styles, runs, ..Default::default() };
+    assert_eq!(texts(&d), ["Äà"]);
+}
+
+#[test]
+fn font_0_is_not_a_fallback() {
+    // Font 0 is Cyrillic, but nothing names it and the style's language is English: Word reads
+    // Windows-1252.
+    let fonts = &[(204, "Times New Roman Cyr"), (0, "Arial")];
+    let styles = &[Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", chpx: &[0x61, 0x09, 0x04], ..Default::default() })];
+    // A character run that names no font (where the reader used to take font 0).
+    let runs: &[(u32, u32, &[u8])] = &[(0, 3, &[])];
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts, styles, runs, ..Default::default() };
+    assert_eq!(texts(&d), ["Äà"]);
+}
+
+#[test]
+fn a_font_named_in_the_style_chooses_the_code_page() {
+    // The base style names the Cyrillic font 1; the run and its own style name none.
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", chpx: &[0x5D, 0x01, 0x00], ..Default::default() }),
+        Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name: "Child", ..Default::default() }),
+    ];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 3, &[])];
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts: FONTS, styles, paras, para_styles: &[1], ..Default::default() };
+    assert_eq!(texts(&d), ["Да"]);
+}
+
+#[test]
+fn an_ansi_font_leaves_the_code_page_to_the_language() {
+    // Arial (ANSI) named on the run, the style's language Russian: Word reads Cyrillic.
+    let fonts = &[(0, "Times New Roman"), (0, "Arial")];
+    let styles = &[Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", chpx: &[0x61, 0x19, 0x04], ..Default::default() })];
+    let runs: &[(u32, u32, &[u8])] = &[(0, 2, &[0x5D, 0x01, 0x00]), (2, 3, &[])];
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts, styles, runs, ..Default::default() };
+    assert_eq!(texts(&d), ["Да"]);
+}
+
 /// A fixture with every structure read: runs, fonts and a piece table.
 fn full_stream() -> Vec<u8> {
     let runs: &[(u32, u32, &[u8])] = &[(0, 6, &[0x55, 0x81]), (6, 9, &[0x5D, 0x01, 0x00]), (9, 12, &[])];
-    word_stream(&Doc6 { text: b"Hello\r\xC4\xE0\rx\r\r", fonts: FONTS, runs, pieces: Some(&[(6, 0), (6, 6)]), ..Default::default() })
+    let styles = &[
+        Some(Std { sgc: 1, base: 0x0FFF, name: "Normal", chpx: &[0x61, 0x09, 0x04], ..Default::default() }),
+        None,
+        Some(Std { sti: 0x0FFE, sgc: 1, base: 0, name: "Mine", papx: &[0x05, 0x01], chpx: &[0x55, 0x01] }),
+    ];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 6, &[]), (6, 12, &[])];
+    word_stream(&Doc6 {
+        text: b"Hello\r\xC4\xE0\rx\r\r",
+        fonts: FONTS,
+        runs,
+        paras,
+        para_styles: &[2, 0],
+        styles,
+        pieces: Some(&[(6, 0), (6, 6)]),
+        ..Default::default()
+    })
 }
 
 #[test]
 fn the_full_fixture_reads() {
     let f = cfb_file(&[("WordDocument", &full_stream())]);
-    assert_eq!(body_texts(&read(&f).expect("opens")), ["Hello", "Да", "x", ""]);
+    let doc = read(&f).expect("opens");
+    assert_eq!(body_texts(&doc), ["Hello", "Да", "x", ""]);
+    assert_eq!(style_names(&doc)[0], "Mine");
 }
 
 proptest! {
