@@ -120,8 +120,10 @@ impl WordApp {
             fonts_hant: false,
             fonts_system_cjk: false,
             fonts_system_arabic: false,
+            fonts_system_hebrew: false,
             want_system_cjk: false,
             want_system_arabic: false,
+            want_system_hebrew: false,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
             fonts_frames: 0,
@@ -363,12 +365,18 @@ impl WordApp {
             ctx.request_repaint_of(viewport);
             ctx.request_repaint();
         }
-        // The open above may have changed the file name the caption draws.
+        // The open above, or a control command (`ui.language`), may have changed the file name
+        // the caption draws and the interface language. Fonts and direction are installed for
+        // the language this frame will draw: a Hebrew command in this pass would otherwise paint
+        // Hebrew with the previous frame's faces.
         self.ensure_caption_fonts();
         self.ensure_comment_fonts();
         self.ensure_recover_fonts();
         self.ensure_recent_fonts();
         self.ensure_find_fonts();
+        let lang = i18n::Lang::from_pref(&self.ui.language);
+        i18n::set_current(lang);
+        crate::rtl::sync(ctx);
         self.install_ui_fonts(ctx, lang);
         self.report_dirty();
     }

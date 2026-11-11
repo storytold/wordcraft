@@ -25,8 +25,8 @@ pub use script::{fallback_rank, is_emoji, joins_cursively, needs_layout_tables, 
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
 pub use ui_fallback::{
-    SystemUiFont, is_cjk, system_arabic_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, ui_needs_system_cjk,
-    ui_uncovered_cjk,
+    SystemUiFont, is_cjk, system_arabic_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, system_hant_ui_font, system_hebrew_ui_font,
+    ui_needs_system_cjk, ui_uncovered_cjk,
 };
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
@@ -111,6 +111,29 @@ pub fn arabic_fonts() -> impl Iterator<Item = &'static CraftFont> {
 /// fallback for an Arabic interface and for Arabic file names. Empty without craft-fonts.
 pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
     arabic_fonts().filter(|f| f.style == "Regular").collect()
+}
+
+/// The faces in `fonts` whose scripts include Hebrew (`"Hebr"`), in the slice's order.
+pub fn hebrew_fonts_in(fonts: &[CraftFont]) -> impl Iterator<Item = &CraftFont> {
+    fonts.iter().filter(|f| f.scripts.contains(&"Hebr"))
+}
+
+/// The craft-fonts faces for Hebrew script (`"Hebr"`), in manifest order. Empty without craft-fonts,
+/// and empty when that checkout has no Hebrew face.
+pub fn hebrew_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    hebrew_fonts_in(CRAFT_FONTS)
+}
+
+/// Regular Hebrew faces in `fonts`: the interface's fallback. Bold and other styles are left out
+/// (the UI fakes no bold), and a face for another script is left out.
+pub fn ui_hebrew_fonts_in(fonts: &[CraftFont]) -> Vec<&CraftFont> {
+    hebrew_fonts_in(fonts).filter(|f| f.style == "Regular").collect()
+}
+
+/// The craft-fonts faces for Hebrew script (`"Hebr"`), Regular styles only: the interface's
+/// fallback for a Hebrew interface and for Hebrew file names. Empty without a Hebrew face.
+pub fn ui_hebrew_fonts() -> Vec<&'static CraftFont> {
+    ui_hebrew_fonts_in(CRAFT_FONTS)
 }
 
 /// The bundled serif used when a document asks for nothing better.
@@ -376,6 +399,10 @@ pub fn first_glyph(face: &FontFace, chars: &[char]) -> u32 {
 }
 
 #[cfg(test)]
+#[path = "../web_embed.rs"]
+mod web_embed;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -575,6 +602,34 @@ mod tests {
         let latin = db.face(DEFAULT_FAMILY, "Regular");
         let fb = db.fallback_for('語', latin.id()).unwrap();
         assert!(fb.family.contains("Mincho"), "{fb:?}");
+    }
+
+    /// `hebrew_fonts` / `ui_hebrew_fonts` keep Hebrew faces, and the interface list is the
+    /// Regular ones. A fixture stands in for the manifest so the check does not depend on
+    /// whether this build embedded a Hebrew file.
+    #[test]
+    fn hebrew_font_lists_keep_regular_hebr_faces() {
+        let bytes = bundled()[0];
+        let fonts = [
+            CraftFont { family: "Probe Hebrew", style: "Regular", scripts: &["Hebr"], bytes },
+            CraftFont { family: "Probe Hebrew", style: "Bold", scripts: &["Hebr"], bytes },
+            CraftFont { family: "Probe Hebrew", style: "Italic", scripts: &["Hebr", "Latn"], bytes },
+            CraftFont { family: "Probe Arabic", style: "Regular", scripts: &["Arab"], bytes },
+            CraftFont { family: "Probe Sans", style: "Regular", scripts: &["Latn", "Hebr"], bytes },
+        ];
+        let kept: Vec<_> = hebrew_fonts_in(&fonts).map(|f| f.style.to_string()).collect();
+        assert_eq!(kept, ["Regular", "Bold", "Italic", "Regular"]);
+        let ui: Vec<_> = ui_hebrew_fonts_in(&fonts).into_iter().map(|f| (f.family, f.style)).collect();
+        assert_eq!(ui, [("Probe Hebrew", "Regular"), ("Probe Sans", "Regular")]);
+        for f in hebrew_fonts() {
+            assert!(f.scripts.contains(&"Hebr"), "{}", f.family);
+        }
+        assert_eq!(ui_hebrew_fonts().len(), hebrew_fonts().filter(|f| f.style == "Regular").count());
+        // A checkout was embedded (the font dir was set) but it has no Hebrew face: that is a
+        // broken pin, not a build that skipped fonts. The web build keeps this face too.
+        if !CRAFT_FONTS.is_empty() {
+            assert!(!ui_hebrew_fonts().is_empty(), "craft-fonts is embedded but has no Regular Hebrew face");
+        }
     }
 
     /// Arabic text in a document needs no system font: the craft-fonts Arabic face is the

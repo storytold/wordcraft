@@ -1,4 +1,4 @@
-//! Mirrored window layout for a right-to-left interface language (Arabic).
+//! Mirrored window layout for a right-to-left interface language (Arabic and Hebrew).
 //!
 //! egui has no global direction, but `ui.horizontal` runs right to left wherever the enclosing
 //! layout prefers it (`Layout::prefer_right_to_left`): a right-to-left row, or a column whose

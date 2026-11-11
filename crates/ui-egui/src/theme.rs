@@ -485,22 +485,34 @@ pub fn install_fonts_language_extra(
     system_cjk: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
-    install_fonts_language_arabic(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, false, faces);
+    install_fonts_language_arabic(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, InstalledScripts::NONE, faces);
 }
 
-/// [`install_fonts_language_extra`], also adding an installed Arabic font when `system_arabic` is
-/// set and no embedded face has Arabic letters. Asked for by an Arabic interface only, apart from
-/// the installed CJK font: reading either is a font file read the other languages never need.
+/// Which installed Arabic or Hebrew face to add when craft-fonts has none for that script.
+/// Each is asked for by that interface, or by a screen showing the language's own name.
+#[derive(Clone, Copy)]
+pub struct InstalledScripts {
+    pub arabic: bool,
+    pub hebrew: bool,
+}
+
+impl InstalledScripts {
+    const NONE: Self = Self { arabic: false, hebrew: false };
+}
+
+/// [`install_fonts_language_extra`], also adding the installed faces in `scripts` when no embedded
+/// face covers that script. Apart from the installed CJK font: reading one is a font file read the
+/// other languages never need.
 pub fn install_fonts_language_arabic(
     ctx: &egui::Context,
     prefer_hans: bool,
     prefer_korean: bool,
     prefer_hant: bool,
     system_cjk: bool,
-    system_arabic: bool,
+    scripts: InstalledScripts,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
-    let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
+    let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, scripts);
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
 }
@@ -556,18 +568,19 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
 
 /// The interface fonts, ordered for the preferred CJK writing system.
 pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_hant: bool, system_cjk: bool) -> FontDefinitions {
-    font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, false)
+    font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, InstalledScripts::NONE)
 }
 
-/// [`font_definitions_language`], also with an installed Arabic font when `system_arabic` is set
-/// and the build embeds none.
+/// [`font_definitions_language`], also with the installed faces in `scripts` when the build
+/// embeds none for that script.
 pub fn font_definitions_language_arabic(
     prefer_hans: bool,
     prefer_korean: bool,
     prefer_hant: bool,
     system_cjk: bool,
-    system_arabic: bool,
+    scripts: InstalledScripts,
 ) -> FontDefinitions {
+    let (system_arabic, system_hebrew) = (scripts.arabic, scripts.hebrew);
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -624,7 +637,7 @@ pub fn font_definitions_language_arabic(
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
     #[cfg(target_arch = "wasm32")]
-    let _ = system_cjk;
+    let _ = (system_cjk, system_arabic);
     // Arabic-script faces last: the Arabic interface, its name in the language list, Arabic file
     // names. Without an embedded one (a build without craft-fonts), an installed font, read when
     // `system_arabic` is set: for an Arabic interface.
@@ -641,6 +654,14 @@ pub fn font_definitions_language_arabic(
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
+    // Hebrew letters are a different script from Arabic. The same rule: an embedded Hebrew face,
+    // or, when `system_hebrew` is set and none is embedded, one installed face.
+    let hebrew = wordcraft_fonts::ui_hebrew_fonts();
+    #[cfg(not(target_arch = "wasm32"))]
+    let installed_hebrew = system_hebrew_font();
+    #[cfg(target_arch = "wasm32")]
+    let installed_hebrew: Option<&wordcraft_fonts::SystemUiFont> = None;
+    add_hebrew_ui_faces(&mut fonts, &hebrew, system_hebrew, installed_hebrew);
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
 }
@@ -650,6 +671,45 @@ pub fn font_definitions_language_arabic(
 fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
     static ARABIC: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
     ARABIC.get_or_init(wordcraft_fonts::system_arabic_ui_font).as_ref()
+}
+
+/// The installed Hebrew interface font, read once.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_hebrew_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static HEBREW: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    HEBREW.get_or_init(wordcraft_fonts::system_hebrew_ui_font).as_ref()
+}
+
+/// Add `data` at the end of the proportional interface families.
+fn push_ui_face(fonts: &mut FontDefinitions, name: String, data: FontData) {
+    fonts.font_data.insert(name.clone(), Arc::new(data));
+    for fam in [FontFamily::Proportional, FontFamily::Name("medium".into()), FontFamily::Name("semibold".into())] {
+        if let Some(v) = fonts.families.get_mut(&fam) {
+            v.push(name.clone());
+        }
+    }
+}
+
+/// Embedded Regular Hebrew faces, then one installed face when `system_hebrew` is set and nothing
+/// embedded covers Hebrew. An embedded face is added either way: the installed file is the
+/// fallback for a build that has none.
+fn add_hebrew_ui_faces(
+    fonts: &mut FontDefinitions,
+    embedded: &[&wordcraft_fonts::CraftFont],
+    system_hebrew: bool,
+    installed: Option<&wordcraft_fonts::SystemUiFont>,
+) {
+    for f in embedded {
+        push_ui_face(fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    if system_hebrew
+        && embedded.is_empty()
+        && let Some(f) = installed
+    {
+        let mut data = FontData::from_owned(f.bytes.clone());
+        data.index = f.index;
+        push_ui_face(fonts, format!("system {}", f.family), data);
+    }
 }
 
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
@@ -1053,18 +1113,54 @@ mod tests {
     /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
     /// the front and SourceSans after egui's complete default fallback block, including the
     /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
-    /// An installed Arabic font is read for an Arabic interface only (`system_arabic`), and the
-    /// installed CJK font request alone never brings it in: neither read is paid by the other.
+    /// An installed Arabic font is read for an Arabic interface only (`system_arabic`), a Hebrew
+    /// one for a Hebrew interface only (`system_hebrew`), and the installed CJK font request
+    /// alone never brings either in: none of the three reads is paid by the others.
     #[test]
     fn the_installed_arabic_font_is_asked_for_by_arabic_alone() {
-        let plain = super::font_definitions_language_arabic(false, false, false, false, false).font_data.len();
-        let cjk_only = super::font_definitions_language_arabic(false, false, false, true, false);
-        let arabic = super::font_definitions_language_arabic(false, false, false, false, true).font_data.len();
+        let none = super::InstalledScripts::NONE;
+        let plain = super::font_definitions_language_arabic(false, false, false, false, none).font_data.len();
+        let cjk_only = super::font_definitions_language_arabic(false, false, false, true, none);
+        let arabic = super::font_definitions_language_arabic(false, false, false, false, super::InstalledScripts { arabic: true, hebrew: false })
+            .font_data
+            .len();
+        let hebrew = super::font_definitions_language_arabic(false, false, false, false, super::InstalledScripts { arabic: false, hebrew: true })
+            .font_data
+            .len();
+        let both = super::font_definitions_language_arabic(false, false, false, false, super::InstalledScripts { arabic: true, hebrew: true })
+            .font_data
+            .len();
         let installed_arabic = wordcraft_fonts::ui_arabic_fonts().is_empty() && wordcraft_fonts::system_arabic_ui_font().is_some();
+        let installed_hebrew = wordcraft_fonts::ui_hebrew_fonts().is_empty() && wordcraft_fonts::system_hebrew_ui_font().is_some();
         assert_eq!(arabic, plain + usize::from(installed_arabic), "Arabic adds the installed font when nothing is embedded");
+        assert_eq!(hebrew, plain + usize::from(installed_hebrew), "Hebrew adds the installed font when nothing is embedded");
+        assert_eq!(both, plain + usize::from(installed_arabic) + usize::from(installed_hebrew), "each script adds its own face");
         let arabic_named = |defs: &egui::FontDefinitions| defs.font_data.keys().filter(|k| k.starts_with("system ")).count();
         let cjk_font = super::system_cjk_font(false, false).is_some();
-        assert_eq!(arabic_named(&cjk_only), usize::from(cjk_font), "the CJK request adds the CJK font and no Arabic one");
+        assert_eq!(arabic_named(&cjk_only), usize::from(cjk_font), "the CJK request adds the CJK font and no Arabic or Hebrew one");
+    }
+
+    /// The installed Hebrew face is added only when Hebrew was asked for and no embedded face
+    /// covers the script. The fixture font is this test's, not whatever the machine has installed.
+    #[test]
+    fn the_system_hebrew_face_is_added_only_when_asked_and_nothing_is_embedded() {
+        let bytes = wordcraft_fonts::bundled()[0];
+        let embedded = wordcraft_fonts::CraftFont { family: "Probe Hebrew", style: "Regular", scripts: &["Hebr"], bytes };
+        let installed = wordcraft_fonts::SystemUiFont { family: "Probe Installed Hebrew".into(), bytes: bytes.to_vec(), index: 0 };
+        let names = |embedded: &[&wordcraft_fonts::CraftFont], flag: bool| {
+            let mut fonts = egui::FontDefinitions::default();
+            super::add_hebrew_ui_faces(&mut fonts, embedded, flag, Some(&installed));
+            fonts.font_data.into_keys().collect::<Vec<_>>()
+        };
+        let asked = names(&[], true);
+        assert!(asked.iter().any(|k| k == "system Probe Installed Hebrew"), "{asked:?}");
+        let not_asked = names(&[], false);
+        assert!(not_asked.iter().all(|k| !k.starts_with("system ")), "{not_asked:?}");
+        let embedded_wins = names(&[&embedded], true);
+        assert!(embedded_wins.iter().any(|k| k == "Probe Hebrew Regular"), "{embedded_wins:?}");
+        assert!(embedded_wins.iter().all(|k| !k.starts_with("system ")), "an embedded face replaces the installed one: {embedded_wins:?}");
+        let embedded_without_flag = names(&[&embedded], false);
+        assert!(embedded_without_flag.iter().any(|k| k == "Probe Hebrew Regular"), "embedded faces are added either way");
     }
 
     #[test]
