@@ -460,6 +460,24 @@ impl<'e> Breaker<'e> {
             // descent) and a check box. A line break ending the line is no text.
             ex.text |= math || check_box || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
         }
+        // A line of only pictures that ends the paragraph holds its mark: Word makes it at least
+        // as tall as the mark's font too (measured in Word for Mac: an 18 pt picture alone over a
+        // 24 pt Times New Roman mark makes a 27.6 pt line, the picture on its bottom). A line
+        // ending in a break doesn't: the mark takes a line of its own after it (`empty_last_line`).
+        let ends_in_break = c1
+            .checked_sub(1)
+            .and_then(|k| pl.clusters.get(k))
+            .is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
+        if any
+            && !ex.text
+            && ex.obj_asc + ex.obj_desc > 0.0
+            && c1 >= self.n
+            && !ends_in_break
+            && let Some(st) = pl.styles.get(self.mark_style as usize)
+        {
+            ex.asc = ex.asc.max(st.ascent);
+            ex.desc = ex.desc.max(st.descent);
+        }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)
         {

@@ -14691,6 +14691,59 @@ fn a_line_of_only_pictures_takes_no_descent() {
     assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
+/// A line of only pictures that ends its paragraph is at least as tall as the paragraph mark's
+/// font, the picture on its bottom (Word for Mac, Times New Roman: an 18 pt picture alone over a
+/// 24 pt mark makes a 27.6 pt line); over a mark no taller than the picture it stays the picture's.
+#[test]
+fn a_line_of_only_pictures_takes_its_paragraph_marks_height() {
+    use wordcraft_doc::props::LineSpacing;
+    let line_of = |mark: Option<f32>| {
+        let mut d = Document::from_text("");
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+            p.mark.size = mark;
+            p.insert_object(0, picture(60.0, 18.0, Default::default()), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        (para.lines[0].height, para.lines[0].baseline - para.lines[0].top)
+    };
+    // The 40 pt mark's own line, from an empty paragraph with that mark.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        p.mark.size = Some(40.0);
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let big = para.lines[0].height;
+    assert!(big > 18.0, "{big}");
+
+    let (h, base) = line_of(Some(40.0));
+    assert!((h - big).abs() < 0.01 && (base - big).abs() < 0.01, "a taller mark: line {h}, baseline {base}, mark's line {big}");
+    let (h, base) = line_of(None);
+    assert!((h - 18.0).abs() < 0.01 && (base - 18.0).abs() < 0.01, "a smaller mark: line {h}, baseline {base}");
+}
+
+/// A picture followed by a line break at the paragraph's end keeps the picture's height: the
+/// mark takes the line after the break, so a mark taller than the picture is counted once.
+#[test]
+fn a_picture_before_a_closing_line_break_keeps_its_height() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        p.mark.size = Some(40.0);
+        p.insert_object(0, picture(60.0, 18.0, Default::default()), &Default::default()).unwrap();
+        let at = p.len();
+        p.insert_text(at, &wordcraft_doc::para::LINE_BREAK.to_string(), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let first = para.lines.first().map_or(0.0, |l| l.height);
+    assert!(para.lines.len() == 2 && (first - 18.0).abs() < 0.01, "picture, line break, 40 pt mark: {} lines, first {first}", para.lines.len());
+}
+
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
 /// one of its lines, moves whole to the next page, where it fits (#3907 review).
 #[test]
