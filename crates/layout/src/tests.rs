@@ -14812,6 +14812,39 @@ fn continuous_section_first_page_header_is_not_shown_on_its_second_page() {
     }
 }
 
+/// The same when the continuous section's first paragraph begins part-way down a page and runs
+/// over onto the next: the section began on the page before, so the next shows its default
+/// header, not its first-page one.
+#[test]
+fn continuous_section_first_paragraph_running_over_keeps_first_page_header_hidden() {
+    use wordcraft_doc::section::SectionStart;
+    let mut paras: Vec<String> = (0..44).map(|i| format!("Paragraph {i}")).collect();
+    // Section 2's first paragraph: long enough to start low on page 1 and run onto page 2.
+    paras.push("word ".repeat(1200));
+    paras.extend((0..60).map(|i| format!("After {i}")));
+    let mut d = Document::from_text(&paras.join("\n"));
+    let part = |d: &mut Document, t: &str| {
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(Paragraph::with_text(t, Default::default()))])
+    };
+    let (one, first, two) = (part(&mut d, "ONE"), part(&mut d, "FIRST"), part(&mut d, "TWO"));
+    let mut s1 = d.last_section.clone();
+    s1.headers.default = Some(one);
+    d.para_mut(StoryRef::Body, &Path::top(43)).unwrap().section = Some(Box::new(s1));
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.title_page = true;
+    d.last_section.headers.first = Some(first);
+    d.last_section.headers.default = Some(two);
+    let l = lay(&d);
+    let begins = l.caret(&Pos::body(44, 0)).unwrap().page;
+    assert_eq!(l.caret(&Pos::body(43, 0)).unwrap().page, begins, "the second section starts part-way down a page");
+    let next = begins + 1;
+    assert!(l.pages.get(next).is_some_and(|p| p.first_block == 44), "its first paragraph runs over onto the next page");
+    let shown: Vec<_> = l.pages.iter().map(|p| p.header_story).collect();
+    assert_eq!(shown[begins], Some(one));
+    assert!(shown[next..].iter().all(|h| *h == Some(two)), "{shown:?}");
+    assert!(l.pages[next..].iter().all(|p| p.hf_slot == crate::HfSlot::Default));
+}
+
 /// Sections starting continuously one after another still go onto new pages: a paragraph that
 /// doesn't fit below the text above it moves on rather than running off the page (#3907). A
 /// hundred one-line sections lay out like a hundred plain paragraphs.

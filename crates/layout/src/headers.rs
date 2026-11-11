@@ -40,13 +40,21 @@ pub(crate) fn section_side(start: SectionStart, restart: Option<u32>, last: u32,
 /// header and footer go on: the page where the section begins. A page's section is the one at its
 /// top, so a section that starts continuously part-way down `prev` has no first page of its own:
 /// Word shows the earlier section's header there and the section's default one from the next page
-/// on. `sections` as [`Document::sections`] gives them (each with its last block).
+/// on, also when its first paragraph begins on `prev` and runs over. `sections` as
+/// [`Document::sections`] gives them (each with its last block).
 pub(crate) fn begins_section(sections: &[(usize, &SectionProps)], prev: Option<&Page>, page: &Page) -> bool {
     if prev.is_some_and(|p| p.section == page.section) {
         return false;
     }
     let start = page.section.checked_sub(1).and_then(|k| sections.get(k)).map_or(0, |(end, _)| end.saturating_add(1));
-    start >= page.first_block
+    // A first paragraph (or table) that begins part-way down `prev` and runs over still began
+    // the section there.
+    let began_before = prev.is_some_and(|p| {
+        p.items
+            .iter()
+            .any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if path.0.first().is_some_and(|&b| b as usize >= start)))
+    });
+    start >= page.first_block && !began_before
 }
 
 /// The document's sections with their headers and footers (Word's "link to previous"), each
