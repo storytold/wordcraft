@@ -531,6 +531,27 @@ fn a_long_combo_list_builds_only_the_rows_in_view() {
     .drop_without_applying_deltas();
 }
 
+/// The tab strip exposes each tab as a button with its selected state, and a click on an
+/// unselected tab reports its index.
+#[test]
+fn dialog_tabs_expose_the_selected_state_and_report_clicks() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 60.0)).build_ui_state(
+        |ui, st: &mut (usize, Option<usize>)| {
+            if let Some(i) = dialog_tabs(ui, &["One".to_string(), "Two".to_string()], st.0) {
+                st.1 = Some(i);
+            }
+        },
+        (0usize, None),
+    );
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("One").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(h.get_by_label("Two").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    h.get_by_label("Two").click();
+    h.run_steps(2);
+    assert_eq!(h.state().1, Some(1));
+}
+
 #[test]
 fn big_toggle_reports_accessible_label_and_selected_state() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -547,4 +568,5 @@ fn big_toggle_reports_accessible_label_and_selected_state() {
     h.run_steps(2);
     let node = h.get_by_role_and_label(egui::accesskit::Role::Button, "Link to Previous");
     assert!(node.accesskit_node().toggled().is_some() || node.accesskit_node().is_selected().is_some());
+}
 }
