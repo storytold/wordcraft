@@ -471,3 +471,32 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }
+
+#[test]
+fn a_backslash_before_a_line_end_or_a_tab_is_a_control_space() {
+    // The control symbol took the line end with it and read as nothing: the two words ran
+    // together, and a blank line after it no longer ended the paragraph.
+    assert_eq!(texts("\\begin{document}mid\\\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}mid\\\r\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}tab\\\there\\end{document}"), vec!["tab here".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\n\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\r\n\r\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+}
+
+#[test]
+fn a_control_space_at_a_line_end_adds_no_second_space() {
+    // The line end after it was read as a space of its own, so text taken as written (a
+    // reference, a URL) had two spaces where `\ ` gives one.
+    assert_eq!(tokenize("a\\\nb"), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\ntwo}\\end{document}"), vec!["one two".to_string()]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\r\n   two}\\end{document}"), vec!["one two".to_string()]);
+}
+
+#[test]
+fn a_control_space_in_an_item_label_is_a_space() {
+    // The optional argument kept a control symbol as written, so the label read `one\ two`.
+    for src in ["one\\ two", "one\\\ttwo", "one\\\ntwo"] {
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[{src}] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{src:?}");
+    }
+}

@@ -1176,3 +1176,12 @@ fn latex_export_keeps_repeated_spaces() {
     let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
     assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
 }
+
+#[test]
+fn latex_export_keeps_a_paragraph_that_ends_in_spaces_apart() {
+    // Its last control space is written at the line end (`a \`), which import read as nothing,
+    // so the paragraph ran into the next one.
+    let tex = String::from_utf8(crate::export("tex", &Document::from_text("a  \nb")).unwrap().unwrap()).unwrap();
+    let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
+    assert_eq!(para_texts(&d), vec!["a".to_string(), "b".to_string()], "{tex}");
+}

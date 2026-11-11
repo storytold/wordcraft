@@ -260,6 +260,9 @@ impl<'a> Parser<'a> {
                 }
                 Tok::Open => out.push('{'),
                 Tok::Close => out.push('}'),
+                // A control space (`\ `, or `\` before a tab or a line end) is a space, as TeX
+                // sets it in a label.
+                Tok::Cmd(c) if c == " " => out.push(' '),
                 Tok::Cmd(c) => {
                     out.push('\\');
                     out.push_str(c);
