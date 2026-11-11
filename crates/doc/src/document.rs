@@ -350,7 +350,10 @@ impl Document {
     }
 
     /// [`Self::plain_text`] without tracked-deleted or hidden runs. A deleted paragraph mark
-    /// still yields `\n`.
+    /// still yields `\n`. Hidden runs are dropped only here, through the resolved style: the
+    /// paragraph-level [`wordcraft_doc::Paragraph::final_text`] drops tracked deletions only,
+    /// because whether a run is hidden takes the resolved style, which the paragraph alone
+    /// doesn't know.
     pub fn final_text(&self, s: StoryRef) -> String {
         self.story_text(s, TextMode::Final)
     }

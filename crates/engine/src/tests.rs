@@ -3598,6 +3598,9 @@ fn document_text_drops_hidden_text() {
     run(&mut s, "text.insert", json!({"text": " Paid: yes."}));
     assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Approved budget: . Paid: yes.");
     assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["hiddenText"], json!(true));
+    // plain_text and shown_text are unchanged: they still return the hidden run.
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Approved budget: 100. Paid: yes.");
+    assert_eq!(s.doc.shown_text(StoryRef::Body), "Approved budget: 100. Paid: yes.");
 }
 
 #[test]
@@ -3612,8 +3615,8 @@ fn document_text_drops_hidden_text_in_tables() {
     run(&mut s, "caret.docEnd", json!({}));
     run(&mut s, "text.insert", json!({"text": "After."}));
     let out = run(&mut s, "document.text", json!({}))["text"].as_str().unwrap().to_string();
-    assert!(!out.contains("42"), "hidden table text leaked: {out}");
-    assert!(out.contains("Cell note") && out.contains("After."), "{out}");
+    // Cells read back separated the way plain_text does (`\t` between them, one per row).
+    assert_eq!(out, "Before. \nCell note \nAfter.", "{out}");
 }
 
 #[test]
@@ -3709,6 +3712,73 @@ fn select_text_skips_tracked_deletions_in_the_default_projection() {
     let r = run(&mut s, "select.text", json!({"text": "foo", "includeHidden": true}));
     assert_eq!(r["anchor"]["off"], json!(3), "{r}");
     assert_eq!(r["focus"]["off"], json!(6), "{r}");
+}
+
+#[test]
+fn document_text_drops_hidden_text_from_a_style() {
+    // A run hidden only through its style (StyleSheet::resolve_char, no direct formatting) is
+    // not body text either: document.text omits it, Inspect Document still reports it, and
+    // select.text skips the hidden paragraph.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Approved budget: 100.\nSecret note.\nPaid: yes.", "paragraphs": true}));
+    // `styles.create` applies the new style to the selected paragraph (a paragraph style):
+    // `styles.modify` then hides it through the style, no direct formatting involved.
+    run(&mut s, "select.text", json!({"text": "Secret note"}));
+    run(&mut s, "styles.create", json!({"name": "Covert", "fromSelection": false}));
+    run(&mut s, "styles.modify", json!({"style": "Covert", "chr": {"hidden": true}}));
+    assert_eq!(run(&mut s, "document.text", json!({}))["text"], "Approved budget: 100.\n\nPaid: yes.");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["hiddenText"], json!(true));
+    assert!(s.run("select.text", &json!({"text": "Secret"})).is_err());
+    // includeHidden searches the raw paragraph text.
+    let r = run(&mut s, "select.text", json!({"text": "Secret", "includeHidden": true}));
+    assert_eq!(r["anchor"]["off"], json!(0), "{r}");
+}
+
+#[test]
+fn select_text_maps_multibyte_matches_to_raw_offsets() {
+    // Accented and CJK characters around a hidden run: anchor/focus are raw byte offsets, so
+    // selecting what reads back after a hidden multi-byte run still lands on the real text.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "héllo 世界 wörld"}));
+    run(&mut s, "select.text", json!({"text": "世界"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    // "héllo  wörld" reads back: the visible match offset (8) is not the raw one (14).
+    let r = run(&mut s, "select.text", json!({"text": "wörld"}));
+    assert_eq!(r["anchor"]["off"], json!(14), "{r}");
+    assert_eq!(r["focus"]["off"], json!(20), "{r}");
+}
+
+#[test]
+fn select_text_with_no_visible_match_keeps_the_selection() {
+    // A needle that exists only in hidden runs is not found by default: the command fails and
+    // the selection stays where it was. includeHidden finds it as the positive control.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "foo bar"}));
+    run(&mut s, "select.text", json!({"text": "bar"}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    let sel = run(&mut s, "document.selection", json!({}));
+    let (anchor, focus) = (sel["anchor"].clone(), sel["focus"].clone());
+    let e = s.run("select.text", &json!({"text": "bar"})).unwrap_err().to_string();
+    assert!(e.contains("not found"), "{e}");
+    let sel = run(&mut s, "document.selection", json!({}));
+    assert_eq!(sel["anchor"], anchor, "{sel}");
+    assert_eq!(sel["focus"], focus, "{sel}");
+    let r = run(&mut s, "select.text", json!({"text": "bar", "includeHidden": true}));
+    assert_eq!(r["anchor"]["off"], json!(4), "{r}");
+    assert_eq!(r["focus"]["off"], json!(7), "{r}");
+}
+
+#[test]
+fn document_text_drops_hidden_text_in_footnotes() {
+    // Footnotes and other non-body stories go through the same Final path: hidden runs are
+    // omitted there too.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Body."}));
+    let id = run(&mut s, "references.footnote", json!({"text": "note 42"}))["id"].as_u64().unwrap();
+    let story = json!({"part": id});
+    run(&mut s, "select.text", json!({"text": "42", "story": story}));
+    run(&mut s, "format.hidden", json!({"value": true}));
+    assert_eq!(run(&mut s, "document.text", json!({"story": story}))["text"], " note ");
 }
 
 /// The author of the revision `rid` points to.

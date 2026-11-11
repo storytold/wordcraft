@@ -1,7 +1,7 @@
 //! Caret movement and selection.
 
 use serde_json::Value;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Paragraph, Pos, StoryRef, StyleSheet};
 use wordcraft_layout::ViewMode;
 
 use super::{parse_pos, sel_result};
@@ -489,45 +489,74 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     let include_hidden = p::bool(v, "includeHidden").unwrap_or(false);
     let mut count = 0;
     let story = super::story_param(s, v);
+    // One projection buffer, reused across paragraphs.
+    let mut visible = String::new();
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
-        let style = p.props.style.as_deref();
-        let mut visible = String::with_capacity(p.text.len());
-        // Per visible character: (its byte offset in `visible`, its raw start, its raw end).
-        // A match maps to the first matched character's raw start and the last matched
-        // character's raw end, so the selection never reaches past the match into hidden
-        // text sitting before the next visible character.
-        let mut chars: Vec<(usize, usize, usize)> = Vec::with_capacity(p.text.len());
-        let mut v = 0;
-        for (r, c) in p.run_ranges() {
-            let hidden = !include_hidden && !r.is_empty() && (c.del.is_some() || s.doc.styles.resolve_char(style, c).hidden);
-            for (i, ch) in p.text[r.clone()].char_indices() {
-                if hidden {
-                    continue;
+        if include_hidden {
+            // Raw search: no projection to build; occurrences inside hidden and
+            // tracked-deleted runs count too.
+            for (i, _) in p.text.match_indices(needle) {
+                count += 1;
+                if count == n {
+                    let end = i + needle.len();
+                    s.sel = Selection { anchor: Pos { story, path: path.clone(), off: i }, focus: Pos { story, path: path.clone(), off: end } };
+                    // Formatting picked for the old caret doesn't carry over (as `select.word`): what
+                    // replaces the selection takes its formatting.
+                    s.pending = None;
+                    return sel_result(s);
                 }
-                let o = r.start + i;
-                chars.push((v, o, o + ch.len_utf8()));
-                visible.push(ch);
-                v += ch.len_utf8();
             }
+            continue;
+        }
+        let style = p.props.style.as_deref();
+        visible.clear();
+        for (r, c) in p.run_ranges() {
+            if !r.is_empty() && (c.del.is_some() || s.doc.styles.resolve_char(style, c).hidden) {
+                continue;
+            }
+            visible.push_str(&p.text[r.clone()]);
         }
         for (vi, _) in visible.match_indices(needle) {
             count += 1;
-            if count == n {
-                // match_indices lands on character boundaries, so `vi` opens a visible
-                // character and `vi + needle.len()` closes the last matched one.
-                let at = chars.partition_point(|&(cv, _, _)| cv < vi);
-                let start = chars.get(at).map(|&(_, rs, _)| rs);
-                let end = chars.partition_point(|&(cv, _, _)| cv < vi + needle.len()).checked_sub(1).and_then(|k| chars.get(k)).map(|&(_, _, re)| re);
-                let (Some(start), Some(end)) = (start, end) else { continue };
-                s.sel = Selection { anchor: Pos { story, path: path.clone(), off: start }, focus: Pos { story, path: path.clone(), off: end } };
-                // Formatting picked for the old caret doesn't carry over (as `select.word`): what
-                // replaces the selection takes its formatting.
-                s.pending = None;
-                return sel_result(s);
+            if count < n {
+                continue;
             }
+            // match_indices lands on character boundaries: the first matched visible
+            // character's raw start opens the selection and the last matched one's raw end
+            // closes it, so the selection never reaches past the match into hidden text
+            // sitting before the next visible character. The runs are walked again only for
+            // the match itself, not for every paragraph scanned.
+            let Some((start, _)) = visible_char_raw(p, &s.doc.styles, style, vi) else { continue };
+            let Some((_, end)) = visible_char_raw(p, &s.doc.styles, style, vi + needle.len() - 1) else { continue };
+            s.sel = Selection { anchor: Pos { story, path: path.clone(), off: start }, focus: Pos { story, path: path.clone(), off: end } };
+            // Formatting picked for the old caret doesn't carry over (as `select.word`): what
+            // replaces the selection takes its formatting.
+            s.pending = None;
+            return sel_result(s);
         }
     }
     let _ = StoryRef::Body;
     Err(CmdError::Failed(format!("`{needle}` not found")))
+}
+
+/// The raw (start, end) of the visible character whose projection covers byte `target`:
+/// the runs are walked again, skipping tracked-deleted and hidden ones. `target` must be a
+/// visible character boundary.
+fn visible_char_raw(p: &Paragraph, styles: &StyleSheet, style: Option<&str>, target: usize) -> Option<(usize, usize)> {
+    let mut seen = 0;
+    for (r, c) in p.run_ranges() {
+        if c.del.is_some() || styles.resolve_char(style, c).hidden {
+            continue;
+        }
+        for (i, ch) in p.text[r.clone()].char_indices() {
+            let len = ch.len_utf8();
+            if target < seen + len {
+                let o = r.start + i;
+                return Some((o, o + len));
+            }
+            seen += len;
+        }
+    }
+    None
 }
