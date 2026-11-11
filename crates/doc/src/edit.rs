@@ -426,6 +426,8 @@ impl Relink<'_> {
                         self.style(&mut c.old.style);
                     }
                     for row in t.rows.iter_mut() {
+                        row.props.ins = row.props.ins.and_then(|r| self.rev_id(r));
+                        row.props.del = row.props.del.and_then(|r| self.rev_id(r));
                         self.shift_change(&mut row.props.fmt_change);
                         for cell in row.cells.iter_mut() {
                             self.shift_change(&mut cell.props.fmt_change);
@@ -1316,6 +1318,13 @@ impl Document {
                 }
             });
         }
+    }
+
+    /// Give every text box in `blocks` (content brought in from another document whose text box
+    /// stories are `parts`) a new story of its own, as pasting does.
+    pub fn adopt_text_box_stories(&mut self, blocks: &mut [Block], parts: &BTreeMap<u32, Part>) {
+        let mut budget = BoxBudget::new();
+        self.adopt_text_boxes(blocks, parts, 0, &mut budget);
     }
 
     /// A new text box story copied from `old`; its own boxes get new stories too. Blocks without

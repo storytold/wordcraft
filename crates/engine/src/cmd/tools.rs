@@ -15,13 +15,14 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod actions;
 mod autocorrect;
 mod compare;
+mod compare_import;
 mod inspect;
 mod specs;
 mod typing;
 
 pub use autocorrect::{AUTOCORRECT, AutoCap, AutoCorrectPrefs, lenient_autocorrect};
 #[cfg(test)]
-use compare::{Op, collapse_noise_matches, lcs_ops};
+use compare::{Op, block_text, collapse_noise_matches, compare_with, lcs_ops};
 pub use specs::specs;
 pub use typing::{INITIAL_CAPS_EXCEPTIONS, autocorrect, autocorrect_word, emphasis_autoformat, has_emphasis};
 pub(crate) use typing::{is_turkic, lower_char, upper_char};
