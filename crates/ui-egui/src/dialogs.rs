@@ -191,6 +191,13 @@ pub enum Dialog {
         /// first page (the section's), applied only if changed (#1230).
         odd_even: bool,
         first_page: bool,
+        /// The gutter and the header and footer distances from the page edge, in the measurement
+        /// unit as shown (`layout.margins`), and the section's break type (`layout.sectionStart`),
+        /// each applied only if changed.
+        gutter: f32,
+        header: f32,
+        footer: f32,
+        start: wordcraft_doc::section::SectionStart,
     },
     Link {
         url: String,
@@ -733,6 +740,10 @@ impl Dialog {
                     valign: sp.valign,
                     odd_even: app.session.doc.settings.even_odd_headers,
                     first_page: sp.title_page,
+                    gutter: sp.gutter / crate::options::unit().pt_per_unit(),
+                    header: sp.header / crate::options::unit().pt_per_unit(),
+                    footer: sp.footer / crate::options::unit().pt_per_unit(),
+                    start: sp.start,
                 }
             }
             "link" => {
@@ -918,3 +929,5 @@ pub mod dialogs_table_style;
 pub mod dialogs_templates;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_page_layout;

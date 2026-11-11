@@ -4,7 +4,9 @@ use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigati
 use super::font::{apply_font, font_box, font_sample_box, font_sample_props, sample_paper};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
-use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
+use super::page_setup::{
+    page_layout_commands, page_paper_group, page_section_start_combo, page_section_start_value, page_valign_combo, page_valign_value, run_as_one_step,
+};
 use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
@@ -615,6 +617,10 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         valign,
         odd_even,
         first_page,
+        gutter,
+        header,
+        footer,
+        start,
     } = d
     else {
         return false;
@@ -632,6 +638,10 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             r.cell(|ui| ui.add(margin(left)).labelled_by(left_label.id));
             let right_label = r.cell(|ui| ui.label(if *mirror { tl!("Outside:") } else { tl!("Right:") }));
             r.cell(|ui| ui.add(margin(right)).labelled_by(right_label.id));
+        });
+        t.row(|r| {
+            let gutter_label = r.cell(|ui| ui.label(tl!("Gutter:")));
+            r.cell(|ui| ui.add(margin(gutter)).labelled_by(gutter_label.id));
         });
     });
     ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
@@ -666,19 +676,31 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
     }
     page_valign_combo(ui, valign);
+    page_section_start_combo(ui, start);
     // Word's Page Setup › Layout: a title page without the page number (#1230).
     ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
     ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
     ui.checkbox(first_page, tl!("Different First Page"));
+    crate::rtl::Table::new("ps_hf").columns(4).show(ui, |t| {
+        t.row(|r| {
+            let header_label = r.cell(|ui| ui.label(tl!("Header:")));
+            r.cell(|ui| ui.add(margin(header)).labelled_by(header_label.id));
+            let footer_label = r.cell(|ui| ui.label(tl!("Footer:")));
+            r.cell(|ui| ui.add(margin(footer)).labelled_by(footer_label.id));
+        });
+    });
     let (mut ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         // Everything OK changes is one undo step; a refused command applies nothing.
-        let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right))
+        let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right), (*gutter, *header, *footer))
             .map_err(|e| tl!(e).to_string())
             .and_then(|mut commands| {
                 // Mirror margins go with the margins (#1181).
                 if let Some((_, v)) = commands.iter_mut().rev().find(|(id, _)| *id == "layout.margins") {
                     v["mirror"] = json!(*mirror);
+                }
+                if *start != wordcraft_engine::cmd::page::sect(&app.session).start {
+                    commands.push(("layout.sectionStart", json!({"value": page_section_start_value(*start)})));
                 }
                 if grid != grid_was {
                     let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.0 as usize).copied().unwrap_or("none");

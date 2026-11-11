@@ -3131,6 +3131,54 @@ fn page_setup_and_breaks() {
     assert!(s.doc.settings.mirror_margins);
 }
 
+/// `layout.margins` takes the gutter and the header and footer distances from the page edge
+/// (`w:pgMar` @w:gutter @w:header @w:footer), and `layout.sectionStart` the section's break type.
+#[test]
+fn layout_margins_header_footer_distance_and_section_start() {
+    use wordcraft_doc::section::SectionStart;
+    let mut s = s();
+    let sect = |s: &Session| crate::cmd::page::sect(s);
+    run(&mut s, "layout.margins", json!({"header": 72.0, "footer": 54.0, "gutter": 36.0}));
+    let x = sect(&s);
+    assert_eq!((x.header, x.footer, x.gutter), (72.0, 54.0, 36.0));
+    // Out of range distances clamp to Word's 0–1584 pt; a non-finite one is refused.
+    run(&mut s, "layout.margins", json!({"header": -5.0, "footer": 5000.0}));
+    let x = sect(&s);
+    assert_eq!((x.header, x.footer), (0.0, 1584.0));
+    let before = sect(&s);
+    assert!(s.run("layout.margins", &json!({"header": "NaN"})).is_err(), "non-finite refused");
+    assert_eq!(sect(&s), before);
+    // The gutter counts against the text width, and a gutter that leaves no room is refused.
+    run(&mut s, "layout.margins", json!({"gutter": 0.0}));
+    let wide = sect(&s).text_width();
+    run(&mut s, "layout.margins", json!({"gutter": 36.0}));
+    assert_eq!(sect(&s).gutter, 36.0);
+    assert!((sect(&s).text_width() - (wide - 36.0)).abs() < 0.01);
+    assert!(s.run("layout.margins", &json!({"gutter": 2000.0})).is_err());
+    assert_eq!(sect(&s).gutter, 36.0, "a refused gutter changes nothing");
+    // Section start: the caret section's break type; an unknown value is refused.
+    for (value, want) in [
+        ("oddPage", SectionStart::OddPage),
+        ("evenPage", SectionStart::EvenPage),
+        ("continuous", SectionStart::Continuous),
+        ("nextColumn", SectionStart::NextColumn),
+        ("nextPage", SectionStart::NextPage),
+    ] {
+        run(&mut s, "layout.sectionStart", json!({"value": value}));
+        assert_eq!(sect(&s).start, want, "{value}");
+    }
+    let before = sect(&s).start;
+    let e = s.run("layout.sectionStart", &json!({"value": "sideways"})).unwrap_err().to_string();
+    assert!(e.contains("unknown section start"), "{e}");
+    assert_eq!(sect(&s).start, before, "an unknown value changes nothing");
+    let spec = s.registry.get("layout.sectionStart").unwrap();
+    assert!(spec.params.contains("oddPage"), "documents its values: {}", spec.params);
+    // One Undo step each.
+    let depth = s.undo_depth();
+    run(&mut s, "layout.sectionStart", json!({"value": "oddPage"}));
+    assert_eq!(s.undo_depth(), depth + 1);
+}
+
 /// #1433: a custom page size (More Paper Sizes…) sets the section in its orientation, and
 /// out-of-range sizes clamp to Word's 0.1"–22" instead of failing or reaching the layout.
 #[test]

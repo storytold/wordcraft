@@ -13,7 +13,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(
-            r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "mirror"?: bool}"#,
+            r#"{"preset"?: "normal|narrow|moderate|wide|mirrored|office2003", "top"?: pt, "bottom"?: pt, "left"?: pt, "right"?: pt, "gutter"?: pt, "header"?: pt, "footer"?: pt, "mirror"?: bool} (gutter and the header and footer distances from the page edge are clamped to 0–1584 pt)"#,
         ),
         CommandSpec::new("layout.orientation", "Orientation", "Layout › Page Setup", |s, v| {
             let land = match p::str(v, "value") {
@@ -54,6 +54,11 @@ pub fn specs() -> Vec<CommandSpec> {
             with_sect(s, |x| x.valign = va)
         })
         .params(r#"{"value": "top|center|justify|bottom"} (also both|justified; anything else is top). Justified shares each page's spare room between its paragraphs and tables"#),
+        CommandSpec::new("layout.sectionStart", "Section Start", "Layout › Page Setup › Layout", |s, v| {
+            let start = section_start(p::str(v, "value").unwrap_or_default())?;
+            with_sect(s, |x| x.start = start)
+        })
+        .params(r#"{"value": "nextPage|continuous|evenPage|oddPage|nextColumn"} (the section's break type, DOCX `w:type` ST_SectionMark; anything else is refused)"#),
         CommandSpec::new("layout.sectionRtl", "Right-to-Left Section", "Layout › Page Setup", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!sect(s).rtl);
             with_sect(s, |x| x.rtl = on)
@@ -489,6 +494,19 @@ fn border_sides_mut(b: &mut Borders) -> impl Iterator<Item = &mut Border> {
     [&mut b.top, &mut b.left, &mut b.bottom, &mut b.right, &mut b.between, &mut b.inside_v].into_iter().flatten()
 }
 
+/// `layout.sectionStart`'s value: a section's break type (`w:type`, ECMA-376 Part 1 §17.6.22
+/// ST_SectionMark). Word's name for the value or the OOXML one; anything else is refused.
+fn section_start(v: &str) -> Result<SectionStart, CmdError> {
+    match v {
+        "nextPage" | "newPage" => Ok(SectionStart::NextPage),
+        "continuous" => Ok(SectionStart::Continuous),
+        "evenPage" => Ok(SectionStart::EvenPage),
+        "oddPage" => Ok(SectionStart::OddPage),
+        "nextColumn" | "newColumn" => Ok(SectionStart::NextColumn),
+        _ => Err(CmdError::Params(format!("unknown section start `{v}`"))),
+    }
+}
+
 fn margins(s: &mut Session, v: &Value) -> CmdResult {
     let preset = p::str(v, "preset");
     let (t, b, l, r) = match preset {
@@ -509,6 +527,17 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
     // Negative margins count as zero before the fit check, so one can't offset another.
     let (t, b, l, r) = (t.max(0.0), b.max(0.0), l.max(0.0), r.max(0.0));
     let gutter = p::f32(v, "gutter").map(|g| g.max(0.0));
+    // The header and footer distances from the page edge (`w:pgMar` @w:header @w:footer).
+    // A number that isn't finite is refused, as `layout.pageSetup` refuses one.
+    let distance = |k: &str| -> Result<Option<f32>, CmdError> {
+        match v.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(_) => {
+                p::f32(v, k).map(|d| Some(d.clamp(0.0, MAX_PAGE_SIDE))).ok_or_else(|| CmdError::Params(format!("`{k}` must be a finite number")))
+            }
+        }
+    };
+    let (header, footer) = (distance("header")?, distance("footer")?);
     let cur = sect(s);
     if !margins_fit((cur.page_w, cur.page_h), (t, b, l, r), gutter.unwrap_or(cur.gutter)) {
         return Err(CmdError::Params("margins leave no room for text".into()));
@@ -525,6 +554,12 @@ fn margins(s: &mut Session, v: &Value) -> CmdResult {
         x.margin_right = r;
         if let Some(g) = gutter {
             x.gutter = g;
+        }
+        if let Some(h) = header {
+            x.header = h;
+        }
+        if let Some(f) = footer {
+            x.footer = f;
         }
     })
 }

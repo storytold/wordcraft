@@ -128,6 +128,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-04 | trivial | Canvas: a press the canvas handles itself (Ctrl+click on a link, switching into a header or footer, equation entry) skips the link tooltip that frame; hovering shows it again; a regression from the #4501 refactor (#4683) |
+| 2026-11-10 | trivial | P0192: Page Setup › Margins has a Gutter box, and Layout a Section start list (Continuous, New column, New page, Even page, Odd page) and Header: and Footer: distances from the page edge; OK sends only what changed, in the dialog's one undo step (`layout.margins` takes `header` and `footer`, `layout.sectionStart` the break type). Readiness estimates unchanged. |
 | 2026-11-07 | trivial | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
 | 2026-11-06 | trivial | The document's scroll bars are always drawn, in the room beside the page left for them, with a grey thumb that stands out from its track in both themes; they were invisible until the pointer reached the window's right edge, so without a mouse wheel nothing showed how to reach page 2 (#5746) |
 | 2026-11-05 | trivial | Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. |
