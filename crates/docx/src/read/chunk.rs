@@ -80,6 +80,21 @@ impl Reader<'_> {
         // `w:matchSrc`: a Word document's content keeps its own styles (other formats' formatting
         // is their own already).
         let keep = is_docx && e.child("w:altChunkPr").and_then(|p| p.child("w:matchSrc")).is_some_and(crate::units::on_off);
+        // The pictures the chunk's own reader dropped are the file's too (strict export, #6005),
+        // each named by the chunk and its part in it (`word/afchunk1.docx > word/header1.xml`).
+        // A chunk in another format brings none: those importers record nothing yet (#6007).
+        let nested = std::mem::take(&mut doc.missing_pictures);
+        let list_len = nested.list.len() as u64;
+        for mut item in nested.list {
+            let inner = if item.story.is_empty() { nested.main.as_str() } else { item.story.as_str() };
+            item.story = format!("{part} > {inner}");
+            self.doc.missing_pictures.push(item);
+        }
+        // The nested records past its list are the file's too; their stories carry the chunk's
+        // part, so none is one the outer list already counted.
+        let unlisted = nested.total.saturating_sub(list_len);
+        self.doc.missing_pictures.add_unlisted(&part, unlisted);
+        self.doc.missing_pictures.truncated |= nested.truncated;
         let mut blocks = self.doc.adopt_blocks(doc, keep, &mut self.next_perm);
         // Bookmarks and comment marks read before the chunk stay before it.
         self.flush_pending_before(sc, out, &mut blocks);

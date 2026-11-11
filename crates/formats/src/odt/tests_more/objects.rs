@@ -168,6 +168,38 @@ fn an_object_in_a_header_is_kept_too() {
     assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object M"));
 }
 
+/// A frame's stated size goes before fitting a column: on either side alone the other follows the
+/// picture's proportions, and only past what a document holds does it shrink, in proportion.
+#[test]
+fn a_picture_keeps_the_size_its_frame_states_on_either_side() {
+    let png = |w: u32, h: u32| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let size = |w: Option<f32>, h: Option<f32>| {
+        let img = crate::odt::body::drawing::picture(png(200, 100), w, h, "").unwrap();
+        (img.w, img.h)
+    };
+    let near = |got: (f32, f32), want: (f32, f32)| assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{got:?}, not {want:?}");
+    // Both, one or the other, past a column's 468 pt.
+    near(size(Some(600.0), Some(100.0)), (600.0, 100.0));
+    near(size(Some(600.0), None), (600.0, 300.0));
+    near(size(None, Some(400.0)), (800.0, 400.0));
+    // Past what a document holds: in proportion, whichever side is stated.
+    near(size(Some(2000.0), Some(1000.0)), (1584.0, 792.0));
+    near(size(Some(2000.0), None), (1584.0, 792.0));
+    near(size(None, Some(1000.0)), (1584.0, 792.0));
+    near(size(Some(f32::MAX), None), (1584.0, 792.0));
+    // None stated, or nothing a size could be: its own, fitted to a column.
+    near(size(None, None), (150.0, 75.0));
+    for junk in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -5.0] {
+        near(size(Some(junk), Some(junk)), (150.0, 75.0));
+    }
+    let wide = crate::odt::body::drawing::picture(png(1000, 500), None, None, "").unwrap();
+    near((wide.w, wide.h), (468.0, 234.0));
+}
+
 /// A replacement picture may come before its object. It is kept whatever it is, though WordCraft
 /// can't show it, and a save from the model writes it back.
 #[test]
