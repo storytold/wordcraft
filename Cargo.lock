@@ -6846,13 +6846,16 @@ dependencies = [
 name = "wordcraft-cli"
 version = "0.15.1"
 dependencies = [
+ "image",
  "serde_json",
  "sys-locale",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-fonts",
  "wordcraft-mcp",
  "wordcraft-render",
  "wordcraft-zotero",
+ "zip 3.0.0",
 ]
 
 [[package]]
