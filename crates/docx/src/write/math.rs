@@ -11,6 +11,7 @@ use crate::xml::W;
 /// is written back unchanged when the equation came from a file. `color` (the equation's run
 /// colour) goes on every math run without its own: OMML has no equation-level colour (#1467).
 pub fn write_equation(w: &mut W, linear: &str, display: bool, math: &Math, color: Option<Rgb>) {
+    w.padded = 0;
     let tinted;
     let math = if color == omml_color(&math.omml) {
         math
@@ -179,16 +180,20 @@ fn char_prop(w: &mut W, name: &str, c: Option<char>) {
     val(w, name, &s);
 }
 
-/// Most cells a matrix is padded out to (rows × its widest row). A ragged matrix past it (a
-/// native document's, or one parsed from a few bytes of text) writes each row as it is, rather
-/// than output that grows with the square of its size.
+/// Most cells the matrices of one equation are padded out to in all (rows × the widest row, of
+/// each). A ragged matrix past it (a native document's, or one parsed from a few bytes of text)
+/// writes each row as it is, rather than output that grows with the square of its size, and so
+/// do nested matrices that would each fit alone.
 const MAX_PADDED_CELLS: usize = 1 << 20;
 
 fn write_matrix(w: &mut W, n: &MNode, depth: usize) {
     let MNode::Matrix { rows, col_jc } = n else { return };
     let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
-    let pad = rows.len().saturating_mul(cols) <= MAX_PADDED_CELLS;
-    if !pad {
+    let cells = rows.len().saturating_mul(cols);
+    let pad = w.padded.saturating_add(cells) <= MAX_PADDED_CELLS;
+    if pad {
+        w.padded += cells;
+    } else {
         log::warn!("docx: a {} × {cols} matrix is too large to pad; its rows are written as they are", rows.len());
     }
     w.open("m:m", &[]);
@@ -508,5 +513,21 @@ mod tests {
         let mut rows = vec![vec![Vec::new()]; 2000];
         rows.push(vec![Vec::new(); 2000]);
         assert_eq!(cells(rows), 4000);
+    }
+
+    #[test]
+    fn matrices_of_one_equation_share_the_padding_budget() {
+        // Each is 700 × 700 padded (490,000 cells): two fit the budget of 2^20, a third does not.
+        let ragged = || {
+            let mut rows = vec![vec![Vec::new()]; 699];
+            rows.push(vec![Vec::new(); 700]);
+            MNode::Matrix { rows, col_jc: Vec::new() }
+        };
+        let mut w = W::new();
+        for _ in 0..3 {
+            write_matrix(&mut w, &ragged(), 0);
+        }
+        let n = w.s.matches("<m:e/>").count() + w.s.matches("<m:e>").count();
+        assert_eq!(n, 2 * 490_000 + 1399, "the third matrix is written as it is");
     }
 }

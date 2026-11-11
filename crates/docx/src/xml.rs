@@ -513,11 +513,13 @@ pub fn esc(s: &str) -> String {
 #[derive(Default)]
 pub struct W {
     pub s: String,
+    /// Matrix cells padded so far in the equation being written (reset by `write_equation`).
+    pub padded: usize,
 }
 
 impl W {
     pub fn new() -> W {
-        W { s: String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n") }
+        W { s: String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n"), padded: 0 }
     }
     fn attrs(&mut self, attrs: &[(&str, &str)]) {
         for (k, v) in attrs {
