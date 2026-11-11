@@ -20,7 +20,7 @@ mod media;
 
 #[cfg(test)]
 use media::{CACHE_BYTES, MediaCache, OVERSIZED_GLYPHS_NOTED, cacheable, decode_pixmap_within, note_oversized_glyphs, shrink};
-pub use media::{decode_pixmap, image_size, metafile_size};
+pub use media::{decode_pixmap, decode_pixmap_fx, image_size, metafile_size};
 use media::{draw_page_picture, draw_vector, lock, pixmap_for, premul_pixmap, vector_for};
 
 mod color_glyph;
@@ -163,6 +163,11 @@ pub struct RenderOptions {
     /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
     /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
     pub text_darkening: bool,
+    /// Hint text for the screen the way FreeType's `hintslight` does on Linux desktops: glyph
+    /// baselines sit on whole pixels and their horizontal edges (x-height, cap height) are moved
+    /// onto the pixel grid, so text looks as crisp as in other apps there. Nothing moves
+    /// sideways, so lines break as without it. For on-screen rasters only: exports stay exact.
+    pub hinting: bool,
     /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
     /// white paper turns black and black text white while hues stay the same. Screen only.
     pub dark: bool,
@@ -184,6 +189,12 @@ impl RenderOptions {
     /// else the document's page color, else [`RenderOptions::paper`].
     pub fn paper_of(&self, doc: &Document) -> Rgb {
         self.ink(self.read_paper.or(doc.settings.page_color).unwrap_or(self.paper))
+    }
+
+    /// The on-screen color of paper with no page color: [`RenderOptions::read_paper`], else
+    /// [`RenderOptions::paper`]. White Read Mode paper on a dark page is the dark paper grey.
+    pub fn blank_paper(&self) -> Rgb {
+        self.ink(self.read_paper.unwrap_or(self.paper))
     }
 
     /// The on-screen colour for a document colour (see [`RenderOptions::dark`]).
@@ -259,6 +270,7 @@ impl Default for RenderOptions {
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
             text_darkening: false,
+            hinting: false,
             dark: false,
             dark_paper: DARK_PAPER,
             read_paper: None,
@@ -342,6 +354,28 @@ pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, 
     Rgb(c(bg[0]), c(bg[1]), c(bg[2]))
 }
 
+// Sample the same inset silhouettes and paints used by the raster and PDF.
+fn soft_fill_alpha(
+    rect: wordcraft_geom::Rect,
+    kind: ShapeKind,
+    corner: Option<u32>,
+    radius: f32,
+    fill: &wordcraft_layout::display::Paint,
+    p: wordcraft_geom::Point,
+) -> f32 {
+    let radius = radius.min(rect.w.min(rect.h) / 2.0).max(0.0);
+    let frame = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
+    let point = kurbo::Point::new(p.x as f64, p.y as f64);
+    let mut opacity = 0.0;
+    for (grow, paint) in fill.soft_bands(radius) {
+        let inset = frame.inflate(grow as f64, grow as f64);
+        if inset.width() > 0.0 && inset.height() > 0.0 && kurbo::Shape::contains(&shape_path(kind, inset, corner), point) {
+            opacity += (1.0 - opacity) * paint.at(p.x, p.y).1;
+        }
+    }
+    opacity
+}
+
 fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOptions, bg: &mut [f32; 3], depth: u32) {
     if depth > 16 {
         return;
@@ -351,13 +385,15 @@ fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOpti
             Draw::Fill { rect, color, alpha, .. } if rect.contains(p) => (*color, *alpha),
             // The shape's own outline (an ellipse's corners are not inside it), in its fill's
             // colour and opacity there (#1500: gradients and transparency).
-            Draw::Shape { rect, kind, fill: Some(fill), corner, .. }
+            Draw::Shape { rect, kind, fill: Some(fill), corner, effects, .. }
                 if *kind != ShapeKind::Line && rect.contains(p) && {
                     let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
                     kurbo::Shape::contains(&shape_path(*kind, r, *corner), kurbo::Point::new(p.x as f64, p.y as f64))
                 } =>
             {
-                fill.at(p.x, p.y)
+                let (color, alpha) = fill.at(p.x, p.y);
+                let alpha = effects.sanitized().soft_edge.map_or(alpha, |radius| soft_fill_alpha(*rect, *kind, *corner, radius, fill, p));
+                (color, alpha)
             }
             Draw::Clip { rect, items } if rect.contains(p) => {
                 blend_backgrounds(items, p, opts, bg, depth + 1);
@@ -425,9 +461,7 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
 }
 
 fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
-    let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
-    let face = r.face;
-    let glyphs = wordcraft_fonts::shape(&face, &wm.text, &[], |c| c);
+    let Some((face, _, glyphs)) = wordcraft_layout::watermark_run(wm, usize::MAX) else { return };
     let upem = face.upem.max(1.0);
     let raw_w: f64 = glyphs.iter().map(|g| g.x_advance as f64).sum::<f64>() / upem;
     if raw_w <= 0.0 {
@@ -459,6 +493,13 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
         ctx.fill_path(&o);
         x += g.x_advance as f64 * k;
     }
+}
+
+/// Does `view` map page points to device pixels without rotation, skew or mirroring, scaling both
+/// axes alike? Only then do hinted outlines (made on the pixel grid) line up with the screen.
+fn is_upright(view: Affine) -> bool {
+    let [a, b, c, d, e, f] = view.as_coeffs();
+    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 1e-6
 }
 
 /// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
@@ -699,13 +740,19 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
     let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
     let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
+    let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
     if outline_stroke > 0.0 {
-        let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
         ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
     }
     // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
     let colour = face.has_color_glyphs();
     let ppem = *size as f64 * px_per_pt;
+    // Hinted outlines are in device pixels: only for an upright, unmirrored, evenly scaled
+    // view (not rotated text boxes), where the pixel grid lines up with the glyphs.
+    let hint_ppem = (opts.hinting && !colour && is_upright(view)).then_some(ppem as f32);
+    // The outline strokes in device pixels, for the hinted outlines.
+    let stroke_px = outline_stroke * k * px_per_pt;
+    let mut hinted_stroke = false;
     for (gid, x, y) in glyphs {
         let (gx, gy) = (*x as f64, *y as f64);
         // Written so a NaN position is skipped too.
@@ -719,6 +766,23 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
             ctx.set_paint(color(opts.ink(*c), *alpha));
             continue;
         }
+        if let Some(o) = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p)) {
+            if o.elements().is_empty() {
+                continue;
+            }
+            // The baseline on a whole pixel, as the hinting assumes.
+            let at = view * kurbo::Point::new(gx, gy);
+            ctx.set_transform(Affine::translate((at.x, at.y.round())) * skew);
+            ctx.fill_path(&o);
+            if outline_stroke > 0.0 {
+                if !hinted_stroke {
+                    ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(join));
+                    hinted_stroke = true;
+                }
+                ctx.stroke_path(&o);
+            }
+            continue;
+        }
         let o = db.outline(face, *gid);
         if o.elements().is_empty() {
             continue;
@@ -726,6 +790,10 @@ fn draw_glyphs(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
         ctx.fill_path(&o);
         if outline_stroke > 0.0 {
+            if hinted_stroke {
+                ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
+                hinted_stroke = false;
+            }
             ctx.stroke_path(&o);
         }
     }
@@ -773,7 +841,7 @@ fn draw_mark_text(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
 }
 
 fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let Draw::Image { rect, media, crop, alpha, .. } = it else { return };
+    let Draw::Image { rect, media, crop, alpha, fx, .. } = it else { return };
     let (doc, view) = (fr.doc, fr.view);
     let r = kurbo_rect(rect);
     if !r.overlaps(*fr.visible) {
@@ -783,7 +851,7 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         draw_vector(ctx, &v, &r, crop, *alpha, view);
         return;
     }
-    let Some(pm) = pixmap_for(doc, media) else {
+    let Some(pm) = pixmap_for(doc, media, *fx) else {
         ctx.set_transform(view);
         ctx.set_paint(color(fr.opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
         ctx.fill_rect(&r);
@@ -812,10 +880,22 @@ fn draw_image(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     }
 }
 
+/// Widest path drawn, in device pixels a side: 64 times the largest canvas. The rasteriser
+/// flattens a curve into as many points as its size asks for, before clipping, so a path with
+/// coordinates of 1e15 (file data in a native document) would take it forever or run out of
+/// memory; one this far past every canvas shows nothing a real drawing would.
+const MAX_PATH_PIXELS: f64 = 1_048_576.0;
+
+/// Whether `path` under `view` is small enough to draw ([`MAX_PATH_PIXELS`]) and finite.
+fn path_extent_ok(view: Affine, path: &kurbo::BezPath) -> bool {
+    let b = view.transform_rect_bbox(path.bounding_box());
+    path.is_finite() && [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite() && v.abs() <= MAX_PATH_PIXELS)
+}
+
 fn draw_path(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
     let Draw::Path { segs, fill, stroke, stroke_width, dash, cap } = it else { return };
     let path = wordcraft_layout::display::seg_path(segs);
-    if path.elements().is_empty() {
+    if path.elements().is_empty() || !path_extent_ok(fr.view, &path) {
         return;
     }
     ctx.set_transform(fr.view);
@@ -913,10 +993,10 @@ fn shape_shadow_and_glow(ctx: &mut RenderContext, fr: &Frame, (geom, sw): (&Shap
 
 /// Soft edges: the fill fades out toward the outline (which fades with it).
 fn shape_soft_edges(ctx: &mut RenderContext, fr: &Frame, geom: &ShapeGeom, (rad, f): (f32, &Paint)) {
-    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+    for (g, paint) in f.soft_bands(rad) {
         let rr = geom.r.inflate(g as f64, g as f64);
         if rr.width() > 0.0 && rr.height() > 0.0 {
-            set_paint(ctx, &f.faded(a), fr.opts);
+            set_paint(ctx, &paint, fr.opts);
             ctx.fill_path(&shape_path(geom.kind, rr, geom.corner));
         }
     }
@@ -1103,3 +1183,6 @@ mod tests;
 
 #[cfg(test)]
 mod cache_tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;

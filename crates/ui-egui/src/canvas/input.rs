@@ -1,5 +1,5 @@
 use super::balloons::over_balloon;
-use super::links::{field_showing_code, is_followable_link, is_generated_bookmark_link, link_under};
+use super::links::{field_showing_code, follow_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
 use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
 use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
@@ -110,7 +110,7 @@ pub(super) fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[
     };
     let Some((page, x, y)) = page_at(rects, layout, scale, p) else { return };
     let story = app.session.sel.focus.story;
-    handle_page_pointer(app, PagePointer { ui, resp, layout, p, page, x, y, story });
+    handle_page_pointer(app, PagePointer { ui, resp, layout, rects, scale, p, page, x, y, story });
 }
 
 fn route_pointer_targets(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layout: &DocLayout, scale: f32) -> Option<Pos2> {
@@ -143,6 +143,8 @@ struct PagePointer<'a> {
     ui: &'a Ui,
     resp: &'a egui::Response,
     layout: &'a DocLayout,
+    rects: &'a [Rect],
+    scale: f32,
     p: Pos2,
     page: usize,
     x: f32,
@@ -173,7 +175,9 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
         return;
     }
     if pressed {
-        handle_primary_press(app, &pointer, mods, hf_zone, hf_enter);
+        if handle_primary_press(app, &pointer, mods, hf_zone, hf_enter) {
+            return;
+        }
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
         && let Some((from, last)) = app.canvas.column_drag
@@ -227,13 +231,14 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
     show_hover_link(app, &pointer);
 }
 
+/// A press. `true` when it was handled and the pointer is done (no hover tooltip this frame).
 fn handle_primary_press(
     app: &mut WordApp,
     pointer: &PagePointer<'_>,
     mods: egui::Modifiers,
     hf_zone: Option<(Option<StoryRef>, bool)>,
     hf_enter: bool,
-) {
+) -> bool {
     let PagePointer { ui, layout, p, page, x, y, story, .. } = *pointer;
     let now = ui.input(|i| i.time);
     let (delay, dist) = ui.ctx().options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
@@ -267,14 +272,14 @@ fn handle_primary_press(
             }
             app.session.page_hint = page;
         }
-        return;
+        return true;
     }
     // A press in the header/footer area from the body leaves the caret where it is, as in
     // Word (#2103): moving it to the nearest body text scrolled the view there, away from the
     // footer the double-click was aiming at.
     if hf_switch && !mods.shift && hf_zone.is_some() && story == StoryRef::Body && app.session.sel.focus.story == StoryRef::Body {
         app.canvas.column_drag = None;
-        return;
+        return true;
     }
     if !mods.shift
         && let Some((at, inner)) = layout.equation_hit(page, x, y, story)
@@ -282,7 +287,7 @@ fn handle_primary_press(
         app.session.sel = wordcraft_engine::Selection::caret(at);
         let _ = app.run("equation.edit", json!({"pos": serde_json::to_value(&inner).unwrap_or_default()}));
         app.session.page_hint = page;
-        return;
+        return true;
     }
     if app.session.math.is_some() {
         let _ = app.run("equation.exit", json!({}));
@@ -322,24 +327,15 @@ fn handle_primary_press(
         };
         app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: line });
         app.canvas.dragging = true;
-        return;
+        return true;
     }
-    let Some(pos) = layout.hit(page, x, y, story) else { return };
+    let Some(pos) = layout.hit(page, x, y, story) else { return true };
     // Ctrl/⌘+click follows a hyperlink.
     if mods.command
         && let Some(link) = link_under(app, layout, page, x, y, &pos)
     {
-        if let Some(name) = link.strip_prefix('#') {
-            // The caret goes to the bookmark's start, as in Word (Go To selects its text).
-            if app.run("edit.goto", json!({"bookmark": name})).is_ok() {
-                let _ = app.run("select.collapse", json!({}));
-            }
-        } else if is_followable_link(&link) {
-            app.canvas.open_url = Some(link);
-        } else {
-            app.status(tl!("Only web (http, https) and email (mailto) links can be followed"));
-        }
-        return;
+        follow_link(app, link);
+        return true;
     }
     let pj = serde_json::to_value(&pos).unwrap_or_default();
     // Alt+drag selects a column (block) of text.
@@ -348,7 +344,7 @@ fn handle_primary_press(
         app.session.page_hint = page;
         app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
         app.canvas.dragging = true;
-        return;
+        return true;
     }
     app.canvas.column_drag = None;
     let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
@@ -369,6 +365,7 @@ fn handle_primary_press(
     app.session.page_hint = page;
     app.canvas.dragging = true;
     // Format painter applies on mouse up
+    false
 }
 
 fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, story: StoryRef) -> StoryRef {
@@ -479,16 +476,17 @@ fn skip_equation_or_outline(app: &mut WordApp, pointer: &PagePointer<'_>) -> boo
 }
 
 fn show_hover_link(app: &WordApp, pointer: &PagePointer<'_>) {
-    let PagePointer { ui, resp, layout, page, x, y, story, .. } = pointer;
+    let PagePointer { ui, resp, layout, rects, scale, p, page, x, y, story } = pointer;
     // Hover a link: show its target, unless the context menu is opening or open: a tooltip draws
-    // above the menu and would cover its first items (#3368).
+    // above the menu and would cover its first items (#3368). A linked picture or shape under the
+    // pointer comes first: it lies over the text (#5267).
     if resp.hovered()
         && !app.canvas.dragging
         && !app.canvas.context_menu_open
         && !resp.secondary_clicked()
         && !ui.input(|i| i.pointer.secondary_down())
-        && let Some(pos) = layout.hit(*page, *x, *y, *story)
-        && let Some(link) = link_under(app, layout, *page, *x, *y, &pos)
+        && let Some(link) = crate::objects::link_at(app, layout, rects, *scale, *p)
+            .or_else(|| layout.hit(*page, *x, *y, *story).and_then(|pos| link_under(app, layout, *page, *x, *y, &pos)))
     {
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };

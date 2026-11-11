@@ -21,6 +21,8 @@ thread_local! {
     static UPLOADS: RefCell<usize> = const { RefCell::new(0) };
     /// Each viewport's last input-method output.
     static IME: RefCell<HashMap<ViewportId, Option<egui::output::IMEOutput>>> = RefCell::new(HashMap::new());
+    /// Viewport builders passed to immediate viewports, by viewport id.
+    static BUILDERS: RefCell<HashMap<ViewportId, egui::ViewportBuilder>> = RefCell::new(HashMap::new());
 }
 
 fn input(id: ViewportId) -> RawInput {
@@ -49,10 +51,12 @@ fn backend() -> egui::Context {
     EVENTS.with(|e| e.borrow_mut().clear());
     COMMANDS.with(|c| c.borrow_mut().clear());
     UPLOADS.with(|u| *u.borrow_mut() = 0);
+    BUILDERS.with(|b| b.borrow_mut().clear());
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
         let id = viewport.ids.this;
+        BUILDERS.with(|b| b.borrow_mut().insert(id, viewport.builder.clone()));
         let mut raw = input(id);
         raw.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
         let mut cb = viewport.viewport_ui_cb;
@@ -382,11 +386,14 @@ fn control_typing_reaches_the_active_window() {
     assert_eq!(text(&a), "First", "the other window got none of it");
 }
 
-/// `ui.screenshot` captures the active window: the capture is sized from its viewport and the
-/// command goes to that viewport. A capture still pending when another window comes forward
-/// fails with an error instead of capturing that window.
+/// `ui.screenshot` captures the window in the root viewport: capturing a secondary document
+/// window in a separate native viewport is not supported by the viewport renderer and is refused
+/// immediately at admission with an error directing to `view.switchWindows` (#6159). A capture
+/// still pending when another window comes forward fails with an error instead of capturing that
+/// window. When a window is adopted into the root viewport after the first window closes, it can
+/// be captured.
 #[test]
-fn screenshot_captures_the_active_window() {
+fn screenshot_captures_the_root_window_and_refuses_secondary_windows() {
     let ctx = backend();
     let mut a = app("First");
     frames(&ctx, &mut a, 2);
@@ -399,26 +406,102 @@ fn screenshot_captures_the_active_window() {
 
     let (reply, replies) = std::sync::mpsc::channel();
     crate::control::admit_screenshot(&mut a, &ctx, None, reply);
-    assert!(replies.try_recv().is_err(), "the capture is admitted");
-    assert_eq!(a.shots.requests.iter().map(|s| (s.viewport, s.expected)).collect::<Vec<_>>(), [(child, [800, 600])]);
+    let v = replies.try_recv().expect("a secondary window capture is refused at admission");
+    assert_eq!(v["ok"], false, "{v}");
+    let err = v["error"].as_str().expect("error message");
+    assert!(err.contains("capturing a secondary document window is not supported by the viewport renderer"), "error explains why: {err}");
+    assert!(err.contains("view.switchWindows {\"window\": 1}"), "error tells how to activate the root window: {err}");
+    assert!(a.shots.requests.is_empty(), "refused capture is never queued");
+
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.active_viewport(), ViewportId::ROOT, "the root window is now active");
+    let (reply, replies) = std::sync::mpsc::channel();
+    crate::control::admit_screenshot(&mut a, &ctx, None, reply);
+    assert!(replies.try_recv().is_err(), "the capture of the root window is admitted");
+    assert_eq!(a.shots.requests.len(), 1);
+    assert_eq!(a.shots.requests[0].viewport, ViewportId::ROOT);
     a.shots.requests.iter_mut().for_each(|s| s.ready_at = 0.0);
     COMMANDS.with(|c| c.borrow_mut().clear());
     frames(&ctx, &mut a, 4);
     let shot_to =
         |id: ViewportId| COMMANDS.with(|c| c.borrow().get(&id).is_some_and(|v| v.iter().any(|c| matches!(c, ViewportCommand::Screenshot(_)))));
-    assert!(shot_to(child), "the active window is captured");
-    assert!(!shot_to(ViewportId::ROOT), "the first window is not");
+    assert!(shot_to(ViewportId::ROOT), "the root window is captured");
+    assert!(!shot_to(child), "the child window is not");
 
     let (reply, later) = std::sync::mpsc::channel();
     crate::control::admit_screenshot(&mut a, &ctx, None, reply);
+    focus(child);
+    frames(&ctx, &mut a, 2);
+    let v = later.try_recv().expect("the capture was answered");
+    assert_eq!(v["ok"], false);
+    assert!(v["error"].as_str().is_some_and(|e| e.contains("another window")), "{v}");
+    assert!(a.shots.requests.is_empty());
+
+    // When the first window closes, the child window is adopted into the root viewport:
+    let first_key = a.windows.open.iter().find(|w| w.id == a.windows.viewports.as_ref().unwrap().root()).unwrap().key;
+    let child_id = a.windows.open.iter().find(|w| w.key != first_key).unwrap().id;
+    a.close_window(first_key);
+    a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 1);
+    assert_eq!(a.windows.viewports.as_ref().unwrap().root(), child_id);
+    assert_eq!(a.active_viewport(), ViewportId::ROOT, "the adopted window now occupies the root viewport");
+    let (reply, replies) = std::sync::mpsc::channel();
+    crate::control::admit_screenshot(&mut a, &ctx, None, reply);
+    assert!(replies.try_recv().is_err(), "the adopted window's capture is admitted");
+    assert_eq!(a.shots.requests.len(), 1);
+    assert_eq!(a.shots.requests[0].viewport, ViewportId::ROOT);
+}
+
+/// #6159: when two windows are open on the same document (`view.newWindow`), `ui.screenshot`
+/// while the secondary window is active is refused at admission. Using `view.switchWindows` with
+/// `window` selects the root window, allowing a screenshot retry to be admitted and issued.
+#[test]
+fn screenshot_refuses_secondary_window_on_same_document_and_recovers_via_switch_windows() {
+    let ctx = backend();
+    let mut a = app("Shared Doc");
+    frames(&ctx, &mut a, 2);
+    a.run("view.newWindow", json!({})).unwrap();
+    let child = a.active_viewport();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    INFOS.with(|i| i.borrow_mut().entry(child).or_default().inner_rect = Some(rect));
+    focus(child);
+    frames(&ctx, &mut a, 4);
+    assert_ne!(a.active_viewport(), ViewportId::ROOT);
+
+    let (reply, replies) = std::sync::mpsc::channel();
+    crate::control::admit_screenshot(&mut a, &ctx, None, reply);
+    let v = replies.try_recv().expect("secondary window screenshot refused at admission");
+    assert_eq!(v["ok"], false, "{v}");
+    let err = v["error"].as_str().expect("error message");
+    assert!(err.contains("capturing a secondary document window is not supported by the viewport renderer"), "error: {err}");
+    assert!(err.contains("view.switchWindows {\"window\": 1}"), "error recommends root window selection: {err}");
+
+    // Recovery path: select the root window via view.switchWindows {"window": 1}
+    COMMANDS.with(|c| c.borrow_mut().clear());
+    a.run("view.switchWindows", json!({"window": 1})).unwrap();
+    assert_eq!(a.active_viewport(), ViewportId::ROOT, "switchWindows selected the root window");
+    // Simulate the desktop applying the focus request:
     focus(ViewportId::ROOT);
     frames(&ctx, &mut a, 2);
-    for r in [replies, later] {
-        let v = r.try_recv().expect("the capture was answered");
-        assert_eq!(v["ok"], false);
-        assert!(v["error"].as_str().is_some_and(|e| e.contains("another window")), "{v}");
-    }
-    assert!(a.shots.requests.is_empty());
+    let root_focused = COMMANDS.with(|c| c.borrow().get(&ViewportId::ROOT).is_some_and(|v| v.iter().any(|c| matches!(c, ViewportCommand::Focus))));
+    assert!(root_focused, "switchWindows requested focus on root viewport");
+    assert_eq!(a.active_viewport(), ViewportId::ROOT, "root window is now active");
+
+    let (reply, replies) = std::sync::mpsc::channel();
+    crate::control::admit_screenshot(&mut a, &ctx, None, reply);
+    assert!(replies.try_recv().is_err(), "screenshot admitted on retry");
+    assert_eq!(a.shots.requests.len(), 1);
+    assert_eq!(a.shots.requests[0].viewport, ViewportId::ROOT);
+
+    a.shots.requests.iter_mut().for_each(|s| s.ready_at = 0.0);
+    COMMANDS.with(|c| c.borrow_mut().clear());
+    frames(&ctx, &mut a, 4);
+    let shot_to =
+        |id: ViewportId| COMMANDS.with(|c| c.borrow().get(&id).is_some_and(|v| v.iter().any(|c| matches!(c, ViewportCommand::Screenshot(_)))));
+    assert!(shot_to(ViewportId::ROOT), "root window screenshot was issued");
+    assert!(!shot_to(child), "secondary window was not issued");
 }
 
 /// Quitting with two documents of unsaved changes asks about each in its window, the window
@@ -533,6 +616,42 @@ fn closing_one_of_two_windows_on_a_document_asks_nothing() {
     assert!(a.quit_requested, "one prompt for the document");
 }
 
+/// #3274: a programmatic `file.close` on a document shown in two windows closes the window
+/// alone, as the window's own close does: the document and its work stay open, so nothing is
+/// lost and the control channel must not refuse it as unsaved work it would never lose.
+#[test]
+fn a_programmatic_close_of_one_of_two_windows_on_a_document_is_accepted() {
+    let ctx = backend();
+    let mut a = app("Kept");
+    let doc = a.session.document_id();
+    frames(&ctx, &mut a, 2);
+    a.run("view.newWindow", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 2);
+    assert!(a.session.dirty, "the document has unsaved work");
+
+    // The control channel's refusal: it must not stand in the way of a close that keeps the
+    // document open.
+    let refused = crate::control::close_refused(&a, "file.close", &json!({}));
+    assert!(refused.is_none(), "closing a window alone loses nothing: {refused:?}");
+
+    // And the command itself runs, closing the window and leaving the document and its work.
+    let r = crate::control::handle(&mut a, &ctx, &crate::control::ControlRequest::new("engine.execute", json!({"command": "file.close"})).0);
+    let r = match r {
+        crate::control::Outcome::Done(v) => v,
+        _ => json!({"ok": false, "error": "not a reply"}),
+    };
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a.window_count(), 1, "the window closed");
+    assert_eq!(a.session.document_id(), doc, "the document stays open");
+    assert!(a.session.dirty, "its work stays");
+    assert_eq!(text(&a), "Kept");
+
+    // The last window closes the document, so the same command is refused for its unsaved work.
+    let refused = crate::control::close_refused(&a, "file.close", &json!({}));
+    assert!(refused.is_some(), "closing the document would lose the work: {refused:?}");
+}
+
 /// Two windows, the second (focused) on an untouched blank document: an app whose host
 /// answers file dialogs only when the test does, plus the dialog's answer channel.
 fn blank_beside_a_document() -> (egui::Context, WordApp, Shown, u64) {
@@ -593,4 +712,68 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
         assert_eq!(text(&a), "Second", "{how}: it shows the opened file");
     }
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
+}
+
+/// Opening a second document when another is already open constrains the new window's requested
+/// dimensions so that it fits within the active monitor's bounds, even on displays with high
+/// DPI scaling (such as 2560x1440 at 200% scale = 1280x720 pt) where the unconstrained default
+/// size (1440x920 pt) would extend past the right edge (#5871).
+#[test]
+fn newly_opened_window_does_not_exceed_screen_width() {
+    let doc1 = docx_on_disk("doc1", "Doc One");
+    let doc2 = docx_on_disk("doc2", "Doc Two");
+    let ctx = backend();
+
+    // Simulate 2560x1440 at 200% scale (1280x720 pt).
+    let screen = egui::vec2(1280.0, 720.0);
+    let frame_decorations = egui::vec2(16.0, 39.0);
+    INFOS.with(|i| {
+        let mut infos = i.borrow_mut();
+        let root = infos.entry(ViewportId::ROOT).or_default();
+        root.monitor_size = Some(screen);
+        root.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(48.0, 48.0), egui::vec2(1168.0, 585.0)));
+        root.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(40.0, 17.0), egui::vec2(1184.0, 624.0)));
+    });
+
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    frames(&ctx, &mut a, 2);
+
+    // Open first document in the primary window.
+    a.run("file.open", json!({"path": doc1.to_string_lossy()})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 1);
+
+    // Open second document, creating a second window while the first is active.
+    a.run("file.open", json!({"path": doc2.to_string_lossy()})).unwrap();
+    frames(&ctx, &mut a, 3);
+    assert_eq!(a.window_count(), 2);
+
+    // Find the immediate viewport created for the new window.
+    let child_builder = BUILDERS.with(|b| {
+        b.borrow()
+            .iter()
+            .find(|(id, _)| **id != ViewportId::ROOT)
+            .map(|(_, builder)| builder.clone())
+            .expect("child window viewport builder was recorded")
+    });
+
+    let inner_size = child_builder.inner_size.expect("child window has an inner size requested");
+    assert!(inner_size.x <= 1168.0, "new window width ({}) must not exceed available width on 1280pt monitor (1168pt)", inner_size.x);
+    assert!(
+        inner_size.x + frame_decorations.x <= screen.x,
+        "new window outer width ({} + {}) must fit within screen width ({})",
+        inner_size.x,
+        frame_decorations.x,
+        screen.x
+    );
+    assert!(
+        inner_size.y + frame_decorations.y <= screen.y,
+        "new window outer height ({} + {}) must fit within screen height ({})",
+        inner_size.y,
+        frame_decorations.y,
+        screen.y
+    );
+
+    std::fs::remove_dir_all(doc1.parent().unwrap()).ok();
+    std::fs::remove_dir_all(doc2.parent().unwrap()).ok();
 }

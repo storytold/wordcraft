@@ -4,6 +4,7 @@ use super::section::comment_reference_style;
 use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
 
 impl Writer<'_> {
+    /// Write an inline object (`Bookmark`, `Comment`, `Equation`, `Field`, `Shape`, etc.).
     pub(super) fn object(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         match o {
             // Written by `para_content` (inline) or `blocks` (around paragraphs).
@@ -51,10 +52,12 @@ impl Writer<'_> {
                     Some(TextColor::Rgb(c)) => Some(c),
                     _ => None,
                 };
+                self.rev_open(w, props);
                 match crate::write::math::resolve_numbers(math, *display, &mut self.eq_number) {
                     Some(m) => crate::write::math::write_equation(w, linear, *display, &m, color),
                     None => crate::write::math::write_equation(w, linear, *display, math, color),
                 }
+                self.rev_close(w, props);
             }
             InlineObject::Field { instr, result, locked, dirty, form, .. } => {
                 self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form }, props)
@@ -115,6 +118,9 @@ impl Writer<'_> {
             // ink keep their original source and related parts.
             InlineObject::Graphic { .. } => self.write_graphic(w, o, props, rels, depth),
             InlineObject::Image { .. } => self.write_image(w, o, props, rels, depth),
+            InlineObject::Shape { extra, float, .. } if extra.hr.is_some() && float.wrap == Wrap::Inline && !float.hidden => {
+                self.write_hr(w, o, props)
+            }
             InlineObject::Shape { .. } => self.write_shape(w, o, props, rels, depth),
             InlineObject::Group { .. } => self.write_group(w, o, props, rels, depth),
             InlineObject::Ruby { base, ruby, align, size, raise, base_size, lang, props: ruby_props } => {
@@ -217,13 +223,18 @@ impl Writer<'_> {
                 w.open("mc:Choice", &[("Requires", requires)]);
             }
             let docpr = self.next_docpr();
+            let link = Self::drawing_link(props, rels);
             let name = match graphic.kind {
                 wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
                 wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
                 wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
             };
             let z = self.z;
-            self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, native.unwrap_or(&root));
+            self.graphic_frame(
+                w,
+                DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt, link: link.as_deref() },
+                native.unwrap_or(&root),
+            );
             if let Some(fallback) = fallback {
                 w.close("mc:Choice");
                 match picture {
@@ -231,7 +242,11 @@ impl Writer<'_> {
                         // Both branches are one object: same id and stacking order.
                         self.z = z;
                         w.open("mc:Fallback", &[]);
-                        self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, picture);
+                        self.graphic_frame(
+                            w,
+                            DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt, link: link.as_deref() },
+                            picture,
+                        );
                         w.close("mc:Fallback");
                     }
                     None => w.raw(&fallback.to_xml()),
@@ -246,7 +261,7 @@ impl Writer<'_> {
     fn write_image(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, _depth: usize) {
         let InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } = o else { return };
         // An OLE object read from a file: the object itself, at its current size.
-        if let Some(src) = ole.as_deref()
+        if let Some(src) = ole.as_deref().filter(|e| !e.is_odf_object())
             && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float, alt.as_str())))
         {
             self.rev_open(w, props);
@@ -263,8 +278,9 @@ impl Writer<'_> {
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
+        let link = Self::drawing_link(props, rels);
         let name = format!("Picture {docpr}");
-        self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt });
+        self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt, link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
@@ -277,6 +293,74 @@ impl Writer<'_> {
         self.rev_close(w, props);
     }
 
+    /// A horizontal rule goes back as the VML rule it was read from: DrawingML has none, and a
+    /// fixed-size shape would lose its line-wide width.
+    fn write_hr(&mut self, w: &mut W, o: &InlineObject, props: &CharProps) {
+        let InlineObject::Shape { w: sw, h: sh, fill, stroke, stroke_width, extra, float, .. } = o else { return };
+        let Some(hr) = extra.hr else { return };
+        let align = match hr.align {
+            wordcraft_doc::props::Align::Center => "center",
+            wordcraft_doc::props::Align::Right => "right",
+            _ => "left",
+        };
+        let width = if hr.pct > 0.0 { "0".to_string() } else { format!("{:.2}pt", sw.max(0.0)) };
+        let mut style = format!("width:{width};height:{:.2}pt", sh.max(0.0));
+        let spin = float.spin();
+        if spin.deg != 0.0 {
+            style.push_str(&format!(";rotation:{}", spin.deg));
+        }
+        match (spin.flip_h, spin.flip_v) {
+            (true, true) => style.push_str(";flip:x y"),
+            (true, false) => style.push_str(";flip:x"),
+            (false, true) => style.push_str(";flip:y"),
+            (false, false) => {}
+        }
+        let pct = format!("{}", (hr.pct * 10.0).round().max(0.0) as u32);
+        let fill_hex = fill.as_ref().map(|f| format!("#{}", f.main_color().hex()));
+        let stroke_hex = stroke.map(|c| format!("#{}", c.hex()));
+        let weight = format!("{stroke_width:.2}pt");
+        let mut attrs: Vec<(&str, &str)> = vec![
+            ("xmlns:v", "urn:schemas-microsoft-com:vml"),
+            ("xmlns:o", "urn:schemas-microsoft-com:office:office"),
+            ("style", &style),
+            ("o:hrpct", &pct),
+            ("o:hralign", align),
+            ("o:hr", "t"),
+        ];
+        if hr.standard {
+            attrs.push(("o:hrstd", "t"));
+        }
+        if let Some(f) = &fill_hex {
+            attrs.push(("fillcolor", f));
+        } else {
+            attrs.push(("filled", "f"));
+        }
+        match &stroke_hex {
+            Some(s) => {
+                attrs.push(("strokecolor", s));
+                attrs.push(("strokeweight", &weight));
+            }
+            None => attrs.push(("stroked", "f")),
+        }
+        self.rev_open(w, props);
+        w.open("w:r", &[]);
+        self.rpr(w, props);
+        w.open("w:pict", &[]);
+        // A see-through fill keeps its opacity, which `fillcolor` can't say.
+        match fill.as_ref() {
+            Some(wordcraft_doc::fill::Fill::Solid { transparency, .. }) if *transparency > 0.0 => {
+                let opacity = format!("{:.4}", (1.0 - transparency / 100.0).clamp(0.0, 1.0));
+                w.open("v:rect", &attrs);
+                w.empty("v:fill", &[("opacity", &opacity)]);
+                w.close("v:rect");
+            }
+            _ => w.empty("v:rect", &attrs),
+        }
+        w.close("w:pict");
+        w.close("w:r");
+        self.rev_close(w, props);
+    }
+
     fn write_shape(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         let InlineObject::Shape { kind, w: sw, h: sh, float, effects, freeform, extra, .. } = o else { return };
         self.rev_open(w, props);
@@ -284,6 +368,7 @@ impl Writer<'_> {
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.shape_docpr(extra.id);
+        let link = Self::drawing_link(props, rels);
         // Ink is told apart by its name (and its pen), which reading looks for.
         let name = shape_name(*kind, freeform.as_deref(), &docpr);
         // The effect extent leaves room for the shadow and glow.
@@ -298,7 +383,7 @@ impl Writer<'_> {
                 .map(std::sync::Arc::new);
         }
         let float = &float;
-        self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text() });
+        self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
@@ -318,8 +403,9 @@ impl Writer<'_> {
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
+        let link = Self::drawing_link(props, rels);
         let name = format!("{} {docpr}", if canvas.is_some() { "Canvas" } else { "Group" });
-        self.drawing_open(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt: o.alt_text() });
+        self.drawing_open(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         let outer = match canvas {

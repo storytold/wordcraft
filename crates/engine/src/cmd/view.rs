@@ -1,5 +1,6 @@
 //! View tab and status bar: views, zoom, show/hide, panes.
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_doc::{Zoom, ZoomFit};
 use wordcraft_layout::{NumeralMode, ViewMode};
@@ -7,12 +8,14 @@ use wordcraft_layout::{NumeralMode, ViewMode};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+/// Toggles or sets a boolean view property, returning the updated state.
 fn toggle(s: &mut Session, v: &Value, f: fn(&mut crate::ViewState) -> &mut bool) -> CmdResult {
     let cur = *f(&mut s.view);
     *f(&mut s.view) = p::bool(v, "value").unwrap_or(!cur);
     Ok(json!({"value": *f(&mut s.view)}))
 }
 
+/// Returns the command specifications for the View ribbon tab and window management commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("view.marks", "Show/Hide ¶", "Home › Paragraph", |s, v| {
@@ -40,6 +43,15 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.readPageColor", "Reading Page Color", "Reading › Layout", read_page_color)
             .params(r#"{"value": "none" | "sepia" | "inverse"}"#)
             .pure(),
+        CommandSpec::new("view.paperColor", "Screen Paper Color", "View › Display", |s, v| {
+            let color: PaperColor = serde_json::from_value(v.get("value").cloned().unwrap_or(Value::Null))
+                .map_err(|_| CmdError::Params("screen paper color must be document, green, cream, or gray".into()))?;
+            s.prefs.paper_color = color;
+            if color != PaperColor::Document {
+                s.view.dark_mode = false;
+            }
+            Ok(json!({"paperColor": color}))
+        }).params(r#"{"value": "document" | "green" | "cream" | "gray"}"#).pure(),
         // Print Layout: hide the white space (margins, headers, footers) between pages. Screen only.
         CommandSpec::new("view.hideWhiteSpace", "Hide White Space", "View › Show", |s, v| toggle(s, v, |x| &mut x.hide_white_space))
             .params(r#"{"value"?: bool}"#)
@@ -133,13 +145,37 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
-            .params(r#"{"id"?: n (make this open document the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
+            .params(r#"{"id"?: n (make this open document the active one), "window"?: n (make this open window the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
             .pure(),
         CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
             s.push_ui_request(json!({"toggle": "split"}));
             sel_result(s)
         })
         .key("Mod+Alt+S")
+        .pure(),
+        // View › Window across WordCraft windows (#322): the desktop app's native windows
+        // perform these (see `Windows`), elsewhere they are disabled.
+        CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {
+            s.ui_requests.push(json!({"windows": "arrange"}));
+            Ok(json!({"windows": s.windows.others.len() + 1}))
+        })
+        .when(windows_available)
+        .pure(),
+        CommandSpec::new("view.sideBySide", "View Side by Side", "View › Window", side_by_side)
+            .params(r#"{"value"?: bool, "window"?: id of the other window (optional when one other window is open)}"#)
+            .when(|s| match windows_available(s) {
+                None if s.windows.side_by_side.is_none() => has_other_window(s),
+                r => r,
+            })
+            .pure(),
+        CommandSpec::new("view.syncScroll", "Synchronous Scrolling", "View › Window", |s, v| {
+            let Some(with) = s.windows.side_by_side else { return Err(CmdError::Disabled("turn on View Side by Side first".into())) };
+            s.windows.sync_scroll = p::bool(v, "value").unwrap_or(!s.windows.sync_scroll);
+            s.ui_requests.push(json!({"windows": "syncScroll", "with": with, "value": s.windows.sync_scroll}));
+            Ok(json!({"value": s.windows.sync_scroll}))
+        })
+        .params(r#"{"value"?: bool}"#)
+        .when(|s| if s.windows.side_by_side.is_some() { None } else { Some("turn on View Side by Side first") })
         .pure(),
         // The window fills the screen, OS-level full screen (#980). F11 as in browsers and most
         // desktop apps; ⌃⌘F first on macOS, where Ctrl is a key of its own (elsewhere Mod is Ctrl,
@@ -170,6 +206,85 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// View › Window (#322): the other native windows of the app as the window being drawn sees them
+/// (by window id, the ids of `ui.inspect`'s `windows`), and its Side by Side pairing. The front
+/// end keeps these current as each window draws; elsewhere (web, CLI, MCP without the app) they
+/// stay empty and the window commands are disabled.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Windows {
+    /// The host can list and move its windows (the desktop app).
+    pub available: bool,
+    /// The active window, when known.
+    pub current: Option<u64>,
+    /// The other open windows, by id.
+    pub others: Vec<OtherWindow>,
+    /// View Side by Side is on, with this window.
+    pub side_by_side: Option<u64>,
+    /// Synchronous Scrolling (only while Side by Side is on).
+    pub sync_scroll: bool,
+}
+
+/// Another open WordCraft window.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct OtherWindow {
+    pub id: u64,
+    pub title: String,
+}
+
+fn windows_available(s: &Session) -> Option<&'static str> {
+    if s.windows.available { None } else { Some("only the desktop app has several windows") }
+}
+
+fn has_other_window(s: &Session) -> Option<&'static str> {
+    windows_available(s).or(if s.windows.others.is_empty() { Some("no other WordCraft window is open") } else { None })
+}
+
+/// The window a command means: `window`, or the only other one.
+fn pick_window(s: &Session, v: &Value) -> Result<u64, CmdError> {
+    let others = &s.windows.others;
+    match p::u64(v, "window") {
+        Some(id) if others.iter().any(|w| w.id == id) => Ok(id),
+        Some(id) => Err(CmdError::Params(format!("no open window {id}"))),
+        None => match others.as_slice() {
+            [only] => Ok(only.id),
+            [] => Err(CmdError::Disabled("no other WordCraft window is open".into())),
+            several => {
+                let list: Vec<String> = several.iter().map(|w| format!("{} ({})", w.id, w.title)).collect();
+                Err(CmdError::Params(format!("pass `window`: one of {}", list.join(", "))))
+            }
+        },
+    }
+}
+
+/// View Side by Side: on with a window (left this one, right that one, scrolling together), or
+/// off.
+fn side_by_side(s: &mut Session, v: &Value) -> CmdResult {
+    let on = p::bool(v, "value").unwrap_or(s.windows.side_by_side.is_none() || v.get("window").is_some());
+    if !on {
+        if let Some(id) = s.windows.side_by_side.take() {
+            s.ui_requests.push(json!({"windows": "sideBySide", "off": id}));
+        }
+        s.windows.sync_scroll = false;
+        return Ok(json!({"value": false}));
+    }
+    let id = match (s.windows.side_by_side, v.get("window")) {
+        (Some(id), None) => id,
+        _ => pick_window(s, v)?,
+    };
+    if let Some(old) = s.windows.side_by_side.filter(|old| *old != id) {
+        s.ui_requests.push(json!({"windows": "sideBySide", "off": old}));
+    }
+    // The partner it already has keeps the user's Synchronous Scrolling choice and is not asked
+    // again; a new pairing starts with scrolling on.
+    if s.windows.side_by_side != Some(id) {
+        s.windows.side_by_side = Some(id);
+        s.windows.sync_scroll = true;
+        s.ui_requests.push(json!({"windows": "sideBySide", "with": id}));
+    }
+    Ok(json!({"value": true, "window": id, "syncScroll": s.windows.sync_scroll}))
+}
+
 /// The browser keeps full screen to itself (its own F11); the web app can't ask for it.
 fn full_screen_available(_: &Session) -> Option<&'static str> {
     cfg!(target_arch = "wasm32").then_some("Use the browser's full screen (F11)")
@@ -177,11 +292,11 @@ fn full_screen_available(_: &Session) -> Option<&'static str> {
 
 fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
     if read && !s.view.read_mode {
-        // Reading controls are session-only, and reset on each entry to the view.
+        // Width, size and spacing reset on each entry. Page Color follows the saved preference.
         s.view.read_column_width = None;
         s.view.read_zoom = 1.0;
         s.view.read_line_spacing = None;
-        s.view.read_page_color = ReadPageColor::None;
+        s.view.read_page_color = s.prefs.read_page_color;
     }
     s.view.mode = m;
     s.view.read_mode = read;
@@ -234,6 +349,40 @@ fn read_line_spacing(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"spacing": spacing}))
 }
 
+/// Screen-only paper presets, saved with user preferences, never in the document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PaperColor {
+    #[default]
+    Document,
+    Green,
+    Cream,
+    Gray,
+}
+
+impl PaperColor {
+    pub const ALL: [Self; 4] = [Self::Document, Self::Green, Self::Cream, Self::Gray];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Document => "Document background",
+            Self::Green => "Soft green",
+            Self::Cream => "Warm cream",
+            Self::Gray => "Soft gray",
+        }
+    }
+
+    pub fn color(self) -> wordcraft_doc::props::Rgb {
+        use wordcraft_doc::props::Rgb;
+        match self {
+            Self::Document => Rgb::WHITE,
+            Self::Green => Rgb(0xCC, 0xE8, 0xCF),
+            Self::Cream => Rgb(0xFA, 0xF0, 0xDC),
+            Self::Gray => Rgb(0xE8, 0xEA, 0xED),
+        }
+    }
+}
+
 /// Read Mode › View › Page Color, as in Word. Screen only: the document and its own page color
 /// are unchanged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -256,6 +405,7 @@ fn read_page_color(s: &mut Session, v: &Value) -> CmdResult {
         _ => return Err(CmdError::Params("reading page color must be none, sepia, or inverse".into())),
     };
     s.view.read_page_color = color;
+    s.prefs.read_page_color = color;
     Ok(json!({"pageColor": color}))
 }
 
@@ -285,6 +435,7 @@ pub(crate) fn restore_zoom(s: &mut Session, z: Zoom) {
     s.view.single_column = fit == "onePage" || fit == "pageWidth";
 }
 
+/// Sets the view zoom level or fit mode, or requests opening the Zoom dialog.
 fn zoom(s: &mut Session, v: &Value) -> CmdResult {
     match v.get("value") {
         Some(Value::String(f)) if ["pageWidth", "onePage", "multiplePages", "textWidth"].contains(&f.as_str()) => {
@@ -310,7 +461,13 @@ fn zoom(s: &mut Session, v: &Value) -> CmdResult {
 
 /// View › Window › Switch Windows: the open documents, or make one of them active.
 fn switch_windows(s: &mut Session, v: &Value) -> CmdResult {
-    if let Some(x) = v.get("id").filter(|x| !x.is_null()) {
+    if let Some(w) = v.get("window").filter(|x| !x.is_null()) {
+        let wid = w.as_u64().ok_or_else(|| CmdError::Params("`window` must be an open window's id".into()))?;
+        if s.windows.available && s.windows.current != Some(wid) && !s.windows.others.iter().any(|other| other.id == wid) {
+            return Err(CmdError::Params(format!("no open window {wid}")));
+        }
+        s.push_ui_request(json!({"windows": "switchWindow", "window": wid}));
+    } else if let Some(x) = v.get("id").filter(|x| !x.is_null()) {
         let id = x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?;
         s.activate(id)?;
     }

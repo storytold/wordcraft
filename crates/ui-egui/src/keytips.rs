@@ -254,7 +254,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("WordArt", "insert.wordArt"),
             m("Drop Cap", "insert.dropCap"),
             c("Signature Line", "insert.signatureLine"),
-            c("Date & Time", "insert.dateTime"),
+            d("Date & Time", "dateTime"),
             c("Object", "insert.object"),
             c("Equation", "insert.equation"),
             m("Symbol", "insert.symbol"),
@@ -389,6 +389,9 @@ fn controls(tab: &str) -> Vec<Control> {
             c("New Window", "view.newWindow"),
             c("Arrange All", "view.arrangeAll"),
             c("Split", "view.split"),
+            c("View Side by Side", "view.sideBySide"),
+            c("Synchronous Scrolling", "view.syncScroll"),
+            m("Switch Windows", "view.switchWindows"),
             c("Full Screen", "view.fullScreen"),
             c("Macros", "tools.macros"),
         ],
@@ -711,6 +714,7 @@ pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
         || (app.ui.backstage && app.ui.keytips != Phase::Backstage)
         || (!app.ui.backstage && app.ui.keytips == Phase::Backstage)
         || app.dialog.is_some()
+        || app.modal_open()
         || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
 }
 

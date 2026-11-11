@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 mod note_conversion;
 
@@ -18,6 +19,25 @@ fn word_count() {
     assert_eq!(count_words(" -- "), 0);
 }
 
+/// #2797: the status bar's character counts, worded like the Word Count dialog's: characters
+/// with spaces leave the paragraph breaks out, characters without spaces leave every
+/// whitespace character out.
+#[test]
+fn character_counts() {
+    assert_eq!(count_chars(""), 0);
+    assert_eq!(count_chars("Hello"), 5);
+    // Paragraph breaks join the paragraphs but aren't characters.
+    assert_eq!(count_chars("Hello\nworld\r\n"), 10);
+    assert_eq!(count_chars("a\tb"), 3, "a tab is a character");
+    // Every kind of whitespace goes, spaces, tabs and (non-ASCII) spaces between words.
+    assert_eq!(count_chars_no_spaces("Hello world"), 10);
+    assert_eq!(count_chars_no_spaces("a\tb c\u{a0}d"), 4, "including a non-breaking space");
+    assert_eq!(count_chars_no_spaces(" \n\r\t "), 0);
+    // Accented letters and emoji count as one character each, as they are.
+    assert_eq!(count_chars("café 🚀"), 6);
+    assert_eq!(count_chars_no_spaces("café 🚀"), 5);
+}
+
 /// #4547: each Han ideograph and kana counts as a word; punctuation and Hangul spacing don't change.
 #[test]
 fn word_count_counts_each_chinese_and_japanese_character() {
@@ -35,8 +55,8 @@ fn word_count_counts_each_chinese_and_japanese_character() {
 #[test]
 fn word_count_includes_numbered_list_labels_but_not_bullets() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
-    let bul_id = d.numbering.add_list(ListKind::Bullet);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let bul_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
 
     let mut p1 = Paragraph::with_text("Apple", CharProps::default());
     p1.props.numbering = Some(props::NumRef { num: num_id, level: 0 });
@@ -60,9 +80,9 @@ fn word_count_includes_numbered_list_labels_but_not_bullets() {
 #[test]
 fn word_count_includes_numbered_labels_with_nothing_suffix() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
-    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    let a = Arc::make_mut(&mut d.numbering).abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
     a.levels[0].suffix = numbering::LevelSuffix::Nothing;
 
     let mut p1 = Paragraph::with_text("Apple", CharProps::default());
@@ -81,9 +101,9 @@ fn word_count_includes_numbered_labels_with_nothing_suffix() {
 #[test]
 fn word_count_keeps_a_cjk_list_label_one_word() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
-    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    let a = Arc::make_mut(&mut d.numbering).abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
     a.levels[0].format = section::NumFormat::ChineseCounting;
     a.levels[0].text = "第%1章".into();
     a.levels[0].start = 12;
@@ -187,7 +207,7 @@ fn parts_and_lists_after_the_largest_ids_take_free_ones() {
     assert_eq!(d.add_part(PartKind::Footer, Vec::new()), 3);
     assert!(parts.iter().all(|(k, p)| d.parts.get(k) == Some(p)));
 
-    let n = &mut d.numbering;
+    let n = Arc::make_mut(&mut d.numbering);
     n.add_list(ListKind::Bullet);
     n.add_list(ListKind::Bullet);
     n.abstracts[1].id = u32::MAX;
@@ -229,11 +249,11 @@ fn same_content_sees_every_change() {
     assert!(!d.same_content(&e), "the formatting changed");
     // The styles changed.
     let mut e = d.clone();
-    e.styles.get_mut("Normal").unwrap().chr.bold = Some(true);
+    Arc::make_mut(&mut e.styles).get_mut("Normal").unwrap().chr.bold = Some(true);
     assert!(!d.same_content(&e), "a style changed");
     // The lists changed.
     let mut e = d.clone();
-    e.numbering.add_list(ListKind::Numbered);
+    Arc::make_mut(&mut e.numbering).add_list(ListKind::Numbered);
     assert!(!d.same_content(&e), "a list was added");
     // The settings changed.
     let mut e = d.clone();
@@ -446,6 +466,25 @@ fn box_para(story: u32, id: u32) -> Blocks {
     let mut p = Paragraph::with_text("cell", CharProps::default());
     p.insert_object(0, shape, &CharProps::default()).unwrap();
     vec![para_block(p)]
+}
+
+#[test]
+fn adopting_relinks_lists_in_deeply_nested_tables() {
+    // As #1339: a list paragraph 20 tables down takes the list it is brought in with.
+    let mut ours = Document::from_text("ours");
+    let our_list = Arc::make_mut(&mut ours.numbering).add_list(numbering::ListKind::Bullet);
+    let mut theirs = Document::from_text("theirs");
+    let list = Arc::make_mut(&mut theirs.numbering).add_list(numbering::ListKind::Bullet);
+    assert_eq!(list, our_list);
+    let mut p = Paragraph::with_text("item", CharProps::default());
+    p.props.numbering = Some(props::NumRef { num: list, level: 0 });
+    theirs.body = nested_tables(20, vec![para_block(p)]);
+    let mut nums = Vec::new();
+    for b in &ours.adopt(theirs).blocks {
+        edit::each_para(b, 0, &mut |p| nums.extend(p.props.numbering.map(|n| n.num)));
+    }
+    assert_eq!(nums.len(), 1);
+    assert_ne!(nums[0], our_list);
 }
 
 #[test]
@@ -746,4 +785,32 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     let Block::Table(res1) = &*d.body[1] else { panic!("expected table") };
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
+}
+
+#[test]
+fn missing_picture_names_are_capped_at_a_char_boundary() {
+    let mut d = Document::new();
+    let long: String = "é".repeat(5000);
+    d.missing_pictures.push(MissingPicture { part: long.clone(), story: long, reason: MissingPictureReason::MissingPart });
+    let item = &d.missing_pictures.list[0];
+    assert_eq!((item.part.chars().count(), item.story.chars().count()), (1024, 1024));
+}
+
+#[test]
+fn missing_pictures_are_capped_deduplicated_and_not_content() {
+    let mut d = Document::new();
+    let item = |n: usize| MissingPicture { part: format!("p{n}"), story: "word/document.xml".into(), reason: MissingPictureReason::MissingPart };
+    d.missing_pictures.push(item(0));
+    d.missing_pictures.push(item(0));
+    assert_eq!(d.missing_pictures.list.len(), 1);
+    for n in 1..MAX_MISSING_PICTURES + 3 {
+        d.missing_pictures.push(item(n));
+    }
+    assert_eq!(d.missing_pictures.list.len(), MAX_MISSING_PICTURES);
+    assert!(d.missing_pictures.truncated);
+    let e = Document::new();
+    assert_eq!(d, e);
+    assert!(d.same_content(&e));
+    assert!(!serde_json::to_string(&d).unwrap().contains("p0"));
+    assert_eq!(MissingPictureReason::ExternalTarget.label(), "external target");
 }
