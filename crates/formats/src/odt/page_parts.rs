@@ -57,6 +57,8 @@ pub(super) struct Parts {
     even_odd: bool,
     /// Spaces the parts' `text:s` elements added, charged to the document's budget.
     pub(super) spaces_used: usize,
+    /// The spaces-budget warning was already logged, so later readers don't repeat it.
+    pub(super) spaces_warned: bool,
 }
 
 /// Read each visible header and footer of the master pages in `pages`, and name it on its master
@@ -113,10 +115,12 @@ pub(super) fn read(xml: &[u8], styles: &Styles, pages: &mut Pages, fetch: &mut d
         let mut reader = Body::new(styles, &none, fetch);
         reader.in_text = true;
         reader.spaces_left = MAX_EXPANDED_SPACES.saturating_sub(out.spaces_used);
+        reader.spaces_warned = out.spaces_warned;
         for ev in evs {
             reader.feed(ev);
         }
         out.spaces_used = MAX_EXPANDED_SPACES.saturating_sub(reader.spaces_left);
+        out.spaces_warned = reader.spaces_warned;
         out.parts.push((if kind.footer() { PartKind::Footer } else { PartKind::Header }, reader.take_blocks()));
         if let Some(sec) = pages.masters.get_mut(&name) {
             kind.set(sec, out.parts.len() as u32);

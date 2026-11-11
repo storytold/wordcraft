@@ -160,7 +160,7 @@ pub(super) struct Body<'a> {
     /// Spaces `text:s` may still add ([`MAX_EXPANDED_SPACES`]).
     pub(super) spaces_left: usize,
     /// The spaces-budget warning was logged.
-    spaces_warned: bool,
+    pub(super) spaces_warned: bool,
 }
 
 /// Most spaces the document's `text:s` elements add in all: each may ask for 1,000 in 20
