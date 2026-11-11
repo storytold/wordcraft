@@ -199,15 +199,90 @@ fn bad_pages_are_params_errors() {
 }
 
 #[test]
-fn an_unreadable_page_is_an_error_and_a_null_page_means_the_caret_page() {
-    let mut s = book(2);
-    let before = shown(&mut s);
-    for page in [json!(-1), json!("2"), json!(true), json!(1.5), json!(2.8)] {
+fn an_unreadable_page_is_an_error_and_never_means_the_caret_page() {
+    let mut s = book(3);
+    // The caret is on page 3, so a fallback would change page 3.
+    s.run("select.text", &json!({"text": "Page 3 second"})).unwrap();
+    let before = s.doc.clone();
+    for page in [json!(-1), json!("2"), json!(true), json!(1.5), json!(2.8), json!(2.0), json!(null), json!([2]), json!({})] {
+        for args in [json!({"page": page.clone(), "visible": false}), json!({"page": page.clone(), "toggle": true})] {
+            let e = s.run("layout.pageFooterVisible", &args).unwrap_err();
+            assert!(matches!(e, CmdError::Params(_)), "{page}: {e:?}");
+            assert_eq!(s.doc, before, "{page}: a refused call changes nothing");
+        }
+    }
+    assert_eq!(shown(&mut s), vec![true; 3]);
+}
+
+#[test]
+fn pages_out_of_range_are_params_errors_and_change_nothing() {
+    let mut s = book(3);
+    s.run("select.text", &json!({"text": "Page 3 second"})).unwrap();
+    let before = s.doc.clone();
+    for page in [json!(0), json!(4), json!(u64::MAX), json!(1_000_000)] {
         let e = s.run("layout.pageFooterVisible", &json!({"page": page.clone(), "visible": false})).unwrap_err();
         assert!(matches!(e, CmdError::Params(_)), "{page}: {e:?}");
+        assert!(e.to_string().contains("pages are numbered from 1 to 3"), "{e}");
+        assert_eq!(s.doc, before);
     }
-    assert_eq!(shown(&mut s), before, "a refused call changes nothing");
-    assert!(s.run("layout.pageFooterVisible", &json!({"page": null, "visible": true})).is_ok());
+}
+
+#[test]
+fn resolve_page_covers_every_form_and_the_empty_document() {
+    let caret = || Some(2);
+    assert_eq!(resolve_page(None, 5, caret).unwrap(), (2, true));
+    assert_eq!(resolve_page(Some(&json!(5)), 5, caret).unwrap(), (4, false));
+    assert_eq!(resolve_page(None, 2, caret).unwrap(), (1, true), "a caret past the end is clamped");
+    assert_eq!(resolve_page(None, 5, || None).unwrap(), (0, true));
+    for count in [0, 3] {
+        for bad in [json!(null), json!("1"), json!(-1), json!(0.5), json!(1.0)] {
+            assert!(resolve_page(Some(&bad), count, caret).is_err(), "{bad} with {count} pages");
+        }
+    }
+    // No pages at all: the error is the same with or without a page, and the caret is not asked.
+    for page in [None, Some(json!(1)), Some(json!(0))] {
+        let e = resolve_page(page.as_ref(), 0, || panic!("the caret must not be consulted")).unwrap_err();
+        assert!(matches!(e, CmdError::Failed(_)) && e.to_string().contains("no pages"), "{e:?}");
+    }
+}
+
+#[test]
+fn the_result_names_the_page_its_number_and_where_it_came_from() {
+    let mut s = book(6);
+    // Two chapters: the last page displays 1 again.
+    s.doc.para_mut(StoryRef::Body, &Path::top(10)).unwrap().props.page_break_before = None;
+    s.sel = crate::Selection::caret(Pos::body(10, 0));
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.pageNumberFormat", &json!({"start": 1})).unwrap();
+    let r = s.run("layout.pageFooterVisible", &json!({"page": 6, "visible": false})).unwrap();
+    assert_eq!((r["page"].as_u64(), r["number"].as_u64(), r["pageFrom"].as_str()), (Some(6), Some(1), Some("argument")));
+    // No page: the caret's, and the result says so.
+    s.run("select.text", &json!({"text": "Page 2 second"})).unwrap();
+    let r = s.run("layout.pageFooterVisible", &json!({"visible": false})).unwrap();
+    assert_eq!((r["page"].as_u64(), r["number"].as_u64(), r["pageFrom"].as_str()), (Some(2), Some(2), Some("caret")));
+    // Even when nothing changes.
+    let r = s.run("layout.pageFooterVisible", &json!({"visible": false})).unwrap();
+    assert_eq!((r["changed"].as_bool(), r["pageFrom"].as_str()), (Some(false), Some("caret")));
+}
+
+#[test]
+fn a_refusal_on_the_caret_page_names_that_page() {
+    let long = "word ".repeat(2500);
+    let mut s = Session::new(Document::from_text(&format!("Intro\n{long}\nEnd")));
+    s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
+    s.run("insert.footer", &json!({"preset": "pageNumber"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    s.run("select.text", &json!({"text": "End"})).unwrap();
+    let last = s.layout().pages.len();
+    let before = s.doc.clone();
+    let e = s.run("layout.pageFooterVisible", &json!({"visible": false})).unwrap_err();
+    let text = e.to_string();
+    assert!(text.contains(&format!("page {last} is the page the caret is on")), "{text}");
+    assert!(text.contains('['), "{text}");
+    assert_eq!(s.doc, before);
+    // A page the caller named carries no such note.
+    let e = s.run("layout.pageFooterVisible", &json!({"page": 2, "visible": false})).unwrap_err();
+    assert!(!e.to_string().contains("the caret is on"), "{e}");
 }
 
 #[test]
@@ -423,4 +498,132 @@ fn blocked_codes_are_stable_strings() {
     for (reason, code) in all {
         assert_eq!(reason.code(), code);
     }
+}
+
+/// `Intro`, a long paragraph that starts its own page and ends in the middle of a page, `End`.
+fn long_book() -> Session {
+    let long = "word ".repeat(2500);
+    let mut s = Session::new(Document::from_text(&format!("Intro\n{long}\nEnd")));
+    s.doc.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+    s.touch();
+    s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
+    s.run("insert.footer", &json!({"preset": "pageNumber"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    s
+}
+
+#[test]
+fn the_blocked_reasons_in_the_listing_match_what_the_pages_do() {
+    let mut s = long_book();
+    let map = page_footers(&mut s);
+    assert!(map.len() >= 4, "{} pages", map.len());
+    assert_eq!(map[0].blocked_code, None, "the first page of a section is never blocked");
+    assert_eq!(map[1].blocked_code, Some(BlockedReason::EndsMidBlock), "starts its paragraph but runs on");
+    let codes: Vec<_> = map.iter().map(|i| i.blocked_code).collect();
+    assert!(codes.contains(&Some(BlockedReason::EndsMidBlock)), "{codes:?}");
+    assert!(codes.contains(&Some(BlockedReason::StartsMidBlock)), "{codes:?}");
+    for info in &map {
+        assert_eq!(info.blocked.is_some(), info.blocked_code.is_some(), "text and code come together: {info:?}");
+        // A blocked page is refused by the command with the same code.
+        if let Some(code) = info.blocked_code {
+            let e = hide(&mut s, info.page).unwrap_err();
+            assert!(e.to_string().ends_with(&format!("[{}]", code.code())), "{e}");
+        }
+    }
+}
+
+#[test]
+fn a_continuous_break_inside_a_page_blocks_it_with_its_own_code() {
+    let mut s = book(3);
+    s.sel = crate::Selection::caret(Pos::body(3, 0));
+    s.run("layout.break", &json!({"kind": "continuous"})).unwrap();
+    let before = s.doc.clone();
+    let map = page_footers(&mut s);
+    assert_eq!(map[1].blocked_code, Some(BlockedReason::ContinuousBreak), "{map:?}");
+    let e = hide(&mut s, 2).unwrap_err();
+    assert!(matches!(e, CmdError::Disabled(_)) && e.to_string().ends_with("[continuous_break]"), "{e}");
+    assert_eq!(s.doc, before);
+}
+
+#[test]
+fn page_footer_info_is_the_listing_entry_of_one_page() {
+    let mut s = book(4);
+    hide(&mut s, 2).unwrap();
+    let map = page_footers(&mut s);
+    for (i, want) in map.iter().enumerate() {
+        assert_eq!(page_footer_info(&mut s, i).as_ref(), Some(want), "page {}", i + 1);
+    }
+    assert_eq!(page_footer_info(&mut s, 1).map(|i| (i.page, i.number, i.footer)), Some((2, 2, false)));
+    assert_eq!(page_footer_info(&mut s, 4), None, "past the last page");
+    assert_eq!(page_footer_info(&mut s, usize::MAX), None);
+}
+
+#[test]
+fn the_listing_shows_headers_numbers_and_the_footer_of_every_page() {
+    let mut s = book(6);
+    s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
+    s.run("insert.header", &json!({"text": "Running head"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+    s.doc.para_mut(StoryRef::Body, &Path::top(10)).unwrap().props.page_break_before = None;
+    s.sel = crate::Selection::caret(Pos::body(10, 0));
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.pageNumberFormat", &json!({"start": 1})).unwrap();
+    hide(&mut s, 3).unwrap();
+    let map = page_footers(&mut s);
+    assert_eq!(map.iter().map(|i| i.page).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6]);
+    assert_eq!(map.iter().map(|i| i.number).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 1], "page and number differ after a restart");
+    assert_eq!(map.iter().map(|i| i.footer).collect::<Vec<_>>(), vec![true, true, false, true, true, true]);
+    assert!(map.iter().all(|i| i.header), "headers are listed too");
+}
+
+#[test]
+fn hiding_a_first_page_with_its_own_footer_keeps_it_aside_and_undo_restores_the_file() {
+    let mut s = book_with_own_first_footer(3);
+    let before = s.doc.clone();
+    hide(&mut s, 1).unwrap();
+    assert_eq!(first_page_footer(&mut s), None, "hidden");
+    // The own footer is not lost: showing the page puts it back, and a second round does too.
+    show(&mut s, 1).unwrap();
+    assert_eq!(first_page_footer(&mut s).as_deref(), Some("Own first page footer"));
+    let parts = s.doc.parts.len();
+    hide(&mut s, 1).unwrap();
+    show(&mut s, 1).unwrap();
+    assert_eq!(first_page_footer(&mut s).as_deref(), Some("Own first page footer"));
+    assert_eq!(s.doc.parts.len(), parts, "no footers pile up");
+    // Hidden, then undone: the document is exactly as it was.
+    hide(&mut s, 1).unwrap();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(first_page_footer(&mut s).as_deref(), Some("Own first page footer"));
+    drop(before);
+}
+
+#[test]
+fn another_section_keeps_its_first_page_footer_when_the_first_page_is_hidden() {
+    // Two chapters, each with Different First Page and its own first-page footer text.
+    let mut s = book_with_own_first_footer(6);
+    s.doc.para_mut(StoryRef::Body, &Path::top(10)).unwrap().props.page_break_before = None;
+    s.sel = crate::Selection::caret(Pos::body(10, 0));
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    let second = vec![para_block(Paragraph::with_text("Chapter two opener", Default::default()).styled("Footer"))];
+    let id = s.doc.try_add_part(PartKind::Footer, second).unwrap();
+    s.doc.last_section.title_page = true;
+    s.doc.last_section.footers.first = Some(id);
+    s.touch();
+    let texts = |s: &mut Session| {
+        let l = s.layout();
+        l.pages
+            .iter()
+            .map(|pg| {
+                shown_blocks(&s.doc, pg.footer_story).map(|b| {
+                    b.iter().filter_map(|x| if let Block::Para(p) = &**x { Some(p.text.clone()) } else { None }).collect::<Vec<_>>().join("")
+                })
+            })
+            .collect::<Vec<_>>()
+    };
+    let before = texts(&mut s);
+    assert_eq!(before.last().cloned().flatten().as_deref(), Some("Chapter two opener"));
+    hide(&mut s, 1).unwrap();
+    let after = texts(&mut s);
+    assert_eq!(after[0], None);
+    assert_eq!(&after[1..], &before[1..], "every other page, the second chapter's opener included, shows what it showed");
 }

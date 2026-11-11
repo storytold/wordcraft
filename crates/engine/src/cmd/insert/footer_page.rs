@@ -32,7 +32,7 @@ use wordcraft_doc::{Blocks, Document};
 use wordcraft_layout::{DocLayout, HfSlot, Page, ParaLayout, Placed};
 
 use super::header_footer::page_number_para;
-use super::{Block, CmdError, CmdResult, Paragraph, PartKind, Path, Pos, Session, StoryRef, json, p, para_block};
+use super::{Block, CmdError, CmdResult, Paragraph, PartKind, Path, Pos, Session, StoryRef, json, para_block};
 
 /// Deepest table nesting looked into when deciding whether a footer is empty.
 const BLANK_DEPTH: usize = 8;
@@ -454,39 +454,57 @@ pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> Cmd
         ));
     }
     let layout = s.layout();
-    let given = v.get("page").is_some_and(|x| !x.is_null());
-    let whole = v.get("page").is_some_and(|x| x.as_u64().is_some() || x.as_f64().is_some_and(|f| f.is_finite() && f >= 0.0 && f.fract() == 0.0));
-    let idx = match p::u64(v, "page") {
-        _ if given && !whole => return Err(CmdError::Params("page must be a whole number from 1".into())),
-        Some(n) => {
-            let n = usize::try_from(n).unwrap_or(usize::MAX);
-            if n == 0 || n > layout.pages.len() {
-                return Err(CmdError::Params(format!("no page {n}: pages are numbered from 1 to {}", layout.pages.len())));
-            }
-            n - 1
-        }
-        None => {
-            let focus = s.sel.focus.clone();
-            let at = if focus.story == StoryRef::Body { layout.page_of(&focus) } else { Some(s.page_hint) };
-            at.unwrap_or(0).min(layout.pages.len().saturating_sub(1))
-        }
+    let caret = || {
+        let focus = s.sel.focus.clone();
+        if focus.story == StoryRef::Body { layout.page_of(&focus) } else { Some(s.page_hint) }
     };
+    let (idx, from_caret) = resolve_page(v.get("page"), layout.pages.len(), caret)?;
     let Some(pg) = layout.pages.get(idx) else { return Err(CmdError::Failed("the document has no pages".into())) };
     let now = footer_visible(&s.doc, pg);
     let want = explicit.unwrap_or(!now);
-    let result = |changed: bool| Ok(json!({"page": idx + 1, "visible": want, "changed": changed}));
+    let number = pg.number;
+    let result = |changed: bool| {
+        Ok(json!({"page": idx + 1, "number": number, "visible": want, "changed": changed, "pageFrom": if from_caret { "caret" } else { "argument" }}))
+    };
     if want == now {
         return result(false);
     }
+    // Name the page in a refusal when the caller did not choose it.
+    let named = |e: CmdError| match e {
+        CmdError::Disabled(m) if from_caret => CmdError::Disabled(format!("{m} (page {} is the page the caret is on)", idx + 1)),
+        CmdError::Failed(m) if from_caret => CmdError::Failed(format!("{m} (page {} is the page the caret is on)", idx + 1)),
+        other => other,
+    };
     let before = view_of(&s.doc, &layout);
     if want {
-        show(s, &layout, idx, &before)?;
+        show(s, &layout, idx, &before).map_err(named)?;
     } else {
         let orig = blocks_of(&s.doc, pg.footer_story).cloned().unwrap_or_else(blank_footer);
-        set_page_footer(s, &layout, idx, blank_footer(), orig)?;
-        verify(s, &before, idx, false)?;
+        set_page_footer(s, &layout, idx, blank_footer(), orig).map_err(named)?;
+        verify(s, &before, idx, false).map_err(named)?;
     }
     result(true)
+}
+
+/// The 0-based index of the page a command is about, and whether it is the caret's page because
+/// no `page` was given. A given `page` must be a whole number from 1 to `count`: anything else
+/// (null, a string, a fraction, a negative, `2.0`) is a Params error and never falls back to the
+/// caret's page, so a wrong call cannot change a page the caller did not name.
+fn resolve_page(page: Option<&serde_json::Value>, count: usize, caret: impl FnOnce() -> Option<usize>) -> Result<(usize, bool), CmdError> {
+    if count == 0 {
+        return Err(CmdError::Failed("the document has no pages".into()));
+    }
+    let Some(page) = page else {
+        return Ok((caret().unwrap_or(0).min(count - 1), true));
+    };
+    let Some(n) = page.as_u64() else {
+        return Err(CmdError::Params("page must be a whole number from 1 (leave page out for the caret's page)".into()));
+    };
+    let n = usize::try_from(n).unwrap_or(usize::MAX);
+    if n == 0 || n > count {
+        return Err(CmdError::Params(format!("no page {n}: pages are numbered from 1 to {count}")));
+    }
+    Ok((n - 1, false))
 }
 
 /// Shows the footer on page `idx`: it gets the neighbour's footer, or a page number, and the result is verified by laying out again.
