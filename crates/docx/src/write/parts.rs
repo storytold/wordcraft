@@ -11,6 +11,8 @@ use super::{
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
 pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+    // Theme font slots are written while they name the run's font in this theme.
+    let _theme_fonts = super::props::ThemeFontsGuard::set(&doc.settings.major_font, &doc.settings.minor_font);
     // A range field must be whole in the file: drop markers that lost their partner in editing.
     let balanced;
     let doc = if doc.has_unbalanced_field_ranges() {

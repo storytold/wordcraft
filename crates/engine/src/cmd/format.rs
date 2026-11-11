@@ -353,13 +353,19 @@ fn font(s: &mut Session, v: &Value) -> CmdResult {
             !r.substituted && r.face.is_east_asian()
         })
     });
+    // Each font set here drops the theme slot it came from: Word reads the slot over the named
+    // font, so a slot left in place would hide the font just chosen once the file is saved.
     apply(s, &|c| {
         if let Some(n) = &name {
             c.font = Some(n.clone());
             c.font_cs = Some(n.clone());
+            c.font_ascii_theme = None;
+            c.font_hansi_theme = None;
+            c.font_cs_theme = None;
         }
         if let Some(n) = &ea {
             c.font_ea = Some(n.clone());
+            c.font_ea_theme = None;
         }
     })
 }

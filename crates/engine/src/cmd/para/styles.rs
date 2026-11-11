@@ -47,10 +47,15 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
         for path in paths {
             let para = s.doc.para_mut(a.story, &path)?;
             let len = para.len();
+            // The fonts' theme slots go with them, or Word would keep showing the theme fonts.
             para.format(0, len, &|c| {
                 c.font = None;
                 c.font_cs = None;
                 c.font_ea = None;
+                c.font_ascii_theme = None;
+                c.font_hansi_theme = None;
+                c.font_cs_theme = None;
+                c.font_ea_theme = None;
                 c.size = None;
                 c.size_cs = None;
                 c.color = None;
@@ -58,6 +63,10 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             para.mark.font = None;
             para.mark.font_cs = None;
             para.mark.font_ea = None;
+            para.mark.font_ascii_theme = None;
+            para.mark.font_hansi_theme = None;
+            para.mark.font_cs_theme = None;
+            para.mark.font_ea_theme = None;
             para.mark.size = None;
             para.mark.size_cs = None;
             para.mark.color = None;

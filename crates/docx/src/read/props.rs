@@ -6,7 +6,7 @@ use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
     ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
-    TextDirection, Underline, VAlign, VMerge, VertAlign,
+    TextDirection, ThemeFont, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
@@ -277,6 +277,18 @@ impl PropCtx {
                     // The East Asian font (Chinese, Japanese, Korean text). A `w:eastAsiaTheme` font
                     // is left to inherit, like `w:cstheme`.
                     c.font_ea = k.attr("w:eastAsia").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
+                    // The theme slots themselves are kept for saving: Word resolves them (over the
+                    // named fonts) when it lays the text out, and dropping them changes its line
+                    // breaks in a document with an East Asian language.
+                    c.font_ea_theme = k.attr("w:eastAsiaTheme").and_then(ThemeFont::parse);
+                    c.font_cs_theme = k.attr("w:cstheme").and_then(ThemeFont::parse);
+                    // The Latin slots too, when `font` came from them: saving writes them back while
+                    // they still name `font`, so the text keeps following the theme in Word.
+                    if c.font.is_some() {
+                        let latin = |a: &str| k.attr(a).and_then(ThemeFont::parse).filter(|t| t.is_latin());
+                        c.font_ascii_theme = latin("w:asciiTheme");
+                        c.font_hansi_theme = latin("w:hAnsiTheme");
+                    }
                 }
                 "w:b" => c.bold = Some(on_off(k)),
                 "w:bCs" => c.bold_cs = Some(on_off(k)),

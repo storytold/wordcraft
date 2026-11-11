@@ -72,6 +72,9 @@ fn every_char_prop_round_trips() {
     let all = CharProps {
         style: Some("Strong".into()),
         font: Some("Georgia".into()),
+        // Theme slots naming Georgia in the document's theme (set below).
+        font_ascii_theme: Some(wordcraft_doc::props::ThemeFont::MajorHAnsi),
+        font_hansi_theme: Some(wordcraft_doc::props::ThemeFont::MajorAscii),
         // The symbol's own font: the run is written as `w:sym` characters (#2036).
         sym_font: Some("Wingdings".into()),
         size: Some(10.5),
@@ -128,6 +131,8 @@ fn every_char_prop_round_trips() {
         cs: Some(true),
         font_cs: Some("B Nazanin".into()),
         font_ea: Some("宋体".into()),
+        font_ea_theme: Some(wordcraft_doc::props::ThemeFont::MinorEastAsia),
+        font_cs_theme: Some(wordcraft_doc::props::ThemeFont::MinorBidi),
         size_cs: Some(13.0),
         bold_cs: Some(false),
         italic_cs: Some(true),
@@ -147,7 +152,8 @@ fn every_char_prop_round_trips() {
     };
     let auto =
         CharProps { color: Some(TextColor::Auto), highlight: Some(Highlight::None), vert_align: Some(VertAlign::Subscript), ..Default::default() };
-    let d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
+    let mut d = doc_with(vec![para_runs(&[("plain ", CharProps::default()), ("everything", all.clone()), (" auto", auto.clone())])]);
+    d.settings.major_font = "Georgia".into();
     let r = rt(&d);
     let p = paras(&r)[0];
     assert_eq!(p.text, "plain everything auto");
