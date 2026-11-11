@@ -11,7 +11,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 /// Toggles or sets a boolean view property, returning the updated state.
 fn toggle(s: &mut Session, v: &Value, f: fn(&mut crate::ViewState) -> &mut bool) -> CmdResult {
     let cur = *f(&mut s.view);
-    *f(&mut s.view) = p::bool(v, "value").unwrap_or(!cur);
+    *f(&mut s.view) = p::toggle(v, cur)?;
     Ok(json!({"value": *f(&mut s.view)}))
 }
 

@@ -1435,3 +1435,4 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
+| 2026-10-31 | trivial | Focus mode integration testing: 27 tests (8 engine, 19 UI) pin six findings and their fixes — the empty window keeps the Focus bar so nothing can strand a full-screen window, keytips badge on the slim bar and drop the ribbon, large ribbon buttons are named, a non-boolean `value` is refused across every switch, and a chrome change hands the keyboard back to the page; see [the report](docs/focus-mode-test-report.md) |

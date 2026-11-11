@@ -549,8 +549,9 @@ pub(super) fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key
     if canvas && !app.session.sel.is_collapsed() {
         return false;
     }
-    let _ = app.run(id, json!({"value": false}));
-    true
+    // Only a command that ran counts as taking the key: one that was refused (a screen state with
+    // no document open, say) must not swallow Escape as if it had done something.
+    app.run(id, json!({"value": false})).is_ok()
 }
 
 /// Typed text (a key's text or an input method's commit). Text replacing what an input method's
