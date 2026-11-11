@@ -29,6 +29,19 @@ pub(crate) struct Bins {
     sorted: bool,
     /// Page number (× 512 = byte offset in the WordDocument stream).
     pns: Vec<u32>,
+    /// Runs read ahead of time instead of pages (Word 6.0/95, whose FKPs and sprms are another
+    /// layout, translated by [`crate::word6`]): sorted by `lo`, not overlapping.
+    translated: Option<Vec<TranslatedRun>>,
+}
+
+/// One run of a [`Bins::translated`] table: the FCs `[lo, hi)` it covers, the paragraph style
+/// (for PAPX runs) and a Word 97 grpprl.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct TranslatedRun {
+    pub(crate) lo: u32,
+    pub(crate) hi: u32,
+    pub(crate) istd: u16,
+    pub(crate) grpprl: Vec<u8>,
 }
 
 impl Bins {
@@ -37,7 +50,7 @@ impl Bins {
         let fc = fc as usize;
         let lcb = lcb as usize;
         if lcb < 4 || !(lcb - 4).is_multiple_of(8) {
-            return Ok(Bins { fcs: Vec::new(), sorted: true, pns: Vec::new() });
+            return Ok(Bins { fcs: Vec::new(), sorted: true, pns: Vec::new(), translated: None });
         }
         let end = fc.checked_add(lcb).ok_or_else(|| DocbinError::Malformed("bin table overflow".into()))?;
         let plc = table.get(fc..end).ok_or_else(|| DocbinError::Malformed("bin table outside the Table stream".into()))?;
@@ -56,7 +69,31 @@ impl Bins {
             pns.push(at(n + 1 + i).ok_or_else(|| DocbinError::Malformed("truncated bin aPn".into()))? & 0x003F_FFFF);
         }
         let sorted = fcs.windows(2).all(|w| w.first() <= w.get(1));
-        Ok(Bins { fcs, sorted, pns })
+        Ok(Bins { fcs, sorted, pns, translated: None })
+    }
+
+    /// A table of runs read ahead of time ([`TranslatedRun`]). Runs are sorted by start; one that
+    /// overlaps an earlier one (a corrupt file) or covers nothing is dropped.
+    pub(crate) fn translated(mut runs: Vec<TranslatedRun>) -> Bins {
+        runs.sort_by_key(|r| r.lo);
+        let mut kept: Vec<TranslatedRun> = Vec::with_capacity(runs.len());
+        for r in runs {
+            if r.lo < r.hi && kept.last().is_none_or(|last| r.lo >= last.hi) {
+                kept.push(r);
+            }
+        }
+        Bins { fcs: Vec::new(), sorted: true, pns: Vec::new(), translated: Some(kept) }
+    }
+
+    /// For a translated table: the run covering `fc`, or the gap `[lo, hi)` between runs that
+    /// holds it.
+    fn translated_at(runs: &[TranslatedRun], fc: u32) -> Result<&TranslatedRun, (u32, u32)> {
+        let i = runs.partition_point(|r| r.lo <= fc);
+        let prev = i.checked_sub(1).and_then(|i| runs.get(i));
+        match prev {
+            Some(r) if fc < r.hi => Ok(r),
+            _ => Err((prev.map_or(0, |r| r.hi), runs.get(i).map_or(u32::MAX, |r| r.lo))),
+        }
     }
 
     /// The page containing `fc`, as a slice of the WordDocument stream, and the FC range
@@ -77,13 +114,19 @@ impl Bins {
 
     /// The grpprl of the Chpx covering `fc` ([MS-DOC] ChpxFkp: rgfc u32s, rgb offsets ×2,
     /// crun in the last byte).
-    pub(crate) fn chpx<'w>(&self, word: &'w [u8], fc: u32) -> &'w [u8] {
+    pub(crate) fn chpx<'w>(&'w self, word: &'w [u8], fc: u32) -> &'w [u8] {
         self.chpx_run(word, fc).grpprl
     }
 
     /// [`Bins::chpx`] with the FC range over which the same grpprl is the answer, so a walk
     /// over consecutive characters looks it up once per run, not once per character.
-    pub(crate) fn chpx_run<'w>(&self, word: &'w [u8], fc: u32) -> ChpxRun<'w> {
+    pub(crate) fn chpx_run<'w>(&'w self, word: &'w [u8], fc: u32) -> ChpxRun<'w> {
+        if let Some(runs) = &self.translated {
+            return match Self::translated_at(runs, fc) {
+                Ok(r) => ChpxRun { grpprl: &r.grpprl, lo: r.lo, hi: r.hi },
+                Err((lo, hi)) => ChpxRun { grpprl: &[], lo, hi },
+            };
+        }
         let none = ChpxRun { grpprl: &[], lo: 1, hi: 0 };
         let Some((page, page_lo, page_hi)) = self.page(word, fc) else { return none };
         let Some(&crun) = page.get(511) else { return none };
@@ -113,7 +156,13 @@ impl Bins {
     /// ([MS-DOC] PapxFkp: rgfc u32s — each the FC *following* a paragraph mark —, rgbx BX
     /// entries (1 offset byte + 12 PHE bytes), crun in the last byte; the PAPX itself is a
     /// PapxInFkp with the cb/cb' size quirk). Query with the FC of the character after the mark.
-    pub(crate) fn papx<'w>(&self, word: &'w [u8], fc: u32) -> (u16, &'w [u8]) {
+    pub(crate) fn papx<'w>(&'w self, word: &'w [u8], fc: u32) -> (u16, &'w [u8]) {
+        if let Some(runs) = &self.translated {
+            return match Self::translated_at(runs, fc) {
+                Ok(r) => (r.istd, &r.grpprl),
+                Err(_) => (0, &[]),
+            };
+        }
         let Some((page, _, _)) = self.page(word, fc) else { return (0, &[]) };
         let Some(&crun) = page.get(511) else { return (0, &[]) };
         // BX is 13 bytes; cap crun at what fits before byte 511.
