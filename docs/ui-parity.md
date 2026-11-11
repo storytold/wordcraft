@@ -133,6 +133,51 @@ Right-click and Shift+F10 keep the compact suggestions menu. The pane is shared 
 
 Page Setup's margin, paper-size and document-grid number boxes scroll long text inside the field instead of enlarging the dialog (#5650). Readiness estimates unchanged. Accepted long margin values also stay inside the field after focus leaves; their accepted range, units and parsing are unchanged.
 
+## Measured section rows
+
+Office 16.0.20527, 125% DPI, unmaximised window; widths are outer px. Each entry is the section's
+control-row count (1, 2 or 3; a 5 is a menu with nested rows) at the width where it changes.
+
+| Tab | Section | Rows by width |
+|---|---|---|
+| Home | Font | 450: 1 → 1024: 3 → 1900: 2 |
+| Home | Paragraph | 450: 1 → 1200: 3 → 1900: 2 |
+| Home | Styles | 450: 1 → 1600: 0 |
+| Home | Editing | 450: 1 → 1900: 3 |
+| Insert | Pages | 450: 1 → 1600: 3 |
+| Insert | Illustrations | 450: 1 → 1100: 3 → 1900: 1 |
+| Insert | Links | 450: 1 → 1600: 3 |
+| Insert | Header & Footer | 450: 1 → 1161: 3 → 1900: 1 |
+| Insert | Text | 450: 1 → 1300: 3 |
+| Insert | Symbols | 450: 1 → 1400: 2 |
+| Design | Document Formatting | 450: 1 → 650: 3 |
+| Design | Page Background | 450: 3 → 750: 1 |
+| Layout | Page Setup | 450: 1 → 550: 3 |
+| Layout | Paragraph | 450: 1 → 750: 0 |
+| Layout | Arrange | 450: 1 → 1024: 3 |
+| References | Table of Contents | 450: 1 → 750: 2 |
+| References | Footnotes | 450: 1 → 750: 3 |
+| References | Citations & Bibliography | 450: 1 → 950: 3 |
+| References | Captions | 450: 1 → 1024: 3 |
+| References | Index | 450: 1 → 1024: 2 |
+| References | Table of Authorities | 450: 1 → 1024: 2 |
+| Mailings | Create | 450: 1 → 1100: 2 → 1400: 1 |
+| Mailings | Start Mail Merge | 450: 1 → 650: 3 → 1200: 1 |
+| Mailings | Write & Insert Fields | 450: 1 → 850: 3 |
+| Mailings | Preview Results | 450: 1 → 1100: 3 |
+| Review | Proofing | 450: 1 → 1161: 3 |
+| Review | Comments | 450: 1 → 1600: 3 |
+| Review | Markup | 450: 1 → 1400: 3 |
+| Review | Tracking | 450: 1 → 1900: 2 |
+| View | Views | 450: 1 → 1100: 2 |
+| View | Show | 450: 1 → 1600: 0 |
+| View | Zoom | 450: 1 → 1400: 3 |
+| View | Window | 450: 1 → 1300: 3 |
+| Help | Help | 450: 3 → 550: 1 |
+
+The planner keeps a section's natural rows while it fits and collapses it to one row below the
+measured narrow breakpoint; two-row states beyond the implemented sections are not modelled yet.
+
 ## Revision history
 
 | Date | Change | Summary |

@@ -726,7 +726,9 @@ fn table_tabs_stay_clickable_when_the_tab_strip_overflows() {
         app,
     );
     h.run_steps(3);
-    let buttons = [tl!("Comments"), tl!("Editing")].map(|b| h.get_by_label(b).rect());
+    // The group names are also accessible names in the card; the tab strip is the topmost node.
+    let buttons =
+        [tl!("Comments"), tl!("Editing")].map(|b| h.get_all_by_label(b).map(|n| n.rect()).min_by(|a, b| a.top().total_cmp(&b.top())).expect("a tab"));
     for tab in ["Table Design", "Table Layout"] {
         let r = h.get_by_label(tl!(tab)).rect();
         assert!(r.right() <= 1280.0 && buttons.iter().all(|b| !b.intersects(r)), "{tab} {r:?} under {buttons:?}");
