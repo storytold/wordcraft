@@ -995,6 +995,80 @@ fn tracked_changes_round_trip() {
 }
 
 #[test]
+fn tracked_equations_round_trip() {
+    // Issue #6011: equations saved with tracked revision marks (w:ins / w:del) around math.
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let ins = CharProps { ins: Some(0), ..Default::default() };
+    let del = CharProps { del: Some(1), ..Default::default() };
+    let plain = CharProps::default();
+    let mut p = Paragraph::with_text("Formula: ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "x+1".into(), display: false, math: Default::default() }, &ins).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "E=mc^2".into(), display: true, math: Default::default() }, &del).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "a^2+b^2=c^2".into(), display: true, math: Default::default() }, &ins).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "y=mx+b".into(), display: false, math: Default::default() }, &del).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "z=1".into(), display: false, math: Default::default() }, &plain).unwrap();
+    d.body = vec![para_block(p.clone())];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:ins w:id="1" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMath>"#), "ins directly encloses inline math: {xml}");
+    assert!(
+        xml.contains(r#"<w:del w:id="2" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMathPara>"#),
+        "del directly encloses display math: {xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:ins w:id="3" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMathPara>"#),
+        "ins directly encloses display math: {xml}"
+    );
+    assert!(xml.contains(r#"<w:del w:id="4" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMath>"#), "del directly encloses inline math: {xml}");
+    assert!(xml.contains(r#"</w:del><m:oMath>"#), "plain equation follows closing tag without revision wrapper: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    assert_eq!(r.revisions, d.revisions);
+    let got = &paras(&r)[0];
+    assert_eq!(got.objects.len(), 5);
+    let eq_summary: Vec<(bool, String)> = got
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::Equation { display, linear, .. } => (*display, linear.clone()),
+            _ => panic!("expected equation object, got {o:?}"),
+        })
+        .collect();
+    assert_eq!(
+        eq_summary,
+        vec![(false, "x+1".into()), (true, "E=mc^2".into()), (true, "a^2+b^2=c^2".into()), (false, "y=mx+b".into()), (false, "z=1".into()),]
+    );
+    assert_eq!(got.runs, p.runs);
+}
+
+#[test]
+fn nested_omath_para_revisions_read() {
+    // Defensive reader check: w:ins and w:del nested inside m:oMathPara.
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Charles".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMathPara><w:ins w:id="1" w:author="Ada" w:date="2026-05-01T10:00:00Z"><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:ins><w:del w:id="2" w:author="Charles" w:date="2026-05-02T10:00:00Z"><m:oMath><m:r><m:t>y-1</m:t></m:r></m:oMath></w:del></m:oMathPara></w:p></w:body></w:document>"#;
+    let base = wordcraft_docx::write(&d).unwrap();
+    let bytes = replace_part(&base, "word/document.xml", doc_xml.as_bytes());
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = &paras(&r)[0];
+    assert_eq!(got.objects.len(), 2);
+    assert!(matches!(&got.objects[0], InlineObject::Equation { display: true, linear, .. } if linear == "x+1"));
+    assert!(matches!(&got.objects[1], InlineObject::Equation { display: true, linear, .. } if linear == "y-1"));
+    assert_eq!(got.runs[0].props.ins, Some(0));
+    assert_eq!(got.runs[1].props.del, Some(1));
+}
+
+#[test]
 fn tracked_paragraph_marks_round_trip() {
     // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
     // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
