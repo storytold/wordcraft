@@ -565,6 +565,44 @@ fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
     p.objects.iter().flat_map(InlineObject::text_boxes)
 }
 
+/// Remap media references in an inline object.
+fn remap_media_object(o: &mut InlineObject, map: &BTreeMap<String, String>, depth: usize) {
+    match o {
+        InlineObject::Image { media, .. } => {
+            if let Some(k) = map.get(media.as_str()) {
+                *media = k.clone();
+            }
+        }
+        InlineObject::Graphic { graphic, .. } => {
+            let mapped = |m: &str| map.get(m).filter(|k| k.as_str() != m);
+            if graphic.items.iter().any(|i| matches!(i, crate::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                for i in &mut Arc::make_mut(graphic).items {
+                    if let crate::graphic::GraphicItem::Image { media, .. } = i
+                        && let Some(k) = map.get(media.as_str())
+                    {
+                        *media = k.clone();
+                    }
+                }
+            }
+        }
+        InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => {
+            for child in children {
+                remap_media_object(&mut child.obj, map, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remap media references in a block.
+fn remap_media_block(b: &mut Block, map: &BTreeMap<String, String>) {
+    each_para_mut(b, 0, &mut |p| {
+        for o in &mut p.objects {
+            remap_media_object(o, map, 0);
+        }
+    });
+}
+
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -1252,11 +1290,30 @@ impl Document {
     /// Media items referenced by objects in `blocks`, nested text box stories included.
     pub fn media_of_blocks(&self, blocks: &[Block]) -> BTreeMap<String, Arc<Vec<u8>>> {
         let mut keys = std::collections::BTreeSet::new();
-        let mut collect_para = |p: &Paragraph| {
-            for o in &p.objects {
-                if let InlineObject::Image { media, .. } = o {
+        /// Collect media keys from an inline object recursively.
+        fn collect_object(o: &InlineObject, keys: &mut std::collections::BTreeSet<String>, depth: usize) {
+            match o {
+                InlineObject::Image { media, .. } => {
                     keys.insert(media.clone());
                 }
+                InlineObject::Graphic { graphic, .. } => {
+                    for item in &graphic.items {
+                        if let crate::graphic::GraphicItem::Image { media, .. } = item {
+                            keys.insert(media.clone());
+                        }
+                    }
+                }
+                InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => {
+                    for child in children {
+                        collect_object(&child.obj, keys, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut collect_para = |p: &Paragraph| {
+            for o in &p.objects {
+                collect_object(o, &mut keys, 0);
             }
         };
         for b in blocks {
@@ -1424,8 +1481,15 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
+        let mut media_remap = BTreeMap::new();
         for (k, v) in &frag.media {
-            if !self.media.contains_key(k) {
+            if let Some(existing) = self.media.get(k) {
+                if existing.as_slice() != v.as_slice() {
+                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let new_key = self.add_media((**v).clone(), ext);
+                    media_remap.insert(k.clone(), new_key);
+                }
+            } else {
                 self.media.insert(k.clone(), v.clone());
             }
         }
@@ -1441,9 +1505,20 @@ impl Document {
         if self.para_at(pos).is_none() {
             return Err(DocError::BadPath(pos.path.to_string()));
         }
+        let mut parts = frag.parts.clone();
+        if !media_remap.is_empty() {
+            for b in &mut blocks {
+                remap_media_block(b, &media_remap);
+            }
+            for part in parts.values_mut() {
+                for b in &mut part.blocks {
+                    remap_media_block(Arc::make_mut(b), &media_remap);
+                }
+            }
+        }
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
             // Once per paste, not once per box (review of #3874).
             log::warn!(

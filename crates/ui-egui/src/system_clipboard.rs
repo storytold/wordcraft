@@ -14,8 +14,11 @@ use crate::{WordApp, paste_picture};
 /// Straight RGBA8 pixels for a native image copy. Decode limits are applied before allocation.
 #[derive(Clone, Debug)]
 pub struct CopyImage {
+    /// Width in pixels.
     pub width: usize,
+    /// Height in pixels.
     pub height: usize,
+    /// Raw uncompressed RGBA pixel bytes (4 bytes per pixel).
     pub rgba: Vec<u8>,
 }
 
@@ -130,6 +133,7 @@ pub(crate) fn put_result(app: &mut WordApp, ctx: &egui::Context, r: &Value) {
     app.clipboard_published = put(app, ctx, s("text"), s("html"), s("rtf"), s("mathml"));
 }
 
+/// Extract the single copied image from the clipboard fragment, if that is all that was copied.
 fn copied_image(app: &WordApp) -> Option<Result<CopyImage, String>> {
     use wordcraft_doc::{Block, para::InlineObject};
     let fragment = app.session.clipboard.as_ref()?;
@@ -151,13 +155,15 @@ fn copied_image(app: &WordApp) -> Option<Result<CopyImage, String>> {
                 fx: Default::default(),
                 decorative: false,
             }];
-            let image = wordcraft_render::render_items(&app.session.doc, &items, rect, 96.0 / 72.0, &Default::default());
+            let doc = fragment.to_document();
+            let image = wordcraft_render::render_items(&doc, &items, rect, 96.0 / 72.0, &Default::default());
             Ok(CopyImage { width: image.width as usize, height: image.height as usize, rgba: image.to_straight() })
         }
         None => decode_image(bytes),
     })
 }
 
+/// Decode raster image bytes into unpremultiplied RGBA8 pixels under bounded size limits.
 fn decode_image(bytes: &[u8]) -> Result<CopyImage, String> {
     if bytes.len() as u64 > paste_picture::MAX_FILE_BYTES {
         return Err("the picture file is larger than 200 MB".into());

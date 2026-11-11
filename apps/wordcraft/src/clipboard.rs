@@ -98,6 +98,7 @@ pub fn set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &
     set
 }
 
+/// Write image pixels to the clipboard through arboard.
 fn set_image_arboard(image: &wordcraft_ui_egui::system_clipboard::CopyImage) -> bool {
     WRITER.with(|w| {
         let Ok(mut slot) = w.try_borrow_mut() else { return false };
@@ -229,6 +230,7 @@ mod platform {
 
     const OWNER_MIME: &str = "application/x-wordcraft-owner";
 
+    /// Process-unique ownership token placed into Wayland clipboard offers.
     fn owner_token() -> [u8; 16] {
         static TOKEN: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
         *TOKEN.get_or_init(|| {
@@ -240,6 +242,7 @@ mod platform {
 
     static X11_OWNER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
+    /// Record clipboard ownership for X11 selection tracking.
     pub fn record_own() {
         if !wayland() {
             let win = x11::owner_window().unwrap_or(0);
@@ -247,6 +250,7 @@ mod platform {
         }
     }
 
+    /// Whether WordCraft still owns the Wayland offer or X11 selection.
     pub fn is_own() -> bool {
         if wayland() {
             if formats().iter().any(|m| m == OWNER_MIME) { read(OWNER_MIME, 16).is_some_and(|b| b == owner_token()) } else { false }
@@ -293,6 +297,7 @@ mod platform {
         }
     }
 
+    /// Put a copied picture on the Wayland clipboard alongside HTML, text, and ownership token.
     pub fn set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, text: &str) -> bool {
         use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
 
@@ -320,6 +325,7 @@ mod platform {
         }
     }
 
+    /// Additional formats to register after setting image via arboard on Unix.
     pub fn after_set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) {}
 
     /// Wayland copies carry their RTF already; X11 ones can't (see the module docs).
@@ -449,6 +455,7 @@ mod platform {
             (reply.type_ != incr).then_some(reply.value)
         }
 
+        /// Query X11 for the current window id owning the CLIPBOARD selection.
         pub fn owner_window() -> Option<Window> {
             let (conn, _) = x11rb::connect(None).ok()?;
             let clipboard = atom(&conn, "CLIPBOARD")?;
@@ -531,18 +538,21 @@ mod platform {
 
     const OWNER_FORMAT: &str = "WordCraft Copy Owner";
 
+    /// Record clipboard ownership for Windows clipboard.
     pub fn record_own() {
         let Some(format) = raw::register_format(OWNER_FORMAT) else { return };
         let Ok(_open) = Clipboard::new_attempts(10) else { return };
         let _ = raw::set_without_clear(format.get(), &[1u8]);
     }
 
+    /// Whether WordCraft still owns the Windows clipboard contents.
     pub fn is_own() -> bool {
         let Some(format) = raw::register_format(OWNER_FORMAT) else { return false };
         let Ok(_open) = Clipboard::new_attempts(10) else { return false };
         raw::is_format_avail(format.get())
     }
 
+    /// Windows supports clipboard setting via arboard and clipboard_win.
     pub fn can_set() -> bool {
         true
     }
@@ -552,10 +562,32 @@ mod platform {
         false
     }
 
+    /// Windows sets the primary image through arboard and supplements via [`after_set_image`].
     pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
         false
     }
 
+    /// Wrap HTML in the Windows CF_HTML header format required by clipboard readers.
+    fn wrap_cf_html(ctn: &str) -> Vec<u8> {
+        let h_version = "Version:0.9";
+        let h_start_html = "\r\nStartHTML:";
+        let h_end_html = "\r\nEndHTML:";
+        let h_start_frag = "\r\nStartFragment:";
+        let h_end_frag = "\r\nEndFragment:";
+        let c_start_frag = "\r\n<html>\r\n<body>\r\n<!--StartFragment-->\r\n";
+        let c_end_frag = "\r\n<!--EndFragment-->\r\n</body>\r\n</html>\0";
+        let h_len = h_version.len() + h_start_html.len() + 10 + h_end_html.len() + 10 + h_start_frag.len() + 10 + h_end_frag.len() + 10;
+        let n_start_html = h_len + 2;
+        let n_start_frag = h_len + c_start_frag.len();
+        let n_end_frag = n_start_frag + ctn.len();
+        let n_end_html = n_end_frag + c_end_frag.len() - 1;
+        let header = format!(
+            "{h_version}{h_start_html}{n_start_html:010}{h_end_html}{n_end_html:010}{h_start_frag}{n_start_frag:010}{h_end_frag}{n_end_frag:010}{c_start_frag}{ctn}{c_end_frag}"
+        );
+        header.into_bytes()
+    }
+
+    /// Add PNG and CF_HTML formats alongside arboard's image, then mark ownership.
     pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
         if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone())
             && let Some(format) = raw::register_format("PNG")
@@ -567,7 +599,8 @@ mod platform {
             && let Some(format) = raw::register_format("HTML Format")
             && let Ok(_open) = Clipboard::new_attempts(10)
         {
-            let _ = raw::set_without_clear(format.get(), html.as_bytes());
+            let cf = wrap_cf_html(html);
+            let _ = raw::set_without_clear(format.get(), &cf);
         }
         record_own();
     }
@@ -614,32 +647,38 @@ mod platform {
     /// RTF's pasteboard type (`NSPasteboardTypeRTF`, whose extern static needs unsafe to read).
     const RTF: &str = "public.rtf";
 
+    /// Formats offered on macOS pasteboard.
     pub fn formats() -> Vec<String> {
         Vec::new()
     }
 
+    /// Read RTF data from macOS pasteboard.
     pub fn rtf() -> Option<Vec<u8>> {
         let data = NSPasteboard::generalPasteboard().dataForType(&NSString::from_str(RTF))?;
         (data.len() <= super::MAX_PASTE_BYTES).then(|| data.to_vec())
     }
 
+    /// Read encoded picture data from macOS pasteboard.
     pub fn encoded_picture() -> Option<Vec<u8>> {
         None
     }
 
     static LAST_CHANGE_COUNT: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(-1);
 
+    /// Record pasteboard changeCount on macOS to verify ownership.
     pub fn record_own() {
         let count = NSPasteboard::generalPasteboard().changeCount();
         LAST_CHANGE_COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Whether WordCraft still owns the macOS pasteboard.
     pub fn is_own() -> bool {
         let count = NSPasteboard::generalPasteboard().changeCount();
         let recorded = LAST_CHANGE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
         recorded >= 0 && count == recorded
     }
 
+    /// Whether macOS supports setting the pasteboard.
     pub fn can_set() -> bool {
         true
     }
@@ -649,10 +688,12 @@ mod platform {
         false
     }
 
+    /// macOS sets the primary image through arboard and supplements via [`after_set_image`].
     pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
         false
     }
 
+    /// Set supplemental PNG and HTML representations on macOS pasteboard.
     pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
         let board = NSPasteboard::generalPasteboard();
         if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) {
@@ -690,39 +731,50 @@ mod platform {
     all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten")))
 )))]
 mod platform {
+    /// Formats on the clipboard.
     pub fn formats() -> Vec<String> {
         Vec::new()
     }
 
+    /// The RTF bytes on the clipboard.
     pub fn rtf() -> Option<Vec<u8>> {
         None
     }
 
+    /// Encoded picture bytes on the clipboard.
     pub fn encoded_picture() -> Option<Vec<u8>> {
         None
     }
 
+    /// Whether the fallback platform can set the clipboard.
     pub fn can_set() -> bool {
         true
     }
 
+    /// Record clipboard ownership on the fallback platform.
     pub fn record_own() {}
 
+    /// Whether WordCraft owns the clipboard on the fallback platform.
     pub fn is_own() -> bool {
         false
     }
 
+    /// Set rich text on the fallback platform.
     pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
         false
     }
 
+    /// Set image on the fallback platform.
     pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
         false
     }
 
+    /// Post-image set hook on the fallback platform.
     pub fn after_set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) {}
 
+    /// Add RTF to the clipboard on the fallback platform.
     pub fn add_rtf(_rtf: &str) {}
 
+    /// Add MathML to the clipboard on the fallback platform.
     pub fn add_mathml(_mathml: &str) {}
 }
