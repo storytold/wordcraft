@@ -29,9 +29,11 @@
   03:27Z on 2026-11-11 (`50c68e3a`) and at 07:26Z (`af6c311b` and `2e414114`
   together); at each point the local `HEAD`, the fork branch and the
   `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27,
-  §5.35, §5.36). This page is one local documentation commit on top of
-  `2e414114`, not pushed; the envoy role cannot push, so publishing it is one
-  fast-forward for the owner.
+  §5.35, §5.36). The nine findings of the review on `2e414114`, `5855379673`,
+  are triaged in §5.37: five are fixed in the local code commit `65037c7b` on
+  top of `2e414114`, four in the documentation, and this page is a local
+  documentation commit on top of that. None of it is pushed: the envoy role
+  cannot push, so publishing it is one fast-forward for the owner.
 - The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
   branch merges cleanly, and `BLOCKED` is the required review plus the
   unapproved workflows. It was marked ready for review at 14:57:53Z, and the
@@ -58,13 +60,13 @@
   Upstream rule 11 asks for CI changes outside a feature PR; the pin and the
   gate close one hole together, so the job rides in this branch as a
   self-contained commit that splits out on request (§5.24).
-- CodeRabbit's last completed review is `5853542478` on `50c68e3a`
-  (03:42:23Z, eight actionable comments); its eight findings are answered in
-  `af6c311b` and triaged in §5.35, and the one finding of the review body
-  without an inline id stays confirmed and open (§4). On `2e414114` its check
-  started at 07:26:55Z and was `in_progress` when this page was written, and no
-  review exists for that head; it was not waited for, and §5.36 records the
-  state for the next session.
+- CodeRabbit's last completed review is `5855379673` on `2e414114`
+  (07:39:16Z, three inline comments and six outside the diff); all nine are
+  triaged in §5.37, the confirmed ones are fixed in the local commit this page
+  rides on, and the review before it, `5853542478` on `50c68e3a` (03:42:23Z,
+  eight actionable comments), is answered in `af6c311b` and triaged in §5.35.
+  The one finding of that earlier review body without an inline id stays
+  confirmed and open (§4).
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -515,10 +517,10 @@ Results at this writing:
   a submission that fails moves the session to `Status::Diverged`, which pauses
   editing and refuses a commit with the reason, and a resync replaces the local
   document with the room's confirmed one
-  (`docs/collab/adr/0006-diverged-session-pauses.md`, §5.33). Two findings of
-  §5.26 stay open, each with its own slice: the connection is app-wide while
-  documents are per window (9), and a session event replaces the client and
-  drops its unconfirmed edits (10).
+  (`docs/collab/adr/0006-diverged-session-pauses.md`, §5.33). One finding of
+  §5.26 stays open, with its own slice: the connection is app-wide while
+  documents are per window (9). Finding 10, a session event that replaced the
+  client and dropped its unconfirmed edits, is closed in §5.34.
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -3498,8 +3500,8 @@ names and does not take:
   gated by the same `InSync` test (`crates/ui-egui/src/app/commands.rs`) and are
   refused, which is correct, but the wording still says "reconnecting".
 
-In the code, findings 9 and 10 of §5.26 remain (§4), each with its own slice and
-test. Finding 8 is closed here.
+In the code, finding 9 of §5.26 remains (§4), with its own slice and test;
+findings 8 and 10 are closed in §5.33 and §5.34.
 
 ### 5.34 Finding 10: a token rotation keeps the connection it belongs to (run 2026-11-11)
 
@@ -3702,8 +3704,11 @@ wasm32-unknown-unknown` on the same host: clean (`WASM_OK`). The `ui-egui` test
 was run alone (`a_commit_refusal_names_the_role_that_is_missing`), because that
 suite's 1195 tests are not part of this pass.
 
-**What is left.** One maintainer's approval of the five runs above and a review
-decision. The eight findings of `5853542478` are answered in `af6c311b`; the
+**What is left.** Delivery of `af6c311b` first, and then a maintainer's approval
+of the runs created for the resulting head: the five runs above target
+`50c68e3a`, which does not contain the fixes, so approving them cannot validate
+them (review 5855379673). A review decision follows. The eight findings of
+`5853542478` are answered in `af6c311b`; the
 snapshot rollback of the review body is open and named in §4; findings 4 and 7 of
 §5.26 are in `4ecab864`, the rest in §5.28–§5.34, except 9 (per-document
 connections), which is still open and named in §4. `af6c311b` and the commit
@@ -3741,13 +3746,12 @@ pending and unconfirmed operations and is named in §4.
 The evidence that the tree builds is the build-host run below, not a CI run.
 
 **CodeRabbit on `2e414114`.** Its check started at 07:26:55Z and was
-`in_progress` at 08:00Z; no review exists for this head, and the last completed
-one is still `5853542478` on `50c68e3a`. It was not waited for and not polled.
-A later session reads the check-run and `gh api
-repos/storytold/wordcraft/pulls/5834/reviews`, and triages whatever it finds by
-the same rule: a confirmed finding is fixed with a regression test that fails
-without the fix; an invalid one is rejected with the reason and the test or ADR
-that contradicts it.
+`in_progress` at 08:00Z; no review existed for this head when this page was
+written, and the last completed one was still `5853542478` on `50c68e3a`. It was
+not waited for and not polled. That review has since landed — `5855379673` at
+07:39:16Z — and §5.37 triages it by the same rule: a confirmed finding is fixed
+with a regression test that fails without the fix; an invalid one is rejected
+with the reason and the test or ADR that contradicts it.
 
 **Gates on `2e414114`** (build host `agents`, tree synced by
 `scripts/remote-build.sh` at this commit; the docs commit above it moves no Rust
@@ -3778,9 +3782,65 @@ outside a feature PR; the commit is self-contained and splits out on request,
 and it is declared in the header and in §5.24 rather than left to a reviewer.
 
 **What is left.** A maintainer's approval of the five runs on `2e414114` and a
-review decision. The CodeRabbit review on this head, when it lands, is the next
-piece of work. This page is a local documentation commit on top of `2e414114`;
-the envoy role cannot push, so publishing it is one fast-forward for the owner.
+review decision. The CodeRabbit review on this head has since landed
+(`5855379673`) and §5.37 answers it in a local code commit; this page and that
+commit are local. The envoy role cannot push, so publishing them is one
+fast-forward for the owner, after which the runs belong to the new head.
+
+### 5.37 Review `5855379673` on the delivered head: nine findings, all confirmed (run 2026-11-11)
+
+**The review.** CodeRabbit posted `5855379673` on `2e414114` at 07:39:16Z: three
+inline comments — `apps/collab-server/src/lib.rs:1043` and
+`docs/collab/adr/0003-corrupt-snapshot-refused.md:122` and `:123` — and six
+comments outside the diff (three code, three documentation), plus one nitpick.
+Every one was checked against the tree before anything changed. The fixes are
+the local code commit `65037c7b` on top of `2e414114` and this page's
+documentation edits; the regression tests are named per row, and each was run
+with only its fix hunk reverted, where it fails.
+
+| # | Finding | Where | Verdict | Answer |
+|---|---|---|---|---|
+| 1 | Required node updates are skipped when the author's write fails | server `lib.rs:1043` (inline, Major) | **Confirmed.** `broadcast` queues the peers first and then writes to the author, and the old `if !broadcast(..Applied..) { return false; }` returned before the `Nodes` frame; `take_nodes_changed()` had already cleared the flag that would have sent the map later. Peers held `Applied` for a split with no id for the new paragraph. | The accepted-operation path is `publish_applied`: the author's answer, the node update, the due snapshot, and only then does a failed author write end the session. Test `a_failed_author_write_still_sends_the_node_update_to_peers` (`DeadSink` author, a queued peer that still gets `Nodes`). |
+| 2 | The deduplication window must come from the same snapshot | ADR 0003:122 (inline, Major) | **Confirmed.** `dedup.json` was read on its own, bounded only by the journal's `clamp(version)`. A window left by a divergent history — `model.json` and `meta` restored from one backup, a newer `dedup.json` left from another — can hold an answer for an edit the restored model never had at a version it does have; that retry is acknowledged and never applied. | The window is stamped with the snapshot version and the SHA-256 of `model.json` and read only when both match; anything else is dropped, which costs a duplicate answer instead of an edit. Tests `a_window_without_the_snapshot_stamp_is_not_used` (fails on the old read) and `a_window_stamped_for_another_model_is_not_used` (pins the stamp; it passes on the old code only because the old reader cannot parse the stamped file at all). ADR 0003 and `server.md` say it. |
+| 3 | Recovery after removing the directory | ADR 0003:123 (inline, Minor) | **Confirmed** in the text, not in the code: removing the directory leaves the document unstored, and the next join must seed the room from a client that may write (ADR WC-0004); a join without a seed is refused. | ADR 0003's consequence 1 now says so, and why deleting files cannot produce a blank room that is then persisted over a client's document. No code change: the refusal is `Refusal::Unseeded` (`unseeded_joins_total`). |
+| 4 | A history refusal clears a paused session | `collab-app/src/lib.rs:539`, `collab-web/src/lib.rs:399` (outside diff, Major) | **Confirmed.** `refusal_status` answers `InSync` for `undo-conflict`/`unsupported`, and the handler wrote that over the `Diverged` status `pause()` had set; `can_write` and `can_commit` are both `role && status == InSync`, so they reopened while `divergence.is_paused()` was still true and a commit would have omitted the edit the room never received. | `Divergence::status_after_refusal`: a refusal that reads `InSync` leaves a paused session `Diverged`, and only a snapshot clears the pause. Both call sites use it. Tests `a_refusal_that_reads_in_sync_does_not_clear_the_pause` (app) and `a_refused_undo_does_not_reopen_a_paused_session` (web, both gates before and after the snapshot). |
+| 5 | A session that lost the lease can still write | server `lib.rs:1021-1031` (outside diff, Major) | **Confirmed.** `register` moves `guard.session` to the new cabinet session on a takeover (an owner may take it), but the earlier connection stays in `peers`, and `handle_op`/`handle_commit` never compared `claims.sid` with `guard.session`: the taken-over session kept writing and, as an owner, kept committing. | Both mutating frames are checked under the room lock: an operation or a commit from a session that does not hold the lease is refused `lease` (retryable), and the rate limit and submit flow of the holder are unchanged. Test `a_session_that_lost_the_lease_cannot_write_or_commit` (two owner sessions, a refused operation and commit, and the holder still writing). |
+| 6 | The snapshot directory key is not injective | store `store.rs:207-214` (outside diff, Major) | **Confirmed.** `sanitize` kept 64 characters and mapped every other byte to `_`: `a/b` and `a_b` shared a directory, and so did any two ids that agreed in their first 64 characters. One document could be handed another's snapshot and a save could overwrite it. | The key is a 48-character readable prefix plus the SHA-256 of the whole id. A snapshot under the old name is adopted once, by the id whose digest it answers, by renaming; a `meta` that records a different `doc_sha256` is left untouched, and `save` never writes to the old name. Tests `ids_the_old_name_could_not_tell_apart_are_stored_apart`, `an_old_snapshot_directory_is_adopted_once`, `a_snapshot_of_another_id_is_not_adopted`. `server.md` describes the key and the adoption. |
+| 7 | Finding 10 is still listed as open | `STATUS.md` (outside diff, Minor) | **Confirmed** — the §4 bullet still named 10 as open after §5.34 closed it. | §4 names 9 as the only open finding of §5.26, and §5.33's closing line says the same. |
+| 8 | The checklist asks for approval of runs that cannot validate the fixes | `STATUS.md` (outside diff, Minor) | **Confirmed** — §5.35's "What is left" asked for approval of the five runs on `50c68e3a`, which do not contain `af6c311b`. | It now asks for delivery first and then approval of the runs created for the delivered head; §5.36 records that the five runs on `2e414114` exist and wait. |
+| 9 | The CodeRabbit status in the header is stale | `STATUS.md` (outside diff, Minor) | **Confirmed** — the header said the check on `2e414114` was running and that no review existed for it. | The header names `5855379673` on `2e414114` and points here. |
+| — | Nitpick: the first-join race test does not check the losing join's answer | `STATUS.md` (nitpick, Trivial) | **Accepted in part.** The test does not force both builds to finish before publication, but the outcome the review asks about is now asserted: every join's plan carries the published room's snapshot. | Forcing the interleaving needs a hook in the room map; the assertion covers the answer and the eight-thread race covers the interleaving. |
+
+**Pre-fix check.** The eight regression tests above were run with only the fix
+hunks reverted and the tests kept: all eight fail there —
+`a_failed_author_write_still_sends_the_node_update_to_peers`,
+`a_session_that_lost_the_lease_cannot_write_or_commit`,
+`ids_the_old_name_could_not_tell_apart_are_stored_apart`,
+`an_old_snapshot_directory_is_adopted_once`,
+`a_snapshot_of_another_id_is_not_adopted`,
+`a_window_without_the_snapshot_stamp_is_not_used`,
+`a_refusal_that_reads_in_sync_does_not_clear_the_pause`,
+`a_refused_undo_does_not_reopen_a_paused_session`. The stamped-window test is
+the one exception, for the reason the row gives.
+
+**Gates** (build host `agents`, `scripts/remote-build.sh`, tree at this commit):
+
+```
+cargo fmt --all -- --check                                      EXIT=0
+cargo clippy -p wordcraft-collab-server -p wordcraft-collab-app \
+  -p wordcraft-collab-web --all-targets -- -D warnings          EXIT=0
+cargo test -p wordcraft-collab-server -p wordcraft-collab-app \
+  -p wordcraft-collab-web -j 6                        77 passed, 1 ignored (soffice)
+                                                      44 passed, 0 failed
+                                                      11 passed, 0 failed
+cargo check -p wordcraft-collab-web --target wasm32-unknown-unknown  EXIT=0
+```
+
+**What is left.** The same as §5.36: a maintainer's approval of the five runs on
+`2e414114` and a review decision. This page and the code commit under it are
+local; the envoy role cannot push, so publishing them is one fast-forward for
+the owner, after which the runs are created on the new head and §5.36's
+checklist applies to them rather than to `50c68e3a`.
 
 ## 6. Where things live
 

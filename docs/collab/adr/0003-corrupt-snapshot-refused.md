@@ -111,17 +111,40 @@ unmodified paragraphs, ADR-0011). A damaged window costs a duplicated answer
 across a restart; a missing source costs original markup on unchanged
 paragraphs. Neither is text, and neither justifies refusing the document.
 
+The window is nevertheless read only when it belongs to the snapshot beside it,
+which it proves by carrying that snapshot's version and the SHA-256 of its
+`model.json` (review 5855379673). A newer window left behind by a divergent
+history — a restore that put `model.json` and `meta` back from one backup while
+`dedup.json` stayed from another — can hold an answer for an edit the restored
+model never had, and acknowledging that retry would silently drop the edit. A
+window that cannot prove its snapshot is dropped, which costs a duplicate answer
+instead.
+
 ## Consequences
 
 1. **A damaged document is not silently replaced.** The join is refused, the
    file is untouched, and the operator has a path to act on: restore the
-   document's directory from a backup — `model.json` **and** `meta` from the
-   same snapshot, since `Store::load` takes the head version from `meta` and an
-   older model beside a newer `meta` advertises a head the document does not
-   have (`source.docx` and `dedup.json` belong to the same snapshot but cost
-   only markup and deduplication when they are missing) — or remove the
-   document directory to deliberately start a blank room.
+   document's directory from **one** backup — `model.json` **and** `meta` from
+   the same snapshot, since `Store::load` takes the head version from `meta` and
+   an older model beside a newer `meta` advertises a head the document does not
+   have. `source.docx` and `dedup.json` belong to that same snapshot as well: a
+   missing source costs original markup on unchanged paragraphs, and the window
+   is used only when its stamp — the snapshot version and the digest of
+   `model.json` — matches, so a newer window from a divergent history is dropped
+   rather than answering a retry for an edit the restored model does not
+   contain (review 5855379673). Dropping it can let such a retry land twice; the
+   other way round, an acknowledgement would claim an edit the document never
+   got.
    `corrupt_snapshots_total` and the log line name the document.
+
+   **Removing the directory does not start a blank room.** It leaves the
+   document unstored, and the next join has to seed the room from a client's
+   copy: a session that may write, with the document open, offers it on connect
+   (ADR WC-0004). A join without such a seed — a read-only session, or a client
+   that sends no copy — is refused, so deleting files cannot create an empty
+   page that would then be persisted over the document a client still holds.
+   Removing the directory is therefore only safe when the operator knows which
+   client will reopen the document first.
 2. **A document the server has never seen still opens.** `Ok(None)` is the
    ordinary first-open path, unchanged, and the test that a fresh document gets
    a room at version 0 still passes.
@@ -151,7 +174,19 @@ paragraphs. Neither is text, and neither justifies refusing the document.
   `half_a_cabinet_marker_is_corrupt` — a `cabinet_version` without its etag is
   damage;
   `a_missing_snapshot_is_none` — the absent case is still `Ok(None)`, asserted
-  against the corrupt cases above.
+  against the corrupt cases above;
+  `ids_the_old_name_could_not_tell_apart_are_stored_apart` — `a/b` and `a_b`,
+  and two ids that agree in their first 64 characters, get different
+  directories, and one is never handed the other's snapshot;
+  `an_old_snapshot_directory_is_adopted_once` — a snapshot written under the old
+  name is moved to the name the digest gives it, and the id that never owned it
+  is left with nothing rather than another document;
+  `a_snapshot_of_another_id_is_not_adopted` — a directory whose `meta` names a
+  different `doc_sha256` is left untouched;
+  `a_window_without_the_snapshot_stamp_is_not_used` and
+  `a_window_stamped_for_another_model_is_not_used` — a window that cannot prove
+  which snapshot it belongs to is dropped instead of answering a retry for an
+  edit the restored model does not have (review 5855379673).
 - `apps/collab-server/src/tests.rs`:
   `a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten` — with a
   truncated `model.json` and a `meta` on disk, a real client's join is answered

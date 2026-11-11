@@ -105,22 +105,38 @@ cabinet session is refused `invalid` (not retryable) and counted in
 ## Snapshots on disk
 
 A room is snapshotted every 500 operations, after a commit, when its last peer
-leaves and on SIGTERM. The directory `<dataDir>/<doc>/` holds:
+leaves and on SIGTERM. The directory `<dataDir>/<docKey>/` holds:
 
 | File | Content |
 |---|---|
 | `model.json` | `serde_json` of `wordcraft_doc::Document` |
 | `source.docx` | the file the model was read from, for `Document::kept` (ADR-0011) |
-| `dedup.json` | the `opId` window: stored `applied` answers at or before the snapshot version |
-| `meta` | `version=` and `epoch=` lines, written last as the commit marker |
+| `dedup.json` | the `opId` window, stamped with the snapshot version and the SHA-256 of `model.json` it belongs to |
+| `meta` | `version=`, `epoch=` and `doc_sha256=` lines, written last as the commit marker |
 | `prev/` | the previous set of the four files, for one-step rollback |
+
+`<docKey>` is a readable prefix of the document id plus the SHA-256 of the
+**whole** id (review 5855379673). The name is a key and must be injective: the
+earlier name kept 64 characters and mapped every other byte to `_`, so `a/b` and
+`a_b` — and any two ids that agreed in their first 64 characters — shared one
+directory, and a client could be handed another document's snapshot and a save
+could overwrite it. A snapshot written under the old name is adopted once, on
+the first load of the id whose digest it answers, by renaming the directory; a
+snapshot whose `meta` records a different `doc_sha256` is not adopted and is left
+untouched.
 
 The window makes a retry survive a restart: a client that reconnects with the
 same `opId` after the server came back is answered with the stored `applied`
 frame and the version does not move. It is server state only — the wire is
-unchanged. A snapshot written before the window was stored has no `dedup.json`
-and still opens; only deduplication across that restart is missing. A retry of
-an operation accepted after the last snapshot is not covered, because the restore
+unchanged. The window is read back only when its stamp matches the snapshot
+beside it; a window left behind by a divergent history (a restore of
+`model.json`/`meta` from one backup with a newer `dedup.json` from another) can
+hold an answer for an edit the restored model never had, and acknowledging that
+retry would drop the edit. Such a window is dropped, which costs a duplicate
+answer instead. A snapshot written before the window was stored has no
+`dedup.json` and still opens, and a window written before the stamp existed is
+not read; only deduplication across that restart is missing. A retry of an
+operation accepted after the last snapshot is not covered, because the restore
 cannot replay the operation itself either.
 
 **A snapshot that cannot be opened refuses the document** (ADR WC-0003). On the
