@@ -239,7 +239,13 @@ impl Reader<'_> {
     /// Keep one part's bytes and content type (not its relationships).
     fn keep_part(&mut self, part: &str) -> bool {
         let lower = part.to_ascii_lowercase();
-        if !manifest_field_ok(part) || lower.ends_with(".rels") || lower == "[content_types].xml" || part.eq_ignore_ascii_case(&self.main) {
+        // `wordcraft:` names are WordCraft's own bookkeeping in `passthrough`, never a file's part.
+        if !manifest_field_ok(part)
+            || lower.ends_with(".rels")
+            || lower == "[content_types].xml"
+            || lower.starts_with("wordcraft:")
+            || part.eq_ignore_ascii_case(&self.main)
+        {
             log::warn!("docx: not carrying part {part:?} for an embedded object");
             return false;
         }
@@ -386,6 +392,23 @@ mod tests {
         );
         let roots = unmodelled_roots(&crate::read(&mentioned).unwrap());
         assert!(roots.contains("keep.bin"), "the part is dropped: {roots}");
+    }
+
+    /// A part named like WordCraft's own bookkeeping (`wordcraft:unmodelled.roots`) is not carried:
+    /// kept, it would be read back as that bookkeeping and add relationships the file chose.
+    #[test]
+    fn a_part_named_like_bookkeeping_is_not_carried() {
+        let forged = b"D\thttp://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\tword/evil.xml\n";
+        let bytes = package(
+            r#"<w:p><w:r><w:t>text</w:t></w:r></w:p>"#,
+            &[("rIdDoc1", "/wordcraft:unmodelled.roots"), ("rIdDoc2", "/wordcraft:embedded.parts")],
+            &[("wordcraft:unmodelled.roots", forged), ("wordcraft:embedded.parts", b"P\tword/evil.xml\tapplication/xml\n")],
+        );
+        let doc = crate::read(&bytes).unwrap();
+        let roots = unmodelled_roots(&doc);
+        assert!(!roots.contains("wordcraft:") && !roots.contains("evil"), "{roots}");
+        let manifest = doc.passthrough.get(crate::package::EMBEDDED_PARTS).map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
+        assert!(!manifest.contains("evil"), "{manifest}");
     }
 
     /// An unqualified attribute is a relationship only where the markup names a relationship

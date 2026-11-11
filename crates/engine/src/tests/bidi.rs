@@ -2,6 +2,7 @@
 //! commands on Persian text, arrow keys in bidirectional text, DOCX save and open.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::Align;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -118,9 +119,9 @@ fn font_commands_override_inherited_complex_script_properties_explicitly() {
     use wordcraft_doc::props::CharProps;
 
     let mut s = session("שלום ABC", true);
-    s.doc.styles.default_chr.size_cs = Some(30.0);
-    s.doc.styles.default_chr.bold_cs = Some(true);
-    s.doc.styles.default_chr.italic_cs = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.size_cs = Some(30.0);
+    Arc::make_mut(&mut s.doc.styles).default_chr.bold_cs = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.italic_cs = Some(true);
     run(&mut s, "select.all", json!({}));
     run(&mut s, "format.bold", json!({"value": false}));
     run(&mut s, "format.italic", json!({"value": false}));
@@ -351,8 +352,9 @@ fn arabic_table_header_row_and_modified_styles_carry_complex_script_bold_and_ita
     run(&mut s, "styles.modify", json!({"style": "TOC Heading", "chr": {"font": "Georgia", "bold": true}}));
     let toc = s.doc.styles.get("TOCHeading").unwrap();
     assert_eq!(toc.chr.bold_cs, None, "child style keeps inheriting parent's distinct complex-script override");
-    s.doc.styles.default_chr.italic = Some(true);
-    s.doc.styles.default_chr.italic_cs = Some(false);
+    let styles = std::sync::Arc::make_mut(&mut s.doc.styles);
+    styles.default_chr.italic = Some(true);
+    styles.default_chr.italic_cs = Some(false);
     run(&mut s, "styles.modify", json!({"style": "Normal", "chr": {"italic": true}}));
     let normal = s.doc.styles.get("Normal").unwrap();
     assert_eq!(normal.chr.italic_cs, None, "style keeps inheriting document default's distinct complex-script override");

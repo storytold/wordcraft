@@ -24,3 +24,45 @@ The proofing languages offered in Set Proofing Language, Review › Language and
 menu: the languages WordCraft names, plus those of every installed (and, in Set Proofing Language,
 every available) Language pack, each once.
 _Avoid_: Language menu (that is only one of the places it is shown)
+
+**Your languages**:
+The proofing languages Options › Language lists: each English variant in use (the default proofing
+language and any in the open document), every language with an installed
+Language pack, and every proofing language used in the open document.
+_Avoid_: Authoring languages, preferred languages
+
+**Default proofing language**:
+The proofing language new blank documents get, set with Set as default; without one, the interface
+language.
+_Avoid_: Preferred language
+
+**Proofing status**:
+Where a language's proofing comes from: built in, an installed Language pack, your own dictionary,
+a system dictionary, available to install, or not available.
+
+**Custom dictionary**:
+The words you added with Add to Dictionary, accepted in every language.
+_Avoid_: User dictionary (in the interface)
+
+**Dictionaries folder**:
+A folder of Hunspell dictionaries you supply, used before the system's (an installed Language pack
+comes after it).
+_Avoid_: Custom dictionaries
+
+## Export
+
+**Strict export**:
+An export that writes nothing, and reports why, when a character or picture the output is meant
+to show would be missing from it. Text the output doesn't show (hidden text, deletions without
+markup) isn't checked.
+_Avoid_: Safe mode, validated export
+
+**Missing glyph**:
+A character the output draws that no face in the font fallback chain can draw, so it would appear
+as an empty box.
+_Avoid_: Tofu, box, notdef character
+
+**Missing picture**:
+A picture the document refers to that the output cannot include: its part is absent, its data
+cannot be decoded, its format is unsupported, or it is linked from outside the file.
+_Avoid_: Broken image, dropped image

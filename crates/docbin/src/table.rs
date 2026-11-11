@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::Rgb;
 use wordcraft_doc::para::Paragraph;
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, CellProps, HeightRule, RowProps, TableProps, VAlign, VMerge};
+use wordcraft_doc::props::{Align, Borders, CellProps, HeightRule, RowProps, TableProps, VAlign, VMerge};
 use wordcraft_doc::table::{Cell, Row, Table};
 use wordcraft_doc::{Block, Blocks, para_block};
 
@@ -83,6 +83,11 @@ pub(crate) struct RowInfo {
 
 /// Read the table context out of a paragraph mark's PAPX grpprl.
 impl RowInfo {
+    /// Does the mark belong to a table: inside one, ending a row, or ending a cell?
+    pub(crate) fn is_table(&self) -> bool {
+        self.in_table || self.ttp || self.cell_mark
+    }
+
     /// The row height from `sprmTDyaRowHeight`, for tests.
     #[cfg(test)]
     pub(crate) fn height(&self) -> Option<f32> {
@@ -263,8 +268,8 @@ pub(crate) struct ParaOut {
     pub(crate) para: Paragraph,
     /// CP just past the terminating mark.
     pub(crate) end_cp: u32,
-    /// Table context from the mark's PAPX (empty default = not in a table).
-    pub(crate) row: RowInfo,
+    /// Table context from the mark's PAPX; `None` for a paragraph outside a table.
+    pub(crate) row: Option<Box<RowInfo>>,
 }
 
 /// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
@@ -369,9 +374,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     }
 
     for p in paras {
-        let info = p.row;
-        let is_table = info.in_table || info.ttp || info.cell_mark;
-        if !is_table {
+        let Some(info) = p.row else {
             if open {
                 flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
                 grid.clear();
@@ -386,7 +389,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             }
             out.push(para_block(p.para));
             continue;
-        }
+        };
         if !open {
             open = true;
         }
@@ -458,30 +461,10 @@ fn def_table_edges(operand: &[u8]) -> Vec<f32> {
 }
 
 /// Table borders from `sprmTTableBorders80`: cb (0x18) then six Brc80s in the order top,
-/// left, bottom, right, inside-horizontal, inside-vertical.
+/// left, bottom, right, inside-horizontal, inside-vertical, read as paragraph borders are.
 fn table_borders(operand: &[u8]) -> Option<Borders> {
-    let b = |i: usize| operand.get(1 + i * 4..1 + i * 4 + 4).and_then(brc80);
+    let b = |i: usize| operand.get(1 + i * 4..1 + i * 4 + 4).and_then(fmt::brc80);
     Some(Borders { top: b(0), left: b(1), bottom: b(2), right: b(3), between: b(4), inside_v: b(5) })
-}
-
-/// One Brc80: width in 1/8 pt, type, palette colour, space/flags byte.
-fn brc80(b: &[u8]) -> Option<Border> {
-    let [w, ty, ico, flags] = b else { return None };
-    let style = match ty {
-        0x00 => BorderStyle::None,
-        0x02 | 0x15 => BorderStyle::Thick,
-        0x03 => BorderStyle::Double,
-        0x04 | 0x05 => BorderStyle::Dotted,
-        0x06 | 0x07 => BorderStyle::Dashed,
-        0x08 | 0x09 => BorderStyle::DotDash,
-        0x0A | 0x18 => BorderStyle::Wave,
-        0x11 => BorderStyle::Triple,
-        _ => BorderStyle::Single,
-    };
-    if *ty == 0 && *w == 0 {
-        return None;
-    }
-    Some(Border { style, width: (*w as f32 / 8.0).clamp(0.25, 12.0), color: fmt::ico(*ico), space: (flags & 0x1F) as f32 })
 }
 
 /// Background colour from a 10-byte `Shd`: cvFore, cvBack (COLORREFs), ipat. Solid patterns
