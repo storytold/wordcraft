@@ -455,6 +455,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let resp = egui::Modal::new(Id::unique("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
     // egui's Modal blocks the window behind it, but not the document's keyboard.
     crate::dialogs::release_keyboard(app, ctx);
+    crate::dialogs::drag_by_title_bar(ctx, &resp.backdrop_response, resp.response.rect);
     let mut done = resp.inner;
     if done.is_none() && resp.should_close() {
         done = Some(false);
