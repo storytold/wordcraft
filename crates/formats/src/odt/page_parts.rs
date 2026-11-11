@@ -177,7 +177,7 @@ pub(super) fn add(doc: &mut Document, parts: Parts) {
     }
     let mut ids: Vec<Option<u32>> = Vec::with_capacity(parts.parts.len());
     for (kind, blocks) in parts.parts {
-        let blocks = model::part_blocks(doc, &blocks);
+        let blocks = model::part_blocks(doc, &blocks, &[]);
         ids.push(doc.try_add_part(kind, blocks).ok());
     }
     let new_id = |old: Option<u32>| old.and_then(|o| o.checked_sub(1)).and_then(|i| ids.get(i as usize).copied().flatten());

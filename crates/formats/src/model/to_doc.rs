@@ -1020,9 +1020,12 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
 }
 
 /// `blocks` as document blocks of `doc` (their pictures go into its media), for a header,
-/// footer or other part an importer adds itself.
-pub fn part_blocks(doc: &mut Document, blocks: &[FBlock]) -> Blocks {
-    let mut out = Builder::new(doc, blocks).blocks(blocks, 0);
+/// footer or other part an importer adds itself. `lists` are the source's list definitions,
+/// as in [`Flow::lists`]; an importer whose lists name none passes an empty slice.
+pub fn part_blocks(doc: &mut Document, blocks: &[FBlock], lists: &[super::types::ListDef]) -> Blocks {
+    let mut b = Builder::new(doc, blocks);
+    b.list_defs = lists;
+    let mut out = b.blocks(blocks, 0);
     if out.is_empty() {
         out.push(para_block(Paragraph::new()));
     }

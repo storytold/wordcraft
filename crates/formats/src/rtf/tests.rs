@@ -1918,3 +1918,36 @@ fn levels_no_paragraph_uses_keep_the_list_tables_definition() {
     let third = doc.numbering.level(n.num, 2).unwrap();
     assert_eq!((third.format, third.start, third.text.as_str()), (wordcraft_doc::section::NumFormat::LowerRoman, 2, "%3."));
 }
+
+#[test]
+fn list_levels_in_headers_footers_notes_and_comments_keep_the_list_table() {
+    use wordcraft_doc::PartKind::{Comment, Footer, Footnote, Header};
+    // Headers, footers, notes and comments were built without the list table, so there a list
+    // of only second-level items still showed `1.1.` where the list table gives `c.1.`.
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}
+{\*\listtable{\list\listtemplateid1{\listlevel\levelnfc4\levelnfcn4\levelstartat3{\leveltext\'02\'00);}{\levelnumbers\'01;}}{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'04\'00.\'01.;}{\levelnumbers\'01\'03;}}{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+{\header \pard\ls1\ilvl1 {\listtext c.1.\tab}head\par}
+{\footer \pard\ls1\ilvl1 {\listtext c.1.\tab}foot\par}
+\pard Body{\super\chftn}{\footnote \pard\plain\ls1\ilvl1 {\listtext c.1.\tab}note\par} {\*\atrfstart 1}x{\*\atrfend 1}{\*\atnid A}{\*\atnauthor Z}\chatn{\*\annotation{\*\atnref 1}\pard\plain\ls1\ilvl1 {\listtext c.1.\tab}remark\par}\par
+}"#;
+    let doc = import(rtf).unwrap();
+    let labels: Vec<(wordcraft_doc::PartKind, String)> = doc
+        .parts
+        .values()
+        .filter_map(|part| {
+            let mut counters = wordcraft_doc::numbering::Counters::default();
+            let label = part
+                .blocks
+                .iter()
+                .filter_map(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.numbering } else { None })
+                .find_map(|n| counters.next_label(&doc.numbering, n.num, n.level))?;
+            Some((part.kind, label.0))
+        })
+        .collect();
+    let want = [Header, Footer, Footnote, Comment].map(|k| (k, "c.1.".to_string()));
+    assert_eq!(labels.len(), want.len(), "{labels:?}");
+    for w in &want {
+        assert!(labels.contains(w), "{labels:?}");
+    }
+}
