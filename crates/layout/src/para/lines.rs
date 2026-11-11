@@ -1136,17 +1136,20 @@ fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, 
     if taken.is_empty() {
         return Ok(VecDeque::from([(lo, hi)]));
     }
-    // Each span with the largest minimum of the objects bordering it.
-    let mut spans = vec![(lo, hi, 0.0_f32)];
+    // Each span with the minimum of what borders it on the left and on the right (nothing at the
+    // row's ends): an object cutting a span becomes the new edge of both pieces.
+    let mut spans = vec![(lo, hi, 0.0_f32, 0.0_f32)];
     for &(left, right, _, min) in &taken {
         spans = spans
             .into_iter()
             .flat_map(
-                |(a, b, m)| if right <= a || left >= b { vec![(a, b, m)] } else { vec![(a, left.min(b), m.max(min)), (right.max(a), b, m.max(min))] },
+                |(a, b, ml, mr)| {
+                    if right <= a || left >= b { vec![(a, b, ml, mr)] } else { vec![(a, left.min(b), ml, min), (right.max(a), b, min, mr)] }
+                },
             )
             .collect();
     }
-    let spans: VecDeque<(f32, f32)> = spans.into_iter().filter(|(a, b, m)| b - a >= *m).map(|(a, b, _)| (a, b)).collect();
+    let spans: VecDeque<(f32, f32)> = spans.into_iter().filter(|(a, b, ml, mr)| b - a >= ml.max(*mr)).map(|(a, b, ..)| (a, b)).collect();
     if spans.is_empty() {
         // Nothing wide enough: the line goes below the first object that ends.
         return Err(taken.iter().map(|t| t.2).reduce(f32::min).unwrap_or(top));
@@ -1185,5 +1188,14 @@ mod tests {
             row_spans(&[area(50.0, false, false), table], 0.0, 12.0, 12.0, 0.0, 300.0, true).is_ok()
         };
         assert!(both(20.0) && !both(19.9));
+        // A span bordered only by a picture needs 18, whichever order the objects come in, also
+        // when a table cut the span first (a table at 0..70, a picture at 80..100, a 19pt span
+        // right of the picture).
+        let table = area(70.0, true, false);
+        let picture = Exclusion { left: 80.0, right: 100.0, ..area(0.0, false, false) };
+        for order in [[table.clone(), picture.clone()], [picture.clone(), table.clone()]] {
+            let spans = row_spans(&order, 0.0, 12.0, 12.0, 0.0, 119.0, true);
+            assert_eq!(spans, Ok(VecDeque::from([(100.0, 119.0)])), "{order:?}");
+        }
     }
 }
