@@ -38,6 +38,13 @@ const OFF_FLAGS: usize = 0x0A;
 const F_COMPLEX: u16 = 0x0004;
 /// Password-protected (Word 97's bit; no unprotected file sets it).
 const F_ENCRYPTED: u16 = 0x0100;
+/// Word 97's `fExtChar` bit. No Word 6.0/95 file seen sets it; it may mark text stored other
+/// than one byte per character, which this reader would garble, so such a file is refused.
+const F_EXT_CHAR: u16 = 0x1000;
+/// Bin table entries read, as for Word 97 (`fkp::MAX_BINS`).
+const MAX_BINS: usize = 100_000;
+/// Code page runs kept: far more than any real file's, and few enough to stay small.
+const MAX_RUNS: usize = 1_000_000;
 const OFF_FC_MIN: usize = 0x18;
 const OFF_CCP_TEXT: usize = 0x34;
 const OFF_PAIRS: usize = 0x58;
@@ -78,6 +85,9 @@ impl Fib6 {
         let flags = u16_at(OFF_FLAGS).unwrap_or(0);
         if flags & F_ENCRYPTED != 0 {
             return Err(DocbinError::Encryption("password-protected Word 6.0/95 files can't be opened".into()));
+        }
+        if flags & F_EXT_CHAR != 0 {
+            return Err(DocbinError::NotWord("this Word 6.0/95 file may store its text in a form that can't be read yet".into()));
         }
         let ccp_text = u32_at(OFF_CCP_TEXT).unwrap_or(0);
         if ccp_text > MAX_CCP {
@@ -121,7 +131,9 @@ fn font_charsets(word: &[u8], fc: u32, lcb: u32) -> Vec<u8> {
     let mut at = 2usize;
     while let Some(&cb_m1) = table.get(at) {
         let next = at + usize::from(cb_m1) + 1;
-        let Some(&charset) = table.get(at + 4).filter(|_| next <= table.len()) else { break };
+        // The charset must lie inside this entry (an entry too short to hold it is corrupt) and
+        // the entry inside the table.
+        let Some(&charset) = table.get(at + 4).filter(|_| at + 4 < next && next <= table.len()) else { break };
         if charsets.len() >= MAX_FONTS {
             break;
         }
@@ -129,6 +141,18 @@ fn font_charsets(word: &[u8], fc: u32, lcb: u32) -> Vec<u8> {
         at = next;
     }
     charsets
+}
+
+/// The page numbers of a bin table with `n` entries ((n+1) u32 FCs, then n u16 page numbers),
+/// each once, however many entries name it: a page's runs carry their own FCs, so reading it
+/// again would only repeat them. The entries read are capped as for Word 97.
+fn distinct_pages(plc: &[u8], n: usize) -> Vec<usize> {
+    let mut pns: Vec<usize> = (0..n.min(MAX_BINS))
+        .filter_map(|i| plc.get(4 * (n + 1) + 2 * i..4 * (n + 1) + 2 * i + 2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]]))))
+        .collect();
+    pns.sort_unstable();
+    pns.dedup();
+    pns
 }
 
 /// The byte ranges whose code page is not Windows-1252, from the character bin table at
@@ -140,8 +164,10 @@ fn code_page_runs(word: &[u8], fc: u32, lcb: u32, charsets: &[u8]) -> Vec<CodePa
     let Some(n) = plc.len().checked_sub(4).filter(|r| r % 6 == 0).map(|r| r / 6) else { return Vec::new() };
     let code_page_of = |font: u16| -> u16 { charsets.get(usize::from(font)).and_then(|&c| charset_code_page(i32::from(c))).unwrap_or(1252) };
     let mut runs: Vec<CodePageRun> = Vec::new();
-    for i in 0..n {
-        let Some(pn) = plc.get(4 * (n + 1) + 2 * i..4 * (n + 1) + 2 * i + 2).map(|b| usize::from(u16::from_le_bytes([b[0], b[1]]))) else { continue };
+    for pn in distinct_pages(plc, n) {
+        if runs.len() >= MAX_RUNS {
+            break;
+        }
         let Some(page) = pn.checked_mul(PAGE).and_then(|at| word.get(at..at.checked_add(PAGE)?)) else { continue };
         let crun = usize::from(page.get(PAGE - 1).copied().unwrap_or(0));
         // The FCs and the offsets must fit before the count byte.
@@ -179,7 +205,10 @@ fn font(grpprl: &[u8]) -> Option<u16> {
     let mut i = 0usize;
     while let Some(&op) = grpprl.get(i) {
         let len = match op {
-            0x55 | 0x56 | 0x5A | 0x5B | 0x5E | 0x62 | 0x68 | 0x75 => 1,
+            // 0x55-0x5C are the character toggles of [MS-DOC]'s Prm0 isprm table (bold, italic,
+            // strike, outline, shadow, small caps, caps, hidden), all one byte; 0x55, 0x56, 0x5A
+            // and 0x5B are also seen in real files.
+            0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 => 1,
             0x50 | 0x5D | 0x60 | 0x61 | 0x63 => 2,
             // Its operand starts with its own length.
             0x44 => 1 + usize::from(*grpprl.get(i + 1)?),
@@ -192,4 +221,28 @@ fn font(grpprl: &[u8]) -> Option<u16> {
         i += 1 + len;
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_page_named_by_many_bin_entries_is_read_once() {
+        // A hostile bin table: a million entries all naming page 7, and one naming page 3.
+        let n = 1_000_001usize;
+        let mut plc = vec![0u8; 4 * (n + 1)];
+        for i in 0..n {
+            plc.extend_from_slice(&(if i == 5 { 3u16 } else { 7u16 }).to_le_bytes());
+        }
+        assert_eq!(super::distinct_pages(&plc, n), [3, 7]);
+    }
+
+    #[test]
+    fn bin_entries_past_the_cap_are_not_read() {
+        let n = super::MAX_BINS + 1;
+        let mut plc = vec![0u8; 4 * (n + 1)];
+        for i in 0..n {
+            plc.extend_from_slice(&(if i == n - 1 { 9u16 } else { 7u16 }).to_le_bytes());
+        }
+        assert_eq!(super::distinct_pages(&plc, n), [7]);
+    }
 }

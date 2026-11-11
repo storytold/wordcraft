@@ -18,6 +18,8 @@ struct Doc6<'a> {
     text: &'a [u8],
     /// (charset, name) per font index.
     fonts: &'a [(u8, &'a str)],
+    /// The font table's entries as raw bytes instead of `fonts` (the size word is added).
+    raw_fonts: Option<&'a [u8]>,
     /// Contiguous character runs (lo, hi, grpprl), all in one FKP page.
     runs: &'a [(u32, u32, &'a [u8])],
     /// For a fast-saved file: (length, offset) per piece, in CP order.
@@ -71,8 +73,9 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
         pairs.push((12, w.len() as u32, bte.len() as u32));
         w.extend_from_slice(&bte);
     }
-    if !d.fonts.is_empty() {
+    if !d.fonts.is_empty() || d.raw_fonts.is_some() {
         let mut ffn = vec![0u8, 0];
+        ffn.extend_from_slice(d.raw_fonts.unwrap_or_default());
         for (charset, name) in d.fonts {
             let mut e = vec![0u8, 0x16, 0x90, 0x01, *charset, 0x00];
             e.extend_from_slice(name.as_bytes());
@@ -191,6 +194,63 @@ fn east_asian_font_bytes_read_as_replacement_characters() {
     let runs: &[(u32, u32, &[u8])] = &[(0, 4, &[0x5D, 0x01, 0x00]), (4, 5, &[])];
     let d = Doc6 { text, fonts: &[(0, "Arial"), (128, "MS Mincho")], runs, ..Default::default() };
     assert_eq!(texts(&d), ["ab\u{FFFD}\u{FFFD}"]);
+}
+
+#[test]
+fn the_toggle_sprms_before_the_font_are_framed() {
+    // 0x57 (strike, a one-byte toggle in [MS-DOC]'s Prm0 isprm table) before the font sprm: the
+    // font must still be found, or the Cyrillic text reads as Windows-1252.
+    let text = b"\xC4\xE0\r";
+    for op in [0x57, 0x58, 0x59, 0x5C] {
+        let g = [op, 0x01, 0x5D, 0x01, 0x00];
+        let runs: &[(u32, u32, &[u8])] = &[(0, 2, &g), (2, 3, &[])];
+        let d = Doc6 { text, fonts: FONTS, runs, ..Default::default() };
+        assert_eq!(texts(&d), ["Да"], "opcode 0x{op:02X}");
+    }
+}
+
+#[test]
+fn a_font_entry_too_short_for_its_charset_ends_the_font_table() {
+    // Entry 0 says it is 3 bytes long, which can't hold the charset at offset 4. The bytes after
+    // it (the next entry, whose flags byte is 0xCC) must not be read as font 0's charset.
+    let raw: &[u8] = &[0x02, 0x16, 0x90, 0x05, 0xCC, 0x90, 0x01, 0xCC, 0x00, b'X', 0];
+    let d = Doc6 { text: b"\xC4\xE0\r", raw_fonts: Some(raw), runs: &[(0, 3, &[])], ..Default::default() };
+    assert_eq!(texts(&d), ["Äà"], "font 0 has no charset: Windows-1252");
+}
+
+#[test]
+fn a_bin_table_naming_one_page_many_times_reads_it_once() {
+    // A hostile bin table: 1,000,000 entries, all naming one page of 50 Cyrillic runs. The text still
+    // reads right; that the page is read once is pinned in `word6::tests`.
+    let text: Vec<u8> = std::iter::repeat_n(0xC4u8, 50).chain(*b"\r").collect();
+    let g: &[u8] = &[0x5D, 0x01, 0x00];
+    let runs: Vec<(u32, u32, &[u8])> = (0..50).map(|i| (i, i + 1, g)).chain([(50, 51, &[][..])]).collect();
+    let mut w = word_stream(&Doc6 { text: &text, fonts: FONTS, runs: &runs, ..Default::default() });
+    let u32_at = |w: &[u8], at: usize| u32::from_le_bytes([w[at], w[at + 1], w[at + 2], w[at + 3]]);
+    let bte_fc = u32_at(&w, 0x58 + 12 * 8) as usize;
+    let pn = u16::from_le_bytes([w[bte_fc + 8], w[bte_fc + 9]]);
+    let n = 1_000_000usize;
+    let mut bte = Vec::with_capacity(4 * (n + 1) + 2 * n);
+    bte.extend_from_slice(&TEXT_AT.to_le_bytes());
+    for _ in 0..n {
+        bte.extend_from_slice(&(TEXT_AT + 51).to_le_bytes());
+    }
+    for _ in 0..n {
+        bte.extend_from_slice(&pn.to_le_bytes());
+    }
+    let at = w.len() as u32;
+    w.extend_from_slice(&bte);
+    put32(&mut w, 0x58 + 12 * 8, at);
+    put32(&mut w, 0x58 + 12 * 8 + 4, bte.len() as u32);
+    let doc = read(&cfb_file(&[("WordDocument", &w)])).expect("opens");
+    assert_eq!(body_texts(&doc), ["Д".repeat(50)]);
+}
+
+#[test]
+fn a_file_marked_with_extended_characters_is_refused() {
+    // Word 97's fExtChar bit: no Word 6.0/95 file seen sets it, so its text form is unknown.
+    let d = Doc6 { flags: 0x1000, text: b"Hello\r", ..Default::default() };
+    assert!(matches!(read(&word6_file(&d)), Err(DocbinError::NotWord(_))));
 }
 
 #[test]
