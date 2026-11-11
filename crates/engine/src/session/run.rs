@@ -118,6 +118,7 @@ impl Session {
                 self.typing_open,
                 self.undo_evicted,
                 self.column.clone(),
+                self.pending_move.clone(),
             ))
         } else {
             None
@@ -173,7 +174,8 @@ impl Session {
             self.typing_open = false;
         }
         // Only the paste right after a tracked cut makes it a move.
-        if (spec.mutates || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo")) && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteSpecial")
+        if spec.mutates
+            && !matches!(id, "edit.cut" | "edit.paste" | "edit.pasteMerge" | "edit.pasteText" | "edit.pasteSpecial" | "edit.undo" | "edit.undoTo" | "edit.redo")
         {
             self.pending_move = None;
         }
@@ -249,7 +251,7 @@ impl Session {
                     self.bib_style = bib_style;
                     self.merge.preview = merge_preview;
                 }
-                if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                if let Some((d, s, h, r, t, ev, c, pending_move)) = before_doc {
                     self.doc = d;
                     self.sel = s;
                     self.history = h;
@@ -258,6 +260,7 @@ impl Session {
                     // The steps the command pushed out are back, so they no longer count as gone.
                     self.undo_evicted = ev;
                     self.column = c;
+                    self.pending_move = pending_move;
                     // Its step is gone with them: its undo group has none to merge into.
                     if pushed {
                         self.join_anchor = false;
@@ -436,7 +439,7 @@ impl Session {
                     for d in opened {
                         let _ = self.close_document(d);
                     }
-                    if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                    if let Some((d, s, h, r, t, ev, c, pending_move)) = before_doc {
                         self.doc = d;
                         self.sel = s;
                         self.history = h;
@@ -444,6 +447,7 @@ impl Session {
                         self.typing_open = t;
                         self.undo_evicted = ev;
                         self.column = c;
+                    self.pending_move = pending_move;
                     }
                 }
                 if let Some(b) = blocks_before {

@@ -15,6 +15,7 @@ impl Session {
             sel: self.sel.clone(),
             pending: self.pending.clone(),
             column: self.column.clone(),
+            pending_move: self.pending_move.clone(),
         }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
@@ -29,7 +30,7 @@ impl Session {
     /// Record `doc`/`sel` as their own undo step after the fact and close the typing group, so
     /// Undo right after an automatic change (AutoFormat, AutoCorrect) reverts only that change.
     pub fn push_undo(&mut self, label: &str, doc: Document, sel: Selection) {
-        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None }));
+        self.history.push(Arc::new(Undo { label: label.to_string(), doc, sel, pending: self.pending.clone(), column: None, pending_move: self.pending_move.clone() }));
         if self.history.len() > MAX_UNDO {
             self.history.remove(0);
             self.undo_evicted += 1;
@@ -190,6 +191,7 @@ impl Session {
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
+            pending_move: std::mem::replace(&mut self.pending_move, u.pending_move),
         };
         self.redo.push(Arc::new(cur));
         // Undo swaps the whole body back: a composition belongs to the text it showed.
@@ -216,6 +218,7 @@ impl Session {
             sel: std::mem::replace(&mut self.sel, u.sel),
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
+            pending_move: std::mem::replace(&mut self.pending_move, u.pending_move),
         };
         self.history.push(Arc::new(cur));
         self.note_body_replaced();
