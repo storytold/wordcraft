@@ -188,7 +188,7 @@ impl Reader<'_> {
                     El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
                 if let Some(source) = self.keep_embedded(&kept, rels, &[]) {
                     graphic.source = Some(source);
-                } else if graphic.ink_fallback.is_some() {
+                } else if graphic.ink_fallback.is_some() || !plain_missing_ink_preview(fallback, rels, self.pkg) {
                     graphic.ink_fallback_unretained = true;
                 }
                 // A malformed or over-budget fallback must not discard a valid native part.
@@ -249,7 +249,7 @@ impl Reader<'_> {
             // A broken extra relationship can prevent retaining the complete alternate even
             // though the picture itself is usable. Read it independently for display.
             preview = fallback.child("pic:pic").and_then(|p| self.read_pic(p, rels, 0.0, 0.0, String::new(), Float::default()));
-            if !retained && preview.is_some() {
+            if !retained && (preview.is_some() || !plain_missing_ink_preview(fallback, rels, self.pkg)) {
                 Arc::make_mut(&mut graphic).ink_fallback_unretained = true;
             }
         }
@@ -689,6 +689,84 @@ impl Reader<'_> {
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }
+}
+
+/// Only a structurally plain picture with a missing image part is disposable. Unknown
+/// attributes, elements and text may carry metadata even inside the picture itself.
+fn plain_missing_ink_preview(fallback: &El, rels: &Rels, pkg: &crate::package::Package) -> bool {
+    fn plain(e: &El, rels: &Rels, pkg: &crate::package::Package, depth: usize) -> bool {
+        if depth > crate::xml::MAX_DEPTH {
+            return false;
+        }
+        let (attrs, children): (&[&str], &[&str]) = match e.name.as_str() {
+            "mc:Fallback" => (&[], if e.child("w:pict").is_some() { &["w:pict"] } else { &["pic:pic"] }),
+            "w:pict" => (&[], &["v:shape"]),
+            "v:shape" => (&["id", "style"], &["v:imagedata"]),
+            "v:imagedata" => (&["r:id", "id"], &[]),
+            "pic:pic" => (&[], &["pic:nvPicPr", "pic:blipFill", "pic:spPr"]),
+            "pic:nvPicPr" => (&[], &["pic:cNvPr", "pic:cNvPicPr"]),
+            "pic:cNvPr" => (&["id", "name"], &[]),
+            "pic:cNvPicPr" => (&[], &[]),
+            "pic:blipFill" => (&[], &["a:blip", "a:stretch"]),
+            "a:blip" => (&["r:embed", "embed"], &[]),
+            "a:stretch" => (&[], &["a:fillRect"]),
+            "a:fillRect" => (&[], &[]),
+            "pic:spPr" => (&[], &["a:xfrm", "a:prstGeom"]),
+            "a:xfrm" => (&[], &["a:off", "a:ext"]),
+            "a:off" => (&["x", "y"], &[]),
+            "a:ext" => (&["cx", "cy"], &[]),
+            "a:prstGeom" => (&["prst"], &["a:avLst"]),
+            "a:avLst" => (&[], &[]),
+            _ => return false,
+        };
+        if !e.attrs.iter().all(|(k, _)| attrs.contains(&k.as_str()) || k.starts_with("xmlns:")) {
+            return false;
+        }
+        if e.name == "v:shape"
+            && let Some(style) = e.attr("style")
+        {
+            let mut width = false;
+            let mut height = false;
+            for declaration in style.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+                let Some((name, value)) = declaration.split_once(':') else { return false };
+                let seen = match name.trim() {
+                    "width" => &mut width,
+                    "height" => &mut height,
+                    _ => return false,
+                };
+                if *seen || measure(value.trim(), 1.0).is_none_or(|v| v < 0.0) {
+                    return false;
+                }
+                *seen = true;
+            }
+        }
+        if matches!(e.name.as_str(), "v:imagedata" | "a:blip") {
+            let (key, alias) = if e.name == "v:imagedata" { ("r:id", "id") } else { ("r:embed", "embed") };
+            // Both spellings can name different relationships, so never discard an ambiguous picture.
+            if e.attrs.iter().filter(|(name, _)| name == key || name == alias).count() != 1 {
+                return false;
+            }
+            if e.attr(key).is_none_or(|id| {
+                rels.by_id(id).is_some_and(|r| {
+                    r.external
+                        || !matches!(r.kind.as_str(), rt::IMAGE | "http://purl.oclc.org/ooxml/officeDocument/relationships/image")
+                        || pkg.get_shared(&r.target).is_some()
+                })
+            }) {
+                return false;
+            }
+        }
+        let mut expected = children.iter();
+        for node in &e.kids {
+            match node {
+                Node::Text(s) if s.trim().is_empty() => {}
+                Node::El(child) if expected.next().is_some_and(|name| *name == child.name) && plain(child, rels, pkg, depth + 1) => {}
+                _ => return false,
+            }
+        }
+        expected.next().is_none()
+    }
+    plain(fallback, rels, pkg, 0)
 }
 
 /// The `mc:Choice` holding an Office 2016 chart (`cx:chart`) in an `mc:AlternateContent`.

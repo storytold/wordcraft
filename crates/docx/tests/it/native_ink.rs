@@ -163,6 +163,134 @@ fn standalone_ink_with_unretained_preview_refuses_partial_save() {
     assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
 }
 
+/// Missing optional pictures may be omitted only when no extra fallback metadata is lost.
+#[test]
+fn native_ink_missing_preview_metadata_refuses_partial_save() {
+    for canvas in [false, true] {
+        for nested in [false, true] {
+            for placement in 0..3 {
+                for metadata in 0..4 {
+                    if placement == 0 && (canvas || nested) {
+                        continue;
+                    }
+                    if placement == 1 && nested {
+                        continue;
+                    }
+                    let bytes = if placement == 0 {
+                        ink_docx(true, false)
+                    } else {
+                        let mut member = ink_member(914400, true);
+                        if nested {
+                            member = format!(
+                                r#"<wpg:grpSp><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="2743200" cy="914400"/></a:xfrm></wpg:grpSpPr>{member}</wpg:grpSp>"#
+                            );
+                        }
+                        nested_ink_docx(canvas, &member, true)
+                    };
+                    let mut files = unzip(&bytes);
+                    files.remove("word/media/preview.png");
+                    let mut body = text(&files, "word/document.xml");
+                    if metadata == 1 {
+                        let closing = if placement == 0 { "</v:shape>" } else { "</pic:pic>" };
+                        body = body.replace(closing, &format!(r#"<a:ext uri="urn:test:important"><a:data>keep me</a:data></a:ext>{closing}"#));
+                    } else if metadata == 2 {
+                        body = body.replace("</mc:Fallback>", r#"<a:ext uri="urn:test:important"><a:data>keep me</a:data></a:ext></mc:Fallback>"#);
+                    } else if metadata == 3 {
+                        let image = if placement == 0 { "v:imagedata" } else { "a:blip" };
+                        body = body.replace(&format!("<{image} "), &format!(r#"<{image} test:extra="valuable" xmlns:test="urn:test" "#));
+                    }
+                    files.insert("word/document.xml".into(), body.into_bytes());
+                    let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+                    let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+                    // Nested members need a recursive lookup rather than the top-level helper.
+                    fn find(o: &InlineObject) -> Option<std::sync::Arc<Graphic>> {
+                        match o {
+                            InlineObject::Graphic { graphic, .. } if graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink => {
+                                Some(graphic.clone())
+                            }
+                            InlineObject::Group { children, .. } => children.iter().find_map(|c| find(&c.obj)),
+                            _ => None,
+                        }
+                    }
+                    let get = |d: &Document| {
+                        if placement == 0 { ink_graphic(d, false) } else { group_children(d).iter().find_map(|c| find(&c.obj)).unwrap() }
+                    };
+                    assert!(get(&doc).source.is_some());
+                    let mut doc: Document = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+                    if metadata != 0 {
+                        assert!(get(&doc).ink_fallback_unretained, "canvas={canvas} nested={nested} placement={placement} metadata={metadata}");
+                        for _ in 0..2 {
+                            assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+                        }
+                    } else {
+                        for _ in 0..2 {
+                            assert!(!get(&doc).ink_fallback_unretained);
+                            let saved = wordcraft_docx::write(&doc).unwrap();
+                            check_ink(&unzip(&saved));
+                            doc = wordcraft_docx::read(&saved).unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Build an ink fixture with a missing preview and modified fallback/relationship markup.
+fn missing_preview_variant(grouped: bool, body_edit: impl FnOnce(String) -> String, rel_edit: impl FnOnce(String) -> String) -> Document {
+    let bytes = if grouped { nested_ink_docx(false, &ink_member(914400, true), true) } else { ink_docx(true, false) };
+    let mut files = unzip(&bytes);
+    files.remove("word/media/preview.png");
+    let body = body_edit(text(&files, "word/document.xml"));
+    let rels = rel_edit(text(&files, "word/_rels/document.xml.rels"));
+    files.insert("word/document.xml".into(), body.into_bytes());
+    files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap()
+}
+
+#[test]
+fn missing_ink_preview_with_unknown_vml_style_refuses_save() {
+    let doc =
+        missing_preview_variant(false, |body| body.replace("width:144pt;height:72pt", "width:144pt;height:72pt;mso-custom:valuable"), |rels| rels);
+    assert!(ink_graphic(&doc, false).ink_fallback_unretained);
+    for _ in 0..2 {
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+    }
+}
+
+#[test]
+fn missing_ink_preview_with_wrong_relationship_type_refuses_save() {
+    for grouped in [false, true] {
+        let doc = missing_preview_variant(grouped, |body| body, |rels| rels.replace("relationships/image", "relationships/customXml"));
+        assert!(ink_graphic(&doc, grouped).ink_fallback_unretained, "grouped={grouped}");
+        for _ in 0..2 {
+            assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+        }
+    }
+}
+
+#[test]
+fn missing_ink_preview_unqualified_aliases_and_ambiguous_duplicates() {
+    for grouped in [false, true] {
+        let (qualified, alias) = if grouped { ("r:embed", "embed") } else { ("r:id", "id") };
+        let attr = format!(r#"{qualified}="rPreview""#);
+        let mut doc = missing_preview_variant(grouped, |body| body.replace(&attr, &format!(r#"{alias}="rPreview""#)), |rels| rels);
+        assert!(!ink_graphic(&doc, grouped).ink_fallback_unretained, "grouped={grouped}");
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            check_ink(&unzip(&saved));
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+        for duplicate in ["rPreview", "other"] {
+            let doc = missing_preview_variant(grouped, |body| body.replace(&attr, &format!(r#"{attr} {alias}="{duplicate}""#)), |rels| rels);
+            assert!(ink_graphic(&doc, grouped).ink_fallback_unretained, "grouped={grouped} duplicate={duplicate}");
+            assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+        }
+    }
+}
+
 /// Unsupported visual ink semantics use their picture while preserving bytes across repeated saves.
 #[test]
 fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {

@@ -38,8 +38,8 @@ pub struct Graphic {
     /// be retained. The original markup remains authoritative whenever it is available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ink_fallback_style: Option<InkFallbackStyle>,
-    /// A preview was usable but its original markup could not be retained in full. Saving must
-    /// not silently replace it with a potentially incomplete synthesized picture.
+    /// Fallback markup could not be retained in full and may contain additional metadata. Saving
+    /// must not silently discard it, whether or not the picture itself was usable.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub ink_fallback_unretained: bool,
     /// Where the graphic was read from, so saving writes the original drawing itself back (not
