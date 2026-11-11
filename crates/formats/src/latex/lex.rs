@@ -68,6 +68,19 @@ impl Lexer<'_> {
             self.out.push(Tok::Text(t.to_string()));
         }
     }
+    /// Skip spaces, tabs and line ends, returning the number of line ends skipped.
+    fn blanks(&mut self) -> usize {
+        let mut lines = 0;
+        while let Some(c) = self.peek() {
+            match c {
+                '\n' => lines += 1,
+                ' ' | '\t' | '\r' => {}
+                _ => break,
+            }
+            self.bump();
+        }
+        lines
+    }
     /// Skip the rest of a line (a comment), the line end and the next line's leading blanks.
     fn comment(&mut self) {
         while let Some(c) = self.bump() {
@@ -126,11 +139,14 @@ impl Lexer<'_> {
                     let r = self.rest();
                     let n = r.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(r.len());
                     if n == 0 {
-                        // `\` before a line end is a control space, as TeX defines `\^^M`. The
-                        // line end stays for the whitespace below, so a blank line after it
-                        // still ends the paragraph.
+                        // `\` before a line end is a control space, as TeX defines `\^^M`. TeX
+                        // skips the next line's leading blanks, so no second space follows, but
+                        // a blank line after it still ends the paragraph.
                         if matches!(self.peek(), Some('\n' | '\r')) {
                             self.out.push(Tok::Cmd(" ".to_string()));
+                            if self.blanks() >= 2 {
+                                self.out.push(Tok::Par);
+                            }
                             continue;
                         }
                         let Some(sym) = self.bump() else { break };
@@ -228,16 +244,7 @@ impl Lexer<'_> {
                 }
                 '\n' | '\r' | ' ' | '\t' => {
                     // Whitespace: a blank line ends the paragraph, anything else is one space.
-                    let mut lines = 0;
-                    while let Some(c) = self.peek() {
-                        match c {
-                            '\n' => lines += 1,
-                            ' ' | '\t' | '\r' => {}
-                            _ => break,
-                        }
-                        self.bump();
-                    }
-                    if lines >= 2 {
+                    if self.blanks() >= 2 {
                         self.out.push(Tok::Par);
                     } else {
                         self.text(" ");

@@ -482,3 +482,12 @@ fn a_backslash_before_a_line_end_or_a_tab_is_a_control_space() {
     assert_eq!(texts("\\begin{document}first\\\n\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
     assert_eq!(texts("\\begin{document}first\\\r\n\r\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
 }
+
+#[test]
+fn a_control_space_at_a_line_end_adds_no_second_space() {
+    // The line end after it was read as a space of its own, so text taken as written (a
+    // reference, a URL) had two spaces where `\ ` gives one.
+    assert_eq!(tokenize("a\\\nb"), vec![Tok::Text("a".into()), Tok::Cmd(" ".into()), Tok::Text("b".into())]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\ntwo}\\end{document}"), vec!["one two".to_string()]);
+    assert_eq!(texts("\\begin{document}\\ref{one\\\r\n   two}\\end{document}"), vec!["one two".to_string()]);
+}
