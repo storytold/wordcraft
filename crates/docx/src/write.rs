@@ -86,6 +86,8 @@ pub(crate) struct Writer<'d> {
     doc: &'d Document,
     /// Numbered display equations written so far (automatic numbers are written as text).
     pub(crate) eq_number: u32,
+    /// A usable ink preview could not be retained completely when the file was opened.
+    unretained_ink_fallback: bool,
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
     bookmarks: HashMap<String, u32>,

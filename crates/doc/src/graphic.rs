@@ -34,6 +34,14 @@ pub struct Graphic {
     /// alongside `items`; kept independently so successful decoding does not lose it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ink_fallback: Option<String>,
+    /// Modeled picture properties for a fallback reconstructed when its original markup cannot
+    /// be retained. The original markup remains authoritative whenever it is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ink_fallback_style: Option<InkFallbackStyle>,
+    /// A preview was usable but its original markup could not be retained in full. Saving must
+    /// not silently replace it with a potentially incomplete synthesized picture.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ink_fallback_unretained: bool,
     /// Where the graphic was read from, so saving writes the original drawing itself back (not
     /// only these items). `None` for graphics made some other way.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -47,6 +55,14 @@ pub struct Graphic {
     /// writes the chart part from it, and the items are drawn from it. See [`crate::chart`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chart: Option<std::sync::Arc<crate::chart::ChartSpec>>,
+}
+
+/// Picture properties needed to reconstruct a native-ink preview from its media.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct InkFallbackStyle {
+    pub crop: [f32; 4],
+    pub fx: crate::picfx::PicFx,
 }
 
 impl Graphic {

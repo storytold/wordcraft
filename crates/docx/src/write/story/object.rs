@@ -181,6 +181,7 @@ impl Writer<'_> {
     fn write_graphic(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, _depth: usize) {
         let InlineObject::Graphic { w: gw, h: gh, alt, float, graphic } = o else { return };
         let ink = graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink;
+        self.unretained_ink_fallback |= ink && graphic.ink_fallback_unretained && graphic.ink_fallback.is_some();
         let root = match (graphic.chart.as_deref(), graphic.smart_art.as_deref(), graphic.source.as_deref()) {
             (Some(spec), _, _) => crate::xml::parse(self.chart_graphic(spec, rels).as_bytes()).ok(),
             (None, Some(spec), _) => crate::xml::parse(self.smart_art_graphic(spec, *gw, *gh, rels).as_bytes()).ok(),
@@ -455,6 +456,7 @@ impl Writer<'_> {
                 }
                 // Native ink kept from the file, with its fallback, at the member's place.
                 InlineObject::Graphic { w: iw, h: ih, float, graphic, .. } if graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink => {
+                    self.unretained_ink_fallback |= graphic.ink_fallback_unretained && graphic.ink_fallback.is_some();
                     if let Some(src) = graphic.source.as_deref()
                         && let Some(mut root) = self.embedded_tree(src, rels, None)
                     {
@@ -465,14 +467,15 @@ impl Writer<'_> {
                             && let Some(media) = graphic.ink_fallback.as_ref()
                             && let Some(file) = self.media_files.get(media).cloned()
                         {
+                            let style = graphic.ink_fallback_style.as_ref();
                             let image = InlineObject::Image {
                                 media: media.clone(),
                                 w: *iw,
                                 h: *ih,
                                 alt: String::new(),
                                 float: float.clone(),
-                                crop: [0.0; 4],
-                                fx: Default::default(),
+                                crop: style.map_or([0.0; 4], |s| s.crop),
+                                fx: style.map_or_else(Default::default, |s| s.fx),
                                 ole: None,
                             };
                             w.open("mc:AlternateContent", &[]);

@@ -23,6 +23,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     };
     let mut wr = Writer {
         eq_number: 0,
+        unretained_ink_fallback: false,
         doc,
         media_files: BTreeMap::new(),
         bookmarks: HashMap::new(),
@@ -276,6 +277,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     }
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
+    if wr.unretained_ink_fallback {
+        return Err(DocxError::Preservation("an ink picture fallback could not be retained completely".into()));
+    }
     Ok(entries)
 }
 

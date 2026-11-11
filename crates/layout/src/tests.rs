@@ -12942,7 +12942,7 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
     crate::test_fonts();
     use crate::display::Draw;
     use std::sync::Arc;
-    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind};
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, InkFallbackStyle};
     use wordcraft_doc::para::{Float, GroupChild};
     let items = vec![GraphicItem::Image { rect: [0.0, 0.0, 60.0, 30.0], media: "preview".into() }];
     let ink = InlineObject::Graphic {
@@ -12950,7 +12950,15 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
         h: 30.0,
         alt: String::new(),
         float: Float::default(),
-        graphic: Arc::new(Graphic { kind: GraphicKind::Ink, items, w: 60.0, h: 30.0, ..Default::default() }),
+        graphic: Arc::new(Graphic {
+            kind: GraphicKind::Ink,
+            items,
+            w: 60.0,
+            h: 30.0,
+            ink_fallback: Some("preview".into()),
+            ink_fallback_style: Some(InkFallbackStyle { crop: [0.25, 0.0, 0.0, 0.0], fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0) }),
+            ..Default::default()
+        }),
     };
     let group = InlineObject::Group {
         w: 200.0,
@@ -12965,10 +12973,10 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
     d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
     let l = lay(&d);
     let frame = l.object(&Pos::body(0, 0), 0).unwrap().rect;
-    fn images(draws: &[Draw], out: &mut Vec<Rect>) {
+    fn images(draws: &[Draw], out: &mut Vec<(Rect, [f32; 4], wordcraft_doc::picfx::PicFx)>) {
         for d in draws {
             match d {
-                Draw::Image { rect, media, .. } if media == "preview" => out.push(*rect),
+                Draw::Image { rect, media, crop, fx, .. } if media == "preview" => out.push((*rect, *crop, *fx)),
                 Draw::Rotated { items, .. } | Draw::Clip { items, .. } => images(items, out),
                 Draw::Figure { draws, .. } => images(draws, out),
                 _ => {}
@@ -12977,9 +12985,11 @@ fn ink_member_of_a_group_draws_its_fallback_picture() {
     }
     let mut found = Vec::new();
     images(&crate::display::page_display(&d, &l.pages[0], &Default::default()), &mut found);
-    let [r] = found.as_slice() else { panic!("ink preview not drawn: {found:?}") };
+    let [(r, crop, fx)] = found.as_slice() else { panic!("ink preview not drawn: {found:?}") };
     assert!((r.x - (frame.x + 20.0)).abs() < 0.01 && (r.y - (frame.y + 30.0)).abs() < 0.01, "{r:?} in {frame:?}");
     assert!((r.w - 60.0).abs() < 0.01 && (r.h - 30.0).abs() < 0.01, "{r:?}");
+    assert_eq!(*crop, [0.25, 0.0, 0.0, 0.0]);
+    assert_eq!(fx.bright, 20_000);
 }
 
 /// The word being typed gets no spelling squiggle until the caret leaves it (#1552): only in the

@@ -92,6 +92,30 @@ fn native_taps_and_strokes_use_the_same_mean_scale_at_layout() {
 }
 
 #[test]
+fn native_ink_preview_style_applies_only_to_its_fallback_image() {
+    let style = wordcraft_doc::graphic::InkFallbackStyle { crop: [0.25, 0.0, 0.0, 0.0], fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0) };
+    let mut graphic = Graphic {
+        kind: GraphicKind::Ink,
+        w: 10.0,
+        h: 10.0,
+        ink_fallback: Some("preview".into()),
+        ink_fallback_style: Some(style.clone()),
+        items: vec![
+            GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "preview".into() },
+            GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "other".into() },
+        ],
+        ..Default::default()
+    };
+    let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+    let draws = graphic_draws(&Document::new(), &graphic, rect, 1.0);
+    assert!(matches!(&draws[0], Draw::Image { crop, fx, .. } if *crop == style.crop && *fx == style.fx));
+    assert!(matches!(&draws[1], Draw::Image { crop, fx, .. } if *crop == [0.0; 4] && fx.is_identity()));
+    graphic.kind = GraphicKind::Chart;
+    let draws = graphic_draws(&Document::new(), &graphic, rect, 1.0);
+    assert!(matches!(&draws[0], Draw::Image { crop, fx, .. } if *crop == [0.0; 4] && fx.is_identity()));
+}
+
+#[test]
 fn other_path_alpha_defaults() {
     let rect = Rect::new(4.0, 4.0, 24.0, 24.0);
     let graphic = Graphic {

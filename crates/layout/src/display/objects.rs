@@ -15,7 +15,8 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
     let width_scale = g.ink_width_scale(sx, sy);
     let mut out = Vec::with_capacity(g.items.len());
     for it in &g.items {
-        if let Some(draw) = graphic_geometry(it, rect, sx, sy, alpha, g.kind == GraphicKind::Ink, width_scale) {
+        if let Some(mut draw) = graphic_geometry(it, rect, sx, sy, alpha, g.kind == GraphicKind::Ink, width_scale) {
+            ink_preview_style(g, &mut draw);
             out.push(draw);
         } else if let GraphicItem::Text { rect: r, .. } = it {
             let inside = Rect::new(rect.x + r[0] * sx, rect.y + r[1] * sy, r[2] * sx, r[3] * sy);
@@ -23,6 +24,17 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
         }
     }
     out
+}
+
+fn ink_preview_style(g: &Graphic, draw: &mut Draw) {
+    if let Draw::Image { media, crop, fx, .. } = draw
+        && g.kind == GraphicKind::Ink
+        && g.ink_fallback.as_deref() == Some(media.as_str())
+        && let Some(style) = &g.ink_fallback_style
+    {
+        *crop = style.crop;
+        *fx = style.fx;
+    }
 }
 
 pub(super) fn graphic_rotation_frame(g: &Graphic, rect: Rect) -> Rect {
@@ -527,7 +539,15 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
         InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink && !opts.hide_ink => {
             let (sx, sy) = (scale_of(rect.w, graphic.w), scale_of(rect.h, graphic.h));
             let width_scale = graphic.ink_width_scale(sx, sy);
-            let items = graphic.items.iter().filter_map(|it| graphic_geometry(it, rect, sx, sy, alpha, true, width_scale)).collect();
+            let items = graphic
+                .items
+                .iter()
+                .filter_map(|it| graphic_geometry(it, rect, sx, sy, alpha, true, width_scale))
+                .map(|mut draw| {
+                    ink_preview_style(graphic, &mut draw);
+                    draw
+                })
+                .collect();
             spun(own, graphic_rotation_frame(graphic, rect), items, out)
         }
         _ => {}

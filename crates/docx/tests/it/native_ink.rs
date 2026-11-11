@@ -58,7 +58,7 @@ fn native_ink_strokes_render_in_all_frames_and_survive_json_and_two_docx_saves()
 fn grouped_ink_preview_survives_an_unretainable_alternate() {
     for canvas in [false, true] {
         for nested in [false, true] {
-            for broken in [0, 1, 2, 3] {
+            for broken in [0, 1, 2, 3, 4, 5, 6] {
                 let member = ink_member(914400, true);
                 let member = if nested {
                     format!(
@@ -73,17 +73,35 @@ fn grouped_ink_preview_survives_an_unretainable_alternate() {
                     .replace("<a:stretch>", r#"<a:srcRect l="25000"/><a:stretch>"#)
                     .replace(r#"<a:blip r:embed="rPreview"/>"#, r#"<a:blip r:embed="rPreview"><a:lum bright="20000"/></a:blip>"#);
                 if broken == 1 {
-                    body = body.replace("</mc:Fallback>", r#"<a:ext r:id="missing"/></mc:Fallback>"#);
-                } else if broken >= 2 {
+                    body = body.replace("</mc:Fallback>", r#"<a:ext r:id="missing"/><a:ext uri="urn:test:keep"/></mc:Fallback>"#);
+                } else if broken == 2 || broken == 3 {
                     body = body.replace("</pic:spPr>", r#"</pic:spPr><a:ext r:id="missing"/>"#);
                     if broken == 3 {
                         let rels = text(&files, "word/_rels/document.xml.rels").replace("</Relationships>", r#"<Relationship Id="missing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/absent.png"/></Relationships>"#);
                         files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
                     }
+                } else if broken == 4 {
+                    let mut extensions = String::new();
+                    let mut rels = String::new();
+                    for i in 0..65 {
+                        extensions.push_str(&format!(r#"<a:ext uri="urn:test:{i}"><f:data xmlns:f="urn:test:feature" r:id="extra{i}"/></a:ext>"#));
+                        rels.push_str(&format!(r#"<Relationship Id="extra{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/preview.png"/>"#));
+                    }
+                    body = body.replace("</pic:spPr>", &format!("</pic:spPr><pic:extLst>{extensions}</pic:extLst>"));
+                    let rels = text(&files, "word/_rels/document.xml.rels").replace("</Relationships>", &format!("{rels}</Relationships>"));
+                    files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
+                } else if broken == 5 {
+                    body = body.replace(
+                        "</pic:spPr>",
+                        r#"</pic:spPr><a:ext uri="urn:test:important" r:id="missing"><f:data xmlns:f="urn:test:feature">keep me</f:data></a:ext>"#,
+                    );
+                } else if broken == 6 {
+                    body = body.replace("</pic:spPr>", r#"</pic:spPr><a:ext r:id="missing" r:embed="rPreview"/>"#);
                 }
                 files.insert("word/document.xml".into(), body.into_bytes());
                 let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
-                let mut doc = wordcraft_docx::read(&replace_ink(&zip(&entries), "malformed")).unwrap();
+                let doc = wordcraft_docx::read(&replace_ink(&zip(&entries), "malformed")).unwrap();
+                let mut doc: Document = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
                 for cycle in 0..3 {
                     let graphic = ink_graphic(&doc, true);
                     assert!(
@@ -92,12 +110,23 @@ fn grouped_ink_preview_survives_an_unretainable_alternate() {
                         graphic.items
                     );
                     if cycle < 2 {
+                        if broken >= 4 {
+                            assert!(graphic.ink_fallback_unretained, "the retained preview must carry its preservation failure");
+                            let style = graphic.ink_fallback_style.as_ref().expect("preview properties must survive JSON");
+                            assert_eq!(style.crop[0], 0.25);
+                            assert_eq!(style.fx.bright, 20_000);
+                            assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+                            break;
+                        }
                         let saved = wordcraft_docx::write(&doc).unwrap();
                         let files = unzip(&saved);
                         assert!(files.values().any(|b| b == b"malformed"));
                         assert!(files.values().any(|b| b == b"original preview bytes"));
                         let body = text(&files, "word/document.xml");
                         assert!(!body.contains("missing"));
+                        if broken == 1 {
+                            assert!(body.contains("urn:test:keep"), "valid fallback sibling was discarded: {body}");
+                        }
                         assert!(body.contains(r#"l="25000""#), "fallback crop lost: {body}");
                         assert!(body.contains(r#"bright="20000""#), "fallback brightness lost: {body}");
                         doc = wordcraft_docx::read(&saved).unwrap();
@@ -106,6 +135,32 @@ fn grouped_ink_preview_survives_an_unretainable_alternate() {
             }
         }
     }
+}
+
+/// A drawing-level preview over the retention budget must not be silently discarded on save.
+#[test]
+fn standalone_ink_with_unretained_preview_refuses_partial_save() {
+    let mut files = unzip(&ink_docx(true, false));
+    let mut extensions = String::new();
+    let mut rels = String::new();
+    for i in 0..65 {
+        extensions.push_str(&format!(r#"<a:ext uri="urn:test:{i}"><f:data xmlns:f="urn:test:feature" r:id="extra{i}"/></a:ext>"#));
+        rels.push_str(&format!(r#"<Relationship Id="extra{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/preview.png"/>"#));
+    }
+    let body = text(&files, "word/document.xml")
+        .replace(r#"<v:imagedata r:id="rPreview"/>"#, r#"<v:imagedata r:id="rPreview" blacklevel="0.1"/>"#)
+        .replace("</v:shape>", &format!("{extensions}</v:shape>"));
+    let rels = text(&files, "word/_rels/document.xml.rels").replace("</Relationships>", &format!("{rels}</Relationships>"));
+    files.insert("word/document.xml".into(), body.into_bytes());
+    files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    let doc: Document = serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+    let InlineObject::Graphic { graphic, .. } = &graphics(&doc)[0] else { panic!("ink disappeared") };
+    assert!(graphic.ink_fallback.is_some());
+    assert_eq!(graphic.ink_fallback_style.as_ref().unwrap().fx.bright, 20_000);
+    assert!(graphic.ink_fallback_unretained);
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
 }
 
 /// Unsupported visual ink semantics use their picture while preserving bytes across repeated saves.

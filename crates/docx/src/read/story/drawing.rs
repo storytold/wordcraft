@@ -174,7 +174,10 @@ impl Reader<'_> {
         let Some(mut object) = self.read_drawing(sc, drawing, rels) else { return preview };
         if let InlineObject::Graphic { w, h, graphic, .. } = &mut object {
             let graphic = Arc::make_mut(graphic);
-            if let Some(InlineObject::Image { media, .. }) = preview {
+            if let Some(InlineObject::Image { media, crop, fx, .. }) = preview {
+                if crop != [0.0; 4] || !fx.is_identity() {
+                    graphic.ink_fallback_style = Some(wordcraft_doc::graphic::InkFallbackStyle { crop, fx });
+                }
                 graphic.ink_fallback = Some(media.clone());
                 if matches!(graphic.items.first(), Some(GraphicItem::Image { .. })) {
                     graphic.items = vec![GraphicItem::Image { rect: [0.0, 0.0, *w, *h], media }];
@@ -185,6 +188,8 @@ impl Reader<'_> {
                     El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
                 if let Some(source) = self.keep_embedded(&kept, rels, &[]) {
                     graphic.source = Some(source);
+                } else if graphic.ink_fallback.is_some() {
+                    graphic.ink_fallback_unretained = true;
                 }
                 // A malformed or over-budget fallback must not discard a valid native part.
             }
@@ -219,41 +224,34 @@ impl Reader<'_> {
     /// Its saved source is the complete alternate-content element when it can be preserved, and
     /// otherwise the native ink element alone. `None` means its related part is missing, malformed
     /// as a package part, or not declared to have the InkML content type.
-    fn ink_member(&mut self, content: &El, alternate: Option<&El>, rels: &Rels) -> Option<(Arc<Graphic>, Option<String>)> {
+    fn ink_member(&mut self, content: &El, alternate: Option<&El>, rels: &Rels) -> Option<(Arc<Graphic>, Option<InlineObject>)> {
         let mut graphic = self.ink_content_graphic(content, rels)?;
         let mut preview = None;
         let choice = alternate.and_then(children_of_choice).filter(|c| c.name == "mc:Choice");
         if let (Some(choice), Some(fallback)) = (choice, alternate.and_then(|a| a.child("mc:Fallback"))) {
             let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
-            // A malformed or over-budget fallback must not discard a valid native part. If
-            // only unrelated fallback markup is broken, retain the picture by itself so its
-            // crop, effects and other valid markup are not lost when it is saved again.
+            // A malformed or over-budget fallback must not discard a valid native part. Drop
+            // only extensions whose relationships cannot resolve, keeping every other child of
+            // the fallback rather than silently replacing it with the picture alone.
             let whole = self.keep_embedded(&kept, rels, &[]).or_else(|| {
-                let pic = fallback.child("pic:pic")?;
-                let make_alternate = |pic: El| {
-                    let clean_fallback = El { name: "mc:Fallback".into(), attrs: Vec::new(), kids: vec![Node::El(pic)] };
-                    El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(clean_fallback)] }
-                };
-                self.keep_embedded(&make_alternate(pic.clone()), rels, &[]).or_else(|| {
-                    // A picture extension may itself reference a missing relationship. Drop
-                    // only that broken extension, retaining the crop and other picture effects.
-                    let mut pic = pic.clone();
-                    let mut removed = false;
-                    if prune_missing_preview_extensions(&mut pic, rels, self.pkg, &mut removed, 0) || !removed {
-                        return None;
-                    }
-                    self.keep_embedded(&make_alternate(pic), rels, &[])
-                })
+                let mut clean = fallback.clone();
+                let mut removed = false;
+                if prune_missing_preview_extensions(&mut clean, rels, self.pkg, &mut removed, 0) || !removed {
+                    return None;
+                }
+                let clean = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(clean)] };
+                self.keep_embedded(&clean, rels, &[])
             });
+            let retained = whole.is_some();
             if let Some(whole) = whole {
                 Arc::make_mut(&mut graphic).source = Some(whole);
             }
             // A broken extra relationship can prevent retaining the complete alternate even
             // though the picture itself is usable. Read it independently for display.
-            preview = match fallback.child("pic:pic").and_then(|p| self.read_pic(p, rels, 0.0, 0.0, String::new(), Float::default())) {
-                Some(InlineObject::Image { media, .. }) => Some(media),
-                _ => None,
-            };
+            preview = fallback.child("pic:pic").and_then(|p| self.read_pic(p, rels, 0.0, 0.0, String::new(), Float::default()));
+            if !retained && preview.is_some() {
+                Arc::make_mut(&mut graphic).ink_fallback_unretained = true;
+            }
         }
         Some((graphic, preview))
     }
@@ -504,6 +502,16 @@ impl Reader<'_> {
                 let mut float = float;
                 float.set_spin(xfrm_spin(e.child("w14:xfrm")));
                 crate::read::ink::fit_frame(Arc::make_mut(&mut graphic), w, h);
+                let preview = match preview {
+                    Some(InlineObject::Image { media, crop, fx, .. }) => {
+                        let g = Arc::make_mut(&mut graphic);
+                        if crop != [0.0; 4] || !fx.is_identity() {
+                            g.ink_fallback_style = Some(wordcraft_doc::graphic::InkFallbackStyle { crop, fx });
+                        }
+                        Some(media)
+                    }
+                    _ => None,
+                };
                 Arc::make_mut(&mut graphic).ink_fallback = preview.clone();
                 if graphic.items.is_empty() {
                     let g = Arc::make_mut(&mut graphic);
@@ -698,7 +706,17 @@ fn prune_missing_preview_extensions(e: &mut El, rels: &Rels, pkg: &crate::packag
     e.kids.retain_mut(|node| match node {
         Node::El(child) => {
             let child_missing = prune_missing_preview_extensions(child, rels, pkg, removed, depth + 1);
-            if child_missing && child.name == "a:ext" {
+            // Only an empty broken extension can be dropped without also discarding unknown
+            // extension content. A populated one must make the caller refuse a partial save.
+            let empty_broken_extension = child.name == "a:ext"
+                && child.kids.iter().all(|n| matches!(n, Node::Text(s) if s.trim().is_empty()))
+                && child.attrs.iter().all(|(k, v)| {
+                    k == "uri"
+                        || k.starts_with("xmlns:")
+                        || (crate::xml::is_rel_attr(&child.name, k)
+                            && rels.by_id(v).is_none_or(|r| !r.external && pkg.get_shared(&r.target).is_none()))
+                });
+            if child_missing && empty_broken_extension {
                 *removed = true;
                 false
             } else {
