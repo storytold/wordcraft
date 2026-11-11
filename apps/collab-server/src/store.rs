@@ -92,8 +92,18 @@ impl Store {
     /// empty room, which would be persisted over the stored file (ADR WC-0003).
     pub fn load(&self, doc: &str) -> Result<Option<Snapshot>, Corrupt> {
         let dir = self.doc_dir(doc);
-        let model = match fs::read(dir.join("model.json")) {
-            Ok(bytes) => bytes,
+        let path = dir.join("model.json");
+        // A bounded read: the file is rejected before it is in memory, which is
+        // the whole point of `MAX_MODEL` (CodeRabbit 4533747500).
+        let model = match fs::File::open(&path) {
+            Ok(file) => {
+                use std::io::Read as _;
+                let mut bytes = Vec::new();
+                file.take(MAX_MODEL as u64 + 1)
+                    .read_to_end(&mut bytes)
+                    .map_err(|err| Corrupt::new("model.json", format!("cannot be read: {err}")))?;
+                bytes
+            }
             // The model is written before the metadata, so its absence is the
             // one state that means "never snapshotted".
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),

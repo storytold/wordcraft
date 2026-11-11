@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
 pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Status};
-use wordcraft_collab_app::{CopyBuffer, Outcome, SyncState, apply_presence};
+use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, SyncState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -199,6 +199,9 @@ pub struct Collab {
     server: String,
     token: String,
     status: Status,
+    /// An edit the room never received: tracked apart from `status`, which a
+    /// closed socket or a failed resync frame moves to `Offline`.
+    divergence: Divergence,
     participants: Vec<ParticipantView>,
     commit: Option<Commit>,
     /// The cabinet refused the last commit (`409`); the panel offers the room's
@@ -240,6 +243,7 @@ impl Collab {
             server: session.ws_url().to_string(),
             token: session.token().to_string(),
             status: Status::Connecting,
+            divergence: Divergence::default(),
             participants: Vec::new(),
             commit: None,
             conflict: None,
@@ -370,13 +374,15 @@ impl Collab {
                 self.state.version = self.state.version.max(version);
                 self.state.role = Role::parse(&role).unwrap_or(self.state.role);
                 self.set_participants(&participants);
-                if self.status == Status::Diverged {
+                // A handshake is not a snapshot: `Offline`, a renewal or a
+                // closed socket never cleared the divergence, so this reads the
+                // flag, not the status (review 5853542478).
+                self.status = self.divergence.status_after_welcome();
+                if self.divergence.is_paused() {
                     // Reconnecting does not replace this document: the edit the
                     // room never received is still in it. Stay paused and ask
                     // for the snapshot that repairs it (finding 8).
                     self.request_snapshot();
-                } else {
-                    self.status = Status::InSync;
                 }
             }
             Event::Nodes { nodes } => self.state.set_nodes(&nodes),
@@ -403,6 +409,9 @@ impl Collab {
             Event::Snapshot { version, bytes, last } => {
                 if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
                     self.state.version = version;
+                    // The document is the room's now: the local edit that never
+                    // reached it is gone with the document it was in.
+                    self.divergence.snapshot();
                     self.status = Status::InSync;
                     self.last_error = None;
                 }
@@ -489,8 +498,12 @@ impl Collab {
     /// follows it rather than pretending the edit was sent.
     fn pause(&mut self, pause: wordcraft_collab_app::Pause) -> String {
         self.last_error = Some(pause.message.clone());
+        self.divergence.pause();
         self.status = pause.status;
         if self.send(&ClientMsg::Resync { last_version: self.client.version() }).is_err() {
+            // The socket is gone, not the divergence: `Offline` describes the
+            // connection and must not clear what the document still holds
+            // (review 5853542478).
             self.status = Status::Offline;
         }
         pause.message
@@ -678,6 +691,7 @@ mod tests {
             server: session.ws_url().to_string(),
             token: session.token().to_string(),
             status: Status::InSync,
+            divergence: Divergence::default(),
             participants: Vec::new(),
             commit: None,
             conflict: None,
@@ -826,5 +840,34 @@ mod tests {
         let host = host_participants(&people);
         assert_eq!(host[0], HostParticipant { client_id: "c1".into(), role: "owner".into(), color: Some("#112233".into()) });
         assert_eq!(host[1], HostParticipant { client_id: "c2".into(), role: "viewer".into(), color: None });
+    }
+
+    /// A pause that could not even send its resync is still a pause: the status
+    /// falls to `Offline` with the socket, and the divergence must survive it
+    /// until a snapshot replaces the document (CodeRabbit 4533747527).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_pause_survives_a_closed_socket_until_the_snapshot_lands() {
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let mut collab = test_collab(&opened, "c1");
+        let mut session = Session::new(wordcraft_doc::Document::new());
+
+        // The native build has no socket, so the resync frame cannot be sent.
+        collab.pause(wordcraft_collab_app::Pause::after_failed_command("the socket closed"));
+        assert_eq!(*collab.status(), Status::Offline, "the socket status follows the socket");
+
+        // The handshake after a reconnect arrives before the snapshot does.
+        let welcome =
+            ServerMsg::Welcome { session_id: "s1".into(), role: "editor".into(), version: 3, epoch: 0, participants: Vec::new(), resync: true };
+        let text = serde_json::to_string(&welcome).expect("json");
+        collab.on_text(&text, &mut session);
+        assert_eq!(*collab.status(), Status::Diverged, "a welcome is not the snapshot that repairs the edit");
+
+        // The snapshot replaces the document, and with it the divergence.
+        let bytes = serde_json::to_vec(&wordcraft_doc::Document::new()).expect("model");
+        let snapshot = ServerMsg::Snapshot { version: 3, bytes, last: true };
+        let text = serde_json::to_string(&snapshot).expect("json");
+        collab.on_text(&text, &mut session);
+        assert_eq!(*collab.status(), Status::InSync, "the room's document is this document again");
     }
 }

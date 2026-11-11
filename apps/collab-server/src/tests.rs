@@ -694,6 +694,113 @@ fn a_taken_client_id_is_only_removed_by_the_connection_that_registered_it() {
     assert!(room.lock().expect("room lock").peers.is_empty(), "the owner's leave removes the peer");
 }
 
+/// A takeover retires the old connection only after every refusal has passed:
+/// a reconnect the lease turns away must leave the working socket in place
+/// (CodeRabbit 4533747488).
+#[test]
+fn a_takeover_the_lease_refuses_leaves_the_old_connection_alone() {
+    let cfg = config_for("client-id-refused-takeover");
+    let state = AppState::new(cfg);
+    let room = open_room(&state, "doc-lease-takeover");
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+
+    let alice =
+        super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None).expect("alice joins");
+    // An owner from another cabinet session takes the document's lease.
+    assert!(super::register(&state, &room, "owner", &claims("owner", "sid-2"), wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
+
+    // Alice's reconnect carries her own `sid`, so the client-id check lets it
+    // through, and the lease check is what refuses it.
+    let refused = super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None);
+    assert_eq!(refused.err().expect("the lease is held by another session").code, wordcraft_collab::wire::RejectCode::Lease);
+    assert!(!alice.superseded.is_set(), "a refused takeover must not retire the connection that still works");
+    assert_eq!(room.lock().expect("room lock").peers["alice"].conn, alice.conn, "the room keeps the old connection");
+}
+
+/// Building a room outside the room map means two first joins can both load the
+/// document; they must still end up on one room (CodeRabbit 4533747484).
+#[test]
+fn two_first_joins_share_the_room_that_was_published() {
+    let state = AppState::new(dev_config());
+    let handles: Vec<_> = (0..8)
+        .map(|_| {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                state
+                    .room_for("doc-first-joins", Some(blank_model()), wordcraft_collab::room::Role::Editor)
+                    .map(|(room, seeded)| (std::sync::Arc::as_ptr(&room) as usize, seeded))
+            })
+        })
+        .collect();
+    let opened: Vec<(usize, bool)> = handles.into_iter().map(|handle| handle.join().expect("thread").expect("a room")).collect();
+    assert_eq!(opened.len(), 8, "every join got a room");
+    assert!(opened.iter().all(|(room, _)| *room == opened[0].0), "every join shares the room that was published first");
+    assert_eq!(state.room_count(), 1, "only one room is in the map");
+    assert!(opened.iter().filter(|(_, seeded)| *seeded).count() <= 1, "at most the published room was built from the client's copy");
+    let _ = std::fs::remove_dir_all(state.store.doc_dir("doc-first-joins"));
+}
+
+/// A sink whose every write fails, standing in for the author's connection when
+/// it stops taking frames (CodeRabbit 4533747492).
+struct DeadSink;
+
+impl futures_util::Sink<axum::extract::ws::Message> for DeadSink {
+    type Error = axum::Error;
+
+    fn poll_ready(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: std::pin::Pin<&mut Self>, _item: axum::extract::ws::Message) -> Result<(), Self::Error> {
+        Err(axum::Error::new(std::io::Error::other("the peer is gone")))
+    }
+
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: std::pin::Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// The author's own answer is what `broadcast` reports: a frame that cannot be
+/// written ends the session instead of leaving a pending operation unanswered
+/// (CodeRabbit 4533747492).
+#[tokio::test]
+async fn an_answer_that_cannot_reach_its_author_is_reported() {
+    let state = AppState::new(dev_config());
+    let room = open_room(&state, "doc-dead-sink");
+    let mut sink = DeadSink;
+    let written = super::broadcast(
+        &state,
+        &room,
+        "alice",
+        ServerMsg::Committed { version: 1, sha256: "0".repeat(64), warnings: Vec::new(), cabinet: None },
+        &mut sink,
+    )
+    .await;
+    assert!(!written, "a failed write to the author is reported to the caller");
+}
+
+/// The `MAX_MODEL` bound is checked before the file is held: a model over it is
+/// refused without being read whole (CodeRabbit 4533747500).
+#[test]
+fn a_model_over_the_bound_is_refused_without_being_read_whole() {
+    let cfg = dev_config();
+    let store = crate::store::Store::new(&cfg.data_dir);
+    let dir = store.doc_dir("doc-oversized");
+    std::fs::create_dir_all(&dir).expect("document directory");
+    let file = std::fs::File::create(dir.join("model.json")).expect("model file");
+    file.set_len(crate::store::MAX_MODEL as u64 + 4096).expect("a sparse model over the bound");
+    drop(file);
+    let error = store.load("doc-oversized").expect_err("over the bound");
+    assert!(error.to_string().contains("model bound"), "{error}");
+    // Absence is still the one state that means "never snapshotted".
+    assert!(store.load("doc-never-written").expect("no file").is_none());
+    let _ = std::fs::remove_dir_all(&cfg.data_dir);
+}
+
 #[tokio::test]
 async fn another_participant_cannot_register_a_taken_client_id() {
     let cfg = config_for("client-id-claim");

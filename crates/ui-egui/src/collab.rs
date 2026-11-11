@@ -256,6 +256,19 @@ impl WordApp {
     }
 }
 
+/// Why a commit from this session is refused, in words that name the real
+/// restriction: an `editor` writes but cannot commit, so "read-only" would
+/// contradict the editing the same panel allows (CodeRabbit 4533747533).
+fn commit_refusal_message(can_commit: bool, can_write: bool, status: &crate::collab_session::Status) -> &'static str {
+    if can_commit {
+        commit_blocked_message(status)
+    } else if can_write {
+        "Only the owner can commit this document"
+    } else {
+        "This session is read-only"
+    }
+}
+
 /// Commit: the room builds the file, and the server publishes it to the cabinet
 /// when it is configured with the commit callback (M87); the answer — the
 /// cabinet's version and etag — shows in the panel. A host bridge that owns the
@@ -269,7 +282,7 @@ pub(crate) fn request_commit(app: &mut WordApp) {
         .collab
         .as_ref()
         .filter(|collab| !collab.can_commit())
-        .map(|collab| if collab.role().can_commit() { commit_blocked_message(collab.status()) } else { "This session is read-only" });
+        .map(|collab| commit_refusal_message(collab.role().can_commit(), collab.role().can_write(), collab.status()));
     if let Some(message) = blocked {
         app.status(message.to_string());
         return;
@@ -357,4 +370,28 @@ fn participant_color(color: Option<&str>, index: usize) -> Color32 {
         Color32::from_rgb(0x17, 0xbe, 0xcf),
     ];
     PALETTE[index % PALETTE.len()]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An `editor` writes but cannot commit: the refusal must name the real
+    /// restriction instead of calling the session read-only (CodeRabbit
+    /// 4533747533).
+    #[test]
+    fn a_commit_refusal_names_the_role_that_is_missing() {
+        let synced = crate::collab_session::Status::InSync;
+        assert_eq!(
+            commit_refusal_message(false, true, &synced),
+            "Only the owner can commit this document",
+            "an editor may edit, so only the commit is missing"
+        );
+        assert_eq!(commit_refusal_message(false, false, &synced), "This session is read-only", "a viewer cannot write either");
+        assert_eq!(
+            commit_refusal_message(true, true, &crate::collab_session::Status::Diverged),
+            commit_blocked_message(&crate::collab_session::Status::Diverged),
+            "the owner's refusal is about the session, not the role"
+        );
+    }
 }

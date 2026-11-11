@@ -12,7 +12,7 @@ use wordcraft_collab_engine::SessionModel;
 use wordcraft_doc::{Block, Cell, CharProps, Document, Paragraph, Path, Pos, StoryRef, Table};
 use wordcraft_engine::Session;
 
-use crate::{CopyBuffer, Outcome, Outgoing, Status, SyncState};
+use crate::{CopyBuffer, Divergence, Outcome, Outgoing, Status, SyncState};
 
 fn server() -> (Room<DocModel>, Vec<NodeRef>) {
     let mut room = Room::new(DocModel::new(Document::new()));
@@ -1491,4 +1491,28 @@ fn a_stale_positional_edit_resyncs_instead_of_diverging() {
         serde_json::to_value(&pair.mine.doc).expect("json"),
         "both replicas hold the same document"
     );
+}
+
+/// A divergence is not the connection status: a reconnect, a closed socket or a
+/// token renewal moves the status through `Offline`/`Connecting`, and none of
+/// them replaces the document the room never received (CodeRabbit 4533747521).
+#[test]
+fn a_divergence_outlives_the_connection_status_until_a_snapshot_lands() {
+    let mut divergence = Divergence::default();
+    assert!(!divergence.is_paused());
+    assert_eq!(divergence.status_after_welcome(), Status::InSync, "a clean session comes back in sync");
+
+    divergence.pause();
+    assert!(divergence.is_paused());
+    // The status an `Offline` or a renewal leaves behind is not consulted.
+    assert_eq!(divergence.status_after_welcome(), Status::Diverged, "a handshake does not clear the pause");
+
+    // A failure that ends the session task leaves the flag where it is: the
+    // edit is still in the document.
+    divergence.pause();
+    assert_eq!(divergence.status_after_welcome(), Status::Diverged);
+
+    divergence.snapshot();
+    assert!(!divergence.is_paused(), "the snapshot replaced the document and with it the lost edit");
+    assert_eq!(divergence.status_after_welcome(), Status::InSync);
 }

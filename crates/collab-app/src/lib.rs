@@ -151,6 +151,41 @@ impl Pause {
     }
 }
 
+/// Whether this window holds an edit the room never received (finding 8).
+///
+/// Kept apart from [`Status`] on purpose: `Offline` and `Connecting` describe the
+/// socket, not the document, and a reconnect or a token renewal moves the status
+/// through them. Only a snapshot replacing this document clears a divergence
+/// (review 5853542478, findings 5 and 6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Divergence {
+    paused: bool,
+}
+
+impl Divergence {
+    /// A command that did not reach the room left its edit in this document.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    pub fn is_paused(self) -> bool {
+        self.paused
+    }
+
+    /// What a `welcome` leaves the session in. A handshake does not replace the
+    /// document, so a paused session stays paused and asks for the snapshot that
+    /// repairs it.
+    pub fn status_after_welcome(self) -> Status {
+        if self.paused { Status::Diverged } else { Status::InSync }
+    }
+
+    /// A snapshot replaced the document: the edit the room never received went
+    /// with the document it was in.
+    pub fn snapshot(&mut self) {
+        self.paused = false;
+    }
+}
+
 /// Turn a local command into the operations the room expects, mapping a
 /// planning failure to the pause it causes. A diff that cannot address this
 /// document (a paragraph the server issued no id for, or a selection it cannot
@@ -341,6 +376,9 @@ pub struct Collab {
     state: SyncState,
     server: String,
     status: Status,
+    /// An edit the room never received: tracked apart from `status`, which a
+    /// reconnect or a renewal moves through `Offline`/`Connecting`.
+    divergence: Divergence,
     participants: Vec<ParticipantView>,
     commit: Option<Commit>,
     /// The cabinet refused the last commit (`409`): the reason, until a commit
@@ -379,6 +417,7 @@ impl Collab {
             state: SyncState::new(client_id, actor, Role::Editor),
             server: server.to_string(),
             status: Status::Connecting,
+            divergence: Divergence::default(),
             participants: Vec::new(),
             commit: None,
             conflict: None,
@@ -475,13 +514,15 @@ impl Collab {
                 self.state.version = self.state.version.max(version);
                 self.state.role = Role::parse(&role).unwrap_or(Role::Editor);
                 self.set_participants(&participants);
-                if self.status == Status::Diverged {
-                    // A handshake does not replace this document: the edit the
-                    // room never received is still in it. Stay paused and ask
-                    // again for the snapshot that repairs it (finding 8).
+                // A handshake is not a snapshot: `Offline` or `Connecting` never
+                // cleared the divergence, so this reads the flag, not the status
+                // (review 5853542478).
+                self.status = self.divergence.status_after_welcome();
+                if self.divergence.is_paused() {
+                    // The edit the room never received is still in the
+                    // document: ask again for the snapshot that repairs it
+                    // (finding 8).
                     let _ = self.handle.resync();
-                } else {
-                    self.status = Status::InSync;
                 }
             }
             Event::Nodes { nodes } => self.state.set_nodes(&nodes),
@@ -508,6 +549,9 @@ impl Collab {
             Event::Snapshot { version, bytes, last } => {
                 if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
                     self.state.version = version;
+                    // The document is the room's now: no local edit is missing
+                    // from it anymore.
+                    self.divergence.snapshot();
                     self.status = Status::InSync;
                     self.last_error = None;
                 }
@@ -588,6 +632,7 @@ impl Collab {
     /// rather than a commit that would leave it out).
     fn pause(&mut self, pause: Pause) -> String {
         self.last_error = Some(pause.message.clone());
+        self.divergence.pause();
         self.status = pause.status;
         if self.handle.resync().is_err() {
             // The session task is gone: nothing will bring the room's state

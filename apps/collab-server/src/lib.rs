@@ -395,10 +395,39 @@ impl AppState {
     /// The flag says the room was built from this client's seed; it answers the
     /// join without a snapshot, because the client already holds that state.
     fn room_for(&self, doc: &str, seed: Option<Vec<u8>>, role: Role) -> Result<(Arc<Mutex<RoomState>>, bool), Refusal> {
+        // A room that is already open costs one lock and no disk work.
+        if let Some(room) = self.open_room(doc) {
+            return Ok((room, false));
+        }
+        // Loading and parsing happen with no lock of the room map held: the
+        // model is read under a 64 MiB bound and parsed, and doing that inside
+        // the map would stall every other join, `/metrics` and `persist_all`
+        // (CodeRabbit 4533747484). The map is taken again only to publish the
+        // room, and a join that won the race is reused instead of replaced.
+        let built = self.build_room(doc, seed, role);
         let mut rooms = self.rooms.lock().unwrap_or_else(|poison| poison.into_inner());
         if let Some(room) = rooms.get(doc) {
             return Ok((room.clone(), false));
         }
+        let (state, seeded) = built?;
+        let room = Arc::new(Mutex::new(state));
+        rooms.insert(doc.to_string(), room.clone());
+        Ok((room, seeded))
+    }
+
+    /// The room of `doc` if one is open already.
+    fn open_room(&self, doc: &str) -> Option<Arc<Mutex<RoomState>>> {
+        self.rooms.lock().unwrap_or_else(|poison| poison.into_inner()).get(doc).cloned()
+    }
+
+    /// Build the room of `doc` from its stored snapshot, or from the copy the
+    /// joining client offered when the document was never snapshotted.
+    ///
+    /// Touches no shared lock beyond the store's own reads: the caller decides
+    /// whether the result is published. Two joins of a never-opened document
+    /// can therefore both build it; the loser's copy is dropped and the room
+    /// that is already in the map is the one they share.
+    fn build_room(&self, doc: &str, seed: Option<Vec<u8>>, role: Role) -> Result<(RoomState, bool), Refusal> {
         let (state, seeded) = match self.store.load(doc) {
             Ok(Some(snapshot)) => {
                 let mut document =
@@ -438,9 +467,7 @@ impl AppState {
                 return Err(Refusal::Corrupt(corrupt));
             }
         };
-        let room = Arc::new(Mutex::new(state));
-        rooms.insert(doc.to_string(), room.clone());
-        Ok((room, seeded))
+        Ok((state, seeded))
     }
 
     pub fn room_count(&self) -> usize {
@@ -555,12 +582,24 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     let Some(Handshake { client_id, claims, role, wants_version, seed }) = authenticate(&mut sink, &mut stream, &state).await else {
         return;
     };
-    let (room, seeded) = match state.room_for(&claims.doc, seed, role) {
-        Ok(parts) => parts,
+    let opened = {
+        // Building a room reads and parses the snapshot: blocking file work on a
+        // 64 MiB bound that must not run on an async worker either
+        // (CodeRabbit 4533747484).
+        let state = state.clone();
+        let doc = claims.doc.clone();
+        tokio::task::spawn_blocking(move || state.room_for(&doc, seed, role)).await
+    };
+    let (room, seeded) = match opened {
+        Ok(Ok(parts)) => parts,
         // Joining would open an empty room whose snapshot overwrites the stored
         // file (ADR WC-0003) or replaces the document the client has open
         // (ADR WC-0004).
-        Err(refusal) => return refuse_join(&mut sink, &state, &claims.doc, refusal).await,
+        Ok(Err(refusal)) => return refuse_join(&mut sink, &state, &claims.doc, refusal).await,
+        Err(_) => {
+            log::error!("the room of {} could not be opened: the task ended unexpectedly", claims.doc);
+            return;
+        }
     };
     // Every write to this peer is bounded by one heartbeat period: a peer that
     // stopped reading is closed instead of holding the connection open with a
@@ -792,7 +831,6 @@ fn register(
                 Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "this client id belongs to another participant");
             return Err(reject);
         }
-        existing.superseded.mark();
     } else if guard.peers.len() >= MAX_PARTICIPANTS {
         let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TooLarge, "the room is full");
         return Err(reject);
@@ -811,6 +849,13 @@ fn register(
         guard.lease_seen = std::time::Instant::now();
     }
     guard.lease_seen = std::time::Instant::now();
+    // Only now, with every refusal behind us, does a takeover retire the old
+    // connection: a join the lease check refuses must leave the working socket
+    // in place, or the client loses a live connection to a refusal that changes
+    // nothing (CodeRabbit 4533747488).
+    if let Some(existing) = guard.peers.get(client_id) {
+        existing.superseded.mark();
+    }
     let plan = guard.room.join(wants_version, false);
     let conn = next_connection();
     let peer = Peer::new(conn, &claims.sub, role, &claims.sid, tx.clone());
@@ -991,14 +1036,20 @@ async fn handle_op(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSink<W
             // A command that allocates ids carries them on the answer; peers
             // apply the delta instead of replacing the whole map.
             let delta_sent = applied.nodes.is_some();
-            broadcast(state, room, client_id, ServerMsg::Applied { applied }, sink).await;
+            // The author's own answer: without it the pending operation is never
+            // acknowledged on this connection, so a failed write ends it.
+            if !broadcast(state, room, client_id, ServerMsg::Applied { applied }, sink).await {
+                return false;
+            }
             let nodes = {
                 let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
                 let moved = guard.room.take_nodes_changed();
                 if !delta_sent && (structural || moved) { Some(guard.room.nodes()) } else { None }
             };
-            if let Some(nodes) = nodes {
-                broadcast(state, room, "", ServerMsg::Nodes { nodes }, sink).await;
+            if let Some(nodes) = nodes
+                && !broadcast(state, room, "", ServerMsg::Nodes { nodes }, sink).await
+            {
+                return false;
             }
             let due = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.should_snapshot();
             if due && let Err(message) = state.persist(&claims.doc, room, None) {
@@ -1083,8 +1134,9 @@ async fn handle_commit(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSi
             let notice =
                 ServerMsg::Error { code: "cabinetConflict".into(), message: format!("{message}; save a copy or reopen the file"), retryable: true };
             let _ = state.persist(&claims.doc, room, Some(bytes));
-            broadcast(state, room, client_id, notice, sink).await;
-            return true;
+            // Every replica needs this notice; the author's own frame decides
+            // whether the connection survives it.
+            return broadcast(state, room, client_id, notice, sink).await;
         }
         Some(Err(error)) => {
             Metrics::inc(&state.metrics.publish_errors);
@@ -1106,9 +1158,10 @@ async fn handle_commit(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSi
         log::warn!("snapshot after commit failed: {message}");
     }
     // The version and etag are the cabinet's; every peer shows them, so the
-    // participants panel never claims a save the cabinet did not take.
-    broadcast(state, room, client_id, ServerMsg::Committed { version, sha256, warnings, cabinet }, sink).await;
-    true
+    // participants panel never claims a save the cabinet did not take. The
+    // author's own frame is the answer to its commit: if it cannot be written,
+    // the session ends and the client resyncs.
+    broadcast(state, room, client_id, ServerMsg::Committed { version, sha256, warnings, cabinet }, sink).await
 }
 
 /// The owner asked for the file of a refused commit (`409`): send the bytes the
@@ -1175,7 +1228,13 @@ fn parse_client(text: &str) -> Result<ClientMsg, Reject> {
 /// Write one frame to a peer, bounded by the heartbeat period. A write that
 /// does not finish in time means the peer stopped reading: the caller ends the
 /// connection and the client reconnects and resyncs (ADR WC-0002).
-async fn send(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, msg: &ServerMsg, limit: Duration) -> Result<(), ()> {
+///
+/// Generic over the sink so a test can hand it one whose write fails and see
+/// the answer the callers act on (CodeRabbit 4533747492).
+async fn send<S>(sink: &mut S, msg: &ServerMsg, limit: Duration) -> Result<(), ()>
+where
+    S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
+{
     let text = serde_json::to_string(msg).map_err(|_| ())?;
     match timeout(limit, sink.send(Message::Text(text.into()))).await {
         Ok(result) => result.map_err(|_| ()),
@@ -1212,13 +1271,15 @@ fn queue_ephemeral(peer: &Peer, msg: &ServerMsg) {
 
 /// Send to every peer of the room (`broadcast` includes the sender, so the
 /// author sees the authoritative version too).
-async fn broadcast(
-    state: &AppState,
-    room: &Arc<Mutex<RoomState>>,
-    sender: &str,
-    msg: ServerMsg,
-    sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
-) {
+///
+/// `false` means the author's own frame could not be written within the
+/// heartbeat bound: the answer it needs for the operation it just sent is gone,
+/// so the caller ends the session and the client reconnects and resyncs, the way
+/// every other failed write in this file does (CodeRabbit 4533747492).
+async fn broadcast<S>(state: &AppState, room: &Arc<Mutex<RoomState>>, sender: &str, msg: ServerMsg, sink: &mut S) -> bool
+where
+    S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
+{
     let targets: Vec<Peer> = {
         let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
         guard.peers.iter().filter(|(id, _)| id.as_str() != sender).map(|(_, peer)| peer.clone()).collect()
@@ -1229,7 +1290,7 @@ async fn broadcast(
         // it missed is an accepted operation it can no longer derive.
         let _ = queue(state, peer, &msg);
     }
-    let _ = send(sink, &msg, state.cfg.heartbeat).await;
+    send(sink, &msg, state.cfg.heartbeat).await.is_ok()
 }
 
 /// Remove this connection's peer from the room. The connection id decides: when

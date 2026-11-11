@@ -114,10 +114,14 @@ paragraphs. Neither is text, and neither justifies refusing the document.
 ## Consequences
 
 1. **A damaged document is not silently replaced.** The join is refused, the
-   file is untouched, and the operator has a path to act on: restore `model.json`
-   (or `prev/`) from a backup, or remove the document directory to deliberately
-   start a blank room. `corrupt_snapshots_total` and the log line name the
-   document.
+   file is untouched, and the operator has a path to act on: restore the
+   document's directory from a backup — `model.json` **and** `meta` from the
+   same snapshot, since `Store::load` takes the head version from `meta` and an
+   older model beside a newer `meta` advertises a head the document does not
+   have (`source.docx` and `dedup.json` belong to the same snapshot but cost
+   only markup and deduplication when they are missing) — or remove the
+   document directory to deliberately start a blank room.
+   `corrupt_snapshots_total` and the log line name the document.
 2. **A document the server has never seen still opens.** `Ok(None)` is the
    ordinary first-open path, unchanged, and the test that a fresh document gets
    a room at version 0 still passes.
