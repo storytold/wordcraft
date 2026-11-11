@@ -77,14 +77,16 @@ const EUROPEAN_PORTUGUESE: [&str; 12] = ["PT", "AO", "CH", "CV", "FR", "GQ", "GW
 
 /// The dialog's language for a saved or interface language tag (`pt-PT`, `pt_PT.UTF-8`, `pt-pt`…):
 /// Portuguese (Portugal) when a `pt` tag names one of [`EUROPEAN_PORTUGUESE`], Portuguese (Brazil)
-/// for any other `pt` tag (`pt` alone, `pt-BR`), English (United States) otherwise. A private-use
-/// part (`pt-x-pt`) names no region.
+/// for any other `pt` tag (`pt` alone, `pt-BR`), English (United States) otherwise. The subtags after
+/// a singleton (an extension such as `pt-BR-t-pt-PT`, or private use such as `pt-x-pt`) name no
+/// region of the text, and a POSIX encoding or modifier (`.UTF-8`, `@euro`) is not part of the tag.
 fn date_language(tag: &str) -> &'static str {
-    let mut parts = tag.trim().split(['-', '_', '.', '@']);
+    let tag = tag.trim().split(['.', '@']).next().unwrap_or("");
+    let mut parts = tag.split(['-', '_']);
     if !parts.next().is_some_and(|p| p.eq_ignore_ascii_case("pt")) {
         return "en-US";
     }
-    let european = parts.take_while(|p| !p.eq_ignore_ascii_case("x")).any(|p| EUROPEAN_PORTUGUESE.iter().any(|r| r.eq_ignore_ascii_case(p)));
+    let european = parts.take_while(|p| p.len() > 1).any(|p| EUROPEAN_PORTUGUESE.iter().any(|r| r.eq_ignore_ascii_case(p)));
     if european { "pt-PT" } else { "pt-BR" }
 }
 
