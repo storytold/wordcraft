@@ -43,9 +43,10 @@ pub struct LayoutCache {
     pub(crate) env: u64,
     pub(crate) used: HashSet<Key>,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
-    /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
-    /// while both are unchanged, so headers using STYLEREF don't rebuild it on every pass.
-    pub(crate) styleref: Option<(Blocks, u64, Arc<styleref::StyleIndex>)>,
+    /// (shared, so an edited block is a different pointer), `env` (styles and numbering) and the
+    /// body's hidden deletions. Kept while they are unchanged, so headers using STYLEREF don't
+    /// rebuild it on every pass.
+    pub(crate) styleref: Option<(Blocks, u64, HideDeleted, Arc<styleref::StyleIndex>)>,
     pub hits: u64,
     pub misses: u64,
 }
@@ -67,17 +68,19 @@ impl LayoutCache {
         self.styleref = None;
     }
 
-    /// The STYLEREF style index for `doc`, rebuilt only when the body or the styles changed.
-    pub(crate) fn style_index(&mut self, doc: &Document) -> Arc<styleref::StyleIndex> {
-        if let Some((body, env, ix)) = &self.styleref
+    /// The STYLEREF style index for `doc` without the body deletions `hide` leaves out, rebuilt
+    /// only when the body, the styles or `hide` changed.
+    pub(crate) fn style_index(&mut self, doc: &Document, hide: HideDeleted) -> Arc<styleref::StyleIndex> {
+        if let Some((body, env, h, ix)) = &self.styleref
             && *env == self.env
+            && *h == hide
             && body.len() == doc.body.len()
             && body.iter().zip(doc.body.iter()).all(|(a, b)| Arc::ptr_eq(a, b))
         {
             return ix.clone();
         }
-        let ix = Arc::new(styleref::StyleIndex::build(doc));
-        self.styleref = Some((doc.body.to_vec(), self.env, ix.clone()));
+        let ix = Arc::new(styleref::StyleIndex::build(doc, hide));
+        self.styleref = Some((doc.body.to_vec(), self.env, hide, ix.clone()));
         ix
     }
 }

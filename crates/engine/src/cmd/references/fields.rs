@@ -76,12 +76,12 @@ pub(super) fn caption(s: &mut Session, v: &Value) -> CmdResult {
 /// after each heading of that level), `\r n` (reset to n), `\c` (repeat) and `\h` (hide), and
 /// fill body STYLEREF fields ([`wordcraft_layout::styleref`]): chapter numbers (`STYLEREF n \s`,
 /// the last level-n heading's number, or its count when the heading isn't numbered) and the
-/// text or number of the nearest paragraph of a style.
+/// text or number of the nearest paragraph of a style, without the deletions the view hides.
 pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
     // Numbers first: a STYLEREF to a heading that holds a SEQ field shows its new number.
     let numbers = seq_results(&s.doc);
     apply_results(&mut s.doc, numbers)?;
-    let refs = styleref_results(&s.doc);
+    let refs = styleref_results(&s.doc, s.body_hides_deleted());
     apply_results(&mut s.doc, refs)
 }
 
@@ -165,8 +165,9 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
 }
 
 /// The fresh results of the body's unlocked STYLEREF fields ([`update_seq`]), from the text
-/// `doc` holds: the SEQ fields in the headings they find should already show their numbers.
-fn styleref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
+/// `doc` holds without the deletions `hide` leaves out: the SEQ fields in the headings they find
+/// should already show their numbers.
+fn styleref_results(doc: &wordcraft_doc::Document, hide: wordcraft_layout::HideDeleted) -> Vec<FieldResult> {
     let mut out = Vec::new();
     // Built on the first STYLEREF.
     let mut styles: Option<wordcraft_layout::styleref::StyleIndex> = None;
@@ -177,7 +178,7 @@ fn styleref_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
             if FieldCode::parse(instr).name != "STYLEREF" {
                 continue;
             }
-            let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(doc));
+            let ix = styles.get_or_insert_with(|| wordcraft_layout::styleref::StyleIndex::build(doc, hide));
             if let Some(i) = ix.index_of(&path) {
                 out.push((StoryRef::Body, path.clone(), k, text_result(instr, ix.eval(instr, wordcraft_layout::styleref::At::Body(i)))));
             }
@@ -281,16 +282,17 @@ fn changed(doc: &wordcraft_doc::Document, mut results: Vec<FieldResult>) -> Vec<
 /// "Update fields before printing" off, while NUMWORDS, FILENAME, the summary properties and
 /// formulas keep their stored results (measured with Word for Windows, printing and exporting
 /// fields whose stored results were wrong). The document itself keeps its stored results.
+/// STYLEREF results leave out the body deletions `hide` says the output leaves out.
 /// `None` when every such field already shows its fresh result, so nothing is copied then.
 /// A `REF` to a missing bookmark shows Word's error in the interface language
 /// ([`crate::set_reference_error`]).
-pub fn output_fields(doc: &wordcraft_doc::Document) -> Option<wordcraft_doc::Document> {
+pub fn output_fields(doc: &wordcraft_doc::Document, hide: wordcraft_layout::HideDeleted) -> Option<wordcraft_doc::Document> {
     let error = crate::locale::reference_error();
-    output_fields_with(doc, error.as_deref().unwrap_or(REFERENCE_NOT_FOUND))
+    output_fields_with(doc, error.as_deref().unwrap_or(REFERENCE_NOT_FOUND), hide)
 }
 
 /// [`output_fields`], with `ref_error` for a `REF` to a missing bookmark.
-pub(crate) fn output_fields_with(doc: &wordcraft_doc::Document, ref_error: &str) -> Option<wordcraft_doc::Document> {
+pub(crate) fn output_fields_with(doc: &wordcraft_doc::Document, ref_error: &str, hide: wordcraft_layout::HideDeleted) -> Option<wordcraft_doc::Document> {
     // Numbers first, then the fields that read them: a STYLEREF to a heading holding a SEQ field,
     // and a REF to a bookmarked caption, show the new number.
     let seq = changed(doc, seq_results(doc));
@@ -298,7 +300,7 @@ pub(crate) fn output_fields_with(doc: &wordcraft_doc::Document, ref_error: &str)
     if let Some(d) = out.as_mut() {
         apply_results(d, seq).ok()?;
     }
-    let styles = changed(out.as_ref().unwrap_or(doc), styleref_results(out.as_ref().unwrap_or(doc)));
+    let styles = changed(out.as_ref().unwrap_or(doc), styleref_results(out.as_ref().unwrap_or(doc), hide));
     if !styles.is_empty() {
         apply_results(out.get_or_insert_with(|| doc.clone()), styles).ok()?;
     }

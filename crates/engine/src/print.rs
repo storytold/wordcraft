@@ -219,7 +219,7 @@ impl Session {
         }
         // Print Markup (File › Print) decides whether tracked changes and comments print.
         let markup = crate::cmd::file::export_options(self, v);
-        let out = crate::cmd::references::output_fields(&self.doc);
+        let out = crate::cmd::references::output_fields(&self.doc, self.output_hides_deleted(!markup.markup));
         let doc = out.as_ref().unwrap_or(&self.doc);
         let lay = self.output_layout_of(doc, markup.markup, !markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
