@@ -436,20 +436,13 @@ fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
 
 /// Paint highlights and shading before glyphs, grouping adjacent equal character borders.
 fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    character_fills(ctx, out);
     let mut open: Option<(Border, f32, f32)> = None;
     for k in ctx.line.c0..ctx.line.c1 {
         let (Some(cluster), Some(left), Some(right)) = (ctx.pl.clusters.get(k), ctx.line.cl_left(k), ctx.line.cl_right(k)) else { continue };
         let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
         if cluster.kind == ClKind::Marker {
             continue;
-        }
-        if let Some(color) = style.rc.highlight.or(style.rc.shading) {
-            out.push(Draw::Fill {
-                rect: Rect::new(ctx.x + left, ctx.top, (right - left).max(0.0), ctx.line.height),
-                color,
-                alpha: ctx.alpha,
-                text_bg: true,
-            });
         }
         let border = style.rc.border;
         if let Some((open_border, x0, x1)) = open.as_mut()
@@ -466,6 +459,47 @@ fn character_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
     if let Some((border, x0, x1)) = open {
         char_box(&border, x0, x1, ctx.top, ctx.bottom, ctx.alpha, out);
+    }
+}
+
+/// Highlight and character shading, one fill per run of touching letters with the same colour.
+/// One fill per letter left hairline seams where anti-aliased edges met at fractional pixels.
+/// Letters join in either direction, so right-to-left text merges too. Drawn before the borders,
+/// so a fill never covers a neighbouring run's border.
+fn character_fills(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
+    // Points; cluster edges that meet can differ by float rounding.
+    const TOUCH: f32 = 0.01;
+    let fill = |(color, x0, x1): (Rgb, f32, f32)| Draw::Fill {
+        rect: Rect::new(x0, ctx.top, (x1 - x0).max(0.0), ctx.line.height),
+        color,
+        alpha: ctx.alpha,
+        text_bg: true,
+    };
+    let mut open: Option<(Rgb, f32, f32)> = None;
+    for k in ctx.line.c0..ctx.line.c1 {
+        let (Some(cluster), Some(left), Some(right)) = (ctx.pl.clusters.get(k), ctx.line.cl_left(k), ctx.line.cl_right(k)) else { continue };
+        let Some(style) = ctx.pl.styles.get(cluster.style as usize) else { continue };
+        if cluster.kind == ClKind::Marker {
+            continue;
+        }
+        let color = style.rc.highlight.or(style.rc.shading);
+        let (left, right) = (ctx.x + left, ctx.x + right);
+        if let Some((open_color, x0, x1)) = open.as_mut()
+            && Some(*open_color) == color
+            && left <= *x1 + TOUCH
+            && right >= *x0 - TOUCH
+        {
+            *x0 = x0.min(left);
+            *x1 = x1.max(right);
+            continue;
+        }
+        if let Some(run) = open.take() {
+            out.push(fill(run));
+        }
+        open = color.map(|color| (color, left, right));
+    }
+    if let Some(run) = open {
+        out.push(fill(run));
     }
 }
 
