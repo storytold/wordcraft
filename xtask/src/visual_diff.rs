@@ -319,12 +319,12 @@ fn lcs(a: &[String], b: &[String]) -> Vec<(usize, usize)> {
 }
 
 /// A short stable hash of a line, for `--private` (FNV-1a, 64 bit).
-fn hash(s: &str) -> String {
+pub(crate) fn hash(s: &str) -> String {
     let h = s.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
     format!("{h:016x}")[..10].to_string()
 }
 
-fn round(v: f64, places: i32) -> f64 {
+pub(crate) fn round(v: f64, places: i32) -> f64 {
     let k = 10f64.powi(places);
     (v * k).round() / k
 }

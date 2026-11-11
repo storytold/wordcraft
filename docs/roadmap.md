@@ -1,6 +1,6 @@
 # WordCraft roadmap: milestones and what's next
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-03 · **Change:** minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged); previously minor (M15: Arabic mirrored UI #1195; 28 UI languages; Hebrew UI and native IME acceptance remain open); previously trivial (HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged; previously trivial: egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…), and the input-method handling has synthetic regressions while managed CI passed and native acceptance (#155–#164) remains open; previously trivial: M6: Manage Sources imports Word's `Sources.xml`, #2640; previously minor: Czech proofing review fixes; previously minor: Portuguese proofing; previously minor: Polish interface and Polish proofing; previously trivial: M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (local page-by-page layout corpus harness landed: `cargo xtask layout-corpus` exports five committed synthetic cases and compares each with a Word PDF exported by hand; Word references stay local); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged); previously minor (M15: Arabic mirrored UI #1195; 28 UI languages; Hebrew UI and native IME acceptance remain open); previously trivial (HTML import keeps preformatted lines with CR, CRLF or LF input newlines (#4810); numeric character references retain their separate meaning; readiness estimates unchanged; previously trivial: egui 0.37 migration: 27 interface languages remain pinned by `craft-i18n.rev` (9205108…), and the input-method handling has synthetic regressions while managed CI passed and native acceptance (#155–#164) remains open; previously trivial: M6: Manage Sources imports Word's `Sources.xml`, #2640; previously minor: Czech proofing review fixes; previously minor: Portuguese proofing; previously minor: Polish interface and Polish proofing; previously trivial: M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
 [`gaps.md`](gaps.md); the numbers are in [`target-app-parity.md`](target-app-parity.md). Hours are
@@ -21,7 +21,11 @@ Opus 5.5 agent wall-clock.
    autosave/recovery soak test. Local desktop recovery is implemented; cross-platform field
    validation and longer soak testing remain. See [recovery.md](recovery.md).
 5. **Pagination fidelity** (gap #4, 30–50 h): column balancing, footnote continuation, compat
-   options, a local page-by-page comparison harness; an owner decision on an Aptos-metric font.
+   options, an owner decision on an Aptos-metric font. The local page-by-page harness landed:
+   `cargo xtask layout-corpus --dir corpus/layout` exports five committed synthetic cases, compares
+   each with a Word PDF exported by hand and writes `summary.json`/`summary.md`, worst first.
+   Word reference PDFs stay gitignored and are never committed; the remaining work is collecting
+   references and fixing what the report ranks highest.
 6. **Formatting revisions and content controls** (gap #5, 12–18 h), **native printing** (gap #6,
    6–10 h), **dialog depth** (gap #7, 20–30 h).
 
@@ -74,6 +78,7 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | Local page-by-page layout corpus harness: `cargo xtask layout-corpus` orchestrates `wordcraft-cli convert` and `cargo xtask visual-diff`, aggregates page-count deltas, same-break percentages, median \|Δy\|, SSIM and worst pages, ranks cases worst first, and supports a private numbers/hashes-only mode. Five original synthetic DOCX cases are committed; Word PDFs are exported by hand and stay gitignored. |
 | 2026-11-03 | trivial | DOCX text-frame anchor locks survive JSON and two save/reopen cycles, including position and size edits |
 | 2026-11-03 | minor | M15: Arabic mirrored interface (#1195); 28 UI languages from craft-i18n; Hebrew UI, native-speaker review and native IME acceptance (#155–#164) remain open |
 | 2026-10-31 | minor | #3398: persistent screen-only green, cream and gray paper presets, with document backgrounds and export colors retained. Read Mode None follows the screen preset; Sepia/Inverse retain priority. |
