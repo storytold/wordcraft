@@ -243,16 +243,31 @@ fn endnote_queue(ctx: &Ctx) -> VecDeque<(u32, usize)> {
 
 /// Vertical sections are laid out on their pages turned on their side (see `vertical`).
 fn turned_sections(ctx: &mut Ctx, hf: &HfLinks, web: bool) -> Vec<Option<SectionProps>> {
+    let even_odd = ctx.doc.settings.even_odd_headers;
+    let mut page_num = 1u32;
     hf.sections
         .iter()
         .enumerate()
         .map(|(si, (_, s))| {
-            (!web && s.text_direction.is_turned()).then(|| {
+            let turned = (!web && s.text_direction.is_turned()).then(|| {
                 ctx.fields.page_format = s.page_num_format;
                 let heads = hf.heads.set(si);
-                let top = with_pct_base(ctx, hf.defining_width(false, si, heads.default), |c| body_top_for(c, s, heads.default));
+                let head = if s.title_page {
+                    heads.first
+                } else if even_odd && page_num.is_multiple_of(2) {
+                    heads.even.or(heads.default)
+                } else {
+                    heads.default
+                };
+                let base = hf.defining_width(false, si, head);
+                let top = with_pct_base(ctx, base, |c| body_top_for(c, s, head));
                 vertical::unturned_sect(s, top)
-            })
+            });
+            if let Some(start) = s.page_num_start {
+                page_num = start;
+            }
+            page_num = page_num.saturating_add(1);
+            turned
         })
         .collect()
 }
@@ -546,7 +561,9 @@ pub(crate) fn layout_pass(
     // Text boxes laid out in balancing attempts that were thrown away.
     let mut boxes_discarded = 0usize;
     let mut block = 0usize;
+    let numbering = (ctx.counters.clone(), ctx.eq_count);
     let turned = turned_sections(&mut ctx, &hf, mode.web);
+    (ctx.counters, ctx.eq_count) = numbering;
     let mut prev_turn = TextDirection::Horizontal;
     for (si, (end, sect)) in sections.iter().enumerate() {
         let page_format = sect.page_num_format;

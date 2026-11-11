@@ -3,6 +3,7 @@ use super::{
     json, p, para_block,
 };
 
+/// The header/footer part id for `slot` in `set`.
 pub(crate) fn slot_of(slot: wordcraft_layout::HfSlot, set: &wordcraft_doc::section::HeaderSet) -> Option<u32> {
     match slot {
         wordcraft_layout::HfSlot::First => set.first,
@@ -11,6 +12,7 @@ pub(crate) fn slot_of(slot: wordcraft_layout::HfSlot, set: &wordcraft_doc::secti
     }
 }
 
+/// Mutable reference to the header/footer part id for `slot` in `set`.
 pub(crate) fn slot_of_mut(slot: wordcraft_layout::HfSlot, set: &mut wordcraft_doc::section::HeaderSet) -> &mut Option<u32> {
     match slot {
         wordcraft_layout::HfSlot::First => &mut set.first,
