@@ -1,6 +1,6 @@
 # European Portuguese interface and proofing
 
-> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-04 · **Change:** trivial (the `pt-pt` Language pack is installed from Add a language… in File › Options › Language; previously trivial: WordCraft's craft-proof pin reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included, checked with the Natura dictionary; previously minor: proofing moved to craft-proof in storytold/craft-libs, #5202, which reads `pt-PT` text against its own `pt_PT` dictionary; previously trivial: the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
+> **Last reviewed:** 2026-11-03 · **Last updated:** 2026-11-11 · **Change:** trivial (the catalog has 3,210 entries and keeps its language name in `common.tsv`; a Portuguese variant without its own dictionary reads the other variant's pack; Insert › Date & Time and three region names are left to do; previously trivial: the `pt-pt` Language pack is installed from Add a language… in File › Options › Language; previously trivial: WordCraft's craft-proof pin reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included, checked with the Natura dictionary; previously minor: proofing moved to craft-proof in storytold/craft-libs, #5202, which reads `pt-PT` text against its own `pt_PT` dictionary; previously trivial: the dictionary's source and licences; previously minor: pt-PT spelling from the installed `pt_PT` dictionary, Review › Language and the Region list; the interface catalog goes to storytold/craft-i18n as `locales/pt-pt/wordcraft.tsv`) · **Target:** WordCraft 0.10.0
 
 ## Language menu and region
 
@@ -16,10 +16,12 @@ Proofing is craft-proof, in [storytold/craft-libs](https://github.com/storytold/
 `crates/proof` (#5202). Text tagged `pt-PT` has its own dictionary
 ([spelling-dictionaries.md](spelling-dictionaries.md)): `pt_PT` (or `pt-PT`, `pt`) in the
 dictionaries folder, the `pt-pt` Language pack (Add a language… in File › Options › Language), then the system's
-`pt_PT`. Grammar rules, messages and hyphenation patterns are Portuguese's. With the Natura
+`pt_PT`. When none of these is there, another installed Portuguese pack (`pt-br`) is read, then a
+system `pt` dictionary. Grammar rules, messages and hyphenation patterns are Portuguese's. With the Natura
 dictionary, `Isto e um facto económico da equipa, nao econômico.` flags `nao` (→ *não*) and
 `econômico` (→ *económico*) and nothing else; `facto`, `equipa` and `económico` are words.
-Brazilian Portuguese, a bare `pt` and the other regions read `pt_BR`.
+Brazilian Portuguese, a bare `pt` and the other regions read `pt_BR`, and fall back the same way to
+the `pt-pt` pack.
 
 The `pt_PT` dictionary LibreOffice ships (`dict-pt-PT`), which the `pt-pt` pack downloads, is the
 Natura project's (Departamento de Informática, Universidade do Minho,
@@ -35,8 +37,9 @@ combinations the dictionary doesn't derive (`fê-lo`) are flagged.
 ## Interface
 
 The interface catalogs live in [storytold/craft-i18n](https://github.com/storytold/craft-i18n).
-The European Portuguese one goes there as `locales/pt-pt/wordcraft.tsv`, with its
-`@id language.name` row, *Português (Portugal)*. Once `craft-i18n.rev` pins a commit that has it,
+The European Portuguese one goes there as `locales/pt-pt/wordcraft.tsv`, with
+`locales/pt-pt/common.tsv` holding its `@id language.name` row, *Português (Portugal)*
+([storytold/craft-i18n#121](https://github.com/storytold/craft-i18n/pull/121)). Once `craft-i18n.rev` pins a commit that has it,
 WordCraft lists `pt-pt` in `LANGUAGES` (with `pt-PT` as the language new documents are written
 in) and resolves `pt-PT` to it. Until then a `pt-PT` system locale keeps the English interface,
 and `pt-BR` keeps the Brazilian one.
@@ -44,7 +47,8 @@ and `pt-BR` keeps the Brazilian one.
 The catalog started from all 2,061 entries of the Brazilian catalog as it was in WordCraft before
 the move (the same keys), adapted from WordCraft's own `pt-br.tsv` and the meaning of the English
 labels; 574 of them differ from the Brazilian ones. The strings WordCraft gained since were
-written from the meaning of the English, for 3,050 entries in all. No proprietary translation
+written from the meaning of the English, for 3,210 entries in all (WordCraft's strings at
+`560565cd`). No proprietary translation
 resources were consulted.
 
 ### Terminology
@@ -78,14 +82,22 @@ Product and format names stay as they are.
 ## Verification and remaining scope
 
 `cargo test -p wordcraft-ui-egui` covers the Review › Language entry, its name and check mark for
-the ways a `pt-PT` tag is written, and the names of the other regions.
+the ways a `pt-PT` tag is written, the names of the other regions, and `pt-PT` in the Region list.
 
-Not covered yet: a review of the catalog by a second native speaker, which is welcome.
+Not covered yet:
+
+- a review of the catalog by a second native speaker, which is welcome;
+- the strings WordCraft gained after `560565cd`, which the catalog gets when it is synced again;
+- Insert › Date & Time offers English (United States) and Portuguese (Brazil) only, and turns a
+  `pt-PT` language into `pt-BR`;
+- Review › Language names `pt-GW`, `pt-ST` and `pt-TL` by their codes (*Portuguese (GW)*), as
+  Guinea-Bissau, São Tomé and Príncipe and Timor-Leste have no region name yet.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | trivial | The catalog has 3,210 entries (WordCraft's strings at `560565cd`) and keeps its language name in `common.tsv`; a Portuguese variant without its own dictionary reads the other variant's pack; `pt-PT` in the Region list is tested; Insert › Date & Time, three region names and the strings added since `560565cd` are listed as left to do |
 | 2026-11-04 | trivial | The `pt-pt` Language pack is installed from Add a language… in File › Options › Language (main's Options › Language redesign) |
 | 2026-11-03 | trivial | WordCraft's craft-proof pin (`47c9f62`) reads `pt-PT` text against its own dictionary, the `pt-pt` Language pack included; checked with the Natura dictionary; the other regions wait for storytold/craft-libs#523 |
 | 2026-11-02 | minor | Proofing moved to craft-proof (#5202), which reads `pt-PT` against its own `pt_PT` dictionary on craft-libs main; WordCraft's own pt-PT proofing code is gone, and this page says what each does. The catalog has 3,050 entries |
