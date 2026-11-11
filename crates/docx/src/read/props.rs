@@ -207,10 +207,10 @@ impl PropCtx {
     pub(super) fn app_default_cs_font(&self) -> String {
         let script = self.bidi_script.unwrap_or("Thai");
         let named = |f: &String| (!f.is_empty()).then(|| f.clone());
-        if script == "Latn" {
-            if let Some(f) = named(&self.minor_font) {
-                return f;
-            }
+        if script == "Latn"
+            && let Some(f) = named(&self.minor_font)
+        {
+            return f;
         }
         let themed = self
             .theme_fonts
