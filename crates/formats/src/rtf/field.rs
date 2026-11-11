@@ -31,6 +31,8 @@ pub(super) struct OpenField {
     /// Its result group was met in the text (not inside another field's instruction).
     result: bool,
     locked: bool,
+    /// Hidden text of its result was left out: the result is not what showed.
+    hidden: bool,
 }
 
 impl Reader {
@@ -46,7 +48,7 @@ impl Reader {
             _ => None,
         };
         let (depth, para, start) = (self.depth(), self.para_seq, self.para.inlines.len());
-        self.open_fields.push(OpenField { depth, index, para, start, tail_from, result: false, locked: false });
+        self.open_fields.push(OpenField { depth, index, para, start, tail_from, result: false, locked: false, hidden: false });
     }
 
     /// `\fldrslt` and `\fldlock`, read in a field's group.
@@ -63,9 +65,20 @@ impl Reader {
     /// `\chpgn`, the current page number: a `PAGE` field.
     pub(super) fn page_number_symbol(&mut self) {
         if self.marks_on && self.st.dest == Dest::Body && !self.st.hidden {
-            let fmt = self.st.fmt.clone();
+            // Tracked like text, so Accept and Reject apply to it.
+            let fmt = self.text_fmt();
             self.para.inlines.push(Inline::Field { instr: "PAGE".into(), result: String::new(), fmt, locked: false });
             self.para_has = true;
+        }
+    }
+
+    /// Hidden text left out of the body: an open field's result is then not what showed, and the
+    /// field is left as read rather than made a field that would show.
+    pub(super) fn hidden_text_dropped(&mut self) {
+        if let Some(f) = self.open_fields.last_mut()
+            && f.result
+        {
+            f.hidden = true;
         }
     }
 
@@ -75,7 +88,7 @@ impl Reader {
             return;
         }
         let Some(f) = self.open_fields.pop() else { return };
-        if !f.result || f.para != self.para_seq {
+        if !f.result || f.hidden || f.para != self.para_seq {
             return;
         }
         let instr = self.fields.get(f.index).map_or("", |s| s.trim());
@@ -117,7 +130,7 @@ fn result_text(inlines: &[Inline], f: &OpenField, group: &Fmt) -> Option<(String
             runs.push((tail, fmt));
         }
     }
-    for i in &inlines[f.start..] {
+    for i in inlines.get(f.start..)? {
         match i {
             Inline::Text(t, fmt) => runs.push((t, fmt)),
             _ => return None,

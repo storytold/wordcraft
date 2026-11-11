@@ -172,3 +172,34 @@ fn the_flow_reader_keeps_field_results_as_text() {
         b => panic!("{b:?}"),
     }
 }
+
+#[test]
+fn a_tracked_page_symbol_keeps_its_insertion_and_deletion() {
+    let rtf = br"{\rtf1\ansi{\*\revtbl{Unknown;}{Ann;}}
+\pard Page {\revised\revauth1 \chpgn}\par
+\pard Page {\deleted\revauthdel1 \chpgn}\par}";
+    let d = import(rtf).unwrap();
+    let f = fields_of(&d.body);
+    assert_eq!(f[0].1.len(), 1, "{f:?}");
+    assert_eq!(f[1].1.len(), 1, "{f:?}");
+    // Each field sits in a run carrying its tracked change, so Accept and Reject apply to it.
+    let marked = |i: usize, ins: bool| {
+        let p = d.body[i].as_para().unwrap();
+        p.runs.iter().any(|r| if ins { r.props.ins.is_some() } else { r.props.del.is_some() })
+    };
+    assert!(marked(0, true), "{:?}", d.body[0].as_para().unwrap().runs);
+    assert!(marked(1, false), "{:?}", d.body[1].as_para().unwrap().runs);
+}
+
+#[test]
+fn a_result_whose_text_is_hidden_inside_it_stays_as_read() {
+    // `\v` inside the result: what showed was nothing, so no field that would show a number.
+    let rtf = br"{\rtf1\ansi
+\pard x{\field{\*\fldinst PAGE}{\fldrslt \v 2}}y\par
+\pard x{\field{\*\fldinst PAGE}{\fldrslt }}y\par}";
+    let d = import(rtf).unwrap();
+    let f = fields_of(&d.body);
+    assert_eq!((f[0].0.as_str(), f[0].1.len()), ("xy", 0), "{f:?}");
+    // A result that is really empty is still a field.
+    assert_eq!(f[1].1.len(), 1, "{f:?}");
+}
