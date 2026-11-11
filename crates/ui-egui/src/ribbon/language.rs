@@ -257,7 +257,7 @@ fn name_parts(tag: Option<&str>) -> NameParts {
 
 /// The English name of a region subtag the language list has no entry for (else the subtag).
 fn region_name(code: &str) -> String {
-    const REGIONS: [(&str, &str); 69] = [
+    const REGIONS: [(&str, &str); 72] = [
         ("AE", "U.A.E."),
         ("AO", "Angola"),
         ("AR", "Argentina"),
@@ -287,6 +287,7 @@ fn region_name(code: &str) -> String {
         ("GB", "United Kingdom"),
         ("GQ", "Equatorial Guinea"),
         ("GT", "Guatemala"),
+        ("GW", "Guinea-Bissau"),
         ("HK", "Hong Kong SAR"),
         ("HN", "Honduras"),
         ("IE", "Ireland"),
@@ -319,8 +320,10 @@ fn region_name(code: &str) -> String {
         ("QA", "Qatar"),
         ("RU", "Russia"),
         ("SG", "Singapore"),
+        ("ST", "São Tomé and Príncipe"),
         ("SV", "El Salvador"),
         ("SY", "Syria"),
+        ("TL", "Timor-Leste"),
         ("TW", "Taiwan"),
         ("UA", "Ukraine"),
         ("US", "United States"),
