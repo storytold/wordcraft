@@ -797,3 +797,16 @@ fn heading_trailing_hash_survives_round_trip() {
         assert_eq!(export(&import(&md)), want, "second export of {src:?}");
     }
 }
+
+#[test]
+fn unclosed_inline_comments_are_text_without_a_search_each() {
+    // #3714-style: each unclosed `<!--` searched the rest of the paragraph for `-->`.
+    let src = "<!--".repeat(200_000);
+    let t = std::time::Instant::now();
+    let text: String = inl(&src).into_iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t) } else { None }).collect();
+    assert_eq!(text, src);
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    // A comment that does close still goes, after an unclosed one too.
+    let text: String = inl("a <!-- b --> c <!-- d").into_iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t) } else { None }).collect();
+    assert_eq!(text, "a  c <!-- d");
+}
