@@ -118,6 +118,8 @@ pub(super) struct Reader {
     /// it, and whether it is marked `\defshp`.
     pub(super) shape_read_at: Option<usize>,
     pub(super) pict_after_shape: bool,
+    /// The depth of the open `\*\shppict` group: a picture in it stands where the group does.
+    pub(super) shppict_at: Option<usize>,
     pub(super) pict_defshp: bool,
 }
 

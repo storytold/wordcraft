@@ -106,6 +106,11 @@ fn the_picture_after_a_shape_read_is_not_a_second_copy() {
     assert_eq!((shapes(&d).len(), images(&d)), (1, 1));
     let d = import(format!(r"{{\rtf1\ansi {}{pict}{pict} caption\par}}", shape(13)).as_bytes()).unwrap();
     assert_eq!((shapes(&d).len(), images(&d)), (1, 1));
+    // The picture may come wrapped in `\*\shppict`: still the shape's copy.
+    let d = import(format!(r"{{\rtf1\ansi {}{{\*\shppict{pict}}} caption\par}}", shape(13)).as_bytes()).unwrap();
+    assert_eq!((shapes(&d).len(), images(&d)), (1, 0));
+    let d = import(format!(r"{{\rtf1\ansi {}{{\*\shppict{pict}}} caption\par}}", shape(20)).as_bytes()).unwrap();
+    assert_eq!((shapes(&d).len(), images(&d)), (0, 1));
 }
 
 #[test]

@@ -16,7 +16,7 @@ impl Reader {
         if self.shape_word(w, p, first_in_group) {
             return;
         }
-        if w == "shppict" || self.start_header_footer_word(w) {
+        if self.shppict_word(w) || self.start_header_footer_word(w) {
             return;
         }
         if self.start_note_word(w) {
@@ -31,8 +31,7 @@ impl Reader {
                 Dest::Pict => {
                     self.pict_depth = Some(self.depth());
                     self.pict_defshp = false;
-                    // The picture right after a shape read, in the same group, may be its copy.
-                    self.pict_after_shape = self.shape_read_at.take().is_some_and(|d| d + 1 == self.depth());
+                    self.pict_after_shape = self.pict_follows_shape();
                     self.pict_hex.clear();
                     self.pict_half = None;
                     self.pict_kind = 0;

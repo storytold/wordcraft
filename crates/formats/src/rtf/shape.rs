@@ -244,8 +244,28 @@ impl Reader {
         self.shape.as_deref().is_some_and(|s| s.inst_depth == Some(self.depth()))
     }
 
+    /// `\shppict`: note where its group is, so a picture in it counts as standing in its place.
+    pub(super) fn shppict_word(&mut self, w: &str) -> bool {
+        if w != "shppict" {
+            return false;
+        }
+        self.shppict_at = Some(self.depth());
+        true
+    }
+
+    /// Whether the `\pict` just opened is right after a shape read, in the same group (a
+    /// `\*\shppict` around it is transparent): it may be the shape's copy.
+    pub(super) fn pict_follows_shape(&mut self) -> bool {
+        let depth = self.depth();
+        let at = if self.shppict_at.is_some_and(|s| s.saturating_add(1) == depth) { depth.saturating_sub(1) } else { depth };
+        self.shape_read_at.take().is_some_and(|d| d.saturating_add(1) == at)
+    }
+
     /// After a group closed: the shape whose `\shp` group it was is done.
     pub(super) fn after_shape_group(&mut self) {
+        if self.shppict_at.is_some_and(|d| self.depth() < d) {
+            self.shppict_at = None;
+        }
         if self.shape_read_at.is_some_and(|d| self.depth() < d) {
             self.shape_read_at = None;
         }
