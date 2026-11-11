@@ -113,6 +113,28 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let (a, b) = (old.get(i), new.get(j));
                 // The revised block, with its formatting changes tracked.
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
+                    if opts.formatting && pa.section.is_some() && pb.section.is_none() {
+                        if let Some(x) = a {
+                            out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
+                            changes += 1;
+                        }
+                        if let Some(x) = b {
+                            out.push(Arc::new(mark_block(
+                                x,
+                                &|c| {
+                                    c.ins = Some(ins);
+                                    c.del = None;
+                                    c.fmt_change = None;
+                                },
+                                0,
+                            )));
+                            changes += 1;
+                        }
+                        i += 1;
+                        j += 1;
+                        k += 1;
+                        continue;
+                    }
                     if !same_objects(&s.doc, pa, pb) {
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
@@ -123,35 +145,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                         k += 1;
                         continue;
                     }
-                    let mut p = pb.clone();
-                    let map = map_byte_offsets(&pa.text, &pb.text, &opts);
-                    for (r, props_a) in pa.run_ranges() {
-                        let start_b = map.get(r.start).copied().unwrap_or(p.len());
-                        let end_b = map.get(r.end).copied().unwrap_or(p.len());
-                        if start_b < end_b {
-                            let _ = p.format(start_b, end_b, &|c| {
-                                c.ins = props_a.ins;
-                                c.del = props_a.del;
-                                if c.fmt_change.is_none() {
-                                    c.fmt_change = props_a.fmt_change.clone();
-                                }
-                            });
-                        }
-                    }
-                    p.mark.ins = pa.mark.ins;
-                    p.mark.del = pa.mark.del;
-                    if p.mark.fmt_change.is_none() {
-                        p.mark.fmt_change = pa.mark.fmt_change.clone();
-                    }
-                    if !opts.formatting {
-                        p.props = pa.props.clone();
-                        p.section = pa.section.clone();
-                    } else if pa.text == pb.text {
-                        let before = s.doc.revisions.len();
-                        crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, &mut s.doc.revisions, &author, &date);
-                        if s.doc.revisions.len() > before || p != *pb {
-                            changes += 1;
-                        }
+                    let (p, changed) = build_same_para(pa, pb, &opts, &mut s.doc.revisions, &author, &date, fmt);
+                    if changed {
+                        changes += 1;
                     }
                     out.push(para_block(p));
                 } else if let Some(x) = b.or(a) {
@@ -171,28 +167,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let old_slice = old.get(i..i + dels).unwrap_or_default();
                 let new_slice = new.get(j..j + inss).unwrap_or_default();
                 let pairs = align_block_run(old_slice, new_slice, &opts, &mut align_budget);
-                for pair in pairs {
-                    match pair {
-                        RunPair::Diff(u, v) => {
-                            if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (old_slice.get(u).map(|x| &**x), new_slice.get(v).map(|x| &**x)) {
-                                out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx)));
-                                changes += 1;
-                            }
-                        }
-                        RunPair::Del(u) => {
-                            if let Some(x) = old_slice.get(u) {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
-                                changes += 1;
-                            }
-                        }
-                        RunPair::Ins(v) => {
-                            if let Some(x) = new_slice.get(v) {
-                                out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), 0)));
-                                changes += 1;
-                            }
-                        }
-                    }
-                }
+                changes += emit_run_pairs(&s.doc, &pairs, old_slice, new_slice, &mut ctx, &mut out);
                 i += dels;
                 j += inss;
                 k += run.max(1);
@@ -227,6 +202,142 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         "notHonoured": not_honoured,
         "characterFallback": char_fallbacks,
     }))
+}
+
+/// Builds the comparison output paragraph for an unchanged block pair, preserving the original's
+/// tracked revision metadata and recording formatting differences when formatting comparison is enabled.
+fn build_same_para(
+    pa: &Paragraph,
+    pb: &Paragraph,
+    opts: &CompareOptions,
+    revisions: &mut Vec<wordcraft_doc::Revision>,
+    author: &str,
+    date: &str,
+    fmt: u32,
+) -> (Paragraph, bool) {
+    let mut p = pb.clone();
+    p.props.fmt_change = pa.props.fmt_change.clone();
+    for r in &mut p.runs {
+        r.props.ins = None;
+        r.props.del = None;
+        r.props.fmt_change = None;
+    }
+    let new_fmt = std::cell::Cell::new(false);
+    let map = map_byte_offsets(&pa.text, &pb.text, opts);
+    for (r, props_a) in pa.run_ranges() {
+        let start_b = map.get(r.start).copied().unwrap_or(p.len());
+        let end_b = map.get(r.end).copied().unwrap_or(p.len());
+        if start_b < end_b {
+            let _ = p.format(start_b, end_b, &|c| {
+                c.ins = props_a.ins;
+                c.del = props_a.del;
+                if opts.formatting && pa.text != pb.text && props_a.formatting() != c.formatting() {
+                    c.fmt_change = wordcraft_doc::props::PropChange::boxed(fmt, props_a.formatting());
+                    new_fmt.set(true);
+                } else {
+                    c.fmt_change = props_a.fmt_change.clone();
+                }
+            });
+        }
+    }
+    p.mark.ins = pa.mark.ins;
+    p.mark.del = pa.mark.del;
+    if opts.formatting && pa.text != pb.text && pa.mark.formatting() != p.mark.formatting() {
+        p.mark.fmt_change = wordcraft_doc::props::PropChange::boxed(fmt, pa.mark.formatting());
+        new_fmt.set(true);
+    } else {
+        p.mark.fmt_change = pa.mark.fmt_change.clone();
+    }
+    let mut changed = false;
+    if !opts.formatting {
+        p.props = pa.props.clone();
+        p.section = pa.section.clone();
+    } else {
+        let before = revisions.len();
+        if pa.text == pb.text {
+            crate::cmd::fmt_revisions::compare_formatting(pa, &mut p, revisions, author, date);
+        } else if pa.props.formatting() != p.props.formatting() {
+            p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(fmt, pa.props.formatting());
+            new_fmt.set(true);
+        } else {
+            p.props.fmt_change = pa.props.fmt_change.clone();
+        }
+        if let (Some(sa), Some(sb)) = (&pa.section, &mut p.section) {
+            if strip_section(sa) != strip_section(sb) {
+                sb.fmt_change = wordcraft_doc::props::PropChange::boxed(fmt, strip_section(sa));
+                new_fmt.set(true);
+            } else {
+                sb.fmt_change = sa.fmt_change.clone();
+            }
+        }
+        if revisions.len() > before || new_fmt.get() || p != *pb {
+            changed = true;
+        }
+    }
+    (p, changed)
+}
+
+/// Emits alignment pairs within an edit run, diffing paired paragraphs or treating unmatched
+/// and mismatched section blocks as whole-block deletions and insertions. Returns the number of changes added.
+fn emit_run_pairs(
+    doc: &Document,
+    pairs: &[RunPair],
+    old_slice: &[Arc<Block>],
+    new_slice: &[Arc<Block>],
+    ctx: &mut DiffCtx<'_>,
+    out: &mut Vec<Arc<Block>>,
+) -> usize {
+    let mut changes = 0;
+    for &pair in pairs {
+        match pair {
+            RunPair::Diff(u, v) => {
+                if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (old_slice.get(u).map(|x| &**x), new_slice.get(v).map(|x| &**x)) {
+                    if ctx.opts.formatting && pa.section.is_some() && pb.section.is_none() {
+                        if let Some(x) = old_slice.get(u) {
+                            out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), 0)));
+                            changes += 1;
+                        }
+                        if let Some(x) = new_slice.get(v) {
+                            out.push(Arc::new(mark_block(
+                                x,
+                                &|c| {
+                                    c.ins = Some(ctx.ins);
+                                    c.del = None;
+                                    c.fmt_change = None;
+                                },
+                                0,
+                            )));
+                            changes += 1;
+                        }
+                    } else {
+                        out.push(para_block(word_diff(doc, pa, pb, ctx)));
+                        changes += 1;
+                    }
+                }
+            }
+            RunPair::Del(u) => {
+                if let Some(x) = old_slice.get(u) {
+                    out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), 0)));
+                    changes += 1;
+                }
+            }
+            RunPair::Ins(v) => {
+                if let Some(x) = new_slice.get(v) {
+                    out.push(Arc::new(mark_block(
+                        x,
+                        &|c| {
+                            c.ins = Some(ctx.ins);
+                            c.del = None;
+                            c.fmt_change = None;
+                        },
+                        0,
+                    )));
+                    changes += 1;
+                }
+            }
+        }
+    }
+    changes
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
@@ -1023,44 +1134,67 @@ fn key_with_offsets(s: &str, opts: &CompareOptions) -> (String, Vec<usize>) {
     let mut offsets = Vec::new();
 
     if opts.white_space {
-        for (b_idx, c) in s.char_indices() {
-            if opts.case {
+        if opts.case {
+            for (b_idx, c) in s.char_indices() {
                 key.push(c);
                 offsets.push(b_idx);
-            } else {
-                for lc in c.to_lowercase() {
-                    key.push(lc);
-                    offsets.push(b_idx);
+            }
+        } else {
+            let s_lc = s.to_lowercase();
+            let mut lc_chars = s_lc.chars();
+            for (b_idx, c) in s.char_indices() {
+                for _ in 0..c.to_lowercase().count() {
+                    if let Some(lc) = lc_chars.next() {
+                        key.push(lc);
+                        offsets.push(b_idx);
+                    }
                 }
             }
         }
     } else {
-        let mut first_word = true;
         let mut in_ws = true;
+        let mut word_start_b = 0;
         let mut ws_start_b = 0;
+        let mut words = Vec::new();
 
         for (b_idx, c) in s.char_indices() {
             if c.is_whitespace() {
                 if !in_ws {
+                    words.push((word_start_b, b_idx, ws_start_b));
                     in_ws = true;
                     ws_start_b = b_idx;
                 }
             } else {
                 if in_ws {
-                    if !first_word {
-                        key.push(' ');
-                        offsets.push(ws_start_b);
-                    }
-                    first_word = false;
+                    word_start_b = b_idx;
                     in_ws = false;
                 }
-                if opts.case {
+            }
+        }
+        if !in_ws {
+            words.push((word_start_b, s.len(), ws_start_b));
+        }
+
+        for (i, &(wb_start, wb_end, prev_ws)) in words.iter().enumerate() {
+            if i > 0 {
+                key.push(' ');
+                offsets.push(prev_ws);
+            }
+            let word = s.get(wb_start..wb_end).unwrap_or_default();
+            if opts.case {
+                for (b_off, c) in word.char_indices() {
                     key.push(c);
-                    offsets.push(b_idx);
-                } else {
-                    for lc in c.to_lowercase() {
-                        key.push(lc);
-                        offsets.push(b_idx);
+                    offsets.push(wb_start.saturating_add(b_off));
+                }
+            } else {
+                let w_lc = word.to_lowercase();
+                let mut lc_chars = w_lc.chars();
+                for (b_off, c) in word.char_indices() {
+                    for _ in 0..c.to_lowercase().count() {
+                        if let Some(lc) = lc_chars.next() {
+                            key.push(lc);
+                            offsets.push(wb_start.saturating_add(b_off));
+                        }
                     }
                 }
             }
@@ -1302,6 +1436,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
         p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, a.props.formatting());
     } else if ctx.opts.formatting {
         p.props = b.props.clone();
+        p.props.fmt_change = a.props.fmt_change.clone();
     } else {
         p.props = a.props.clone();
     }
@@ -1314,7 +1449,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
             ..b.mark.formatting()
         };
     } else if ctx.opts.formatting {
-        p.mark = CharProps { ins: a.mark.ins, del: a.mark.del, fmt_change: None, ..b.mark.formatting() };
+        p.mark = CharProps { ins: a.mark.ins, del: a.mark.del, fmt_change: a.mark.fmt_change.clone(), ..b.mark.formatting() };
     } else {
         p.mark = a.mark.clone();
     }
@@ -1326,7 +1461,9 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
                 sec.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, strip_section(sa));
                 p.section = Some(Box::new(sec));
             } else if ctx.opts.formatting {
-                p.section = b.section.clone();
+                let mut sec = (**sb).clone();
+                sec.fmt_change = sa.fmt_change.clone();
+                p.section = Some(Box::new(sec));
             } else {
                 p.section = a.section.clone();
             }
@@ -1340,11 +1477,9 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
                 p.section = None;
             }
         }
-        (Some(sa), None) => {
+        (Some(_), None) => {
             if ctx.opts.formatting {
-                let mut sec = (**sa).clone();
-                sec.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, strip_section(sa));
-                p.section = Some(Box::new(sec));
+                p.section = None;
             } else {
                 p.section = a.section.clone();
             }
