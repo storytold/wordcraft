@@ -1,20 +1,56 @@
 //! The piece table ([MS-DOC] `Clx`/`Pcdt`/`PlcPcd`): where every character position lives in
 //! the WordDocument stream, and how it is encoded.
+//!
+//! Word 6.0/95 files ([`crate::word6`]) keep the same `Clx` shape, but every piece is 8-bit text
+//! at a plain byte offset, in the code page of the font each run uses.
 
-use wordcraft_doc::encoding::cp1252;
+use wordcraft_doc::encoding::{code_page_byte, cp1252, is_byte_code_page};
 
 use crate::DocbinError;
 
 /// Most pieces any real file has; more means a corrupt `PlcPcd`.
 const MAX_PIECES: usize = 1_000_000;
 
-/// One piece: text at FcCompressed `fc` (30-bit offset + compression bit).
+/// How a piece's characters are stored.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Text {
+    /// UTF-16LE at `fc`.
+    Utf16,
+    /// Windows-1252, one byte per character at `fc / 2` (Word 97 FcCompressed).
+    Compressed,
+    /// One byte per character at `fc` itself, in the code page [`PieceTable::code_page_at`] gives
+    /// that byte (Word 6.0/95).
+    Bytes,
+}
+
+/// One piece: its text at `fc` (for Word 97, the 30-bit offset of FcCompressed).
 #[derive(Clone, Copy, Debug)]
 struct Pcd {
     fc: u32,
-    compressed: bool,
-    /// `Prm`: either a single sprm (Prm0) or an index into the Clx's Prc grpprls (Prm1).
+    text: Text,
+    /// `Prm`: either a single sprm (Prm0) or an index into the Clx's Prc grpprls (Prm1). Always 0
+    /// in Word 6.0/95 pieces, whose Prms use that version's sprm numbers.
     prm: u16,
+}
+
+impl Pcd {
+    /// The byte offset of the character `step / 2` characters into the piece. `step` is twice
+    /// the CP offset, so one formula serves all three encodings.
+    fn fc_at(&self, step: u32) -> Option<u32> {
+        match self.text {
+            Text::Utf16 => self.fc.checked_add(step),
+            Text::Compressed => self.fc.checked_add(step)?.checked_div(2),
+            Text::Bytes => self.fc.checked_add(step / 2),
+        }
+    }
+}
+
+/// The code page of the 8-bit text in the byte range `[lo, hi)` of the WordDocument stream.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CodePageRun {
+    pub(crate) lo: u32,
+    pub(crate) hi: u32,
+    pub(crate) code_page: u16,
 }
 
 /// The parsed piece table plus the grpprls of the Prcs that Prm1 references.
@@ -23,11 +59,32 @@ pub(crate) struct PieceTable {
     cps: Vec<u32>,
     pieces: Vec<Pcd>,
     prc_grpprls: Vec<Vec<u8>>,
+    /// For [`Text::Bytes`] pieces: the code page of each byte range, sorted by `lo`, not
+    /// overlapping. Bytes outside every range are Windows-1252.
+    code_pages: Vec<CodePageRun>,
 }
 
 impl PieceTable {
     /// Parse the `Clx` at `table[fc .. fc+lcb]`.
     pub(crate) fn parse(table: &[u8], fc: u32, lcb: u32) -> Result<PieceTable, DocbinError> {
+        Self::parse_clx(table, fc, lcb, false)
+    }
+
+    /// Parse a Word 6.0/95 `Clx` at `word[fc .. fc+lcb]`: the Word 97 shape, but every piece is
+    /// 8-bit text at its plain byte offset, and its Prm is not read.
+    pub(crate) fn parse_word6(word: &[u8], fc: u32, lcb: u32, code_pages: Vec<CodePageRun>) -> Result<PieceTable, DocbinError> {
+        let mut t = Self::parse_clx(word, fc, lcb, true)?;
+        t.code_pages = code_pages;
+        Ok(t)
+    }
+
+    /// One Word 6.0/95 piece: `ccp` characters of 8-bit text from byte `fc` on. This covers a file
+    /// that was not fast-saved, which has no `Clx`.
+    pub(crate) fn contiguous_bytes(fc: u32, ccp: u32, code_pages: Vec<CodePageRun>) -> PieceTable {
+        PieceTable { cps: vec![0, ccp], pieces: vec![Pcd { fc, text: Text::Bytes, prm: 0 }], prc_grpprls: Vec::new(), code_pages }
+    }
+
+    fn parse_clx(table: &[u8], fc: u32, lcb: u32, word6: bool) -> Result<PieceTable, DocbinError> {
         let fc = fc as usize;
         let lcb = lcb as usize;
         if lcb == 0 {
@@ -95,9 +152,28 @@ impl PieceTable {
                 return Err(DocbinError::Malformed("truncated aPcd".into()));
             };
             let prm = plc.get(at + 4..at + 6).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
-            pieces.push(Pcd { fc: fc_raw & 0x3FFF_FFFF, compressed: fc_raw & 0x4000_0000 != 0, prm });
+            pieces.push(if word6 {
+                // A plain byte offset: Word 6.0/95 text is always 8-bit, with no compression bit.
+                // The Prm's sprm numbers are not Word 97's, so it is not applied.
+                Pcd { fc: fc_raw, text: Text::Bytes, prm: 0 }
+            } else {
+                let text = if fc_raw & 0x4000_0000 != 0 { Text::Compressed } else { Text::Utf16 };
+                Pcd { fc: fc_raw & 0x3FFF_FFFF, text, prm }
+            });
         }
-        Ok(PieceTable { cps, pieces, prc_grpprls })
+        if word6 {
+            prc_grpprls.clear();
+        }
+        Ok(PieceTable { cps, pieces, prc_grpprls, code_pages: Vec::new() })
+    }
+
+    /// The code page of the 8-bit text byte at `fc` (in [`Text::Bytes`] pieces).
+    fn code_page_at(&self, fc: u32) -> u16 {
+        let i = self.code_pages.partition_point(|r| r.lo <= fc);
+        match i.checked_sub(1).and_then(|i| self.code_pages.get(i)) {
+            Some(r) if fc < r.hi => r.code_page,
+            _ => 1252,
+        }
     }
 
     /// The Prls this piece's `Prm` adds. Bit 0 (`fComplex`) discriminates: a Prm0
@@ -133,8 +209,7 @@ impl PieceTable {
         let p = self.piece_of(cp)?;
         let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
         let cp0 = *self.cps.get(i)?;
-        let step = cp.checked_sub(cp0)?.checked_mul(2)?;
-        if p.compressed { p.fc.checked_add(step)?.checked_div(2) } else { p.fc.checked_add(step) }
+        p.fc_at(cp.checked_sub(cp0)?.checked_mul(2)?)
     }
 
     /// The piece holding `cp`, with the CP range it covers: for every CP in that range the
@@ -167,13 +242,24 @@ impl PieceTable {
         let (Some(p), Some(&cp0)) = (self.pieces.get(i), self.cps.get(i)) else { return Err(u32::MAX) };
         let Some(off) = cp.checked_sub(cp0) else { return Err(next) };
         let off = off as usize;
-        if p.compressed {
-            // 8-bit, Windows-1252, one byte per character, stored at fc/2.
-            let at = ((p.fc / 2) as usize).checked_add(off);
-            return match at.and_then(|a| word.get(a)) {
-                Some(&b) => Ok((cp1252(b), 1)),
-                None => Err(next),
-            };
+        match p.text {
+            Text::Compressed => {
+                // 8-bit, Windows-1252, one byte per character, stored at fc/2.
+                let at = ((p.fc / 2) as usize).checked_add(off);
+                return match at.and_then(|a| word.get(a)) {
+                    Some(&b) => Ok((cp1252(b), 1)),
+                    None => Err(next),
+                };
+            }
+            Text::Bytes => {
+                // 8-bit, one byte per character at fc, in its run's code page.
+                let at = (p.fc as usize).checked_add(off);
+                return match at.and_then(|a| Some((u32::try_from(a).ok()?, *word.get(a)?))) {
+                    Some((a, b)) => Ok((byte_char(self.code_page_at(a), b), 1)),
+                    None => Err(next),
+                };
+            }
+            Text::Utf16 => {}
         }
         // UTF-16LE, one 16-bit unit per character, stored at fc.
         let unit = |k: usize| -> Option<u16> {
@@ -207,8 +293,7 @@ impl PieceSpan<'_> {
 
     /// [`PieceTable::fc_of_cp`] for a CP inside the span.
     pub(crate) fn fc_at(&self, cp: u32) -> Option<u32> {
-        let step = cp.checked_sub(self.cp_lo)?.checked_mul(2)?;
-        if self.pcd.compressed { self.pcd.fc.checked_add(step)?.checked_div(2) } else { self.pcd.fc.checked_add(step) }
+        self.pcd.fc_at(cp.checked_sub(self.cp_lo)?.checked_mul(2)?)
     }
 
     /// The raw Prm of the piece: two CPs with the same value get the same [`PrmRef`].
@@ -227,4 +312,17 @@ pub(crate) enum PrmRef<'a> {
     },
     /// Prm1: a grpprl from a Prc (absent if out of range).
     Grpprl(Option<&'a [u8]>),
+}
+
+/// One byte of 8-bit text in `code_page`. The East Asian code pages store a character as a lead
+/// and a trail byte, which one CP per byte can't represent, so their bytes above ASCII read as
+/// U+FFFD rather than as unrelated Windows-1252 letters.
+fn byte_char(code_page: u16, b: u8) -> char {
+    if is_byte_code_page(code_page) {
+        code_page_byte(code_page, b)
+    } else if b.is_ascii() {
+        char::from(b)
+    } else {
+        '\u{FFFD}'
+    }
 }
