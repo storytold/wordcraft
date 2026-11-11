@@ -16,6 +16,7 @@ mod find_apostrophes;
 mod font_sizes;
 mod fonts;
 mod ime_noop;
+mod para_tools;
 mod revision_checks;
 mod typing;
 mod wordart;
@@ -4682,7 +4683,7 @@ fn typed_paragraphs_are_capped_for_every_caller() {
     assert!(!body_texts(&s).iter().any(|p| p.contains('y')));
 }
 
-fn hostile_junk() -> [serde_json::Value; 8] {
+fn hostile_junk() -> [serde_json::Value; 10] {
     [
         json!(null),
         json!({}),
@@ -4692,6 +4693,9 @@ fn hostile_junk() -> [serde_json::Value; 8] {
         json!({"page": 0, "x": 1e30, "y": -1e30, "extend": 1}),
         json!({"width": 1e-9, "height": 1e30, "top": -1e9, "left": 1e9}),
         json!({"section": {"pageW": -1e308, "pageH": 0, "marginTop": 1e30, "header": -5, "columns": {"count": 1000000, "space": -1e300, "widths": [[0, 0]]}}}),
+        // Strict export (#6005): the flag, and file.strictReport's `page`, with junk.
+        json!({"strict": true, "page": 0, "scale": 0, "markup": true}),
+        json!({"strict": "x", "page": 1e30, "scale": 1e-9, "markup": "x"}),
     ]
 }
 
@@ -4788,6 +4792,9 @@ fn hostile_file_params_never_panic() {
             json!({"path": path, "password": "x", "format": "wordml2003", "markup": "x", "confirmDamaged": 1}),
             json!({"path": path, "password": 5, "format": 5, "markup": true}),
             json!({"path": path, "page": 0, "scale": 0, "width": -1e308, "alt": 5}),
+            json!({"path": path, "strict": true, "page": 1, "scale": 0.1}),
+            json!({"path": path, "strict": true, "page": 1e30, "markup": true, "format": "flatopc"}),
+            json!({"path": path, "strict": 5, "page": -1}),
             json!({"path": path, "data": "not base64!"}),
             json!({"path": path, "data": "AAAA"}),
             json!({"path": path, "pagesPerSheet": 7, "range": "x", "pages": "9-1,,", "parity": "x", "copies": 3, "paper": "x"}),
@@ -5215,6 +5222,42 @@ fn arrange_bounds_resizes_and_moves_objects() {
     // One undo per change.
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(box_area(&mut s).rect, n);
+}
+
+/// A frame anchored to a page and moved in WordCraft is placed by its paragraph from then on: the
+/// file's page number goes, or the save would put it back. Only resized, it stays on that page.
+#[test]
+fn an_odt_frame_moved_from_its_page_loses_the_page_number() {
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><draw:frame text:anchor-type="page" text:anchor-page-number="3" svg:x="5cm" svg:y="5cm" svg:width="4cm" svg:height="2cm"><draw:text-box><text:p>On it</text:p></draw:text-box></draw:frame><text:p>One</text:p><text:p>Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str())] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let odt = z.finish().unwrap().into_inner();
+    let frame_tag = |s: &Session| {
+        let mut a = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
+        let mut c = String::new();
+        std::io::Read::read_to_string(&mut a.by_name("content.xml").unwrap(), &mut c).unwrap();
+        c.split("<draw:frame").nth(1).and_then(|t| t.split('>').next()).unwrap_or_default().to_string()
+    };
+    let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"width": 150, "height": 80}));
+    assert!(frame_tag(&s).contains(r#"text:anchor-page-number="3""#), "resized: {}", frame_tag(&s));
+    let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+    select_box(&mut s);
+    run(&mut s, "arrange.bounds", json!({"page": 0, "x": 200, "y": 300}));
+    let tag = frame_tag(&s);
+    assert!(!tag.contains("anchor-page-number") && !tag.contains(r#"text:anchor-type="page""#), "moved: {tag}");
+    // Moved, then placed by the margins: the file's page number is gone, not only hidden.
+    run(&mut s, "arrange.position", json!({"preset": "topLeft"}));
+    let tag = frame_tag(&s);
+    assert!(!tag.contains("anchor-page-number"), "moved, then placed: {tag}");
 }
 
 /// An object dropped near the bottom of a page lands there, though at the top of the paragraph
@@ -10792,6 +10835,44 @@ fn insert_picture_takes_a_windows_metafile() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn window_commands_need_the_desktop_and_name_a_window() {
+    use crate::cmd::view::OtherWindow;
+    let mut s = s();
+    // Web, CLI, MCP: one window, so View › Window is disabled.
+    for id in ["view.arrangeAll", "view.sideBySide", "view.syncScroll"] {
+        assert!(s.run(id, &json!({})).is_err(), "{id} without a window host");
+    }
+    s.windows.available = true;
+    run(&mut s, "view.arrangeAll", json!({}));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "arrange"})));
+    assert!(s.run("view.sideBySide", &json!({})).is_err(), "no other window");
+    s.windows.others = vec![OtherWindow { id: 7, title: "Notes".into() }, OtherWindow { id: 9, title: "Draft".into() }];
+    let e = s.run("view.sideBySide", &json!({})).unwrap_err().to_string();
+    assert!(e.contains("7 (Notes)") && e.contains("9 (Draft)"), "several windows: say which: {e}");
+    assert!(s.run("view.sideBySide", &json!({"window": 8})).is_err(), "an unknown window");
+    assert!(s.run("view.sideBySide", &json!({"window": "9"})).is_err());
+    // Side by Side pairs with one window and scrolls together until turned off.
+    assert!(s.run("view.syncScroll", &json!({})).is_err(), "only while Side by Side is on");
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7}));
+    assert_eq!((r["value"].as_bool(), s.windows.side_by_side, s.windows.sync_scroll), (Some(true), Some(7), true));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "with": 7})));
+    run(&mut s, "view.syncScroll", json!({}));
+    assert!(!s.windows.sync_scroll);
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "syncScroll", "with": 7, "value": false})));
+    // Asking again for the partner it already has keeps scrolling off and pairs nothing anew.
+    let r = run(&mut s, "view.sideBySide", json!({"window": 7, "value": true}));
+    assert_eq!((r["syncScroll"].as_bool(), s.windows.sync_scroll), (Some(false), false));
+    assert!(s.ui_requests.is_empty());
+    // Another partner replaces the first; the bare button turns it off.
+    run(&mut s, "view.sideBySide", json!({"window": 9}));
+    assert_eq!(std::mem::take(&mut s.ui_requests), [json!({"windows": "sideBySide", "off": 7}), json!({"windows": "sideBySide", "with": 9})]);
+    run(&mut s, "view.sideBySide", json!({}));
+    assert_eq!((s.windows.side_by_side, s.windows.sync_scroll), (None, false));
+    assert_eq!(s.ui_requests.pop(), Some(json!({"windows": "sideBySide", "off": 9})));
+    assert!(!s.dirty, "window commands never touch the document");
+}
+
 /// Change Picture must keep the replacement's own format: the part's name and content type
 /// come from the extension, so a JPEG stored as `imageN.png` saves declared `image/png` (Word
 /// and LibreOffice then show a broken picture).
@@ -12572,6 +12653,40 @@ fn export_png_rejects_a_page_number_that_does_not_fit() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn screen_paper_color_is_a_persistent_preference_not_document_formatting() {
+    use crate::cmd::view::PaperColor;
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Screen paper test", "raw": true}));
+    let before = serde_json::to_value(&s.doc).unwrap();
+    let docx_before = wordcraft_docx::write(&s.doc).unwrap();
+    s.dirty = false;
+    let dirty = s.dirty;
+    s.view.dark_mode = true;
+    for (value, expected) in
+        [("green", PaperColor::Green), ("cream", PaperColor::Cream), ("gray", PaperColor::Gray), ("document", PaperColor::Document)]
+    {
+        run(&mut s, "view.paperColor", json!({"value": value}));
+        assert_eq!(s.prefs.paper_color, expected);
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), before);
+        assert_eq!(s.dirty, dirty);
+        assert_eq!(wordcraft_docx::write(&s.doc).unwrap(), docx_before);
+        assert!(!s.view.dark_mode, "choosing a tint turns off dark paper");
+        let saved = serde_json::to_value(&s.prefs).unwrap();
+        let restored: crate::Prefs = serde_json::from_value(saved).unwrap();
+        assert_eq!(restored.paper_color, expected);
+    }
+    for v in [json!({}), json!({"value": "red"}), json!({"value": 42})] {
+        assert!(s.run("view.paperColor", &v).is_err());
+        assert_eq!(s.prefs.paper_color, PaperColor::Document);
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({})).unwrap();
+    assert_eq!(legacy.paper_color, PaperColor::Document);
+    let future: crate::Prefs = serde_json::from_value(json!({"paperColor":"future", "countNotes":false})).unwrap();
+    assert_eq!(future.paper_color, PaperColor::Document);
+    assert!(!future.count_notes);
+}
+
 /// Font › Emphasis mark puts a mark over (or under) each selected character, and the layout
 /// draws one per character; Format state reports it, and none takes it off.
 #[test]
@@ -12617,6 +12732,73 @@ fn an_odt_charts_paragraph_is_written_as_read_after_drawing_it() {
     let mut content = String::new();
     std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
     assert!(content.contains(r#"draw:name="Chart1""#) && !content.contains("wcChart"), "{content}");
+}
+
+/// A picture an OpenDocument file makes wider than the text (a rule across the whole page) stays
+/// that wide, and its paragraph is written as read: opening a file changes nothing in it.
+#[test]
+fn an_odts_picture_wider_than_the_text_keeps_its_size() {
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm" fo:margin-left="3cm" fo:margin-right="3cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p><draw:frame draw:name="Rule" text:anchor-type="paragraph" svg:x="-1cm" svg:width="18cm" svg:height="0.2cm"><draw:image xlink:href="Pictures/r.png"/></draw:frame>Text</text:p></office:text></office:body></office:document-content>"#
+    );
+    let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 64]].concat();
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [
+        ("mimetype", b"application/vnd.oasis.opendocument.text".as_slice()),
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Pictures/r.png", &png),
+    ] {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data).unwrap();
+    }
+    let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+    let width = doc.body[0]
+        .as_para()
+        .unwrap()
+        .objects
+        .iter()
+        .find_map(|o| if let wordcraft_doc::para::InlineObject::Image { w, .. } = o { Some(*w) } else { None });
+    let want = 18.0 * 72.0 / 2.54;
+    assert!(width.is_some_and(|w| (w - want).abs() < 0.1), "{width:?}, not fitted to the text");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&doc).unwrap())).unwrap();
+    let mut saved = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut saved).unwrap();
+    assert!(saved.contains(r#"draw:name="Rule""#) && saved.contains(r#"svg:width="18cm""#), "written as read: {saved}");
+}
+
+/// Numbering or a new style makes the styles be written from the model on save: a document in
+/// German stays in German, rather than taking the default language of what opens it next.
+#[test]
+fn an_odts_language_survives_a_save_after_numbering_or_a_new_style() {
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="de" fo:country="DE"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Hallo</text:p></office:text></office:body></office:document-content>"#
+    );
+    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for (name, data) in [("mimetype", "application/vnd.oasis.opendocument.text"), ("content.xml", content.as_str()), ("styles.xml", styles.as_str())]
+    {
+        z.start_file(name, o).unwrap();
+        std::io::Write::write_all(&mut z, data.as_bytes()).unwrap();
+    }
+    let odt = z.finish().unwrap().into_inner();
+    for (command, params) in [("para.numbering", json!({})), ("styles.create", json!({"name": "Notiz"}))] {
+        let mut s = Session::new(crate::io::open_bytes("t.odt", &odt).unwrap());
+        assert_eq!(cmd::default_lang(&s).as_deref(), Some("de-DE"), "the document's, not English");
+        run(&mut s, command, params);
+        let saved = wordcraft_formats::odt::export(&s.doc).unwrap();
+        let back = crate::io::open_bytes("t.odt", &saved).unwrap();
+        assert_eq!(back.styles.default_chr.lang.as_deref(), Some("de-DE"), "after {command}");
+    }
 }
 
 /// A Word package whose body holds `body` and, as `rIdC`, the chunk part `word/afchunk.{ext}`.
@@ -12865,6 +13047,47 @@ fn page_down_extends_a_selection_that_ends_in_collapsed_outline_text() {
     assert_eq!(s.sel.anchor, anchor, "the anchor stays");
     assert!(s.sel.focus.path.0[0] > 6, "Page Down extends the selection a page on: {:?}", s.sel.focus);
     assert!(s.layout().caret(&s.sel.focus).is_some(), "to a place the outline shows");
+}
+
+/// A picture an OpenDocument file gives no size is shown at its own, fitted to the text as other
+/// formats' are; one with a stated size keeps it, in line too.
+#[test]
+fn an_odts_picture_is_fitted_only_when_it_states_no_size() {
+    let ns = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let styles = format!(
+        r#"<office:document-styles {ns}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(1000, 500).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let open = |attrs: &str| {
+        let content = format!(
+            r#"<office:document-content {ns}><office:body><office:text><text:p><draw:frame text:anchor-type="as-char"{attrs}><draw:image xlink:href="Pictures/a.png"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
+        );
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        for (name, data) in [
+            ("mimetype", b"application/vnd.oasis.opendocument.text".as_slice()),
+            ("content.xml", content.as_bytes()),
+            ("styles.xml", styles.as_bytes()),
+            ("Pictures/a.png", &png),
+        ] {
+            z.start_file(name, o).unwrap();
+            std::io::Write::write_all(&mut z, data).unwrap();
+        }
+        let doc = crate::io::open_bytes("t.odt", &z.finish().unwrap().into_inner()).unwrap();
+        doc.body[0]
+            .as_para()
+            .unwrap()
+            .objects
+            .iter()
+            .find_map(|o| if let wordcraft_doc::para::InlineObject::Image { w, h, .. } = o { Some((*w, *h)) } else { None })
+            .unwrap()
+    };
+    let (w, h) = open("");
+    assert!((w - 306.14).abs() < 0.5 && (h - 153.07).abs() < 0.5, "fitted to the text: {w} {h}");
+    let (w, _) = open(r#" svg:width="18cm" svg:height="9cm""#);
+    assert!((w - 18.0 * 72.0 / 2.54).abs() < 0.5, "as the file says: {w}");
 }
 
 /// Issue #5667's document: `Intro`, then an inserted `Appendix` paragraph whose mark carries a
