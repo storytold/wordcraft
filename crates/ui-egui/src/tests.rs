@@ -8301,7 +8301,7 @@ fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui()
     let mut raw1 = egui::RawInput { events: vec![wheel_event(-1.0)], ..Default::default() };
     a.raw_input_hook(&ctx, &mut raw1);
     let factor = a.ui.touchpad_scroll_speed.touchpad_factor();
-    let scaled_1 = -1.0 * factor;
+    let scaled_1 = -factor;
     assert_eq!(raw1.events[0], wheel_event(scaled_1));
 
     // 2. Warm-up UI pass runs: window_ui returns early because fonts_frames < 2.
