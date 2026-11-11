@@ -307,6 +307,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let mut out = Vec::with_capacity(runs.len());
     for (face, s, shaped) in runs {
         let k = scale(face);
+        let ranges = crate::missing::cluster_ranges(s, &shaped);
         let mut glyphs = Vec::with_capacity(shaped.len());
         for g in &shaped {
             glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
@@ -324,7 +325,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
             synth_italic: false,
             text: s.to_string(),
             link: None,
-            ranges: Vec::new(),
+            ranges,
             text_bg: None,
             x_scale: 1.0,
         });
