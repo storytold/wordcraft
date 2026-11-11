@@ -51,14 +51,10 @@ fn is_default(s: &El) -> bool {
 /// gets a copy, so a hostile one megabyte id doesn't become gigabytes (#5056).
 const MAX_DEFAULT_TABLE_STYLE_ID: usize = 256;
 
-/// Normal Table as Word writes it: nothing but 0.08" left and right cell margins, which an
-/// unstyled table already has here. `s` is the style with its based-on chain merged.
-fn plain_normal_table(s: &wordcraft_doc::styles::TableStyleProps) -> bool {
-    let word_margins = |m: [f32; 4]| m.iter().zip([0.0, 5.4, 0.0, 5.4]).all(|(a, b)| (a - b).abs() < 0.01);
-    let p = &s.parts;
-    s.para == Default::default()
-        && s.chr == Default::default()
-        && *p == TableStyleParts { cell_margins: p.cell_margins.filter(|m| word_margins(*m)), ..Default::default() }
+/// A table style named Normal Table (`Normal Table` or `Table Normal`, any case), which Word
+/// gives a table nothing from, whatever it holds: its name decides, not its id.
+fn is_normal_table(s: &El) -> bool {
+    s.child_val("w:name").is_some_and(|n| ["normal table", "table normal"].iter().any(|w| n.trim().eq_ignore_ascii_case(w)))
 }
 
 /// The outline level (0 for Heading 1) of Word's built-in style named `heading 1` … `heading 9`.
@@ -204,16 +200,17 @@ impl Reader<'_> {
             sheet.add_default_gallery();
         }
         // A table with no `w:tblStyle` takes the default table style, as in Word (#5056); the
-        // `default` flag above leaves `TableNormal` out. Word's plain Normal Table is skipped: an
-        // unstyled table is that already, and saving writes it as the default.
+        // `default` flag above leaves `TableNormal` out. A default named Normal Table is skipped:
+        // Word gives the table nothing from it, so it stays unstyled, as saving writes it.
         self.default_table_style = root
             .children("w:style")
             .take(10_000)
             .find(|s| s.attr("w:type") == Some("table") && is_default(s))
+            .filter(|s| !is_normal_table(s))
             .and_then(|s| s.attr("w:styleId"))
             .filter(|id| id.len() <= MAX_DEFAULT_TABLE_STYLE_ID)
             .map(|id| self.pc.style_id(id))
-            .filter(|id| sheet.table_style(id).is_some_and(|t| !(id == "TableNormal" && plain_normal_table(&t))));
+            .filter(|id| sheet.table_style(id).is_some());
         self.doc.styles = sheet;
         Ok(())
     }

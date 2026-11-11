@@ -784,15 +784,16 @@ fn empty_tbl_borders_elements_leave_sides_unset() {
 }
 
 /// #5056: a table without `w:tblStyle` takes the styles part's default table style, as Word
-/// reports (`Table.Style`) and draws it. Word's plain Normal Table leaves tables unstyled.
+/// reports (`Table.Style`) and draws it. A default named Normal Table leaves tables unstyled.
 #[test]
 fn a_table_without_a_style_takes_the_default_table_style() {
     // A style whose header row draws a bottom rule and bottom-aligns its cells.
-    let ruled = |id: &str, default: &str| {
+    let ruled_named = |id: &str, name: &str, default: &str| {
         format!(
-            r#"<w:style w:type="table" w:default="{default}" w:styleId="{id}"><w:name w:val="{id}"/><w:tblStylePr w:type="firstRow"><w:tcPr><w:vAlign w:val="bottom"/><w:tcBorders><w:bottom w:val="single" w:sz="4"/></w:tcBorders></w:tcPr></w:tblStylePr></w:style>"#
+            r#"<w:style w:type="table" w:default="{default}" w:styleId="{id}"><w:name w:val="{name}"/><w:tblStylePr w:type="firstRow"><w:tcPr><w:vAlign w:val="bottom"/><w:tcBorders><w:bottom w:val="single" w:sz="4"/></w:tcBorders></w:tcPr></w:tblStylePr></w:style>"#
         )
     };
+    let ruled = |id: &str, default: &str| ruled_named(id, id, default);
     let normal = r#"<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>"#;
     let read = |styles: &str, tbl_style: &str| {
         let styles = format!("<w:styles {W_NS}>{styles}</w:styles>");
@@ -808,17 +809,20 @@ fn a_table_without_a_style_takes_the_default_table_style() {
         (ruled("Rule", "0"), "", None),
         (format!("{}{}", ruled("Rule", "1"), ruled("Other", "0")), r#"<w:tblStyle w:val="Other"/>"#, Some("Other")),
         (normal.to_string(), "", None),
-        // A Normal Table with formatting of its own, or from the style it is based on, formats the
-        // tables.
-        (ruled("TableNormal", "1"), "", Some("TableNormal")),
+        // Word gives a table nothing from a style named Normal Table (any case, either word
+        // order), even with formatting of its own or from the style it is based on. The name
+        // decides, not the id.
+        (ruled_named("TableNormal", "Normal Table", "1"), "", None),
+        (ruled_named("Plain", "table normal", "1"), "", None),
         (
             format!(
                 r#"{}<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:basedOn w:val="Rule"/></w:style>"#,
                 ruled("Rule", "0")
             ),
             "",
-            Some("TableNormal"),
+            None,
         ),
+        (ruled_named("TableNormal", "Foo", "1"), "", Some("TableNormal")),
         // An id too long to copy into every table is not given to them.
         (ruled(&"L".repeat(300), "1"), "", None),
     ] {
