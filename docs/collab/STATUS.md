@@ -5,14 +5,16 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `3b05f844` (§5.33, the finding-8 fix) plus this page on
-  top of it. The fork branch and the `headRefOid` of PR #5834 are still
-  `af9a43a2` (the CodeRabbit triage, §5.26): the eleven commits after it —
-  `2a6f39c7`, `925bb0c9`, `3225e644`, `264afd18`, `c6e3df4a`, `bcca9bce`,
-  `37af31cb`, `bf632378`, `4e95d929`, `c1582864` and `3b05f844` — are committed
-  locally and **not pushed**, because the envoy role cannot push; the owner
-  sends it (§5.27–§5.33). The branch is 91 commits over `4b0d3995` before this
-  page and 92 with it. The branch was pushed
+- HEAD at this writing: `b963a8db` (§5.34, the finding-10 fix) plus this page
+  on top of it. The fork branch and the `headRefOid` of PR #5834 are still
+  `af9a43a2` (the CodeRabbit triage, §5.26): the fourteen commits after it —
+  `2a6f39c7` and the code+documentation pairs of §5.28 (`925bb0c9`,
+  `3225e644`), §5.29 (`264afd18`, `c6e3df4a`), §5.30 (`bcca9bce`, `37af31cb`),
+  §5.31 (`bf632378`, `4e95d929`), §5.32 (`c1582864`, `88aca38b`), §5.33
+  (`3b05f844`, `64f05201`) and §5.34 (`b963a8db`) — are committed locally and
+  **not pushed**, because the envoy role cannot push; the owner
+  sends it (§5.27–§5.34). The branch is 93 commits over `4b0d3995` before this
+  page and 94 with it. The branch was pushed
   on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
   20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
   `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
@@ -315,7 +317,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 9 and 10 (per-document connections, token renewal) remain open, named in §4 |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 10 (the token renewal that replaced the client) is closed in §5.34 — a repeated `session` for the live connection renews its credentials in place, so the unconfirmed edit and the participant list survive (`a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`; ADR `0007-token-renewal-keeps-the-connection.md`); 9 (per-document connections) remains open, named in §4 |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -559,7 +561,10 @@ Results at this writing:
   after its snapshot was removed) sends no `expectedVersion`, so an external
   edit in that window is overwritten.
 - The token is read from the environment on desktop; the cabinet must push a fresh
-  token through the host bridge when it arrives.
+  token through the host bridge when it arrives. On the web the push is handled:
+  a repeated `session` for the live connection renews the credentials of the
+  running client instead of replacing it (ADR WC-0007, §5.34). The desktop has
+  no host bridge yet, so it reads the environment once at start.
 - No two-machine manual GUI test; the UI tests are headless.
 
 ## 5. Next session
@@ -3456,6 +3461,139 @@ on the new head. Two things this slice names and does not take:
 
 In the code, findings 9 and 10 of §5.26 remain (§4), each with its own slice and
 test. Finding 8 is closed here.
+
+### 5.34 Finding 10: a token rotation keeps the connection it belongs to (run 2026-11-11)
+
+**The finding.** §5.26 #10, as CodeRabbit put it against `af9a43a2`: "a session
+event for the current session replaces the client and drops its unconfirmed
+edits" (`apps/wordcraft-web/src/web.rs:243-274`,
+`crates/collab-web/src/lib.rs:120-128`). The trigger is ordinary: the cabinet
+repeats `wordcraft:session` before the JWT expires, with the same `session_id`
+and a fresh `token`.
+
+**What was lost.** `HostState::on_event` answered `HostAction::Connect` for
+every `Session`, so the shell built a second `Collab`, and `Collab::connect`
+built a second `Client`. Everything the session had earned went with the old
+object: `Client::pending` — the operations this tab planned and the room had not
+confirmed, resent after a `welcome` under their original ids (ADR-0003, §5.5) —
+the participant list, the version and the node map, the undo/redo stacks, and
+the etag of the last commit. A writer could type, watch the text stay on screen
+and lose it from the room's copy: the divergence class ADR WC-0006 exists about,
+reached through a message nobody thought of as an ending. `Collab::renew_token`
+already did the right thing and had no caller — the host path bypassed it by
+replacing the object.
+
+**The decision.** `docs/collab/adr/0007-token-renewal-keeps-the-connection.md`
+(ADR WC-0007), with three options: ignore the repeated message (A), renew in
+place (B, chosen), or copy `pending`/`participants` into a new object (C). A was
+rejected because the transport reconnects on its own after any drop and the next
+`auth` frame would then carry the **superseded** token — a rotation that arrives
+before an expiry would turn into a session the server refuses. C duplicates
+state ownership and cannot move a `Client`'s `seq` counter. B keeps the object:
+same `Collab`, same `Client`, new credentials.
+
+Five rules, as implemented:
+
+1. Connection identity is `(session_id, ws_url)`. The token is what rotates, so
+   it is not part of it; another URL is another room and opens a new connection,
+   because the transport keeps the URL it dialled.
+2. `HostAction::Renew` never builds a second `Collab`. `Collab::renew(&session)`
+   refuses a session whose `session_id` differs (`false`; the shell dials) and
+   refreshes the stored URL and token on the joined object otherwise.
+3. An unchanged token is not a reason to reconnect: `renew` calls `renew_token`
+   only when the token actually changed, so a duplicate host message costs
+   neither a socket nor a `pending` blip in the cabinet.
+4. A renewal with no live client dials. A first dial that failed, or a shell that
+   only saw the renewal, has nothing to renew; the `Renew` arm falls back to the
+   `Connect` body.
+5. The role is the server's. `HostSession::role` is read when a connection opens;
+   afterwards the room's `welcome` carries the role, so a repeated message cannot
+   widen a viewer's rights locally.
+
+**The change.** `crates/collab-web`: `HostAction::Renew(HostSession)`;
+`HostState::on_event` compares the stored session's `session_id` and `ws_url`
+and leaves `connected` alone on a renewal; `Collab::renew` (next to
+`renew_token`). `apps/wordcraft-web/src/web.rs`: `apply_host_events` gained the
+`Renew` arm and the old `Connect` body became `WebShell::connect`, so both arms
+share one dial path. No wire change, no server change, no `craft-web-host`
+change: `Message::Session` may simply be sent again, which `host-bridge.md` now
+says out loud.
+
+**A drive-by the gate forced.** The mandated clippy list (`-p wordcraft-web`
+pulls `wordcraft-ui-egui` into the lint graph) failed on
+`crates/ui-egui/src/collab.rs:279`: `needless_return` on the `return` that ends
+the room-commit branch. Removing it would have changed wasm behaviour — the
+host-commit path below it is `cfg(target_arch = "wasm32")`, so on the native gate
+it looks unreachable and on the target it is not. The statement keeps its
+`#[allow(clippy::needless_return)]` with that reason. The lint is not new: it
+came in with §5.33's `3b05f844`, whose clippy run did not report it; whatever
+the cause, the gate is green now, on the same command §5.28–§5.33 record.
+
+**Tests.** `crates/collab-web/src/lib.rs`:
+
+- `a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`
+  — the live session holds one unconfirmed operation and one peer; a repeated
+  `Session` with a new token answers `Renew`, `renew` keeps the object, the new
+  token is in it, the status is `Connecting` for the reconnect, `client_id` is
+  unchanged, `pending` still holds the operation and the participant is still
+  listed. `dials == 0`: the shell's `Renew` arm built no second `Collab`.
+- `a_repeated_session_with_the_same_token_keeps_the_socket` — the same message
+  with the same token leaves the status `InSync`.
+- `a_session_for_another_id_still_replaces_the_connection` — `Connect`, and
+  `Collab::renew` returns `false` for it: the old client does not absorb another
+  session's message.
+- `a_session_for_another_url_is_a_new_connection` — the URL half of rule 1.
+
+Checked against the pre-fix behaviour on the build host: with
+`same_connection` forced to `false` (the old answer), the two renewal tests fail
+on `Connect` vs `Renew` and the two replacement tests still pass; the patch was
+reverted afterwards and the tree is clean.
+
+**What ran** (build host `agents`, on the tree above):
+
+- `cargo fmt --all -- --check` EXIT=0;
+- `cargo clippy -p wordcraft-collab -p wordcraft-collab-app
+  -p wordcraft-collab-web -p wordcraft-web --all-targets -- -D warnings`
+  EXIT=0;
+- `cargo test` over the six crates: `wordcraft-collab` 61 passed,
+  `wordcraft-collab-server` 66 passed and 1 ignored (the LibreOffice commit
+  gate), `wordcraft-collab-client` 20, `wordcraft-collab-doc` 116,
+  `wordcraft-collab-app` 42, `wordcraft-collab-web` 9 (4 new) — **314 passed,
+  0 failed, 1 ignored** (310 before this slice);
+- `cargo check -p wordcraft-web --target wasm32-unknown-unknown` EXIT=0 — the
+  shell's new arm is wasm-only, so a native `--all-targets` run does not compile
+  it. The check reports two warnings from `ui-egui` (`unused imports
+  block_behind/forget_nudge`, `unused variable system_arabic`) that are not in
+  this slice's files and do not fail the check.
+
+**Local head.**
+
+| | |
+|---|---|
+| head | `b963a8db` — `collab: a repeated session renews the connection it belongs to` |
+| files | `crates/collab-web/src/lib.rs` +159/−2, `apps/wordcraft-web/src/web.rs` +31/−16, `crates/ui-egui/src/collab.rs` +4, `docs/collab/adr/0007-token-renewal-keeps-the-connection.md` +175 (four files, +369/−18), plus this page and `host-bridge.md` |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27–§5.33: from `upstream/`,
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
+from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the runs
+on the new head. Three things this slice names and does not take:
+
+- **The sender is the cabinet's.** No test here proves that the real cabinet
+  page sends the repeated `session`; the crate's `Message::Session` and the app
+  side are ready for it (mail-frontend M87 owns the page). A manual two-client
+  rotation through the trunk build is still on the same list as §5.1's
+  "what remains for a person".
+- **Finding 9 is untouched.** The connection is still app-wide while documents
+  are per window, so a connection made for one document can carry another's
+  edits (§4, §5.26). It needs per-document `Collab`s, and this fix does not
+  pretend to be a step towards it — the renewal is keyed by the session the host
+  sent, not by the document.
+- **A rotation that is never delivered leaves the stale token.** If the host page
+  is gone, the reconnect is refused and the panel shows `error`; there is no
+  retry that could invent a fresh token. Named in ADR WC-0007 §Consequences 5.
+
+
 
 ## 6. Where things live
 

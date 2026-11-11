@@ -43,7 +43,11 @@ single-user mode (the rule from `INTEGRATION.md` §6).
    in `WordApp` (`host_session`) and only then connects
    `wordcraft-collab-web::Collab`, which drives `wordcraft-collab-client` over
    the browser's `WebSocket`. The token never reaches a URL, a log,
-   `localStorage` or preferences (`HostSession`'s `Debug` redacts it).
+   `localStorage` or preferences (`HostSession`'s `Debug` redacts it). The host
+   may send `session` again for the same session with a fresh token when the JWT
+   nears expiry: the app renews the credentials of the live client and keeps its
+   unconfirmed edits and the participant list (ADR WC-0007). Another
+   `session_id`, or the same id at another `ws_url`, opens a new connection.
 2. `post_session_state` on join/leave/reconnect/status change; `post_presence`
    coalesced to the same 5–10 Hz as the WebSocket presence (ADR-0006).
 3. Commit goes through the room. With `COLLAB_CABINET_URL` set, the server
