@@ -144,7 +144,7 @@ struct AwaitingSave {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "String", into = "String")]
 pub enum DisplayServer {
-    /// The app's own choice: XWayland whenever there's an X server, for file drag-and-drop.
+    /// Native Wayland when available, except GNOME until its native window controls are fixed (#78).
     #[default]
     Auto,
     Wayland,
