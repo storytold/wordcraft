@@ -99,7 +99,7 @@ craft-update = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # tests/mac_panel_menu_appkit.rs reads AppKit's menu bar back.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem", "NSWindow", "NSPanel", "NSSavePanel"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem", "NSWindow", "NSPanel", "NSSavePanel", "NSColorPanel"] }
 
 [[test]]
 name = "mac_panel_menu_appkit"

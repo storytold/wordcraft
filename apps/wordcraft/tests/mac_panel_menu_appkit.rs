@@ -56,6 +56,10 @@ fn main() {
     // A dialog is open but no panel is the key window (another document's window is): no swap.
     menu.sync(true);
     assert!(is_menu_bar(&app, &usual), "no panel menu bar while no panel is key");
+    assert!(!panel_menu::in_file_panel(None));
+    assert!(panel_menu::in_file_panel(Some(objc2_app_kit::NSSavePanel::savePanel(mtm).into_super().into_super())), "a Save panel");
+    let colours = objc2_app_kit::NSColorPanel::sharedColorPanel(mtm);
+    assert!(!panel_menu::in_file_panel(Some(colours.into_super().into_super())), "another kind of panel");
 
     menu.set_shown(&app, true);
     assert_panel_shortcuts(&app, &usual);
