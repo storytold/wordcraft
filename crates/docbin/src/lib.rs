@@ -8,7 +8,7 @@
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
 //!
 //! Word 6.0/95 files, which that specification does not cover, are read by `word6` from their
-//! observed layout: their text so far.
+//! observed layout: their text, formatting and tables so far.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod crypt;
@@ -429,13 +429,12 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     Ok(doc)
 }
 
-/// Read a Word 6.0/95 file ([`word6`]): its main text, as paragraphs, through the same walk as a
-/// Word 97 file, with no formatting, styles or other stories yet. A section mark reads as a page
-/// break, since sections are not read.
+/// Read a Word 6.0/95 file ([`word6`]): its main text, with its character and paragraph
+/// formatting and table rows translated to Word 97 sprms, through the same walk as a Word 97 file.
+/// Styles and the other stories are not read yet, and a section mark reads as a page break.
 fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
     let fib = word6::Fib6::parse(word)?;
-    let pieces = word6::pieces(word, &fib)?;
-    let no_bins = Bins::parse(&[], 0, 0)?;
+    let content = word6::content(word, &fib)?;
     let mut doc = Document::new();
     // Word opens these files in compatibility mode 11 too.
     doc.settings.compat_mode = 11;
@@ -452,10 +451,10 @@ fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_
     let ctx = WalkCtx {
         word,
         data: &[],
-        pieces: &pieces,
-        chpx_bins: &no_bins,
-        papx_bins: &no_bins,
-        fonts: &[],
+        pieces: &content.pieces,
+        chpx_bins: &content.chpx,
+        papx_bins: &content.papx,
+        fonts: &content.fonts,
         raw_styles: &[],
         sheet: &sheet,
         notes: &[],
@@ -466,14 +465,9 @@ fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_
         paragraphs: &paragraphs,
         work: &work,
     };
-    let mut paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
+    let paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
     if paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
-    }
-    // Where a table row ends is paragraph formatting, which is not read yet. Without it every
-    // cell of a table would land in one row, so a cell mark ends a plain paragraph instead.
-    for p in &mut paras {
-        p.row = None;
     }
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();

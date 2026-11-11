@@ -20,6 +20,9 @@ struct Doc6<'a> {
     fonts: &'a [(u8, &'a str)],
     /// Contiguous character runs (lo, hi, grpprl), all in one FKP page.
     runs: &'a [(u32, u32, &'a [u8])],
+    /// Contiguous paragraph runs (lo, hi, grpprl), style 0, all in one FKP page. Each covers the
+    /// paragraph whose mark lies in it.
+    paras: &'a [(u32, u32, &'a [u8])],
     /// For a fast-saved file: (length, offset) per piece, in CP order.
     pieces: Option<&'a [(u32, u32)]>,
 }
@@ -32,7 +35,53 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
     v[at..at + 4].copy_from_slice(&x.to_le_bytes());
 }
 
-/// The WordDocument stream: FIB, text, then the FKP page, font table and piece table.
+/// Append one FKP page for `runs` and its bin table, and return the bin table's (fc, lcb). A
+/// character page has a 1-byte entry per run and CHPXs (byte count + grpprl); a paragraph page
+/// has 7-byte entries and PAPXs (word count + style 0 + grpprl padded to whole words).
+fn fkp(w: &mut Vec<u8>, runs: &[(u32, u32, &[u8])], papx: bool) -> (u32, u32) {
+    let (Some(first), Some(last)) = (runs.first(), runs.last()) else { return (0, 0) };
+    w.resize(w.len().div_ceil(512) * 512, 0);
+    let pn = (w.len() / 512) as u16;
+    let crun = runs.len();
+    let entry = if papx { 7 } else { 1 };
+    let mut page = [0u8; 512];
+    for (k, (lo, _, _)) in runs.iter().enumerate() {
+        put32(&mut page, 4 * k, TEXT_AT + lo);
+    }
+    put32(&mut page, 4 * crun, TEXT_AT + last.1);
+    // Records from the end of the page down, each at an even offset.
+    let mut top = 511usize;
+    for (k, (_, _, g)) in runs.iter().enumerate() {
+        let body: Vec<u8> = if papx {
+            let mut b = vec![0u8, 0];
+            b.extend_from_slice(g);
+            if b.len() % 2 == 1 {
+                b.push(0);
+            }
+            b
+        } else if g.is_empty() {
+            continue;
+        } else {
+            g.to_vec()
+        };
+        let at = (top - 1 - body.len()) & !1;
+        page[at] = if papx { (body.len() / 2) as u8 } else { body.len() as u8 };
+        page[at + 1..at + 1 + body.len()].copy_from_slice(&body);
+        page[4 * (crun + 1) + entry * k] = (at / 2) as u8;
+        top = at;
+    }
+    page[511] = crun as u8;
+    w.extend_from_slice(&page);
+    let mut bte = Vec::new();
+    bte.extend_from_slice(&(TEXT_AT + first.0).to_le_bytes());
+    bte.extend_from_slice(&(TEXT_AT + last.1).to_le_bytes());
+    bte.extend_from_slice(&pn.to_le_bytes());
+    let at = w.len() as u32;
+    w.extend_from_slice(&bte);
+    (at, bte.len() as u32)
+}
+
+/// The WordDocument stream: FIB, text, then the FKP pages, font table and piece table.
 fn word_stream(d: &Doc6) -> Vec<u8> {
     let mut w = vec![0u8; TEXT_AT as usize];
     w.extend_from_slice(d.text);
@@ -41,35 +90,11 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
         None => d.text.len() as u32,
     };
     let mut pairs: Vec<(usize, u32, u32)> = Vec::new();
-    if let (Some(first), Some(last)) = (d.runs.first(), d.runs.last()) {
-        w.resize(w.len().div_ceil(512) * 512, 0);
-        let pn = (w.len() / 512) as u16;
-        let crun = d.runs.len();
-        let mut page = [0u8; 512];
-        for (k, (lo, _, _)) in d.runs.iter().enumerate() {
-            put32(&mut page, 4 * k, TEXT_AT + lo);
+    for (pair, runs, papx) in [(12, d.runs, false), (13, d.paras, true)] {
+        let (fc, lcb) = fkp(&mut w, runs, papx);
+        if lcb > 0 {
+            pairs.push((pair, fc, lcb));
         }
-        put32(&mut page, 4 * crun, TEXT_AT + last.1);
-        // CHPXs from the end of the page down, each at an even offset.
-        let mut top = 511usize;
-        for (k, (_, _, g)) in d.runs.iter().enumerate() {
-            if g.is_empty() {
-                continue;
-            }
-            let at = (top - 1 - g.len()) & !1;
-            page[at] = g.len() as u8;
-            page[at + 1..at + 1 + g.len()].copy_from_slice(g);
-            page[4 * (crun + 1) + k] = (at / 2) as u8;
-            top = at;
-        }
-        page[511] = crun as u8;
-        w.extend_from_slice(&page);
-        let mut bte = Vec::new();
-        bte.extend_from_slice(&(TEXT_AT + first.0).to_le_bytes());
-        bte.extend_from_slice(&(TEXT_AT + last.1).to_le_bytes());
-        bte.extend_from_slice(&pn.to_le_bytes());
-        pairs.push((12, w.len() as u32, bte.len() as u32));
-        w.extend_from_slice(&bte);
     }
     if !d.fonts.is_empty() {
         let mut ffn = vec![0u8, 0];
@@ -199,13 +224,109 @@ fn password_protected_files_are_refused() {
     assert!(matches!(read(&word6_file(&d)), Err(DocbinError::Encryption(_))));
 }
 
+/// The first paragraph of `doc`'s body.
+fn first_para(doc: &wordcraft_doc::Document) -> &wordcraft_doc::para::Paragraph {
+    doc.body.iter().find_map(|b| b.as_para()).expect("a paragraph")
+}
+
 #[test]
-fn cell_marks_end_plain_paragraphs() {
-    // Rows can't be told apart without paragraph formatting, so there is no table yet.
-    let d = Doc6 { text: b"A\x07B\x07\x07after\r", ..Default::default() };
-    let doc = read(&word6_file(&d)).expect("opens");
-    assert!(doc.body.iter().all(|b| b.as_para().is_some()), "no table blocks");
-    assert_eq!(body_texts(&doc), ["A", "B", "", "after"]);
+fn character_formatting_is_read() {
+    // Bold on, italic as the opposite of the (unread, so plain) style, 14 pt, red, single
+    // underline, font 2: the Word 6 opcodes as observed.
+    let g: &[u8] = &[0x55, 0x01, 0x56, 0x81, 0x63, 0x1C, 0x00, 0x62, 0x06, 0x5E, 0x01, 0x5D, 0x02, 0x00];
+    let runs: &[(u32, u32, &[u8])] = &[(0, 2, g), (2, 3, &[])];
+    let fonts = &[(0, "Times New Roman"), (2, "Symbol"), (0, "Arial")];
+    let doc = read(&word6_file(&Doc6 { text: b"Hi\r", fonts, runs, ..Default::default() })).expect("opens");
+    let p = first_para(&doc);
+    let c = &p.runs.first().expect("a run").props;
+    assert_eq!((c.bold, c.italic, c.size), (Some(true), Some(true), Some(14.0)));
+    assert_eq!(c.color, Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb(0xFF, 0, 0))));
+    assert_eq!(c.underline, Some(wordcraft_doc::props::Underline::Single));
+    assert_eq!(c.font.as_deref(), Some("Arial"));
+}
+
+#[test]
+fn unseen_operand_values_are_left_unread() {
+    // Underline 3 and "multiple" line spacing were never seen in a real file, so they aren't
+    // guessed at.
+    let runs: &[(u32, u32, &[u8])] = &[(0, 3, &[0x5E, 0x03])];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 3, &[0x14, 0xF0, 0x00, 0x01, 0x00])];
+    let doc = read(&word6_file(&Doc6 { text: b"Hi\r", runs, paras, ..Default::default() })).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.runs.first().and_then(|r| r.props.underline), None);
+    assert_eq!(p.props.line_spacing, None);
+}
+
+#[test]
+fn paragraph_formatting_is_read() {
+    // Justified, 0.5" left and 0.25" right indents, a 0.5" hanging first line, at least 27 pt.
+    let g: &[u8] = &[0x05, 0x03, 0x11, 0xD0, 0x02, 0x10, 0x68, 0x01, 0x13, 0x30, 0xFD, 0x14, 0x1C, 0x02, 0x00, 0x00];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 3, g), (3, 6, &[0x05, 0x01])];
+    let doc = read(&word6_file(&Doc6 { text: b"Hi\rHo\r", paras, ..Default::default() })).expect("opens");
+    let ps: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    let p = &ps[0].props;
+    assert_eq!(p.align, Some(wordcraft_doc::props::Align::Justify));
+    assert_eq!((p.indent_left, p.indent_right, p.indent_first), (Some(36.0), Some(18.0), Some(-36.0)));
+    assert_eq!(p.line_spacing, Some(wordcraft_doc::props::LineSpacing::AtLeast(27.0)));
+    assert_eq!(ps[1].props.align, Some(wordcraft_doc::props::Align::Center));
+}
+
+/// A Word 6 table definition sprm (0xBE): the cell edges, then a 10-byte descriptor per cell
+/// whose first word holds the merge flags.
+fn def_table(edges: &[i16], rgfs: &[u16]) -> Vec<u8> {
+    let mut rest = vec![rgfs.len() as u8];
+    for e in edges {
+        rest.extend_from_slice(&e.to_le_bytes());
+    }
+    for r in rgfs {
+        rest.extend_from_slice(&r.to_le_bytes());
+        rest.extend_from_slice(&[0; 8]);
+    }
+    let mut v = vec![0xBE];
+    v.extend_from_slice(&((rest.len() + 1) as u16).to_le_bytes());
+    v.extend_from_slice(&rest);
+    v
+}
+
+/// The rows of the first table in `doc`'s body, each as its cells' texts.
+fn table_rows(doc: &wordcraft_doc::Document) -> Vec<Vec<String>> {
+    let t = doc.body.iter().find_map(|b| match b.as_ref() {
+        wordcraft_doc::Block::Table(t) => Some(t),
+        _ => None,
+    });
+    let t = t.expect("a table");
+    t.rows
+        .iter()
+        .map(|r| r.cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>().join("|")).collect())
+        .collect()
+}
+
+#[test]
+fn table_rows_and_merged_cells_are_read() {
+    // Row 1: "A", "B". Row 2: "C" merged across both cells. In-table marks carry 0x18, the row
+    // ends 0x18, 0x19 and the table definition.
+    let text = b"A\x07B\x07\x07C\x07\x07\x07after\r";
+    let mut row1 = vec![0x18, 1, 0x19, 1];
+    row1.extend(def_table(&[0, 1440, 2880], &[0, 0]));
+    let mut row2 = vec![0x18, 1, 0x19, 1];
+    row2.extend(def_table(&[0, 1440, 2880], &[0x0001, 0x0002]));
+    let cell: &[u8] = &[0x18, 1];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, cell), (2, 4, cell), (4, 5, &row1), (5, 7, cell), (7, 8, cell), (8, 9, &row2), (9, 15, &[])];
+    let doc = read(&word6_file(&Doc6 { text, paras, ..Default::default() })).expect("opens");
+    assert_eq!(table_rows(&doc), [vec!["A", "B"], vec!["C"]]);
+    assert_eq!(body_texts(&doc), ["after"], "the paragraph after the table stays outside it");
+}
+
+#[test]
+fn several_merges_in_one_row_each_keep_their_cells() {
+    // Five cells merged as [A B] [C] [D E]: the second merge must not be shifted by the first.
+    let text = b"A\x07B\x07C\x07D\x07E\x07\x07";
+    let mut row = vec![0x18, 1, 0x19, 1];
+    row.extend(def_table(&[0, 100, 200, 300, 400, 500], &[0x0001, 0x0002, 0x0000, 0x0001, 0x0002]));
+    let cell: &[u8] = &[0x18, 1];
+    let paras: &[(u32, u32, &[u8])] = &[(0, 2, cell), (2, 4, cell), (4, 6, cell), (6, 8, cell), (8, 10, cell), (10, 11, &row)];
+    let doc = read(&word6_file(&Doc6 { text, paras, ..Default::default() })).expect("opens");
+    assert_eq!(table_rows(&doc), [vec!["A|B", "C", "D|E"]]);
 }
 
 #[test]
