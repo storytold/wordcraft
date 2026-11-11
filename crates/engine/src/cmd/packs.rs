@@ -639,6 +639,9 @@ mod tests {
     /// their spelling is their own) but hyphenate and check grammar as German and Portuguese.
     #[test]
     fn swiss_german_and_portugal_portuguese_keep_their_languages_rules() {
+        if crate::tests::no_language_data("swiss_german_and_portugal_portuguese_keep_their_languages_rules") {
+            return;
+        }
         use wordcraft_proof::ProofLang;
         let de_ch = ProofLang::from_tag(Some("de-CH"));
         let pt_pt = ProofLang::from_tag(Some("pt-PT"));
