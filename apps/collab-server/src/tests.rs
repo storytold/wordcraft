@@ -30,6 +30,21 @@ fn token_sid(cfg: &Config, sub: &str, role: &str, app: &str, ttl: i64, sid: &str
     jsonwebtoken::encode(&Header::new(jsonwebtoken::Algorithm::HS256), &claims, &EncodingKey::from_secret(secret.as_bytes())).expect("encode")
 }
 
+/// The token claims a test connection authenticates with, for the paths that
+/// call `register`/`leave` without a socket (ADR WC-0005).
+fn claims(sub: &str, sid: &str) -> Claims {
+    Claims {
+        sub: sub.into(),
+        aud: "collab".into(),
+        doc: "doc-1".into(),
+        app: "wordcraft".into(),
+        role: "editor".into(),
+        sid: sid.into(),
+        iat: 0,
+        exp: u64::MAX,
+    }
+}
+
 fn dev_config() -> Config {
     let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}", std::process::id()));
     Config {
@@ -230,6 +245,27 @@ async fn connect_full(
         for frame in seed_frames(model) {
             ws.send(Message::Text(serde_json::to_string(&frame).expect("seed json").into())).await.expect("send seed");
         }
+    }
+    ws
+}
+
+/// Connect with an explicit account and cabinet session: the tests that pin
+/// `client_id` ownership need to offer an id that is not the connection's own,
+/// or to reconnect as itself (ADR WC-0005). The document is offered the way the
+/// seeding step does, so a room is always creatable.
+async fn connect_as(
+    url: &str,
+    cfg: &Config,
+    client: &str,
+    sub: &str,
+    role: &str,
+    sid: &str,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.expect("connect");
+    let auth = ClientMsg::Auth { token: token_sid(cfg, sub, role, "wordcraft", 600, sid), client_id: client.into(), last_version: None, seed: true };
+    ws.send(Message::Text(serde_json::to_string(&auth).expect("auth json").into())).await.expect("send auth");
+    for frame in seed_frames(&blank_model()) {
+        ws.send(Message::Text(serde_json::to_string(&frame).expect("seed json").into())).await.expect("send seed");
     }
     ws
 }
@@ -598,7 +634,7 @@ async fn a_full_outbox_marks_the_peer_stale_once() {
     // the outbox full and marks the peer stale; a third drop is the same event.
     let state = AppState::new(dev_config());
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
-    let peer = crate::Peer::new(wordcraft_collab::room::Role::Editor, "sid", tx);
+    let peer = crate::Peer::new(1, "alice", wordcraft_collab::room::Role::Editor, "sid", tx);
     let msg = ServerMsg::Applied {
         applied: wordcraft_collab::wire::Applied {
             op_id: OpId::new("bob", 1),
@@ -615,6 +651,121 @@ async fn a_full_outbox_marks_the_peer_stale_once() {
     assert!(peer.stale.is_set(), "the peer is marked stale");
     assert!(!crate::queue(&state, &peer, &msg));
     assert_eq!(state.metrics.stale.load(std::sync::atomic::Ordering::Relaxed), 1, "counted once per peer");
+}
+
+/// Two orderings of the same three events — a claim, a takeover, a `leave` — and
+/// the rule that decides each: a `client_id` belongs to the connection that
+/// registered it (ADR WC-0005).
+#[test]
+fn a_taken_client_id_is_only_removed_by_the_connection_that_registered_it() {
+    let cfg = config_for("client-id-identity");
+    let state = AppState::new(cfg);
+    let room = open_room(&state, "doc-1");
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+
+    let first = super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None)
+        .expect("the first registration");
+
+    // Another account in the same cabinet session may not claim the id.
+    let refused = super::register(&state, &room, "alice", &claims("bob", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None);
+    match refused {
+        Err(reject) => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid);
+            assert!(!reject.retryable, "a claim on a taken id is not for the client to retry");
+        }
+        Ok(_) => panic!("a second account registered someone else's client id"),
+    }
+    assert_eq!(state.metrics.client_ids.load(std::sync::atomic::Ordering::Relaxed), 1, "the refused claim is counted");
+    assert_eq!(room.lock().expect("room lock").peers["alice"].sub, "alice", "the refused claim left the peer alone");
+
+    // The same client reconnecting takes its own id over.
+    let second = super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None)
+        .expect("a reconnect takes its own id over");
+    assert_ne!(second.conn, first.conn, "each connection has its own identity");
+    assert!(first.superseded.is_set(), "the old connection is told to end");
+    assert_eq!(room.lock().expect("room lock").peers["alice"].conn, second.conn, "the room holds the new connection");
+
+    // The old connection's `leave` is not the room's: the replacement stays.
+    super::leave(&state, "doc-1", &room, "alice", first.conn);
+    assert_eq!(room.lock().expect("room lock").peers["alice"].conn, second.conn, "the old leave kept the replacement");
+
+    // The connection that registered the id removes it.
+    super::leave(&state, "doc-1", &room, "alice", second.conn);
+    assert!(room.lock().expect("room lock").peers.is_empty(), "the owner's leave removes the peer");
+}
+
+#[tokio::test]
+async fn another_participant_cannot_register_a_taken_client_id() {
+    let cfg = config_for("client-id-claim");
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+    let mut alice = connect_as(&url, &cfg, "alice", "alice", "editor", "session-1").await;
+    assert!(matches!(next_msg(&mut alice).await, ServerMsg::Welcome { .. }));
+    let node = node_of(&mut alice).await;
+
+    // Bob authenticates as himself and registers Alice's client id.
+    let mut intruder = connect_as(&url, &cfg, "alice", "bob", "editor", "session-1").await;
+    match next_msg(&mut intruder).await {
+        ServerMsg::Rejected { reject } => {
+            assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Invalid, "{reject:?}");
+            assert!(!reject.retryable, "a claim on a taken id is not for the client to retry");
+        }
+        other => panic!("expected a claim on a taken client id to be refused, got {other:?}"),
+    }
+    let end = timeout(Duration::from_secs(5), intruder.next()).await.expect("no timeout");
+    assert!(matches!(end, Some(Ok(Message::Close(_))) | None), "the refused connection ended: {end:?}");
+
+    // Alice is still the only peer with that id, and her connection still works.
+    {
+        let room = open_room(&state, "doc-1");
+        let guard = room.lock().expect("room lock");
+        assert_eq!(guard.peers.len(), 1, "the claim did not add a peer");
+        assert_eq!(guard.peers["alice"].sub, "alice", "the entry is still Alice's");
+    }
+    assert!(send_op(&mut alice, insert("alice", 1, 0, node, 0, "still here")).await);
+    assert!(matches!(next_msg(&mut alice).await, ServerMsg::Applied { .. }), "the victim's connection still works");
+    assert_eq!(state.metrics.client_ids.load(std::sync::atomic::Ordering::Relaxed), 1, "the refused claim is counted");
+}
+
+#[tokio::test]
+async fn a_reconnecting_client_takes_its_client_id_over_and_the_old_leave_keeps_the_new_peer() {
+    let cfg = config_for("client-id-takeover");
+    let (url, state) = spawn_server_state(cfg.clone()).await;
+    let mut carol = connect_as(&url, &cfg, "carol", "carol", "editor", "session-1").await;
+    assert!(matches!(next_msg(&mut carol).await, ServerMsg::Welcome { .. }));
+    let _ = node_of(&mut carol).await;
+    let mut alice = connect_as(&url, &cfg, "alice", "alice", "editor", "session-1").await;
+    assert!(matches!(next_msg(&mut alice).await, ServerMsg::Welcome { .. }));
+    let node = node_of(&mut alice).await;
+    match next_frame(&mut carol).await {
+        ServerMsg::Presence { client_id, .. } => assert_eq!(client_id, "alice", "the join announcement"),
+        other => panic!("expected the join announcement, got {other:?}"),
+    }
+
+    // The same client reconnects: same account, same cabinet session, same id.
+    let mut reconnected = connect_as(&url, &cfg, "alice", "alice", "editor", "session-1").await;
+    assert!(matches!(next_msg(&mut reconnected).await, ServerMsg::Welcome { .. }));
+    // The room has state, so the reconnect is caught up with a snapshot.
+    let _ = node_of(&mut reconnected).await;
+
+    // The superseded connection is retired, so two sockets never share one id.
+    let end = timeout(Duration::from_secs(5), alice.next()).await.expect("the superseded connection was never closed");
+    assert!(matches!(end, Some(Ok(Message::Close(_))) | None), "the superseded connection ended: {end:?}");
+
+    // Its `leave` must not remove the replacement: Carol is told nothing, and the
+    // room keeps both peers.
+    assert!(timeout(Duration::from_millis(300), next_msg(&mut carol)).await.is_err(), "the old connection's leave was broadcast as a `left`");
+    {
+        let room = open_room(&state, "doc-1");
+        let guard = room.lock().expect("room lock");
+        assert_eq!(guard.peers.len(), 2, "Carol and the reconnected Alice");
+        assert_eq!(guard.peers["alice"].sub, "alice", "the replacement is still in the room");
+    }
+
+    // The replacement is a full participant: its operation is applied and reaches
+    // the observer.
+    assert!(send_op(&mut reconnected, insert("alice", 1, 0, node, 0, "again")).await);
+    assert!(matches!(next_msg(&mut reconnected).await, ServerMsg::Applied { .. }));
+    assert!(matches!(next_msg(&mut carol).await, ServerMsg::Applied { .. }), "the replacement's edit was broadcast");
 }
 
 #[tokio::test]
@@ -925,12 +1076,12 @@ fn a_second_session_needs_the_owner_role() {
     let state = AppState::new(dev_config());
     let room = open_room(&state, "doc-lease");
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
+    assert!(super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
 
-    let denied = super::register(&room, "bob", "sid-2", wordcraft_collab::room::Role::Editor, &tx, None);
-    assert_eq!(denied.expect_err("a foreign session needs the owner").code, wordcraft_collab::wire::RejectCode::Lease);
+    let denied = super::register(&state, &room, "bob", &claims("bob", "sid-2"), wordcraft_collab::room::Role::Editor, &tx, None);
+    assert_eq!(denied.err().expect("a foreign session needs the owner").code, wordcraft_collab::wire::RejectCode::Lease);
 
-    assert!(super::register(&room, "carol", "sid-3", wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
+    assert!(super::register(&state, &room, "carol", &claims("carol", "sid-3"), wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
 }
 
 /// The acceptance gate from TASK.md §8: the committed file opens in LibreOffice
@@ -1301,10 +1452,13 @@ fn a_silent_session_loses_the_lease_after_its_ttl() {
     let state = AppState::new(cfg);
     let room = open_room(&state, "doc-lease-ttl");
     let (tx, _rx) = tokio::sync::mpsc::channel(16);
-    assert!(super::register(&room, "alice", "sid-1", wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
+    assert!(super::register(&state, &room, "alice", &claims("alice", "sid-1"), wordcraft_collab::room::Role::Editor, &tx, None).is_ok());
     // The only peer of sid-1 disconnected, and the TTL is zero.
     room.lock().expect("room lock").peers.remove("alice");
-    assert!(super::register(&room, "bob", "sid-2", wordcraft_collab::room::Role::Editor, &tx, None).is_ok(), "a stale lease is taken over");
+    assert!(
+        super::register(&state, &room, "bob", &claims("bob", "sid-2"), wordcraft_collab::room::Role::Editor, &tx, None).is_ok(),
+        "a stale lease is taken over"
+    );
     assert_eq!(room.lock().expect("room lock").session, "sid-2");
 }
 

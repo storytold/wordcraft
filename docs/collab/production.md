@@ -80,6 +80,7 @@ first WebSocket frame must be `auth`.
 | `wordcraft_collab_stale_peers_total` | peers whose outbox overflowed and whose connection was closed (ADR WC-0002) |
 | `wordcraft_collab_corrupt_snapshots_total` | joins refused because the stored snapshot cannot be opened (ADR WC-0003) |
 | `wordcraft_collab_unseeded_joins_total` | joins refused because the document has no state here and the client brought no copy (ADR WC-0004) |
+| `wordcraft_collab_client_id_conflicts_total` | joins refused because the `client_id` they registered belongs to another participant (ADR WC-0005) |
 
 A publication that is not counted in `cabinet_published_total` did not become a
 file version. `cabinet_errors_total` growing while `commits_total` grows is a
@@ -90,6 +91,14 @@ opened and its joins are refused (ADR WC-0003). The log line names the document
 and the file; the document is not lost — restore `model.json`/`meta` (or `prev/`)
 from a backup, or remove `<dataDir>/<doc>/` to start it blank on purpose. The
 counter is per refused join, so a client that keeps reconnecting keeps counting.
+
+`client_id_conflicts_total` growing means a connection registered a `client_id`
+that another participant owns (ADR WC-0005). The join is refused `invalid` and
+opens nothing; the log line names the document only. A client that keeps
+reconnecting with a foreign id is either an integration bug — the id must come
+from `session_client_id` — or an attempt to displace a participant. A connection
+of the *same* account and cabinet session may re-register its own id: that is a
+reconnect, and both events are separate (it is not counted here).
 
 `unseeded_joins_total` growing means a client asked for a document this server
 has never snapshotted without offering the document it has open (ADR WC-0004).

@@ -92,6 +92,16 @@ retryable) and opens no room; so is a seed from a viewer. A room that exists
 ignores the seed and answers with its snapshot, so a stale copy can never
 replace it.
 
+**A `client_id` belongs to the connection that registered it** (ADR WC-0005).
+The auth frame picks the id; the JWT says who is claiming it. A second connection
+may take an id over only with the same `sub` and the same `sid` — that is the
+same client reconnecting while the server has not yet noticed the old socket is
+gone. The old connection is retired with a `close` frame, and its `leave` does
+not remove the replacement: a peer is removed by the connection that registered
+it, not by the id it happens to hold. A claim from another account or another
+cabinet session is refused `invalid` (not retryable) and counted in
+`wordcraft_collab_client_id_conflicts_total`.
+
 ## Snapshots on disk
 
 A room is snapshotted every 500 operations, after a commit, when its last peer

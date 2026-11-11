@@ -136,34 +136,57 @@ pub struct Claims {
 /// One connected client.
 #[derive(Clone)]
 struct Peer {
-    role: Role,
+    /// Server-assigned identity of *this connection*, not of the `client_id`. A
+    /// connection removes a peer only while this id matches, so the `leave` of a
+    /// socket the server closed cannot remove the connection that replaced it
+    /// (ADR WC-0005).
+    conn: u64,
+    /// The account and the cabinet session the connection authenticated as. A
+    /// second connection may take a `client_id` over only when both match: that
+    /// is the same client reconnecting, never another participant (ADR WC-0005).
+    sub: String,
     sid: String,
+    role: Role,
     out: mpsc::Sender<ServerMsg>,
     /// Set when a document frame could not be queued for this peer: its outbox
     /// is full, so it has already missed an accepted operation. Its connection
     /// ends instead of staying open with a document the room has moved past
     /// (ADR WC-0002).
-    stale: Arc<Stale>,
+    stale: Arc<Retire>,
+    /// Set when a newer connection of the same client registered this
+    /// `client_id`. This connection ends so two sockets never share one
+    /// `(clientId, seq)` space, and its `leave` is a no-op (ADR WC-0005).
+    superseded: Arc<Retire>,
 }
 
 impl Peer {
-    fn new(role: Role, sid: &str, out: mpsc::Sender<ServerMsg>) -> Peer {
-        Peer { role, sid: sid.to_string(), out, stale: Arc::new(Stale::default()) }
+    fn new(conn: u64, sub: &str, role: Role, sid: &str, out: mpsc::Sender<ServerMsg>) -> Peer {
+        Peer {
+            conn,
+            sub: sub.to_string(),
+            sid: sid.to_string(),
+            role,
+            out,
+            stale: Arc::new(Retire::default()),
+            superseded: Arc::new(Retire::default()),
+        }
     }
 }
 
-/// A peer that missed a document frame: the flag is what the connection loop
-/// reads, the notification is what wakes it out of a write that is stuck
-/// because the peer stopped reading. Without the notification the loop is
-/// inside that write and cannot look at the flag (ADR WC-0002).
+/// A one-shot signal that ends one connection: its outbox overflowed and it
+/// missed an accepted operation (ADR WC-0002), or a newer connection took its
+/// `client_id` over (ADR WC-0005). The flag is what the connection loop reads,
+/// the notification is what wakes it out of a write that is stuck because the
+/// peer stopped reading. Without the notification the loop is inside that write
+/// and cannot look at the flag.
 #[derive(Default)]
-struct Stale {
+struct Retire {
     flag: AtomicBool,
     wake: tokio::sync::Notify,
 }
 
-impl Stale {
-    /// Mark the peer stale; `true` the first time only.
+impl Retire {
+    /// Set the signal; `true` the first time only.
     fn mark(&self) -> bool {
         let first = !self.flag.swap(true, Ordering::Relaxed);
         self.wake.notify_one();
@@ -173,19 +196,27 @@ impl Stale {
         self.flag.load(Ordering::Relaxed)
     }
 
-    /// Resolves when the peer is marked stale. The permit `notify_one` leaves
-    /// behind is taken here, so a mark that lands between two writes is not
-    /// lost.
+    /// Resolves when the signal is set. The permit `notify_one` leaves behind is
+    /// taken here, so a mark that lands between two writes is not lost.
     async fn wait(&self) {
         self.wake.notified().await;
     }
 }
 
-impl std::fmt::Debug for Stale {
+impl std::fmt::Debug for Retire {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // `Notify` is not `Debug`; the flag is what matters in a failure message.
-        f.debug_struct("Stale").field("set", &self.is_set()).finish()
+        f.debug_struct("Retire").field("set", &self.is_set()).finish()
     }
+}
+
+/// Source of connection identities. Peers are keyed by the `client_id` the
+/// client owns, so the server needs an id of its own to tell one connection from
+/// the connection that replaced it (ADR WC-0005).
+static CONNECTIONS: AtomicU64 = AtomicU64::new(1);
+
+fn next_connection() -> u64 {
+    CONNECTIONS.fetch_add(1, Ordering::Relaxed)
 }
 
 /// A document room and its connected peers.
@@ -285,6 +316,10 @@ pub struct Metrics {
     /// the document was older than the seeding step, or a read-only session
     /// arrived before a writer did.
     unseeded: AtomicU64,
+    /// Joins refused because the `client_id` they registered belongs to another
+    /// participant (ADR WC-0005). Non-zero means a client is using an id that is
+    /// not its own.
+    client_ids: AtomicU64,
 }
 
 impl Metrics {
@@ -308,6 +343,7 @@ impl Metrics {
             ("stale_peers_total", self.stale.load(Ordering::Relaxed)),
             ("corrupt_snapshots_total", self.corrupt.load(Ordering::Relaxed)),
             ("unseeded_joins_total", self.unseeded.load(Ordering::Relaxed)),
+            ("client_id_conflicts_total", self.client_ids.load(Ordering::Relaxed)),
         ] {
             out.push_str(&format!("# TYPE wordcraft_collab_{name} counter\nwordcraft_collab_{name} {value}\n"));
         }
@@ -530,87 +566,116 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     // stopped reading is closed instead of holding the connection open with a
     // document the room no longer has (ADR WC-0002).
     let limit = state.cfg.heartbeat;
-    let (tx, mut rx) = mpsc::channel::<ServerMsg>(state.cfg.peer_queue.max(1));
-    let (plan, peers, stale) = match register(&room, &client_id, &claims.sid, role, &tx, wants_version) {
-        Ok(parts) => parts,
+    let (tx, rx) = mpsc::channel::<ServerMsg>(state.cfg.peer_queue.max(1));
+    let registration = match register(&state, &room, &client_id, &claims, role, &tx, wants_version) {
+        Ok(registration) => registration,
         Err(reject) => {
             let _ = send(&mut sink, &ServerMsg::Rejected { reject }, limit).await;
             let _ = sink.close().await;
             return;
         }
     };
-    if !send_join(&mut sink, &claims, role, &plan, peers, limit, seeded).await {
-        leave(&state, &claims.doc, &room, &client_id);
+    if !send_join(&mut sink, &claims, role, &registration.plan, registration.peers, limit, seeded).await {
+        leave(&state, &claims.doc, &room, &client_id, registration.conn);
         return;
     }
     announce_join(&room, &client_id, role);
 
     let conn = Conn { state: &state, room: &room, claims: &claims, role, client_id: &client_id, limit };
+    let session = Session { conn, sink, stream, rx, stale: registration.stale, superseded: registration.superseded };
+    session.run().await;
+    leave(&state, &claims.doc, &room, &client_id, registration.conn);
+}
 
-    let mut heartbeat = interval(state.cfg.heartbeat);
-    heartbeat.tick().await; // the first tick is immediate; the first frame stays an answer
-    loop {
-        tokio::select! {
-            incoming = stream.next() => {
-                let text = match incoming {
-                    Some(Ok(Message::Text(text))) => text,
-                    Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
-                    Some(Ok(_)) => continue,
-                };
-                if !process_frame(&conn, &mut sink, &text).await {
+/// One connection after the join: the frames a client sends, the frames the room
+/// queues for it, and the two signals that end it — its outbox overflowed
+/// (ADR WC-0002) or a newer connection took its `client_id` over (ADR WC-0005).
+/// Kept out of `handle_socket` so the handshake stays one screen.
+struct Session<'a> {
+    conn: Conn<'a>,
+    sink: futures_util::stream::SplitSink<WebSocket, Message>,
+    stream: futures_util::stream::SplitStream<WebSocket>,
+    rx: mpsc::Receiver<ServerMsg>,
+    stale: Arc<Retire>,
+    superseded: Arc<Retire>,
+}
+
+impl Session<'_> {
+    async fn run(mut self) {
+        let limit = self.conn.limit;
+        let mut heartbeat = interval(self.conn.state.cfg.heartbeat);
+        heartbeat.tick().await; // the first tick is immediate; the first frame stays an answer
+        loop {
+            tokio::select! {
+                // A newer connection of the same client registered this
+                // `client_id`: two sockets must not share one `(clientId, seq)`
+                // space, and this connection's `leave` must not remove the
+                // replacement (ADR WC-0005).
+                _ = self.superseded.wait() => {
+                    close_retired(&mut self.sink, limit, "a newer connection registered the same client id").await;
                     break;
                 }
-            }
-            outgoing = rx.recv() => {
-                let Some(msg) = outgoing else { break };
-                // The outbox overflowed while this peer was not reading: the
-                // accepted operation it missed is gone from its queue, so the
-                // connection ends here and the client reconnects and resyncs.
-                // `stale.wait()` cancels a write that is stuck on that peer, so
-                // the close does not wait for the write bound.
-                if stale.is_set() {
-                    close_stale(&mut sink, limit).await;
-                    break;
-                }
-                tokio::select! {
-                    _ = stale.wait() => {
-                        close_stale(&mut sink, limit).await;
+                incoming = self.stream.next() => {
+                    let text = match incoming {
+                        Some(Ok(Message::Text(text))) => text,
+                        Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
+                        Some(Ok(_)) => continue,
+                    };
+                    if !process_frame(&self.conn, &mut self.sink, &text).await {
                         break;
                     }
-                    sent = send(&mut sink, &msg, limit) => {
-                        if sent.is_err() {
+                }
+                outgoing = self.rx.recv() => {
+                    let Some(msg) = outgoing else { break };
+                    // The outbox overflowed while this peer was not reading: the
+                    // accepted operation it missed is gone from its queue, so the
+                    // connection ends here and the client reconnects and resyncs.
+                    // `stale.wait()` cancels a write that is stuck on that peer, so
+                    // the close does not wait for the write bound.
+                    if self.stale.is_set() {
+                        close_retired(&mut self.sink, limit, "its outbox overflowed and it missed an accepted operation").await;
+                        break;
+                    }
+                    tokio::select! {
+                        _ = self.stale.wait() => {
+                            close_retired(&mut self.sink, limit, "its outbox overflowed and it missed an accepted operation").await;
                             break;
+                        }
+                        sent = send(&mut self.sink, &msg, limit) => {
+                            if sent.is_err() {
+                                break;
+                            }
                         }
                     }
                 }
-            }
-            _ = heartbeat.tick() => {
-                // The queue drop happens while this loop is blocked on a write,
-                // so the flag can only be read here or on the next frame; the
-                // heartbeat is what guarantees a stale peer is noticed even
-                // when nothing else arrives.
-                if stale.is_set() {
-                    close_stale(&mut sink, limit).await;
-                    break;
-                }
-                let ping = timeout(limit, sink.send(Message::Ping(Vec::new().into()))).await;
-                if !matches!(ping, Ok(Ok(()))) {
-                    break;
+                _ = heartbeat.tick() => {
+                    // The queue drop happens while this loop is blocked on a write,
+                    // so the flag can only be read here or on the next frame; the
+                    // heartbeat is what guarantees a stale peer is noticed even
+                    // when nothing else arrives.
+                    if self.stale.is_set() {
+                        close_retired(&mut self.sink, limit, "its outbox overflowed and it missed an accepted operation").await;
+                        break;
+                    }
+                    let ping = timeout(limit, self.sink.send(Message::Ping(Vec::new().into()))).await;
+                    if !matches!(ping, Ok(Ok(()))) {
+                        break;
+                    }
                 }
             }
         }
     }
-    leave(&state, &claims.doc, &room, &client_id);
 }
 
-/// End a connection whose outbox overflowed. The peer has already missed an
-/// accepted operation, so the version it holds can no longer catch up from its
-/// own queue; closing makes the client reconnect with its `lastVersion`, and
-/// the join answers with the journal tail or a snapshot (ADR WC-0002).
-async fn close_stale(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, limit: Duration) {
-    log::warn!("closing a peer whose outbox overflowed: it missed an accepted operation");
+/// End a connection the room has retired: the peer's outbox overflowed and it
+/// missed an accepted operation (ADR WC-0002), or a newer connection of the same
+/// client took its `client_id` over (ADR WC-0005). Closing makes the client
+/// reconnect with its `lastVersion`; the join answers with the journal tail or a
+/// snapshot.
+async fn close_retired(sink: &mut futures_util::stream::SplitSink<WebSocket, Message>, limit: Duration, reason: &str) {
+    log::warn!("closing a peer connection: {reason}");
     if timeout(limit, sink.send(Message::Close(None))).await.is_err() {
-        log::warn!("the stale peer did not take the close frame; dropping the socket");
+        log::warn!("the retired peer did not take the close frame; dropping the socket");
     }
 }
 
@@ -691,46 +756,75 @@ async fn read_seed(stream: &mut futures_util::stream::SplitStream<WebSocket>) ->
     }
 }
 
+/// What `register` installed: the answer this connection gets, plus its own
+/// identity and the signal that ends it when a newer connection takes the
+/// `client_id` over (ADR WC-0005).
+struct Registration {
+    plan: wordcraft_collab::room::JoinPlan,
+    peers: Vec<Participant>,
+    conn: u64,
+    stale: Arc<Retire>,
+    superseded: Arc<Retire>,
+}
+
 fn register(
+    state: &AppState,
     room: &Arc<Mutex<RoomState>>,
     client_id: &str,
-    sid: &str,
+    claims: &Claims,
     role: Role,
     tx: &mpsc::Sender<ServerMsg>,
     wants_version: Option<Version>,
-) -> Result<(wordcraft_collab::room::JoinPlan, Vec<Participant>, Arc<Stale>), Reject> {
+) -> Result<Registration, Reject> {
     let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
     const MAX_PARTICIPANTS: usize = 8;
-    if guard.peers.len() >= MAX_PARTICIPANTS && !guard.peers.contains_key(client_id) {
+    if let Some(existing) = guard.peers.get(client_id) {
+        // The id is taken. Only the same account in the same cabinet session may
+        // take it over: that is this client reconnecting while the server has
+        // not noticed the old socket is gone, and the old connection is retired
+        // below. A different `sub` or `sid` is a claim on someone else's id: it
+        // is refused before it reaches the map, so no one can displace a peer
+        // from the room or inherit its presence (ADR WC-0005).
+        if existing.sub != claims.sub || existing.sid != claims.sid {
+            Metrics::inc(&state.metrics.client_ids);
+            log::warn!("refusing a join: the client id it registered belongs to another participant");
+            let reject =
+                Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Invalid, "this client id belongs to another participant");
+            return Err(reject);
+        }
+        existing.superseded.mark();
+    } else if guard.peers.len() >= MAX_PARTICIPANTS {
         let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TooLarge, "the room is full");
         return Err(reject);
     }
     if guard.session.is_empty() {
-        guard.session = sid.to_string();
+        guard.session = claims.sid.clone();
         guard.lease_seen = std::time::Instant::now();
-    } else if guard.session != sid {
+    } else if guard.session != claims.sid {
         let lease_alive = guard.peers.values().any(|peer| peer.sid == guard.session);
         let stale = guard.lease_seen.elapsed().as_secs() >= guard.lease_ttl_secs;
         if role != Role::Owner && (lease_alive || !stale) {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Lease, "another session holds this document");
             return Err(reject);
         }
-        guard.session = sid.to_string();
+        guard.session = claims.sid.clone();
         guard.lease_seen = std::time::Instant::now();
     }
     guard.lease_seen = std::time::Instant::now();
     let plan = guard.room.join(wants_version, false);
-    let peer = Peer::new(role, sid, tx.clone());
-    // The connection keeps the flag, so a queue drop on any path (present)
-    // or future one closes *this* connection (ADR WC-0002).
+    let conn = next_connection();
+    let peer = Peer::new(conn, &claims.sub, role, &claims.sid, tx.clone());
+    // The connection keeps both signals, so a queue drop (ADR WC-0002) and a
+    // takeover (ADR WC-0005) end *this* connection and no other.
     let stale = peer.stale.clone();
+    let superseded = peer.superseded.clone();
     guard.peers.insert(client_id.to_string(), peer);
     let peers = guard
         .peers
         .iter()
         .map(|(id, peer)| Participant { client_id: id.clone(), role: peer.role.as_str().to_string(), color: None, presence: None })
         .collect();
-    Ok((plan, peers, stale))
+    Ok(Registration { plan, peers, conn, stale, superseded })
 }
 
 async fn send_join(
@@ -1138,10 +1232,15 @@ async fn broadcast(
     let _ = send(sink, &msg, state.cfg.heartbeat).await;
 }
 
-fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &str) {
+/// Remove this connection's peer from the room. The connection id decides: when
+/// another connection with the same `client_id` replaced this one, the entry is
+/// not ours and stays — no `left` is broadcast and the room is not treated as
+/// empty (ADR WC-0005).
+fn leave(state: &AppState, doc: &str, room: &Arc<Mutex<RoomState>>, client_id: &str, conn: u64) {
     let gone = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        guard.peers.remove(client_id)
+        let ours = guard.peers.get(client_id).is_some_and(|peer| peer.conn == conn);
+        if ours { guard.peers.remove(client_id) } else { None }
     };
     if gone.is_some() {
         let targets: Vec<Peer> = {
