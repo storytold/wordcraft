@@ -225,14 +225,25 @@ impl Reader<'_> {
         let choice = alternate.and_then(children_of_choice).filter(|c| c.name == "mc:Choice");
         if let (Some(choice), Some(fallback)) = (choice, alternate.and_then(|a| a.child("mc:Fallback"))) {
             let kept = El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(fallback.clone())] };
-            // A malformed or over-budget fallback must not discard a valid native part.
-            if let Some(whole) = self.keep_embedded(&kept, rels, &[]) {
+            // A malformed or over-budget fallback must not discard a valid native part. If
+            // only unrelated fallback markup is broken, retain the picture by itself so its
+            // crop, effects and other valid markup are not lost when it is saved again.
+            let whole = self.keep_embedded(&kept, rels, &[]).or_else(|| {
+                let pic = fallback.child("pic:pic")?;
+                let clean_fallback = El { name: "mc:Fallback".into(), attrs: Vec::new(), kids: vec![Node::El(pic.clone())] };
+                let clean =
+                    El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(clean_fallback)] };
+                self.keep_embedded(&clean, rels, &[])
+            });
+            if let Some(whole) = whole {
                 Arc::make_mut(&mut graphic).source = Some(whole);
-                preview = match fallback.child("pic:pic").and_then(|p| self.read_pic(p, rels, 0.0, 0.0, String::new(), Float::default())) {
-                    Some(InlineObject::Image { media, .. }) => Some(media),
-                    _ => None,
-                };
             }
+            // A broken extra relationship can prevent retaining the complete alternate even
+            // though the picture itself is usable. Read it independently for display.
+            preview = match fallback.child("pic:pic").and_then(|p| self.read_pic(p, rels, 0.0, 0.0, String::new(), Float::default())) {
+                Some(InlineObject::Image { media, .. }) => Some(media),
+                _ => None,
+            };
         }
         Some((graphic, preview))
     }

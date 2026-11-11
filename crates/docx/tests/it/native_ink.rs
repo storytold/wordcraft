@@ -53,6 +53,52 @@ fn native_ink_strokes_render_in_all_frames_and_survive_json_and_two_docx_saves()
     }
 }
 
+/// An unretainable optional branch must not suppress a recoverable picture preview.
+#[test]
+fn grouped_ink_preview_survives_an_unretainable_alternate() {
+    for canvas in [false, true] {
+        for nested in [false, true] {
+            for broken in [false, true] {
+                let member = ink_member(914400, true);
+                let member = if nested {
+                    format!(
+                        r#"<wpg:grpSp><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="2743200" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="2743200" cy="914400"/></a:xfrm></wpg:grpSpPr>{member}</wpg:grpSp>"#
+                    )
+                } else {
+                    member
+                };
+                let bytes = nested_ink_docx(canvas, &member, true);
+                let mut files = unzip(&bytes);
+                let mut body = text(&files, "word/document.xml").replace("<a:stretch>", r#"<a:srcRect l="25000"/><a:stretch>"#);
+                if broken {
+                    body = body.replace("</mc:Fallback>", r#"<a:ext r:id="missing"/></mc:Fallback>"#);
+                }
+                files.insert("word/document.xml".into(), body.into_bytes());
+                let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+                let mut doc = wordcraft_docx::read(&replace_ink(&zip(&entries), "malformed")).unwrap();
+                for cycle in 0..3 {
+                    let graphic = ink_graphic(&doc, true);
+                    assert!(
+                        matches!(graphic.items.as_slice(), [GraphicItem::Image { media, .. }] if doc.media.contains_key(media)),
+                        "canvas={canvas}, nested={nested}, broken={broken}, cycle={cycle}: {:?}",
+                        graphic.items
+                    );
+                    if cycle < 2 {
+                        let saved = wordcraft_docx::write(&doc).unwrap();
+                        let files = unzip(&saved);
+                        assert!(files.values().any(|b| b == b"malformed"));
+                        assert!(files.values().any(|b| b == b"original preview bytes"));
+                        let body = text(&files, "word/document.xml");
+                        assert!(!body.contains("missing"));
+                        assert!(body.contains(r#"l="25000""#), "fallback crop lost: {body}");
+                        doc = wordcraft_docx::read(&saved).unwrap();
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Unsupported visual ink semantics use their picture while preserving bytes across repeated saves.
 #[test]
 fn native_ink_unsupported_features_keep_the_preview_and_original_bytes() {

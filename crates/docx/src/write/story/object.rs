@@ -459,7 +459,33 @@ impl Writer<'_> {
                         && let Some(mut root) = self.embedded_tree(src, rels, None)
                     {
                         Self::place_member(&mut root, [c.x, c.y, *iw, *ih], float, 0);
-                        w.raw(&root.to_xml());
+                        // If an invalid extra relationship prevented keeping the original
+                        // alternate, retain its usable picture by rebuilding only the fallback.
+                        if root.name == "w14:contentPart"
+                            && let Some(media) = graphic.ink_fallback.as_ref()
+                            && let Some(file) = self.media_files.get(media).cloned()
+                        {
+                            let image = InlineObject::Image {
+                                media: media.clone(),
+                                w: *iw,
+                                h: *ih,
+                                alt: String::new(),
+                                float: float.clone(),
+                                crop: [0.0; 4],
+                                fx: Default::default(),
+                                ole: None,
+                            };
+                            w.open("mc:AlternateContent", &[]);
+                            w.open("mc:Choice", &[("Requires", "wpi")]);
+                            w.raw(&root.to_xml());
+                            w.close("mc:Choice");
+                            w.open("mc:Fallback", &[]);
+                            self.pic(w, &image, &file, at, rels);
+                            w.close("mc:Fallback");
+                            w.close("mc:AlternateContent");
+                        } else {
+                            w.raw(&root.to_xml());
+                        }
                     }
                 }
                 _ => {}
