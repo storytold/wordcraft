@@ -227,6 +227,7 @@ impl Reader<'_> {
             };
             self.pc.major_scripts = scripts("a:majorFont");
             self.pc.minor_scripts = scripts("a:minorFont");
+            self.pc.theme_fonts = true;
         }
         self.pc.major_font = self.doc.settings.major_font.clone();
         self.pc.minor_font = self.doc.settings.minor_font.clone();

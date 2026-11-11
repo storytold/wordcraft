@@ -439,6 +439,7 @@ pub(crate) fn outside_unchanged(before: &Document, after: &Document, author: &st
         && sections(before) == sections(after)
         && b.default_chr == a.default_chr
         && b.default_para == a.default_para
+        && b.default_para_present == a.default_para_present
         && b.styles.iter().all(|st| a.get(&st.id) == Some(st))
         && before.settings == after.settings
         && before.core == after.core

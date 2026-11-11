@@ -103,6 +103,8 @@ fn update_styles(s: &mut Session, v: &Value) -> CmdResult {
 pub fn apply_template_styles(doc: &mut Document, src: &Document) -> Value {
     Arc::make_mut(&mut doc.styles).default_chr = src.styles.default_chr.clone();
     Arc::make_mut(&mut doc.styles).default_para = src.styles.default_para.clone();
+    // Whether the template has paragraph defaults of its own decides what they resolve to.
+    Arc::make_mut(&mut doc.styles).default_para_present = src.styles.default_para_present;
     let ids: Vec<String> = src.styles.styles.iter().map(|st| st.id.clone()).collect();
     copy_styles(doc, src, &ids)
 }
@@ -465,6 +467,25 @@ mod tests {
         assert!(err.is_err());
         assert_eq!(s.doc.styles, before);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn a_templates_paragraph_defaults_resolve_as_in_the_template() {
+        // A template with `w:pPrDefault` that says nothing of spacing (0 pt after), and one
+        // without `w:pPrDefault` (Word's own 8 pt after), each over a document of the other kind.
+        for template_has_them in [true, false] {
+            let mut src = Document::new();
+            let st = Arc::make_mut(&mut src.styles);
+            st.default_para = Default::default();
+            st.default_para_present = template_has_them;
+            let mut doc = Document::new();
+            let st = Arc::make_mut(&mut doc.styles);
+            st.default_para = Default::default();
+            st.default_para_present = !template_has_them;
+            apply_template_styles(&mut doc, &src);
+            assert_eq!(doc.styles.para_defaults(), src.styles.para_defaults(), "template has pPrDefault: {template_has_them}");
+            assert_eq!(doc.styles.para_defaults().space_after, (!template_has_them).then_some(8.0));
+        }
     }
 
     #[test]

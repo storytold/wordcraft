@@ -52,6 +52,8 @@ pub struct PropCtx {
     /// The theme's per-script fonts (`a:font script="Arab" typeface="…"`).
     pub major_scripts: Vec<(String, String)>,
     pub minor_scripts: Vec<(String, String)>,
+    /// Whether the package has a theme with a font scheme (without one, Word uses its own theme's).
+    pub theme_fonts: bool,
     /// The script (ISO 15924) of `w:themeFontLang/@w:bidi`, which picks the font a `…Bidi` theme
     /// slot names. `None` = the settings name no bidi language.
     pub bidi_script: Option<&'static str>,
@@ -194,6 +196,34 @@ impl PropCtx {
         let Some(script) = self.bidi_script else { return BIDI_THEME_FALLBACK_FONT.to_string() };
         let by_script = if script == "Latn" { named(latin) } else { scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)) };
         by_script.or_else(|| named(cs)).unwrap_or_else(|| BIDI_THEME_FALLBACK_FONT.to_string())
+    }
+
+    /// The complex-script font of the run defaults Word gives a document whose styles leave
+    /// `w:rPrDefault` out: its Normal template's `w:cstheme="minorBidi"`. Measured in Word for
+    /// Windows (Thai), `w:cs` runs: the theme's minor font for the script of the settings'
+    /// `w:themeFontLang/@w:bidi`, or Thai with none there (the template's bidi language,
+    /// `APP_RPR_DEFAULT`); else the theme's `a:cs`. With no font for Thai, Angsana New; with no
+    /// theme at all, Word's own theme's Thai font, Cordia New.
+    pub(super) fn app_default_cs_font(&self) -> String {
+        let script = self.bidi_script.unwrap_or("Thai");
+        let named = |f: &String| (!f.is_empty()).then(|| f.clone());
+        if script == "Latn" {
+            if let Some(f) = named(&self.minor_font) {
+                return f;
+            }
+        }
+        let themed = self
+            .theme_fonts
+            .then(|| self.minor_scripts.iter().find(|(s, _)| s == script).and_then(|(_, f)| named(f)).or_else(|| named(&self.minor_cs)))
+            .flatten();
+        themed.unwrap_or_else(|| {
+            match (script, self.theme_fonts) {
+                ("Thai", false) => "Cordia New",
+                ("Thai", true) => "Angsana New",
+                _ => BIDI_THEME_FALLBACK_FONT,
+            }
+            .to_string()
+        })
     }
 
     /// The theme colour `e` names in `attr` (`w:themeColor`, `w:themeFill`), through the colour

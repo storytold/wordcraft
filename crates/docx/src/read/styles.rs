@@ -103,6 +103,8 @@ impl Reader<'_> {
                 if let Ok(r) = crate::xml::parse(APP_RPR_DEFAULT.as_bytes()) {
                     sheet.default_chr = self.pc.rpr(&r);
                 }
+                // `rpr` leaves `w:cstheme` to inherit; here there is nothing to inherit from.
+                sheet.default_chr.font_cs = Some(self.pc.app_default_cs_font());
             }
             Some(d) => {
                 if let Some(r) = d.child("w:rPr") {

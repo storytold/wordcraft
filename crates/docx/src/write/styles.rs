@@ -37,9 +37,12 @@ pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     w.close("w:rPr");
     w.close("w:rPrDefault");
     if s.default_para_present || s.default_para != wordcraft_doc::props::ParaProps::default() {
+        // Defaults edited over a file that left `w:pPrDefault` out still stand on Word's own
+        // (8 pt after): written out whole, so reopening keeps them.
+        let para = s.para_defaults();
         w.open("w:pPrDefault", &[]);
         w.open("w:pPr", &[]);
-        props::ppr_inner(&mut w, &s.default_para, false, None);
+        props::ppr_inner(&mut w, &para, false, None);
         w.close("w:pPr");
         w.close("w:pPrDefault");
     }
