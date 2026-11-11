@@ -9,6 +9,7 @@ use super::shape::{NO_TEXT_BOX, can_link, has_text_box, link_text_box, set_text_
 use super::{CmdError, CommandSpec, InlineObject, Pos, Rgb, Selection, Spin, TextVert, VAlign, Wrap, WrapText, json, p, sel_result};
 use wordcraft_doc::picfx::PicFx;
 
+/// Returns all command specifications for objects (pictures, shapes, text boxes, and drawing canvases).
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("picture.size", "Size", "Picture Format › Size", size)
@@ -297,25 +298,46 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"index"?: n}"#)
         .pure(),
         CommandSpec::new("shape.outline", "Shape Outline", "Shape Format › Shape Styles", |s, v| {
-            let c = p::str(v, "color").and_then(Rgb::parse);
+            let color = match v.get("color") {
+                None => None,
+                Some(serde_json::Value::Null) => Some(None),
+                Some(_) => {
+                    let hex = p::str(v, "color")
+                        .and_then(Rgb::parse)
+                        .ok_or_else(|| CmdError::Params("`color`: \"RRGGBB\" or null".into()))?;
+                    Some(Some(hex))
+                }
+            };
             let w = p::f32(v, "width").map(|w| w.clamp(0.0, 72.0));
+            let dash = p::str(v, "dash").map(wordcraft_doc::line_dash::LineDash::from_ooxml);
+            let cap = p::str(v, "cap").map(wordcraft_doc::connector::LineCap::from_ooxml);
             with_obj(s, |o| {
                 if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
-                    *stroke = c;
-                    // A colour chosen here replaces an outline gradient from a file.
-                    extra.outline_fill = None;
+                    if let Some(c) = color {
+                        *stroke = c;
+                        // A colour chosen here replaces an outline gradient from a file.
+                        extra.outline_fill = None;
+                    }
                     if let Some(w) = w {
                         *stroke_width = w;
                     }
+                    if let Some(d) = dash.clone() {
+                        extra.dash = d;
+                    }
+                    if let Some(cp) = cap {
+                        extra.cap = cp;
+                    }
                 } else if let Some(style) = crate::cmd::canvas::style_mut(o) {
-                    style.stroke = c;
+                    if let Some(c) = color {
+                        style.stroke = c;
+                    }
                     if let Some(w) = w {
                         style.stroke_width = w;
                     }
                 }
             })
         })
-        .params(r#"{"color": "RRGGBB" | null, "width"?: pt}  (a selected drawing canvas: its border)"#)
+        .params(r#"{"color"?: "RRGGBB" | null, "width"?: pt, "dash"?: string, "cap"?: string}  (a selected drawing canvas: its border)"#)
         .when(has_shape_or_canvas),
         CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
             .params(

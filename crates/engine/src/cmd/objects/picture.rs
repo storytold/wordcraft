@@ -1,4 +1,4 @@
-use super::select::{obj_size, selected, with_obj};
+use super::select::{obj_size, selected, selected_or_text_box, with_obj};
 use super::{CmdError, CmdResult, InlineObject, Rgb, Session, Value, Wrap, p};
 use wordcraft_doc::picfx::PicFx;
 
@@ -74,7 +74,7 @@ pub fn cropped_original_size(s: &Session, o: &InlineObject) -> Option<(f32, f32)
 /// of the original size (`original` alone gives that back: the Size dialog's Reset); then `width`
 /// and `height`, where one alone keeps the proportions unless `lockAspect` is false.
 pub(super) fn size(s: &mut Session, v: &Value) -> CmdResult {
-    let (_, o) = selected(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
+    let (_, o) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no object".into()))?;
     let lock = p::bool(v, "lockAspect").unwrap_or(true);
     let (w0, h0) = obj_size(&o);
     let (mut w, mut h) = (w0, h0);
