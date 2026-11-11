@@ -5,33 +5,41 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `b963a8db` (§5.34, the finding-10 fix) plus this page
-  on top of it. The fork branch and the `headRefOid` of PR #5834 are still
-  `af9a43a2` (the CodeRabbit triage, §5.26): the fourteen commits after it —
-  `2a6f39c7` and the code+documentation pairs of §5.28 (`925bb0c9`,
-  `3225e644`), §5.29 (`264afd18`, `c6e3df4a`), §5.30 (`bcca9bce`, `37af31cb`),
-  §5.31 (`bf632378`, `4e95d929`), §5.32 (`c1582864`, `88aca38b`), §5.33
-  (`3b05f844`, `64f05201`) and §5.34 (`b963a8db`) — are committed locally and
-  **not pushed**, because the envoy role cannot push; the owner
-  sends it (§5.27–§5.34). The branch is 93 commits over `4b0d3995` before this
-  page and 94 with it. The branch was pushed
-  on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
-  20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
-  `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
-  The PR is `MERGEABLE`; it was marked ready for review at 14:57:53Z; its
-  title carried the word "(draft)" as text until this pass removed it (§5.27),
-  and the title now reads "Real-time collaboration: authoritative sync server,
-  document adapter, client core". The fork git
-  source is gone from the manifest and the lock (§5.24), and the three
-  `printing.yml` steps are green on the pushed tree at the build host (§5.25).
-  CI has not executed on any pushed head: every run on `15c9625b`, the five
-  runs on `077b4056` (17:14Z) and the five runs on `af9a43a2` (20:15:37Z) sit
-  in `action_required` until a maintainer approves them (§5.2, §5.26, §5.27). A
-  maintainer had approved the workflows for `467948fa`; there `Nix` and
-  `SonarCloud` passed and `Printing` failed on a stale `Cargo.lock`, not on
-  code (§5.23). CodeRabbit is green on `af9a43a2` (completed 20:25:20Z); its
-  review `5848804525` has two Minor findings, both about this page, and both
-  are answered here (§5.27).
+- HEAD at this writing: `50c68e3a` (§5.34, the finding-10 fix), with this page
+  on top of it. Unlike the earlier pushes, `50c68e3a` is **delivered**: the
+  local `HEAD` of `upstream/`, the fork branch
+  (`git ls-remote fork refs/heads/feature/realtime-collaboration`) and the
+  `headRefOid` of PR #5834 all answer
+  `50c68e3ad07cd4114004ea292b1d6eb4739a2231` (§5.35). The fifteen commits after
+  `af9a43a2` — `2a6f39c7` and the code+documentation pairs of §5.28
+  (`925bb0c9`, `3225e644`), §5.29 (`264afd18`, `c6e3df4a`), §5.30 (`bcca9bce`,
+  `37af31cb`), §5.31 (`bf632378`, `4e95d929`), §5.32 (`c1582864`, `88aca38b`),
+  §5.33 (`3b05f844`, `64f05201`) and §5.34 (`b963a8db`, `50c68e3a`) — are in
+  the fork and in the PR. The branch is 94 commits over `4b0d3995` and 95 with
+  this page; the diff is 69 files, +30473/−22. The branch was pushed on
+  2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`), at 20:15Z
+  (`af9a43a2`) and around 03:27Z on 2026-11-11 (`50c68e3a`); at each point the
+  local `HEAD`, the fork branch and the `headRefOid` of PR #5834 were the same
+  commit (§5.21, §5.24, §5.26, §5.27, §5.35).
+- The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
+  branch merges cleanly, and `BLOCKED` is the required review plus the
+  unapproved workflows. It was marked ready for review at 14:57:53Z, and the
+  title reads "Real-time collaboration: authoritative sync server, document
+  adapter, client core". The fork git source is gone from the manifest and the
+  lock (§5.24), and the three `printing.yml` steps are green on the pushed tree
+  at the build host (§5.25).
+- CI has still not executed on any pushed head. The five runs created at
+  03:27:31Z on `50c68e3a` — `Printing`, `SonarCloud`, `Packaging lint`, `Nix`
+  and `CI` — are all `action_required`, as are the five on `077b4056` (17:14Z)
+  and the five on `af9a43a2` (20:15:37Z), until a maintainer approves them
+  (§5.2, §5.26, §5.27, §5.35). A maintainer had approved the workflows for
+  `467948fa`; there `Nix` and `SonarCloud` passed and `Printing` failed on a
+  stale `Cargo.lock`, not on code (§5.23).
+- CodeRabbit has not finished on `50c68e3a`: its check started at 03:27:51Z
+  and was `in_progress` when this page was written, and no review exists for
+  that head. The last completed review is `5848804525` on `af9a43a2`
+  (20:25:20Z), whose two Minor findings are answered in §5.27; §5.35 records
+  the state of the new one, and has no findings to triage yet.
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -324,7 +332,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z | PR #5834; head `af9a43a2` equals the fork branch; every workflow run on the pushed head waits in `action_required` for a maintainer's approval (§5.2, §5.27) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; `headRefOid` `50c68e3a` equals the fork branch and the local `HEAD` (§5.35); `MERGEABLE`/`BLOCKED` with an empty `reviewDecision`; the five runs on that head wait in `action_required` for a maintainer's approval (§5.2, §5.35) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -638,20 +646,21 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    offers the room's file as a copy (§5.19); what remains for it is operational:
    the cabinet's ticket must carry the numeric `fileId` in `doc`, and the shared
    service token must be in both `.env`s.
-2. Get a maintainer's approval for the runs on the PR head. The rebased branch
-   is pushed, the fork and the PR head are the same commit (`af9a43a2`), and
-   the PR is `MERGEABLE`; it was marked ready for review at 14:57:53Z, so the
-   draft flag is gone (§5.21, §5.26). A maintainer had approved the workflows
-   for the earlier head `467948fa`: `Nix` and `SonarCloud` passed, `Printing`
-   failed on a stale `Cargo.lock` rather than on code, and `39f2e1a4` fixes it
-   (§5.23). The pushes at 14:38Z (`15c9625b`) and around 17:14Z (`077b4056`)
-   started fresh runs that wait in `action_required`, so nothing has executed
-   on any of them; the three `printing.yml` steps have been run green on the
-   pushed tree at the build host instead (§5.25). The fix from the CodeRabbit
-   triage (`4ecab864`) and the pages above it were pushed at 20:15Z; the head
-   is `af9a43a2`, and its five runs wait in `action_required` too (§5.26,
-   §5.27). This page sits on top of that head and still waits for a push; the
-   envoy role cannot push, so it is one fast-forward for the owner (§5.27).
+2. Get a maintainer's approval for the runs on the PR head. The head is
+   delivered: the local `HEAD`, the fork branch and the PR `headRefOid` are all
+   `50c68e3a`, the PR is `MERGEABLE`, and it was marked ready for review at
+   14:57:53Z, so the draft flag is gone (§5.21, §5.26, §5.35). A maintainer had
+   approved the workflows for the earlier head `467948fa`: `Nix` and
+   `SonarCloud` passed, `Printing` failed on a stale `Cargo.lock` rather than on
+   code, and `39f2e1a4` fixes it (§5.23). Every push since started a fresh set
+   of five runs that wait in `action_required`, so nothing has executed on any
+   of them; the three `printing.yml` steps have been run green on the pushed
+   tree at the build host instead (§5.25). The latest set is the one on
+   `50c68e3a`, created at 03:27:31Z — `Printing`, `SonarCloud`, `Packaging
+   lint`, `Nix` and `CI`, all `action_required` — and CodeRabbit's check on
+   that head was still `in_progress` at 03:27:51Z (§5.35). This page is a local
+   commit on top of `50c68e3a` and is not pushed; the envoy role cannot push,
+   so it is one fast-forward for the owner.
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -2669,12 +2678,14 @@ The full `cargo xtask ci` was not run in this pass.
 
 **What is left.** The two commits this entry describes were pushed after it was
 written: `4ecab864` and `af9a43a2`, which is the PR head when the next review
-landed (§5.27). They are no longer local. A maintainer still has to approve the
-five runs on the pushed head; the runs on `077b4056` validate neither
-`4ecab864` nor this page, so their approval would prove nothing about either.
-The eight confirmed findings above need slices of their own, findings 1 and 5
-first: they are what keeps the convergence criterion at **partial** (§2,
-§5.27).
+landed (§5.27). They are no longer local. The eight confirmed findings above
+were then taken one slice each: 1 in §5.28, 5 in §5.29, 2 in §5.30, 3 in §5.31,
+6 in §5.32, 8 in §5.33 and 10 in §5.34; 9 (per-document connections) is the
+only one of the ten still open and is named in §4. All of those commits are
+delivered: the fork branch and the PR `headRefOid` are `50c68e3a` (§5.35). A
+maintainer still has to approve the five runs on that head; the runs on
+`077b4056` validate neither `4ecab864` nor this page, so their approval would
+prove nothing about either.
 
 ### 5.27 The review on `af9a43a2` is about this page; the acceptance table is reconciled (run 2026-11-10)
 
@@ -2732,15 +2743,14 @@ repos/storytold/wordcraft/commits/af9a43a2/check-runs`, `gh api
 and `git ls-remote fork`. No `cargo` command was run, because no Rust file
 moved; the last full gate is the one in §3.
 
-**What is left.** One push, then a maintainer's approval of the five runs on
-the resulting head. This page is committed on top of `af9a43a2` and is not
-pushed: the envoy role denies `git push`, so the owner runs
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` from
-`upstream/` (a fast-forward from `af9a43a2`, no rebase and no force). The runs
-on `077b4056` validate neither `4ecab864` nor this page. After that, in this
-order: the ADR and the fix for finding 5 (finding 1 is done, §5.28 — these two
-decide when the criterion can go back to `done`), then findings 2,
-3, 6, 8, 9 and 10, each with its own test. The PR title ended with the word
+**What is left.** The push this entry asks for happened: the fifteen commits
+after `af9a43a2` are delivered, and `50c68e3a` is the fork branch and the PR
+`headRefOid` (§5.35). What remains is a maintainer's approval of the five runs
+on that head, which are in `action_required` since 03:27:31Z; the runs on
+`077b4056` validate neither `4ecab864` nor this page. In the code, the ADR and
+the fix for finding 5 landed in §5.29 (finding 1 in §5.28), and findings 2, 3,
+6, 8 and 10 followed in §5.30–§5.34; 9 (per-document connections) is the only
+one of the ten still open, named in §4. The PR title ended with the word
 "(draft)" as text though the flag was gone; that title was edited in this pass
 and no longer says it, which touches no commit.
 
@@ -2835,18 +2845,16 @@ and `git show --stat` for the fix are the ones the commit printed:
 |---|---|
 | head | `925bb0c9` — `collab: refuse a positional edit whose base no longer matches its paragraph` |
 | files | `crates/collab/src/room.rs` +62/−2, `crates/collab-client/src/lib.rs` +8, `crates/collab-client/src/tests.rs` +24, `crates/collab-doc/src/tests.rs` +57, `crates/collab-app/src/tests.rs` +43, `docs/collab/adr/0001-positional-edit-guard.md` +143, `docs/collab/rfc.md` +1/−1 |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27: from `upstream/`,
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a
-fast-forward from `af9a43a2` with no rebase and no force (two commits for the
-fix and its ADR plus the earlier docs commit `2a6f39c7` and this page). Then a
-maintainer's approval of the runs on the new head. In the code, finding 5 is
-next (§4): a per-peer stale flag that closes the socket when an accepted
-operation was dropped from a full queue, with a stalled-reader test; that is
-what keeps the convergence criterion at **partial** with finding 1 closed.
-Findings 2, 3, 6, 8, 9 and 10 follow, each with its own test. The rebase for
-text primitives stays the design target and will supersede ADR WC-0001.
+**What is left.** The push happened: this commit is in `50c68e3a`, the fork
+branch and the PR head (§5.35), and a maintainer's approval of the five runs on
+that head is still outstanding. In the code, finding 5 is next (§4): a per-peer
+stale flag that closes the socket when an accepted operation was dropped from a
+full queue, with a stalled-reader test; that is what keeps the convergence
+criterion at **partial** with finding 1 closed. Findings 2, 3, 6, 8, 9 and 10
+follow, each with its own test. The rebase for text primitives stays the design
+target and will supersede ADR WC-0001.
 
 ### 5.29 Finding 5: a peer that missed an accepted operation is closed, not left stale (run 2026-11-11)
 
@@ -2933,17 +2941,15 @@ only file it changes.
 |---|---|
 | head | `264afd18` |
 | files | `apps/collab-server/src/lib.rs` +232/−90, `apps/collab-server/src/tests.rs` +151/−4, `docs/collab/adr/0002-stale-peer-close.md` +139, `docs/collab/server.md` +7/−1, `docs/collab/rfc.md` +3/−1, `docs/collab/production.md` +1 |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27 and §5.28: from
-`upstream/`, `git push fork HEAD:refs/heads/feature/realtime-collaboration` — a
-fast-forward from `af9a43a2`, no rebase and no force. Then a maintainer's
-approval of the runs on the new head. In the code, findings 2, 3, 6, 8, 9 and 10
-remain (§4), each with its own slice and test; finding 2 (a corrupt snapshot
-becomes an empty room) is the next data-safety one. Both convergence findings
-are now closed, so §2's criterion reads **done** with the price the two ADRs
-name; the six remaining findings are separate failure modes and are not hidden
-by that row.
+**What is left.** The commit is delivered in `50c68e3a` (§5.35); a maintainer's
+approval of the runs on that head is still outstanding. In the code, findings
+2, 3, 6, 8, 9 and 10 remain (§4), each with its own slice and test; finding 2 (a
+corrupt snapshot becomes an empty room) is the next data-safety one. Both
+convergence findings are now closed, so §2's criterion reads **done** with the
+price the two ADRs name; the six remaining findings are separate failure modes
+and are not hidden by that row.
 
 ### 5.30 Finding 2: a snapshot that cannot be opened refuses the document (run 2026-11-11)
 
@@ -3040,13 +3046,11 @@ it and the only file it changes.
 |---|---|
 | head | `bcca9bce` — `collab: refuse a document whose snapshot cannot be opened` |
 | files | `apps/collab-server/src/lib.rs` +95/−46, `src/store.rs` +184/−23, `src/tests.rs` +61/−10, `docs/collab/adr/0003-corrupt-snapshot-refused.md` +166, `docs/collab/server.md` +16, `production.md` +7, `rfc.md` +7 (7 files, +536/−79) |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27–§5.29: from `upstream/`,
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a
-fast-forward from `af9a43a2`, no rebase and no force. Then a maintainer's
-approval of the runs on the new head. Two follow-ups this slice names and does
-not take:
+**What is left.** The commit is delivered in `50c68e3a` (§5.35); a maintainer's
+approval of the runs on that head is still outstanding. Two follow-ups this
+slice names and does not take:
 
 - **The client reconnects in a loop on a refused join.** The transport
   reconnects on any closed socket with a 250 ms backoff, and a join refusal
@@ -3184,12 +3188,11 @@ on top of it and the only file it changes.
 |---|---|
 | head | `bf632378` — `collab: open a room from the document the first writer has open` |
 | files | `apps/collab-server/src/lib.rs` +174/−43, `src/tests.rs` +248/−18, `crates/collab/src/wire.rs` +39/−1, `crates/collab-client/src/lib.rs` +30/−3, `src/tests.rs` +29, `crates/collab-ws/src/lib.rs` +22/−4, `tests/reconnect.rs` +45/−1, `crates/collab-app/src/lib.rs` +6/−2, `crates/collab-web/src/lib.rs` +28/−3, `crates/ui-egui/src/collab.rs` +1/−1, `apps/wordcraft-web/src/web.rs` +1/−1, `docs/collab/adr/0004-room-without-snapshot-seeded.md` +197, `server.md` +32/−3, `rfc.md` +21/−1, `production.md` +10, `host-bridge.md` +7 (16 files, +890/−81) |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27–§5.30: from `upstream/`,
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
-from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the
-runs on the new head. Three follow-ups this slice names and does not take:
+**What is left.** The commit is delivered in `50c68e3a` (§5.35); a maintainer's
+approval of the runs on that head is still outstanding. Three follow-ups this
+slice names and does not take:
 
 - **The seed carries no source `.docx`.** The collab session does not hold the
   host's file bytes, so a room seeded from a model has no `source.docx` until
@@ -3322,12 +3325,11 @@ clean).
 |---|---|
 | head | `c1582864` — `collab: a client id belongs to the connection that registered it` |
 | files | `apps/collab-server/src/lib.rs` +180/−81, `src/tests.rs` +161/−7, `docs/collab/adr/0005-client-id-belongs-to-a-connection.md` +158, `server.md` +10, `production.md` +9 (five files, +518/−88) |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27–§5.31: from `upstream/`,
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
-from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the runs
-on the new head. Two things this slice names and does not take:
+**What is left.** The commit is delivered in `50c68e3a` (§5.35); a maintainer's
+approval of the runs on that head is still outstanding. Two things this slice
+names and does not take:
 
 - **The ownership rule assumes `sid` is stable for the life of a `client_id`.**
   That is how the cabinet issues tokens (ADR-0008) and how the desktop transport
@@ -3444,12 +3446,11 @@ not exist). The rules it picks:
 |---|---|
 | head | `3b05f844` — `collab: an edit that did not reach the room pauses the session` |
 | files | `crates/collab-app/src/lib.rs` +90/−5, `src/tests.rs` +56, `crates/collab-web/src/lib.rs` +49/−11, `crates/ui-egui/src/collab.rs` +55/−17, `docs/collab/adr/0006-diverged-session-pauses.md` +135 (five files, +385/−33), plus this page |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27–§5.32: from `upstream/`,
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
-from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the runs
-on the new head. Two things this slice names and does not take:
+**What is left.** The commit is delivered in `50c68e3a` (§5.35); a maintainer's
+approval of the runs on that head is still outstanding. Two things this slice
+names and does not take:
 
 - **The price is the one ADR WC-0002 already names.** The resync continues from
   the room's snapshot, so an edit that never reached the room is dropped locally
@@ -3572,12 +3573,11 @@ reverted afterwards and the tree is clean.
 |---|---|
 | head | `b963a8db` — `collab: a repeated session renews the connection it belongs to` |
 | files | `crates/collab-web/src/lib.rs` +159/−2, `apps/wordcraft-web/src/web.rs` +31/−16, `crates/ui-egui/src/collab.rs` +4, `docs/collab/adr/0007-token-renewal-keeps-the-connection.md` +175 (four files, +369/−18), plus this page and `host-bridge.md` |
-| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+| pushed | yes, as part of `50c68e3a`: the fork branch and PR #5834 carry this commit (§5.35) |
 
-**What is left.** The push is the owner's, as in §5.27–§5.33: from `upstream/`,
-`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
-from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the runs
-on the new head. Three things this slice names and does not take:
+**What is left.** The commit is delivered in `50c68e3a` (§5.35); a maintainer's
+approval of the runs on that head is still outstanding. Three things this slice
+names and does not take:
 
 - **The sender is the cabinet's.** No test here proves that the real cabinet
   page sends the repeated `session`; the crate's `Message::Session` and the app
@@ -3592,6 +3592,57 @@ on the new head. Three things this slice names and does not take:
 - **A rotation that is never delivered leaves the stale token.** If the host page
   is gone, the reconnect is refused and the panel shows `error`; there is no
   retry that could invent a fresh token. Named in ADR WC-0007 §Consequences 5.
+
+### 5.35 The head is delivered; the runs and CodeRabbit on `50c68e3a` (run 2026-11-11)
+
+This entry records the state of PR #5834 after the fifteen commits of
+§5.28–§5.34 left the local branch, and the one thing a maintainer still owes
+it. No code changed: this commit touches `docs/collab/STATUS.md` only.
+
+**The head.** `git rev-parse HEAD`, `git ls-remote fork
+refs/heads/feature/realtime-collaboration` and `gh pr view 5834 --json
+headRefOid` all answer `50c68e3ad07cd4114004ea292b1d6eb4739a2231`; the PR's
+`headRefName` is `feature/realtime-collaboration` on `copoka/wordcraft` and its
+`baseRefOid` is `4b0d39959968a34e462cb53099e76fb108d0e96f`. The branch is 94
+commits over that base and the diff is 69 files, +30473/−22
+(`git diff --stat 4b0d3995..HEAD`). `git log --oneline af9a43a2..HEAD` has the
+fifteen commits of §5.28–§5.34, in the code+documentation pairs those entries
+name.
+
+**The merge state.** `gh pr view 5834 --json mergeable,mergeStateStatus,
+reviewDecision,isDraft` answers `MERGEABLE`, `BLOCKED`, `""` and `false`. The
+branch merges cleanly; `BLOCKED` is the required review and the unapproved
+workflows, not a conflict, and no reviewer has recorded a decision.
+
+**CI on the delivered head.** From `gh api
+"repos/storytold/wordcraft/actions/runs?head_sha=50c68e3a…"`, five runs, all
+created 2026-11-11 03:27:31Z:
+
+| Workflow | Status |
+|---|---|
+| `Printing` | `action_required` |
+| `SonarCloud` | `action_required` |
+| `Packaging lint` | `action_required` |
+| `Nix` | `action_required` |
+| `CI` | `action_required` |
+
+Nothing executed, for the fork rule of §5.21. The evidence that the tree builds
+is still the build-host run of §3 and the `printing.yml` steps of §5.25, not a
+CI run on this head.
+
+**CodeRabbit on `50c68e3a`.** Its check started at 03:27:51Z and is
+`in_progress`; `gh pr view 5834 --json reviews` has no review for that head, the
+newest being `5848804525` on `af9a43a2` (2026-11-10 20:25:18Z, §5.27). There is
+therefore nothing to triage in this pass: no finding of the new review is known
+yet, and this entry does not guess at one. The next session reads the completed
+review once and records its findings here rather than polling the check.
+
+**What is left.** One maintainer's approval of the five runs above and a review
+decision. Until the review on this head completes there is no new CodeRabbit
+finding to answer; the ten of §5.26 are otherwise settled — findings 4 and 7 in
+`4ecab864`, the rest in §5.28–§5.34, except 9 (per-document connections), which
+is still open and named in §4. This page itself is a local commit on top of
+`50c68e3a`; the envoy role cannot push, so it is one fast-forward for the owner.
 
 
 
