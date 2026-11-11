@@ -56,6 +56,7 @@ pub fn with_small_memory_blocks(descriptor: DeviceDescriptor<'static>) -> Device
 }
 
 /// Wraps eframe's own device descriptor, so its limits stay as they are.
+#[cfg_attr(not(any(target_os = "windows", target_os = "macos")), allow(dead_code))]
 pub fn configure_memory_hints(options: &mut NativeOptions) {
     if let WgpuSetup::CreateNew(create) = &mut options.wgpu_options.wgpu_setup {
         let describe = std::sync::Arc::clone(&create.device_descriptor);
