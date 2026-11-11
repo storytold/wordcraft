@@ -20,6 +20,7 @@ mod glossary;
 mod heading_levels;
 mod legacy_forms;
 mod ligatures;
+mod line_numbering;
 mod malformed;
 mod missing_pictures;
 mod nested_block_controls;
