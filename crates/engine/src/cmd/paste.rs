@@ -270,13 +270,16 @@ pub enum Pasted {
 /// another program's formatted copy (HTML, RTF), else the system clipboard's text.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    let (has_html, has_rtf) = (p::str(v, "html").is_some(), p::str(v, "rtf").is_some());
-    let html_matches = p::str(v, "html").is_none_or(|h| h == s.clipboard_html);
-    let rtf_matches = p::str(v, "rtf").is_none_or(|r| r == s.clipboard_rtf);
+    let html = p::str(v, "html");
+    let rtf = p::str(v, "rtf");
+    let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
+    let html_matches = html.is_none_or(|h| h == s.clipboard_html);
+    let rtf_matches = rtf.is_none_or(|r| r == s.clipboard_rtf);
 
     if let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (!has_html && !has_rtf) || (has_html && html_matches && rtf_matches) || (has_rtf && !has_html && rtf_matches))
+        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
+        && html_matches
+        && rtf_matches
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
