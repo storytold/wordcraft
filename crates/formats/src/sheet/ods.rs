@@ -11,6 +11,8 @@ struct OCell {
     kind: String,
     value: Option<String>,
     text: String,
+    /// Characters in `text` (see [`push_capped`]).
+    text_chars: usize,
     paras: usize,
 }
 
@@ -77,7 +79,7 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                         && skip == 0
                     {
                         if c.paras > 0 {
-                            push_capped(&mut c.text, "\n");
+                            push_capped(&mut c.text, &mut c.text_chars, "\n");
                         }
                         c.paras += 1;
                     }
@@ -86,17 +88,17 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                 b"s" if in_p > 0 && skip == 0 => {
                     let k = attr(e, b"c").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).clamp(1, 1_000);
                     if let Some(c) = cell.as_mut() {
-                        push_capped(&mut c.text, &" ".repeat(k));
+                        push_capped(&mut c.text, &mut c.text_chars, &" ".repeat(k));
                     }
                 }
                 b"tab" if in_p > 0 && skip == 0 => {
                     if let Some(c) = cell.as_mut() {
-                        push_capped(&mut c.text, "\t");
+                        push_capped(&mut c.text, &mut c.text_chars, "\t");
                     }
                 }
                 b"line-break" if in_p > 0 && skip == 0 => {
                     if let Some(c) = cell.as_mut() {
-                        push_capped(&mut c.text, "\n");
+                        push_capped(&mut c.text, &mut c.text_chars, "\n");
                     }
                 }
                 _ => {}
@@ -107,7 +109,7 @@ pub(super) fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, 
                 && skip == 0
                 && let Some(c) = cell.as_mut()
             {
-                push_capped(&mut c.text, &t);
+                push_capped(&mut c.text, &mut c.text_chars, &t);
             }
         }
         Ev::End(n) => {
@@ -181,7 +183,7 @@ fn ods_value(c: &OCell) -> String {
         ("string", Some(v)) if c.text.trim().is_empty() => {
             // Attribute text obeys the same per-cell cap as `<text:p>` text.
             let mut s = String::new();
-            push_capped(&mut s, v);
+            push_capped(&mut s, &mut 0, v);
             s
         }
         _ => c.text.clone(),

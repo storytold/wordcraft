@@ -1,4 +1,4 @@
-use super::state::{Dest, MAX_PICT, St};
+use super::state::{Dest, MARK_CLOSE, MARK_OPEN, MAX_PICT, St};
 use super::{Fmt, Inline, Reader, Rgb, make_img, model};
 use std::sync::Arc;
 
@@ -11,7 +11,7 @@ fn multibyte_encoding(code_page: u16) -> Option<&'static encoding_rs::Encoding> 
 
 impl Reader {
     pub(super) fn commit_font(&mut self) {
-        let name = std::mem::take(&mut self.font_name).trim().trim_end_matches(';').trim().to_string();
+        let name = std::mem::take(&mut self.font_name).trim().to_string();
         if let Some(name) = model::kept_font(&name).filter(|n| !n.is_empty())
             && self.fonts.len() < 4096
         {
@@ -34,6 +34,11 @@ impl Reader {
     pub(super) fn byte(&mut self, b: u8) {
         if self.skip_chars > 0 {
             self.skip_chars -= 1;
+            return;
+        }
+        // `\'3b` in a font name is a `;` in every code page, and part of the name (see `ch`).
+        if b == b';' && self.st.dest == Dest::FontTbl {
+            self.ch(';');
             return;
         }
         let cp = self.code_page();
@@ -106,10 +111,11 @@ impl Reader {
     /// Big5 or UHC (a valid character pair followed by a lead byte) would be dropped as a UTF-8
     /// BOM and the rest decoded as UTF-8.
     pub(super) fn run(&mut self, chunk: &[u8]) {
-        if self.skip_chars > 0 {
-            for b in chunk {
-                self.byte(*b);
-            }
+        // The fallback bytes after `\uN` are skipped; the rest of the run is text like any other.
+        let skip = self.skip_chars.min(chunk.len());
+        self.skip_chars -= skip;
+        let chunk = chunk.get(skip..).unwrap_or_default();
+        if chunk.is_empty() {
             return;
         }
         let cp = self.code_page();
@@ -190,6 +196,11 @@ impl Reader {
                     return;
                 }
                 let mut f = self.st.fmt.clone();
+                if s.contains([MARK_OPEN, MARK_CLOSE]) {
+                    self.para.push_text(&s.replace([MARK_OPEN, MARK_CLOSE], "\u{FFFD}"), &f);
+                    self.para_has = true;
+                    return;
+                }
                 let r = self.st.rev;
                 if r.ins {
                     f.ins = Some(self.rev_mark(r.auth, r.dttm));
@@ -239,6 +250,11 @@ impl Reader {
                 }
             }
             Dest::Info(_) => self.info_text.push_str(s),
+            Dest::Atn(_) => {
+                if self.atn_text.len() < 256 {
+                    self.atn_text.push_str(s);
+                }
+            }
             Dest::FldInst => {
                 if let Some(f) = self.st.field.and_then(|i| self.fields.get_mut(i))
                     && f.len() < 4096
@@ -302,6 +318,14 @@ impl Reader {
             return;
         }
         self.finish_multibyte();
+        // Only a literal `;` ends a font name: an escaped one (`\'3b`, `\u59?`) belongs to it.
+        if c == ';' && self.st.dest == Dest::FontTbl {
+            // Held to the limit as other characters are; one past it drops the name.
+            if self.font_name.len() <= model::MAX_FONT_NAME {
+                self.font_name.push(c);
+            }
+            return;
+        }
         let mut buf = [0u8; 4];
         self.text(c.encode_utf8(&mut buf));
     }

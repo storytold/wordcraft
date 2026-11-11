@@ -46,6 +46,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+                let warning = app.font_box_warning(&font);
                 let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
                 let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
@@ -60,6 +61,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         recent: &recent,
                         preview: Some(&*prev),
                         tip: tl!("Font"),
+                        shown_as: warning.as_deref(),
                     },
                 ) {
                     let _ = if f == crate::widgets::ADD_FONT {
@@ -167,7 +169,7 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
-        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props));
+        let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
         // The buttons show alignment as seen on the page (Align Right is a right-to-left paragraph's start).
         let align = rp.as_ref().map(|r| r.align.visual(r.bidi)).unwrap_or_default();
         let rtl = rp.as_ref().is_some_and(|r| r.bidi);
@@ -326,6 +328,32 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     },
                 );
             });
+        });
+    });
+    // Advanced paragraph tools (#5043): conversions and cleanup over the selection, or the
+    // whole document with Ctrl+A first (the commands take `scope: "all"` for that as well).
+    group(ui, "Paragraph Tools", None, app, |ui, app| {
+        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("pilcrow", Some("Paragraph\nTools"), "Paragraph Tools", true, ""), |ui, app| {
+            mi(ui, app, "Split Lines into Paragraphs", "para.convertBreaks", json!({}));
+            mi(ui, app, "Add Blank Paragraphs Between", "para.blankBetween", json!({}));
+            mi(ui, app, "Separate Paragraphs", "para.separateParagraphs", json!({}));
+            ui.separator();
+            mi(ui, app, "Delete Blank Paragraphs", "para.removeBlank", json!({}));
+            mi(ui, app, "Remove Leading Spaces", "para.trimLeadingSpaces", json!({}));
+            mi(ui, app, "Remove Extra Spaces", "para.removeExtraSpaces", json!({}));
+            ui.separator();
+            mi(ui, app, "Indent Leading Spaces", "para.spacesToIndent", json!({}));
+            mi(ui, app, "Indents to Leading Spaces", "para.indentToSpaces", json!({}));
+            mi(ui, app, "Join Lines", "para.removeLineBreaks", json!({}));
+            ui.separator();
+            // The whole document, not just the selection.
+            for (l, id) in [
+                ("Delete Blank Paragraphs in the Whole Document", "para.removeBlank"),
+                ("Remove Leading Spaces in the Whole Document", "para.trimLeadingSpaces"),
+                ("Remove Extra Spaces in the Whole Document", "para.removeExtraSpaces"),
+            ] {
+                mi(ui, app, l, id, json!({"scope": "all"}));
+            }
         });
     });
     group(ui, "Styles", Some("styles.pane"), app, |ui, app| {

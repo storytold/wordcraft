@@ -1,4 +1,4 @@
-use super::{NumeralMode, WriteError};
+use super::{NumeralMode, WriteError, imposition};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PdfError {
@@ -19,6 +19,12 @@ impl From<WriteError> for PdfError {
 /// Export options.
 #[derive(Clone, Debug)]
 pub struct PdfOptions {
+    /// Physical sheet layout used only by printing.
+    pub imposition: imposition::Imposition,
+    /// Repeat complete sheet plans (padding never spills into another copy).
+    pub sheet_copies: u32,
+    /// Collate physical sheet sides when repeating a print job.
+    pub sheet_collate: bool,
     /// Pages to export (0-based layout page indexes, in output order); `None` = all.
     pub pages: Option<Vec<usize>>,
     /// Title / author overrides (default: the document properties).
@@ -46,9 +52,42 @@ pub struct PdfOptions {
     pub numeral: NumeralMode,
 }
 
+/// How many characters of the watermark text the PDF draws.
+pub const WATERMARK_MAX_CHARS: usize = 200;
+
+impl PdfOptions {
+    /// What a page shows when drawn into the PDF: no marks or dimming, tracked changes as markup
+    /// only with `include_markup`. The one place that says so; strict export (#6005) checks the
+    /// same display list.
+    pub fn display_options(&self) -> wordcraft_layout::display::DisplayOptions {
+        wordcraft_layout::display::DisplayOptions {
+            marks: false,
+            dim_header: false,
+            dim_body: false,
+            markup: self.include_markup,
+            placeholders: false,
+            ..Default::default()
+        }
+    }
+
+    /// How [`crate::export`] lays a document out for these options.
+    pub fn layout_options(&self) -> wordcraft_layout::LayoutOptions {
+        wordcraft_layout::LayoutOptions {
+            hide_deleted: !self.include_markup,
+            comment_balloons: self.comments,
+            numeral: self.numeral,
+            ..Default::default()
+        }
+    }
+}
+
 impl Default for PdfOptions {
+    /// Keep ordinary document export unchanged unless a print layout is requested.
     fn default() -> Self {
         PdfOptions {
+            imposition: Default::default(),
+            sheet_copies: 1,
+            sheet_collate: true,
             pages: None,
             title: None,
             author: None,

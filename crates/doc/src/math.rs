@@ -16,6 +16,12 @@ pub type Arg = Vec<MNode>;
 /// Deepest structure nesting kept (parsers stop here; layout draws nothing deeper).
 pub const MAX_DEPTH: usize = 64;
 
+/// Most matrix columns kept (writers pad every row to the widest, so this bounds a row's cost).
+pub const MAX_MATRIX_COLS: usize = 64;
+
+/// Most matrix rows kept.
+pub const MAX_MATRIX_ROWS: usize = 1000;
+
 /// An equation's structure, plus what's needed to write it back.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct Math {

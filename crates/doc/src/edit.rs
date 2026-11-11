@@ -228,6 +228,11 @@ fn block_cost(b: &Block) -> (usize, bool) {
             .saturating_add(p.objects.len().saturating_mul(std::mem::size_of::<InlineObject>()));
         let objects = p.objects.iter().fold(0usize, |n, o| n.saturating_add(object_cost(o)));
         cost = cost.saturating_add(p.text.len()).saturating_add(items).saturating_add(objects);
+        // The formatting a clone copies too: style ids, font names and the like in the runs,
+        // the mark and the paragraph's properties.
+        let runs = p.runs.iter().filter(|r| !r.props.is_empty()).fold(0usize, |n, r| n.saturating_add(serialized_len(&r.props)));
+        let props = serialized_len(&p.props).saturating_add(serialized_len(&p.mark)).saturating_add(p.section.as_ref().map_or(0, serialized_len));
+        cost = cost.saturating_add(runs).saturating_add(props);
         boxes |= box_ids(p).next().is_some();
     });
     (cost, boxes)
@@ -604,8 +609,10 @@ impl Document {
             let mut at = at.into_iter().peekable();
             let mut start = 0usize;
             for r in &mut p.runs {
+                crate::work::steps(1);
                 let end = start.saturating_add(r.len);
                 while at.peek().is_some_and(|&o| o < start) {
+                    crate::work::steps(1);
                     at.next();
                 }
                 if at.peek().is_some_and(|&o| o < end) {
@@ -765,6 +772,10 @@ impl Document {
         if a.path.parent() == b.path.parent() {
             // Same container: trim the ends, drop the blocks between, join.
             let (ia, ib) = (a.path.last(), b.path.last());
+            // Removing an already-empty paragraph must not impose its style or mark formatting
+            // on the following content. Test before trimming: deleting actual heading text is
+            // still an ordinary merge that keeps the first paragraph's properties.
+            let empty_start = self.para(a.story, &a.path).is_some_and(Paragraph::is_empty);
             // Kept markers of the paragraphs in between move to the join.
             let mut moved: Vec<(InlineObject, CharProps)> = Vec::new();
             // `kept` is sorted: one walk of each paragraph's objects and runs (#3614).
@@ -812,15 +823,18 @@ impl Document {
             if ib < bl.len() && ia < ib {
                 bl.drain(ia + 1..=ib);
             }
-            tail.props = ParaProps::default();
             // The deleted marks include `a`'s, so a section break there goes too: the joined
             // paragraph ends where `b`'s mark did, and its text takes the following section's
             // setup, as in Word (#2127).
             let sect = tail.section.take();
             let pa = self.para_mut(a.story, &a.path)?;
-            let keep_props = pa.props.clone();
+            let keep_props = if empty_start { tail.props.clone() } else { pa.props.clone() };
+            let keep_mark = empty_start.then(|| tail.mark.clone());
             pa.append(tail);
             pa.props = keep_props;
+            if let Some(mark) = keep_mark {
+                pa.mark = mark;
+            }
             let before = std::mem::replace(&mut pa.section, sect);
             if a.story == crate::StoryRef::Body && a.path.0.len() == 1 {
                 // Nearest first, as "link to previous" resolved them before the delete.
@@ -1049,7 +1063,7 @@ impl Document {
         let mut default_style = None;
         if keep_styles {
             if src.styles.get("Normal").is_none() {
-                src.styles.upsert(crate::styles::Style { id: "Normal".into(), name: "Normal".into(), ..Default::default() });
+                Arc::make_mut(&mut src.styles).upsert(crate::styles::Style { id: "Normal".into(), name: "Normal".into(), ..Default::default() });
             }
             // Ids given out here are taken too: two styles never get the same new one.
             let mut given = std::collections::HashSet::new();
@@ -1084,7 +1098,7 @@ impl Document {
             abs_map.insert(a.id, id);
             let mut a = crate::numbering::AbstractNum { id, ..a.clone() };
             a.levels.iter_mut().for_each(|l| restyle(&mut l.style));
-            self.numbering.abstracts.push(a);
+            Arc::make_mut(&mut self.numbering).abstracts.push(a);
         }
         let next_num = self.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
         let mut nums = BTreeMap::new();
@@ -1094,7 +1108,7 @@ impl Document {
             let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
             let mut n = crate::numbering::Num { id, abstract_id, ..n.clone() };
             n.level_overrides.iter_mut().for_each(|(_, l)| restyle(&mut l.style));
-            self.numbering.nums.push(n);
+            Arc::make_mut(&mut self.numbering).nums.push(n);
         }
         let renumber = |n: &mut Option<crate::props::NumRef>| {
             if let Some(n) = n.as_mut()
@@ -1133,7 +1147,7 @@ impl Document {
             }
             if self.styles.get(&st.id).is_none() {
                 renumber(&mut st.para.numbering);
-                self.styles.upsert(st);
+                Arc::make_mut(&mut self.styles).upsert(st);
             }
         }
         let rev = u32::try_from(self.revisions.len()).unwrap_or(u32::MAX);
