@@ -473,7 +473,15 @@ mod tests {
         story_para
             .insert_object(
                 0,
-                InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+                InlineObject::Field {
+                    instr: "PAGE".into(),
+                    result: "1".into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                    code_xml: String::new(),
+                },
                 &Default::default(),
             )
             .unwrap();

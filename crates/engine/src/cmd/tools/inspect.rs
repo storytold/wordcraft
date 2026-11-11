@@ -191,7 +191,7 @@ impl Hidden {
 }
 
 /// Every story of the document: the body, then headers, footers, notes, comments and text boxes.
-fn all_stories(doc: &Document) -> Vec<StoryRef> {
+pub(super) fn all_stories(doc: &Document) -> Vec<StoryRef> {
     std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect()
 }
 

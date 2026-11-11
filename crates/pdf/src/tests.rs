@@ -528,6 +528,7 @@ fn fields_put_their_shown_text_in_the_text_layer() {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     f.insert_object(5, field("PAGE"), &CharProps::default()).unwrap();
     let n = f.len();
@@ -557,6 +558,7 @@ fn styleref_headers_show_each_page_s_chapter() {
         dirty: false,
         code: false,
         form: String::new(),
+        code_xml: String::new(),
     };
     h.insert_object(0, field, &CharProps::default()).unwrap();
     let id = d.add_part(wordcraft_doc::PartKind::Header, vec![para_block(h)]);
@@ -906,6 +908,7 @@ fn field_results_are_extractable_text() {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
         &CharProps::default(),
     )
@@ -936,6 +939,7 @@ fn field_result_ligatures_extract_all_their_letters() {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
         &font,
     )
@@ -1556,7 +1560,15 @@ fn ref_fields_export_cached_links() {
         let mut p = Paragraph::new();
         p.insert_object(
             0,
-            InlineObject::Field { instr: instr.into(), result: "Cached label".into(), locked: true, dirty: false, code, form: String::new() },
+            InlineObject::Field {
+                instr: instr.into(),
+                result: "Cached label".into(),
+                locked: true,
+                dirty: false,
+                code,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps { link: outer.map(str::to_owned), ..Default::default() },
         )
         .unwrap();
@@ -1632,7 +1644,15 @@ fn outline_keeps_visible_objects() {
     let mut base = Document::from_text("Earlier text");
     let media = base.add_media(png(), "png");
     for object in [
-        InlineObject::Field { instr: "QUOTE Visible".into(), result: "Visible".into(), locked: true, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "QUOTE Visible".into(),
+            result: "Visible".into(),
+            locked: true,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         InlineObject::Image {
             media,
             w: 16.0,

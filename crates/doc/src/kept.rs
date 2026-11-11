@@ -725,8 +725,15 @@ mod tests {
     #[test]
     fn filling_objects_keeps_groups_and_stories_as_read() {
         use crate::para::InlineObject;
-        let field =
-            || InlineObject::Field { instr: "X".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
+        let field = || InlineObject::Field {
+            instr: "X".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        };
         let mut doc = crate::Document::from_text("Body");
         let mut boxed = Paragraph::with_text("In the box", Default::default());
         boxed.insert_object(0, field(), &Default::default()).unwrap();

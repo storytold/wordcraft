@@ -1010,6 +1010,7 @@ fn enclose(s: &mut Session, v: &Value) -> CmdResult {
                 dirty: false,
                 code: false,
                 form: String::new(),
+                code_xml: String::new(),
             };
             s.doc.insert_object(&at, obj, &t.props)?
         }

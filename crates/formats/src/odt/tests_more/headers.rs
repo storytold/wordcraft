@@ -16,7 +16,15 @@ fn text_para(s: &str, props: CharProps) -> std::sync::Arc<wordcraft_doc::Block> 
 fn page_field_para(before: &str) -> std::sync::Arc<wordcraft_doc::Block> {
     let mut p = Paragraph::new();
     p.text = format!("{before}{}", wordcraft_doc::para::OBJ);
-    p.objects.push(InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() });
+    p.objects.push(InlineObject::Field {
+        instr: "PAGE".into(),
+        result: "1".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        code_xml: String::new(),
+    });
     p.runs = vec![wordcraft_doc::para::Run { len: p.text.len(), props: Default::default() }];
     para_block(p)
 }
