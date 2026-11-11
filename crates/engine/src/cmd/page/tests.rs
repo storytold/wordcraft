@@ -500,3 +500,106 @@ fn inherited_footer_preserves_content_when_numbering_from_inherited_footer() {
     assert_eq!(l.pages[0].footer_story, Some(fid));
     assert_eq!(l.pages[1].footer_story, Some(fid));
 }
+
+/// Inserting a page number into the footer while editing an inherited header preserves the
+/// inherited footer content and keeps both sections sharing the footer part without unlinking.
+#[test]
+fn inherited_footer_preserves_content_when_numbering_from_inherited_header() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+
+    // Set up header and footer in section 0.
+    s.run("insert.editHeader", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Header on sec 0"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Footer on sec 0"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Edit the inherited header from section 1's page.
+    s.run("insert.editHeader", &json!({"page": 1})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 1);
+
+    // Insert page number at bottom of page (into the footer).
+    s.run("insert.pageNumber", &json!({"position": "bottom", "align": "right"})).unwrap();
+
+    // Verify footer text retains "Footer on sec 0" as well as the PAGE field.
+    let secs = s.doc.sections();
+    assert_eq!(secs[1].1.footers.default, None, "section 1 continues to inherit footer from section 0");
+    let fid = secs[0].1.footers.default.expect("section 0 footer exists");
+    let footer_text = s.doc.plain_text(wordcraft_doc::StoryRef::Part(fid));
+    assert!(footer_text.contains("Footer on sec 0"), "inherited footer content was preserved");
+
+    // Both page 0 and page 1 render the shared footer with page numbers.
+    let l = s.layout();
+    assert_eq!(l.pages[0].footer_story, Some(fid));
+    assert_eq!(l.pages[1].footer_story, Some(fid));
+}
+
+/// When a shared footer grows and repagination causes the preceding section to expand
+/// onto the hinted page, the active section being edited is preserved rather than
+/// reverting to the preceding section.
+#[test]
+fn repagination_during_shared_footer_edit_preserves_active_section() {
+    use wordcraft_doc::section::NumFormat;
+    // Determine the line count that exactly fills 1 page with a single-line footer.
+    let mut n_lines: usize = 10;
+    while n_lines < 100 {
+        let lines = (0..n_lines).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+        let mut s = Session::new(wordcraft_doc::Document::from_text(&lines));
+        s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+        s.run("text.insert", &json!({"text": "Footer"})).unwrap();
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        if s.layout().pages.len() == 1 {
+            n_lines += 1;
+        } else {
+            n_lines = n_lines.saturating_sub(3);
+            break;
+        }
+    }
+
+    let lines = (0..n_lines).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    let mut s = Session::new(wordcraft_doc::Document::from_text(&lines));
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("text.insert", &json!({"text": "Section 1 body"})).unwrap();
+
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Shared footer"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Verify initial layout: Section 0 is on page 0, Section 1 is on page 1.
+    let l = s.layout();
+    assert_eq!(l.pages.len(), 2);
+    assert_eq!(l.pages[0].section, 0);
+    assert_eq!(l.pages[1].section, 1);
+
+    // Edit inherited footer from section 1's page.
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 1);
+
+    // Expand the shared footer so section 0 no longer fits on 1 page and spills onto page 1.
+    for _ in 0..8 {
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Expanded footer row"})).unwrap();
+    }
+
+    // Verify repagination: Section 0 now occupies page 0 and page 1; Section 1 is pushed to page 2.
+    let l = s.layout();
+    assert!(l.pages.len() >= 3);
+    assert_eq!(l.pages[0].section, 0);
+    assert_eq!(l.pages[1].section, 0, "page 1 now occupied by section 0");
+    assert_eq!(l.pages[2].section, 1, "section 1 pushed to page 2");
+
+    // The active section being edited remains section 1 despite page 1 now holding section 0.
+    assert_eq!(section_index_of_focus(&s), 1);
+
+    // Formatting page numbers updates section 1 rather than section 0.
+    s.run("layout.pageNumberFormat", &json!({"format": "lowerRoman", "start": 10})).unwrap();
+    let secs = s.doc.sections();
+    assert_eq!((secs[0].1.page_num_format, secs[0].1.page_num_start), (NumFormat::Decimal, None));
+    assert_eq!((secs[1].1.page_num_format, secs[1].1.page_num_start), (NumFormat::LowerRoman, Some(10)));
+}

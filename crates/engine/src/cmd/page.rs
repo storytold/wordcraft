@@ -237,6 +237,21 @@ fn section_of_part(s: &Session, id: u32) -> usize {
             ]
             .contains(&Some(id))
         };
+        if let Some(ret) = &s.hf_return
+            && ret.focus.story == wordcraft_doc::StoryRef::Body
+        {
+            let ret_sec = s.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize);
+            if uses_hf(ret_sec) {
+                let ret_page = s.cached_layout().and_then(|l| l.page_of(&ret.focus));
+                let hint_sec = s.cached_layout().and_then(|l| l.pages.get(s.page_hint)).map(|pg| pg.section.min(sections.len().saturating_sub(1)));
+                if let (Some(rp), Some(hs)) = (ret_page, hint_sec)
+                    && hs < ret_sec
+                    && s.page_hint < rp
+                {
+                    return ret_sec;
+                }
+            }
+        }
         if let Some(pg) = s.cached_layout().and_then(|l| l.pages.get(s.page_hint)) {
             let sec = pg.section.min(sections.len().saturating_sub(1));
             if uses_hf(sec) {

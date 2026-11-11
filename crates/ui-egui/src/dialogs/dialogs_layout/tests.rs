@@ -893,3 +893,17 @@ fn page_numbers_dialog_edits_start_at_and_updates_footer() {
     h.run_steps(2);
     assert!(h.state().session.doc.last_section.page_num_start.is_some_and(|s| s > 1), "dragging adjusted value and selected radio");
 }
+
+#[test]
+fn parse_page_start_rejects_non_finite_and_fractional_input() {
+    use super::page::parse_page_start;
+    assert_eq!(parse_page_start("5", "decimal"), Some(5.0));
+    assert_eq!(parse_page_start(" 42 ", "decimal"), Some(42.0));
+    assert_eq!(parse_page_start("1.9", "decimal"), None);
+    assert_eq!(parse_page_start("inf", "decimal"), None);
+    assert_eq!(parse_page_start("+inf", "decimal"), None);
+    assert_eq!(parse_page_start("-inf", "decimal"), None);
+    assert_eq!(parse_page_start("NaN", "decimal"), None);
+    assert_eq!(parse_page_start("iv", "decimal"), Some(4.0));
+    assert_eq!(parse_page_start("b", "lowerLetter"), Some(2.0));
+}

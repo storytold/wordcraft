@@ -232,6 +232,7 @@ fn handle_page_pointer(app: &mut WordApp, pointer: PagePointer<'_>) {
 }
 
 /// A press. `true` when it was handled and the pointer is done (no hover tooltip this frame).
+/// Handle a primary mouse button press on the page canvas.
 fn handle_primary_press(
     app: &mut WordApp,
     pointer: &PagePointer<'_>,
@@ -341,7 +342,7 @@ fn handle_primary_press(
     // Alt+drag selects a column (block) of text.
     if mods.alt && !mods.shift && !mods.command {
         let _ = app.run("caret.set", json!({"pos": pj}));
-        app.session.page_hint = page;
+        sync_page_and_hf_return(app, layout, page);
         app.canvas.column_drag = Some(((page, x, y), (page, x, y)));
         app.canvas.dragging = true;
         return true;
@@ -362,10 +363,28 @@ fn handle_primary_press(
         let (start, end) = app.session.sel.ordered();
         app.canvas.unit_drag = Some(UnitDrag { unit, clicks, start, end, last: pos });
     }
-    app.session.page_hint = page;
+    sync_page_and_hf_return(app, layout, page);
     app.canvas.dragging = true;
     // Format painter applies on mouse up
     false
+}
+
+/// Update the active page hint and keep the return selection aligned with the page's section when in a header or footer.
+fn sync_page_and_hf_return(app: &mut WordApp, layout: &DocLayout, page: usize) {
+    app.session.page_hint = page;
+    if app.session.in_header_footer() {
+        let sec = layout.pages.get(page).map(|pg| pg.section).unwrap_or(0);
+        let sec_idx = sec.min(app.session.doc.sections().len().saturating_sub(1));
+        let already_in_sec = app.session.hf_return.as_ref().is_some_and(|ret| {
+            ret.focus.story == wordcraft_doc::StoryRef::Body
+                && app.session.doc.section_index_of(ret.focus.path.0.first().copied().unwrap_or(0) as usize) == sec_idx
+        });
+        if !already_in_sec {
+            let block = app.session.doc.sections().get(sec_idx).map(|(end, _)| *end).unwrap_or(0);
+            app.session.hf_return =
+                Some(wordcraft_engine::Selection::caret(wordcraft_doc::Pos::new(wordcraft_doc::StoryRef::Body, wordcraft_doc::Path::top(block), 0)));
+        }
+    }
 }
 
 fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32, story: StoryRef) -> StoryRef {

@@ -260,10 +260,10 @@ impl PageNumbersForm {
 
 /// Parse a starting page number typed into `Start at:`: a decimal number, or a Roman numeral or
 /// letter sequence (`i`, `iv`, `a`, `aa`…).
-fn parse_page_start(s: &str, format: &str) -> Option<f64> {
+pub(super) fn parse_page_start(s: &str, format: &str) -> Option<f64> {
     let s = s.trim();
     if let Ok(n) = s.parse::<f64>() {
-        return Some(n);
+        return (n.is_finite() && n.fract() == 0.0).then_some(n);
     }
     if matches!(format, "lowerLetter" | "upperLetter") {
         parse_letters(s).or_else(|| parse_roman(s)).map(f64::from)
