@@ -718,7 +718,7 @@ fn graphic_inline(
             alt: alt.to_string(),
             float: kept_float(float).filter(|_| opts.paras),
             object: None,
-            crop: [0.0; 4],
+            crop: if opts.paras { graphic.ink_fallback_style.as_ref().map_or([0.0; 4], |style| style.crop) } else { [0.0; 4] },
         }));
     }
     // `graphic_group` can convert taps to shapes but cannot express native stroke paths. Without

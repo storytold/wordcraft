@@ -370,6 +370,45 @@ fn has_preview(doc: &Document, objects: &[InlineObject]) -> bool {
     })
 }
 
+/// A fallback picture's crop must not be replaced with the entire image on ODT/OTT export.
+#[test]
+fn native_ink_picture_crop_survives_odt_and_ott_export() {
+    fn image_crop(objects: &[InlineObject]) -> Option<[f32; 4]> {
+        objects.iter().find_map(|o| match o {
+            InlineObject::Image { crop, .. } => Some(*crop),
+            InlineObject::Group { children, .. } => children.iter().find_map(|c| image_crop(std::slice::from_ref(&c.obj))),
+            _ => None,
+        })
+    }
+    for placement in ["inline", "floating", "group", "canvas"] {
+        let mut files = unpack(&with_fallback(placement, INK));
+        if matches!(placement, "group" | "canvas") {
+            replace(
+                &mut files,
+                "word/document.xml",
+                r#"<a:blip r:embed="preview"/>"#,
+                r#"<a:blip r:embed="preview"/><a:srcRect l="25000" t="10000" r="5000"/>"#,
+            );
+        }
+        let mut doc = crate::io::open_bytes("ink.docx", &pack(files)).unwrap();
+        if matches!(placement, "inline" | "floating") {
+            first_graphic_mut(&mut doc).ink_fallback_style =
+                Some(wordcraft_doc::graphic::InkFallbackStyle { crop: [0.25, 0.1, 0.05, 0.0], ..Default::default() });
+        }
+        for name in ["ink.odt", "ink.ott"] {
+            let reopened = crate::io::open_bytes(name, &crate::io::save_bytes(name, &doc).unwrap()).unwrap();
+            let crop = reopened.body.iter().find_map(|b| match &**b {
+                Block::Para(p) => image_crop(&p.objects),
+                _ => None,
+            });
+            let crop = crop.expect("fallback picture must survive ODT export");
+            for (actual, expected) in crop.into_iter().zip([0.25, 0.1, 0.05, 0.0]) {
+                assert!((actual - expected).abs() < 0.001, "{placement}, {name}: crop={crop:?}");
+            }
+        }
+    }
+}
+
 /// Independent preview images survive JSON adoption and ODT/OTT export with vector ink.
 #[test]
 fn native_ink_picture_fallback_survives_odt_and_ott_export() {
