@@ -63,18 +63,57 @@ impl Launcher {
             let picking = picker(rfd::AsyncFileDialog::new().set_parent(parent), &req);
             #[cfg(all(unix, not(target_os = "macos")))]
             let unparented = picker(rfd::AsyncFileDialog::new(), &req);
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let parent_id = {
+                use eframe::wgpu::rwh::HasWindowHandle;
+                crate::portal_save::parent_id(parent.window_handle().ok().map(|h| h.as_raw()))
+            };
             let ctx = self.ctx.clone();
             let waiting = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
                 // The pickers only start when first polled: without a system dialog they never do.
                 let picked = match no_system_dialog() {
                     Some(reason) => Err(reason),
                     None => {
-                        // Only the portal folds a failure into "cancelled" (#2999).
                         #[cfg(all(unix, not(target_os = "macos")))]
-                        let picked = pick(picking, unparented, TOO_QUICK);
+                        {
+                            if let FileDialogRequest::Save { name, dir } = &req {
+                                let portal_req = crate::portal_save::SaveRequest {
+                                    parent: parent_id,
+                                    name: Some(name.clone()),
+                                    suggested: Some(name.clone()),
+                                    folder: dir.clone().map(std::path::PathBuf::from),
+                                    filters: save_filters(name),
+                                    current: Some(0),
+                                    cancel: None,
+                                    timeout: None,
+                                };
+                                let portal_res = zbus::blocking::Connection::session()
+                                    .map_err(|e| e.to_string())
+                                    .and_then(|conn| crate::portal_save::save_as(&conn, portal_req));
+                                match portal_res {
+                                    Ok(Some(path)) => Ok(vec![path.to_string_lossy().into_owned()]),
+                                    Ok(None) => Ok(Vec::new()),
+                                    Err(e) if crate::portal_save::is_ambiguous_filter_error(&e) => {
+                                        log::warn!("portal save format ambiguous ({e}); cancelling save without explicit format choice");
+                                        Ok(Vec::new())
+                                    }
+                                    Err(e) => {
+                                        log::info!("portal save dialog unavailable ({e}), using rfd");
+                                        let picked = pick(picking, unparented, TOO_QUICK);
+                                        picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                                    }
+                                }
+                            } else {
+                                // Only the portal folds a failure into "cancelled" (#2999).
+                                let picked = pick(picking, unparented, TOO_QUICK);
+                                picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                            }
+                        }
                         #[cfg(not(all(unix, not(target_os = "macos"))))]
-                        let picked: Result<_, String> = Ok(pollster::block_on(picking));
-                        picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                        {
+                            let picked: Result<_, String> = Ok(pollster::block_on(picking));
+                            picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                        }
                     }
                 };
                 let _ = answer.send(picked);
@@ -220,8 +259,9 @@ fn save_exts(name: &str) -> Vec<String> {
 /// The "Save as type" list (#1399): one named entry per format, the suggested one first (see
 /// [`save_exts`] for why the order matters).
 ///
-/// rfd doesn't report which entry the user picked, so if they choose "PDF" but leave "name.docx"
-/// in the name box, the extension in the name wins, as the format is chosen by extension.
+/// On Linux and the BSDs, [`crate::portal_save`] asks the portal directly over D-Bus and gives a
+/// name the dialog left alone the chosen type's extension (#6180). When falling back to `rfd`, the
+/// extension in the name wins, as `rfd` doesn't report which entry the user picked.
 fn save_filters(name: &str) -> Vec<(String, Vec<String>)> {
     save_exts(name).into_iter().map(|e| (format!("{} (*.{e})", format_name(&e)), vec![e])).collect()
 }
