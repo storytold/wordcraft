@@ -253,10 +253,11 @@ fn load_prefs(app: &mut WordApp) {
 /// default). A name set in File › Options always wins, and the system is asked only until one is
 /// saved: [`WordApp::prefs`] keeps the name from then on, as Word keeps the name it starts with.
 /// The name goes through `file.setAuthor`, as one typed in Options does, so it is cleaned the same
-/// way. Runs without preferences (`prefs_enabled`) never ask the system: what they save or show
-/// stays the same on every machine.
-fn use_system_user_name(app: &mut WordApp, system: impl FnOnce() -> Option<String>) {
-    if !prefs_enabled() || app.session.author != DEFAULT_AUTHOR {
+/// way. A run without preferences never asks the system, so what it saves or shows stays the same
+/// on every machine; that decision arrives as `prefs_on` (the caller's [`prefs_enabled`]) rather
+/// than being read from the environment here, so the tests cover both kinds of run.
+fn use_system_user_name(app: &mut WordApp, prefs_on: bool, system: impl FnOnce() -> Option<String>) {
+    if !prefs_on || app.session.author != DEFAULT_AUTHOR {
         return;
     }
     if let Some(name) = system()
@@ -635,7 +636,7 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
-            use_system_user_name(&mut app, user_name::system);
+            use_system_user_name(&mut app, prefs_enabled(), user_name::system);
             // After the preferences, so the reason it gives is in the interface language.
             if updates_unsafe {
                 app.disable_self_update();
@@ -863,7 +864,7 @@ mod user_name_tests {
     fn the_system_user_name_replaces_only_the_default() {
         let mut a = app();
         let undo = a.session.undo_depth();
-        use_system_user_name(&mut a, || Some(" Ada\u{7} Lovelace\n".into()));
+        use_system_user_name(&mut a, true, || Some(" Ada\u{7} Lovelace\n".into()));
         assert_eq!(a.session.author, "Ada Lovelace", "cleaned as a name typed in Options is");
         assert_eq!(a.session.user_initials(), "AL");
         assert_eq!(a.session.undo_depth(), undo, "no undo step");
@@ -871,7 +872,7 @@ mod user_name_tests {
 
         // A chosen name, saved or set this run, never asks the system.
         let mut asked = false;
-        use_system_user_name(&mut a, || {
+        use_system_user_name(&mut a, true, || {
             asked = true;
             Some("Grace Hopper".into())
         });
@@ -879,7 +880,7 @@ mod user_name_tests {
         assert_eq!(a.session.author, "Ada Lovelace");
         let mut b = app();
         b.apply_prefs(serde_json::from_str(r#"{"author": "Grace Hopper"}"#).unwrap());
-        use_system_user_name(&mut b, || Some("Ada Lovelace".into()));
+        use_system_user_name(&mut b, true, || Some("Ada Lovelace".into()));
         assert_eq!(b.session.author, "Grace Hopper", "a saved name wins");
     }
 
@@ -890,7 +891,7 @@ mod user_name_tests {
         for saved in [r#"{"author": "WordCraft User"}"#, r#"{"author": "  "}"#, r#"{"dark": true}"#] {
             let mut a = app();
             a.apply_prefs(serde_json::from_str(saved).unwrap());
-            use_system_user_name(&mut a, || Some("Ada Lovelace".into()));
+            use_system_user_name(&mut a, true, || Some("Ada Lovelace".into()));
             assert_eq!(a.session.author, "Ada Lovelace", "{saved}");
             assert_eq!(a.prefs().author.as_deref(), Some("Ada Lovelace"), "saved from now on: {saved}");
         }
@@ -901,15 +902,30 @@ mod user_name_tests {
         // #4368: an empty saved name is the person's own choice, not a missing name.
         let mut a = app();
         a.apply_prefs(serde_json::from_str(r#"{"author": ""}"#).unwrap());
-        use_system_user_name(&mut a, || Some("Ada Lovelace".into()));
+        use_system_user_name(&mut a, true, || Some("Ada Lovelace".into()));
         assert_eq!(a.session.author, "", "the cleared name stays cleared");
+    }
+
+    #[test]
+    fn a_run_without_preferences_never_asks_the_system() {
+        // Agents' and screenshot runs (`WORDCRAFT_NO_PREFS`, which `prefs_enabled` reads) keep the
+        // default, so what they save or show stays the same on every machine.
+        let mut asked = false;
+        let mut a = app();
+        use_system_user_name(&mut a, false, || {
+            asked = true;
+            Some("Ada Lovelace".into())
+        });
+        assert!(!asked, "no lookup at all");
+        assert_eq!(a.session.author, DEFAULT_AUTHOR);
+        assert_eq!(a.prefs().author.as_deref(), Some(DEFAULT_AUTHOR), "and it is saved as the default");
     }
 
     #[test]
     fn no_usable_system_name_keeps_the_default() {
         for system in [None, Some(String::new()), Some(" \t\n".into()), Some("\u{0}\u{1b}".into())] {
             let mut a = app();
-            use_system_user_name(&mut a, || system.clone());
+            use_system_user_name(&mut a, true, || system.clone());
             assert_eq!(a.session.author, DEFAULT_AUTHOR, "{system:?}");
         }
     }
