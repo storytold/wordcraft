@@ -72,6 +72,7 @@ pub use import::{import, import_on, parse};
 use limits::{MAX_EXTRA_SPACES, MAX_XML_DEPTH};
 pub use package::{TEMPLATE_MIME, TEXT_MIME, export, export_template};
 use styles::Styles;
+pub(crate) use writer::now_iso;
 #[cfg(test)]
 use writer::x;
 #[cfg(test)]

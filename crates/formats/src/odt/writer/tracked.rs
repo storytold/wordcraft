@@ -80,7 +80,7 @@ pub(in crate::odt) fn join_deleted_marks(blocks: &[FBlock]) -> Option<JoinedMark
 }
 
 /// Now, as an `xsd:dateTime` (UTC).
-pub(in crate::odt) fn now_iso() -> String {
+pub(crate) fn now_iso() -> String {
     let t = now_unix();
     let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
     // Reuse the crate's 400-year-cycle converter (chrono within a cycle, cycles carried in the
