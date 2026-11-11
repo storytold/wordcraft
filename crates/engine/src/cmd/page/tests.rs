@@ -463,7 +463,7 @@ fn section_command_from_inherited_footer_targets_active_section() {
     s.run("insert.closeHeader", &json!({})).unwrap();
     s.run("insert.editFooter", &json!({"page": 1})).unwrap();
     assert_eq!(section_index_of_focus(&s), 1);
-    s.run("layout.orientation", &json!({"orientation": "landscape"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
     let secs = s.doc.sections();
     assert!(!secs[0].1.landscape);
     assert!(secs[1].1.landscape);
