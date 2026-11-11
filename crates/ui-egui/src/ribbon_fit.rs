@@ -23,7 +23,11 @@ pub const COMPACT: u8 = 1;
 /// Room the card keeps past its last section. Word's measured breaks leave the last natural
 /// section well clear of the right edge (at 1024 × 768 only Clipboard and Font keep their rows),
 /// and without this a section fits by a hair and loses the break Word has there.
-const EDGE_ROOM: f32 = 39.0;
+const EDGE_ROOM: f32 = 95.0;
+
+/// From this client width Word's Home draws Font and Paragraph in their wide two-row form
+/// (measured at 1900 px = 1520 pt at 125 %); below it they keep three rows.
+pub const WIDE_MIN: f32 = 1520.0;
 
 /// One group of a tab in drawing order: its title and measured widths at each level.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -60,6 +64,8 @@ pub fn plan(groups: &[GroupWidths], avail: f32) -> Vec<u8> {
 #[derive(Clone, Default)]
 struct Frame {
     tab: String,
+    /// Whether the card is wide enough for the two-row Home forms.
+    wide: bool,
     /// The plan, by position, and the titles it was made for.
     titles: Vec<String>,
     levels: Vec<u8>,
@@ -114,8 +120,10 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
         (titles, groups)
     });
     let levels = if groups.iter().all(|g| g.widths[0].is_some()) { plan(&groups, avail - EDGE_ROOM) } else { Vec::new() };
+    // Read before taking the data lock: the context lock is not re-entrant.
+    let wide = ctx.content_rect().width() >= WIDE_MIN;
     ctx.data_mut(|d| {
-        d.insert_temp(frame_id(), Frame { tab: tab.to_string(), titles, levels, drawn: Vec::new() });
+        d.insert_temp(frame_id(), Frame { tab: tab.to_string(), wide, titles, levels, drawn: Vec::new() });
         d.insert_temp(active_id(), true);
     });
 }
@@ -124,6 +132,11 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
 /// groups that share a title (a custom group named like a built-in one).
 pub fn position(ctx: &Context) -> usize {
     ctx.data(|d| d.get_temp::<Frame>(frame_id()).map(|f| f.drawn.len())).unwrap_or(0)
+}
+
+/// Whether this frame's card is wide enough for the two-row Home forms (Font, Paragraph).
+pub fn wide(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp::<Frame>(frame_id()).is_some_and(|f| f.wide))
 }
 
 /// The level the next group, `title`, draws at this frame.
@@ -272,6 +285,18 @@ mod ui_tests {
             .into_iter()
             .filter_map(|title| planned(&h.ctx, title).map(|level| (title.to_string(), level)))
             .collect()
+    }
+
+    /// Word's wide Home form starts at 1520 pt of card: Font and Paragraph are two rows there,
+    /// three rows at 1228 pt, which this also checks so the threshold cannot drift.
+    #[test]
+    fn home_wide_form_starts_at_1520_pt() {
+        let h = harness(1228.0, 768.0, 1.25);
+        assert!(!wide(&h.ctx), "1228 pt keeps the three-row Home");
+        let h = harness(1520.0, 768.0, 1.25);
+        assert!(wide(&h.ctx), "1520 pt draws the two-row Home");
+        assert_eq!(planned(&h.ctx, "Font"), Some(FULL), "Font keeps its rows in the wide form");
+        assert_eq!(planned(&h.ctx, "Paragraph"), Some(FULL), "Paragraph keeps its rows in the wide form");
     }
 
     /// Word's measured rule at 125 %: 1024 × 768 draws Clipboard and Font in their rows and every
