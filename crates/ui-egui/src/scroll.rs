@@ -390,8 +390,29 @@ impl CanvasScroll {
     /// pinch the system reports as a pinch still follows the fingers.
     pub fn zoom(&mut self, input: &egui::InputState, opts: &InputOptions, animate: bool) -> f32 {
         // Fingers on a touch screen are measured directly, never eased.
-        if animate || input.multi_touch().is_some() {
+        if input.multi_touch().is_some() {
             self.zoom_pending = 0.0;
+            return input.zoom_delta();
+        }
+        if animate {
+            self.zoom_pending = 0.0;
+            let factor = opts.line_scroll_speed / InputOptions::default().line_scroll_speed;
+            let has_line_wheel = input.events.iter().any(|e| {
+                matches!(
+                    e,
+                    Event::MouseWheel {
+                        unit: MouseWheelUnit::Line,
+                        modifiers,
+                        ..
+                    } if modifiers.matches_any(opts.zoom_modifier)
+                )
+            });
+            if has_line_wheel && factor > 0.0 && (factor - 1.0).abs() > 1e-4 {
+                let z = input.zoom_delta();
+                if z.is_finite() && z > 0.0 {
+                    return (z.ln() / factor).exp();
+                }
+            }
             return input.zoom_delta();
         }
         let mut zoom = 1.0_f32;
@@ -400,7 +421,10 @@ impl CanvasScroll {
             match event {
                 Event::Zoom(factor) => zoom *= factor,
                 Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } if modifiers.matches_any(opts.zoom_modifier) => {
-                    let d = egui_points(*unit, *delta, input, opts);
+                    let d = match unit {
+                        MouseWheelUnit::Line => *delta * InputOptions::default().line_scroll_speed,
+                        _ => egui_points(*unit, *delta, input, opts),
+                    };
                     turned += opts.scroll_zoom_speed * (d.x + d.y);
                 }
                 _ => {}

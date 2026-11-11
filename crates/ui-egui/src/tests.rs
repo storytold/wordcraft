@@ -8329,18 +8329,25 @@ fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui()
 }
 
 /// Issue #6146 / PR #6167 review: changing mouse-wheel scroll speed (Slow / Normal / Fast)
-/// must only affect scrolling distance, not Ctrl/⌘+Line-wheel zoom distance.
+/// must only affect scrolling distance, not Ctrl/⌘+wheel zoom distance for either Line or Point events.
 /// Tests both animation settings (`animate == true` eased zoom and `animate == false`
-/// `CanvasScroll::zoom` discrete steps).
+/// `CanvasScroll::zoom` discrete steps) for both Line and Point mouse-wheel events.
 #[test]
 fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
     let mut a = app();
     let default_opts = egui::InputOptions::default();
     let default_notch_zoom = (default_opts.scroll_zoom_speed * default_opts.line_scroll_speed).exp();
 
-    let ctrl_wheel_event = || egui::Event::MouseWheel {
+    let ctrl_line_event = || egui::Event::MouseWheel {
         unit: egui::MouseWheelUnit::Line,
         delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    let ctrl_point_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 20.0),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::COMMAND,
         source: egui::MouseWheelSource::Unknown,
@@ -8348,55 +8355,98 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
 
     // 1. Establish baseline zoom with Normal speed
     a.ui.scroll_speed = crate::scroll::ScrollSpeed::Normal;
-    let ctx_baseline = egui::Context::default();
-    a.logic(&ctx_baseline);
-    let opts_baseline = ctx_baseline.options(|o| o.input_options);
-    let mut baseline_eased_zoom = 1.0;
-    let mut baseline_discrete_zoom = 1.0;
-    ctx_baseline
-        .run_ui(egui::RawInput { events: vec![ctrl_wheel_event()], ..Default::default() }, |ui| {
-            baseline_eased_zoom = ui.input(|i| i.zoom_delta());
+    let mut baseline_eased_line_zoom = 1.0;
+    let mut baseline_discrete_line_zoom = 1.0;
+    let mut baseline_eased_point_zoom = 1.0;
+    let mut baseline_discrete_point_zoom = 1.0;
+
+    // Line baseline:
+    let ctx_line_base = egui::Context::default();
+    a.logic(&ctx_line_base);
+    let opts_line_base = ctx_line_base.options(|o| o.input_options);
+    ctx_line_base
+        .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
             let mut canvas_scroll = crate::scroll::CanvasScroll::default();
-            baseline_discrete_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_baseline, false));
+            baseline_eased_line_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_line_base, true));
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_line_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_line_base, false));
         })
         .drop_without_applying_deltas();
 
-    assert!((baseline_discrete_zoom - default_notch_zoom).abs() < 1e-3, "discrete zoom equals notch zoom");
-    assert!(baseline_eased_zoom > 1.0 && baseline_eased_zoom < default_notch_zoom, "eased zoom begins in first frame");
+    // Point baseline:
+    let ctx_point_base = egui::Context::default();
+    a.logic(&ctx_point_base);
+    let opts_point_base = ctx_point_base.options(|o| o.input_options);
+    ctx_point_base
+        .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            baseline_eased_point_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_point_base, true));
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_point_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point_base, false));
+        })
+        .drop_without_applying_deltas();
+
+    assert!((baseline_discrete_line_zoom - default_notch_zoom).abs() < 1e-3, "discrete line zoom equals notch zoom");
+    assert!(baseline_eased_line_zoom > 1.0 && baseline_eased_line_zoom < default_notch_zoom, "eased line zoom begins in first frame");
+    assert!(baseline_eased_point_zoom > 1.0, "point zoom applies in eased mode");
+    assert!(baseline_discrete_point_zoom > 1.0, "point zoom applies in discrete mode");
 
     // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings
     for speed in [crate::scroll::ScrollSpeed::Slow, crate::scroll::ScrollSpeed::Normal, crate::scroll::ScrollSpeed::Fast] {
         a.ui.scroll_speed = speed;
-        let ctx = egui::Context::default();
-        a.logic(&ctx);
 
-        let opts = ctx.options(|o| o.input_options);
+        // Test Line-wheel zoom invariance:
+        let ctx_line = egui::Context::default();
+        a.logic(&ctx_line);
+        let opts = ctx_line.options(|o| o.input_options);
         let factor = speed.wheel_factor();
         assert!(
             (opts.line_scroll_speed - default_opts.line_scroll_speed * factor).abs() < 1e-4,
             "line scroll speed scales by factor for ordinary scrolling"
         );
-        assert!(
-            (opts.scroll_zoom_speed - default_opts.scroll_zoom_speed / factor).abs() < 1e-6,
-            "scroll zoom speed inverts factor to preserve zoom distance"
+        assert_eq!(
+            opts.scroll_zoom_speed, default_opts.scroll_zoom_speed,
+            "scroll zoom speed remains unscaled default so point-wheel zoom is unchanged"
         );
 
-        ctx.run_ui(egui::RawInput { events: vec![ctrl_wheel_event()], ..Default::default() }, |ui| {
-            // Eased zoom (animate == true)
-            let zoom_delta = ui.input(|i| i.zoom_delta());
-            assert!(
-                (zoom_delta - baseline_eased_zoom).abs() < 1e-5,
-                "eased zoom delta for speed {speed:?} matches baseline ({zoom_delta} vs {baseline_eased_zoom})"
-            );
+        ctx_line
+            .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
+                let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                assert!(
+                    (eased_zoom - baseline_eased_line_zoom).abs() < 1e-5,
+                    "eased line zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_line_zoom})"
+                );
 
-            // CanvasScroll::zoom (animate == false)
-            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
-            let discrete_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts, false));
-            assert!(
-                (discrete_zoom - baseline_discrete_zoom).abs() < 1e-5,
-                "discrete CanvasScroll::zoom for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_zoom})"
-            );
-        })
-        .drop_without_applying_deltas();
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_line_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_line_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        // Test Point-wheel zoom invariance:
+        let ctx_point = egui::Context::default();
+        a.logic(&ctx_point);
+        let opts_point = ctx_point.options(|o| o.input_options);
+        ctx_point
+            .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
+                let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts_point, true));
+                assert!(
+                    (eased_zoom - baseline_eased_point_zoom).abs() < 1e-5,
+                    "eased point zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_point_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_point_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom point delta for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_point_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
     }
 }
