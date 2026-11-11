@@ -1156,3 +1156,139 @@ fn the_file_page_scrolls_with_the_wheel_at_the_window_edge() {
     assert!(after < before - 1.0, "expected doc0.docx to scroll up at the edge: before={before}, after={after}");
     assert!((bar.right() - 1432.0).abs() < 1.0, "expected the scrollbar at the window edge: {bar:?}");
 }
+
+/// Recursively collects bounding rectangles and text entries from egui shapes.
+fn collect_shapes(shape: &egui::Shape, rects: &mut Vec<egui::Rect>, texts: &mut Vec<(String, egui::Pos2, f32)>) {
+    match shape {
+        egui::Shape::Rect(r) => rects.push(r.rect),
+        egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), t.pos, t.galley.size().x)),
+        egui::Shape::Vec(v) => {
+            for s in v {
+                collect_shapes(s, rects, texts);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// #6151: in an RTL interface (Arabic), template titles on the Start/Home page
+/// and New page are right-aligned to their preview thumbnails rather than left-aligned.
+#[test]
+fn rtl_template_titles_are_right_aligned() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.language = "ar".into();
+    a.ui.backstage = true;
+    a.ui.backstage_page = "home".into();
+    let ctx = egui::Context::default();
+    let mut last_shapes = Vec::new();
+    for frame in 0..4 {
+        let input = egui::RawInput {
+            time: Some(f64::from(frame) * 0.1),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            a.logic(&ctx.clone());
+            a.ui(ui);
+        });
+        out.textures_delta.clear();
+        if frame == 3 {
+            last_shapes = out.shapes;
+        }
+    }
+
+    let mut rects = Vec::new();
+    let mut texts = Vec::new();
+    for s in &last_shapes {
+        collect_shapes(&s.shape, &mut rects, &mut texts);
+    }
+
+    let blank_caption = crate::i18n::tc("template", "Blank document");
+    let (_, pos, width) = texts.iter().find(|(t, _, _)| t == blank_caption).expect("blank template caption drawn");
+    let thumbnail = rects
+        .iter()
+        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - pos.y).abs() < 1.0)
+        .expect("blank template thumbnail rect");
+
+    let text_right = pos.x + width;
+    assert!(
+        (thumbnail.max.x - text_right).abs() < 1.0,
+        "template caption should be right-aligned with thumbnail in RTL: thumbnail.max.x={}, text_right={}, text_left={}, caption={}",
+        thumbnail.max.x,
+        text_right,
+        pos.x,
+        blank_caption,
+    );
+
+    // Verify the New page through the normal UI path in Arabic as well (#6151).
+    a.ui.backstage_page = "new".into();
+    let mut new_out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(0.4),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        },
+        |ui| {
+            a.logic(&ctx.clone());
+            a.ui(ui);
+        },
+    );
+    new_out.textures_delta.clear();
+    let mut new_rects = Vec::new();
+    let mut new_texts = Vec::new();
+    for s in &new_out.shapes {
+        collect_shapes(&s.shape, &mut new_rects, &mut new_texts);
+    }
+    for (label, _) in super::TEMPLATES {
+        let caption = crate::i18n::tc("template", label);
+        if let Some((_, new_pos, new_width)) = new_texts.iter().find(|(t, _, _)| t == caption) {
+            let right = new_pos.x + new_width;
+            let has_matching_thumbnail = new_rects.iter().any(|r| {
+                (r.width() - 150.0).abs() < 1.0
+                    && (r.height() - 194.0).abs() < 1.0
+                    && (r.max.y - new_pos.y).abs() < 1.0
+                    && (r.max.x - right).abs() < 1.0
+            });
+            assert!(
+                has_matching_thumbnail,
+                "New page: caption '{caption}' must be right-aligned with its 150pt thumbnail (right={right}, y={})",
+                new_pos.y
+            );
+        }
+    }
+
+    // Also verify that a template tile with a wide caption (>150 pt) aligns both the thumbnail
+    // and caption to the right edge in RTL.
+    let wide_label = "A very long template title that exceeds 150 points width";
+    let mut wide_out = ctx.run_ui(
+        egui::RawInput {
+            time: Some(0.5),
+            screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+            ..Default::default()
+        },
+        |ui| {
+            crate::rtl::root(ui, |ui| {
+                super::template_tile(ui, &mut a, wide_label, "sample");
+            });
+        },
+    );
+    wide_out.textures_delta.clear();
+    let mut wide_rects = Vec::new();
+    let mut wide_texts = Vec::new();
+    for s in &wide_out.shapes {
+        collect_shapes(&s.shape, &mut wide_rects, &mut wide_texts);
+    }
+    let (_, wide_pos, wide_width) = wide_texts.iter().find(|(t, _, _)| t == wide_label).expect("wide template caption drawn");
+    assert!(*wide_width > 150.0, "wide caption should exceed 150 points: {wide_width}");
+    let wide_thumbnail = wide_rects
+        .iter()
+        .find(|r| (r.width() - 150.0).abs() < 1.0 && (r.height() - 194.0).abs() < 1.0 && (r.max.y - wide_pos.y).abs() < 1.0)
+        .expect("wide template thumbnail rect");
+    let wide_text_right = wide_pos.x + wide_width;
+    assert!(
+        (wide_thumbnail.max.x - wide_text_right).abs() < 1.0,
+        "wide template caption and thumbnail should share the same right edge in RTL: thumb.max.x={}, text_right={}",
+        wide_thumbnail.max.x,
+        wide_text_right,
+    );
+}

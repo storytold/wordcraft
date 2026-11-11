@@ -8,12 +8,14 @@ use wordcraft_layout::{NumeralMode, ViewMode};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+/// Toggles or sets a boolean view property, returning the updated state.
 fn toggle(s: &mut Session, v: &Value, f: fn(&mut crate::ViewState) -> &mut bool) -> CmdResult {
     let cur = *f(&mut s.view);
     *f(&mut s.view) = p::bool(v, "value").unwrap_or(!cur);
     Ok(json!({"value": *f(&mut s.view)}))
 }
 
+/// Returns the command specifications for the View ribbon tab and window management commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("view.marks", "Show/Hide ¶", "Home › Paragraph", |s, v| {
@@ -143,7 +145,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
-            .params(r#"{"id"?: n (make this open document the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
+            .params(r#"{"id"?: n (make this open document the active one), "window"?: n (make this open window the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
             .pure(),
         CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
             s.push_ui_request(json!({"toggle": "split"}));
@@ -213,6 +215,8 @@ pub fn specs() -> Vec<CommandSpec> {
 pub struct Windows {
     /// The host can list and move its windows (the desktop app).
     pub available: bool,
+    /// The active window, when known.
+    pub current: Option<u64>,
     /// The other open windows, by id.
     pub others: Vec<OtherWindow>,
     /// View Side by Side is on, with this window.
@@ -431,6 +435,7 @@ pub(crate) fn restore_zoom(s: &mut Session, z: Zoom) {
     s.view.single_column = fit == "onePage" || fit == "pageWidth";
 }
 
+/// Sets the view zoom level or fit mode, or requests opening the Zoom dialog.
 fn zoom(s: &mut Session, v: &Value) -> CmdResult {
     match v.get("value") {
         Some(Value::String(f)) if ["pageWidth", "onePage", "multiplePages", "textWidth"].contains(&f.as_str()) => {
@@ -456,7 +461,13 @@ fn zoom(s: &mut Session, v: &Value) -> CmdResult {
 
 /// View › Window › Switch Windows: the open documents, or make one of them active.
 fn switch_windows(s: &mut Session, v: &Value) -> CmdResult {
-    if let Some(x) = v.get("id").filter(|x| !x.is_null()) {
+    if let Some(w) = v.get("window").filter(|x| !x.is_null()) {
+        let wid = w.as_u64().ok_or_else(|| CmdError::Params("`window` must be an open window's id".into()))?;
+        if s.windows.available && s.windows.current != Some(wid) && !s.windows.others.iter().any(|other| other.id == wid) {
+            return Err(CmdError::Params(format!("no open window {wid}")));
+        }
+        s.push_ui_request(json!({"windows": "switchWindow", "window": wid}));
+    } else if let Some(x) = v.get("id").filter(|x| !x.is_null()) {
         let id = x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?;
         s.activate(id)?;
     }

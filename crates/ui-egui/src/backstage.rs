@@ -92,6 +92,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
+                crate::chrome::note_title_drag(ui.ctx(), band);
                 // The chevron's stroke starts at the content edge.
                 let c = if rtl {
                     pos2(band.max.x - 26.0, band.center().y)
@@ -320,7 +321,9 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         let galley = ui.painter().layout_no_wrap(caption.to_string(), regular(12.5), ui.visuals().text_color());
         let (tile, resp) = ui.allocate_exact_size(vec2(galley.size().x.max(150.0), 194.0 + galley.size().y), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), caption));
-        let r = Rect::from_min_size(tile.min, vec2(150.0, 194.0));
+        let flows = crate::rtl::flows(ui);
+        let r_min_x = if flows { tile.max.x - 150.0 } else { tile.min.x };
+        let r = Rect::from_min_size(pos2(r_min_x, tile.min.y), vec2(150.0, 194.0));
         ui.painter().rect(
             r,
             2.0,
@@ -351,7 +354,8 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
+        let x = if flows { r.max.x - galley.size().x } else { r.min.x };
+        ui.painter().galley(pos2(x, r.max.y), galley, ui.visuals().text_color());
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
             app.ui.backstage = false;
