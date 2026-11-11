@@ -589,7 +589,7 @@ fn picture_outline_round_trips() {
 /// with no `a:ln` in `pic:spPr` — and a picture's own `a:ln` beats the style's, in
 /// colour and width alike.
 #[test]
-fn picture_outline_comes_from_pic_style_and_spPr_wins() {
+fn picture_outline_comes_from_pic_style_and_sppr_wins() {
     use wordcraft_doc::line_dash::{CompoundLine, LineDash};
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
