@@ -70,15 +70,22 @@ impl DateTimeForm {
         json!({"format": self.format, "language": self.language, "update": self.update})
     }
 }
+/// The regions that write Portuguese like Portugal: Portugal and the regions CLDR gives `pt_PT` as
+/// their parent locale (Angola, Switzerland, Cabo Verde, France, Equatorial Guinea, Guinea-Bissau,
+/// Luxembourg, Macao, Mozambique, São Tomé and Príncipe, Timor-Leste).
+const EUROPEAN_PORTUGUESE: [&str; 12] = ["PT", "AO", "CH", "CV", "FR", "GQ", "GW", "LU", "MO", "MZ", "ST", "TL"];
+
 /// The dialog's language for a saved or interface language tag (`pt-PT`, `pt_PT.UTF-8`, `pt-pt`…):
-/// Portuguese (Portugal) when a `pt` tag names the region `PT`, Portuguese (Brazil) for any other
-/// `pt` tag, English (United States) otherwise. A private-use part (`pt-x-pt`) names no region.
+/// Portuguese (Portugal) when a `pt` tag names one of [`EUROPEAN_PORTUGUESE`], Portuguese (Brazil)
+/// for any other `pt` tag (`pt` alone, `pt-BR`), English (United States) otherwise. A private-use
+/// part (`pt-x-pt`) names no region.
 fn date_language(tag: &str) -> &'static str {
     let mut parts = tag.trim().split(['-', '_', '.', '@']);
     if !parts.next().is_some_and(|p| p.eq_ignore_ascii_case("pt")) {
         return "en-US";
     }
-    if parts.take_while(|p| !p.eq_ignore_ascii_case("x")).any(|p| p.eq_ignore_ascii_case("pt")) { "pt-PT" } else { "pt-BR" }
+    let european = parts.take_while(|p| !p.eq_ignore_ascii_case("x")).any(|p| EUROPEAN_PORTUGUESE.iter().any(|r| r.eq_ignore_ascii_case(p)));
+    if european { "pt-PT" } else { "pt-BR" }
 }
 
 /// The pictures offered for a dialog language.

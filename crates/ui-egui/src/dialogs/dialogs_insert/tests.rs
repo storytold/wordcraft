@@ -180,9 +180,9 @@ fn date_time_dialog_uses_saved_pt_br_language() {
     assert_eq!(f.params()["update"], false);
 }
 
-/// A saved Portuguese language keeps its country: a `pt` tag naming Portugal however it is written
-/// (`pt-PT`, `pt_PT.UTF-8`, `pt-Latn-PT`) opens as `pt-PT`, any other `pt` tag as `pt-BR`. Portugal
-/// used to be turned into Brazil.
+/// A saved Portuguese language keeps its country: a `pt` tag naming Portugal (`pt-PT`, `pt_PT.UTF-8`,
+/// `pt-Latn-PT`) or a region that writes like it (`pt-AO`, `pt_MZ`) opens as `pt-PT`, `pt` alone or
+/// Brazil as `pt-BR`. Portugal used to be turned into Brazil.
 #[test]
 fn date_time_dialog_normalizes_portuguese_language_tags() {
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -190,7 +190,9 @@ fn date_time_dialog_normalizes_portuguese_language_tags() {
         ("pt_BR", "pt-BR"),
         ("pt", "pt-BR"),
         ("pt-x-pt", "pt-BR"),
-        ("pt-AO", "pt-BR"),
+        ("pt-US", "pt-BR"),
+        ("pt-AO", "pt-PT"),
+        ("pt_MZ.UTF-8", "pt-PT"),
         ("pt-PT", "pt-PT"),
         ("pt_PT.UTF-8", "pt-PT"),
         ("pt-Latn-PT", "pt-PT"),
