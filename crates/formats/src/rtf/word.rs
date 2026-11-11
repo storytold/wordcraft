@@ -3,6 +3,8 @@ use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
 impl Reader {
+    /// Dispatch one parsed RTF control word (with optional numeric parameter `p`), returning early
+    /// for active destination handlers.
     pub(super) fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
         // Every control word ends a multibyte run: the code page it is read in may change here
         // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
@@ -582,32 +584,20 @@ impl Reader {
         self.info_depth.is_some_and(|d| self.depth() > d)
     }
 
+    /// Handle `\shp` / `\shpinst` / `\shprslt` words for picture shapes, returning `true` if `w`
+    /// was consumed.
     fn shape_pic_word(&mut self, w: &str, p: Option<i32>, first_in_group: bool) -> bool {
-        use wordcraft_doc::para::Anchor;
         let depth = self.depth();
         match self.st.dest {
             Dest::ShpInst => {
-                let pv = p.unwrap_or(0);
                 let Some(s) = self.shp_pic.as_deref_mut() else {
                     self.st.dest = Dest::Skip;
                     return true;
                 };
+                if s.control_word(w, p) {
+                    return true;
+                }
                 match w {
-                    "shpleft" => s.rect[0] = i64::from(pv),
-                    "shptop" => s.rect[1] = i64::from(pv),
-                    "shpright" => s.rect[2] = i64::from(pv),
-                    "shpbottom" => s.rect[3] = i64::from(pv),
-                    "shpbxpage" => s.bx = Some(Anchor::Page),
-                    "shpbxmargin" => s.bx = Some(Anchor::Margin),
-                    "shpbxcolumn" => s.bx = Some(Anchor::Column),
-                    "shpbxignore" => s.bx_ignore = true,
-                    "shpbypage" => s.by = Some(Anchor::Page),
-                    "shpbymargin" => s.by = Some(Anchor::Margin),
-                    "shpbypara" => s.by = Some(Anchor::Paragraph),
-                    "shpbyignore" => s.by_ignore = true,
-                    "shpwr" => s.wr = Some(pv),
-                    "shpwrk" => s.wrk = pv,
-                    "shpfblwtxt" => s.behind = p != Some(0),
                     "sp" => {}
                     "sn" => {
                         s.sn.clear();
@@ -645,6 +635,9 @@ impl Reader {
                     _ => false,
                 },
                 "par" | "pard" if self.shp_pic.as_deref().is_some_and(|s| s.rslt_depth.is_some()) => true,
+                _ if self.shp_pic.as_deref().is_some_and(|s| depth == s.shp_depth) => {
+                    self.shp_pic.as_deref_mut().is_some_and(|s| s.control_word(w, p))
+                }
                 _ => false,
             },
             _ => false,

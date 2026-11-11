@@ -334,6 +334,7 @@ impl Reader {
         self.stack.push(self.st.clone());
     }
 
+    /// Close the current RTF group, committing any destination state and popping the saved state.
     pub(super) fn close(&mut self) {
         // A group end decodes the multibyte bytes read in it, before the state is restored.
         self.finish_multibyte();

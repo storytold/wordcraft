@@ -150,6 +150,7 @@ impl Reader {
         }
     }
 
+    /// Finalize the open `\pict` group into an `Inline::Image`, applying any `\shp` float layout.
     pub(super) fn finish_pict(&mut self) {
         if self.pict_half.take().is_some() {
             // Odd hex digit count: drop the dangling nibble.
@@ -194,6 +195,7 @@ impl Reader {
         }
     }
 
+    /// Append decoded text into the currently active RTF destination.
     pub(super) fn text(&mut self, s: &str) {
         match self.st.dest {
             Dest::Body => {

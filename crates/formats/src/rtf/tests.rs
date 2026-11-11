@@ -670,7 +670,7 @@ fn metafile_pictures_are_imported() -> Result<(), String> {
 
 #[test]
 fn floating_picture_shape_keeps_its_wrapping_and_anchor() -> Result<(), String> {
-    use wordcraft_doc::para::{Anchor, Wrap};
+    use wordcraft_doc::para::{Anchor, FloatAlign, Wrap};
     let wmf: Vec<u8> = [1u16, 9, 0x300, 12, 0, 0, 3, 0, 0, 3, 0, 0].iter().flat_map(|w| w.to_le_bytes()).collect();
     let hex: String = wmf.iter().map(|b| format!("{b:02x}")).collect();
     let pict = format!("{{\\pict\\picscalex67\\picscaley67\\picw7939\\pich7939\\picwgoal4501\\pichgoal4501\\wmetafile8 {hex}}}");
@@ -687,6 +687,30 @@ fn floating_picture_shape_keeps_its_wrapping_and_anchor() -> Result<(), String> 
     assert_eq!(float.wrap, Wrap::Square);
     assert_eq!((float.h_rel, float.v_rel), (Anchor::Margin, Anchor::Paragraph));
     assert_eq!((float.x, float.y), (300.0, 0.0));
+
+    // Placement words on `\shp` directly before `\shpinst`, `dxWrapDistRight` only, `posrelh=5`
+    // (RightMargin), and `posh` without explicit anchor.
+    let outer_rtf = format!(
+        "{{\\rtf1\\ansi{{\\shp\\shpleft0\\shptop0\\shpbxignore\\shpwr2{{\\*\\shpinst{{\\sp{{\\sn shapeType}}{{\\sv 75}}}}{{\\sp{{\\sn posrelh}}{{\\sv 5}}}}{{\\sp{{\\sn posrelv}}{{\\sv 4}}}}{{\\sp{{\\sn posh}}{{\\sv 3}}}}{{\\sp{{\\sn dxWrapDistRight}}{{\\sv 254000}}}}}}{{\\shprslt{pict}}}}}After\\par}}"
+    );
+    let outer = import(outer_rtf.as_bytes())?;
+    let Some(InlineObject::Image { float, .. }) = outer.body[0].as_para().and_then(|p| p.objects.first()) else {
+        return Err("expected floating image from outer \\shp".into());
+    };
+    assert_eq!(float.wrap, Wrap::Square);
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::RightMargin, Anchor::TopMargin));
+    assert_eq!(float.h_align, Some(FloatAlign::End));
+    assert!((float.dist - 20.0).abs() < 0.01, "{}", float.dist);
+
+    let align_only_rtf = format!(
+        "{{\\rtf1\\ansi{{\\shp{{\\*\\shpinst{{\\sp{{\\sn shapeType}}{{\\sv 75}}}}{{\\sp{{\\sn posh}}{{\\sv 2}}}}}}{{\\shprslt{pict}}}}}Text\\par}}"
+    );
+    let align_only = import(align_only_rtf.as_bytes())?;
+    let Some(InlineObject::Image { float, .. }) = align_only.body[0].as_para().and_then(|p| p.objects.first()) else {
+        return Err("expected floating image with posh alone".into());
+    };
+    assert_eq!(float.wrap, Wrap::InFrontOfText);
+    assert_eq!(float.h_align, Some(FloatAlign::Center));
     Ok(())
 }
 
