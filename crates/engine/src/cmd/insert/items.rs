@@ -1,8 +1,72 @@
+use super::PartKind;
 use super::header_footer::hf_part;
 use super::{
     Align, Block, CharProps, CmdError, CmdResult, InlineObject, Paragraph, Rgb, Selection, Session, StoryRef, TabAlign, TabStop, TextColor, Value,
     delete_selection, json, p, para_block, sel_result, type_text,
 };
+use std::collections::BTreeSet;
+
+fn story_has_page_field(doc: &wordcraft_doc::Document, story: StoryRef, except: Option<usize>) -> bool {
+    let Some(blocks) = doc.story(story) else { return false };
+    let mut seen = BTreeSet::from([story]);
+    let mut pending: Vec<&Block> = blocks.iter().enumerate().filter(|(i, _)| Some(*i) != except).map(|(_, b)| &**b).collect();
+    while let Some(block) = pending.pop() {
+        let para = match block {
+            Block::Para(para) => para,
+            Block::Table(table) => {
+                pending.extend(table.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).map(|b| &**b));
+                continue;
+            }
+        };
+        for object in &para.objects {
+            if matches!(object, InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } if instr.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("PAGE")))
+            {
+                return true;
+            }
+            for id in object.text_boxes() {
+                if let Some(part) = doc.parts.get(&id).filter(|part| part.kind == PartKind::TextBox)
+                    && seen.insert(StoryRef::Part(id))
+                {
+                    pending.extend(part.blocks.iter().map(|b| &**b));
+                }
+            }
+        }
+    }
+    false
+}
+
+fn page_number_paragraph(style: &str, align: Align, x_of_y: bool) -> Result<Paragraph, CmdError> {
+    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let mut para = Paragraph::new().styled(style);
+    para.props.align = Some(align);
+    para.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Clear, leader: Default::default() }]);
+    if x_of_y {
+        para.insert_text(0, "Page  of ", &CharProps::default())?;
+        para.insert_object(5, field, &CharProps { bold: Some(true), ..Default::default() })?;
+        let end = para.len();
+        para.insert_object(
+            end,
+            InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+            &CharProps { bold: Some(true), ..Default::default() },
+        )?;
+    } else {
+        para.insert_object(0, field, &CharProps::default())?;
+    }
+    Ok(para)
+}
+
+// Only cached display text is transferable; instructions, flags and formatting remain part of ownership.
+fn copy_page_number_results(to: &mut Paragraph, from: &Paragraph) {
+    for object in &mut to.objects {
+        let InlineObject::Field { instr, result, .. } = object else { continue };
+        if let Some(cached) = from.objects.iter().find_map(|object| match object {
+            InlineObject::Field { instr: source, result, .. } if source.as_str() == instr.as_str() => Some(result),
+            _ => None,
+        }) {
+            result.clone_from(cached);
+        }
+    }
+}
 
 pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     let position = p::str(v, "position").unwrap_or("bottom");
@@ -22,22 +86,61 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     }
     let header = position == "top";
     let id = hf_part(s, header);
-    let mut para = Paragraph::new().styled(if header { "Header" } else { "Footer" });
-    para.props.align = Some(align);
-    para.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Clear, leader: Default::default() }]);
-    if x_of_y {
-        para.insert_text(0, "Page  of ", &CharProps::default())?;
-        para.insert_object(5, field, &CharProps { bold: Some(true), ..Default::default() })?;
-        let end = para.len();
-        para.insert_object(
-            end,
-            InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
-            &CharProps { bold: Some(true), ..Default::default() },
-        )?;
-    } else {
-        para.insert_object(0, field, &CharProps::default())?;
+    let story = StoryRef::Part(id);
+    let style = if header { "Header" } else { "Footer" };
+    let mut para = page_number_paragraph(style, align, x_of_y)?;
+    // Replace only a top-level paragraph matching our generated structure. User text,
+    // field switches/metadata and paragraph/run formatting must not be mistaken for a gallery number.
+    // Cached field results and paragraph-mark formatting survive gallery changes and identical requests.
+    if story_has_page_field(&s.doc, story, None) {
+        let generated = s.doc.story(story).and_then(|blocks| {
+            blocks.iter().enumerate().find_map(|(i, block)| {
+                let Block::Para(existing) = &**block else { return None };
+                let Some(align @ (Align::Left | Align::Center | Align::Right)) = existing.props.align else { return None };
+                [false, true]
+                    .into_iter()
+                    .any(|x_of_y| {
+                        page_number_paragraph(style, align, x_of_y).is_ok_and(|mut p| {
+                            if p.objects.len() != existing.objects.len() {
+                                return false;
+                            }
+                            p.mark = existing.mark.clone();
+                            copy_page_number_results(&mut p, existing);
+                            *existing == p
+                        })
+                    })
+                    .then_some((i, existing))
+            })
+        });
+        // More than one PAGE makes ownership ambiguous, including in tables or anchored text
+        // boxes. The traversal visits each story once so cycles cannot hang insertion.
+        if let Some((i, existing)) = generated
+            && !story_has_page_field(&s.doc, story, Some(i))
+        {
+            para.mark = existing.mark.clone();
+            copy_page_number_results(&mut para, existing);
+            let replacement = para_block(para);
+            if s.doc.story(story).and_then(|blocks| blocks.get(i)) != Some(&replacement) {
+                let block = s.doc.story_mut(story)?.get_mut(i).ok_or_else(|| CmdError::Failed("page-number paragraph is missing".into()))?;
+                *block = replacement;
+            }
+        }
+        return Ok(json!({"story": id}));
     }
-    s.doc.set_story(StoryRef::Part(id), vec![para_block(para)])?;
+    let blocks = s.doc.story_mut(story)?;
+    // A DOCX round trip can add paragraph-mark formatting to the otherwise untouched
+    // Header/Footer placeholder. Reuse it without losing that formatting or adding a blank line.
+    if let [block] = blocks.as_slice()
+        && let Block::Para(existing) = &**block
+    {
+        let mut placeholder = Paragraph::new().styled(style);
+        placeholder.mark = existing.mark.clone();
+        if *existing == placeholder {
+            para.mark = existing.mark.clone();
+            blocks.clear();
+        }
+    }
+    blocks.push(para_block(para));
     Ok(json!({"story": id}))
 }
 

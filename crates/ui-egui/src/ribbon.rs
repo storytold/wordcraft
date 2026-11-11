@@ -70,7 +70,10 @@ use shape::shape_format;
 use table::{table_design, table_layout};
 #[cfg(test)]
 use tabs::MIN_TAB_W;
-use tabs::{MORE_TABS_W, TAB_ENTRY_SECS, TAB_ENTRY_SLIDE, ease_out_cubic, note_contextual_tabs, reading_toolbar, tab_entry};
+use tabs::{
+    CONTENT_SWITCH_SLIDE, MORE_TABS_W, TAB_ENTRY_SECS, TAB_ENTRY_SLIDE, ease_out_cubic, note_contextual_tabs, reading_toolbar, slide_underline,
+    tab_content_entry, tab_entry,
+};
 pub use tabs::{
     StripPlan, TABS, TabSpec, contextual_tabs, fit_tabs, has_chart_selected, has_picture_selected, has_shape_selected, has_smart_art_selected,
     in_table_public, plan_strip, resolve_tab,
@@ -277,8 +280,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 }
                                 let active = app.ui.tab == tab && !app.ui.backstage;
                                 resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
-                                if resp.hovered() && !active && ghost.is_none() {
-                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() && !active && ghost.is_none());
+                                if hover > 0.0 {
+                                    ui.painter().rect_filled(
+                                        r.shrink2(vec2(0.0, 4.0)),
+                                        4.0,
+                                        egui::Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover),
+                                    );
                                 }
                                 // Entering and departing contextual tabs move and fade without changing layout.
                                 let entry = match ghost {
@@ -316,7 +324,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 let resp = if cut && ghost.is_none() { resp.on_hover_text(shown) } else { resp };
                                 if active {
                                     let u = Rect::from_center_size(pos2(r.center().x + shift.x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                    ui.painter().rect_filled(u, 2.0, t.accent.gamma_multiply(entry));
+                                    slide_underline(ui, tab, u, t.accent.gamma_multiply(entry), now, animate);
                                 }
                                 if resp.clicked() {
                                     let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -337,8 +345,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 .collect();
                             if !left_out.is_empty() {
                                 let (r, resp) = ui.allocate_exact_size(vec2(MORE_TABS_W, 30.0), Sense::click());
-                                if resp.hovered() {
-                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+                                if hover > 0.0 {
+                                    ui.painter().rect_filled(
+                                        r.shrink2(vec2(0.0, 4.0)),
+                                        4.0,
+                                        egui::Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover),
+                                    );
                                 }
                                 // The active tab is in the menu: the button says so.
                                 let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
@@ -376,6 +389,13 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
+            // Bring newly selected ribbon content in from the side of its tab.
+            let index = tabs.iter().position(|(name, _)| name == &app.ui.tab).unwrap_or(0);
+            let (settled, direction) = tab_content_entry(ui.ctx(), &app.ui.tab, index, now, animate);
+            let shift = vec2(direction * (1.0 - settled) * CONTENT_SWITCH_SLIDE, 0.0);
+            let mut shifted = ui.new_child(egui::UiBuilder::new().max_rect(ui.max_rect().translate(shift)).layout(*ui.layout()));
+            shifted.set_opacity(0.2 + 0.8 * settled);
+            let ui = &mut shifted;
             // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
             // the buttons drawn over it keep their own clicks.
             // No document open (#1129): every command is greyed out but Help's.

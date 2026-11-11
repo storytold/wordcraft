@@ -468,3 +468,35 @@ fn section_command_from_inherited_footer_targets_active_section() {
     assert!(!secs[0].1.landscape);
     assert!(secs[1].1.landscape);
 }
+
+/// Inserting a page number while editing an inherited footer preserves the inherited content
+/// and keeps both sections sharing the footer part without unlinking.
+#[test]
+fn inherited_footer_preserves_content_when_numbering_from_inherited_footer() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("front\nbody"));
+    s.run("select.text", &json!({"text": "front"})).unwrap();
+    s.run("caret.end", &json!({})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("insert.editFooter", &json!({"page": 0})).unwrap();
+    s.run("text.insert", &json!({"text": "Footer on sec 0"})).unwrap();
+    s.run("insert.closeHeader", &json!({})).unwrap();
+
+    // Edit the inherited footer from section 1's page.
+    s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+    assert_eq!(section_index_of_focus(&s), 1);
+
+    // Insert page number at bottom of page.
+    s.run("insert.pageNumber", &json!({"position": "bottom", "align": "right"})).unwrap();
+
+    // Verify footer text retains "Footer on sec 0" as well as the PAGE field.
+    let secs = s.doc.sections();
+    assert_eq!(secs[1].1.footers.default, None, "section 1 continues to inherit footer from section 0");
+    let fid = secs[0].1.footers.default.expect("section 0 footer exists");
+    let footer_text = s.doc.plain_text(wordcraft_doc::StoryRef::Part(fid));
+    assert!(footer_text.contains("Footer on sec 0"), "inherited footer content was preserved");
+
+    // Both page 0 and page 1 render the shared footer with page numbers.
+    let l = s.layout();
+    assert_eq!(l.pages[0].footer_story, Some(fid));
+    assert_eq!(l.pages[1].footer_story, Some(fid));
+}
