@@ -7,11 +7,12 @@
 //!   where the Win32 `GetUserNameExW` needs unsafe, which our workspace forbids. Without either
 //!   (an account with no name, or account info access turned off in Settings › Privacy), the
 //!   logon name.
-//! - Linux and the BSDs: the full name in the running account's `/etc/passwd` entry — the entry
-//!   with our uid where the system tells us one, and where it tells us none (no procfs, as on the
-//!   BSDs) the entry named by the logon name (the GECOS field up to its first comma, as `chfn`
-//!   sets it). Accounts from a directory service (LDAP, SSSD) have no entry there at all, under
-//!   either their uid or their name, and take the logon name.
+//! - Linux and the BSDs: the full name in the running account's `/etc/passwd` entry — the line
+//!   whose uid field is our uid, asked of the kernel rather than inferred: an environment variable
+//!   can say anything, and the line named by the logon name can only ever be somebody else's. The
+//!   name is the GECOS field up to its first comma, as `chfn` sets it. An account from a directory
+//!   service (LDAP, SSSD) has no line in that file at all, under its uid or its name, and takes the
+//!   logon name.
 //! - macOS: the full name Directory Services keeps for the account, from the system's own lookup
 //!   (`/usr/bin/id -F`), else the logon name. `objc2-app-kit` binds no `NSFullUserName`, and reading
 //!   Directory Services directly needs unsafe, which our workspace forbids. A directory service
@@ -42,7 +43,7 @@ const LOGON_VARS: &[&str] = &["USER", "LOGNAME"];
 const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most of `/etc/passwd` read: far more than any real one holds.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
 const MAX_PASSWD_BYTES: u64 = 4 << 20;
 
 /// The name of the account running WordCraft: its full name where the system has one, else its
@@ -55,9 +56,9 @@ pub fn system() -> Option<String> {
             return Some(name);
         }
     }
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
     {
-        if let Some(name) = passwd_full_name(login.as_deref()) {
+        if let Some(name) = passwd_full_name() {
             return Some(name);
         }
     }
@@ -167,20 +168,17 @@ fn joined(first: &str, last: &str) -> Option<String> {
     Some(name).filter(|n| !n.is_empty())
 }
 
-/// The running account's full name in `/etc/passwd` ([`full_name`]); `None` when the file can't be
-/// read, or has no usable entry for it. `login` names the entry to use only when the system gives
-/// no uid to match at all (no procfs, as on the BSDs); a uid it does give has to be in the file,
-/// and one that isn't yields no name rather than somebody else's.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn passwd_full_name(login: Option<&str>) -> Option<String> {
+/// The running account's full name in `/etc/passwd` ([`full_name`]), in the line whose uid field is
+/// the one the kernel gives for this process; `None` when the file can't be read or has no line for
+/// it. The uid comes from the system rather than from the environment or from procfs ownership: a
+/// logon name can say anything, and a non-dumpable process's `/proc/self` reads as root (proc(5)).
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn passwd_full_name() -> Option<String> {
     use std::io::Read;
-    use std::os::unix::fs::MetadataExt;
-    // Our own uid where the system tells us one: the environment's logon name can say anything,
-    // the uid of the process can't. Without it (no procfs), the entry named by the logon name.
-    let uid = std::fs::metadata("/proc/self").ok().map(|m| m.uid().to_string());
+    let uid = rustix::process::getuid().as_raw().to_string();
     let mut passwd = Vec::new();
     match std::fs::File::open("/etc/passwd").and_then(|f| f.take(MAX_PASSWD_BYTES).read_to_end(&mut passwd)) {
-        Ok(_) => full_name(&passwd, uid.as_deref(), login),
+        Ok(_) => full_name(&passwd, &uid),
         Err(e) => {
             log::debug!("user name: /etc/passwd: {e}");
             None
@@ -188,33 +186,44 @@ fn passwd_full_name(login: Option<&str>) -> Option<String> {
     }
 }
 
-/// The full name in the running account's entry of a `passwd` file (`name:password:UID:GID:GECOS:
-/// home:shell` lines): the entry with `uid` when the system gives one, else - when it gives no uid
-/// at all - the first entry named `login`, as the system's own
-/// lookup reads them. The name is the GECOS field up to its first comma (the rest is office and
-/// phone numbers), with `&` standing for the entry's name capitalised, a BSD convention. `None`
-/// without an entry, with an empty full name or with one that isn't UTF-8.
-#[cfg(any(test, all(unix, not(target_os = "macos"))))]
-fn full_name(passwd: &[u8], uid: Option<&str>, login: Option<&str>) -> Option<String> {
-    let entries: Vec<Vec<&[u8]>> = passwd.split(|&b| b == b'\n').map(|line| line.split(|&b| b == b':').collect()).collect();
-    // The entry with our uid, when the system tells us one. The entry named by the logon name is
-    // used only when there is no uid to match at all (a system without procfs, as the BSDs often
-    // are). An account from a directory service has no line in this file under either its uid or
-    // its name, so falling back to the name while the uid is known can only land on somebody
-    // else's entry - and a full name is somebody's, so guessing wrong signs their work. A uid is
-    // matched whole, not as a prefix, so `100` never takes `1000`'s entry.
-    let by_uid = |uid: &str| entries.iter().find(|fields| fields.get(2) == Some(&uid.as_bytes()));
-    let by_name = |login: &str| entries.iter().find(|fields| fields.first() == Some(&login.as_bytes()));
-    let entry = match (uid, login) {
-        (Some(uid), _) => by_uid(uid),
-        (None, Some(login)) => by_name(login),
-        (None, None) => None,
-    }?;
+/// The full name in the entry of a `passwd` file (`name:password:UID:GID:GECOS:home:shell` lines)
+/// whose uid field reads exactly `uid`, as the system's own lookup reads it. The name is the
+/// GECOS field up to its first comma (the rest is office and phone numbers), with `&` standing for
+/// the entry's name capitalised, a BSD convention. `None` without an entry, with a full name that
+/// has nothing any cleaning could keep (empty, blanks, control characters), or with a *name* that
+/// isn't UTF-8: the office and phone fields behind the first comma are never read, so a Latin-1 in
+/// one of them keeps nothing.
+#[cfg(any(test, all(unix, not(target_os = "macos"), not(target_arch = "wasm32"))))]
+fn full_name(passwd: &[u8], uid: &str) -> Option<String> {
+    // As `getpwuid` reads the file: a line whose first character that is neither a space nor a tab is
+    // `#` is a comment in the file, not an account, so it is skipped rather than matched. A
+    // commented-out `#ada:x:1000:...` would otherwise answer for uid 1000 and outrank the live
+    // `ada:x:1000:...` line below it, indented just as much, since the uid is still its third field.
+    let is_comment = |line: &[u8]| matches!(line.iter().find(|b| !matches!(**b, b' ' | b'\t')), Some(&b'#'));
+    let entries: Vec<Vec<&[u8]>> =
+        passwd.split(|&b| b == b'\n').filter(|line| !is_comment(line)).map(|line| line.split(|&b| b == b':').collect()).collect();
+    // Our own entry, and only ours. The entry named by the logon name is not a candidate: an
+    // account from a directory service has no line in this file under its uid or its name, so a
+    // match by name can only ever land on somebody else's local entry - and a full name is
+    // somebody's, so guessing wrong signs their work. The uid is matched whole, not as a prefix, so
+    // `100` never takes `1000`'s entry, and the first line with our uid is the one, as `getpwuid`.
+    let entry = entries.iter().find(|fields| fields.get(2) == Some(&uid.as_bytes()))?;
     let account = std::str::from_utf8(entry.first()?).ok()?;
-    let gecos = std::str::from_utf8(entry.get(4)?).ok()?;
-    let name = gecos.split(',').next().unwrap_or_default();
+    // Only the part of GECOS before the first comma has to be UTF-8. The office and phone fields
+    // behind it are never read, and a Latin-1 in one of them must not cost the person their name.
+    let gecos = entry.get(4)?;
+    let name = match gecos.iter().position(|&b| b == b',') {
+        Some(comma) => &gecos[..comma],
+        None => gecos,
+    };
+    let name = std::str::from_utf8(name).ok()?;
     let name = if name.contains('&') { name.replace('&', &capitalised(account)) } else { name.to_owned() };
-    Some(name.trim().to_owned()).filter(|n| !n.is_empty())
+    // A full name with nothing in it that a cleaning could keep - blanks, control characters - is no
+    // name at all: `None` lets the logon name have its turn, rather than one stray control character
+    // in the GECOS field leaving the person with the placeholder. The name itself is handed on as it
+    // stands, each app cleaning a name the same way it cleans one typed in.
+    let nothing_left = name.chars().filter(|c| !c.is_control()).collect::<String>().trim().is_empty();
+    (!nothing_left).then(|| name.trim().to_owned())
 }
 
 /// The macOS account's full name, from the system's own Directory Services lookup (`id -F`, which
@@ -304,10 +313,10 @@ mod tests {
     #[test]
     fn a_child_that_never_answers_is_stopped_at_its_deadline() {
         use std::process::Stdio;
-        let Ok(child) =
-            std::process::Command::new("sh").arg("-c").arg("sleep 30").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
-        else {
-            return; // nowhere to spawn a shell: the waiting code is not what changed
+        // `sleep` itself, not a shell standing in front of it: the process the check below looks
+        // for has to be the one the wait is meant to stop.
+        let Ok(child) = std::process::Command::new("sleep").arg("30").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() else {
+            return; // no `sleep` to time out on: the waiting code is not what changed
         };
         let started = std::time::Instant::now();
         let pid = child.id();
@@ -325,59 +334,53 @@ mod tests {
     }
 
     const PASSWD: &[u8] = b"# local accounts\n\
+        #ada:x:1000:1000:Older Ada,commented out:/home/not-ada:/bin/sh\n\
+        \t#ada2:x:1000:1000:Older Ada,indented comment:/home/not-ada2:/bin/sh\n\
         root:x:0:0:root:/root:/bin/bash\n\
         ada:x:1000:1000:Ada Lovelace,Room 1,+44 20,,:/home/ada:/bin/zsh\n\
         anna:x:1001:1001:&  Smith:/home/anna:/bin/sh\r\n\
         bob:x:1002:1002::/home/bob:/bin/sh\n\
         carl:x:1003:1003:   ,office:/home/carl:/bin/sh\n\
         dee:x:1004:1004:Dee \xe9:/home/dee:/bin/sh\n\
+        ren:x:1008:1008:Rene Dupont,Office \xe9:/home/ren:/bin/sh\n\
         eve:x:1005\n\
         zoe:x:1006:1006:Zo\xc3\xab Kowalska:/home/zoe:/bin/sh\n\
         zoe:x:1007:1007:Someone Else:/home/zoe2:/bin/sh\n\
+        gus:x:1009:1009:\x07\x02:/home/gus:/bin/sh\n\
         +ldapuser::::::";
 
     #[test]
     fn the_passwd_full_name_is_the_gecos_name_without_office_and_phones() {
-        assert_eq!(full_name(PASSWD, None, Some("ada")).as_deref(), Some("Ada Lovelace"));
-        assert_eq!(full_name(PASSWD, None, Some("root")).as_deref(), Some("root"));
-        // Our own uid wins over the name: an account renamed in the environment still gets its own
-        // entry. And when our uid isn't listed, the named entry is somebody else's account: no
-        // name at all, and `100` is no match for uid 1000's line.
-        assert_eq!(full_name(PASSWD, Some("1000"), Some("someone-else")).as_deref(), Some("Ada Lovelace"));
-        assert_eq!(full_name(PASSWD, Some("100"), Some("ada")), None, "uid 100 is not listed, and `100` is no whole match for 1000");
-        // No logon name in the environment (a service run straight from init) still has an entry.
-        assert_eq!(full_name(PASSWD, Some("1000"), None).as_deref(), Some("Ada Lovelace"));
+        assert_eq!(full_name(PASSWD, "0").as_deref(), Some("root"));
+        // The commented-out line above with the same uid is not an account, and is skipped as
+        // `getpwuid` skips it; the real entry below is the one.
+        assert_eq!(full_name(PASSWD, "1000").as_deref(), Some("Ada Lovelace"));
         // `&` is the entry's own name, capitalised; a Windows line ending is no part of the name.
-        assert_eq!(full_name(PASSWD, None, Some("anna")).as_deref(), Some("Anna  Smith"));
-        assert_eq!(full_name(PASSWD, Some("1001"), Some("anna")).as_deref(), Some("Anna  Smith"));
-        // The first entry for a uid or a name is the one, as `getpwnam` reads it.
-        assert_eq!(full_name(PASSWD, None, Some("zoe")).as_deref(), Some("Zoë Kowalska"));
-        assert_eq!(full_name(PASSWD, Some("1007"), Some("zoe")).as_deref(), Some("Someone Else"));
+        assert_eq!(full_name(PASSWD, "1001").as_deref(), Some("Anna  Smith"));
+        // The first line with our uid is the one, as `getpwuid` reads it.
+        assert_eq!(full_name(PASSWD, "1006").as_deref(), Some("Zoë Kowalska"));
+        assert_eq!(full_name(PASSWD, "1007").as_deref(), Some("Someone Else"));
+        // A Latin-1 in the office field behind the name costs nothing: only the name half is read.
+        assert_eq!(full_name(PASSWD, "1008").as_deref(), Some("Rene Dupont"));
     }
 
     #[test]
     fn no_usable_passwd_name_falls_back_to_the_logon_name() {
-        for (uid, login, why) in [
-            (None, Some("bob"), "an empty GECOS field"),
-            (Some("1002"), Some("bob"), "an empty GECOS field by uid"),
-            (None, Some("carl"), "a full name of blanks"),
-            (None, Some("dee"), "a full name that isn't UTF-8 (Latin-1)"),
-            (None, Some("eve"), "a cut-off entry"),
-            (Some("1005"), Some("eve"), "a cut-off entry by uid"),
-            (None, Some("ad"), "a prefix of another account's name"),
-            (None, Some("mallory"), "no entry"),
-            (Some("4242"), Some("mallory"), "no entry for our uid"),
-            (Some("4242"), Some("ada"), "our uid isn't listed and `ada` is somebody else's account"),
-            (None, Some("ldapuser"), "a NIS entry for someone else"),
-            (None, Some(""), "an empty name"),
-            (None, Some("# local accounts"), "a comment"),
-            (None, None, "no logon name and no uid"),
-            (Some("4242"), None, "no entry for our uid and no logon name"),
+        for (uid, why) in [
+            ("1002", "an empty GECOS field"),
+            ("1003", "a full name of blanks"),
+            ("1004", "a full name that isn't UTF-8 (Latin-1)"),
+            ("1005", "a cut-off entry"),
+            ("1009", "a full name of control characters only"),
+            ("4242", "no line for our uid"),
+            ("", "the empty uid field of a NIS `+` line"),
+            ("100", "a prefix of another uid, not a whole match"),
+            ("ada", "a logon name is no uid, and the line named by it is somebody else's"),
         ] {
-            assert_eq!(full_name(PASSWD, uid, login), None, "{why} ({uid:?}, {login:?})");
+            assert_eq!(full_name(PASSWD, uid), None, "{why} ({uid:?})");
         }
-        assert_eq!(full_name(b"", None, Some("ada")), None, "an empty file");
-        assert_eq!(full_name(b"ada:x:1000:1000:Ada Lovelace", None, Some("ada")).as_deref(), Some("Ada Lovelace"), "no shell or home");
+        assert_eq!(full_name(b"", "1000"), None, "an empty file");
+        assert_eq!(full_name(b"ada:x:1000:1000:Ada Lovelace", "1000").as_deref(), Some("Ada Lovelace"), "no shell or home");
     }
 
     #[test]
