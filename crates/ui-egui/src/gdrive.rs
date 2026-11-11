@@ -99,6 +99,8 @@ pub(crate) const EXPORT_FORMATS: [&str; 10] = ["pdf", "docx", "odt", "ott", "fod
 
 /// The name a Drive export starts from: the title, without the extension a Drive document's name
 /// carries ("Essay.docx" exports as "Essay.pdf", not "Essay.docx.pdf").
+// Only the desktop exports to Drive.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub(crate) fn export_stem(app: &WordApp) -> String {
     let stem = app.title_stem();
     let path = std::path::Path::new(&stem);
