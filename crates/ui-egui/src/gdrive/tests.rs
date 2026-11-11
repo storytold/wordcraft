@@ -52,7 +52,7 @@ fn file_save_goes_to_drive_only_for_drive_documents() {
     // An ordinary document: not intercepted, so the usual save (and its Save As prompt) runs.
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_none());
     let doc = a.session.document_id();
-    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false });
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false, parent: None });
     // A Drive document: Save is Drive's (refused here only because tests have no Drive).
     let r = super::intercept_save(&mut a, "file.save", &json!({}));
     assert!(matches!(r, Some(Err(_))), "{r:?}");
@@ -70,10 +70,10 @@ fn save_names() {
     assert!(super::save_name(&a, Some("Report")).ends_with("Report.docx"));
     assert_eq!(super::save_name(&a, Some("Report.odt")), "Report.odt");
     assert_eq!(super::save_name(&a, Some("Report.docx")), "Report.docx");
-    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false });
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false, parent: None });
     assert_eq!(super::save_name(&a, None), "Essay.docx");
     // A Google Doc's copy is named after the document, as .docx, never the Doc itself.
-    a.drive.origins.insert(doc, Origin { id: "g1".into(), name: "Notes".into(), version: "3".into(), google_doc: true });
+    a.drive.origins.insert(doc, Origin { id: "g1".into(), name: "Notes".into(), version: "3".into(), google_doc: true, parent: None });
     a.session.file_name = Some("Notes.docx".into());
     assert_eq!(super::save_name(&a, None), "Notes.docx");
 }
@@ -93,9 +93,9 @@ fn title_says_saved_to_drive_only_for_drive_files() {
     let mut a = app();
     let doc = a.session.document_id();
     assert!(!super::saved_in_drive(&a));
-    a.drive.origins.insert(doc, Origin { id: "g1".into(), name: "Notes".into(), version: "1".into(), google_doc: true });
+    a.drive.origins.insert(doc, Origin { id: "g1".into(), name: "Notes".into(), version: "1".into(), google_doc: true, parent: None });
     assert!(!super::saved_in_drive(&a), "a Google Doc's Word copy isn't saved anywhere yet");
-    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "1".into(), google_doc: false });
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "1".into(), google_doc: false, parent: None });
     assert!(super::saved_in_drive(&a));
 }
 
@@ -117,6 +117,26 @@ fn drive_pages_commands_work_with_no_document_but_save_needs_one() {
     }
     assert!(!crate::works_without_document("ui.drive.save"), "saving needs a document");
     assert!(!crate::works_without_document("ui.drive.export"), "exporting needs a document");
+}
+
+/// A Google Doc's Word copy, and Save a Copy, go into the Drive file's folder; a new name goes to
+/// My Drive; a plain Save goes over the file it came from.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn copies_go_beside_the_drive_file() {
+    use wordcraft_gdrive::SaveTarget;
+    let o = |google_doc| Origin { id: "f1".into(), name: "Notes".into(), version: "3".into(), google_doc, parent: Some("folder_1".into()) };
+    let new = |parent: Option<&str>| SaveTarget::New { name: "Notes.docx".into(), parent: parent.map(Into::into) };
+    let target = super::native::save_target;
+    assert_eq!(target(Some(o(true)), false, false, "Notes.docx"), new(Some("folder_1")), "a Google Doc's Word copy");
+    assert_eq!(target(Some(o(false)), true, false, "Notes.docx"), new(Some("folder_1")), "Save a Copy");
+    assert_eq!(target(Some(o(true)), false, true, "Notes.docx"), new(None), "a new name");
+    assert_eq!(target(None, false, false, "Notes.docx"), new(None), "not from Drive");
+    assert_eq!(
+        target(Some(o(false)), false, false, "Notes.docx"),
+        SaveTarget::Existing { id: "f1".into(), name: "Notes".into(), version: "3".into() },
+        "Save"
+    );
 }
 
 /// A new registration isn't written while Drive is busy (signing in, say): the worker would keep
@@ -142,7 +162,7 @@ fn a_busy_drive_keeps_the_old_registration() {
 fn save_follows_the_last_destination() {
     let mut a = app();
     let doc = a.session.document_id();
-    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false });
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false, parent: None });
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_some(), "opened from Drive: Save goes to Drive");
     assert!(super::saved_in_drive(&a));
     // Save As to a local file: the document now has a path, so Save writes it.
@@ -158,6 +178,7 @@ fn save_follows_the_last_destination() {
         modified_time: String::new(),
         version: "1".into(),
         size: Some(10),
+        parents: Vec::new(),
     };
     let rev = a.session.rev();
     let local = a.drive.local_saves.get(&doc).copied().unwrap_or(0);
@@ -176,6 +197,7 @@ fn drive_file() -> wordcraft_gdrive::DriveFile {
         modified_time: String::new(),
         version: "1".into(),
         size: Some(10),
+        parents: Vec::new(),
     }
 }
 
@@ -235,7 +257,7 @@ fn google_drive_is_off_until_turned_on() {
     let r = a.run("ui.drive.list", json!({})).unwrap_err();
     assert!(r.contains("Options › Accounts"), "{r}");
     let doc = a.session.document_id();
-    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false });
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false, parent: None });
     assert!(super::intercept_save(&mut a, "file.save", &json!({})).is_none(), "off: Save isn't Drive's");
     assert!(a.run("ui.drive.enable", json!({"value": "yes"})).is_err());
 

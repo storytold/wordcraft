@@ -20,7 +20,7 @@ pub const MAX_DOCUMENT: u64 = 256 << 20;
 /// The most files one listing returns.
 pub const PAGE_SIZE: u32 = 100;
 
-const FIELDS: &str = "id,name,mimeType,modifiedTime,version,size,headRevisionId";
+const FIELDS: &str = "id,name,mimeType,modifiedTime,version,size,headRevisionId,parents";
 
 /// A file's metadata, as much as WordCraft needs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -38,6 +38,10 @@ pub struct DriveFile {
     /// Bytes; absent for Google Docs.
     #[serde(default, deserialize_with = "opt_u64_str")]
     pub size: Option<u64>,
+    /// The folders it is in (one, in practice); empty when the folder isn't visible, such as a
+    /// file shared with the person.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parents: Vec<String>,
 }
 
 fn opt_u64_str<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>, D::Error> {
