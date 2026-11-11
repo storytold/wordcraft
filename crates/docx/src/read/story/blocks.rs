@@ -7,7 +7,7 @@ use super::{
 /// Word draws a run's text with the complex-script font, size, bold and italic only when the run
 /// is complex script or right to left (`w:cs`, `w:rtl`) by its own properties, its paragraph
 /// style, its table style or the run defaults; a character style saying so, or saying not,
-/// doesn't count. Anywhere else the text takes the run's other font and `w:sz`, Thai included,
+/// doesn't count (nor does its `w:rtl` change the order of the text). Anywhere else the text takes the run's other font and `w:sz`, Thai included,
 /// whatever its language or `w:hint` (measured in Word for Windows: Thai text at `w:sz` 22 pt,
 /// `w:szCs` 11 pt is drawn at 22 pt). WordCraft draws Thai, Lao and Indic characters with the
 /// complex-script formatting unless the run says it is not complex script, and counts a character
@@ -26,7 +26,13 @@ fn mark_runs_as_word_draws_them(styles: &wordcraft_doc::StyleSheet, para: &mut P
             continue;
         }
         let word = styles.resolve_char_in(style, table, &CharProps { style: None, ..run.props.clone() });
-        let ours = styles.resolve_char_in(style, table, &run.props);
+        let mut ours = styles.resolve_char_in(style, table, &run.props);
+        // Right to left only by its character style: Word draws and orders the run as it does
+        // one that says nothing (measured, Latin and Thai text).
+        if ours.rtl && !word.rtl {
+            run.props.rtl = Some(false);
+            ours = styles.resolve_char_in(style, table, &run.props);
+        }
         if word.cs || word.rtl {
             if !ours.cs && !ours.rtl {
                 run.props.cs = Some(true);
@@ -411,12 +417,13 @@ impl Reader<'_> {
         }
         // The cells' paragraphs, with the run formatting the table style gives each cell (a
         // table inside has marked its own).
-        for ri in 0..table.rows.len() {
-            for ci in 0..table.rows[ri].cells.len() {
-                let chr = self.doc.styles.table_cell_chr(&table, ri, ci);
-                for b in &mut table.rows[ri].cells[ci].blocks {
+        let chrs = self.doc.styles.table_cells_chr(&table);
+        for (ri, row) in table.rows.iter_mut().enumerate() {
+            for (ci, cell) in row.cells.iter_mut().enumerate() {
+                let chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci));
+                for b in &mut cell.blocks {
                     if let Block::Para(p) = Arc::make_mut(b) {
-                        mark_runs_as_word_draws_them(&self.doc.styles, p, chr.as_ref());
+                        mark_runs_as_word_draws_them(&self.doc.styles, p, chr);
                         p.normalize();
                     }
                 }

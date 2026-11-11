@@ -205,6 +205,7 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
 <w:style w:type="paragraph" w:styleId="CsPara"><w:name w:val="CsPara"/><w:basedOn w:val="Normal"/><w:rPr><w:cs/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="CsChar"><w:name w:val="CsChar"/><w:rPr><w:cs/></w:rPr></w:style>
 <w:style w:type="character" w:styleId="CsOff"><w:name w:val="CsOff"/><w:rPr><w:cs w:val="0"/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="RtlChar"><w:name w:val="RtlChar"/><w:rPr><w:rtl/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="CsTable"><w:name w:val="CsTable"/><w:rPr><w:cs/></w:rPr></w:style>
 <w:style w:type="table" w:styleId="SizeTable"><w:name w:val="SizeTable"/><w:rPr><w:sz w:val="30"/><w:szCs w:val="16"/></w:rPr></w:style>"#
         )
@@ -227,6 +228,7 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
         ("bidi language", defaults(""), run(r#"<w:lang w:val="th-TH" w:bidi="th-TH"/>"#), latin),
         ("hint", defaults(""), run(r#"<w:rFonts w:hint="cs"/>"#), latin),
         ("character style", defaults(""), run(r#"<w:rStyle w:val="CsChar"/>"#), latin),
+        ("character style rtl", defaults(""), run(r#"<w:rStyle w:val="RtlChar"/>"#), latin),
         ("run cs", defaults(""), run("<w:cs/>"), complex),
         ("run rtl", defaults(""), run("<w:rtl/>"), complex),
         ("paragraph style", defaults(""), styled("CsPara", ""), complex),
@@ -242,7 +244,7 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
     ];
     let check = |d: &Document, name: &str, want: (&str, f32, bool), when: &str| {
         let (p, table) = match &*d.body[0] {
-            wordcraft_doc::Block::Table(t) => (t.rows[0].cells[0].blocks[0].as_para().unwrap(), d.styles.table_cell_chr(t, 0, 0)),
+            wordcraft_doc::Block::Table(t) => (t.rows[0].cells[0].blocks[0].as_para().unwrap(), d.styles.table_cells_chr(t).map(|c| c[0][0].clone())),
             b => (b.as_para().unwrap(), None),
         };
         let rc = d.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref(), &p.runs[0].props);
@@ -265,12 +267,13 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
     for p in paras(&d) {
         assert_eq!(p.runs[0].props.cs, None, "{}", p.text);
     }
-    // Latin text follows the same rule (measured): a character style's `w:cs` leaves it in the
+    // Latin text follows the same rule (measured): a character style's `w:cs` or `w:rtl` leaves it in the
     // run's own formatting, a character style's `w:cs w:val="0"` under a paragraph style's
     // `w:cs` in the complex-script formatting.
     let latin_in =
         |p: &str, rpr: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{p}"/></w:pPr><w:r><w:rPr>{rpr}</w:rPr><w:t>Latin</w:t></w:r></w:p>"#);
-    let body = latin_in("Normal", r#"<w:rStyle w:val="CsChar"/>"#) + &latin_in("CsPara", cs_off);
+    let body =
+        latin_in("Normal", r#"<w:rStyle w:val="CsChar"/>"#) + &latin_in("CsPara", cs_off) + &latin_in("Normal", r#"<w:rStyle w:val="RtlChar"/>"#);
     let d = wordcraft_docx::read(&docx_with_styles(&body, &defaults(""))).unwrap();
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     for (d, when) in [(&d, "read"), (&again, "after a save")] {
@@ -282,6 +285,6 @@ fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() 
                 (c.font, c.size)
             })
             .collect();
-        assert_eq!(drawn, [("Angsana New".to_string(), 22.0), ("Tahoma".to_string(), 11.0)], "{when}");
+        assert_eq!(drawn, [("Angsana New".to_string(), 22.0), ("Tahoma".to_string(), 11.0), ("Angsana New".to_string(), 22.0)], "{when}");
     }
 }
