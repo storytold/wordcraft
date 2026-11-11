@@ -403,7 +403,8 @@ impl Reader {
                 }
                 true
             }
-            Dest::StyleSheet => {
+            // Style names take Unicode escapes (with fallback skipping) like the body.
+            Dest::StyleSheet if !matches!(word, "u" | "uc") => {
                 let def = &mut self.style_def_cur;
                 match word {
                     "s" | "cs" | "ds" | "ts" => {
@@ -420,6 +421,7 @@ impl Reader {
                 }
                 true
             }
+            Dest::StyleSheet => false,
             Dest::ListTable => {
                 self.list_table_word(word, value);
                 true
