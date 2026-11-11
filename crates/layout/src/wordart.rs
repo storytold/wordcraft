@@ -336,6 +336,7 @@ mod tests {
 
     #[test]
     fn arch_baselines_lie_on_the_arc() {
+        crate::test_fonts();
         let frame = Rect::new(10.0, 20.0, 200.0, 100.0);
         let w = Warp::new(&TextWarp::new("textArchUp").unwrap(), frame, 0.25).unwrap();
         let (cx, cy, rx, ry) = (110.0, 70.0, 100.0, 50.0);
@@ -363,6 +364,7 @@ mod tests {
     /// #2534: the legacy font effects become text effects, under any WordArt effects.
     #[test]
     fn legacy_font_effects_are_drawn_as_text_effects() {
+        crate::test_fonts();
         use wordcraft_doc::CharProps;
         let rc = |c: CharProps| wordcraft_doc::styles::StyleSheet::default().resolve_char(None, &CharProps { size: Some(20.0), ..c });
         let red = Rgb(200, 0, 0);
@@ -394,6 +396,7 @@ mod tests {
     /// #2534: synthetic bold widens the outline, or adds one in the fill's colour.
     #[test]
     fn embolden_widens_or_adds_the_outline() {
+        crate::test_fonts();
         let red = Rgb(200, 0, 0);
         let mut plain = TextEffects::default();
         embolden(&mut plain, red, 20.0);
@@ -418,6 +421,7 @@ mod tests {
     /// draws its glyphs plainly.
     #[test]
     fn effects_on_tracked_and_turned_text() {
+        crate::test_fonts();
         use crate::display::{DisplayOptions, Draw, InsertMark, page_display};
         use wordcraft_doc::props::TextDirection;
         use wordcraft_doc::{CharProps, Document, Paragraph, Revision, RevisionKind, para_block};
@@ -456,6 +460,7 @@ mod tests {
 
     #[test]
     fn flat_and_unknown_warps_draw_flat() {
+        crate::test_fonts();
         let frame = Rect::new(0.0, 0.0, 100.0, 50.0);
         assert!(Warp::new(&TextWarp::new("textPlain").unwrap(), frame, 0.2).is_none());
         assert!(Warp::new(&TextWarp::new("textCanUp").unwrap(), frame, 0.2).is_none());
