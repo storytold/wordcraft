@@ -684,6 +684,13 @@ impl Session {
         self.disk = self.path.as_deref().and_then(crate::io::disk_stamp);
     }
 
+    /// [`Session::stamp_disk`] right after a write of `written` bytes: the size is the one
+    /// written, not the one found, so a file another program replaced between the write and
+    /// the look is seen as changed unless it has the same size (#5623).
+    pub fn stamp_disk_written(&mut self, written: usize) {
+        self.disk = self.path.as_deref().and_then(crate::io::disk_stamp).map(|stamp| crate::io::DiskStamp { len: written as u64, ..stamp });
+    }
+
     /// Whether another program has changed the active document's file since it was read or
     /// written (#5623): its size or modification time differ from the stamp taken then. A
     /// document without a file, or whose file is gone, hasn't changed on disk: there is nothing

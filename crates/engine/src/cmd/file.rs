@@ -434,9 +434,10 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     // A file another program changed since it was read is never written over without being
     // asked (#5623): the desktop app's bar asks (Reload / Keep mine), and AutoSave waits.
     if s.path.as_deref() == Some(path.as_path()) && p::bool(v, "overwrite") != Some(true) && s.changed_on_disk() {
-        return Err(CmdError::Failed(
-            "the file was changed on disk by another program since it was read: file.reload reads it again, or pass \"overwrite\": true to write the document over it".into(),
-        ));
+        return Err(CmdError::Failed(format!(
+            "{}: file.reload reads it again, or pass \"overwrite\": true to write the document over it",
+            crate::io::CHANGED_ON_DISK
+        )));
     }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
@@ -472,10 +473,13 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);
-    if let Err(e) = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
-    }
+    let written = match crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
+        Ok(written) => written,
+        Err(e) => {
+            (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+            return Err(CmdError::Failed(e));
+        }
+    };
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
@@ -483,7 +487,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     if own_file || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
-        s.stamp_disk();
+        s.stamp_disk_written(written);
         s.relayout();
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))

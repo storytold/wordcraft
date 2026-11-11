@@ -103,6 +103,15 @@ pub fn needs_password(err: &str) -> bool {
     err.contains(wordcraft_docx::PASSWORD_REQUIRED)
 }
 
+/// What `file.save` says when it refuses to write over the document's own file because another
+/// program changed it since it was read (#5623): a front end puts its bar up on this error.
+pub const CHANGED_ON_DISK: &str = "the file was changed on disk by another program since it was read";
+
+/// Does this save error mean the document's file changed on disk since it was read (#5623)?
+pub fn refused_for_disk_change(err: &str) -> bool {
+    err.contains(CHANGED_ON_DISK)
+}
+
 /// Does this open error mean the password given was wrong?
 pub fn wrong_password(err: &str) -> bool {
     err.contains(wordcraft_docx::WRONG_PASSWORD)
@@ -868,20 +877,22 @@ pub fn open_path_in(path: &std::path::Path, password: Option<&str>, _region: &wo
     open_path_with(path, password)
 }
 
-pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
+pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<usize, String> {
     save_path_with(path, doc, None, &ExportOptions::default())
 }
 
-/// [`save_path`], encrypted with `password` as [`save_bytes_with`] does.
+/// [`save_path`], encrypted with `password` as [`save_bytes_with`] does. Returns how many bytes
+/// were written: what the file's size is right after the write, for a stamp of it (#5623).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(), String> {
+pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<usize, String> {
     crate::file_access::check_write(&path.to_string_lossy())?;
     let bytes = save_bytes_with(&path.to_string_lossy(), doc, password, opts)?;
-    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(bytes.len())
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
+pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<usize, String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 

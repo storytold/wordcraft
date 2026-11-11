@@ -116,14 +116,13 @@ impl WordApp {
 
     /// The bar's Reload for the document on screen: read the file again, the document's own
     /// version one Undo away. A comment or reply still being typed is written into that version
-    /// first (`file.reload` flushes drafts, #1348), so Undo brings it back too; a draft the
-    /// document refused goes with the content it was typed against.
+    /// first (`file.reload` flushes drafts in [`WordApp::execute`], #1348), so Undo brings it back
+    /// too; a draft the document refused goes with the content it was typed against.
     pub(crate) fn reload_from_disk(&mut self) {
         let id = self.session.document_id();
         match self.run("file.reload", json!({"force": true})) {
             Ok(_) => {
                 self.disk_notices.retain(|(d, _)| *d != id);
-                crate::panes::discard_comment_drafts(self);
                 self.status(tl!("Reloaded from disk. Undo brings your version back."));
             }
             Err(e) => {
@@ -144,6 +143,12 @@ impl WordApp {
         let id = self.session.document_id();
         self.disk_notices.retain(|(d, _)| *d != id);
         self.session.stamp_disk();
+    }
+
+    /// Whether a `file.reload` with these parameters reads the shown document again: the one
+    /// its `id` names, the shown one by default.
+    pub(crate) fn reload_targets_shown(&self, params: &serde_json::Value) -> bool {
+        params.get("id").and_then(serde_json::Value::as_u64).is_none_or(|id| id == self.session.document_id())
     }
 
     /// The bar's notice for the document on screen, if any.
@@ -432,5 +437,76 @@ mod tests {
         assert_eq!(text(&app), "alpha", "Undo brings the old content back");
         assert!(app.session.doc.comments.values().any(|c| c.parent.is_some()), "with the typed reply in it");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A parked document's reload leaves the shown document's comment draft alone: the person
+    /// is still typing it.
+    #[test]
+    fn a_parked_documents_reload_leaves_the_shown_documents_draft_alone() {
+        let (mut app, a_path) = app_with_file("parked-draft", "alpha");
+        let a = app.session.document_id();
+        let b_path = a_path.with_file_name("other.txt");
+        std::fs::write(&b_path, "bravo").unwrap();
+        app.run("file.open", json!({"path": b_path.to_string_lossy()})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        let comment = app.run("review.newComment", json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        crate::panes::draft_reply(&mut app, comment, "still typing");
+        std::fs::write(&a_path, "alpha changed").unwrap();
+        assert_eq!(app.check_disk_change(), vec![(a, DiskChange::Reloaded)]);
+        assert!(crate::panes::has_comment_drafts(&app), "the draft is still being typed");
+        assert_eq!(text(&app), "bravo");
+        let _ = std::fs::remove_dir_all(a_path.parent().unwrap());
+    }
+
+    /// An agent's `file.reload` (the control channel runs commands with `execute`, not `run`)
+    /// writes a comment draft into the content as it was first, like the bar's Reload: a reload
+    /// without `force` then sees unsaved work, and a forced one keeps the reply one Undo away.
+    #[test]
+    fn an_agents_reload_writes_the_draft_into_the_version_one_undo_away() {
+        let dir = temp_dir("agent-draft");
+        let path = dir.join("notes.docx");
+        let mut app = app();
+        app.run("text.insert", json!({"text": "alpha"})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        let comment = app.run("review.newComment", json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        app.run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        crate::panes::draft_reply(&mut app, comment, "typing a reply");
+        let mut other = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        other.run("text.insert", &json!({"text": "theirs"})).unwrap();
+        other.run("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
+        assert!(app.execute("file.reload", json!({})).is_err(), "the reply written in is unsaved work");
+        assert_eq!(text(&app), "alpha");
+        assert!(
+            !crate::panes::has_comment_drafts(&app) && app.session.doc.comments.values().any(|c| c.parent.is_some()),
+            "the draft is in the document"
+        );
+        app.execute("file.reload", json!({"force": true})).unwrap();
+        assert_eq!(text(&app), "theirs");
+        assert!(!crate::panes::has_comment_drafts(&app));
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&app), "alpha");
+        assert!(app.session.doc.comments.values().any(|c| c.parent.is_some()), "with the reply in it");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Save refused because the file changed on disk: a document with nothing to lose is read
+    /// again on the spot, not asked; one with unsaved work gets the bar. A save elsewhere is a
+    /// copy, written as ever, and asks nothing.
+    #[test]
+    fn a_refused_save_reloads_a_clean_document_and_asks_about_a_dirty_one() {
+        let (mut app, path) = app_with_file("refused", "alpha");
+        std::fs::write(&path, "alpha beta").unwrap();
+        assert!(app.execute_user("file.save", json!({})).is_err(), "refused: the file changed");
+        assert!(app.disk_notices.is_empty(), "nothing to lose: no question");
+        assert_eq!(text(&app), "alpha beta", "read again instead");
+        app.run("text.insert", json!({"text": "X"})).unwrap();
+        std::fs::write(&path, "alpha beta gamma").unwrap();
+        let copy = path.with_file_name("copy.txt");
+        app.execute_user("file.save", json!({"path": copy.to_string_lossy()})).unwrap();
+        assert!(app.disk_notices.is_empty(), "a copy elsewhere asks nothing");
+        assert!(app.execute_user("file.save", json!({})).is_err());
+        assert_eq!(app.disk_notice(), Some(&DiskNotice::Unsaved), "unsaved work: the bar asks");
+        assert_eq!(text(&app), "Xalpha beta", "nothing was lost");
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 }

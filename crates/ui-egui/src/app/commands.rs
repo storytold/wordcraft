@@ -125,6 +125,14 @@ impl WordApp {
         {
             return Err(e.into());
         }
+        // A reload from disk (#5623) replaces the shown document's content, from the bar or
+        // from an agent: a comment or reply still being typed is written into the content as it
+        // was first (#1348), which the reload keeps one Undo away. A parked document's reload
+        // leaves the shown one's drafts alone.
+        let reloads_shown = id == "file.reload" && self.reload_targets_shown(&params);
+        if reloads_shown {
+            let _ = panes::flush_comment_drafts(self);
+        }
         if id == "file.autosave" {
             return self.set_autosave(&params);
         }
@@ -210,6 +218,11 @@ impl WordApp {
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
         };
+        // Reloaded: what is left of the drafts (one the document refused) went with the content
+        // as it was; none waits for the new content, where a comment number may be another one.
+        if reloads_shown && r.is_ok() {
+            panes::discard_comment_drafts(self);
+        }
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;
             // The body (or the whole document) was replaced under the same id — setText, a
@@ -321,11 +334,21 @@ impl WordApp {
         // Opening a file, or a new document from a template, reads a file that may be protected.
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
+        // A Save of the document's own file refused because another program changed it (#5623):
+        // with unsaved work the bar goes up, so the answer (Reload / Keep mine) is at hand with
+        // the reason on the status line; a document with nothing to lose is read again now.
+        let own_file_save = id == "file.save"
+            && params.get("path").and_then(Value::as_str).is_none_or(|p| Some(std::path::Path::new(p)) == self.session.path.as_deref());
         let r = self.execute(id, params);
-        // A Save refused because another program changed the file (#5623) puts the bar up, so
-        // the answer (Reload / Keep mine) is at hand with the reason on the status line.
-        if id == "file.save" && r.is_err() && self.session.changed_on_disk() {
-            self.notice_disk_change(self.session.document_id(), crate::disk_change::DiskNotice::Unsaved);
+        if own_file_save
+            && let Err(e) = &r
+            && wordcraft_engine::io::refused_for_disk_change(e)
+        {
+            if self.document_unsaved() || panes::has_comment_drafts(self) {
+                self.notice_disk_change(self.session.document_id(), crate::disk_change::DiskNotice::Unsaved);
+            } else {
+                self.check_disk_change();
+            }
         }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
@@ -1091,7 +1114,6 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "file.newFromTemplate"
             | "file.listTemplates"
             | "file.open"
-            | "file.reload"
             | "file.close"
             | "file.options"
             | "file.setAuthor"
@@ -1137,8 +1159,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being
-/// typed is written before them (#1348). A reload from disk (#5623) replaces the content too: the
-/// draft goes into the content as it was, which the reload keeps one Undo away.
+/// typed is written before them (#1348). A reload from disk flushes them in [`WordApp::execute`],
+/// where the control channel's reloads pass too (#5623).
 fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
     matches!(
         id,
@@ -1146,7 +1168,6 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
             | "file.saveAs"
             | "file.saveTemplate"
             | "file.open"
-            | "file.reload"
             | "file.exportPdf"
             | "file.exportPng"
             | "file.print"
