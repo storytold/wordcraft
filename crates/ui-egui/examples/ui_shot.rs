@@ -9,6 +9,8 @@
 //! background work such as a Zotero session). The window is 1440×900 pt at 2× and opens the sample
 //! document unless the first line is `{"empty": true}`; `{"empty": true, "startScreen": true}`
 //! starts the way the desktop app does with nothing to open (File › Home, #766). A line
+//! `{"width": w}`, `{"height": h}` or `{"ppp": s}` sets the window size in points or its pixels
+//! per point (e.g. 1.45 for a 145 % desktop, to see text as it is drawn there).
 //! `{"demoPacks": true}` lists a few sample Language packs (installs only record themselves), and
 //! (with `{"network": true}` on a line, downloading is already on) `{"demoPacks": "store"}` uses a real font store, as the desktop app does, in a new temporary
 //! folder rather than the person's, or in `"storeDir"` given on the same line (with
@@ -57,8 +59,9 @@ fn main() {
     }
     let w = lines.iter().find_map(|l| l.get("width").and_then(|v| v.as_f64())).unwrap_or(1440.0) as f32;
     let h = lines.iter().find_map(|l| l.get("height").and_then(|v| v.as_f64())).unwrap_or(900.0) as f32;
+    let ppp = lines.iter().find_map(|l| l.get("ppp").and_then(|v| v.as_f64())).map(|p| p.clamp(0.5, 4.0)).unwrap_or(2.0) as f32;
     let mut harness =
-        egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(2.0).with_max_steps(1_000_000).wgpu().build_ui_state(
+        egui_kittest::Harness::builder().with_size(egui::vec2(w, h)).with_pixels_per_point(ppp).with_max_steps(1_000_000).wgpu().build_ui_state(
             |ui, app: &mut WordApp| {
                 if !READY.load(std::sync::atomic::Ordering::Relaxed) {
                     return;

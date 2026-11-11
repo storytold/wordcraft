@@ -94,9 +94,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -114,10 +114,13 @@ pub fn specs() -> Vec<CommandSpec> {
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
             Ok(json!({"path": path, "markup": opts.markup}))
         })
-        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup)}"#)
+        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
-            .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup)}"#)
+            .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .pure(),
+        CommandSpec::new("file.strictReport", "Strict Export Report", "File › Export", strict_report)
+            .params(r#"{"markup"?: bool (as file.exportPdf), "page"?: n (1-based: check that page of the page image file.exportPng writes; omit for every page of a PDF)} → {"schema": 1, "strict": "passed" | "failed", "missing_glyphs": [{"cp": "U+2D30", "count": n}], "missing_pictures": [{"part", "source_part": the story part it is in (word/header2.xml; background, body, header, footer, text box or "" where unknown), "reason": "missing_part" | "external_target" | "link_only" | "undecodable" | "unsupported_format"}], "truncated": bool (either list was cut at 256 entries), "total_missing_glyphs": n (distinct, past the cap too), "total_missing_pictures": n (past the cap too), "glyphs_truncated": bool, "pictures_truncated": bool}"#)
             .pure(),
         // A print setting, like Word's: not part of the document, so no undo step.
         CommandSpec::new("file.printMarkup", "Print Markup", "File › Print", |s, v| {
@@ -369,6 +372,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(json!({"saved": false}));
         }
     };
+    check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
@@ -450,7 +454,37 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         comments: markup && s.prefs.markup.comments,
         word2003: p::str(v, "format") == Some(FORMAT_WORD_2003),
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
+        strict: p::bool(v, "strict").unwrap_or(false),
     }
+}
+
+/// `strict: true` is for a PDF or a page image only: any other output is a parameter error.
+fn check_strict_output(strict: bool, path: &str) -> Result<(), CmdError> {
+    if strict && !crate::strict::is_strict_output(path) {
+        return Err(CmdError::Params("`strict` applies to a .pdf or .png output only".into()));
+    }
+    Ok(())
+}
+
+/// The strict report of a PDF export of the document (every page), or with `page` of the page
+/// image `file.exportPng` writes. Pure: it reads the document and writes nothing.
+fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
+    let opts = export_options(s, v);
+    let report = match p::u64(v, "page") {
+        Some(n) => {
+            let page = crate::p::page_index(n);
+            let l = s.export_layout_with(opts.markup);
+            if l.pages.get(page).is_none() {
+                return Err(CmdError::Params(format!("no page {}", page + 1)));
+            }
+            crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png)
+        }
+        None => {
+            let out = super::references::output_fields(&s.doc);
+            crate::strict::pdf_report(out.as_ref().unwrap_or(&s.doc), &opts)
+        }
+    };
+    Ok(report.to_json())
 }
 
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
@@ -460,15 +494,21 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
         return Ok(json!({"exported": false}));
     };
     let page = crate::p::page_index(p::u64(v, "page").unwrap_or(1));
+    let strict = p::bool(v, "strict").unwrap_or(false);
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
     let l = s.export_layout_with(export_options(s, v).markup);
     let pg = l.pages.get(page).ok_or_else(|| CmdError::Params(format!("no page {}", page + 1)))?;
     // A page image is the printed page: headers and footers at full strength. Dimming them is
     // the on-screen cue while editing the body, not part of the page.
-    let mut opts = wordcraft_render::RenderOptions::default();
-    opts.display.dim_header = false;
+    let opts = wordcraft_render::RenderOptions { display: crate::strict::png_display(), ..Default::default() };
     if !path.to_ascii_lowercase().ends_with(".png") {
         return Err(CmdError::Params("path must end in .png".into()));
+    }
+    if strict {
+        let report = crate::strict::strict_report(&s.doc, &l, &opts.display, Some(page..=page), wordcraft_layout::StrictOutput::Png);
+        if !report.passed() {
+            return Err(CmdError::Failed(report.refusal()));
+        }
     }
     let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
     let png = img.to_png();
