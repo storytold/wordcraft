@@ -156,11 +156,18 @@ pub fn auto_scale_limit(screen_px: Option<(f32, f32)>) -> f32 {
         .map_or(f32::INFINITY, |(w, h)| (w / AUTO_MIN_POINTS.0).min(h / AUTO_MIN_POINTS.1).max(1.0))
 }
 
-/// [`auto_scale_limit`] for the smallest of several windows' screens. Each is a monitor size in
-/// points and the window's native scale; `zoom` is the zoom factor those points were made with, so
-/// the size in pixels is the three multiplied. Unlimited when none is known.
-pub fn auto_scale_limit_over(monitors: impl IntoIterator<Item = ((f32, f32), f32)>, zoom: f32) -> f32 {
-    monitors.into_iter().map(|((w, h), native)| auto_scale_limit(Some((w * zoom * native, h * zoom * native)))).fold(f32::INFINITY, f32::min)
+/// [`auto_scale_limit`] for the several windows that share one zoom, expressed as pixels per point
+/// at the scale `native` (the one [`InterfaceSize::zoom_factor_within`] divides by). Each window
+/// is a monitor size in points and its own native scale; `zoom` is the zoom factor those points
+/// were made with, so the size in pixels is the three multiplied. Every window must stay within
+/// its own screen, so the allowed zoom is worked out per window and the smallest one is shared.
+/// Unlimited when no screen is known.
+pub fn auto_scale_limit_over(monitors: impl IntoIterator<Item = ((f32, f32), f32)>, zoom: f32, native: f32) -> f32 {
+    let shared_zoom = monitors
+        .into_iter()
+        .map(|((w, h), own)| auto_scale_limit(Some((w * zoom * own, h * zoom * own))) / usable_scale(own))
+        .fold(f32::INFINITY, f32::min);
+    shared_zoom * usable_scale(native)
 }
 
 /// The display's scale, or 1.0 when egui doesn't know it (or reports nonsense).

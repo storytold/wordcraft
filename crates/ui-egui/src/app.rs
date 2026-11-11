@@ -303,7 +303,7 @@ impl WordApp {
         // 1366x768 panel would put the window's controls off screen. The zoom is shared by every
         // window, so the smallest screen of all the open windows sets the cap. A viewport's
         // `monitor_size` is in points of the zoom in force before a pending change applied, so
-        // its pixels are that size times `monitor_zoom` and the window's own native scale.
+        // its pixels are that size times `monitor_zoom` and the window's own native scale; each window's allowed zoom is its own, the smallest is shared.
         let monitors: Vec<_> = self
             .windows
             .viewport_ids()
@@ -315,7 +315,7 @@ impl WordApp {
                 })
             })
             .collect();
-        self.auto_scale_limit = theme::auto_scale_limit_over(monitors, self.monitor_zoom);
+        self.auto_scale_limit = theme::auto_scale_limit_over(monitors, self.monitor_zoom, self.native_scale);
         self.monitor_zoom = ctx.zoom_factor();
         let zoom = self.ui.interface_size.zoom_factor_within(self.native_scale, self.auto_scale_limit);
         if ctx.zoom_factor() != zoom {

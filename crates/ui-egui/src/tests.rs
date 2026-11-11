@@ -6242,16 +6242,37 @@ fn auto_interface_size_is_capped_to_what_fits_the_screen() {
 #[test]
 fn auto_cap_follows_the_smallest_window_screen_and_the_zoom_of_its_points() {
     use theme::auto_scale_limit_over;
-    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0);
-    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0);
+    let small = auto_scale_limit_over([((1366.0, 768.0), 1.0)], 1.0, 1.0);
+    let large = auto_scale_limit_over([((3840.0, 2160.0), 1.0)], 1.0, 1.0);
     assert!(small < large);
-    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0), small);
+    assert_eq!(auto_scale_limit_over([((3840.0, 2160.0), 1.0), ((1366.0, 768.0), 1.0)], 1.0, 1.0), small);
     // A 1366x768 panel at native scale 3: the points are 455x256 at zoom 1, 304x171 at zoom 1.5.
     // The pixels, and so the cap, don't depend on which zoom made the points.
-    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0);
-    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5);
+    let a = auto_scale_limit_over([((1366.0 / 3.0, 768.0 / 3.0), 3.0)], 1.0, 3.0);
+    let b = auto_scale_limit_over([((1366.0 / 4.5, 768.0 / 4.5), 3.0)], 1.5, 3.0);
     assert!((a - b).abs() < 1e-4 && (a - small).abs() < 1e-4, "{a} {b} {small}");
-    assert_eq!(auto_scale_limit_over([], 1.0), f32::INFINITY);
+    assert_eq!(auto_scale_limit_over([], 1.0, 1.0), f32::INFINITY);
+}
+
+/// #4030: with a 1x window on a large screen and a 3x window on a 1366x768 panel, the shared zoom
+/// is the one the 3x window needs, so both windows draw within their own screen.
+#[test]
+fn auto_cap_keeps_every_window_within_its_own_screen_when_scales_differ() {
+    use theme::{AUTO_MIN_POINTS, InterfaceSize, auto_scale_limit, usable_scale};
+    let windows = [((3840.0, 2160.0), 1.0_f32), ((1366.0 / 3.0, 768.0 / 3.0), 3.0)];
+    for root in [1.0_f32, 3.0] {
+        let limit = theme::auto_scale_limit_over(windows, 1.0, root);
+        let zoom = InterfaceSize::AUTO.zoom_factor_within(root, limit);
+        for ((w, h), own) in windows {
+            let pixels_per_point = usable_scale(own) * zoom;
+            let (px_w, px_h) = (w * own, h * own);
+            assert!(pixels_per_point <= auto_scale_limit(Some((px_w, px_h))) + 1e-4, "root {root}, window {own}: {pixels_per_point}");
+            assert!(
+                px_w / pixels_per_point >= AUTO_MIN_POINTS.0 - 1.0 && px_h / pixels_per_point >= AUTO_MIN_POINTS.1 - 1.0,
+                "root {root}, window {own}"
+            );
+        }
+    }
 }
 
 /// #4030: the cap shows in `ui.interfaceSize` and is never saved; Ctrl+Shift+0 returns to Auto
