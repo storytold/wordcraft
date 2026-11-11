@@ -7565,8 +7565,9 @@ fn a_right_to_left_table_centred_or_in_a_cell_stands_where_word_puts_it() {
 /// Measured in Word for Windows (compatibility mode 15, fixed 400pt tables with three columns,
 /// their only borders a table style's 1.5pt ones): a header-row part with a 6pt inside line draws
 /// both lines between the columns 6pt wide, and a last-column part with a 6pt left border the
-/// line before the last column; a right-to-left table aligned to the start stands 3pt further
-/// left for either, as for its own 6pt inside line.
+/// line before the last column; a right-to-left table aligned to the start moves left by half
+/// of that 6pt line for either, as for its own 6pt inside line: 2.25pt further left than with the
+/// style's 1.5pt line (3pt in place of 0.75pt).
 #[test]
 fn a_table_style_s_parts_draw_the_lines_between_columns() {
     use wordcraft_doc::styles::{PartFormat, Style, StyleKind, TablePart, TableStyleParts};
@@ -7628,7 +7629,7 @@ fn a_table_style_s_parts_draw_the_lines_between_columns() {
         let l = lines(Some(part), true);
         assert!(
             (l[3].0 - (plain[3].0 - 2.25)).abs() < 0.01,
-            "{:?}: right to left, 3pt further left than with 0.75pt halves {l:?}, plain {plain:?}",
+            "{:?}: right to left, 2.25pt further left than with the 1.5pt line {l:?}, plain {plain:?}",
             part.0
         );
     }
