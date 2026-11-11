@@ -20,6 +20,7 @@ mod context_menu;
 #[cfg(test)]
 pub(crate) use context_menu::issue_heading;
 mod cursor;
+mod folds;
 mod geometry;
 mod input;
 mod links;
@@ -38,6 +39,7 @@ use context_menu::{context_menu, context_suggestions};
 use cursor::{caret_color_at, preedit_cursor_chars};
 pub(crate) use cursor::{caret_color_on, caret_contrast};
 pub use cursor::{caret_screen, pos_from_screen};
+use folds::paint_fold_arrows;
 pub(crate) use geometry::SEAM;
 #[cfg(test)]
 pub(crate) use geometry::WHITE_SPACE_PAD;
@@ -1426,6 +1428,7 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         };
         ui.ctx().set_cursor_icon(over_object.unwrap_or(fallback));
     }
+    paint_fold_arrows(app, ui, layout, &rects, geo.scale, out.inner_rect);
     crate::table_resize::cursor(app, ui, &resp, layout, &rects, geo.scale);
     crate::table_mouse::cursor(app, ui, &resp, layout, &rects, geo.scale);
     crate::table_pen::cursor(app, ui, &resp);

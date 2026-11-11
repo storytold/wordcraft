@@ -542,6 +542,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-17 | File › Print's Scale to paper size (#2108): pick Letter, Legal, A4 or any Layout › Size paper and every page is scaled to it and centred, the paper turned to each page's orientation, in the preview, the print job (with the spooler's media) and Save these pages as PDF; the document keeps its page size. `paper` param on `ui.print`/`file.printPdf` |
 | 2026-10-17 | Non-overlapping body floating tables clear header tables. Original native controls distinguish never-overlap from allowed overlap. |
 | 2026-10-14 | Comment text being typed is no longer lost or misplaced (#1348): an edit or reply the document refuses (for example read-only protection) keeps the typed text in its field and says why on the status line; drafts belong to their document, so after New or Open a comment with the same number shows its own text; Save, Export, Print, Close, New and Open write pending comment text first; if the document refuses it, Save, Export and Print carry on with the stored comments and show why on the status line (a refused draft is dropped when Save is the only change), while Close, New and Open show the Save Changes prompt (Don't Save drops text the document refuses); Escape discards what was typed; in a document protected as read only or for forms the comment fields can't be typed in |
+| 2026-10-16 | Collapsible headings (#1745): a heading marked "Collapsed by default" (Paragraph dialog, a fold arrow beside it in the margin, or right-click › Expand or Collapse Heading) hides what is under it up to the next heading of its level or higher, on screen, in PDF and in print; the arrow keys skip the hidden text; saved as Word's `w15:collapsed` |
 |---|---|
 | 2026-10-12 | RTF reads and writes footnotes, endnotes and comments (author, initials, date, commented range), so they survive a round trip through RTF (#1053) |
 | 2026-11-07 | Page Setup also bounds the unfocused margin display after a long numeric paste; the accepted value is retained (#5650). |
@@ -1206,6 +1207,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-15 | trivial | Progress log: selected table rows and cells copy as a table; Cut clears their text (#1744) |
 | 2026-10-14 | trivial | Progress log: Select Table copies and cuts the whole table (#1744) |
 | 2026-10-17 | trivial | Progress log: Scale Font Sizes command (#1475) |
+| 2026-10-16 | minor | Progress log: collapsible headings (#1745) |
 | 2026-10-14 | trivial | Progress log: row table border exceptions |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-15 | trivial | Three-column header/footer presets use editable table cells and screen-only editing guides (#2197); readiness unchanged |
