@@ -525,13 +525,32 @@ pub struct ListInfo {
     pub list: u32,
     /// How the paragraph's level shows its number or bullet, when the source says.
     pub label: Option<Label>,
+    /// The source's definition of every level of the paragraph's list, when it gives one (RTF's
+    /// list table): an index into [`Flow::lists`]. Levels none of the list's paragraphs use take
+    /// their kind, start and label from it, so a deeper level's text that shows an unused
+    /// level's number shows it as the source does.
+    pub defs: Option<u32>,
 }
 
 impl Default for ListInfo {
     fn default() -> Self {
-        ListInfo { ordered: false, level: 0, start: 1, list: 0, label: None }
+        ListInfo { ordered: false, level: 0, start: 1, list: 0, label: None, defs: None }
     }
 }
+
+/// One level of a list as the source defines it ([`ListDef`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LevelDef {
+    pub ordered: bool,
+    /// Number of the level's first item.
+    pub start: u32,
+    /// How the level shows its number, when the source says.
+    pub label: Option<Label>,
+}
+
+/// Each level of a list as the source defines it (levels 0 to 8), whether or not a paragraph
+/// uses it; `None` for a level the source leaves out.
+pub type ListDef = [Option<LevelDef>; 9];
 
 /// A list label's prefix or suffix (`(`, `.`, `)`, `Chapter `), at most [`Affix::MAX`] bytes
 /// of UTF-8 (kept inline so list paragraphs stay small).
@@ -1044,6 +1063,9 @@ pub struct Meta {
 pub struct Flow {
     pub blocks: Vec<FBlock>,
     pub meta: Meta,
+    /// The lists the source defines level by level, which list paragraphs point to
+    /// ([`ListInfo::defs`]).
+    pub lists: Vec<ListDef>,
 }
 
 /// `inlines` with equations as their linear text (default formatting), for formats that have no

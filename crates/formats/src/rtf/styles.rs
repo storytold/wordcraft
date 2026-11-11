@@ -91,10 +91,12 @@ impl Reader {
         p.spacing = spacing(st);
         p.borders = st.borders.any_visible().then_some(st.borders);
         if let Some(ls) = st.ls {
-            let list = self.overrides.get(&ls).and_then(|id| self.lists.get(id));
+            let defs = self.overrides.get(&ls).and_then(|id| self.lists.get(id)).copied();
             let lv = st.ilvl.min(8);
-            let ordered = list.and_then(|l| l.get(lv as usize).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv, start: 1, ..Default::default() });
+            let level = defs.and_then(|d| self.list_defs.get(d as usize)).and_then(|l| l.get(lv as usize)).copied().flatten();
+            let ordered = level.is_some_and(|l| l.ordered);
+            let label = level.and_then(|l| l.label);
+            p.list = Some(ListInfo { ordered, level: lv, start: level.map_or(1, |l| l.start), label, defs, ..Default::default() });
         }
         p
     }

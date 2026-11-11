@@ -981,7 +981,7 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         }
     }
     Ok(Parsed {
-        flow: Flow { blocks, meta },
+        flow: Flow { blocks, meta, lists: Vec::new() },
         last,
         track,
         font: styles.doc_font(),

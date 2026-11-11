@@ -221,6 +221,8 @@ struct Builder<'a> {
     comments: std::collections::HashMap<u32, u32>,
     /// The document's list instance for each flow list number ([`ListInfo::list`]).
     lists: std::collections::HashMap<u32, u32>,
+    /// The lists the source defines level by level ([`ListInfo::defs`]).
+    list_defs: &'a [super::types::ListDef],
     /// Bookmarks that cover text ([`super::types::ranged_anchors`]), those started, and those
     /// ended: each started once and ended once, after its start.
     ranged: std::collections::HashSet<String>,
@@ -258,6 +260,7 @@ impl<'a> Builder<'a> {
             run_strings: 0,
             comments: Default::default(),
             lists: Default::default(),
+            list_defs: &[],
             ranged: super::types::ranged_anchors(blocks),
             started: Default::default(),
             ended: Default::default(),
@@ -710,7 +713,13 @@ impl<'a> Builder<'a> {
                 *l = li.label;
             }
         }
-        // Levels nobody used follow the first level's kind.
+        // Levels none of the group's paragraphs use are as the source defines them, when it
+        // defines the list level by level.
+        let list_defs = self.list_defs;
+        if let Some(defs) = group.iter().find_map(|l| l.defs).and_then(|d| list_defs.get(d as usize)) {
+            Self::defined_levels(defs, &mut kinds, &mut starts, &mut labels);
+        }
+        // Other levels nobody used follow the first level's kind.
         let first = group.first().map(|l| l.ordered).unwrap_or(false);
         let levels: Vec<Level> = (0..9)
             .map(|i| {
@@ -752,6 +761,25 @@ impl<'a> Builder<'a> {
         let nid = numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
         numbering.nums.push(Num { id: nid, abstract_id: aid, ..Default::default() });
         nid
+    }
+
+    /// Sets each level that `kinds` leaves unset (none of the list's paragraphs use it) to the
+    /// source's definition of that level in `defs`.
+    fn defined_levels(
+        defs: &super::types::ListDef,
+        kinds: &mut [Option<bool>; 9],
+        starts: &mut [Option<u32>; 9],
+        labels: &mut [Option<super::types::Label>; 9],
+    ) {
+        for (((def, kind), start), label) in defs.iter().zip(kinds.iter_mut()).zip(starts.iter_mut()).zip(labels.iter_mut()) {
+            if let Some(def) = def
+                && kind.is_none()
+            {
+                *kind = Some(def.ordered);
+                *start = Some(def.start);
+                *label = def.label;
+            }
+        }
     }
 
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
@@ -976,6 +1004,7 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
         Arc::make_mut(&mut doc.styles).upsert(code_style());
     }
     let mut b = Builder::new(&mut doc, &flow.blocks);
+    b.list_defs = &flow.lists;
     let body = b.blocks(&flow.blocks, 0);
     b.link_boxes();
     doc.body = body;
@@ -991,9 +1020,12 @@ pub fn to_doc_in(flow: &Flow, section: wordcraft_doc::SectionProps) -> Document 
 }
 
 /// `blocks` as document blocks of `doc` (their pictures go into its media), for a header,
-/// footer or other part an importer adds itself.
-pub fn part_blocks(doc: &mut Document, blocks: &[FBlock]) -> Blocks {
-    let mut out = Builder::new(doc, blocks).blocks(blocks, 0);
+/// footer or other part an importer adds itself. `lists` are the source's list definitions,
+/// as in [`Flow::lists`]; an importer whose lists name none passes an empty slice.
+pub fn part_blocks(doc: &mut Document, blocks: &[FBlock], lists: &[super::types::ListDef]) -> Blocks {
+    let mut b = Builder::new(doc, blocks);
+    b.list_defs = lists;
+    let mut out = b.blocks(blocks, 0);
     if out.is_empty() {
         out.push(para_block(Paragraph::new()));
     }

@@ -259,7 +259,15 @@ fn finalize(mut r: Reader) -> Parsed {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers, notes: r.notes, comments: r.comments }
+    Parsed {
+        flow: Flow { blocks, meta: r.meta, lists: r.list_defs },
+        page: r.page,
+        last_section,
+        default_font,
+        headers_footers,
+        notes: r.notes,
+        comments: r.comments,
+    }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -309,7 +317,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     for parts in &headers_footers {
         let (mut headers, mut footers) = (wordcraft_doc::section::HeaderSet::default(), wordcraft_doc::section::HeaderSet::default());
         for (which, blocks) in parts {
-            let blocks = model::part_blocks(&mut doc, blocks);
+            let blocks = model::part_blocks(&mut doc, blocks, &flow.lists);
             let id = doc.add_part(if which.footer { wordcraft_doc::PartKind::Footer } else { wordcraft_doc::PartKind::Header }, blocks);
             let set = if which.footer { &mut footers } else { &mut headers };
             match which.pages {
@@ -334,7 +342,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if let Some((h, f)) = sets.next() {
         (doc.last_section.headers, doc.last_section.footers) = (h, f);
     }
-    place_notes_and_comments(&mut doc, notes, comments);
+    place_notes_and_comments(&mut doc, notes, comments, &flow.lists);
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
     let dp = &mut Arc::make_mut(&mut doc.styles).default_para;
@@ -348,8 +356,8 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
 }
 
 /// Turn the place markers the reader left in the text into note references and comment ranges,
-/// and add the notes' and comments' stories to `doc`.
-fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: Vec<CommentData>) {
+/// and add the notes' and comments' stories to `doc`; their lists' levels come from `lists`.
+fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: Vec<CommentData>, lists: &[model::ListDef]) {
     use wordcraft_doc::para::NoteKind;
     use wordcraft_doc::{Comment, PartKind};
     if notes.is_empty() && comments.is_empty() {
@@ -360,7 +368,7 @@ fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: 
     for n in notes {
         let (pk, nk, style) =
             if n.endnote { (PartKind::Endnote, NoteKind::Endnote, "EndnoteText") } else { (PartKind::Footnote, NoteKind::Footnote, "FootnoteText") };
-        let mut blocks = model::part_blocks(doc, &n.blocks);
+        let mut blocks = model::part_blocks(doc, &n.blocks, lists);
         for b in &mut blocks {
             if let Block::Para(p) = Arc::make_mut(b)
                 && p.props.style.is_none()
@@ -374,7 +382,7 @@ fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: 
     let mut by_rtf: HashMap<i64, u32> = HashMap::new();
     for (k, c) in comments.into_iter().enumerate() {
         let id = k as u32;
-        let blocks = model::part_blocks(doc, &c.blocks);
+        let blocks = model::part_blocks(doc, &c.blocks, lists);
         let part = doc.add_part(PartKind::Comment, blocks);
         doc.comments
             .insert(id, Comment { author: c.author, initials: c.initials, date: c.date, parent: None, resolved: false, part, ..Default::default() });
