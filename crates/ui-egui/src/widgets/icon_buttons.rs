@@ -22,18 +22,66 @@ pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
 /// fonts and would draw as empty boxes, so icons are painted (`icons.rs`) rather than typed.
 /// It looks and reacts like `ui.button` (see [`drawn_state`]).
 pub fn icon_text_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, false, true)
+    icon_text_button_with(ui, icon, text, font, false, true, None)
 }
 
 /// [`icon_text_button`] that opens a menu: the drop-down marker follows the text.
 pub fn icon_text_menu_button(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId) -> Response {
-    icon_text_button_with(ui, icon, text, font, true, true)
+    icon_text_button_with(ui, icon, text, font, true, true, None)
 }
 
 /// The icon-only form of [`icon_text_button`] / [`icon_text_menu_button`] for a crowded strip
 /// (#2026): `label` is the accessible name and the tooltip, not drawn.
 pub fn icon_only_button(ui: &mut Ui, icon: &str, label: &str, font: egui::FontId, marker: bool) -> Response {
-    icon_text_button_with(ui, icon, label, font, marker, false).on_hover_text(label)
+    icon_text_button_with(ui, icon, label, font, marker, false, None).on_hover_text(label)
+}
+
+/// Header forms retain the existing text and compact button geometry.
+#[derive(Clone, Copy)]
+pub(crate) enum HeaderButton {
+    Text,
+    Menu,
+    Icon,
+    IconMenu,
+}
+
+/// Scope the palette to this button so its popup and ordinary controls keep their theme.
+pub(crate) fn header_icon_button(
+    ui: &mut Ui,
+    icon: &str,
+    text: &str,
+    font: egui::FontId,
+    form: HeaderButton,
+    colour: crate::theme::HeaderColour,
+) -> Response {
+    let (marker, show_text) = match form {
+        HeaderButton::Text => (false, true),
+        HeaderButton::Menu => (true, true),
+        HeaderButton::Icon => (false, false),
+        HeaderButton::IconMenu => (true, false),
+    };
+    let resp = if colour.rgb().is_none() {
+        icon_text_button_with(ui, icon, text, font, marker, show_text, None)
+    } else {
+        ui.scope(|ui| {
+            let t = Tokens::get(ui.ctx());
+            let (fill, hover, ink) = t.header_buttons(colour);
+            let w = &mut ui.visuals_mut().widgets;
+            for state in [&mut w.inactive, &mut w.hovered, &mut w.active] {
+                state.fg_stroke.color = ink;
+                state.bg_stroke.color = ink;
+            }
+            w.inactive.bg_fill = fill;
+            w.inactive.weak_bg_fill = fill;
+            for state in [&mut w.hovered, &mut w.active] {
+                state.bg_fill = hover;
+                state.weak_bg_fill = hover;
+            }
+            icon_text_button_with(ui, icon, text, font, marker, show_text, Some(t.header(colour)))
+        })
+        .inner
+    };
+    if show_text { resp } else { resp.on_hover_text(text) }
 }
 
 /// Width [`icon_text_button`] (or its menu / icon-only forms) takes.
@@ -51,8 +99,16 @@ fn icon_text_button_size(ui: &Ui, text_w: f32, marker: bool, show_text: bool) ->
 
 /// Allocates and paints a themed icon button with optional text, marker and accessible label, and
 /// returns its response.
-fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool, show_text: bool) -> Response {
-    let t = Tokens::get(ui.ctx());
+fn icon_text_button_with(
+    ui: &mut Ui,
+    icon: &str,
+    text: &str,
+    font: egui::FontId,
+    marker: bool,
+    show_text: bool,
+    palette: Option<Tokens>,
+) -> Response {
+    let t = palette.unwrap_or_else(|| Tokens::get(ui.ctx()));
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
     let pad = ui.spacing().button_padding;
     let icon_w = 16.0;

@@ -133,6 +133,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.ui.tab = next.to_string();
         }
     }
+    let header = t.header(app.ui.header_colour);
+    let (button_fill, button_hover, button_ink) = t.header_buttons(app.ui.header_colour);
+
     let (now, animate) = (ui.input(|i| i.time), app.animations_on());
     let leaving = {
         let user_names: Vec<&str> = user_tabs.iter().filter(|e| e.custom).map(|e| e.name.as_str()).collect();
@@ -155,7 +158,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
-        .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(header.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             crate::rtl::root(ui, |ui| {
                 ui.horizontal_centered(|ui| {
@@ -165,7 +168,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     let share = tl!("Share");
                     let editing_label = if app.session.doc.settings.track_changes { tl!("Reviewing") } else { tl!("Editing") };
                     let comments = tl!("Comments");
-                    let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), t.text).size().x);
+                    let share_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(share.to_string(), medium(12.0), header.text).size().x);
                     let spaced = |w: f32| w + 2.0;
                     let button_widths = |level: usize| -> f32 {
                         let labels = level == 0;
@@ -182,7 +185,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         .iter()
                         .zip(&labels)
                         .map(|((tab, custom), shown)| TabSpec {
-                            text_w: ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x),
+                            text_w: ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), header.text).size().x),
                             file: tab == "File",
                             active: *tab == app.ui.tab,
                             contextual: !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab.as_str()),
@@ -198,15 +201,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let (share_size, share_text) =
                                 if plan.buttons < 2 { (((share_w + 36.0).max(74.0), 24.0), true) } else { ((30.0, 24.0), false) };
                             let (r, resp) = ui.allocate_exact_size(vec2(share_size.0, share_size.1), Sense::click());
-                            ui.painter().rect_filled(r, 4.0, if resp.hovered() { t.accent_text } else { t.accent });
+                            ui.painter().rect_filled(r, 4.0, if resp.hovered() { button_hover } else { button_fill });
                             let rtl = crate::rtl::on();
                             let icon_x = if share_text { crate::rtl::lead_x(rtl, r, 14.0) } else { r.center().x };
                             icons::paint(
                                 ui.painter(),
                                 Rect::from_center_size(pos2(icon_x, r.center().y), vec2(14.0, 14.0)),
                                 "share",
-                                t.on_accent,
-                                t.on_accent,
+                                button_ink,
+                                button_ink,
                             );
                             if share_text {
                                 ui.painter().text(
@@ -214,7 +217,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     crate::rtl::lead_center(rtl),
                                     share,
                                     medium(12.0),
-                                    t.on_accent,
+                                    button_ink,
                                 );
                             }
                             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
@@ -223,11 +226,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             ui.add_space(6.0);
                             let track = app.session.doc.settings.track_changes;
-                            let mode = if plan.buttons == 0 {
-                                crate::widgets::icon_text_menu_button(ui, "pencil", editing_label, regular(12.0))
-                            } else {
-                                crate::widgets::icon_only_button(ui, "pencil", editing_label, regular(12.0), true)
-                            };
+                            let mode = crate::widgets::header_icon_button(
+                                ui,
+                                "pencil",
+                                editing_label,
+                                regular(12.0),
+                                if plan.buttons == 0 { crate::widgets::HeaderButton::Menu } else { crate::widgets::HeaderButton::IconMenu },
+                                app.ui.header_colour,
+                            );
                             crate::rtl::menu(&mode).show(|ui| {
                                 if ui.selectable_label(!track, tl!(tl!("Editing — edit the document directly"))).clicked() {
                                     let _ = app.run("review.trackChanges", json!({"value": false}));
@@ -239,11 +245,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 }
                             });
                             ui.add_space(4.0);
-                            let comments_button = if plan.buttons == 0 {
-                                crate::widgets::icon_text_button(ui, "comment", comments, regular(12.0))
-                            } else {
-                                crate::widgets::icon_only_button(ui, "comment", comments, regular(12.0), false)
-                            };
+                            let comments_button = crate::widgets::header_icon_button(
+                                ui,
+                                "comment",
+                                comments,
+                                regular(12.0),
+                                if plan.buttons == 0 { crate::widgets::HeaderButton::Text } else { crate::widgets::HeaderButton::Icon },
+                                app.ui.header_colour,
+                            );
                             if comments_button.clicked() {
                                 let _ = app.run("view.commentsPane", json!({}));
                             }
@@ -285,7 +294,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     ui.painter().rect_filled(
                                         r.shrink2(vec2(0.0, 4.0)),
                                         4.0,
-                                        egui::Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover),
+                                        egui::Color32::TRANSPARENT.lerp_to_gamma(header.hover, hover),
                                     );
                                 }
                                 // Entering and departing contextual tabs move and fade without changing layout.
@@ -298,7 +307,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     None => 1.0,
                                 };
                                 let shift = vec2(-(1.0 - entry) * TAB_ENTRY_SLIDE, 0.0);
-                                let color = (if contextual || active { t.accent_text } else { t.text }).gamma_multiply(entry);
+                                let color = (if contextual || active { header.accent_text } else { header.text }).gamma_multiply(entry);
                                 if cut {
                                     let mut job = egui::text::LayoutJob::single_section(
                                         shown.to_string(),
@@ -324,7 +333,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 let resp = if cut && ghost.is_none() { resp.on_hover_text(shown) } else { resp };
                                 if active {
                                     let u = Rect::from_center_size(pos2(r.center().x + shift.x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                    slide_underline(ui, tab, u, t.accent.gamma_multiply(entry), now, animate);
+                                    slide_underline(ui, tab, u, header.accent.gamma_multiply(entry), now, animate);
                                 }
                                 if resp.clicked() {
                                     let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -350,7 +359,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     ui.painter().rect_filled(
                                         r.shrink2(vec2(0.0, 4.0)),
                                         4.0,
-                                        egui::Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover),
+                                        egui::Color32::TRANSPARENT.lerp_to_gamma(header.hover, hover),
                                     );
                                 }
                                 // The active tab is in the menu: the button says so.
@@ -360,7 +369,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     Align2::CENTER_CENTER,
                                     "»",
                                     medium(12.5),
-                                    if holds_active { t.accent_text } else { t.text },
+                                    if holds_active { header.accent_text } else { header.text },
                                 );
                                 // "»" means nothing read aloud: the button says what it holds.
                                 let more = tl!("More tabs");

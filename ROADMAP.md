@@ -289,6 +289,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-01: Tab leaders are drawn as Word draws them: the dots are spaced by their advance in whole 600-dpi pixels (2.64 pt for TH SarabunPSK at 16 pt, not 2.59), from the first place on that grid after the text before the tab to the last one that ends before the text after it.
 - 2026-10-31: List numbers count as Word counts them when a deeper item comes first: a list that opens with 10.1–10.4 goes on with 11, not a second 10, and 1.1, 1.2 are followed by 2. A level above that hasn't counted yet takes its first number at the first deeper item.
 - 2026-11-01: Paragraph side borders lie outside the text, so a thick border no longer covers the first letter (#5036).
+- 2026-10-26: File › Options › General offers a saved header colour for the title bar and ribbon tabs: Default, Blue, Pink and an opaque RGB picker. Header text and icons choose black or white by contrast. Light/dark/system appearance, menus and document output retain their own colours.
+
 - 2026-10-31: DOCX: a paragraph naming a style the file doesn't define is formatted as Normal, as in Word, not with the document defaults alone, so a Pandoc footer naming an undefined `Footer` style is as tall as Word's and no longer pushes the last paragraph to the next page (#5077). Readiness unchanged.
 - 2026-10-31: Table of contents: with Word's table over entries in columns, where the title sits in a one-column section above a continuous break, Insert Table of Contents with new settings keeps the title above the break and the entries in their columns (the new title went under the break, into the columns), and Remove Table of Contents takes the title, the blank paragraph and its break with the entries, as Word does (observed in Word for Mac); a paragraph of another style above the break stays (#4041).
 - 2026-10-31: A table of contents writes its page numbers as `PAGEREF` fields to the headings' bookmarks, as Word does, so updating the fields in Word moves the numbers with the headings; they were plain text (#5097).
@@ -992,6 +994,8 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-01 | trivial | Progress log: Language packs install from File › Options › Language and the missing-pack bar once language-packs-1 is published (CP4) |
 | 2026-11-01 | trivial | Progress log: English spelling reads SCOWL 2026 (CP2) |
 | 2026-11-02 | trivial | Honor page break before at a continuous section's mid-page top (#5287); its later-column case remains unmeasured in Word. Readiness unchanged. |
+| 2026-11-02 | trivial | #4435: reject explicit null control parameters and scope Edit/Review and Comments to the selected header palette. |
+| 2026-11-01 | trivial | #4435: reject non-object header-colour command parameters; preserve object reads, setters and existing invalid-value errors. Dedicated command control added; runtime qualification pending. |
 | 2026-11-01 | trivial | Progress log: arrowheads keep their kind, width and length and are drawn at Word's sizes |
 | 2026-11-01 | trivial | Progress log: columns for selected text draw their line between (#5178) |
 | 2026-10-31 | trivial | Progress log: a Word 365 .doc in Aptos opens in Aptos (#5066); readiness unchanged |
