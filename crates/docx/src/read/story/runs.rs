@@ -1,3 +1,5 @@
+use wordcraft_doc::math::MathJc;
+
 use super::{
     CharProps, El, InlineObject, Item, MAX_FORM, MAX_INSTR, NoteKind, PB, PTabAlign, PTabBase, Phase, Reader, Rels, RevisionKind, RunCtx, StoryCtx,
     TextColor, children_of_choice, clean_text, int, measure, on_off_attr, placeholder_of, sink,
@@ -13,6 +15,7 @@ impl Reader<'_> {
         }
     }
 
+    /// Read an inline child element (`w:r`, `m:oMath`, `m:oMathPara`, `w:ins`, etc.).
     fn read_inline(&mut self, sc: &mut StoryCtx, pb: &mut PB, k: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
         match k.name.as_str() {
             "w:r" => self.read_run(sc, pb, k, rels, ctx, depth),
@@ -76,25 +79,38 @@ impl Reader<'_> {
             }
             "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
-                let mut props = self.run_props_none(ctx);
-                let mut math = crate::read::math::read_omath(k, Default::default());
-                if let Some(c) = crate::read::math::lift_color(&mut math) {
-                    props.color = Some(TextColor::Rgb(c));
-                }
-                let linear = wordcraft_doc::math::to_linear(&math.nodes);
-                self.emit_obj(sc, pb, InlineObject::Equation { linear, display: false, math }, &props);
+                let props = self.run_props_none(ctx);
+                self.emit_omath(sc, pb, k, Default::default(), false, &props);
             }
             "m:oMathPara" => {
-                let props = self.run_props_none(ctx);
+                let base_props = self.run_props_none(ctx);
                 let jc = crate::read::math::para_jc(k);
-                for m in k.children("m:oMath") {
-                    let mut math = crate::read::math::read_omath(m, jc);
-                    let mut props = props.clone();
-                    if let Some(c) = crate::read::math::lift_color(&mut math) {
-                        props.color = Some(TextColor::Rgb(c));
+                for c in k.els() {
+                    match c.name.as_str() {
+                        "m:oMath" => self.emit_omath(sc, pb, c, jc, true, &base_props),
+                        "w:ins" | "w:moveTo" => {
+                            let mut sub_ctx = ctx.clone();
+                            sub_ctx.ins =
+                                Some(if c.name == "w:moveTo" { self.move_revision(true, c, false) } else { self.revision(RevisionKind::Insert, c) });
+                            let sub_props = self.run_props_none(&sub_ctx);
+                            for m in c.children("m:oMath") {
+                                self.emit_omath(sc, pb, m, jc, true, &sub_props);
+                            }
+                        }
+                        "w:del" | "w:moveFrom" => {
+                            let mut sub_ctx = ctx.clone();
+                            sub_ctx.del = Some(if c.name == "w:moveFrom" {
+                                self.move_revision(false, c, false)
+                            } else {
+                                self.revision(RevisionKind::Delete, c)
+                            });
+                            let sub_props = self.run_props_none(&sub_ctx);
+                            for m in c.children("m:oMath") {
+                                self.emit_omath(sc, pb, m, jc, true, &sub_props);
+                            }
+                        }
+                        _ => {}
                     }
-                    let linear = wordcraft_doc::math::to_linear(&math.nodes);
-                    self.emit_obj(sc, pb, InlineObject::Equation { linear, display: true, math }, &props);
                 }
             }
             "mc:AlternateContent" => {
@@ -382,6 +398,17 @@ impl Reader<'_> {
             Some(link) => self.emit_obj(sc, pb, o, &CharProps { link: Some(link), ..props.clone() }),
             None => self.emit_obj(sc, pb, o, props),
         }
+    }
+
+    /// Read an `m:oMath` element and emit its [`InlineObject::Equation`].
+    fn emit_omath(&mut self, sc: &mut StoryCtx, pb: &mut PB, m: &El, jc: MathJc, display: bool, props: &CharProps) {
+        let mut math = crate::read::math::read_omath(m, jc);
+        let mut props = props.clone();
+        if let Some(color) = crate::read::math::lift_color(&mut math) {
+            props.color = Some(TextColor::Rgb(color));
+        }
+        let linear = wordcraft_doc::math::to_linear(&math.nodes);
+        self.emit_obj(sc, pb, InlineObject::Equation { linear, display, math }, &props);
     }
 
     pub(super) fn emit_obj(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps) {
