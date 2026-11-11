@@ -207,3 +207,6 @@ real_name = "Ashok Ram"
 
 [people.benandez]
 sync_github_name = true
+
+[people.johanneswilm]
+real_name = "Johannes Wilm"

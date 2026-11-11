@@ -48,7 +48,7 @@ pub fn system() -> Option<String> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        if let Some(name) = login.as_deref().and_then(passwd_full_name) {
+        if let Some(name) = passwd_full_name(login.as_deref()) {
             return Some(name);
         }
     }
@@ -140,9 +140,10 @@ fn joined(first: &str, last: &str) -> Option<String> {
 }
 
 /// The running account's full name in `/etc/passwd` ([`full_name`]); `None` when the file can't be
-/// read, or has no usable entry for it.
+/// read, or has no usable entry for it. `login`, when the environment gives one, is the fallback
+/// for a uid the file doesn't list.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn passwd_full_name(login: &str) -> Option<String> {
+fn passwd_full_name(login: Option<&str>) -> Option<String> {
     use std::io::Read;
     use std::os::unix::fs::MetadataExt;
     // Our own uid where the system tells us one: the environment's logon name can say anything,
@@ -164,15 +165,16 @@ fn passwd_full_name(login: &str) -> Option<String> {
 /// phone numbers), with `&` standing for the entry's name capitalised, a BSD convention. `None`
 /// without an entry, with an empty full name or with one that isn't UTF-8.
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
-fn full_name(passwd: &[u8], uid: Option<&str>, login: &str) -> Option<String> {
+fn full_name(passwd: &[u8], uid: Option<&str>, login: Option<&str>) -> Option<String> {
     let entries: Vec<Vec<&[u8]>> = passwd.split(|&b| b == b'\n').map(|line| line.split(|&b| b == b':').collect()).collect();
     // Our own uid when the file lists it; the first entry named by the logon name otherwise (no
     // procfs, or an account whose uid isn't listed). A uid is matched whole, not as a prefix, so
     // `100` never takes `1000`'s entry.
     let by_uid = |uid: &str| entries.iter().find(|fields| fields.get(2) == Some(&uid.as_bytes()));
-    let entry = uid.and_then(by_uid).or_else(|| entries.iter().find(|fields| fields.first() == Some(&login.as_bytes())))?;
-    let account = std::str::from_utf8(*entry.first()?).ok()?;
-    let gecos = std::str::from_utf8(*entry.get(4)?).ok()?;
+    let by_name = |login: &str| entries.iter().find(|fields| fields.first() == Some(&login.as_bytes()));
+    let entry = uid.and_then(by_uid).or_else(|| login.and_then(by_name))?;
+    let account = std::str::from_utf8(entry.first()?).ok()?;
+    let gecos = std::str::from_utf8(entry.get(4)?).ok()?;
     let name = gecos.split(',').next().unwrap_or_default();
     let name = if name.contains('&') { name.replace('&', &capitalised(account)) } else { name.to_owned() };
     Some(name.trim().to_owned()).filter(|n| !n.is_empty())
@@ -220,40 +222,44 @@ mod tests {
 
     #[test]
     fn the_passwd_full_name_is_the_gecos_name_without_office_and_phones() {
-        assert_eq!(full_name(PASSWD, None, "ada").as_deref(), Some("Ada Lovelace"));
-        assert_eq!(full_name(PASSWD, None, "root").as_deref(), Some("root"));
+        assert_eq!(full_name(PASSWD, None, Some("ada")).as_deref(), Some("Ada Lovelace"));
+        assert_eq!(full_name(PASSWD, None, Some("root")).as_deref(), Some("root"));
         // Our own uid wins over the name: an account renamed in the environment still gets its own
         // entry, and a uid is matched whole, not as a prefix.
-        assert_eq!(full_name(PASSWD, Some("1000"), "someone-else").as_deref(), Some("Ada Lovelace"));
-        assert_eq!(full_name(PASSWD, Some("100"), "ada").as_deref(), Some("Ada Lovelace"), "no uid 100 listed: the named entry");
+        assert_eq!(full_name(PASSWD, Some("1000"), Some("someone-else")).as_deref(), Some("Ada Lovelace"));
+        assert_eq!(full_name(PASSWD, Some("100"), Some("ada")).as_deref(), Some("Ada Lovelace"), "no uid 100 listed: the named entry");
+        // No logon name in the environment (a service run straight from init) still has an entry.
+        assert_eq!(full_name(PASSWD, Some("1000"), None).as_deref(), Some("Ada Lovelace"));
         // `&` is the entry's own name, capitalised; a Windows line ending is no part of the name.
-        assert_eq!(full_name(PASSWD, None, "anna").as_deref(), Some("Anna  Smith"));
-        assert_eq!(full_name(PASSWD, Some("1001"), "anna").as_deref(), Some("Anna  Smith"));
+        assert_eq!(full_name(PASSWD, None, Some("anna")).as_deref(), Some("Anna  Smith"));
+        assert_eq!(full_name(PASSWD, Some("1001"), Some("anna")).as_deref(), Some("Anna  Smith"));
         // The first entry for a uid or a name is the one, as `getpwnam` reads it.
-        assert_eq!(full_name(PASSWD, None, "zoe").as_deref(), Some("Zoë Kowalska"));
-        assert_eq!(full_name(PASSWD, Some("1007"), "zoe").as_deref(), Some("Someone Else"));
+        assert_eq!(full_name(PASSWD, None, Some("zoe")).as_deref(), Some("Zoë Kowalska"));
+        assert_eq!(full_name(PASSWD, Some("1007"), Some("zoe")).as_deref(), Some("Someone Else"));
     }
 
     #[test]
     fn no_usable_passwd_name_falls_back_to_the_logon_name() {
         for (uid, login, why) in [
-            (None, "bob", "an empty GECOS field"),
-            (Some("1002"), "bob", "an empty GECOS field by uid"),
-            (None, "carl", "a full name of blanks"),
-            (None, "dee", "a full name that isn't UTF-8 (Latin-1)"),
-            (None, "eve", "a cut-off entry"),
-            (Some("1005"), "eve", "a cut-off entry by uid"),
-            (None, "ad", "a prefix of another account's name"),
-            (None, "mallory", "no entry"),
-            (Some("4242"), "mallory", "no entry for our uid"),
-            (None, "ldapuser", "a NIS entry for someone else"),
-            (None, "", "an empty name"),
-            (None, "# local accounts", "a comment"),
+            (None, Some("bob"), "an empty GECOS field"),
+            (Some("1002"), Some("bob"), "an empty GECOS field by uid"),
+            (None, Some("carl"), "a full name of blanks"),
+            (None, Some("dee"), "a full name that isn't UTF-8 (Latin-1)"),
+            (None, Some("eve"), "a cut-off entry"),
+            (Some("1005"), Some("eve"), "a cut-off entry by uid"),
+            (None, Some("ad"), "a prefix of another account's name"),
+            (None, Some("mallory"), "no entry"),
+            (Some("4242"), Some("mallory"), "no entry for our uid"),
+            (None, Some("ldapuser"), "a NIS entry for someone else"),
+            (None, Some(""), "an empty name"),
+            (None, Some("# local accounts"), "a comment"),
+            (None, None, "no logon name and no uid"),
+            (Some("4242"), None, "no entry for our uid and no logon name"),
         ] {
             assert_eq!(full_name(PASSWD, uid, login), None, "{why} ({uid:?}, {login:?})");
         }
-        assert_eq!(full_name(b"", None, "ada"), None, "an empty file");
-        assert_eq!(full_name(b"ada:x:1000:1000:Ada Lovelace", None, "ada").as_deref(), Some("Ada Lovelace"), "no shell or home");
+        assert_eq!(full_name(b"", None, Some("ada")), None, "an empty file");
+        assert_eq!(full_name(b"ada:x:1000:1000:Ada Lovelace", None, Some("ada")).as_deref(), Some("Ada Lovelace"), "no shell or home");
     }
 
     #[test]
