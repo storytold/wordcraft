@@ -8,14 +8,16 @@
 //!   (an account with no name, or account info access turned off in Settings › Privacy), the
 //!   logon name.
 //! - Linux and the BSDs: the full name in the running account's `/etc/passwd` entry — the entry
-//!   with our uid where the system tells us one, else the one named by the logon name (the GECOS
-//!   field up to its first comma, as `chfn` sets it). Accounts from a directory service (LDAP,
-//!   SSSD) have no entry there and take the logon name.
+//!   with our uid where the system tells us one, and where it tells us none (no procfs, as on the
+//!   BSDs) the entry named by the logon name (the GECOS field up to its first comma, as `chfn`
+//!   sets it). Accounts from a directory service (LDAP, SSSD) have no entry there at all, under
+//!   either their uid or their name, and take the logon name.
 //! - macOS: the full name Directory Services keeps for the account, from the system's own lookup
-//!   (`id -F`), else the logon name. `objc2-app-kit` binds no `NSFullUserName`, and reading
+//!   (`/usr/bin/id -F`), else the logon name. `objc2-app-kit` binds no `NSFullUserName`, and reading
 //!   Directory Services directly needs unsafe, which our workspace forbids. A directory service
 //!   that doesn't answer must not hold up the start, so like the Windows call it is asked on its
-//!   own thread with a timeout ([`LOOKUP_TIMEOUT`]).
+//!   own thread with a timeout ([`LOOKUP_TIMEOUT`]), and its `id` process is stopped and waited
+//!   for when that deadline passes instead of being left running for the next start to repeat.
 //! - Runs without preferences (`WORDCRAFT_NO_PREFS`: agents' and screenshot runs) keep the
 //!   default, so what they save or show never carries the name of whoever ran them (main passes
 //!   that decision to the hook).
@@ -33,8 +35,10 @@ const LOGON_VARS: &[&str] = &["USER", "LOGNAME"];
 
 /// How long a host account lookup may take before the logon name is used instead. Both the
 /// Windows Runtime call and macOS's `id -F` go through the directory services of the machine, and
-/// neither is guaranteed to answer when one of them is misconfigured or unreachable.
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+/// neither is guaranteed to answer when one of them is misconfigured or unreachable. The Windows
+/// call is left to its own thread when it overruns, a Windows Runtime call not being one anyone can
+/// interrupt; the `id` process is stopped and waited for at the same deadline.
+#[cfg(any(target_os = "windows", target_os = "macos", all(test, unix)))]
 const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most of `/etc/passwd` read: far more than any real one holds.
@@ -155,8 +159,9 @@ fn joined(first: &str, last: &str) -> Option<String> {
 }
 
 /// The running account's full name in `/etc/passwd` ([`full_name`]); `None` when the file can't be
-/// read, or has no usable entry for it. `login`, when the environment gives one, is the fallback
-/// for a uid the file doesn't list.
+/// read, or has no usable entry for it. `login` names the entry to use only when the system gives
+/// no uid to match at all (no procfs, as on the BSDs); a uid it does give has to be in the file,
+/// and one that isn't yields no name rather than somebody else's.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn passwd_full_name(login: Option<&str>) -> Option<String> {
     use std::io::Read;
@@ -175,19 +180,27 @@ fn passwd_full_name(login: Option<&str>) -> Option<String> {
 }
 
 /// The full name in the running account's entry of a `passwd` file (`name:password:UID:GID:GECOS:
-/// home:shell` lines): the entry with `uid`, else the first named `login`, as the system's own
+/// home:shell` lines): the entry with `uid` when the system gives one, else - when it gives no uid
+/// at all - the first entry named `login`, as the system's own
 /// lookup reads them. The name is the GECOS field up to its first comma (the rest is office and
 /// phone numbers), with `&` standing for the entry's name capitalised, a BSD convention. `None`
 /// without an entry, with an empty full name or with one that isn't UTF-8.
 #[cfg(any(test, all(unix, not(target_os = "macos"))))]
 fn full_name(passwd: &[u8], uid: Option<&str>, login: Option<&str>) -> Option<String> {
     let entries: Vec<Vec<&[u8]>> = passwd.split(|&b| b == b'\n').map(|line| line.split(|&b| b == b':').collect()).collect();
-    // Our own uid when the file lists it; the first entry named by the logon name otherwise (no
-    // procfs, or an account whose uid isn't listed). A uid is matched whole, not as a prefix, so
-    // `100` never takes `1000`'s entry.
+    // The entry with our uid, when the system tells us one. The entry named by the logon name is
+    // used only when there is no uid to match at all (a system without procfs, as the BSDs often
+    // are). An account from a directory service has no line in this file under either its uid or
+    // its name, so falling back to the name while the uid is known can only land on somebody
+    // else's entry - and a full name is somebody's, so guessing wrong signs their work. A uid is
+    // matched whole, not as a prefix, so `100` never takes `1000`'s entry.
     let by_uid = |uid: &str| entries.iter().find(|fields| fields.get(2) == Some(&uid.as_bytes()));
     let by_name = |login: &str| entries.iter().find(|fields| fields.first() == Some(&login.as_bytes()));
-    let entry = uid.and_then(by_uid).or_else(|| login.and_then(by_name))?;
+    let entry = match (uid, login) {
+        (Some(uid), _) => by_uid(uid),
+        (None, Some(login)) => by_name(login),
+        (None, None) => None,
+    }?;
     let account = std::str::from_utf8(entry.first()?).ok()?;
     let gecos = std::str::from_utf8(entry.get(4)?).ok()?;
     let name = gecos.split(',').next().unwrap_or_default();
@@ -196,21 +209,71 @@ fn full_name(passwd: &[u8], uid: Option<&str>, login: Option<&str>) -> Option<St
 }
 
 /// The macOS account's full name, from the system's own Directory Services lookup (`id -F`, which
-/// prints the login name when the account has no real name), bounded by [`ask_with_timeout`];
-/// `None` when it fails.
+/// prints the login name when the account has no real name), bounded by [`ask_with_timeout`] so the
+/// window never waits on it; `None` when it fails.
 #[cfg(target_os = "macos")]
 fn directory_services_full_name() -> Option<String> {
-    ask_with_timeout("id -F", || match std::process::Command::new("id").arg("-F").output() {
-        Ok(out) if out.status.success() => std::str::from_utf8(&out.stdout).ok().map(|name| name.trim().to_owned()).filter(|n| !n.is_empty()),
-        Ok(out) => {
-            log::debug!("user name: id -F: {}", String::from_utf8_lossy(&out.stderr).trim());
-            None
+    ask_with_timeout("id -F", lookup_id_dash_f)
+}
+
+/// Wait for `child` until `deadline`; `None` if it has not answered by then, in which case it is
+/// stopped and waited for, so a lookup that never finishes leaves no process behind for the next
+/// start to add to. `what` names it in the log. Split out from the `id -F` lookup because a test
+/// cannot make Directory Services unresponsive, but it can hand a wait like this a child that never
+/// ends, which is what `a_child_that_never_answers_is_stopped_at_its_deadline` does.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn wait_with_deadline(mut child: std::process::Child, deadline: std::time::Instant, what: &str) -> Option<std::process::ExitStatus> {
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(10)),
+            Ok(None) => {
+                log::debug!("user name: {what} gave no answer within {LOOKUP_TIMEOUT:?}");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Err(e) => {
+                log::debug!("user name: {what}: {e}");
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
+    }
+}
+
+/// The system's own `id -F`, run as `/usr/bin/id`: a GNU coreutils `id` earlier in `PATH`, easy to
+/// have on a Mac with coreutils installed, has no `-F` and would only print an error. Stopped and
+/// waited for if it outlives [`LOOKUP_TIMEOUT`]: a directory service that never answers would
+/// otherwise leave an `id` process waiting on every start. The name it prints is far below what a
+/// pipe holds, so reading its output after it finished cannot block.
+#[cfg(target_os = "macos")]
+fn lookup_id_dash_f() -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    let mut child = match Command::new("/usr/bin/id").arg("-F").stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
+        Ok(child) => child,
         Err(e) => {
             log::debug!("user name: id -F: {e}");
-            None
+            return None;
         }
-    })
+    };
+    let (out, err) = (child.stdout.take(), child.stderr.take());
+    let status = wait_with_deadline(child, std::time::Instant::now() + LOOKUP_TIMEOUT, "id -F")?;
+    let mut text = String::new();
+    if status.success() {
+        if let Some(mut pipe) = out {
+            let _ = pipe.read_to_string(&mut text);
+        }
+    } else {
+        if let Some(mut pipe) = err {
+            let _ = pipe.read_to_string(&mut text);
+        }
+        log::debug!("user name: id -F: {}", text.trim());
+        return None;
+    }
+    Some(text.trim().to_owned()).filter(|n| !n.is_empty())
 }
 
 /// `word` with its first letter upper case (`ada` → `Ada`).
@@ -223,6 +286,34 @@ fn capitalised(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The deadline half of the macOS lookup, which is otherwise untestable: no test can make
+    /// Directory Services unresponsive, so the child here is a `sleep` and the waiting code is the
+    /// same. The wait must end at its deadline with the child stopped and reaped, not run to the
+    /// child's own end.
+    #[cfg(unix)]
+    #[test]
+    fn a_child_that_never_answers_is_stopped_at_its_deadline() {
+        use std::process::Stdio;
+        let Ok(child) =
+            std::process::Command::new("sh").arg("-c").arg("sleep 30").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
+        else {
+            return; // nowhere to spawn a shell: the waiting code is not what changed
+        };
+        let started = std::time::Instant::now();
+        let pid = child.id();
+        let deadline = started + std::time::Duration::from_millis(200);
+        assert!(wait_with_deadline(child, deadline, "sleep").is_none(), "the deadline ends the wait, not the child");
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "and it ends it at the deadline, not after the sleep: {:?}",
+            started.elapsed()
+        );
+        // Stopped *and* waited for: a child that was only killed would still be a process, and
+        // `kill -0` finds zombies. So nothing is left for the next start to pile up behind.
+        let still_there = std::process::Command::new("sh").arg("-c").arg(format!("kill -0 {pid}")).status().is_ok_and(|status| status.success());
+        assert!(!still_there, "the child is reaped, not left running or waiting");
+    }
 
     const PASSWD: &[u8] = b"# local accounts\n\
         root:x:0:0:root:/root:/bin/bash\n\
@@ -241,9 +332,10 @@ mod tests {
         assert_eq!(full_name(PASSWD, None, Some("ada")).as_deref(), Some("Ada Lovelace"));
         assert_eq!(full_name(PASSWD, None, Some("root")).as_deref(), Some("root"));
         // Our own uid wins over the name: an account renamed in the environment still gets its own
-        // entry, and a uid is matched whole, not as a prefix.
+        // entry. And when our uid isn't listed, the named entry is somebody else's account: no
+        // name at all, and `100` is no match for uid 1000's line.
         assert_eq!(full_name(PASSWD, Some("1000"), Some("someone-else")).as_deref(), Some("Ada Lovelace"));
-        assert_eq!(full_name(PASSWD, Some("100"), Some("ada")).as_deref(), Some("Ada Lovelace"), "no uid 100 listed: the named entry");
+        assert_eq!(full_name(PASSWD, Some("100"), Some("ada")), None, "uid 100 is not listed, and `100` is no whole match for 1000");
         // No logon name in the environment (a service run straight from init) still has an entry.
         assert_eq!(full_name(PASSWD, Some("1000"), None).as_deref(), Some("Ada Lovelace"));
         // `&` is the entry's own name, capitalised; a Windows line ending is no part of the name.
@@ -266,6 +358,7 @@ mod tests {
             (None, Some("ad"), "a prefix of another account's name"),
             (None, Some("mallory"), "no entry"),
             (Some("4242"), Some("mallory"), "no entry for our uid"),
+            (Some("4242"), Some("ada"), "our uid isn't listed and `ada` is somebody else's account"),
             (None, Some("ldapuser"), "a NIS entry for someone else"),
             (None, Some(""), "an empty name"),
             (None, Some("# local accounts"), "a comment"),
