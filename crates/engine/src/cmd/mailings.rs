@@ -25,7 +25,7 @@ use merge::{address_map, finish, go_to, merge_fields, step};
 pub use merge::{merge_range, refresh};
 #[cfg(test)]
 use merge::{mergefield_name, placeholder};
-pub use recipients::{RECIPIENT_EXTENSIONS, is_spreadsheet_name, parse_csv};
+pub use recipients::{CsvCap, RECIPIENT_EXTENSIONS, is_spreadsheet_name, parse_csv, parse_csv_streaming};
 use recipients::{recipients, recipients_strict};
 
 /// The mail-merge data source and preview state (lives in the session, not the document).

@@ -27,11 +27,47 @@ fn push_csv_row(rows: &mut Vec<Vec<String>>, row: &mut Vec<String>) {
 }
 
 pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    parse_csv_streaming(text, None).0
+}
+
+/// Cap for [`parse_csv_streaming`]: rows are kept only while the cells kept stay within `max_cells`
+/// (and the rows within [`MAX_RECORDS`], plus the header).
+/// With `width_from_first_row`, every kept row is cut to the first row's width (a header row's
+/// fields are all a list keeps), otherwise to [`MAX_FIELDS`].
+#[derive(Clone, Copy)]
+pub struct CsvCap {
+    pub max_cells: usize,
+    pub width_from_first_row: bool,
+}
+
+/// [`parse_csv`] with an optional streaming cap (off by default): once the kept rows hold
+/// `max_cells`, later rows are counted but not kept, so peak memory is the cap plus one row, not
+/// every row in the file. Returns the rows and how many records the cap left out. Without a cap
+/// it parses at most 100,000 rows, as before.
+pub fn parse_csv_streaming(text: &str, cap: Option<CsvCap>) -> (Vec<Vec<String>>, usize) {
     let sep = csv_separator(text);
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut cell = String::new();
     let mut q = false;
+    let (mut kept_cells, mut omitted) = (0usize, 0usize);
+    // Ends a row: kept unless the cap is spent.
+    let mut end_row = |rows: &mut Vec<Vec<String>>, row: &mut Vec<String>| {
+        if !row.iter().any(|x| !x.is_empty()) {
+            row.clear();
+            return;
+        }
+        let Some(cap) = cap else { return push_csv_row(rows, row) };
+        let width = if cap.width_from_first_row { rows.first().map_or(MAX_FIELDS, Vec::len) } else { MAX_FIELDS };
+        row.truncate(width.max(1));
+        if rows.len() > MAX_RECORDS || kept_cells.saturating_add(row.len()) > cap.max_cells {
+            omitted += 1;
+            row.clear();
+        } else {
+            kept_cells += row.len();
+            rows.push(std::mem::take(row));
+        }
+    };
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
         if q {
@@ -54,17 +90,17 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
                 chars.next();
             }
             row.push(std::mem::take(&mut cell));
-            push_csv_row(&mut rows, &mut row);
+            end_row(&mut rows, &mut row);
         } else {
             cell.push(c);
         }
-        if rows.len() > 100_000 {
+        if cap.is_none() && rows.len() > 100_000 {
             break;
         }
     }
     row.push(cell);
-    push_csv_row(&mut rows, &mut row);
-    rows
+    end_row(&mut rows, &mut row);
+    (rows, omitted)
 }
 
 /// Most records and fields a recipient list keeps.
@@ -162,8 +198,13 @@ fn load_recipients(s: &mut Session, v: &Value, strict: bool) -> CmdResult {
     let (headers, rows, dropped) = if let Some(arr) = v.get("rows").and_then(Value::as_array) {
         table_from_rows(v.get("fields").and_then(Value::as_array), arr)?
     } else {
+        let headers = p::bool(v, "headers").unwrap_or(true);
+        let cap = Some(CsvCap { max_cells: MAX_CELLS, width_from_first_row: headers });
+        let mut omitted = 0;
         let all = if let Some(c) = p::str(v, "csv") {
-            parse_csv(c)
+            let (rows, o) = parse_csv_streaming(c, cap);
+            omitted = o;
+            rows
         } else {
             let (bytes, ext) = if let Some(d) = p::str(v, "data") {
                 let b = crate::cmd::insert::base64_decode(d.trim()).ok_or_else(|| CmdError::Params("`data` isn't valid base64".into()))?;
@@ -220,10 +261,13 @@ fn load_recipients(s: &mut Session, v: &Value, strict: bool) -> CmdResult {
                 sheet = json!(chosen);
                 rows
             } else {
-                parse_csv(&decode(&bytes, v)?)
+                let (rows, o) = parse_csv_streaming(&decode(&bytes, v)?, cap);
+                omitted = o;
+                rows
             }
         };
-        header_split(all, p::bool(v, "headers").unwrap_or(true))?
+        let (fields, rows, dropped) = header_split(all, headers)?;
+        (fields, rows, dropped + omitted)
     };
     if strict && dropped > 0 {
         return Err(over_limit(dropped, headers.len()));

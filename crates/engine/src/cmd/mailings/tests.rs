@@ -743,3 +743,18 @@ fn a_scalar_row_does_not_take_a_record_slot() {
     let r = s.run("mailings.recipients", &json!({"rows": rows, "fields": fields})).unwrap();
     assert_eq!((r["records"].clone(), r.get("dropped")), (json!(50_000), None));
 }
+
+/// The cell cap applies while the CSV is parsed: rows past it are counted, not kept, and a
+/// parse without a cap is unchanged.
+#[test]
+fn csv_streaming_cap_keeps_at_most_the_cells_and_counts_the_rest() {
+    use super::{CsvCap, parse_csv_streaming};
+    let csv = format!("a,b\n{}", "1,2\n".repeat(10));
+    let cap = Some(CsvCap { max_cells: 8, width_from_first_row: true });
+    let (rows, omitted) = parse_csv_streaming(&csv, cap);
+    assert_eq!((rows.len(), omitted), (4, 7)); // the header and three records fit in 8 cells
+    // Rows wider than the header are cut to it before they are counted.
+    let (rows, omitted) = parse_csv_streaming("a,b\n1,2,3\n4,5,6\n", Some(CsvCap { max_cells: 4, width_from_first_row: true }));
+    assert_eq!((rows, omitted), (vec![vec!["a".to_string(), "b".to_string()], vec!["1".to_string(), "2".to_string()]], 1));
+    assert_eq!(parse_csv_streaming(&csv, None), (parse_csv(&csv), 0));
+}
