@@ -659,14 +659,11 @@ fn group_labels_sit_in_the_cards_label_band_at_1024() {
         h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
         h.run_steps(2);
         crate::widgets::GROUP_LABELS.with(|g| g.borrow_mut().clear());
-        crate::widgets::COLLAPSED_LABELS.with(|g| g.borrow_mut().clear());
         h.run_steps(1);
         let labels = crate::widgets::GROUP_LABELS.with(|g| g.borrow().clone());
-        let collapsed = crate::widgets::COLLAPSED_LABELS.with(|g| g.borrow().clone());
-        assert!(!labels.is_empty() || !collapsed.is_empty(), "{tab}: the card drew no group labels");
+        assert!(!labels.is_empty(), "{tab}: the card drew no group labels");
         // The band the card's height must leave room for: one row under every group's content.
-        let first = labels.first().or(collapsed.first()).expect("a label");
-        let (top, bottom) = (first.band.top(), first.band.bottom());
+        let (top, bottom) = (labels[0].band.top(), labels[0].band.bottom());
         assert!(bottom - top >= crate::widgets::LABEL_H - 0.01, "{tab}: the label band is {} tall", bottom - top);
         for l in &labels {
             assert!(
@@ -697,19 +694,6 @@ fn group_labels_sit_in_the_cards_label_band_at_1024() {
                 l.band
             );
             assert!(l.text.width() <= l.band.width() + 0.5, "{tab} › {}: the title is wider than its band", l.title);
-        }
-        // A folded group is one button whose name sits in the same band (with its drop-down
-        // marker, so the title is not exactly centred).
-        for l in &collapsed {
-            assert!(
-                l.text.top() >= l.band.top() - 0.01 && l.text.bottom() <= l.band.bottom() + 0.01,
-                "{tab} › {}: the folded group's name {:?} leaves the label band {:?}",
-                l.title,
-                l.text,
-                l.band
-            );
-            assert!(l.band.height() >= crate::widgets::LABEL_H - 0.01, "{tab} › {}: the folded name has no band", l.title);
-            assert!(l.text.width() <= l.band.width() + 0.5, "{tab} › {}: the folded name is wider than its band", l.title);
         }
     }
 }

@@ -47,8 +47,6 @@ thread_local! {
     /// band must sit below the content and hold the whole text, never clipped by the card.
     pub(crate) static GROUP_LABELS: std::cell::RefCell<Vec<DrawnGroupLabel>> = const { std::cell::RefCell::new(Vec::new()) };
 
-    /// Collapsed groups' names (the single button's title), likewise in the label band.
-    pub(crate) static COLLAPSED_LABELS: std::cell::RefCell<Vec<DrawnGroupLabel>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// A group label as painted, for tests of the card's three bands.

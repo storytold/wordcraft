@@ -2,7 +2,6 @@
 use super::TALL_GROUPS;
 use super::buttons::{BIG_ICON_Y, CONTENT_H, DROPDOWN, LABEL_H, LABEL_LINE_H, bg, label_line};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
-
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     // The English title keys the launcher's id; the drawn title is translated.
@@ -20,22 +19,20 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
     // #662: the window may be too narrow for the tab; the plan says how this group fits.
     let position = crate::ribbon_fit::position(ui.ctx());
     let level = crate::ribbon_fit::level(ui.ctx(), id_title);
-    if level == crate::ribbon_fit::COLLAPSED {
-        collapsed_group(ui, id_title, position, title, launcher, app, add);
+    if level == crate::ribbon_fit::COMPACT {
+        compact_group(ui, id_title, position, title, launcher, app, add);
     } else {
         // Not folded: a drop-down left open while it was folded doesn't come back by itself.
-        ui.data_mut(|d| d.remove::<bool>(collapsed_open_id(ui, id_title, position)));
+        ui.data_mut(|d| d.remove::<bool>(compact_open_id(ui, id_title, position)));
         let label_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size().x);
         // Reserve the paint slot before children so the glow stays beneath the controls.
         let glow = ui.painter().add(egui::Shape::Noop);
         let inner = crate::rtl::vertical(ui, |ui| {
             ui.set_min_width(label_w + if launcher.is_some() { 22.0 } else { 10.0 });
-            crate::ribbon_fit::set_compact(ui.ctx(), level == crate::ribbon_fit::COMPACT);
             let content = ui.allocate_ui_with_layout(vec2(ui.available_width(), CONTENT_H), crate::rtl::row_layout(ui, egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
                 add(ui, app);
             });
-            crate::ribbon_fit::end_compact(ui.ctx());
             #[cfg(test)]
             if content.response.rect.height() > CONTENT_H + 0.5 {
                 TALL_GROUPS.with(|g| g.borrow_mut().push(format!("{id_title}: {:.1}", content.response.rect.height())));
@@ -131,17 +128,18 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     }
 }
 
-/// Where a collapsed group remembers whether its drop-down is open.
-fn collapsed_open_id(ui: &Ui, id_title: &str, position: usize) -> egui::Id {
-    ui.scope_id().with(("collapsed_group", id_title, position))
+/// Where a compact group remembers whether its drop-down is open.
+fn compact_open_id(ui: &Ui, id_title: &str, position: usize) -> egui::Id {
+    ui.scope_id().with(("compact_group", id_title, position))
 }
 
-/// A group folded into one drop-down button (the window is too narrow, #662): the button, as tall
-/// as the group with its title, shows the group's name, and its drop-down holds the whole group as
-/// designed with its title and launcher. The drop-down stays open while it is used (#1285): only a
-/// click outside it, or on the button, closes it; clicks in the menus and lists its controls open
-/// (font and size lists, Change Case, colours) count as inside.
-fn collapsed_group(
+/// A section drawn as one row (the window is too narrow for its natural rows, #662): a drop-down
+/// button with the group's icon, name and chevron, and the group's name in the label band below,
+/// as Word draws a section it has made one row. The drop-down holds the whole group as designed
+/// with its title and launcher. The drop-down stays open while it is used (#1285): only a click
+/// outside it, or on the button, closes it; clicks in the menus and lists its controls open (font
+/// and size lists, Change Case, colours) count as inside.
+fn compact_group(
     ui: &mut Ui,
     id_title: &str,
     position: usize,
@@ -151,36 +149,32 @@ fn collapsed_group(
     add: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
     let t = Tokens::get(ui.ctx());
-    let text_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size().x);
-    let (r, resp) = ui.allocate_exact_size(vec2((text_w + DROPDOWN + 14.0).max(48.0), CONTENT_H + LABEL_H), Sense::click());
+    let size = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size());
+    let w = (size.x + 18.0 + 6.0 + DROPDOWN + 14.0).max(64.0);
+    // The row is as tall as every other section's content, so the label band stays on one line.
+    let (r, _) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::hover());
+    let br = Rect::from_center_size(pos2(r.center().x, r.min.y + CONTENT_H / 2.0), vec2(w, 28.0));
+    let resp = ui.interact(br, ui.scope_id().with(("compact_button", id_title, position)), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
-    let open_id = collapsed_open_id(ui, id_title, position);
+    let open_id = compact_open_id(ui, id_title, position);
     let was_open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    bg(ui, r, &resp, was_open, &t);
+    bg(ui, br, &resp, was_open, &t);
+    // Icon, name and chevron, centred in the one row.
+    let content_w = 18.0 + 6.0 + size.x + 4.0 + DROPDOWN;
+    let x0 = br.center().x - content_w / 2.0;
+    icons::paint(ui.painter(), Rect::from_min_size(pos2(x0, br.center().y - 9.0), vec2(18.0, 18.0)), group_icon(id_title), t.icon, t.accent);
+    let text_x = x0 + 18.0 + 6.0;
+    let galley = ui.painter().layout_no_wrap(title.to_string(), regular(11.5), t.text);
+    ui.painter().galley(pos2(text_x, br.center().y - galley.size().y / 2.0), galley.clone(), t.text);
     icons::paint(
         ui.painter(),
-        Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)),
-        group_icon(id_title),
-        t.icon,
+        Rect::from_center_size(pos2(text_x + size.x + 4.0 + DROPDOWN / 2.0, br.center().y), vec2(DROPDOWN, DROPDOWN)),
+        "dropdown",
+        t.text,
         t.accent,
     );
-    // The name sits in the card's label band, under the icon, so every tab keeps the three bands
-    // Word shows even when groups fold (#662); the drop-down marker stays beside it.
-    let label_y = r.min.y + CONTENT_H + (LABEL_H - LABEL_LINE_H) / 2.0;
-    label_line(ui, r.center().x, label_y, title, regular(11.5), t.text, true);
-    #[cfg(test)]
-    {
-        let size = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size());
-        let x = r.center().x - (size.x + DROPDOWN + 3.0) / 2.0;
-        let band = Rect::from_min_max(pos2(r.min.x, r.min.y + CONTENT_H), pos2(r.max.x, r.min.y + CONTENT_H + LABEL_H));
-        crate::widgets::COLLAPSED_LABELS.with(|g| {
-            g.borrow_mut().push(crate::widgets::DrawnGroupLabel {
-                title: title.to_string(),
-                band,
-                text: Rect::from_min_size(pos2(x, label_y), size),
-            });
-        });
-    }
+    let band = Rect::from_min_max(pos2(r.min.x, r.min.y + CONTENT_H), pos2(r.max.x, r.min.y + CONTENT_H + LABEL_H));
+    title_row(ui, band, id_title, title, None, app);
     let resp = resp.on_hover_text(title);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let mut open = was_open;

@@ -146,8 +146,6 @@ impl<'a> ButtonAction<'a> {
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, action: ButtonAction<'_>) -> Response {
     let ButtonAction { id, params, checked } = action;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
-    // A compact group (#662) shows only the icon; the tooltip keeps the name.
-    let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
@@ -244,7 +242,6 @@ impl<'a> MenuButtonOptions<'a> {
 pub fn menu_button(ui: &mut Ui, app: &mut WordApp, options: MenuButtonOptions<'_>, menu: impl FnOnce(&mut Ui, &mut WordApp)) {
     let MenuButtonOptions { icon, label, tip, big_btn, id } = options;
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
-    let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     // `id` names the command the menu is about (Header for the Header menu…); while it is
     // disabled the button greys out and doesn't open, like the other ribbon buttons. "" = always on.

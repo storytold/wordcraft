@@ -593,7 +593,6 @@ pub fn style_preview(app: &mut WordApp, ui: &mut Ui, id: &str, ty: &str, size: e
 
 /// Tiles the Home tab's Styles gallery shows, as designed and in a compact group.
 const STYLE_TILES: usize = 6;
-const STYLE_TILES_COMPACT: usize = 3;
 
 /// The Home tab's Styles gallery.
 pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
@@ -605,9 +604,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let ppp = ui.ctx().pixels_per_point();
     let start_id = app.window_id("gallery_start");
     let start = ui.data(|d| d.get_temp::<usize>(start_id)).unwrap_or(0).min(styles.len().saturating_sub(1));
-    // A compact ribbon group (#662, #1285) trims the gallery to fewer tiles before it folds.
-    let visible = if crate::ribbon_fit::compact(ui.ctx()) { STYLE_TILES_COMPACT } else { STYLE_TILES };
-    crate::ribbon_fit::add_saving(ui.ctx(), (STYLE_TILES - STYLE_TILES_COMPACT) as f32 * 76.0);
+    let visible = STYLE_TILES;
     // A mirrored interface (#5566) starts the tiles at the right and puts the arrows at the left.
     let rtl = crate::rtl::flows(ui);
     let (area, _) = ui.allocate_exact_size(vec2(visible as f32 * 76.0 + 18.0, crate::widgets::CONTENT_H), Sense::hover());
