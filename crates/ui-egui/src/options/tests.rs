@@ -316,6 +316,37 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
     assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
 }
 
+/// File › Options › Save › Default Save Format (#6279): choosing a format updates `file.options`,
+/// drives `default_save_name()`, and survives the `prefs()` / `apply_prefs()` round trip.
+#[test]
+fn save_default_format_picker_sets_and_persists_preference() {
+    use wordcraft_engine::DefaultSaveFormat;
+    let mut a = app();
+    a.run("file.options", json!({"pane": "save"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.default_save_format, DefaultSaveFormat::Docx);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Save files in this format:").click();
+    h.run_steps(4);
+    h.get_by_label("OpenDocument Text (*.odt)").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.default_save_format, DefaultSaveFormat::Odt);
+    assert!(h.state().default_save_name().ends_with(".odt"), "{}", h.state().default_save_name());
+
+    let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+    let mut restored = app();
+    restored.apply_prefs(UiState::from_json(&saved).unwrap());
+    assert_eq!(restored.session.prefs.default_save_format, DefaultSaveFormat::Odt);
+    assert!(restored.default_save_name().ends_with(".odt"), "{}", restored.default_save_name());
+}
+
 /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
 /// or Off, with a line saying what the system's own setting is while it is followed.
 #[test]
