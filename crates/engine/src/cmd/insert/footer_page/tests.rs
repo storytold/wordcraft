@@ -360,3 +360,15 @@ fn showing_the_first_page_again_brings_back_its_own_footer() {
     assert_eq!(shown(&mut s), vec![true; 3]);
     assert_eq!(first_page_footer(&mut s), own, "the page shows its own footer, not a neighbour's");
 }
+
+#[test]
+fn a_visible_that_is_not_a_boolean_is_a_params_error_and_changes_nothing() {
+    let mut s = book(3);
+    let before = s.doc.clone();
+    for visible in [json!("false"), json!("yes"), json!(0), json!(1), json!(2.5), json!([]), json!({}), json!([true])] {
+        let e = s.run("layout.pageFooterVisible", &json!({"page": 2, "visible": visible.clone()})).unwrap_err();
+        assert!(matches!(e, CmdError::Params(_)), "{visible}: {e:?}");
+        assert_eq!(s.doc, before, "{visible}");
+    }
+    assert_eq!(shown(&mut s), vec![true; 3]);
+}

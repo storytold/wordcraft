@@ -373,6 +373,11 @@ fn verify(s: &mut Session, before: &View, idx: usize, want_visible: bool) -> Res
 
 /// `layout.pageFooterVisible`: hide or show the footer on one page of the current layout.
 pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> CmdResult {
+    let explicit = match v.get("visible") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::Bool(b)) => Some(*b),
+        Some(_) => return Err(CmdError::Params("visible must be true or false".into())),
+    };
     let layout = s.layout();
     let given = v.get("page").is_some_and(|x| !x.is_null());
     let whole = v.get("page").is_some_and(|x| x.as_u64().is_some() || x.as_f64().is_some_and(|f| f.is_finite() && f >= 0.0 && f.fract() == 0.0));
@@ -393,7 +398,7 @@ pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> Cmd
     };
     let Some(pg) = layout.pages.get(idx) else { return Err(CmdError::Failed("the document has no pages".into())) };
     let now = footer_visible(&s.doc, pg);
-    let want = p::bool(v, "visible").unwrap_or(!now);
+    let want = explicit.unwrap_or(!now);
     let result = |changed: bool| Ok(json!({"page": idx + 1, "visible": want, "changed": changed}));
     if want == now {
         return result(false);
