@@ -5,13 +5,14 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `bf632378` (§5.31, the finding-3 fix) plus this page on
+- HEAD at this writing: `c1582864` (§5.32, the finding-6 fix) plus this page on
   top of it. The fork branch and the `headRefOid` of PR #5834 are still
-  `af9a43a2` (the CodeRabbit triage, §5.26): the eight commits after it —
+  `af9a43a2` (the CodeRabbit triage, §5.26): the ten commits after it —
   `2a6f39c7`, `925bb0c9`, `3225e644`, `264afd18`, `c6e3df4a`, `bcca9bce`,
-  `37af31cb` and `bf632378` — are committed locally and **not pushed**, because
-  the envoy role cannot push; the owner sends it (§5.27–§5.31). The branch is
-  86 commits over `4b0d3995` before this page and 87 with it. The branch was pushed
+  `37af31cb`, `bf632378`, `4e95d929` and `c1582864` — are committed locally and
+  **not pushed**, because the envoy role cannot push; the owner sends it
+  (§5.27–§5.32). The branch is 89 commits over `4b0d3995` before this page and 90
+  with it. The branch was pushed
   on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
   20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
   `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
@@ -284,6 +285,10 @@ missing, and where the next session should start.
   announced to the other peers after `welcome` with the same frame (empty
   `state`, `role` from the JWT), so the role arrives before the newcomer's first
   presence.
+- A `client_id` belongs to the connection that registered it: only a connection
+  with the same `sub` and `sid` may take it over (a reconnect), the old socket is
+  retired with `close`, and `leave` removes a peer only when the connection id
+  matches — a stale socket cannot remove its replacement (§5.32, ADR WC-0005).
 - Commit is owner-only, checks `expectedVersion`, writes the `.docx` in memory,
   returns SHA-256 and warnings, and stores the source bytes for the next snapshot.
 - With `COLLAB_CABINET_URL`, the commit is also published to the cabinet
@@ -305,7 +310,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The five other §5.26 findings (3, 6, 8, 9, 10) remain open: they are separate failure modes (room seeding, connection identity, session status, per-document connections, token renewal), named in §4 |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31 and 6 (connection identity) in §5.32; 8, 9 and 10 (session status, per-document connections, token renewal) remain open, named in §4 |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -460,11 +465,16 @@ Results at this writing:
   (`docs/collab/adr/0003-corrupt-snapshot-refused.md`, §5.30). Finding 3 no
   longer turns an open document into an empty page: a room is built from the
   copy its first writer brings, and a join that brings none is refused
-  (`docs/collab/adr/0004-room-without-snapshot-seeded.md`, §5.31). Four findings
-  of §5.26 stay open, each with its own slice: a participant can register
-  another's `client_id` (6), a failed edit leaves the session reporting `InSync`
-  (8), the connection is app-wide while documents are per window (9), and a
-  session event replaces the client and drops its unconfirmed edits (10).
+  (`docs/collab/adr/0004-room-without-snapshot-seeded.md`, §5.31). Finding 6 no
+  longer lets a participant claim another's `client_id`, and a stale connection
+  can no longer remove the connection that replaced it: a peer is removed by the
+  connection that registered it, and only the same account in the same cabinet
+  session may take an id over — a reconnect
+  (`docs/collab/adr/0005-client-id-belongs-to-a-connection.md`, §5.32). Three
+  findings of §5.26 stay open, each with its own slice: a failed edit leaves the
+  session reporting `InSync` (8), the connection is app-wide while documents are
+  per window (9), and a session event replaces the client and drops its
+  unconfirmed edits (10).
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -3186,6 +3196,137 @@ runs on the new head. Three follow-ups this slice names and does not take:
 In the code, findings 6, 8, 9 and 10 of §5.26 remain (§4), each with its own
 slice and test. Finding 6 (a participant can register another's `client_id`) is
 the next protocol-shaped one; findings 8–10 are client-side state.
+
+### 5.32 Finding 6: a `client_id` belongs to the connection that registered it (run 2026-11-11)
+
+**What the defect was.** A room keyed its peers by the `client_id` a client puts
+in its auth frame, and both ends of that map were keyed by the id alone:
+`register` did `peers.insert(client_id, …)` and `leave(client_id)` did
+`peers.remove(client_id)` (§5.26 finding 6,
+`apps/collab-server/src/lib.rs:448-449` at `af9a43a2`). Two consequences:
+
+1. **A participant could take another's id.** Any authenticated connection that
+   sent `client_id: "alice"` replaced Alice's entry. Inside one cabinet session
+   the lease does not stop it, and as `owner` the lease does not stop it either.
+   Alice kept a socket that received nothing from the room while the participant
+   list showed the intruder under her id; in the other order her `leave` removed
+   the intruder's entry and the room lost a live connection it believed had
+   left.
+2. **A reconnect raced its own predecessor.** The reconnect path ADR WC-0002 and
+   §5.31 rely on is: a peer is closed, the client reconnects with the same
+   `client_id` and `lastVersion`. Two sockets are served by two tasks, so the
+   server can accept the new connection before the old task reaches `leave`;
+   then `register(new)` → `leave(old)` removes the new entry. That client was in
+   the room for operations but was not a participant, received no broadcasts and
+   did not count for the lease.
+
+The id has to stay the client's: `opId = (clientId, seq)` is the retry key across
+a reconnect (ADR-0003), and the unconfirmed queue is keyed by it.
+
+**The decision.** `docs/collab/adr/0005-client-id-belongs-to-a-connection.md`
+(ADR WC-0005; repository-local, it does not consume a protocol ADR number). It
+compares refusing every duplicate registration (rejected: the reconnecting client
+is refused while the server still holds the socket it cannot notice is gone, and
+`invalid` is not retryable), having the server assign the id (rejected: a wire
+change in a frozen protocol, and the queue and pending `opId`s would have to be
+rewritten), and comparing the peer's outbox channel instead of a counter
+(rejected as the mechanism: it says nothing about who the connection is, and the
+refusal rule still needs the identity on the peer). The rules it picks:
+
+- **ownership comes from the token, never from the frame** — the frame picks the
+  id, the JWT says who is claiming it;
+- **takeover requires the same `sub` and the same `sid`** — the same client
+  reconnecting; the old connection is retired with a `close` frame;
+- **a foreign claim is refused `invalid`, not retryable**, and counted;
+- **removal is by connection, not by id** — a retired connection's `leave` is a
+  no-op: it broadcasts no `left` and does not treat the room as empty;
+- **no wire change.**
+
+**What the code does** (+518/−88 in five files).
+
+- `apps/collab-server/src/lib.rs`: `Peer` gains `conn` (a server counter), `sub`
+  and `superseded`. `register` takes the `Claims` and answers a `Registration`
+  (`plan`, `peers`, `conn`, the two signals): a second registration of a taken id
+  is refused with `client_id_conflicts_total`, or, for the same `sub`+`sid`, is a
+  takeover that marks the old peer superseded. `leave` takes the connection id
+  and removes the entry only when it matches. The signal type ADR WC-0002
+  introduced as `Stale` is now `Retire` (a flag, a `Notify`, and a wait), used
+  per connection for both events. The connection loop moved out of
+  `handle_socket` into `Session::run`: a fourth `select!` arm pushed the function
+  over the crate's `clippy::cognitive_complexity` bound (31/30), and the
+  handshake is the part that belongs in `handle_socket`.
+- `docs/collab/server.md`: the ownership rule, under the session flow.
+  `production.md`: the counter and what to do when it grows.
+- No manifest, lock or workflow change.
+
+**Tests** (three new; `collab-server` 63 → 66).
+
+- `another_participant_cannot_register_a_taken_client_id` — Alice joins; a
+  connection that authenticates as Bob and registers `alice` is answered
+  `rejected{invalid, retryable: false}`, its socket ends, the room still holds one
+  peer whose `sub` is `alice`, Alice's next operation is applied, and
+  `client_id_conflicts_total == 1`.
+- `a_reconnecting_client_takes_its_client_id_over_and_the_old_leave_keeps_the_new_peer`
+  — Carol observes; Alice joins, then reconnects with the same id and identity.
+  The old socket receives `close`, Carol receives no `left` (the old `leave` is a
+  no-op), the room still lists two peers, and the replacement's edit is applied
+  and broadcast to Carol.
+- `a_taken_client_id_is_only_removed_by_the_connection_that_registered_it` — the
+  same orderings without a socket: a foreign claim is `Err(invalid)`; the same
+  identity takes over and retires the old signal; `leave` with the old `conn`
+  keeps the replacement; `leave` with the new `conn` removes it.
+
+**The tests fail without the fix** (run at the build host, the tree at
+`c1582864`, one guard reverted at a time; both patches reverted afterwards, tree
+clean).
+
+- With the identity check disabled in `register`, the claim test fails at its
+  first `match`: `expected a claim on a taken client id to be refused, got
+  Welcome { session_id: "session-1", role: "editor", version: 0, epoch: 0,
+  participants: [Participant { client_id: "alice", … }], resync: true }` — the
+  room accepted the intruder, and the entry under `alice` is now the intruder's.
+- With `leave` back on `guard.peers.contains_key(client_id)`, the direct test
+  fails at `the old leave kept the replacement` (the entry holds the new
+  connection's `conn`) and the socket test fails at its `left` assertion — Carol
+  is told the participant left and the room drops a live connection.
+
+**What ran** (build host `agents`, `scripts/remote-build.sh`, from this tree at
+`c1582864`):
+
+- `cargo fmt --all -- --check` → **EXIT=0**.
+- `cargo clippy -p wordcraft-collab-server -p wordcraft-collab-client
+  --all-targets -- -D warnings` → **EXIT=0**.
+- `cargo test` over `collab`, `collab-server`, `collab-client`, `collab-doc`,
+  `collab-app` → **302 passed, 0 failed, 1 ignored** (`collab` 61, `collab-doc`
+  116, `collab-client` 20, `collab-app` 39, `collab-server` 66 passed / 1
+  ignored — the LibreOffice commit gate). The slice added exactly the three
+  `collab-server` tests above; the other four crates are unchanged and green.
+
+**Local head.**
+
+| | |
+|---|---|
+| head | `c1582864` — `collab: a client id belongs to the connection that registered it` |
+| files | `apps/collab-server/src/lib.rs` +180/−81, `src/tests.rs` +161/−7, `docs/collab/adr/0005-client-id-belongs-to-a-connection.md` +158, `server.md` +10, `production.md` +9 (five files, +518/−88) |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27–§5.31: from `upstream/`,
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
+from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the runs
+on the new head. Two things this slice names and does not take:
+
+- **The ownership rule assumes `sid` is stable for the life of a `client_id`.**
+  That is how the cabinet issues tokens (ADR-0008) and how the desktop transport
+  reconnects (it keeps its token and its id, `collab-ws`). A client that renewed
+  its token *and* changed `sid` while keeping the id would be refused `invalid`;
+  the web bridge avoids it by deriving a fresh `client_id` per connection.
+- **A takeover by the same identity is neither counted nor logged as a claim.**
+  It is a reconnect, but repeated takeovers of one id mean a client reconnecting
+  in a loop, which is a different problem from an intruder; the existing
+  `connections_total` and `stale_peers_total` are where that shows.
+
+In the code, findings 8, 9 and 10 of §5.26 remain (§4), each with its own slice
+and test; they are client-side state, not the protocol. Finding 6 is closed here.
 
 ## 6. Where things live
 
