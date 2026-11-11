@@ -160,11 +160,7 @@ fn compare_pins_rejecting_an_inserted_section_restyles_the_next_paragraph() {
     assert_eq!(s.doc.body.len(), 2);
     let body = s.doc.body[1].as_para().unwrap();
     assert_eq!(body.plain_text(), "Body");
-    assert_eq!(
-        body.props.style.as_deref(),
-        Some("Heading1"),
-        "the following paragraph keeps its own properties (fixed on main by #5734)"
-    );
+    assert_eq!(body.props.style.as_deref(), Some("Heading1"), "the following paragraph keeps its own properties (fixed on main by #5734)");
 }
 
 #[test]
