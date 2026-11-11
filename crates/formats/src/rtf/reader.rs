@@ -56,6 +56,8 @@ pub(super) fn level_format(nfc: i32) -> NumFormat {
 /// numbers of levels 1 to 9 (`\'02\'00.` is `%1.`).
 #[derive(Debug, Default)]
 pub(super) struct LevelText {
+    /// The nesting depth of the `\leveltext` group: the text ends with it, read in full or not.
+    depth: usize,
     /// Characters still to come; `None` until the length is read.
     left: Option<u32>,
     /// The text so far, with `%1` to `%9` for the numbers.
@@ -63,6 +65,11 @@ pub(super) struct LevelText {
 }
 
 impl LevelText {
+    /// A level text read in a group at nesting depth `depth`.
+    pub(super) fn new(depth: usize) -> Self {
+        LevelText { depth, ..LevelText::default() }
+    }
+
     /// Adds `c`; true once the text is complete.
     pub(super) fn push(&mut self, c: char) -> bool {
         let Some(left) = self.left else {
@@ -465,6 +472,11 @@ impl Reader {
                     prev.chg_c.date = d;
                 }
             }
+        }
+        // A level text cut short ends with its group, so the text after it (a list's name)
+        // is not read into its label.
+        if self.level_text.as_ref().is_some_and(|t| self.depth() < t.depth) {
+            self.level_text = None;
         }
         if self.pict_depth.is_some_and(|d| self.depth() < d) {
             self.pict_depth = None;

@@ -527,7 +527,7 @@ impl Reader {
                     level.start = u32::try_from(value).unwrap_or(0).min(MAX_LEVEL_START);
                 }
             }
-            "leveltext" => self.level_text = Some(LevelText::default()),
+            "leveltext" => self.level_text = Some(LevelText::new(self.depth())),
             "levelnumbers" => self.level_text = None,
             "listid" => {
                 self.list_cur_id = value;

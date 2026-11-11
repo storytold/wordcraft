@@ -1882,3 +1882,20 @@ fn a_level_text_cut_short_and_a_start_past_the_limit_are_held() {
     assert_eq!(level.text, "%1.");
     assert_eq!(level.start, 32_767);
 }
+
+#[test]
+fn a_level_text_cut_short_ends_with_its_group() {
+    // The characters still to come were read from the text after the group, here the list's
+    // name, so the label read `%1);ABCDEF`.
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}
+{\*\listtable{\list\listsimple{\listlevel\levelnfc3\levelstartat1{\leveltext\'09\'00);}}{\listname ABCDEFGHI;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 one\par
+}"#;
+    let doc = import(rtf).unwrap();
+    let paras = doc_paras(&doc);
+    let n = paras.first().and_then(|p| p.props.numbering).unwrap();
+    let level = doc.numbering.level(n.num, 0).unwrap();
+    assert_eq!(level.format, wordcraft_doc::section::NumFormat::UpperLetter);
+    assert_eq!(level.text, "%1.");
+}
