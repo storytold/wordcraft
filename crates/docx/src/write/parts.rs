@@ -11,6 +11,29 @@ use super::{
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
 pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+    if doc.passthrough.contains_key(super::REQUIRED_SOURCE_GUARD) {
+        let required = doc
+            .kept
+            .get()
+            .and_then(|k| k.docx_required.as_deref())
+            .ok_or_else(|| DocxError::Preservation("original source ownership is unavailable".into()))?;
+        if doc != required.snapshot.as_ref()
+            || !crate::required::same_owners(doc, &required.snapshot)
+            || required.main_content_type != flavor.main_content_type()
+        {
+            return Err(DocxError::Preservation("document or package flavor changed since import".into()));
+        }
+        if doc.settings.remove_personal_info || doc.settings.remove_date_time {
+            return Err(DocxError::Preservation("source replay cannot apply requested privacy sanitization".into()));
+        }
+        if !flavor.macros() && crate::required::source_has_vba(&required.source)? {
+            return Err(DocxError::Preservation("macro-free output cannot replay a source containing VBA".into()));
+        }
+        return Ok(required.source.iter().map(|(name, bytes)| (name.clone(), bytes.as_ref().clone())).collect());
+    }
+    if crate::required::has(doc) {
+        return Err(DocxError::Preservation("copied paragraph has no source package ownership".into()));
+    }
     // A range field must be whole in the file: drop markers that lost their partner in editing.
     let balanced;
     let doc = if doc.has_unbalanced_field_ranges() {

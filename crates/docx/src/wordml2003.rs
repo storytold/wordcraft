@@ -64,6 +64,14 @@ pub(crate) fn convert(bytes: &[u8]) -> Result<Package, DocxError> {
     if root.name != "w:wordDocument" {
         return Err(DocxError::NotWord(format!("root element is {}", root.name)));
     }
+    // Conversion replaces ancestors and cannot carry the original MC scopes or source package.
+    fn has_preservation_directive(e: &El) -> bool {
+        e.attrs.iter().any(|(name, value)| matches!(name.as_str(), "mc:PreserveElements" | "mc:PreserveAttributes") && !value.trim().is_empty())
+            || e.kids.iter().any(|node| matches!(node, Node::El(child) if has_preservation_directive(child)))
+    }
+    if has_preservation_directive(&root) {
+        return Err(DocxError::Preservation("Word 2003 XML conversion cannot retain source preservation directives".into()));
+    }
     let mut c = Conv {
         media: HashMap::new(),
         files: BTreeMap::new(),

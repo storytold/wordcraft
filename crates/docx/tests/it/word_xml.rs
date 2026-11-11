@@ -279,3 +279,16 @@ fn word_2003_xml_with_windows_line_ends_reads_one_space_per_line_break() {
     let d = read_xml(xml.as_bytes()).unwrap();
     assert_eq!(paras(&d)[0].plain_text(), "a b");
 }
+
+#[test]
+fn word_2003_inherited_required_markup_is_not_silently_lost() {
+    for on_body in [false, true] {
+        let directive = r#"mc:Ignorable="mml" mc:PreserveElements="mml:*""#;
+        let xml = format!(
+            r#"<w:wordDocument xmlns:w="http://schemas.microsoft.com/office/word/2003/wordml" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:mml="http://www.w3.org/1998/Math/MathML" {}><w:body {}><w:p><w:r><mml:math><mml:mi>x</mml:mi></mml:math></w:r></w:p></w:body></w:wordDocument>"#,
+            if on_body { "" } else { directive },
+            if on_body { directive } else { "" }
+        );
+        assert!(matches!(read_xml(xml.as_bytes()), Err(DocxError::Preservation(_))));
+    }
+}

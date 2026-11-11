@@ -281,8 +281,12 @@ fn rel_ids(e: &El, out: &mut Vec<String>, depth: usize) -> Option<()> {
             out.push(v.clone());
         }
     }
-    for c in e.els() {
-        rel_ids(c, out, depth + 1)?;
+    // Retained markup includes the wrappers hidden by MC's processing view. Their
+    // relationships must be retained too, including preserved extension content.
+    for node in &e.kids {
+        if let crate::xml::Node::El(c) = node {
+            rel_ids(c, out, depth + 1)?;
+        }
     }
     Some(())
 }
@@ -443,7 +447,7 @@ mod tests {
 
         // A VML shape's `id` is its own: it names no part, so the part is carried over.
         let own = package(
-            r#"<w:p><w:r><w:pict><v:shape id="rIdDoc1" style="width:10pt;height:10pt"/></w:pict></w:r></w:p>"#,
+            r#"<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" id="rIdDoc1" style="width:10pt;height:10pt"/></w:pict></w:r></w:p>"#,
             &[("rIdDoc1", "keep.bin")],
             &[("word/keep.bin", b"kept")],
         );

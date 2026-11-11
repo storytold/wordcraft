@@ -21,6 +21,17 @@ fn doc_zip(document_xml: &[u8]) -> Vec<u8> {
     zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", document_xml)])
 }
 
+fn docx_with_styles(styles: &[u8]) -> Vec<u8> {
+    let document = format!("<w:document {W_NS}><w:body><w:p><w:r><w:t>safe</w:t></w:r></w:p></w:body></w:document>");
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/styles.xml", styles),
+    ])
+}
+
 fn sample() -> Vec<u8> {
     let mut d = wordcraft_doc::Document::from_text("Hello world\nSecond paragraph with more text\nThird");
     let t = wordcraft_doc::Table::new(2, 2, 200.0);
@@ -136,6 +147,40 @@ fn broken_secondary_parts_are_ignored() {
     assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Body), "body");
     // The unresolvable list still writes.
     write(&d).unwrap();
+}
+
+#[test]
+fn malformed_optional_word_part_is_preserved_only_for_an_unchanged_document() {
+    let styles = b"<w:styles><w:style w:type=\"paragraph\" w:styleId=\"Normal\"/>";
+    let source = docx_with_styles(styles);
+    let doc = read(&source).unwrap();
+    assert_eq!(doc.plain_text(wordcraft_doc::StoryRef::Body), "safe");
+
+    let saved = write(&doc).unwrap();
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&saved)).unwrap();
+    let mut carried = Vec::new();
+    std::io::Read::read_to_end(&mut archive.by_name("word/styles.xml").unwrap(), &mut carried).unwrap();
+    assert_eq!(carried, styles, "skipping a malformed optional part must not silently drop its bytes");
+
+    let mut edited = doc.clone();
+    edited.core.title = "edited".into();
+    assert!(matches!(write(&edited), Err(DocxError::Preservation(_))), "edited documents cannot drop source-only markup");
+    let mut private = doc;
+    private.settings.remove_personal_info = true;
+    assert!(matches!(write(&private), Err(DocxError::Preservation(_))), "source replay cannot bypass privacy scrubbing");
+}
+
+#[test]
+fn malformed_optional_part_recovery_cannot_hide_mc_or_prefix_ambiguity() {
+    let malformed = [
+        b"<w:styles><w:altChunk bad:id=\"r1\"/></w:styles>".as_slice(),
+        b"<w:styles><w:Choice bad:Requires=\"w\"/></w:styles>".as_slice(),
+        b"<w:styles xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:f=\"urn:future\"><w:p mc:MustUnderstand=\"f\"/></w:styles>".as_slice(),
+        b"<w:styles xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:a=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" w:val=\"one\" a:val=\"two\"/>".as_slice(),
+    ];
+    for styles in malformed {
+        assert!(matches!(read(&docx_with_styles(styles)), Err(DocxError::Xml(_))), "{}", String::from_utf8_lossy(styles));
+    }
 }
 
 #[test]
