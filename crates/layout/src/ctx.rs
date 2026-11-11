@@ -51,9 +51,9 @@ pub(crate) struct Ctx<'a> {
     /// Empty body paragraphs with hidden marks or continuous section breaks, in order:
     /// they take no room (see [`place_para`]).
     pub(crate) quiet_marks: Vec<usize>,
-    /// The paragraph (by revision) being laid out as going on from the line of the one before,
-    /// whose mark is hidden: its list number is counted but not drawn (#3986).
-    pub(crate) joined: Option<u64>,
+    /// The paragraph being laid out as going on from the line of the one before, whose mark is
+    /// hidden: its list number is counted but not drawn (#3986).
+    pub(crate) joined: Option<Joining>,
     /// Empty paragraphs closing a continuous section right after another section's mark, in
     /// order: each takes its line while it fits, then stays at the page's bottom (#3907).
     pub(crate) stacked_marks: Vec<usize>,
@@ -80,6 +80,31 @@ pub(crate) struct Ctx<'a> {
     /// Items re-placed as repeated table header rows so far, in the whole layout (see
     /// [`MAX_HEADER_ITEMS`]).
     pub(crate) header_repeats: usize,
+}
+
+/// A paragraph going on from the line of the one before, whose mark is hidden (#3986): a copy of
+/// the document's, which keeps its revision, given the space before that puts its text on that
+/// line's baseline.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Joining {
+    /// The paragraph's revision.
+    pub(crate) rev: u64,
+    /// The space before the copy is given.
+    before: f32,
+    /// Whether it still shares that line: not once its first line has moved on to the next
+    /// column or page, where it is laid out as on its own (the copy's space before kept).
+    pub(crate) shares: bool,
+}
+
+impl Joining {
+    pub(crate) fn new(rev: u64, before: f32) -> Self {
+        Joining { rev, before, shares: true }
+    }
+
+    /// What tells the copy's layouts apart from each other and from the paragraph's own.
+    fn key(self) -> (u32, bool) {
+        (self.before.to_bits(), self.shares)
+    }
 }
 
 struct ParaEnvInput<'a> {
@@ -238,6 +263,11 @@ impl Ctx<'_> {
         pl
     }
 
+    /// Whether `p` is laid out going on from the line of the paragraph before, sharing it (#3986).
+    fn shares_line(&self, p: &Paragraph) -> bool {
+        self.joined.is_some_and(|j| j.rev == p.rev && j.shares)
+    }
+
     /// Whether `p`'s paragraph mark is hidden, with hidden text not shown: Word then shows the
     /// paragraph on one line with the next one (#3986). A section's closing mark never joins.
     pub(crate) fn mark_hidden(&self, p: &Paragraph, table_chr: Option<&CharProps>) -> bool {
@@ -295,7 +325,7 @@ impl Ctx<'_> {
                 eq_number,
                 typing_word: typing,
                 fitted: &fitted,
-                joined: self.joined == Some(p.rev),
+                joined: self.shares_line(p),
             }),
         ));
         self.cache.paras.insert(key, pl.clone());
@@ -337,7 +367,7 @@ impl Ctx<'_> {
                 eq_number,
                 typing_word: None,
                 fitted: &[],
-                joined: self.joined == Some(p.rev),
+                joined: self.shares_line(p),
             }),
         ));
         self.cache.paras.insert(key, pl.clone());
@@ -374,7 +404,7 @@ impl Ctx<'_> {
                 eq_number,
                 typing_word: typing,
                 fitted: &fitted,
-                joined: self.joined == Some(p.rev),
+                joined: self.shares_line(p),
             }),
         ));
         self.cache.measures.insert(key, m);
@@ -460,7 +490,7 @@ impl Ctx<'_> {
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
             typing: self.opts.typing_word.filter(|t| t.rev == p.rev).map(|t| (t.start, t.end)),
-            joined: self.joined == Some(p.rev),
+            joined: self.joined.filter(|j| j.rev == p.rev).map(Joining::key),
         };
         (key, eq_number)
     }

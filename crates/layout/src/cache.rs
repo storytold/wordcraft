@@ -27,8 +27,9 @@ pub(crate) struct Key {
     pub(crate) sref: u64,
     /// The word being typed in this paragraph, left without a spelling squiggle.
     pub(crate) typing: Option<(usize, usize)>,
-    /// Laid out going on from the paragraph before ([`ParaEnv::joined`](crate::para::ParaEnv)).
-    pub(crate) joined: bool,
+    /// A copy of the paragraph going on from the line of the one before (`ctx::Joining`): its
+    /// space before and whether it shares that line ([`ParaEnv::joined`](crate::para::ParaEnv)).
+    pub(crate) joined: Option<(u32, bool)>,
 }
 
 /// Memoised paragraph layouts.

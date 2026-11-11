@@ -2338,6 +2338,126 @@ fn a_joined_line_with_a_hanging_indent_still_starts_after_the_text_before() {
 }
 
 #[test]
+fn a_joined_paragraphs_shading_and_borders_start_below_the_shared_line() {
+    // Word (synthetic DOCX, 16.0.20625): the line a paragraph shares with the one before, whose
+    // mark is hidden, shows that one's shading and borders, not its own. Its own start on its next
+    // line (no top border there), and a paragraph that is all on the shared line shows neither and
+    // takes no room for its borders; what follows starts below the first one's bottom border.
+    let yellow = wordcraft_doc::props::Rgb(0xFF, 0xFF, 0);
+    let boxed = || Some(Borders::all(Border { space: 1.0, ..Border::single(1.5) }));
+    // "Alpha" (mark hidden) with `first`'s formatting, then `second` with its own, then "After".
+    let doc = |first: &dyn Fn(&mut ParaProps), second_text: &str, second: &dyn Fn(&mut ParaProps), in_cell: bool| {
+        let mut d = Document::from_text(&format!("Alpha\n{second_text}\nAfter"));
+        let a = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        a.mark.hidden = Some(true);
+        first(&mut a.props);
+        second(&mut d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props);
+        if in_cell {
+            let mut table = Table::new(1, 1, 400.0);
+            table.props.borders = Some(Borders::all(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }));
+            table.rows[0].cells[0].blocks = std::mem::take(&mut d.body);
+            d.body = vec![std::sync::Arc::new(Block::Table(table))];
+        }
+        d
+    };
+    let path = |i: u32, in_cell: bool| if in_cell { Path(vec![0, 0, 0, i]) } else { Path::top(i as usize) };
+    // The shared line (top, bottom), "After"'s top, fills and the paragraphs' horizontal rules.
+    let laid = |d: &Document, in_cell: bool| {
+        crate::test_fonts();
+        let l = lay(d);
+        let at = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: path(i, in_cell), off: 0 }).unwrap();
+        let (alpha, after) = (at(0), at(2));
+        let fills: Vec<Rect> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Fill { rect, color } = i { (*color == yellow).then_some(*rect) } else { None })
+            .collect();
+        let rules: Vec<(f32, f32, f32, f32)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(
+                |i| if let Placed::Rule { x0, y0, x1, y1, border } = i { (border.width == 1.5).then_some((*x0, *y0, *x1, *y1)) } else { None },
+            )
+            .collect();
+        (alpha.top, alpha.top + alpha.height, after.top, fills, rules)
+    };
+    let none = |_: &mut ParaProps| {};
+    let long = format!("Omega {}", "zeta ".repeat(30));
+    for in_cell in [false, true] {
+        let (top, bottom, after, ..) = laid(&doc(&none, "Omega", &none, in_cell), in_cell);
+
+        // The second one shaded, all of it on the shared line: no shading over "Alpha".
+        let (t, _, a, fills, _) = laid(&doc(&none, "Omega", &|p| p.shading = Some(yellow), in_cell), in_cell);
+        assert!(fills.is_empty(), "in_cell={in_cell}: {fills:?}");
+        assert!((t - top).abs() < 0.01 && (a - after).abs() < 0.01, "in_cell={in_cell}");
+
+        // Shaded and running on: the shading starts on its own next line.
+        let (_, b, _, fills, _) = laid(&doc(&none, &long, &|p| p.shading = Some(yellow), in_cell), in_cell);
+        assert_eq!(fills.len(), 1, "in_cell={in_cell}: {fills:?}");
+        assert!(fills[0].y >= b - 0.01, "in_cell={in_cell}: shading from {} over the shared line ending at {b}", fills[0].y);
+
+        // The first one shaded: the shared line is.
+        let (t, b, _, fills, _) = laid(&doc(&|p| p.shading = Some(yellow), "Omega", &none, in_cell), in_cell);
+        assert_eq!(fills.len(), 1, "in_cell={in_cell}: {fills:?}");
+        assert!(fills[0].y <= t + 0.01 && fills[0].bottom() >= b - 0.01, "in_cell={in_cell}: {fills:?}");
+
+        // The second one boxed, all of it on the shared line: no borders, no room for them.
+        let (t, _, a, _, rules) = laid(&doc(&none, "Omega", &|p| p.borders = boxed(), in_cell), in_cell);
+        assert!(rules.is_empty(), "in_cell={in_cell}: {rules:?}");
+        assert!((t - top).abs() < 0.01 && (a - after).abs() < 0.01, "in_cell={in_cell}: {t} {a}");
+
+        // Boxed and running on: its box is around its own lines, open at the top, with its bottom
+        // border's room under it; the shared line stays where it is.
+        let (t, b, _, _, rules) = laid(&doc(&none, &long, &|p| p.borders = boxed(), in_cell), in_cell);
+        assert!((t - top).abs() < 0.01, "in_cell={in_cell}: shared line moved to {t}");
+        assert_eq!(rules.iter().filter(|r| r.1 == r.3).count(), 1, "in_cell={in_cell}: only the bottom border: {rules:?}");
+        assert!(rules.iter().all(|r| r.1.min(r.3) >= b - 0.01), "in_cell={in_cell}: a border over the shared line: {rules:?}");
+
+        // The first one boxed: what follows starts below its bottom border.
+        let (_, _, a, _, rules) = laid(&doc(&|p| p.borders = boxed(), "Omega", &none, in_cell), in_cell);
+        let bottom_rule = rules.iter().filter(|r| r.1 == r.3).map(|r| r.1).fold(f32::MIN, f32::max);
+        assert!(bottom_rule > bottom, "in_cell={in_cell}: {rules:?}");
+        assert!(a >= bottom_rule + 0.75 - 0.01, "in_cell={in_cell}: After at {a}, over the border at {bottom_rule}");
+    }
+}
+
+#[test]
+fn a_joined_paragraph_keeps_its_revision_for_the_cache_and_the_word_being_typed() {
+    // The joined paragraph is laid out as a copy without its space before (#3986). The copy keeps
+    // the document's revision: the word being typed in it gets no squiggle, and laying the
+    // document out again reuses its layouts.
+    crate::test_fonts();
+    let mut d = Document::from_text("Alpha\nhelo wrld\nAfter");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().mark.hidden = Some(true);
+    let rev = d.para(StoryRef::Body, &Path::top(1)).unwrap().rev;
+    let marks = |l: &DocLayout| -> Vec<String> {
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                Placed::Lines { para, path, .. } if *path == Path::top(1) => {
+                    Some(para.issues.iter().filter(|i| !i.2).map(|i| "helo wrld"[i.0..i.1].to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    let mut c = LayoutCache::new();
+    let opts = LayoutOptions { proofing: true, ..LayoutOptions::default() };
+    let both = layout(&d, &mut c, &opts);
+    assert_eq!(marks(&both), ["helo", "wrld"]);
+    let (a, b) = (both.caret(&Pos::body(0, 5)).unwrap(), both.caret(&Pos::body(1, 0)).unwrap());
+    assert!((a.top - b.top).abs() < 0.01, "joined");
+    let misses = c.misses;
+    let again = layout(&d, &mut c, &opts);
+    assert_eq!(marks(&again), ["helo", "wrld"]);
+    assert_eq!(c.misses, misses, "nothing laid out again");
+    let typing = layout(&d, &mut c, &LayoutOptions { typing_word: Some(TypingWord { rev, start: 5, end: 9 }), ..opts.clone() });
+    assert_eq!(marks(&typing), ["helo"], "the word being typed is left alone");
+}
+
+#[test]
 fn a_numbered_heading_opening_with_a_page_break_takes_its_number_along() {
     crate::test_fonts();
     // "Before", then a numbered paragraph whose text opens with a page break: Word draws its

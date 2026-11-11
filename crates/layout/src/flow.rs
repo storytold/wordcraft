@@ -1,6 +1,6 @@
 use super::boxes::{BoxInput, BoxLayout, Edges, Joint, joined, layout_box, push_para};
 use super::cache::has_page_number_fields;
-use super::ctx::Ctx;
+use super::ctx::{Ctx, Joining};
 use super::floats::{
     FloatAnchor, LateFloats, ObjFrame, ObjectPlacement, anchor_floats, body_wraps, continued_exclusions, fitting, late_floats, place_late,
     place_objects,
@@ -45,7 +45,8 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
         pb.joint = pb.page().and_then(|page| {
             page.items.iter().rev().find_map(|it| match it {
                 Placed::Lines { story: StoryRef::Body, path: at, para, l0, l1, x, y, turn: TextDirection::Horizontal, .. } if *at == path => {
-                    Joint::after(para, (*l0, *l1), block, (*x, *y))
+                    let room = if *l1 >= para.lines.len() { Rooms::of(ctx, block, para).bottom } else { 0.0 };
+                    Joint::after(para, (*l0, *l1), block, (*x, *y), room)
                 }
                 _ => None,
             })
@@ -60,16 +61,16 @@ pub(crate) fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, blo
 /// line's top, beside that paragraph's text, with no space before and its list number counted
 /// but not drawn; its space after and line spacing are its own (Word, #3986).
 fn place_para_joined(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, (block, body_top): (usize, f32), j: Joint) {
+    // The copy keeps the paragraph's revision, so the word being typed in it is found and its
+    // layouts are reused from one pass to the next: the cache tells them apart by `Joining`.
     let mut q = p.clone();
     q.props.space_before = Some(0.0);
     q.props.space_before_auto = Some(false);
-    q.touch();
-    let outer = ctx.joined.replace(q.rev);
+    let outer = ctx.joined.replace(Joining::new(q.rev, 0.0));
     let (gap, area) = j.fit(ctx, &q, pb.col_w(), None);
     if gap > 0.0 {
         q.props.space_before = Some(gap);
-        q.touch();
-        ctx.joined = Some(q.rev);
+        ctx.joined = Some(Joining::new(q.rev, gap));
     }
     pb.y = j.top;
     pb.prev = None;
@@ -80,9 +81,10 @@ fn place_para_joined(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, (block,
     if let Some(k) = pb.excl.iter().position(|a| a.0 == area.0 && !a.1 && a.2.is_none() && a.3 == area.3) {
         pb.excl.remove(k);
     }
-    // The shared line is at least as tall as the first paragraph's: what follows starts below it.
+    // The shared line is at least as tall as the first paragraph's, with its bottom border: what
+    // follows starts below it.
     if (pb.pages.len(), pb.col) == (j.page, j.col) {
-        pb.y = pb.y.max(j.top + j.height + ctx.doc.styles.resolve_para(&q.props).space_after);
+        pb.y = pb.y.max(j.bottom() + ctx.doc.styles.resolve_para(&q.props).space_after);
     }
 }
 
@@ -90,8 +92,8 @@ fn place_para_joined(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, (block,
 /// next column or page no longer shares that line: it is laid out as it is on its own there, its
 /// list number drawn and its first-line indent and alignment its own.
 fn unjoin(ctx: &mut Ctx, p: &Paragraph) {
-    if ctx.joined == Some(p.rev) {
-        ctx.joined = None;
+    if let Some(j) = ctx.joined.as_mut().filter(|j| j.rev == p.rev) {
+        j.shares = false;
     }
 }
 
@@ -206,7 +208,7 @@ impl Rooms {
     fn of(ctx: &Ctx, block: usize, pl: &ParaLayout) -> Self {
         let above = joined(ctx.doc, &ctx.doc.body, block, block.checked_sub(1), None);
         let below = joined(ctx.doc, &ctx.doc.body, block, Some(block + 1), None);
-        let own = Edges::own(pl, 0, pl.lines.len());
+        let own = Edges::own(pl, 0, pl.lines.len()).sharing(pl);
         Rooms { above, top: if above { 0.0 } else { own.top }, bottom: if below { 0.0 } else { own.bottom } }
     }
 }
@@ -870,7 +872,7 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
             let Some(line) = pl.lines.get(li).filter(|l| !l.beside) else { continue };
             // The first line of a paragraph going on from the line of the one before (#3986)
             // shares that line, numbered already, unless its first word went on the next one.
-            if li == 0 && pl.joined && line.top <= 0.01 {
+            if li == 0 && pl.shares_line() {
                 continue;
             }
             pb.line_no = pb.line_no.saturating_add(1);

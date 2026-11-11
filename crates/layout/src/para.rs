@@ -107,6 +107,12 @@ pub struct ParaLayout {
 }
 
 impl ParaLayout {
+    /// Whether its first line is the one it shares with the paragraph before, whose mark is
+    /// hidden (#3986), rather than a line of its own below it (its first word didn't fit there).
+    pub(crate) fn shares_line(&self) -> bool {
+        self.joined && self.lines.first().is_some_and(|l| l.top <= 0.01)
+    }
+
     /// The room a horizontal rule at cluster `k` is placed in, from its left edge to the end of
     /// what the line has left. A first-line indent moves that end along (Word, measured with
     /// 50 % and fixed-width rules beside floats on either side and with first-line and hanging
