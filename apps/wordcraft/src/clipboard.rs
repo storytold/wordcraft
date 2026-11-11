@@ -557,19 +557,17 @@ mod platform {
     }
 
     pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
-        if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) {
-            if let Some(format) = raw::register_format("PNG") {
-                if let Ok(_open) = Clipboard::new_attempts(10) {
-                    let _ = raw::set_without_clear(format.get(), &png);
-                }
-            }
+        if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone())
+            && let Some(format) = raw::register_format("PNG")
+            && let Ok(_open) = Clipboard::new_attempts(10)
+        {
+            let _ = raw::set_without_clear(format.get(), &png);
         }
-        if !html.is_empty() {
-            if let Some(format) = raw::register_format("HTML Format") {
-                if let Ok(_open) = Clipboard::new_attempts(10) {
-                    let _ = raw::set_without_clear(format.get(), html.as_bytes());
-                }
-            }
+        if !html.is_empty()
+            && let Some(format) = raw::register_format("HTML Format")
+            && let Ok(_open) = Clipboard::new_attempts(10)
+        {
+            let _ = raw::set_without_clear(format.get(), html.as_bytes());
         }
         record_own();
     }
