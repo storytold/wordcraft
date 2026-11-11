@@ -1016,3 +1016,73 @@ fn output_gives_every_reference_its_bookmarks_text() {
     assert_eq!(results, expected);
     assert_eq!(results, ["First target", "Second target", "First target", REFERENCE_NOT_FOUND, "First target"]);
 }
+
+/// A paragraph of `n` `DATE \@ "MMMM"` fields, each in its own run, alternating English and
+/// Portuguese, so each field's month name shows which run's language it was given.
+fn date_fields_para(n: usize) -> wordcraft_doc::Document {
+    use wordcraft_doc::para::OBJ;
+    use wordcraft_doc::{CharProps, Paragraph, Run};
+    let mut p = Paragraph::new();
+    p.text = OBJ.to_string().repeat(n);
+    p.runs = (0..n)
+        .map(|i| Run {
+            len: OBJ.len_utf8(),
+            props: CharProps { lang: Some(if i % 2 == 0 { "en-US" } else { "pt-BR" }.into()), ..Default::default() },
+        })
+        .collect();
+    p.objects = (0..n)
+        .map(|_| InlineObject::Field {
+            instr: r#"DATE \@ "MMMM""#.into(),
+            result: "stale".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        })
+        .collect();
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d
+}
+
+/// #6318: the refresh on open and Update Field (all) give every DATE field in a long paragraph
+/// its own run's language, at about 8x the steps for 8x the fields: a small file with very many
+/// DATE fields in one paragraph must not hang opening because each field rescans the paragraph.
+#[test]
+fn date_field_languages_are_found_in_one_pass_over_the_paragraph() {
+    let months = |d: &wordcraft_doc::Document| -> Vec<String> {
+        d.body[0]
+            .as_para()
+            .unwrap()
+            .objects
+            .iter()
+            .map(|o| if let InlineObject::Field { result, .. } = o { result.clone() } else { String::new() })
+            .collect()
+    };
+    let en = crate::cmd::insert::format_date_in("MMMM", Some("en-US"));
+    let pt = crate::cmd::insert::format_date_in("MMMM", Some("pt-BR"));
+    assert_ne!(en, pt, "the month names tell the languages apart");
+    let expected: Vec<String> = (0..6).map(|i| if i % 2 == 0 { en.clone() } else { pt.clone() }).collect();
+    let mut d = date_fields_para(6);
+    refresh_date_fields(&mut d);
+    assert_eq!(months(&d), expected, "refresh on open");
+    let mut s = Session::new(date_fields_para(6));
+    s.run("references.updateFields", &json!({"all": true})).unwrap();
+    assert_eq!(months(&s.doc), expected, "Update Field, all");
+
+    // The characters the object lookups walk (`wordcraft_doc::work`), not a timing: about 8x for
+    // 8x the fields when the paragraph is scanned once, about 64x when every field rescans it.
+    let (mut small, mut big) = (date_fields_para(250), date_fields_para(2000));
+    let s1 = wordcraft_doc::work::count(|| refresh_date_fields(&mut small));
+    let s8 = wordcraft_doc::work::count(|| refresh_date_fields(&mut big));
+    let ratio = s8 as f64 / s1.max(1) as f64;
+    eprintln!("date field refresh steps: {s1} -> {s8}, {ratio:.1}x for 8x fields");
+    assert!(s1 > 0, "no steps counted, so the walk this test watches no longer counts them (wordcraft_doc::work)");
+    assert!(ratio <= 12.0, "refreshing DATE fields rescans the paragraph per field: {ratio:.1}x the steps for 8x fields ({s1} -> {s8})");
+    let (mut small, mut big) = (Session::new(date_fields_para(250)), Session::new(date_fields_para(2000)));
+    let u1 = wordcraft_doc::work::count(|| update_fields_in(&mut small, true).unwrap());
+    let u8 = wordcraft_doc::work::count(|| update_fields_in(&mut big, true).unwrap());
+    let ratio = u8 as f64 / u1.max(1) as f64;
+    eprintln!("update all fields steps: {u1} -> {u8}, {ratio:.1}x for 8x fields");
+    assert!(ratio <= 12.0, "updating all fields rescans the paragraph per DATE field: {ratio:.1}x the steps for 8x fields ({u1} -> {u8})");
+}
