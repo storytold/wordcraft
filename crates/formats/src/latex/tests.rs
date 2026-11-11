@@ -471,3 +471,14 @@ fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
     assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
     assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }
+
+#[test]
+fn a_backslash_before_a_line_end_or_a_tab_is_a_control_space() {
+    // The control symbol took the line end with it and read as nothing: the two words ran
+    // together, and a blank line after it no longer ended the paragraph.
+    assert_eq!(texts("\\begin{document}mid\\\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}mid\\\r\nline\\end{document}"), vec!["mid line".to_string()]);
+    assert_eq!(texts("\\begin{document}tab\\\there\\end{document}"), vec!["tab here".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\n\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+    assert_eq!(texts("\\begin{document}first\\\r\n\r\nsecond\\end{document}"), vec!["first".to_string(), "second".to_string()]);
+}

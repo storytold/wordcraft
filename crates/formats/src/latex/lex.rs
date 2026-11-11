@@ -126,8 +126,17 @@ impl Lexer<'_> {
                     let r = self.rest();
                     let n = r.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(r.len());
                     if n == 0 {
+                        // `\` before a line end is a control space, as TeX defines `\^^M`. The
+                        // line end stays for the whitespace below, so a blank line after it
+                        // still ends the paragraph.
+                        if matches!(self.peek(), Some('\n' | '\r')) {
+                            self.out.push(Tok::Cmd(" ".to_string()));
+                            continue;
+                        }
                         let Some(sym) = self.bump() else { break };
                         match sym {
+                            // `\^^I`, likewise.
+                            '\t' => self.out.push(Tok::Cmd(" ".to_string())),
                             '(' => {
                                 let m = self.until("\\)");
                                 self.out.push(Tok::Math(m, false));
