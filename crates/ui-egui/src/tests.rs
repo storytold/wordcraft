@@ -993,6 +993,93 @@ fn table_properties_button_opens_the_dialog() {
     assert_eq!(g.changes(&basis), json!({"rtl": true}));
 }
 
+/// The dialog shows the indent the table is drawn at, its style's when it has none of its own,
+/// so OK with nothing changed leaves the table where it is.
+#[test]
+fn table_properties_show_a_style_indent() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    let doc = &mut a.session.doc;
+    std::sync::Arc::make_mut(&mut doc.styles).upsert(wordcraft_doc::styles::Style {
+        id: "Indented".into(),
+        name: "Indented".into(),
+        kind: wordcraft_doc::styles::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts { indent: Some(36.0), ..Default::default() }),
+        ..Default::default()
+    });
+    for b in &mut doc.body {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.props.style = Some("Indented".into());
+            t.props.indent = None;
+        }
+    }
+    let k = crate::options::unit().pt_per_unit();
+    let f = dialogs::TableForm::read(&a).unwrap();
+    assert!((f.indent * k - 36.0).abs() < 0.01, "{} pt", f.indent * k);
+    assert_eq!(f.changes(&f.clone()), json!({}));
+}
+
+/// The Table Properties fields' limits are in inches whatever unit is chosen: with points, a
+/// 36 pt indent drawn in the dialog stays 36 pt, and OK changes nothing (it was clamped to 22).
+#[test]
+fn table_properties_keep_an_indent_drawn_in_points() {
+    let mut a = app();
+    a.session.prefs.units = Some(wordcraft_geom::Unit::Points);
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    for b in &mut a.session.doc.body {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.props.indent = Some(36.0);
+        }
+    }
+    a.run("table.properties", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let Some(dialogs::Dialog::TableProperties { form, basis }) = h.state().dialog.clone() else { panic!("no dialog") };
+    assert!((form.indent - 36.0).abs() < 0.01, "drawn in points: {}", form.indent);
+    assert_eq!(form.changes(&basis), json!({}));
+}
+
+/// A 6 pt column, the narrowest `table.properties` sets, survives the dialog being drawn and
+/// confirmed: the field's minimum is the command's, and drawing a field doesn't clamp it.
+#[test]
+fn table_properties_keep_a_six_point_column() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    a.run("table.properties", json!({"columnWidth": 6.0})).unwrap();
+    let col =
+        |a: &WordApp| a.session.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { t.grid.first().copied() } else { None });
+    let before = col(&a);
+    a.run("table.properties", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let Some(dialogs::Dialog::TableProperties { form, basis }) = h.state().dialog.clone() else { panic!("no dialog") };
+    assert_eq!(form.changes(&basis), json!({}), "drawing the dialog changes nothing: {}", form.column_width);
+    h.get_by_label("OK").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert_eq!(col(h.state()), before, "the column keeps its 6 pt");
+}
+
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
 /// changes nothing left alone; clicked, OK sets it for every selected row.
 #[test]

@@ -567,6 +567,7 @@ fn table_style_formatting_round_trips() {
         borders: Some(Borders { top: Some(Border::single(1.0)), ..Default::default() }),
         fill: Some(Rgb(0xDD, 0xEB, 0xF7)),
         cell_margins: Some([1.0, 14.4, 0.0, 14.4]),
+        indent: Some(0.0),
         header_chr: CharProps { italic: Some(true), ..Default::default() },
         header_fill: Some(Rgb(0xFF, 0xFF, 0)),
         header_borders: Some(Borders::all(Border::single(1.5))),

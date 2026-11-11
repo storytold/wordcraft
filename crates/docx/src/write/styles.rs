@@ -1,4 +1,5 @@
 use super::{Document, Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, props, xml};
+use wordcraft_doc::styles::TableStyleParts;
 
 /// Built-in names Word keeps in lower case in styles.xml.
 fn file_style_name(name: &str) -> String {
@@ -54,6 +55,31 @@ pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     }
     w.close("w:styles");
     w.into_bytes()
+}
+
+/// A table style's own table properties (`w:tblPr`), in ECMA-376 order.
+fn table_style_tblpr(w: &mut W, t: &TableStyleParts) {
+    if t.borders.is_none() && t.cell_margins.is_none() && t.indent.is_none() && t.band_size.is_none() && t.col_band_size.is_none() {
+        return;
+    }
+    w.open("w:tblPr", &[]);
+    if let Some(n) = t.band_size {
+        w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+    }
+    if let Some(n) = t.col_band_size {
+        w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
+    }
+    // Kept even at 0: Word places a table whose style chain sets no indent differently.
+    if let Some(i) = t.indent {
+        w.empty("w:tblInd", &[("w:w", &crate::units::twips(i)), ("w:type", "dxa")]);
+    }
+    if let Some(b) = &t.borders {
+        props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+    }
+    if let Some(m) = &t.cell_margins {
+        props::margins(w, "w:tblCellMar", m);
+    }
+    w.close("w:tblPr");
 }
 
 fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
@@ -113,22 +139,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
-            w.open("w:tblPr", &[]);
-            if let Some(n) = t.band_size {
-                w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
-            }
-            if let Some(n) = t.col_band_size {
-                w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
-            }
-            if let Some(b) = &t.borders {
-                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
-            }
-            if let Some(m) = &t.cell_margins {
-                props::margins(w, "w:tblCellMar", m);
-            }
-            w.close("w:tblPr");
-        }
+        table_style_tblpr(w, t);
         // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
         // then cell borders, shading and vertical alignment. The whole table's text formatting
         // is the style's own (above).

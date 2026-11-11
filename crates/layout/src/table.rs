@@ -453,7 +453,7 @@ fn table_frame(ctx: &mut Ctx, t: &Table, avail: f32, depth: usize, style: Option
     // Word 2013 and later (compatibility mode 15) put the table's border at the margin (plus its
     // indent); earlier modes line the first cell's text up with it instead.
     let margins_def = default_margins(t, style);
-    let indent = t.props.indent.unwrap_or(0.0);
+    let indent = t.props.indent.or(style.and_then(|s| s.parts.indent)).unwrap_or(0.0);
     // The style's borders, overlaid by the table's own side by side.
     let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
     if let Some(own) = t.props.borders {

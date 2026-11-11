@@ -453,3 +453,31 @@ fn triple_click_selects_a_cell_only_on_its_last_paragraph() {
         assert_eq!(moved, !last, "last paragraph {last}: the column moves only without a cell selection");
     }
 }
+
+/// A table whose indent comes from its style is moved from where it is drawn: dragging its left
+/// edge 10 points in gives it an indent of the style's plus 10, not 10 from the margin.
+#[test]
+fn the_left_edge_moves_a_style_indent_from_where_it_is() {
+    let mut doc = table_session(1, 3).doc;
+    std::sync::Arc::make_mut(&mut doc.styles).upsert(wordcraft_doc::styles::Style {
+        id: "Indented".into(),
+        name: "Indented".into(),
+        kind: wordcraft_doc::styles::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts { indent: Some(36.0), ..Default::default() }),
+        ..Default::default()
+    });
+    for b in &mut doc.body {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.props.style = Some("Indented".into());
+            t.props.indent = None;
+        }
+    }
+    let mut s = Session::new(doc);
+    let a = cell_rect(&mut s, 0, 0);
+    let y = a.y + a.h / 2.0;
+    s.run("table.resizeDrag", &json!({"page": 0, "x": a.x - 1.0, "y": y, "toX": a.x + 9.0, "toY": y})).unwrap();
+    let a1 = cell_rect(&mut s, 0, 0);
+    assert!((a1.x - (a.x + 10.0)).abs() < 0.5, "moved 10 points: {a:?} → {a1:?}");
+    let indent = first_table(&s).props.indent;
+    assert!(indent.is_some_and(|i| (i - 46.0).abs() < 0.5), "{indent:?}");
+}
