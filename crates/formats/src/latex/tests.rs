@@ -241,6 +241,19 @@ fn fragments_without_a_document_environment() {
 }
 
 #[test]
+fn a_blank_line_after_a_comment_ends_the_paragraph() {
+    // The comment took its line end with it, so the blank line after it read as a single line
+    // end: the paragraphs ran together with two spaces between them.
+    let two = ["first", "second"];
+    assert_eq!(texts("\\begin{document}first % note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n  \t\n\nsecond\\end{document}"), two);
+    // A comment still joins its line to a next line that is not blank.
+    assert_eq!(texts("\\begin{document}first%\nsecond\\end{document}"), ["firstsecond"]);
+    assert_eq!(texts("\\begin{document}first % note\n   second\\end{document}"), ["first second"]);
+}
+
+#[test]
 fn math_conversions() {
     for (tex, linear) in [
         (r"\frac{1}{2}", "1/2"),

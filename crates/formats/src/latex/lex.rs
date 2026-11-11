@@ -94,6 +94,16 @@ impl Lexer<'_> {
             }
         }
     }
+    /// After a comment has taken its line end: when the next line is blank, skip the blank lines
+    /// and end the paragraph, as TeX does.
+    fn blank_line_after_line_end(&mut self) {
+        if self.peek() == Some('\n') {
+            while matches!(self.peek(), Some(' ' | '\t' | '\n')) {
+                self.bump();
+            }
+            self.out.push(Tok::Par);
+        }
+    }
     /// After `\begin` / `\end`: the `{name}`, if well formed.
     fn env_name(&mut self) -> Option<String> {
         let save = self.i;
@@ -189,7 +199,10 @@ impl Lexer<'_> {
                         }
                     }
                 }
-                '%' => self.comment(),
+                '%' => {
+                    self.comment();
+                    self.blank_line_after_line_end();
+                }
                 '{' => {
                     self.bump();
                     self.out.push(Tok::Open);
