@@ -574,6 +574,15 @@ Results at this writing:
   running client instead of replacing it (ADR WC-0007, §5.34). The desktop has
   no host bridge yet, so it reads the environment once at start.
 - No two-machine manual GUI test; the UI tests are headless.
+- The client keeps `version.max(...)` when a snapshot or a welcome carries a
+  lower version, so a server restored from an older snapshot leaves the client's
+  base above the head and its next operations are refused `Stale`. Confirmed by
+  `5853542478` (`crates/collab-client/src/lib.rs:297`) and open: reconciling a
+  rollback has to decide how pending and unconfirmed operations are dropped or
+  re-planned, which is a change of its own (§5.35).
+- A first join that races another one on a document nothing is stored for builds
+  the room twice and keeps one; the loser's copy is dropped. Correct, but wasted
+  work on a large document (§5.35, finding 1).
 
 ## 5. Next session
 
@@ -3596,8 +3605,9 @@ names and does not take:
 ### 5.35 The head is delivered; the runs and CodeRabbit on `50c68e3a` (run 2026-11-11)
 
 This entry records the state of PR #5834 after the fifteen commits of
-§5.28–§5.34 left the local branch, and the one thing a maintainer still owes
-it. No code changed: this commit touches `docs/collab/STATUS.md` only.
+§5.28–§5.34 left the local branch, the one thing a maintainer still owes it, and
+the answer to the eight findings CodeRabbit posted on that head once its review
+finished (`af6c311b` for the code, the commit after it for this page).
 
 **The head.** `git rev-parse HEAD`, `git ls-remote fork
 refs/heads/feature/realtime-collaboration` and `gh pr view 5834 --json
@@ -3630,19 +3640,42 @@ Nothing executed, for the fork rule of §5.21. The evidence that the tree builds
 is still the build-host run of §3 and the `printing.yml` steps of §5.25, not a
 CI run on this head.
 
-**CodeRabbit on `50c68e3a`.** Its check started at 03:27:51Z and is
-`in_progress`; `gh pr view 5834 --json reviews` has no review for that head, the
-newest being `5848804525` on `af9a43a2` (2026-11-10 20:25:18Z, §5.27). There is
-therefore nothing to triage in this pass: no finding of the new review is known
-yet, and this entry does not guess at one. The next session reads the completed
-review once and records its findings here rather than polling the check.
+**CodeRabbit on `50c68e3a`.** Its check finished at 03:42:23Z with review
+`5853542478` (`COMMENTED`, eight actionable comments, all on this head). Every
+one was checked against the tree before anything changed; the fixes are in
+`af6c311b`, the tests that hold them are named in the table below. One more
+finding sits in the review body without an inline id
+(`crates/collab-client/src/lib.rs:297`); it is recorded here as confirmed and
+open, because it needs its own decision about pending operations (§4).
+
+| # | Comment | Where | Verdict | Answer |
+|---|---|---|---|---|
+| 1 | `room_for` reads and parses a 64 MiB model under the global `rooms` lock | `apps/collab-server/src/lib.rs` 4533747484 | **Confirmed.** `load`, `read_model` and `read_with_password` all ran with the map locked, so every other join, `/metrics` and `persist_all` waited on one document. | `room_for` keeps the fast path, then `build_room` loads and parses with no map lock, and the map is taken only to publish the room; a join that lost that race takes the published room. The join path runs it on `spawn_blocking`. Test: `two_first_joins_share_the_room_that_was_published`. |
+| 2 | A takeover retires the old connection before the lease can still refuse it | same file 4533747488 | **Confirmed.** `superseded.mark()` ran on the client-id check alone; the same `sid` reconnecting while another session held the lease was refused *after* its working socket was told to end. | The mark moved past every refusal, immediately before the insert. Test: `a_takeover_the_lease_refuses_leaves_the_old_connection_alone`. |
+| 3 | `broadcast` ignores a failed or timed-out write to the author | same file 4533747492 | **Confirmed.** The author's own `Applied`/`Committed` frame could fail while the session stayed open with its pending operation never acknowledged. | `broadcast` returns whether the frame reached the author; `handle_op` and `handle_commit` return `false` on a failure, which ends the session and resyncs the client, as every other failed write already did. `send` is generic over the sink so the failure path has a test: `an_answer_that_cannot_reach_its_author_is_reported`. |
+| 4 | `MAX_MODEL` is checked after the whole file is in memory | `apps/collab-server/src/store.rs` 4533747500 | **Confirmed.** `fs::read` allocated the file before `model.len()` was compared, exactly what the bound's doc comment says it prevents. | `File::open` plus `take(MAX_MODEL + 1)` and `read_to_end`; `NotFound` and the other read errors keep their meaning. Test: `a_model_over_the_bound_is_refused_without_being_read_whole`. |
+| 5 | `Diverged` is lost when `Welcome` arrives after `Disconnected` or a renewal | `crates/collab-app/src/lib.rs` 4533747521 | **Confirmed.** `poll` writes `Offline` on every disconnect and `renew_token` writes `Connecting`; `Welcome` compared the status, found neither `Diverged`, and set `InSync` over a document that still held an edit the room never saw. A commit then built the room's version without it. | New `Divergence` type: the pause is tracked apart from the status, `Welcome` reads it through `status_after_welcome`, and only a snapshot clears it. Test: `a_divergence_outlives_the_connection_status_until_a_snapshot_lands`. |
+| 6 | `pause` replaces `Diverged` with `Offline` when the resync frame cannot be sent | `crates/collab-web/src/lib.rs` 4533747527 | **Confirmed** — the same defect on the web path, where a closed socket and a failed `send` both write `Offline`. | The same `Divergence` flag; `pause` sets it before the status, `Offline` no longer clears it, and `Snapshot` is the only clear. Test: `a_pause_survives_a_closed_socket_until_the_snapshot_lands`. |
+| 7 | A writer who cannot commit is told the session is "read-only" | `crates/ui-egui/src/collab.rs` 4533747533 | **Confirmed.** `request_commit` mapped every role without `can_commit()` to "This session is read-only"; an `editor` writes all day and got that message. | `commit_refusal_message` names the real restriction: owner-only for a writer, read-only only for a role that cannot write, the session message for the owner. Test: `a_commit_refusal_names_the_role_that_is_missing`. |
+| 8 | ADR WC-0003 tells operators to restore `model.json` alone | `docs/collab/adr/0003-corrupt-snapshot-refused.md` 4533747537 | **Confirmed.** `Store::load` takes the head version from `meta`; an older model beside the current `meta` is accepted and advertises a head the document does not have. | The consequence now asks for the document directory from one backup — `model.json` **and** `meta`; `source.docx` and `dedup.json` stay optional for the reasons the ADR already gives. |
+| — | Snapshot reconciliation keeps `max(version)` when the server restores an older snapshot | `crates/collab-client/src/lib.rs:297`, review body only | **Confirmed, open.** `ServerMsg::Snapshot` and `Welcome` both assign `version.max(...)`, so after a restore the client's base stays above the server head and its next operations are refused `Stale`. | Not fixed here: the fix has to decide what happens to pending and unconfirmed operations, which is a change of its own. Recorded in §4. |
+
+**The gates on `af6c311b`.** `cargo test -p wordcraft-collab-server -p
+wordcraft-collab-app -p wordcraft-collab-web -j 6` on the build host: 70 passed
+/ 0 failed / 1 ignored (`soffice`), 43/0, 10/0. `cargo clippy -p … --all-targets
+-- -D warnings` over the four touched packages: clean. `cargo fmt --check` and
+`cargo check -p wordcraft-collab-web -p wordcraft-ui-egui --target
+wasm32-unknown-unknown` on the same host: clean (`WASM_OK`). The `ui-egui` test
+was run alone (`a_commit_refusal_names_the_role_that_is_missing`), because that
+suite's 1195 tests are not part of this pass.
 
 **What is left.** One maintainer's approval of the five runs above and a review
-decision. Until the review on this head completes there is no new CodeRabbit
-finding to answer; the ten of §5.26 are otherwise settled — findings 4 and 7 in
-`4ecab864`, the rest in §5.28–§5.34, except 9 (per-document connections), which
-is still open and named in §4. This page itself is a local commit on top of
-`50c68e3a`; the envoy role cannot push, so it is one fast-forward for the owner.
+decision. The eight findings of `5853542478` are answered in `af6c311b`; the
+snapshot rollback of the review body is open and named in §4; findings 4 and 7 of
+§5.26 are in `4ecab864`, the rest in §5.28–§5.34, except 9 (per-document
+connections), which is still open and named in §4. This page is a local commit on
+top of `af6c311b`; the envoy role cannot push, so delivery is one fast-forward
+for the owner.
 
 
 
