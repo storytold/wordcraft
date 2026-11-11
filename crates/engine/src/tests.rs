@@ -13658,3 +13658,19 @@ fn page_number_prefix_with_x_of_y_keeps_the_prefix() {
     let text = reopened.plain_text(StoryRef::Part(footer));
     assert_eq!(text, "A-1 of 1", "round-trip: {text:?}");
 }
+
+#[test]
+fn page_number_prefix_replaces_its_own_generated_number() {
+    let mut s = s();
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom"}));
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "prefix": "A"}));
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "prefix": "B"}));
+    let footer = s.doc.sections().into_iter().next().and_then(|(_, sect)| sect.footers.default).expect("footer");
+    let text = s.doc.plain_text(StoryRef::Part(footer));
+    assert_eq!(text, "B1", "each prefixed request replaces the generated number instead of adding one: {text:?}");
+    assert_eq!(s.doc.sections().into_iter().next().and_then(|(_, sect)| sect.page_num_prefix.clone()).as_deref(), Some("B"));
+    run(&mut s, "insert.pageNumber", json!({"position": "bottom", "prefix": ""}));
+    let text = s.doc.plain_text(StoryRef::Part(footer));
+    assert_eq!(text, "1", "an empty prefix goes back to a plain number: {text:?}");
+    assert_eq!(s.doc.sections().into_iter().next().and_then(|(_, sect)| sect.page_num_prefix.clone()), None);
+}
