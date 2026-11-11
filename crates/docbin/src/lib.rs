@@ -6,6 +6,9 @@
 //! like every WordCraft parser, is lenient by design (unknown structures are skipped, bad numbers
 //! fall back to defaults) and bounded (stream sizes, piece counts and property counts are
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
+//!
+//! Word 6.0/95 files, which that specification does not cover, are read by `word6` from their
+//! observed layout: their text, formatting and tables so far.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod crypt;
@@ -23,6 +26,7 @@ mod sections;
 mod sprm;
 mod stsh;
 mod table;
+mod word6;
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -213,6 +217,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("WordDocument stream is {} bytes", word.len())));
+    }
+    if word6::is_word6(&word) {
+        return read_word6(&mut comp, &word, max_paragraphs);
     }
     let enc = fib::peek_encryption(&word);
     // The FIB names the Table stream (0Table or 1Table); fall back to whichever exists,
@@ -416,6 +423,52 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         return Err(paragraph_limit(max_paragraphs));
     }
     doc.media.extend(pics.media);
+    doc.body = table::assemble(paras);
+    doc.ensure_nonempty();
+    work.log();
+    Ok(doc)
+}
+
+/// Read a Word 6.0/95 file ([`word6`]): its main text, with its character and paragraph
+/// formatting and table rows translated to Word 97 sprms, through the same walk as a Word 97 file.
+/// Styles and the other stories are not read yet, and a section mark reads as a page break.
+fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
+    let fib = word6::Fib6::parse(word)?;
+    let content = word6::content(word, &fib)?;
+    let mut doc = Document::new();
+    // Word opens these files in compatibility mode 11 too.
+    doc.settings.compat_mode = 11;
+    if let Some(core) = metadata::read(comp) {
+        doc.core = core;
+    }
+    doc.body.clear();
+    let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
+    // As for Word 97 files: the text read can't exceed twice the stream, nor the absolute ceiling.
+    let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
+    let work = Work::new(MAX_WORK);
+    let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
+    let mut pics = media::Pictures::for_input(word.len());
+    let ctx = WalkCtx {
+        word,
+        data: &[],
+        pieces: &content.pieces,
+        chpx_bins: &content.chpx,
+        papx_bins: &content.papx,
+        fonts: &content.fonts,
+        raw_styles: &[],
+        sheet: &sheet,
+        notes: &[],
+        marks: &[],
+        drawn: &[],
+        sect_ends: &[],
+        budget: &budget,
+        paragraphs: &paragraphs,
+        work: &work,
+    };
+    let paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
+    if paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();
@@ -633,6 +686,20 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
+                // The Prm of the piece holding the mark adds its paragraph sprms after the PAPX's
+                // ([MS-DOC] §2.4.6.1, step 5), as Word 6/95's fast saves record a paragraph change.
+                let extra = prm_paragraph_sprms(ctx.pieces.piece_prm(cp), ctx.work);
+                let combined;
+                let papx: &[u8] = if extra.is_empty() {
+                    papx
+                } else {
+                    // Re-framed from its Prls, so that a pad byte at its end can't swallow the
+                    // first appended opcode.
+                    let mut v: Vec<u8> = sprm::iter(papx).flat_map(|p| p.op.to_le_bytes().into_iter().chain(p.operand.iter().copied())).collect();
+                    v.extend_from_slice(&extra);
+                    combined = v;
+                    &combined
+                };
                 if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }
@@ -976,11 +1043,40 @@ struct FmtState<'a> {
 /// paragraph style stay the same, so a Prm grpprl (up to 64 KB) is interpreted once per
 /// formatting change, not once per character (#3692).
 struct FmtMemo<'a> {
-    /// The CHPX grpprl, compared by address: it is a slice of the WordDocument stream.
+    /// The CHPX grpprl, compared by address: a slice of the WordDocument stream, or of a Word 6.0/95
+    /// file's translated runs, both of which stay put for the walk.
     chpx: &'a [u8],
     prm: u16,
     style: Option<String>,
     props: CharProps,
+}
+
+/// The paragraph and table sprms (sgc 1 and 5) of a piece's Prm, as Prls to append to a
+/// paragraph's PAPX: a Prm0's single sprm, or those of the Prm1's grpprl. A Prm1 grpprl is
+/// charged to `work`, as for [`apply_prm`].
+fn prm_paragraph_sprms(prm: PrmRef<'_>, work: &Work) -> Vec<u8> {
+    let mut out = Vec::new();
+    match prm {
+        PrmRef::Sprm0 { isprm, val } => {
+            if let Some(op) = sprm::from_prm0(isprm)
+                && matches!(Prl { op, operand: &[] }.sgc(), 1 | 5)
+            {
+                out.extend_from_slice(&op.to_le_bytes());
+                out.push(val);
+            }
+        }
+        PrmRef::Grpprl(Some(g)) => {
+            if !work.charge(g.len() as u64, Cost::Formatting) {
+                return out;
+            }
+            for prl in sprm::iter(g).filter(|p| matches!(p.sgc(), 1 | 5)) {
+                out.extend_from_slice(&prl.op.to_le_bytes());
+                out.extend_from_slice(prl.operand);
+            }
+        }
+        PrmRef::None | PrmRef::Grpprl(None) => {}
+    }
+    out
 }
 
 /// Apply a piece's Prm (Prm0 short sprm or Prm1 grpprl) to character properties. A Prm1
