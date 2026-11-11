@@ -153,21 +153,27 @@ pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) ->
     let text = serde_json::to_vec_pretty(&v).map_err(|e| Error::Protocol(e.to_string()))?;
     let io = |e: std::io::Error| Error::NotConfigured(format!("couldn't write {}: {e}", path.display()));
     std::fs::create_dir_all(dir).map_err(io)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
+    // Written whole to a new owner-only file, then renamed over the old one: a failed write
+    // leaves the old registration as it was, and the secret is never in a file others can read.
+    let tmp = dir.join(format!(".{CONFIG_FILE}.{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let written = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&tmp)?;
+        std::io::Write::write_all(&mut file, &text)?;
+        file.sync_all()?;
+        std::fs::rename(&tmp, &path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    let mut file = options.open(&path).map_err(io)?;
-    // `mode` only applies to a new file: an older one made by hand becomes owner-only too.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(0o600)).map_err(io)?;
-    }
-    std::io::Write::write_all(&mut file, &text).map_err(io)
+    written.map_err(io)
 }
 
 /// The consent page URL. `redirect` is the loopback address that will receive the code.

@@ -132,7 +132,7 @@ fn config_rejects_junk() {
 
 #[test]
 fn missing_config_file_is_not_configured() {
-    let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-none-{}", std::process::id()));
+    let dir = Scratch::new("none");
     if std::env::var(oauth::ENV_CLIENT_ID).is_err() {
         assert!(matches!(ClientConfig::load(Some(&dir)), Err(Error::NotConfigured(_))));
     }
@@ -448,8 +448,7 @@ fn mime_for_names() {
 
 #[test]
 fn write_client_checks_the_id_keeps_the_scope_and_reads_back() {
-    let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-client-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
+    let dir = Scratch::new("client");
     assert!(matches!(oauth::write_client(&dir, "  ", None), Err(Error::NotConfigured(_))), "an empty ID is refused");
     assert!(!dir.join(oauth::CONFIG_FILE).exists(), "nothing written for a bad ID");
     std::fs::create_dir_all(&dir).unwrap();
@@ -465,7 +464,7 @@ fn write_client_checks_the_id_keeps_the_scope_and_reads_back() {
         let mode = std::fs::metadata(dir.join(oauth::CONFIG_FILE)).unwrap().permissions().mode();
         assert_eq!(mode & 0o777, 0o600, "owner-only");
     }
-    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(std::fs::read_dir(&*dir).unwrap().count(), 1, "no temporary file left behind");
 }
 
 #[test]
@@ -477,8 +476,7 @@ fn export_names_get_their_types() {
 
 #[test]
 fn a_downloaded_client_file_is_found_and_imported() {
-    let root = std::env::temp_dir().join(format!("wordcraft-gdrive-import-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let root = Scratch::new("import");
     let downloads = root.join("Downloads");
     let profile = root.join("profile");
     std::fs::create_dir_all(&downloads).unwrap();
@@ -499,7 +497,6 @@ fn a_downloaded_client_file_is_found_and_imported() {
     std::fs::write(downloads.join("client_secret_bad.json"), b"{\"web\": 1}").unwrap();
     assert!(oauth::import_client(&profile, &downloads.join("client_secret_bad.json")).is_err());
     assert_eq!(ClientConfig::load(Some(&profile)).unwrap().client_id, "2-new.apps.googleusercontent.com");
-    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -515,4 +512,37 @@ fn a_google_doc_is_a_word_upload_drive_converts() {
     assert!(body.contains(&format!(r#""mimeType":"{}""#, drive::MIME_GOOGLE_DOC)), "asks Drive for a Google Doc");
     assert!(body.contains(&format!("Content-Type: {}\r\n", drive::MIME_DOCX)) && body.contains("PKDOCX"), "the content is Word");
     assert!(matches!(d.create_google_doc("a\nb", b"PK"), Err(Error::Invalid(_))));
+}
+
+/// A temporary folder of its own for one test, removed when the test ends (even by a panic).
+pub(crate) struct Scratch(std::path::PathBuf);
+
+impl Scratch {
+    pub(crate) fn new(tag: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+        let dir = std::env::temp_dir().join(format!("wordcraft-gdrive-{tag}-{}-{n}-{nanos}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self(dir)
+    }
+}
+
+impl std::ops::Deref for Scratch {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for Scratch {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
