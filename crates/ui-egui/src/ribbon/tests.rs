@@ -113,6 +113,29 @@ fn design_style_set_gallery_stays_in_its_box() {
     assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
 }
 
+/// #6202: the View checkbox dispatches the screen-only Text Boundaries command.
+#[test]
+fn view_text_boundaries_checkbox_toggles_the_guides() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("ui.tab", json!({"tab": "View"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1800.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(6);
+    h.get_by_label("Text Boundaries").click();
+    h.run_steps(2);
+    assert_eq!(serde_json::to_value(&h.state().session.view).unwrap()["textBoundaries"], true);
+    h.get_by_label("Text Boundaries").click();
+    h.run_steps(2);
+    assert_eq!(serde_json::to_value(&h.state().session.view).unwrap()["textBoundaries"], false);
+}
+
 /// #5043: Home › Paragraph Tools: the drop-down's entries each run their own command over the
 /// selection; "in the Whole Document" entries run the same command with `scope: "all"`.
 #[test]

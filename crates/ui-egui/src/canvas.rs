@@ -981,6 +981,19 @@ fn stretch_fits(tex_w: usize, page_w: f32, scale_px: f32) -> bool {
     ratio.is_finite() && (1.0 / STRETCH_MAX..=STRETCH_MAX).contains(&ratio)
 }
 
+/// Text-area guides belong to the screen overlay, so document rendering, printing and exports
+/// never include them. Continuous views and Read Mode have no printed page margins to outline.
+fn draw_page_text_boundaries(app: &WordApp, painter: &egui::Painter, t: &Tokens, page: &Page, visual_sr: Rect, page_scale: f32) {
+    if !app.session.view.text_boundaries || app.session.view.mode != wordcraft_layout::ViewMode::Print || app.session.view.read_mode {
+        return;
+    }
+    let body = page.body;
+    let rect = Rect::from_min_size(visual_sr.min + vec2(body.x, body.y) * page_scale, vec2(body.w, body.h) * page_scale);
+    if rect.is_finite() && rect.is_positive() {
+        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    }
+}
+
 fn draw_page_gridlines(app: &WordApp, painter: &egui::Painter, t: &Tokens, page: &Page, visual_sr: Rect, page_scale: f32) {
     // View › Gridlines: the drawing grid over the text area (Print Layout, on screen only).
     if app.session.view.gridlines && app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
@@ -1179,6 +1192,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             }
         }
         draw_page_gridlines(app, &painter, t, page, visual_sr, page_scale);
+        draw_page_text_boundaries(app, &painter, t, page, visual_sr, page_scale);
         // The current header/footer's cells have editing guides; explicit View Gridlines
         // still outlines every table. Neither kind of guide is part of the document.
         if app.session.view.table_gridlines || grid_story.is_some() {

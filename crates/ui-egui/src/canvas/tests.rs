@@ -3272,6 +3272,36 @@ fn texel_aligned_rect_snaps_the_origin_and_sizes_from_texture_pixels() {
 /// 0.5 cm in points.
 const HALF_CM: f32 = 72.0 * 0.5 / 2.54;
 
+/// #6202: the outline follows the laid-out body margins, page position and zoom. It is absent
+/// when disabled, in continuous views and in Read Mode, independently of the drawing grid.
+#[test]
+fn text_boundaries_outline_the_page_body_only_in_print_layout() {
+    let ctx = egui::Context::default();
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let page = Page { body: wordcraft_geom::Rect::new(60.0, 80.0, 400.0, 600.0), ..Default::default() };
+    let outlines = |app: &WordApp, origin, scale| {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let t = Tokens::get(ui.ctx());
+            let rect = Rect::from_min_size(origin, vec2(600.0, 800.0) * scale);
+            draw_page_text_boundaries(app, ui.painter(), &t, &page, rect, scale);
+        });
+        let rects: Vec<_> = out.shapes.iter().filter_map(|s| if let egui::Shape::Rect(r) = &s.shape { Some(r.rect) } else { None }).collect();
+        out.drop_without_applying_deltas();
+        rects
+    };
+    assert!(outlines(&app, pos2(0.0, 0.0), 1.0).is_empty());
+    app.run("view.textBoundaries", json!({"value": true})).unwrap();
+    for (origin, scale) in [(pos2(10.0, 20.0), 1.0), (pos2(-50.0, -100.0), 2.0)] {
+        assert_eq!(outlines(&app, origin, scale), vec![Rect::from_min_size(origin + vec2(60.0, 80.0) * scale, vec2(400.0, 600.0) * scale)]);
+    }
+    for mode in ["view.draft", "view.webLayout", "view.outline", "view.readMode"] {
+        app.run(mode, json!({})).unwrap();
+        assert!(outlines(&app, pos2(0.0, 0.0), 1.0).is_empty(), "{mode} shows no printed text boundary");
+    }
+    app.run("view.printLayout", json!({})).unwrap();
+    assert_eq!(outlines(&app, pos2(0.0, 0.0), 1.0).len(), 1, "returning to Print Layout restores the guides");
+}
+
 #[test]
 fn table_gridlines_include_header_and_footer_tables() {
     let cell = |y: f32, covered: bool, story: StoryRef| Placed::Cell {
