@@ -1,22 +1,24 @@
-use super::common::{mi, mi_text, stack};
+use super::common::{mi, mi_text, stack, top_row};
 use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
 
 pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Table of Contents", None, app, |ui, app| {
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("toc", Some("Table of\nContents"), "Table of Contents", true, "references.toc"),
-            |ui, app| {
-                mi(ui, app, "Automatic Table 1 (3 levels)", "references.toc", json!({"levels": 3}));
-                mi(ui, app, "Automatic Table 2 (2 levels)", "references.toc", json!({"levels": 2, "title": "Table of Contents"}));
-                ui.separator();
-                mi(ui, app, "Custom Table of Contents…", "ui.dialog", json!({"name": "toc"}));
-                mi(ui, app, "Remove Table of Contents", "references.removeToc", json!({}));
-            },
-        );
-        stack(ui, |ui| {
+        let toc = |ui: &mut Ui, app: &mut WordApp| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("toc", Some("Table of\nContents"), "Table of Contents", true, "references.toc"),
+                |ui, app| {
+                    mi(ui, app, "Automatic Table 1 (3 levels)", "references.toc", json!({"levels": 3}));
+                    mi(ui, app, "Automatic Table 2 (2 levels)", "references.toc", json!({"levels": 2, "title": "Table of Contents"}));
+                    ui.separator();
+                    mi(ui, app, "Custom Table of Contents…", "ui.dialog", json!({"name": "toc"}));
+                    mi(ui, app, "Remove Table of Contents", "references.removeToc", json!({}));
+                },
+            );
+        };
+        let add_text = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -28,6 +30,8 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                     }
                 },
             );
+        };
+        let update = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -36,11 +40,27 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Update Table",
                 crate::widgets::ButtonAction::new("references.updateToc", json!({}), false),
             );
-        });
+        };
+        // Measured: one row below 750 px (600 pt), two rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Table of Contents", 1) >= 2 {
+            toc(ui, app);
+            stack(ui, |ui| {
+                add_text(ui, app);
+                update(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                toc(ui, app);
+                add_text(ui, app);
+                update(ui, app);
+            });
+        }
     });
     group(ui, "Footnotes", Some("references.noteOptions"), app, |ui, app| {
-        big(ui, app, "footnote", "Insert\nFootnote", "references.footnote", json!({}), false);
-        stack(ui, |ui| {
+        let footnote = |ui: &mut Ui, app: &mut WordApp| {
+            big(ui, app, "footnote", "Insert\nFootnote", "references.footnote", json!({}), false);
+        };
+        let endnote = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -49,6 +69,8 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Insert Endnote",
                 crate::widgets::ButtonAction::new("references.endnote", json!({}), false),
             );
+        };
+        let next = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -57,26 +79,51 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Next Footnote",
                 crate::widgets::ButtonAction::new("references.nextFootnote", json!({}), false),
             );
+        };
+        let show = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "showNotes", Some("Show Notes"), "Show Notes", crate::widgets::ButtonAction::new("references.notes", json!({}), false));
-        });
+        };
+        // Measured: one row below 750 px (600 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Footnotes", 1) >= 3 {
+            footnote(ui, app);
+            stack(ui, |ui| {
+                endnote(ui, app);
+                next(ui, app);
+                show(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                footnote(ui, app);
+                endnote(ui, app);
+                next(ui, app);
+                show(ui, app);
+            });
+        }
     });
     group(ui, "Research", None, app, |ui, app| {
         big(ui, app, "researcher", "Researcher", "references.researcher", json!({}), false);
     });
     group(ui, "Citations & Bibliography", None, app, |ui, app| {
-        // The document's sources to cite, then a new one (Create Source, #402).
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("citation", Some("Insert\nCitation"), "Insert Citation", true, ""), |ui, app| {
-            let sources: Vec<(String, String)> =
-                app.session.doc.sources.iter().map(|s| (s.tag.clone(), format!("{} — {}", s.author, s.title))).collect();
-            for (tag, label) in sources {
-                mi_text(ui, app, &label, "references.citation", json!({"tag": tag}));
-            }
-            if !app.session.doc.sources.is_empty() {
-                ui.separator();
-            }
-            mi(ui, app, "Add New Source…", "ui.dialog", json!({"name": "createSource"}));
-        });
-        stack(ui, |ui| {
+        let citation = |ui: &mut Ui, app: &mut WordApp| {
+            // The document's sources to cite, then a new one (Create Source, #402).
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("citation", Some("Insert\nCitation"), "Insert Citation", true, ""),
+                |ui, app| {
+                    let sources: Vec<(String, String)> =
+                        app.session.doc.sources.iter().map(|s| (s.tag.clone(), format!("{} — {}", s.author, s.title))).collect();
+                    for (tag, label) in sources {
+                        mi_text(ui, app, &label, "references.citation", json!({"tag": tag}));
+                    }
+                    if !app.session.doc.sources.is_empty() {
+                        ui.separator();
+                    }
+                    mi(ui, app, "Add New Source…", "ui.dialog", json!({"name": "createSource"}));
+                },
+            );
+        };
+        let sources = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -85,6 +132,8 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Manage Sources",
                 crate::widgets::ButtonAction::new("references.sources", json!({}), false),
             );
+        };
+        let style = |ui: &mut Ui, app: &mut WordApp| {
             let current = app.session.bib_style.clone();
             let label = crate::i18n::fmt(tl!("Style: {style}"), &[("style", &current)]);
             menu_button(
@@ -97,6 +146,8 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                     }
                 },
             );
+        };
+        let bibliography = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -105,11 +156,29 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Bibliography",
                 crate::widgets::ButtonAction::new("references.bibliography", json!({}), false),
             );
-        });
+        };
+        // Measured: one row below 950 px (760 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Citations & Bibliography", 1) >= 3 {
+            citation(ui, app);
+            stack(ui, |ui| {
+                sources(ui, app);
+                style(ui, app);
+                bibliography(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                citation(ui, app);
+                sources(ui, app);
+                style(ui, app);
+                bibliography(ui, app);
+            });
+        }
     });
     group(ui, "Captions", None, app, |ui, app| {
-        big(ui, app, "caption", "Insert\nCaption", "references.caption", json!({}), false);
-        stack(ui, |ui| {
+        let caption = |ui: &mut Ui, app: &mut WordApp| {
+            big(ui, app, "caption", "Insert\nCaption", "references.caption", json!({}), false);
+        };
+        let figures = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -118,6 +187,8 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Insert Table of Figures",
                 crate::widgets::ButtonAction::new("references.tableOfFigures", json!({}), false),
             );
+        };
+        let update = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -126,6 +197,8 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Update Table of Figures",
                 crate::widgets::ButtonAction::new("references.updateFigures", json!({}), false),
             );
+        };
+        let cross_ref = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -134,7 +207,23 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Cross-reference",
                 crate::widgets::ButtonAction::new("insert.crossReference", json!({}), false),
             );
-        });
+        };
+        // Measured: one row below 1024 px (819.2 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Captions", 1) >= 3 {
+            caption(ui, app);
+            stack(ui, |ui| {
+                figures(ui, app);
+                update(ui, app);
+                cross_ref(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                caption(ui, app);
+                figures(ui, app);
+                update(ui, app);
+                cross_ref(ui, app);
+            });
+        }
     });
     group(ui, "Index", None, app, |ui, app| {
         let insert = |ui: &mut Ui, app: &mut WordApp| {
@@ -164,8 +253,10 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::row(ui, |ui| insert(ui, app));
             });
         } else {
-            big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
-            stack(ui, |ui| insert(ui, app));
+            top_row(ui, |ui| {
+                big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
+                insert(ui, app);
+            });
         }
     });
     group(ui, "Table of Authorities", None, app, |ui, app| {
@@ -203,8 +294,10 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::row(ui, |ui| insert(ui, app));
             });
         } else {
-            big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
-            stack(ui, |ui| insert(ui, app));
+            top_row(ui, |ui| {
+                big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
+                insert(ui, app);
+            });
         }
     });
 }

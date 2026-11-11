@@ -1,4 +1,4 @@
-use super::common::{mi, mi_text, stack};
+use super::common::{mi, mi_text, stack, top_row};
 use super::underline::underline_menu;
 use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split, vec2};
 
@@ -311,10 +311,10 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     font_row3(ui, app);
                 });
             } else {
+                // Three 22-pt rows fill the content band exactly; the 3-pt gaps the wide form
+                // uses would run 6 pt into the label row.
                 crate::widgets::row(ui, |ui| font_row1(ui, app, &st));
-                ui.add_space(3.0);
                 crate::widgets::row(ui, |ui| font_row2(ui, app, &st));
-                ui.add_space(3.0);
                 crate::widgets::row(ui, |ui| font_row3(ui, app));
             }
         });
@@ -339,13 +339,12 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                     para_spacing_row(ui, app, rtl);
                 });
             } else {
+                // Three 22-pt rows fill the content band exactly.
                 crate::widgets::row(ui, |ui| para_lists_row(ui, app, &lists));
-                ui.add_space(3.0);
                 crate::widgets::row(ui, |ui| {
                     para_indent_row(ui, app, marks);
                     para_align_row(ui, app, align);
                 });
-                ui.add_space(3.0);
                 crate::widgets::row(ui, |ui| para_spacing_row(ui, app, rtl));
             }
         });
@@ -380,20 +379,49 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
         crate::previews::style_gallery(app, ui, &st);
     });
     group(ui, "Editing", None, app, |ui, app| {
-        stack(ui, |ui| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("find", Some("Find"), "Find", false, "edit.find"), |ui, app| {
+        let find = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("find", Some("Find"), "Find", big_btn, "edit.find"), |ui, app| {
                 // As in Word: Find searches in the Navigation pane; Advanced Find is the dialog (#712).
                 mi(ui, app, "Find", "edit.find", json!({}));
                 mi(ui, app, "Advanced Find…", "edit.advancedFind", json!({}));
                 mi(ui, app, "Go To…", "ui.dialog", json!({"name": "goto"}));
             });
-            small(ui, app, "replace", Some("Replace"), "Replace", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "replace"}), false));
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("select", Some("Select"), "Select", false, "select.all"), |ui, app| {
+        };
+        let replace = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "replace", "Replace", "ui.dialog", json!({"name": "replace"}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "replace",
+                    Some("Replace"),
+                    "Replace",
+                    crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "replace"}), false),
+                );
+            }
+        };
+        let select = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("select", Some("Select"), "Select", big_btn, "select.all"), |ui, app| {
                 mi(ui, app, "Select All", "select.all", json!({}));
                 mi(ui, app, "Select Paragraph", "select.paragraph", json!({}));
                 mi(ui, app, "Select Sentence", "select.sentence", json!({}));
             });
-        });
+        };
+        // Measured: one row below 1900 px (1520 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Home", "Editing", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| find(ui, app, false));
+                crate::widgets::row(ui, |ui| replace(ui, app, false));
+                crate::widgets::row(ui, |ui| select(ui, app, false));
+            });
+        } else {
+            top_row(ui, |ui| {
+                find(ui, app, true);
+                replace(ui, app, true);
+                select(ui, app, true);
+            });
+        }
     });
     group(ui, "Voice", None, app, |ui, app| {
         big(ui, app, "dictate", "Dictate", "tools.dictate", json!({}), false);

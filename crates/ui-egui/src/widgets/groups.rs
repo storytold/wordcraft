@@ -1,7 +1,7 @@
-#[cfg(test)]
-use super::TALL_GROUPS;
 use super::buttons::{CONTENT_H, DROPDOWN, LABEL_H, bg};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
+#[cfg(test)]
+use super::{TALL_GROUPS, clear_row_tops, drawn_rows, note_group_rows};
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     // The English title keys the launcher's id; the drawn title is translated.
@@ -31,7 +31,11 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
             ui.set_min_width(label_w + if launcher.is_some() { 22.0 } else { 10.0 });
             let content = ui.allocate_ui_with_layout(vec2(ui.available_width(), CONTENT_H), crate::rtl::row_layout(ui, egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+                #[cfg(test)]
+                clear_row_tops();
                 add(ui, app);
+                #[cfg(test)]
+                note_group_rows(id_title, drawn_rows());
             });
             #[cfg(test)]
             if content.response.rect.height() > CONTENT_H + 0.5 {

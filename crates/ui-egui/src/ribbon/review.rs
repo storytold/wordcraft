@@ -1,12 +1,27 @@
-use super::common::{mi, stack};
+use super::common::{mi, stack, top_row};
 use super::language::language_menu;
 use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small};
 
 pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Proofing", None, app, |ui, app| {
-        big(ui, app, "spelling", "Spelling &\nGrammar", "review.spelling", json!({}), false);
-        stack(ui, |ui| {
+        let spelling = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "spelling", "Spelling &\nGrammar", "review.spelling", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "spelling",
+                    Some("Spelling & Grammar"),
+                    "Spelling & Grammar",
+                    crate::widgets::ButtonAction::new("review.spelling", json!({}), false),
+                );
+            }
+        };
+        let thesaurus = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "thesaurus", Some("Thesaurus"), "Thesaurus", crate::widgets::ButtonAction::new("review.thesaurus", json!({}), false));
+        };
+        let word_count = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -15,7 +30,21 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 "Word Count",
                 crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "wordCount"}), false),
             );
-        });
+        };
+        // Measured: one row below 1161 px (928.8 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Review", "Proofing", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| spelling(ui, app, false));
+                crate::widgets::row(ui, |ui| thesaurus(ui, app));
+                crate::widgets::row(ui, |ui| word_count(ui, app));
+            });
+        } else {
+            top_row(ui, |ui| {
+                spelling(ui, app, true);
+                thesaurus(ui, app);
+                word_count(ui, app);
+            });
+        }
     });
     group(ui, "Speech", None, app, |ui, app| {
         big(ui, app, "readAloud", "Read\nAloud", "review.readAloud", json!({}), false);
@@ -28,8 +57,21 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("language", Some("Language"), "Language", true, ""), language_menu);
     });
     group(ui, "Comments", None, app, |ui, app| {
-        big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
-        stack(ui, |ui| {
+        let new_comment = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "newComment", "New\nComment", "review.newComment", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "newComment",
+                    Some("New Comment"),
+                    "New Comment",
+                    crate::widgets::ButtonAction::new("review.newComment", json!({}), false),
+                );
+            }
+        };
+        let delete = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -38,6 +80,8 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 "Delete Comment",
                 crate::widgets::ButtonAction::new("review.deleteComment", json!({}), false),
             );
+        };
+        let previous = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -46,10 +90,47 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 "Previous Comment",
                 crate::widgets::ButtonAction::new("review.previousComment", json!({}), false),
             );
+        };
+        let next = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "nextComment", Some("Next"), "Next Comment", crate::widgets::ButtonAction::new("review.nextComment", json!({}), false));
-        });
+        };
         let shown = app.session.view.comments_pane;
-        big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+        let show_comments = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "showComments",
+                    Some("Show Comments"),
+                    "Show Comments",
+                    crate::widgets::ButtonAction::new("view.commentsPane", json!({"value": !shown}), false),
+                );
+            }
+        };
+        // Measured: one row below 1600 px (1280 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Review", "Comments", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| new_comment(ui, app, false));
+                crate::widgets::row(ui, |ui| {
+                    delete(ui, app);
+                    previous(ui, app);
+                });
+                crate::widgets::row(ui, |ui| {
+                    next(ui, app);
+                    show_comments(ui, app, false);
+                });
+            });
+        } else {
+            top_row(ui, |ui| {
+                new_comment(ui, app, true);
+                delete(ui, app);
+                previous(ui, app);
+                next(ui, app);
+                show_comments(ui, app, true);
+            });
+        }
     });
     group(ui, "Tracking", Some("review.trackingOptions"), app, |ui, app| {
         let on = app.session.doc.settings.track_changes;
@@ -97,8 +178,10 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 crate::widgets::row(ui, |ui| options(ui, app));
             });
         } else {
-            track(ui, app);
-            stack(ui, |ui| options(ui, app));
+            top_row(ui, |ui| {
+                track(ui, app);
+                options(ui, app);
+            });
         }
     });
     group(ui, "Changes", None, app, |ui, app| {
@@ -193,9 +276,37 @@ pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
 
 pub(super) fn help(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Help", None, app, |ui, app| {
-        big(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), false);
-        big(ui, app, "checkForUpdates", "Check for\nUpdates…", "ui.checkForUpdates", json!({}), false);
-        big(ui, app, "discord", "Community\nDiscord", "ui.discord", json!({}), false);
+        let button = |ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: serde_json::Value, big_btn: bool| {
+            if big_btn {
+                big(ui, app, icon, label, id, params, false);
+            } else {
+                let label = label.replace('\n', " ");
+                small(ui, app, icon, Some(&label), &label, crate::widgets::ButtonAction::new(id, params, false));
+            }
+        };
+        let help = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), big_btn);
+        };
+        let updates = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "checkForUpdates", "Check for\nUpdates…", "ui.checkForUpdates", json!({}), big_btn);
+        };
+        let discord = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "discord", "Community\nDiscord", "ui.discord", json!({}), big_btn);
+        };
+        // Measured: three rows below 550 px (440 pt), one row from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Help", "Help", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| help(ui, app, false));
+                crate::widgets::row(ui, |ui| updates(ui, app, false));
+                crate::widgets::row(ui, |ui| discord(ui, app, false));
+            });
+        } else {
+            top_row(ui, |ui| {
+                help(ui, app, true);
+                updates(ui, app, true);
+                discord(ui, app, true);
+            });
+        }
     });
     group(ui, "Agents", None, app, |ui, app| {
         big(ui, app, "macros", "Commands", "ui.dialog", json!({"name": "commands"}), false);

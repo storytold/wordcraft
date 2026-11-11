@@ -620,7 +620,7 @@ fn ribbon_groups_fit_above_their_labels() {
     // 900 pt shows Mailings › Create's two rows and Start Mail Merge's three.
     for width in [2560.0, 900.0] {
         let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
-        // Wide enough that no tab hides groups behind its scroll arrows.
+        // 2560 pt keeps every tab's groups off its scroll arrows; 900 pt draws the narrow forms.
         let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();

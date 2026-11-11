@@ -126,6 +126,16 @@ pub(super) fn stack(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// A row whose items start on the same top line, however tall they are: a wide one-row form
+/// mixes large buttons with small ones without the small controls dropping into a band of their
+/// own. Used by sections that draw their measured one-row form.
+pub(super) fn top_row(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    crate::rtl::horizontal_top(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
+        add(ui);
+    });
+}
+
 /// Layout › Size: the named paper sizes, then More Paper Sizes… for a custom size in Page
 /// Setup (#1433).
 pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {

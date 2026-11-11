@@ -94,6 +94,29 @@ fn active_id() -> Id {
     Id::unique("ribbon_fit_active")
 }
 
+// Whether tests have asked every group to draw its natural form even where the plan would fold
+// it: the measured renderers are checked on their own, away from the card's width planning.
+#[cfg(test)]
+thread_local! {
+    static FORCE_FULL: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Draw every group in its natural form this thread (tests).
+#[cfg(test)]
+pub(crate) fn set_force_full(on: bool) {
+    FORCE_FULL.with(|f| f.set(on));
+}
+
+#[cfg(test)]
+fn forced_full() -> bool {
+    FORCE_FULL.with(|f| f.get())
+}
+
+#[cfg(not(test))]
+fn forced_full() -> bool {
+    false
+}
+
 /// What the measured widths depend on besides the groups themselves.
 fn signature(ctx: &Context) -> String {
     format!("{}:{}", crate::i18n::current().code(), ctx.pixels_per_point())
@@ -119,7 +142,13 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
             .collect();
         (titles, groups)
     });
-    let levels = if groups.iter().all(|g| g.widths[0].is_some()) { plan(&groups, avail - EDGE_ROOM) } else { Vec::new() };
+    let levels = if forced_full() {
+        vec![FULL; groups.len()]
+    } else if groups.iter().all(|g| g.widths[0].is_some()) {
+        plan(&groups, avail - EDGE_ROOM)
+    } else {
+        Vec::new()
+    };
     // Read before taking the data lock: the context lock is not re-entrant.
     let wide = ctx.content_rect().width() >= WIDE_MIN;
     ctx.data_mut(|d| {
@@ -510,5 +539,105 @@ mod ui_tests {
         h.get_by_role_and_label(Role::Button, "Font").click();
         h.run_steps(3);
         assert!(!shown(&h, "Increase Font Size"), "the button closes it again");
+    }
+
+    /// Draw every group naturally for the test's lifetime, even when the plan would fold it.
+    struct ForcedFull;
+
+    impl ForcedFull {
+        fn new() -> Self {
+            set_force_full(true);
+            Self
+        }
+    }
+
+    impl Drop for ForcedFull {
+        fn drop(&mut self) {
+            set_force_full(false);
+        }
+    }
+
+    /// Every measured section draws the row count the plan records, on both sides of each
+    /// transition: the count comes from the buttons actually laid out (distinct control tops),
+    /// not from `rows_in`. Groups are forced to their natural form so a narrow card's fallback
+    /// to one-row drop-downs does not hide the measured section.
+    #[test]
+    fn measured_section_rows_are_drawn() {
+        let sections = [
+            "Editing",
+            "Pages",
+            "Media",
+            "Links",
+            "Header & Footer",
+            "Text",
+            "Document Formatting",
+            "Page Background",
+            "Page Setup",
+            "Arrange",
+            "Table of Contents",
+            "Footnotes",
+            "Citations & Bibliography",
+            "Captions",
+            "Write & Insert Fields",
+            "Preview Results",
+            "Proofing",
+            "Comments",
+            "Zoom",
+            "Window",
+            "Help",
+            "Symbols",
+            "Index",
+            "Table of Authorities",
+            "Create",
+            "Start Mail Merge",
+            "Tracking",
+            "Views",
+        ];
+        let mut cases: Vec<(String, String, f32, u8)> = Vec::new();
+        for (tab, section, narrow, breaks) in SECTION_ROWS {
+            if !sections.contains(section) {
+                continue;
+            }
+            let mut previous = *narrow;
+            for (first, rows) in *breaks {
+                // A point either side, not the exact fraction: the card rounds its rect to a
+                // 1/32 pt grid, so a width just under the first measured one may still round at it.
+                cases.push(((*tab).to_string(), (*section).to_string(), first - 1.0, previous));
+                cases.push(((*tab).to_string(), (*section).to_string(), first + 1.0, *rows));
+                previous = *rows;
+            }
+        }
+        cases.sort_by(|a, b| a.2.total_cmp(&b.2));
+        let _forced = ForcedFull::new();
+        let mut failures = Vec::new();
+        let mut i = 0;
+        while i < cases.len() {
+            let width = cases[i].2;
+            let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, 700.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(2);
+            while i < cases.len() && cases[i].2 == width {
+                let (tab, section, _, expected) = &cases[i];
+                h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
+                h.run_steps(2);
+                crate::widgets::GROUP_ROWS.with(|g| g.borrow_mut().clear());
+                h.run_steps(1);
+                let rows = crate::widgets::GROUP_ROWS.with(|g| g.take());
+                let drawn = rows.iter().rev().find(|(title, _)| title.as_str() == section.as_str()).map(|(_, rows)| *rows);
+                if drawn != Some(usize::from(*expected)) {
+                    let card = h.ctx.content_rect().width();
+                    failures.push(format!("{tab} › {section} at {width} pt (card {card}): drew {drawn:?}, expected {expected}"));
+                }
+                i += 1;
+            }
+        }
+        assert!(failures.is_empty(), "measured rows not drawn: {failures:#?}");
     }
 }

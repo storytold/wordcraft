@@ -1,5 +1,5 @@
 use super::arrange::{align_menu, group_menu, rotate_menu, wrap_menu};
-use super::common::{mi, size_menu, stack};
+use super::common::{mi, size_menu, stack, top_row};
 use super::language::mi_check;
 use super::{MeasureExt, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
@@ -52,31 +52,57 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("layout.pageSetup"), app, |ui, app| {
         // Text Direction works on what the caret is in: table cells, a text box, else the section.
         let dir = wordcraft_engine::cmd::page::text_direction_at(&app.session);
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("textDirection", Some("Text\nDirection"), "Text Direction", true, "layout.textDirection"),
-            |ui, app| {
-                use wordcraft_doc::props::TextDirection;
-                for (label, d) in [
-                    ("Horizontal", TextDirection::Horizontal),
-                    ("Rotate all text 90°", TextDirection::Down),
-                    ("Rotate all text 270°", TextDirection::Up),
-                ] {
-                    mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
-                }
-            },
-        );
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("margins", Some("Margins"), "Margins", true, "layout.margins"), margins_items);
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("orientation", Some("Orientation"), "Orientation", true, "layout.orientation"),
-            orientation_items,
-        );
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("size", Some("Size"), "Size", true, "layout.size"), size_menu);
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("columns", Some("Columns"), "Columns", true, "layout.columns"), columns_items);
-        stack(ui, |ui| {
+        let text_direction = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "textDirection",
+                    Some(if big_btn { "Text\nDirection" } else { "Text Direction" }),
+                    "Text Direction",
+                    big_btn,
+                    "layout.textDirection",
+                ),
+                |ui, app| {
+                    use wordcraft_doc::props::TextDirection;
+                    for (label, d) in [
+                        ("Horizontal", TextDirection::Horizontal),
+                        ("Rotate all text 90°", TextDirection::Down),
+                        ("Rotate all text 270°", TextDirection::Up),
+                    ] {
+                        mi_check(ui, app, label, dir == d, "layout.textDirection", json!({"value": d.ooxml()}));
+                    }
+                },
+            );
+        };
+        let margins = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("margins", Some("Margins"), "Margins", big_btn, "layout.margins"),
+                margins_items,
+            );
+        };
+        let orientation = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("orientation", Some("Orientation"), "Orientation", big_btn, "layout.orientation"),
+                orientation_items,
+            );
+        };
+        let size = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("size", Some("Size"), "Size", big_btn, "layout.size"), size_menu);
+        };
+        let columns = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("columns", Some("Columns"), "Columns", big_btn, "layout.columns"),
+                columns_items,
+            );
+        };
+        let breaks = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(ui, app, crate::widgets::MenuButtonOptions::new("breaks", Some("Breaks"), "Breaks", false, "layout.break"), |ui, app| {
                 ui.label(egui::RichText::new(tl!("Page Breaks")).strong());
                 mi(ui, app, "Page", "layout.break", json!({"kind": "page"}));
@@ -88,6 +114,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Even Page", "layout.break", json!({"kind": "evenPage"}));
                 mi(ui, app, "Odd Page", "layout.break", json!({"kind": "oddPage"}));
             });
+        };
+        let line_numbers = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -105,6 +133,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Line Numbering Options…", "ui.dialog", json!({"name": "lineNumbers"}));
                 },
             );
+        };
+        let hyphenation = |ui: &mut Ui, app: &mut WordApp| {
             let hy = app.session.doc.settings.auto_hyphenation;
             menu_button(
                 ui,
@@ -118,7 +148,31 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Hyphenation Options…", "ui.dialog", json!({"name": "hyphenation"}));
                 },
             );
-        });
+        };
+        // Measured: one row below 550 px (440 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Layout", "Page Setup", 1) >= 3 {
+            text_direction(ui, app, true);
+            margins(ui, app, true);
+            orientation(ui, app, true);
+            size(ui, app, true);
+            columns(ui, app, true);
+            stack(ui, |ui| {
+                breaks(ui, app);
+                line_numbers(ui, app);
+                hyphenation(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                text_direction(ui, app, true);
+                margins(ui, app, true);
+                orientation(ui, app, true);
+                size(ui, app, true);
+                columns(ui, app, true);
+                breaks(ui, app);
+                line_numbers(ui, app);
+                hyphenation(ui, app);
+            });
+        }
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
@@ -186,9 +240,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Arrange", None, app, |ui, app| {
-        big(ui, app, "position", "Position", "arrange.position", json!({}), false);
-        wrap_menu(ui, app);
-        stack(ui, |ui| {
+        let bring_forward = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -197,6 +249,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 "Bring Forward",
                 crate::widgets::ButtonAction::new("arrange.bringForward", json!({}), false),
             );
+        };
+        let send_backward = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -205,6 +259,8 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 "Send Backward",
                 crate::widgets::ButtonAction::new("arrange.sendBackward", json!({}), false),
             );
+        };
+        let selection_pane = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -213,11 +269,32 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 "Selection Pane",
                 crate::widgets::ButtonAction::new("arrange.selectionPane", json!({}), false),
             );
-        });
-        stack(ui, |ui| {
-            align_menu(ui, app, None);
-            group_menu(ui, app, None);
-            rotate_menu(ui, app, None);
-        });
+        };
+        // Measured: one row below 1024 px (819.2 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Layout", "Arrange", 1) >= 3 {
+            big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+            wrap_menu(ui, app);
+            stack(ui, |ui| {
+                bring_forward(ui, app);
+                send_backward(ui, app);
+                selection_pane(ui, app);
+            });
+            stack(ui, |ui| {
+                align_menu(ui, app, None);
+                group_menu(ui, app, None);
+                rotate_menu(ui, app, None);
+            });
+        } else {
+            top_row(ui, |ui| {
+                big(ui, app, "position", "Position", "arrange.position", json!({}), false);
+                wrap_menu(ui, app);
+                bring_forward(ui, app);
+                send_backward(ui, app);
+                selection_pane(ui, app);
+                align_menu(ui, app, None);
+                group_menu(ui, app, None);
+                rotate_menu(ui, app, None);
+            });
+        }
     });
 }

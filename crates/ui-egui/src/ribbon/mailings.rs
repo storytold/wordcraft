@@ -1,4 +1,4 @@
-use super::common::{mi, stack};
+use super::common::{mi, stack, top_row};
 use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
 
@@ -100,11 +100,27 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     group(ui, "Write & Insert Fields", None, app, |ui, app| {
-        big(ui, app, "highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields", json!({}), false);
-        big(ui, app, "addressBlock", "Address\nBlock", "mailings.addressBlock", json!({}), false);
-        big(ui, app, "greetingLine", "Greeting\nLine", "mailings.greetingLine", json!({}), false);
-        big(ui, app, "mergeField", "Insert Merge\nField", "mailings.insertField", json!({}), false);
-        stack(ui, |ui| {
+        let button = |ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, big_btn: bool| {
+            if big_btn {
+                big(ui, app, icon, label, id, json!({}), false);
+            } else {
+                let label = label.replace('\n', " ");
+                small(ui, app, icon, Some(&label), &label, crate::widgets::ButtonAction::new(id, json!({}), false));
+            }
+        };
+        let highlight = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields", big_btn);
+        };
+        let address = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "addressBlock", "Address\nBlock", "mailings.addressBlock", big_btn);
+        };
+        let greeting = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "greetingLine", "Greeting\nLine", "mailings.greetingLine", big_btn);
+        };
+        let merge_field = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            button(ui, app, "mergeField", "Insert Merge\nField", "mailings.insertField", big_btn);
+        };
+        let rules = |ui: &mut Ui, app: &mut WordApp| {
             // The merge rules the engine knows; If and Skip Record If ask for their condition.
             menu_button(ui, app, crate::widgets::MenuButtonOptions::new("rules", Some("Rules"), "Rules", false, "mailings.rules"), |ui, app| {
                 mi(ui, app, "If…Then…Else…", "mailings.rules", json!({"rule": "IF"}));
@@ -112,6 +128,8 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Next Record", "mailings.rules", json!({"rule": "NEXT"}));
                 mi(ui, app, "Skip Record If…", "mailings.rules", json!({"rule": "SKIPIF"}));
             });
+        };
+        let match_fields = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -120,18 +138,44 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
                 "Match Fields",
                 crate::widgets::ButtonAction::new("mailings.matchFields", json!({}), false),
             );
-        });
+        };
+        // Measured: one row below 850 px (680 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Mailings", "Write & Insert Fields", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    highlight(ui, app, false);
+                    address(ui, app, false);
+                    greeting(ui, app, false);
+                });
+                crate::widgets::row(ui, |ui| merge_field(ui, app, false));
+                crate::widgets::row(ui, |ui| {
+                    rules(ui, app);
+                    match_fields(ui, app);
+                });
+            });
+        } else {
+            top_row(ui, |ui| {
+                highlight(ui, app, true);
+                address(ui, app, true);
+                greeting(ui, app, true);
+                merge_field(ui, app, true);
+                rules(ui, app);
+                match_fields(ui, app);
+            });
+        }
     });
     group(ui, "Preview Results", None, app, |ui, app| {
-        big(ui, app, "preview", "Preview\nResults", "mailings.preview", json!({}), false);
-        stack(ui, |ui| {
-            crate::widgets::row(ui, |ui| {
-                small(ui, app, "first", None, "First Record", crate::widgets::ButtonAction::new("mailings.first", json!({}), false));
-                small(ui, app, "previous", None, "Previous Record", crate::widgets::ButtonAction::new("mailings.previous", json!({}), false));
-                record_box(ui, app);
-                small(ui, app, "next", None, "Next Record", crate::widgets::ButtonAction::new("mailings.next", json!({}), false));
-                small(ui, app, "last", None, "Last Record", crate::widgets::ButtonAction::new("mailings.last", json!({}), false));
-            });
+        let preview = |ui: &mut Ui, app: &mut WordApp| {
+            big(ui, app, "preview", "Preview\nResults", "mailings.preview", json!({}), false);
+        };
+        let nav = |ui: &mut Ui, app: &mut WordApp| {
+            small(ui, app, "first", None, "First Record", crate::widgets::ButtonAction::new("mailings.first", json!({}), false));
+            small(ui, app, "previous", None, "Previous Record", crate::widgets::ButtonAction::new("mailings.previous", json!({}), false));
+            record_box(ui, app);
+            small(ui, app, "next", None, "Next Record", crate::widgets::ButtonAction::new("mailings.next", json!({}), false));
+            small(ui, app, "last", None, "Last Record", crate::widgets::ButtonAction::new("mailings.last", json!({}), false));
+        };
+        let find = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -140,6 +184,8 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
                 "Find Recipient",
                 crate::widgets::ButtonAction::new("mailings.findRecipient", json!({}), false),
             );
+        };
+        let check = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -148,7 +194,23 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
                 "Check for Errors",
                 crate::widgets::ButtonAction::new("mailings.checkErrors", json!({}), false),
             );
-        });
+        };
+        // Measured: one row below 1100 px (880 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Mailings", "Preview Results", 1) >= 3 {
+            preview(ui, app);
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| nav(ui, app));
+                find(ui, app);
+                check(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                preview(ui, app);
+                nav(ui, app);
+                find(ui, app);
+                check(ui, app);
+            });
+        }
     });
     group(ui, "Finish", None, app, |ui, app| {
         menu_button(

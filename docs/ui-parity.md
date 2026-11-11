@@ -185,17 +185,54 @@ and 960 pt and one row outside; References › Table of Contents (2 from 600 pt)
 600 pt) hold their natural rows. The same table records every 1↔3 transition in the measured matrix
 (Home Editing, Pages, Media, Links, Header & Footer, Text, Document Formatting, Page Background,
 Page Setup, Arrange, Citations, Captions, Footnotes, Start Mail Merge, Write & Insert Fields,
-Preview Results, Proofing, Comments, Zoom, Window, Help), and the test asserts the plan just
-below and at each measured width. Review › Markup is **not applicable**: WordCraft has no
-independent Markup section; Display for Review (All Markup / No Markup) lives in Tracking. Sections
-whose renderer does not yet consume `rows_for` still draw their natural stacked rows (one row at
-narrow widths comes from the fit planner); see the remaining findings in the revision row.
+Preview Results, Proofing, Comments, Zoom, Window, Help); `measured_section_rows_switch_at_their_first_widths`
+asserts the plan just below and at each measured width, and `measured_section_rows_are_drawn`
+counts the rows actually laid out (distinct control tops, not the plan) on both sides of every
+transition. Each section below is implemented: it draws its measured rows with 22-pt rows inside
+the 66-pt band, and its wide one-row form where the measurement returns to 1. Every listed section
+had enough controls for its measured rows, so none had to be marked impossible.
+
+| Section | Measured | Drawn |
+|---|---|---|
+| Home › Editing | 1 → 3 at 1520 pt | one wide row below, three small rows from |
+| Home › Font, Paragraph | 1 → 3, then 2 at 1520 pt | three rows until 1520 pt (`wide()`), two from; narrower cards fold the group to one row |
+| Insert › Pages | 1 → 3 at 1280 pt | one wide row below, three small rows from |
+| Insert › Media | 1 → 3 at 880 pt, 1 from 1520 pt | three rows between, one wide row outside |
+| Insert › Links | 1 → 3 at 1280 pt | one wide row below, three small rows from |
+| Insert › Header & Footer | 1 → 3 at 928.8 pt, 1 from 1520 pt | three rows between, one wide row outside |
+| Insert › Text | 1 → 3 at 1040 pt | one wide row below, three small rows from |
+| Insert › Symbols | 1 → 2 at 1120 pt | one wide row below, two small rows from |
+| Design › Document Formatting | 1 → 3 at 520 pt | one wide row below, three rows from |
+| Design › Page Background | 3 → 1 at 600 pt | three small rows below, one wide row from |
+| Layout › Page Setup | 1 → 3 at 440 pt | one wide row below, three rows from |
+| Layout › Arrange | 1 → 3 at 819.2 pt | one wide row below, three rows from |
+| References › Table of Contents | 1 → 2 at 600 pt | one wide row below, two rows from |
+| References › Footnotes | 1 → 3 at 600 pt | one wide row below, three rows from |
+| References › Citations & Bibliography | 1 → 3 at 760 pt | one wide row below, three rows from |
+| References › Captions | 1 → 3 at 819.2 pt | one wide row below, three rows from |
+| References › Index, Table of Authorities | 1 → 2 at 819.2 pt | one wide row below, two small rows from |
+| Mailings › Create | 1 → 2 at 880 pt, 1 from 1120 pt | two small rows between, one wide row outside |
+| Mailings › Start Mail Merge | 1 → 3 at 520 pt, 1 from 960 pt | three small rows between, one wide row outside |
+| Mailings › Write & Insert Fields | 1 → 3 at 680 pt | one wide row below, three rows from |
+| Mailings › Preview Results | 1 → 3 at 880 pt | one wide row below, three rows from |
+| Review › Proofing | 1 → 3 at 928.8 pt | one wide row below, three rows from |
+| Review › Comments | 1 → 3 at 1280 pt | one wide row below, three rows from |
+| Review › Tracking | 1 → 2 at 1520 pt | one wide row below, two small rows from |
+| View › Views | 1 → 2 at 880 pt | one wide row below, two small rows from |
+| View › Zoom | 1 → 3 at 1120 pt | one wide row below, three rows from |
+| View › Window | 1 → 3 at 1040 pt | one wide row below, three rows from |
+| Help › Help | 3 below 440 pt, 1 from | three small rows below, one wide row from |
+
+Review › Markup is **not applicable**: WordCraft has no independent Markup section; Display for
+Review (All Markup / No Markup) lives in Tracking. Layout › Paragraph, Home › Styles and View › Show
+measure 1 → 0 rows (the group disappears); the ribbon has no zero-row form, so those are not
+modelled.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-10 | minor | Mailings › Start Mail Merge three-row form between 520 and 960 pt (one row outside); `ribbon_fit::SECTION_ROWS` now records every measured 1↔2 and 1↔3 transition from `uia-word.json`, with `measured_section_rows_switch_at_their_first_widths` asserting just below and at each width; References › Table of Contents 2 rows and Footnotes 3 rows at 600 pt; Review › Markup is not applicable (Display for Review lives in Tracking). Renderers not yet branching on `rows_for` (Home Editing; Insert Pages, Media, Links, Header & Footer and Text; Design Document Formatting and Page Background; Layout Page Setup and Arrange; References Table of Contents, Footnotes, Citations and Captions; Mailings Write & Insert Fields and Preview Results; Review Proofing and Comments; View Zoom and Window; Help) keep their natural stacked rows |
+| 2026-11-11 | minor | Every measured section draws its measured rows: Home Editing; Insert Pages, Media, Links, Header & Footer and Text; Design Document Formatting and Page Background; Layout Page Setup and Arrange; References Table of Contents, Footnotes, Citations and Captions; Mailings Write & Insert Fields and Preview Results; Review Proofing and Comments; View Zoom and Window; Help, plus Start Mail Merge, branch on `ribbon_fit::rows_in` and draw 22-pt rows inside the 66-pt band, keeping the wide one-row form where the measurement returns to 1. `measured_section_rows_are_drawn` counts the laid-out rows on both sides of each transition, and `ribbon_groups_fit_above_their_labels` checks the 2560 pt and 900 pt forms in every language. Review › Markup is not applicable (Display for Review lives in Tracking); the 1 → 0 measurements are not modelled |
 | 2026-11-10 | minor | Measured two-row forms for Insert › Symbols (1120 pt), References › Index and Table of Authorities (819.2 pt), Mailings › Create (880–1120 pt, then one row), Review › Tracking (1520 pt) and View › Views (880 pt), each with a `rows_in` breakpoint test; Home's Font/Paragraph wide form unchanged. Remaining: TOC/Footnotes/Start Mail Merge/Review Markup transitions and the 3-row wide states |
 | 2026-11-10 | minor | Home's wide form: from 1520 pt of client (Word's 1900 px at 125 %) Font and Paragraph draw the same controls in two rows instead of three (`ribbon_fit::WIDE_MIN`); below it they keep three rows, and 1024 × 768 still shows Clipboard and Font natural with Paragraph onward one row |
 | 2026-11-10 | minor | Ribbon card checked against Word at a 1024 × 768 client on a 125 % display (819 × 614 pt): the three bands — tab strip, 66 pt command row, 18 pt group-label row — are drawn on every tab, labels centred in the band and separators through it; a section keeps its natural rows while the card has room, and the first that doesn't fit and every later one become Word's one-row drop-down with the name in the band (at 1024 Clipboard and Font stay natural; Paragraph onward is one row). The band is anchored to the row's cursor instead of the content child's rect, which had lost the Font, Paragraph and Styles labels at 1024. Insert's Illustrations group is Media, as Word. Not built: Home Sensitivity/Add-ins, Insert eSignature/Add-ins, Draw Stencils/Edit, Review OneNote; Home Paragraph Tools, View Dark Mode/Templates, References Research are WordCraft extras |

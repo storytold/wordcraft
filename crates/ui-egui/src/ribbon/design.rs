@@ -1,4 +1,4 @@
-use super::common::{mi, mi_text, stack};
+use super::common::{mi, mi_text, stack, top_row};
 use super::{CONTENT_H, Rect, Sense, Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
 /// The Design tab's style set gallery in a box of its own, sized from its thumbnails and clipped
@@ -25,8 +25,7 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Document Formatting", None, app, |ui, app| {
-        style_set_box(app, ui);
-        stack(ui, |ui| {
+        let colors = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -37,6 +36,8 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
                     }
                 },
             );
+        };
+        let fonts = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -47,8 +48,8 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
                     }
                 },
             );
-        });
-        stack(ui, |ui| {
+        };
+        let para_spacing = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -79,7 +80,11 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
                     }
                 },
             );
+        };
+        let effects = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "effectsDesign", Some("Effects"), "Effects", crate::widgets::ButtonAction::new("design.effects", json!({}), false));
+        };
+        let set_default = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -88,32 +93,91 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
                 "Set as Default",
                 crate::widgets::ButtonAction::new("design.setDefault", json!({}), false),
             );
-        });
+        };
+        // Measured: one row below 650 px (520 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Design", "Document Formatting", 1) >= 3 {
+            style_set_box(app, ui);
+            stack(ui, |ui| {
+                colors(ui, app);
+                fonts(ui, app);
+            });
+            stack(ui, |ui| {
+                para_spacing(ui, app);
+                effects(ui, app);
+                set_default(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                style_set_box(app, ui);
+                colors(ui, app);
+                fonts(ui, app);
+                para_spacing(ui, app);
+                effects(ui, app);
+                set_default(ui, app);
+            });
+        }
     });
     group(ui, "Page Background", None, app, |ui, app| {
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("watermark", Some("Watermark"), "Watermark", true, "design.watermark"),
-            |ui, app| {
-                for w in ["DRAFT", "CONFIDENTIAL", "DO NOT COPY", "SAMPLE", "ASAP", "URGENT"] {
-                    mi(ui, app, w, "design.watermark", json!({"text": w}));
-                }
-                ui.separator();
-                mi(ui, app, "Custom Watermark…", "ui.dialog", json!({"name": "watermark"}));
-                mi(ui, app, "Remove Watermark", "design.watermark", json!({"remove": true}));
-            },
-        );
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("pageColor", Some("Page\nColor"), "Page Color", true, "design.pageColor"),
-            |ui, app| {
-                mi(ui, app, "No Color", "design.pageColor", json!({"color": null}));
-                let theme = app.session.doc.settings.theme_colors.clone();
-                crate::colors::menu(ui, app, &theme, Target::cmd("design.pageColor"));
-            },
-        );
-        big(ui, app, "pageBorders", "Page\nBorders", "design.pageBorders", json!({}), false);
+        let watermark = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new("watermark", Some("Watermark"), "Watermark", big_btn, "design.watermark"),
+                |ui, app| {
+                    for w in ["DRAFT", "CONFIDENTIAL", "DO NOT COPY", "SAMPLE", "ASAP", "URGENT"] {
+                        mi(ui, app, w, "design.watermark", json!({"text": w}));
+                    }
+                    ui.separator();
+                    mi(ui, app, "Custom Watermark…", "ui.dialog", json!({"name": "watermark"}));
+                    mi(ui, app, "Remove Watermark", "design.watermark", json!({"remove": true}));
+                },
+            );
+        };
+        let page_color = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "pageColor",
+                    Some(if big_btn { "Page\nColor" } else { "Page Color" }),
+                    "Page Color",
+                    big_btn,
+                    "design.pageColor",
+                ),
+                |ui, app| {
+                    mi(ui, app, "No Color", "design.pageColor", json!({"color": null}));
+                    let theme = app.session.doc.settings.theme_colors.clone();
+                    crate::colors::menu(ui, app, &theme, Target::cmd("design.pageColor"));
+                },
+            );
+        };
+        let page_borders = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "pageBorders", "Page\nBorders", "design.pageBorders", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "pageBorders",
+                    Some("Page Borders"),
+                    "Page Borders",
+                    crate::widgets::ButtonAction::new("design.pageBorders", json!({}), false),
+                );
+            }
+        };
+        // Measured: three rows below 750 px (600 pt), one row from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Design", "Page Background", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| watermark(ui, app, false));
+                crate::widgets::row(ui, |ui| page_color(ui, app, false));
+                crate::widgets::row(ui, |ui| page_borders(ui, app, false));
+            });
+        } else {
+            top_row(ui, |ui| {
+                watermark(ui, app, true);
+                page_color(ui, app, true);
+                page_borders(ui, app, true);
+            });
+        }
     });
 }

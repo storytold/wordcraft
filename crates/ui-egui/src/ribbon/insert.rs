@@ -1,4 +1,4 @@
-use super::common::{mi, mi_icon, stack};
+use super::common::{mi, mi_icon, stack, top_row};
 use super::language::mi_check;
 use super::{Ui, WordApp, big, group, json, menu_button, small};
 
@@ -46,18 +46,58 @@ pub(super) fn shape_gallery(ui: &mut Ui, app: &mut WordApp) {
 
 pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
-        stack(ui, |ui| {
+        let cover = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
             menu_button(
                 ui,
                 app,
-                crate::widgets::MenuButtonOptions::new("coverPage", Some("Cover Page"), "Cover Page", false, "insert.coverPage"),
+                crate::widgets::MenuButtonOptions::new("coverPage", Some("Cover Page"), "Cover Page", big_btn, "insert.coverPage"),
                 |ui, app| {
                     mi(ui, app, "Studio cover", "insert.coverPage", json!({}));
                 },
             );
-            small(ui, app, "blankPage", Some("Blank Page"), "Blank Page", crate::widgets::ButtonAction::new("insert.blankPage", json!({}), false));
-            small(ui, app, "pageBreak", Some("Page Break"), "Page Break", crate::widgets::ButtonAction::new("insert.pageBreak", json!({}), false));
-        });
+        };
+        let blank = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "blankPage", "Blank Page", "insert.blankPage", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "blankPage",
+                    Some("Blank Page"),
+                    "Blank Page",
+                    crate::widgets::ButtonAction::new("insert.blankPage", json!({}), false),
+                );
+            }
+        };
+        let page_break = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "pageBreak", "Page Break", "insert.pageBreak", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "pageBreak",
+                    Some("Page Break"),
+                    "Page Break",
+                    crate::widgets::ButtonAction::new("insert.pageBreak", json!({}), false),
+                );
+            }
+        };
+        // Measured: one row below 1600 px (1280 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Pages", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| cover(ui, app, false));
+                crate::widgets::row(ui, |ui| blank(ui, app, false));
+                crate::widgets::row(ui, |ui| page_break(ui, app, false));
+            });
+        } else {
+            top_row(ui, |ui| {
+                cover(ui, app, true);
+                blank(ui, app, true);
+                page_break(ui, app, true);
+            });
+        }
     });
     group(ui, "Tables", None, app, |ui, app| {
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("table", Some("Table"), "Add a Table", true, "insert.table"), |ui, app| {
@@ -77,87 +117,158 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Media", None, app, |ui, app| {
-        big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"), |ui, app| {
-            shape_gallery(ui, app);
-            ui.separator();
-            mi_icon(ui, app, "canvas", "New Drawing Canvas", "insert.canvas", json!({}));
-            // Connectors: glue their ends to shapes by dragging them (shape.connect).
-            for (l, k, arrow) in [
-                ("Straight Connector", "straightConnector", "none"),
-                ("Straight Arrow Connector", "straightConnector", "end"),
-                ("Elbow Connector", "elbowConnector", "none"),
-                ("Elbow Arrow Connector", "elbowConnector", "end"),
-                ("Curved Connector", "curvedConnector", "none"),
-                ("Curved Arrow Connector", "curvedConnector", "end"),
-            ] {
-                let icon = if arrow == "end" { k.replace("Connector", "ArrowConnector") } else { k.to_string() };
-                mi_icon(ui, app, &format!("shape.{icon}"), l, "insert.shape", json!({"kind": k, "arrow": arrow}));
-            }
-        });
-        stack(ui, |ui| {
+        let pictures = |ui: &mut Ui, app: &mut WordApp| {
+            big(ui, app, "picture", "Pictures", "insert.picture", json!({}), false);
+        };
+        let shapes = |ui: &mut Ui, app: &mut WordApp| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("shapes", Some("Shapes"), "Shapes", true, "insert.shape"), |ui, app| {
+                shape_gallery(ui, app);
+                ui.separator();
+                mi_icon(ui, app, "canvas", "New Drawing Canvas", "insert.canvas", json!({}));
+                // Connectors: glue their ends to shapes by dragging them (shape.connect).
+                for (l, k, arrow) in [
+                    ("Straight Connector", "straightConnector", "none"),
+                    ("Straight Arrow Connector", "straightConnector", "end"),
+                    ("Elbow Connector", "elbowConnector", "none"),
+                    ("Elbow Arrow Connector", "elbowConnector", "end"),
+                    ("Curved Connector", "curvedConnector", "none"),
+                    ("Curved Arrow Connector", "curvedConnector", "end"),
+                ] {
+                    let icon = if arrow == "end" { k.replace("Connector", "ArrowConnector") } else { k.to_string() };
+                    mi_icon(ui, app, &format!("shape.{icon}"), l, "insert.shape", json!({"kind": k, "arrow": arrow}));
+                }
+            });
+        };
+        let smalls = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "icons", Some("Icons"), "Icons", crate::widgets::ButtonAction::new("insert.icon", json!({}), false));
             small(ui, app, "smartArt", Some("SmartArt"), "SmartArt", crate::widgets::ButtonAction::new("insert.smartArt", json!({}), false));
             small(ui, app, "chart", Some("Chart"), "Chart", crate::widgets::ButtonAction::new("insert.chart", json!({}), false));
-        });
+        };
+        // Measured: three rows from 1100 px (880 pt) to 1900 px, one row outside.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Media", 1) >= 3 {
+            pictures(ui, app);
+            shapes(ui, app);
+            stack(ui, |ui| smalls(ui, app));
+        } else {
+            top_row(ui, |ui| {
+                pictures(ui, app);
+                shapes(ui, app);
+                smalls(ui, app);
+            });
+        }
     });
     group(ui, "Links", None, app, |ui, app| {
-        stack(ui, |ui| {
-            small(ui, app, "link", Some("Link"), "Link", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "link"}), false));
-            small(
-                ui,
-                app,
-                "bookmark",
-                Some("Bookmark"),
-                "Bookmark",
-                crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "bookmark"}), false),
-            );
-            small(
-                ui,
-                app,
-                "crossRef",
-                Some("Cross-reference"),
-                "Cross-reference",
-                crate::widgets::ButtonAction::new("insert.crossReference", json!({}), false),
-            );
-        });
+        let link = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "link", "Link", "ui.dialog", json!({"name": "link"}), false);
+            } else {
+                small(ui, app, "link", Some("Link"), "Link", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "link"}), false));
+            }
+        };
+        let bookmark = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "bookmark", "Bookmark", "ui.dialog", json!({"name": "bookmark"}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "bookmark",
+                    Some("Bookmark"),
+                    "Bookmark",
+                    crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "bookmark"}), false),
+                );
+            }
+        };
+        let cross_ref = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "crossRef", "Cross-reference", "insert.crossReference", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "crossRef",
+                    Some("Cross-reference"),
+                    "Cross-reference",
+                    crate::widgets::ButtonAction::new("insert.crossReference", json!({}), false),
+                );
+            }
+        };
+        // Measured: one row below 1600 px (1280 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Links", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| link(ui, app, false));
+                crate::widgets::row(ui, |ui| bookmark(ui, app, false));
+                crate::widgets::row(ui, |ui| cross_ref(ui, app, false));
+            });
+        } else {
+            top_row(ui, |ui| {
+                link(ui, app, true);
+                bookmark(ui, app, true);
+                cross_ref(ui, app, true);
+            });
+        }
     });
     group(ui, "Comments", None, app, |ui, app| {
         big(ui, app, "newComment", "Comment", "review.newComment", json!({}), false);
     });
     group(ui, "Header & Footer", None, app, |ui, app| {
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("header", Some("Header"), "Header", true, "insert.header"), |ui, app| {
-            mi(ui, app, "Blank", "insert.header", json!({"preset": "blank"}));
-            mi(ui, app, "Blank (Three Columns)", "insert.header", json!({"preset": "blankThree"}));
-            mi(ui, app, "Document Title", "insert.header", json!({"preset": "title"}));
-            ui.separator();
-            mi(ui, app, "Edit Header", "insert.editHeader", json!({}));
-            mi(ui, app, "Remove Header", "insert.removeHeader", json!({}));
-        });
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("footer", Some("Footer"), "Footer", true, "insert.footer"), |ui, app| {
-            mi(ui, app, "Blank", "insert.footer", json!({"preset": "blank"}));
-            mi(ui, app, "Blank (Three Columns)", "insert.footer", json!({"preset": "blankThree"}));
-            mi(ui, app, "Page Number", "insert.footer", json!({"preset": "pageNumber"}));
-            ui.separator();
-            mi(ui, app, "Edit Footer", "insert.editFooter", json!({}));
-            mi(ui, app, "Remove Footer", "insert.removeFooter", json!({}));
-        });
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("pageNumber", Some("Page\nNumber"), "Page Number", true, "insert.pageNumber"),
-            |ui, app| {
-                mi(ui, app, "Top of Page", "insert.pageNumber", json!({"position": "top", "align": "right"}));
-                mi(ui, app, "Bottom of Page", "insert.pageNumber", json!({"position": "bottom", "align": "center"}));
-                mi(ui, app, "Page X of Y", "insert.pageNumber", json!({"position": "bottom", "format": "x of y"}));
-                mi(ui, app, "Current Position", "insert.pageNumber", json!({"position": "current"}));
-                mi(ui, app, "Format Page Numbers…", "ui.dialog", json!({"name": "pageNumbers"}));
-            },
-        );
+        let header = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("header", Some("Header"), "Header", big_btn, "insert.header"), |ui, app| {
+                mi(ui, app, "Blank", "insert.header", json!({"preset": "blank"}));
+                mi(ui, app, "Blank (Three Columns)", "insert.header", json!({"preset": "blankThree"}));
+                mi(ui, app, "Document Title", "insert.header", json!({"preset": "title"}));
+                ui.separator();
+                mi(ui, app, "Edit Header", "insert.editHeader", json!({}));
+                mi(ui, app, "Remove Header", "insert.removeHeader", json!({}));
+            });
+        };
+        let footer = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("footer", Some("Footer"), "Footer", big_btn, "insert.footer"), |ui, app| {
+                mi(ui, app, "Blank", "insert.footer", json!({"preset": "blank"}));
+                mi(ui, app, "Blank (Three Columns)", "insert.footer", json!({"preset": "blankThree"}));
+                mi(ui, app, "Page Number", "insert.footer", json!({"preset": "pageNumber"}));
+                ui.separator();
+                mi(ui, app, "Edit Footer", "insert.editFooter", json!({}));
+                mi(ui, app, "Remove Footer", "insert.removeFooter", json!({}));
+            });
+        };
+        let page_number = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "pageNumber",
+                    Some(if big_btn { "Page\nNumber" } else { "Page Number" }),
+                    "Page Number",
+                    big_btn,
+                    "insert.pageNumber",
+                ),
+                |ui, app| {
+                    mi(ui, app, "Top of Page", "insert.pageNumber", json!({"position": "top", "align": "right"}));
+                    mi(ui, app, "Bottom of Page", "insert.pageNumber", json!({"position": "bottom", "align": "center"}));
+                    mi(ui, app, "Page X of Y", "insert.pageNumber", json!({"position": "bottom", "format": "x of y"}));
+                    mi(ui, app, "Current Position", "insert.pageNumber", json!({"position": "current"}));
+                    mi(ui, app, "Format Page Numbers…", "ui.dialog", json!({"name": "pageNumbers"}));
+                },
+            );
+        };
+        // Measured: three rows from 1161 px (928.8 pt) to 1900 px, one row outside.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Header & Footer", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| header(ui, app, false));
+                crate::widgets::row(ui, |ui| footer(ui, app, false));
+                crate::widgets::row(ui, |ui| page_number(ui, app, false));
+            });
+        } else {
+            top_row(ui, |ui| {
+                header(ui, app, true);
+                footer(ui, app, true);
+                page_number(ui, app, true);
+            });
+        }
     });
     group(ui, "Text", None, app, |ui, app| {
-        big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);
-        stack(ui, |ui| {
+        let quick_parts = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -177,21 +288,43 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Field…", "ui.dialog", json!({"name": "field"}));
                 },
             );
+        };
+        let word_art = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(ui, app, crate::widgets::MenuButtonOptions::new("wordArt", Some("WordArt"), "WordArt", false, ""), |ui, app| {
                 crate::wordart_menus::style_gallery(ui, app, "insert.wordArt")
             });
+        };
+        let drop_cap = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
                 crate::widgets::MenuButtonOptions::new("dropCap", Some("Drop Cap"), "Drop Cap", false, "insert.dropCap"),
                 drop_cap_items,
             );
-        });
-        stack(ui, |ui| {
+        };
+        let extras = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "signature", None, "Signature Line", crate::widgets::ButtonAction::new("insert.signatureLine", json!({}), false));
             small(ui, app, "dateTime", None, "Date & Time", crate::widgets::ButtonAction::new("insert.dateTime", json!({}), false));
             small(ui, app, "object", None, "Object", crate::widgets::ButtonAction::new("insert.object", json!({}), false));
-        });
+        };
+        // Measured: one row below 1300 px (1040 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Text", 1) >= 3 {
+            big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);
+            stack(ui, |ui| {
+                quick_parts(ui, app);
+                word_art(ui, app);
+                drop_cap(ui, app);
+            });
+            stack(ui, |ui| extras(ui, app));
+        } else {
+            top_row(ui, |ui| {
+                big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);
+                quick_parts(ui, app);
+                word_art(ui, app);
+                drop_cap(ui, app);
+                extras(ui, app);
+            });
+        }
     });
     group(ui, "Symbols", None, app, |ui, app| {
         let symbol = |ui: &mut Ui, app: &mut WordApp, big: bool| {
