@@ -19,6 +19,25 @@ fn word_count() {
     assert_eq!(count_words(" -- "), 0);
 }
 
+/// #2797: the status bar's character counts, worded like the Word Count dialog's: characters
+/// with spaces leave the paragraph breaks out, characters without spaces leave every
+/// whitespace character out.
+#[test]
+fn character_counts() {
+    assert_eq!(count_chars(""), 0);
+    assert_eq!(count_chars("Hello"), 5);
+    // Paragraph breaks join the paragraphs but aren't characters.
+    assert_eq!(count_chars("Hello\nworld\r\n"), 10);
+    assert_eq!(count_chars("a\tb"), 3, "a tab is a character");
+    // Every kind of whitespace goes, spaces, tabs and (non-ASCII) spaces between words.
+    assert_eq!(count_chars_no_spaces("Hello world"), 10);
+    assert_eq!(count_chars_no_spaces("a\tb c\u{a0}d"), 4, "including a non-breaking space");
+    assert_eq!(count_chars_no_spaces(" \n\r\t "), 0);
+    // Accented letters and emoji count as one character each, as they are.
+    assert_eq!(count_chars("café 🚀"), 6);
+    assert_eq!(count_chars_no_spaces("café 🚀"), 5);
+}
+
 /// #4547: each Han ideograph and kana counts as a word; punctuation and Hangul spacing don't change.
 #[test]
 fn word_count_counts_each_chinese_and_japanese_character() {
@@ -766,4 +785,32 @@ fn lone_table_open_markers_mixed_tables_and_paired() {
     let Block::Table(res1) = &*d.body[1] else { panic!("expected table") };
     assert!(res1.controls.open.is_empty());
     assert_eq!(res1.controls.close, 0);
+}
+
+#[test]
+fn missing_picture_names_are_capped_at_a_char_boundary() {
+    let mut d = Document::new();
+    let long: String = "é".repeat(5000);
+    d.missing_pictures.push(MissingPicture { part: long.clone(), story: long, reason: MissingPictureReason::MissingPart });
+    let item = &d.missing_pictures.list[0];
+    assert_eq!((item.part.chars().count(), item.story.chars().count()), (1024, 1024));
+}
+
+#[test]
+fn missing_pictures_are_capped_deduplicated_and_not_content() {
+    let mut d = Document::new();
+    let item = |n: usize| MissingPicture { part: format!("p{n}"), story: "word/document.xml".into(), reason: MissingPictureReason::MissingPart };
+    d.missing_pictures.push(item(0));
+    d.missing_pictures.push(item(0));
+    assert_eq!(d.missing_pictures.list.len(), 1);
+    for n in 1..MAX_MISSING_PICTURES + 3 {
+        d.missing_pictures.push(item(n));
+    }
+    assert_eq!(d.missing_pictures.list.len(), MAX_MISSING_PICTURES);
+    assert!(d.missing_pictures.truncated);
+    let e = Document::new();
+    assert_eq!(d, e);
+    assert!(d.same_content(&e));
+    assert!(!serde_json::to_string(&d).unwrap().contains("p0"));
+    assert_eq!(MissingPictureReason::ExternalTarget.label(), "external target");
 }
