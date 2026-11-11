@@ -193,6 +193,115 @@ fn compare_bounds_total_diff_work() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
 }
 
+/// #6110: a record moved from before the comparison window to after it must not misalign the
+/// blocks past the window into hundreds of one-token revisions. 4,600 blocks, one record moved
+/// from 100 to 4,400, one word changed in the first and in the last block (so no common
+/// start or end is trimmed and the whole 4,600 reach the table).
+#[test]
+fn compare_a_move_past_the_window_marks_only_the_real_changes() {
+    let record = |i: usize| format!("Record {i:05} alpha beta gamma delta");
+    let original: Vec<String> = (0..4600).map(record).collect();
+    let mut revised = original.clone();
+    let moved = revised.remove(100);
+    revised.insert(4400, moved);
+    revised[0] = revised[0].replace("delta", "omega");
+    revised[4599] = revised[4599].replace("delta", "omega");
+    let (original, revised) = (original.join("\n"), revised.join("\n"));
+    let mut s = Session::new(Document::from_text(&original));
+    let r = s.run("review.compare", &json!({"text": revised})).unwrap();
+    // The two substitutions, the deleted record and the inserted record.
+    assert_eq!(r["changes"], 4, "false revisions past the window");
+    // Accepting lands on the revised text and rejecting on the original. (A whole paragraph's
+    // mark isn't tracked yet, #3750, so the one deleted or inserted record leaves an empty
+    // paragraph behind; the records themselves are what's compared.)
+    let records = |s: &Session| s.doc.plain_text(StoryRef::Body).split('\n').filter(|l| !l.is_empty()).map(str::to_string).collect::<Vec<_>>();
+    let lines = |t: &str| t.split('\n').map(str::to_string).collect::<Vec<_>>();
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(records(&s), lines(&revised));
+    let mut s = Session::new(Document::from_text(&original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(records(&s), lines(&original));
+}
+
+/// The edit script is a valid script whatever path built it: it consumes both sequences, and
+/// its matches are equal elements.
+fn assert_valid_script(a: &[u32], b: &[u32], ops: &[Op]) {
+    let (mut i, mut j) = (0, 0);
+    for op in ops {
+        match op {
+            Op::Same => {
+                assert_eq!(a.get(i), b.get(j), "a match of unequal elements at {i}/{j}");
+                i += 1;
+                j += 1;
+            }
+            Op::Del => i += 1,
+            Op::Ins => j += 1,
+        }
+    }
+    assert_eq!((i, j), (a.len(), b.len()), "the script doesn't consume both sequences");
+}
+
+#[test]
+fn lcs_ops_past_the_table_size_is_still_a_shortest_script() {
+    // Longer than the comparison table: one element moved far, one replaced near the start.
+    let a: Vec<u32> = (0..6000).collect();
+    let mut b = a.clone();
+    let moved = b.remove(50);
+    b.insert(5500, moved);
+    b[7] = 99_999;
+    let ops = lcs_ops(&a, &b, &mut { u64::MAX });
+    assert_valid_script(&a, &b, &ops);
+    let (dels, inss) = (ops.iter().filter(|o| **o == Op::Del).count(), ops.iter().filter(|o| **o == Op::Ins).count());
+    assert_eq!((dels, inss), (2, 2));
+    // Completely different sequences of that length (too many edits for the search) still
+    // produce a valid script, and a spent budget is respected.
+    let c: Vec<u32> = (100_000..106_000).collect();
+    let ops = lcs_ops(&a, &c, &mut { u64::MAX });
+    assert_valid_script(&a, &c, &ops);
+    let mut spent = 0u64;
+    let ops = lcs_ops(&a, &b, &mut spent);
+    assert_valid_script(&a, &b, &ops);
+    assert_eq!(spent, 0);
+}
+
+/// The search for a shortest script agrees with the comparison table: a valid script with as
+/// many matches as the table's, on small random sequences (including empty and equal ones).
+#[test]
+fn shortest_script_matches_the_table_on_random_sequences() {
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = |n: u64| {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed % n) as u32
+    };
+    for case in 0..2000 {
+        let alphabet = 2 + next(6) as u64;
+        let (la, lb) = (next(40) as usize, next(40) as usize);
+        let a: Vec<u32> = (0..la).map(|_| next(alphabet)).collect();
+        let b: Vec<u32> = if case % 3 == 0 {
+            // Alike: a few edits of `a`.
+            let mut b = a.clone();
+            for _ in 0..next(4) {
+                let at = next(b.len() as u64 + 1) as usize;
+                if next(2) == 0 && at < b.len() {
+                    b.remove(at);
+                } else {
+                    b.insert(at, next(alphabet));
+                }
+            }
+            b
+        } else {
+            (0..lb).map(|_| next(alphabet)).collect()
+        };
+        let script = shortest_script(&a, &b, &mut { u64::MAX }).unwrap_or_else(|| panic!("no script for {a:?} -> {b:?}"));
+        assert_valid_script(&a, &b, &script);
+        let matches = |ops: &[Op]| ops.iter().filter(|o| **o == Op::Same).count();
+        assert_eq!(matches(&script), matches(&lcs_ops(&a, &b, &mut { u64::MAX })), "not shortest for {a:?} -> {b:?}");
+    }
+}
+
 #[test]
 fn macros_record_and_run() {
     let mut s = Session::new(Document::new());
