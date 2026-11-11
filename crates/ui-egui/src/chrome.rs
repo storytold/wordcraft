@@ -587,14 +587,16 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
         ui.memory_mut(|m| m.request_focus(id));
     }
     let typing = ui.memory(|m| m.has_focus(id));
+    let hint = if width >= TitleBarFit::SEARCH_TEXT { ph } else { "" };
     let edit = ui.add_sized(
-        vec2(width.max(TitleBarFit::SEARCH_TEXT), control_h),
-        egui::TextEdit::singleline(&mut s.query).id(id).hint_text(ph).align(if crate::rtl::on() {
+        vec2(width, control_h),
+        egui::TextEdit::singleline(&mut s.query).id(id).hint_text(hint).align(if crate::rtl::on() {
             Align2::RIGHT_CENTER
         } else {
             Align2::LEFT_CENTER
         }),
     );
+    edit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, ph));
     let r = edit.rect;
     // Enter in the box runs the first result, and is used up: a dialog that result opens (Word
     // Count) mustn't take the same Enter as its OK. A result Tab moved to takes Enter or Space

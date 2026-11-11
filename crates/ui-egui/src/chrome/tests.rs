@@ -600,6 +600,51 @@ fn title_bar_controls_never_overlap_in_a_narrow_window() {
     }
 }
 
+/// #5886 (review): when search is active in the title bar at narrow widths down to the minimum
+/// width (and at icon-only search widths), the active text editor stays within the fitted width
+/// without expanding or overlapping surrounding controls (Quick Access Toolbar or Discord).
+#[test]
+fn title_bar_controls_never_overlap_when_search_is_active_in_a_narrow_window() {
+    for scale in [1.0f32, 1.5f32] {
+        // Test narrow icon-only widths (e.g. 400 pt where TitleBarFit returns control_h) as well
+        // as the 600 pt split minimum and wider split widths.
+        for width in [400.0, 450.0, crate::window_geometry::MIN_SIZE.x, 640.0, 680.0, 760.0, 1440.0] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.ui.show_discord = true;
+            let ctx = ctx();
+            if (scale - 1.0).abs() > 0.001 {
+                ctx.set_zoom_factor(scale);
+            }
+            ctx.enable_accesskit();
+            a.ctx = Some(ctx.clone());
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 700.0))), ..Default::default() };
+            // Frame 1: draw title bar to record search box presence.
+            let mut out1 = ctx.run_ui(input.clone(), |ui| title_bar(&mut a, ui));
+            out1.textures_delta.clear();
+            assert!(open_title_search(&mut a), "search opens in the title bar box");
+            // Frame 2: draw title bar with search active.
+            let mut out = ctx.run_ui(input, |ui| title_bar(&mut a, ui));
+            out.textures_delta.clear();
+            assert!(title_search_open(&a, &ctx), "search is active in frame 2");
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            let nodes: Vec<(String, f64, f64)> = update
+                .nodes
+                .iter()
+                .filter_map(|(_, node)| Some((node.label()?.to_string(), node.bounds()?)))
+                .filter(|(_, b)| b.width() > 0.0)
+                .map(|(l, b)| (l, b.x0, b.x1))
+                .collect();
+            assert!(nodes.iter().any(|(l, ..)| l == "Search commands and help"), "{scale}x {width}: {nodes:?}");
+            for (i, (la, a0, a1)) in nodes.iter().enumerate() {
+                assert!(*a1 <= f64::from(width) + 0.5, "{scale}x {width}: {la} runs off the window");
+                for (lb, b0, b1) in nodes.iter().skip(i + 1) {
+                    assert!(a1 <= b0 || b1 <= a0, "{scale}x {width}: active search {la} ({a0}–{a1}) overlaps {lb} ({b0}–{b1})");
+                }
+            }
+        }
+    }
+}
+
 /// #5886: the status bar's texts stop before its controls on the right; in a narrow window the
 /// ones that don't fit are left out or shortened instead of being drawn over Focus, the views and the zoom.
 /// Parametrized across exact 600 pt minimum, split widths, and 1.0x and 1.5x scale factors.
