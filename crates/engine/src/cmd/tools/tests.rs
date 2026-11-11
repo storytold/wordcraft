@@ -394,6 +394,62 @@ fn compare_keeps_a_reply_the_result_still_anchors_when_its_root_goes() {
     assert_eq!(kept.parent, None, "its root went, so the parent clearing detaches it");
 }
 
+/// Every comment's text with its parent's text (`None` for a root), sorted.
+fn comment_threads(d: &Document) -> Vec<(String, Option<String>)> {
+    let text = |c: &wordcraft_doc::Comment| d.plain_text(StoryRef::Part(c.part)).trim().to_string();
+    let mut out: Vec<(String, Option<String>)> = d
+        .comments
+        .values()
+        .map(|c| (text(c), c.parent.map(|p| text(d.comments.get(&p).unwrap_or_else(|| panic!("a reply names parent {p}, which is gone")))))
+        .collect();
+    out.sort();
+    out
+}
+
+#[test]
+fn compare_keeps_the_fixed_in_v2_reply_the_revised_copy_lacks() {
+    // #5571 review: the original's comment on "Alpha" has the reply "Fixed in v2" (no range of
+    // its own); the revised copy has only the comment. The root is deduplicated (the result
+    // shows the revised one's), but the reply is the original's alone: it stays, under the
+    // surviving root, and Save writes it.
+    let mut o = Session::new(Document::from_text("Alpha one."));
+    comment_on(&mut o, "Alpha", "root note");
+    o.run("review.reply", &json!({"id": 0, "text": "Fixed in v2"})).unwrap();
+    let mut r = Session::new(Document::from_text("Alpha one."));
+    comment_on(&mut r, "Alpha", "root note");
+    let s = compare_files("fixedinv2", &o.doc, &r.doc);
+    let t = |t: &str, del| (t.to_string(), del);
+    assert_eq!(anchored_comments(&s.doc), [t("root note", false)], "the root shows once");
+    let thread = |s: &[(&str, Option<&str>)]| s.iter().map(|(a, b)| (a.to_string(), b.map(str::to_string))).collect::<Vec<_>>();
+    let want = thread(&[("Fixed in v2", Some("root note")), ("root note", None)]);
+    assert_eq!(comment_threads(&s.doc), want, "the reply stays with its thread");
+    let path = std::env::temp_dir().join(format!("wc-5571-fixedinv2-out-{}.docx", std::process::id()));
+    let saved = crate::io::save_path(&path, &s.doc);
+    let back = saved.and_then(|_| crate::io::open_path(&path));
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(comment_threads(&back.unwrap()), want, "the saved result has the reply, in its thread");
+}
+
+#[test]
+fn compare_drops_a_reply_the_revised_thread_also_has() {
+    // Both documents' comment on "Alpha" has the reply "Fixed in v2"; only the original's has
+    // "Thanks" too. The revised thread's copy of "Fixed in v2" stands for both; "Thanks" moves
+    // under the surviving root.
+    let mut o = Session::new(Document::from_text("Alpha one."));
+    comment_on(&mut o, "Alpha", "root note");
+    o.run("review.reply", &json!({"id": 0, "text": "Fixed in v2"})).unwrap();
+    o.run("review.reply", &json!({"id": 0, "text": "Thanks"})).unwrap();
+    let mut r = Session::new(Document::from_text("Alpha one."));
+    comment_on(&mut r, "Alpha", "root note");
+    r.run("review.reply", &json!({"id": 0, "text": "Fixed in v2"})).unwrap();
+    let s = compare_files("dupreply", &o.doc, &r.doc);
+    let root = Some("root note".to_string());
+    assert_eq!(
+        comment_threads(&s.doc),
+        [("Fixed in v2".to_string(), root.clone()), ("Thanks".to_string(), root), ("root note".to_string(), None)]
+    );
+}
+
 #[test]
 fn compare_keeps_a_styles_list_when_only_its_definition_changed() {
     use wordcraft_doc::styles::{Style, StyleKind};

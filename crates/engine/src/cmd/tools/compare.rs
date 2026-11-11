@@ -2,7 +2,7 @@ use super::{
     Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
     para_block,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use wordcraft_doc::PartKind;
 use wordcraft_doc::para::OBJ;
 
@@ -70,6 +70,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     // The notes and comments the original shows: those the result no longer does go with it.
     let shown_before = note_and_comment_refs(&s.doc);
+    let original_comments: BTreeSet<u32> = s.doc.comments.keys().copied().collect();
     // Every block of the result that comes from the revised document comes through this one
     // adoption, before anything is compared or marked: its media, lists, styles, notes,
     // comments, tracked changes and text boxes (and what their stories refer to) are relinked
@@ -157,7 +158,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.doc.body = out;
     unique_deleted_bookmarks(&mut s.doc, del);
-    drop_unshown(&mut s.doc, &shown_before);
+    drop_unshown(&mut s.doc, &shown_before, &original_comments);
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
@@ -230,25 +231,95 @@ fn note_and_comment_refs(doc: &Document) -> (BTreeSet<u32>, BTreeSet<u32>) {
 
 /// Drop the original's notes and comments the result no longer shows: where both documents
 /// have the same note or comment the result shows the revised one's (adopted), and the
-/// original's would be left over, listed but anchored nowhere.
-fn drop_unshown(doc: &mut Document, before: &(BTreeSet<u32>, BTreeSet<u32>)) {
+/// original's would be left over, listed but anchored nowhere. `before` is what the original
+/// showed ([`note_and_comment_refs`]) and `original` the ids of its comments, both taken before
+/// the revised document was adopted.
+///
+/// What happens to the replies under a dropped comment depends on why it was dropped:
+/// - **Deduplicated**: the result shows a twin of it, an adopted comment that compares as the
+///   same (author, text and pictures, as [`obj_key`] sees them; for a reply, under the twin of
+///   its parent). Its replies stay with that thread: a reply the twin's thread also has (a reply
+///   of the twin's that compares as the same) is a duplicate and is dropped in turn, and any
+///   other reply is moved under the twin, its own replies coming along. A reply with no anchor
+///   of its own is not a duplicate because of that: replies usually have no range of their own,
+///   so only the revised thread holding the same reply makes it one, and dropping a reply the
+///   revised file lacks would lose it from the result and from what Save writes.
+/// - **Not shown at all** (no twin, for instance the revised paragraph has no comment): its
+///   replies go with it; left behind, the parent clearing below would surface them as
+///   unrelated top-level comments.
+///
+/// Either way, a reply the result still anchors (one read from a file can carry its own range,
+/// a deleted one included) stays: dropping it would leave its anchor naming a comment the
+/// result lacks, and the parent clearing detaches it instead.
+fn drop_unshown(doc: &mut Document, before: &(BTreeSet<u32>, BTreeSet<u32>), original: &BTreeSet<u32>) {
     let (notes, comments) = note_and_comment_refs(doc);
-    // Replies to a dropped comment go with it; left behind, the parent clearing below would
-    // surface them as unrelated top-level comments. A reply the result still anchors (one
-    // read from a file can carry its own range) stays, though: dropping it would leave its
-    // anchor naming a comment the result lacks, and the parent clearing detaches it instead.
     let mut gone: BTreeSet<u32> = before.1.difference(&comments).copied().collect();
-    loop {
-        let more: Vec<u32> = doc
-            .comments
-            .iter()
-            .filter(|(id, c)| !gone.contains(id) && !comments.contains(id) && c.parent.is_some_and(|p| gone.contains(&p)))
-            .map(|(id, _)| *id)
-            .collect();
-        if more.is_empty() {
-            break;
+    let view: &Document = doc;
+    let reads = |id: u32| view.comments.get(&id).map(|c| (c.author.clone(), view.plain_text(StoryRef::Part(c.part))));
+    let same = |a: u32, b: u32| obj_key(view, &InlineObject::CommentStart { id: a }) == obj_key(view, &InlineObject::CommentStart { id: b });
+    // The result's adopted comments (those the original didn't have; roots only if shown) by
+    // parent and by what they read, so each is found without a scan and taken as a twin once.
+    let mut adopted: BTreeMap<(Option<u32>, String, String), Vec<u32>> = BTreeMap::new();
+    // The original's replies the result doesn't anchor, by parent.
+    let mut replies_of: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+    for (&id, c) in &view.comments {
+        if original.contains(&id) {
+            if let Some(p) = c.parent
+                && !comments.contains(&id)
+            {
+                replies_of.entry(p).or_default().push(id);
+            }
+        } else if (c.parent.is_some() || comments.contains(&id))
+            && let Some((author, text)) = reads(id)
+        {
+            adopted.entry((c.parent, author, text)).or_default().push(id);
         }
-        gone.extend(more);
+    }
+    // The twin of `id` under `parent` (`None` for a root): an adopted comment that compares as
+    // the same, no longer available to another.
+    let mut take_twin = |id: u32, parent: Option<u32>| -> Option<u32> {
+        let (author, text) = reads(id)?;
+        let candidates = adopted.get_mut(&(parent, author, text))?;
+        let at = candidates.iter().position(|&t| same(id, t))?;
+        Some(candidates.remove(at))
+    };
+    let mut twin: BTreeMap<u32, u32> = BTreeMap::new();
+    for &id in &gone {
+        if view.comments.get(&id).is_some_and(|c| c.parent.is_none())
+            && let Some(t) = take_twin(id, None)
+        {
+            twin.insert(id, t);
+        }
+    }
+    // Down each dropped comment's thread: a reply under a twin is a duplicate or moves there;
+    // a reply under a comment with none goes too. Each comment is dropped (and walked) once,
+    // so a parent cycle in a hostile file ends.
+    let mut moved: Vec<(u32, u32)> = Vec::new();
+    let mut frontier: Vec<u32> = gone.iter().copied().collect();
+    while let Some(parent) = frontier.pop() {
+        let t = twin.get(&parent).copied();
+        for &r in replies_of.get(&parent).map(Vec::as_slice).unwrap_or_default() {
+            if gone.contains(&r) {
+                continue;
+            }
+            match t.map(|t| (t, take_twin(r, Some(t)))) {
+                Some((t, None)) => moved.push((r, t)),
+                Some((_, Some(d))) => {
+                    twin.insert(r, d);
+                    gone.insert(r);
+                    frontier.push(r);
+                }
+                None => {
+                    gone.insert(r);
+                    frontier.push(r);
+                }
+            }
+        }
+    }
+    for (r, t) in moved {
+        if let Some(c) = doc.comments.get_mut(&r) {
+            c.parent = Some(t);
+        }
     }
     for id in &gone {
         if let Some(c) = doc.comments.remove(id) {
