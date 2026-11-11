@@ -5390,6 +5390,12 @@ fn field_shading_reuses_its_scan_until_the_document_changes() {
     };
     assert_ne!(after, first, "the fresh scan follows the edit: the field moved with the text");
     assert_eq!(canvas.field_cache.borrow().as_ref().map(|(r, _)| *r), Some(session.rev()), "the cache followed the revision");
+
+    let never_canvas = CanvasState::default();
+    let layout = session.layout();
+    let never_rects = field_shading_rects_cached(&never_canvas, &layout, &session, FieldShading::Never, &sel, session.page_hint, &[]);
+    assert!(never_rects.is_empty());
+    assert!(never_canvas.field_cache.borrow().is_none(), "Never avoids scanning or caching fields");
 }
 
 /// #4290: a simple field showing its code is not a result; the overlay leaves it alone.

@@ -334,7 +334,8 @@ impl Tokens {
             status_bar: Color32::from_rgb(0xF0, 0xF0, 0xF0),
             selection: Color32::from_rgba_unmultiplied(0x3B, 0x5B, 0xDB, 0x48),
             find_highlight: Color32::from_rgba_unmultiplied(0xFF, 0xE0, 0x3D, 0x90),
-            field_shading: Color32::from_rgba_unmultiplied(0xD9, 0xD9, 0xD9, 0x80),
+            // Field shading (#4290): 15% black overlay on white gives #D9D9D9 without washing out text.
+            field_shading: Color32::from_rgba_unmultiplied(0x00, 0x00, 0x00, 0x26),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x22),
             handle: Color32::WHITE,
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x28),

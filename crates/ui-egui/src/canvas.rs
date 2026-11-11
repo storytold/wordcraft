@@ -1921,6 +1921,9 @@ pub(crate) fn field_shading_rects_cached(
     page_hint: usize,
     visible_pages: &[bool],
 ) -> Vec<(usize, wordcraft_geom::Rect)> {
+    if matches!(shading, wordcraft_engine::FieldShading::Never) {
+        return Vec::new();
+    }
     let mut cache = canvas.field_cache.borrow_mut();
     let rev = session.rev();
     if cache.as_ref().is_none_or(|(r, _)| *r != rev) {
