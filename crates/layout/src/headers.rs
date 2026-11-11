@@ -303,7 +303,9 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
     let total = pages.len() as u32;
     let hf = Arc::clone(&ctx.hf);
     let even_odd = ctx.doc.settings.even_odd_headers;
-    let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
+    // The headings come from the body: its deletions are left out as the body leaves them out.
+    let hide = ctx.opts.hides_deleted(StoryRef::Body);
+    let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc, hide));
     let mut first_of_section: HashSet<usize> = HashSet::new();
     let mut seen = HashSet::new();
     for (i, p) in pages.iter().enumerate() {

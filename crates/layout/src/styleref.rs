@@ -11,6 +11,12 @@
 //! number in full context (all levels; `\r` is treated like `\w`), `\s` a chapter number (the
 //! number alone, or the heading's count when it isn't numbered); `\t` drops the text around
 //! the number; `\p` adds "above" / "below".
+//!
+//! The text is the paragraph's (or run's) as the body shows it: the tracked deletions the body
+//! leaves out ([`crate::HideDeleted`]: all of them with No Markup or in balloons, else those
+//! Track Changes Options mark Hidden) are left out, and those shown struck through are kept, as
+//! plain text. Word for Windows does this in headers and in updated body fields: with Deletions
+//! marked Hidden they are left out, struck through they are kept (#6263).
 
 use std::collections::HashMap;
 
@@ -18,6 +24,8 @@ use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Document, Path, StoryRef, StyleKind};
+
+use crate::HideDeleted;
 
 /// The result when no paragraph has the style (or the style doesn't exist).
 pub const NO_TEXT: &str = "Error: no paragraph in this style.";
@@ -162,7 +170,9 @@ fn clean(s: &str) -> String {
 }
 
 impl StyleIndex {
-    pub fn build(doc: &Document) -> StyleIndex {
+    /// The index of `doc`'s body, without the text of the tracked deletions `hide` leaves out
+    /// (`HideDeleted::default()`: every deletion kept).
+    pub fn build(doc: &Document, hide: HideDeleted) -> StyleIndex {
         let mut styles = HashMap::new();
         for st in &doc.styles.styles {
             let v = (st.id.clone(), st.kind == StyleKind::Character);
@@ -205,6 +215,7 @@ impl StyleIndex {
             for r in &p.runs {
                 let end = off.saturating_add(r.len);
                 if let Some(cs) = &r.props.style
+                    && !hide.hides(doc, r.props.del)
                     && let Some(t) = p.text.get(off..end)
                 {
                     let t: String = t.chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
@@ -224,7 +235,8 @@ impl StyleIndex {
                     list.push(i);
                 }
             }
-            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, level, ordinal });
+            let hidden: Vec<_> = p.run_ranges().filter(|(_, c)| hide.hides(doc, c.del)).map(|(r, _)| r).collect();
+            entries.push(Entry { path, style, text: clean(&p.text_without(&hidden)), runs, label, levels, level, ordinal });
         }
         StyleIndex { entries, by_path, styles, para_entries, char_entries }
     }

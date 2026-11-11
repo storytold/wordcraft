@@ -480,7 +480,7 @@ fn strict_report(s: &mut Session, v: &Value) -> CmdResult {
             crate::strict::strict_report(&s.doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png)
         }
         None => {
-            let out = super::references::output_fields(&s.doc);
+            let out = super::references::output_fields(&s.doc, crate::strict::pdf_hides_deleted(&opts));
             crate::strict::pdf_report(out.as_ref().unwrap_or(&s.doc), &opts)
         }
     };
