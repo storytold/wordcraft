@@ -155,7 +155,7 @@ impl PageBuilder<'_> {
         // The note area starts below the text (a page of continued notes alone: at its top).
         let area = self.bottom.max(self.body_floor());
         let fits = total <= self.orig_bottom - area + 0.01;
-        let top = match (fits, self.beneath) {
+        let mut top = match (fits, self.beneath) {
             (false, _) => area,
             // Below the page's last line of text.
             (true, true) => self.body_floor().min(self.orig_bottom - total),
@@ -168,12 +168,15 @@ impl PageBuilder<'_> {
         let mut placed = Vec::new();
         // Where the continuation notice goes, below a note that continues on the next page.
         let mut notice_y = None;
+        // The bottom of what is placed (with the notice).
+        let mut end = y;
         let mut rest = notes.into_iter();
         while let Some(n) = rest.next() {
             let room = self.orig_bottom - y;
             if fits || n.h <= room + 0.01 {
                 let ny = y;
                 y += n.h;
+                end = y;
                 placed.push((n, ny));
                 continue;
             }
@@ -181,20 +184,37 @@ impl PageBuilder<'_> {
             // always leaves something here (its first line, or all of it if it can't be split),
             // so continuing ends.
             let first = placed.is_empty();
-            let cuts = n.cuts();
+            // Widow/orphan control in the note keeps two of a paragraph's lines on either side;
+            // the page's first note gives that up before it gives up the page's room.
             let room = room - self.seps.notice_h();
-            match cuts.iter().rev().find(|&&c| c <= room + 0.01).or(cuts.first().filter(|_| first)).copied() {
+            let fit = |cuts: Vec<f32>| cuts.into_iter().rev().find(|&c| c <= room + 0.01);
+            let cut = fit(n.kept_cuts()).or_else(|| if first { fit(n.cuts()).or(n.cuts().first().copied()) } else { None });
+            match cut {
                 Some(c) => {
                     let (head, tail) = n.split(c);
                     notice_y = Some(y + head.h);
+                    end = y + head.h + self.seps.notice_h();
                     placed.push((head, y));
                     self.carry.push(tail);
                 }
-                None if first => placed.push((n, y)),
+                None if first => {
+                    end = y + n.h;
+                    placed.push((n, y));
+                }
                 None => self.carry.push(n),
             }
             self.carry.extend(rest.by_ref());
             break;
+        }
+        // Notes that continue on the next page still end on the bottom margin, the room left
+        // going above the separator (Word for Mac 16.114.4), unless they go beneath the text.
+        if !fits && !self.beneath {
+            let shift = (self.orig_bottom - end).max(0.0);
+            top += shift;
+            notice_y = notice_y.map(|ny| ny + shift);
+            for (_, ny) in &mut placed {
+                *ny += shift;
+            }
         }
         if let Some(pg) = self.pages.last_mut() {
             match if cont { &self.seps.cont } else { &self.seps.sep } {
