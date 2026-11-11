@@ -15,12 +15,28 @@ fn text_overflowing_into_an_unequal_column_takes_its_width() {
         d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 36.0, separator: false, widths };
         WIDTH_RELAYS.with(|c| c.set(0));
         let l = lay(&d);
+        let mut covered = 0;
+        for page in &l.pages {
+            for item in &page.items {
+                if let Placed::Lines { path, para, l0, l1, .. } = item
+                    && path.0 == [0]
+                {
+                    for line in &para.lines[*l0..*l1] {
+                        assert_eq!(line.start, covered, "the continuation neither omits nor repeats text");
+                        covered = line.stop;
+                    }
+                }
+            }
+        }
+        assert_eq!(covered, text.len(), "the complete input paragraph is placed");
         let lines: Vec<(f32, f32)> = l.pages[0]
             .items
             .iter()
             .filter_map(|it| match it {
                 Placed::Lines { path, para, l0, l1, x, .. } if path.0 == [0] => {
-                    let right = (*l0..*l1).filter_map(|li| para.lines.get(li)).map(|line| x + line.end_x()).fold(f32::MIN, f32::max);
+                    // The caret end includes trailing spaces that may hang beyond the margin.
+                    // Compare visible text, as the other unequal-column controls do.
+                    let right = (*l0..*l1).filter_map(|li| para.lines.get(li)).map(|line| x + ink_end(para, line)).fold(f32::MIN, f32::max);
                     Some((*x, right))
                 }
                 _ => None,

@@ -348,7 +348,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
                 0 | 1 | 4 => PartKind::Header,
                 _ => PartKind::Footer,
             };
-            let blocks = story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
+            let blocks = header_story_blocks(&ctx, a, b, &mut pics, max_paragraphs)?;
             if !blocks.is_empty() {
                 let id = doc.add_part(kind, blocks);
                 hf_ids.push((si, k, id));
@@ -432,6 +432,36 @@ fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, m
     let paras = walk(ctx, a, b, pics);
     if ctx.paragraphs.exceeded.get() {
         return Err(paragraph_limit(max_paragraphs));
+    }
+    Ok(table::assemble(paras))
+}
+
+/// A header or footer story's blocks without its guard paragraph mark. [MS-DOC] 2.3.3: a
+/// non-empty header story ends with a paragraph mark that only separates it from the next story
+/// and is not part of its contents, so a one-line header is stored as `text\r\r`. Laid out, the
+/// guard would add an empty paragraph to every header and footer and push the body down when
+/// the header reaches past the top margin (#5922).
+///
+/// Only an empty last paragraph after an ordinary one is dropped: a story that is nothing but a
+/// mark stays a part (an empty header, not one linked to the previous section), and a mark right
+/// after a table row stays the paragraph that closes the table.
+fn header_story_blocks(
+    ctx: &WalkCtx<'_>,
+    a: u32,
+    b: u32,
+    pics: &mut media::Pictures,
+    max_paragraphs: usize,
+) -> Result<wordcraft_doc::Blocks, DocbinError> {
+    let mut paras = walk(ctx, a, b, pics);
+    if ctx.paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
+    let outside_table = |p: &table::ParaOut| p.row.as_ref().is_none_or(|r| !r.in_table && !r.ttp && !r.cell_mark);
+    if let [.., prev, last] = paras.as_slice() {
+        let guard = outside_table(last) && last.para.text.is_empty() && last.para.objects.is_empty() && last.para.section.is_none();
+        if guard && outside_table(prev) {
+            paras.pop();
+        }
     }
     Ok(table::assemble(paras))
 }
