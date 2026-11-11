@@ -1048,6 +1048,39 @@ fn table_properties_keep_an_indent_drawn_in_points() {
     assert_eq!(form.changes(&basis), json!({}));
 }
 
+/// A 6 pt column, the narrowest `table.properties` sets, survives the dialog being drawn and
+/// confirmed: the field's minimum is the command's, and drawing a field doesn't clamp it.
+#[test]
+fn table_properties_keep_a_six_point_column() {
+    let mut a = app();
+    a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+    a.run("table.properties", json!({"columnWidth": 6.0})).unwrap();
+    let col = |a: &WordApp| {
+        a.session.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { t.grid.first().copied() } else { None })
+    };
+    let before = col(&a);
+    a.run("table.properties", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..4 {
+        h.step();
+    }
+    let Some(dialogs::Dialog::TableProperties { form, basis }) = h.state().dialog.clone() else { panic!("no dialog") };
+    assert_eq!(form.changes(&basis), json!({}), "drawing the dialog changes nothing: {}", form.column_width);
+    h.get_by_label("OK").click();
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(h.state().dialog.is_none(), "OK closes the dialog");
+    assert_eq!(col(h.state()), before, "the column keeps its 6 pt");
+}
+
 /// #4857: with the whole table selected, a row check box the rows differ in shows as mixed and
 /// changes nothing left alone; clicked, OK sets it for every selected row.
 #[test]
