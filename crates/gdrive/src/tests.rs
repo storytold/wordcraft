@@ -321,6 +321,7 @@ fn google_docs_are_exported_as_docx() {
         modified_time: String::new(),
         version: "1".into(),
         size: None,
+        parents: Vec::new(),
     };
     assert_eq!(d.download(&f).unwrap(), b"PK\x03\x04docx");
     let req = &fake.seen()[1];

@@ -31,6 +31,8 @@ pub struct Origin {
     pub version: String,
     /// A Google Doc exported as `.docx`: saves go to a new `.docx` file, never over it.
     pub google_doc: bool,
+    /// The folder it is in, if Drive says: a Google Doc's Word copy and Save a Copy go there.
+    pub parent: Option<String>,
 }
 
 /// A file in the last listing.
@@ -317,7 +319,7 @@ pub fn accounts(app: &mut WordApp, ui: &mut egui::Ui) {
     }
     match (app.drive.signed_in, app.drive.busy) {
         (Some(true), _) => {
-            ui.label(tl!("✓ Signed in. WordCraft keeps only a sign-in token: in the system keychain when there is one, otherwise until you quit. Sign out forgets it and asks Google to revoke it."));
+            ui.label(tl!("✓ Signed in. WordCraft keeps only a sign-in token: in the system keychain when possible, otherwise for this session. Sign out forgets it and asks Google to revoke it."));
             ui.horizontal(|ui| {
                 if ui.button(tl!("Open File › Google Drive")).clicked() {
                     let _ = app.run("ui.backstage", json!({"value": true, "page": "drive"}));
@@ -805,11 +807,7 @@ mod native {
         let doc = app.session.document_id();
         let origin = app.drive.origin(doc).cloned();
         let name = save_name(app, given);
-        // A Google Doc, a copy, or a new name: a new file. Otherwise the file it came from.
-        let target = match origin {
-            Some(o) if !copy && !o.google_doc && given.is_none() => SaveTarget::Existing { id: o.id, name: o.name, version: o.version },
-            _ => SaveTarget::New { name: name.clone(), parent: None },
-        };
+        let target = save_target(origin, copy, given.is_some(), &name);
         // A save is a save wherever it goes: stamp first, as the desktop and web saves do.
         app.session.stamp_save();
         let password = app.session.password.as_ref().map(wordcraft_engine::Password::as_str);
@@ -953,7 +951,7 @@ mod native {
             Event::Saved { doc, rev, local, file, marked_saved } => {
                 d.busy = None;
                 let name = file.name.clone();
-                d.origins.insert(doc, Origin { google_doc: file.is_google_doc(), id: file.id, name: file.name, version: file.version });
+                d.origins.insert(doc, origin_of(file));
                 // Only the document that was saved, and only if nothing was typed while it uploaded.
                 // A local save that set the document's home while this one uploaded (a Save As,
                 // or Save to the same local file) is newer: it keeps that destination.
@@ -997,6 +995,21 @@ mod native {
     /// Opens downloaded bytes the way File › Open opens a file's bytes, then makes the document
     /// a Drive document: no local path (so Save never writes beside the app, and nothing joins
     /// the recent files) and its Drive origin.
+    /// Where a Drive save goes. A Google Doc, a copy, or a new name: a new file. Otherwise the
+    /// file it came from. A Google Doc's Word copy and a copy go beside the Drive file (in its
+    /// folder, when Drive says which); a new name, or a document not from Drive, to My Drive.
+    pub(super) fn save_target(origin: Option<Origin>, copy: bool, named: bool, name: &str) -> SaveTarget {
+        match origin {
+            Some(o) if !copy && !o.google_doc && !named => SaveTarget::Existing { id: o.id, name: o.name, version: o.version },
+            Some(o) if !named => SaveTarget::New { name: name.into(), parent: o.parent },
+            _ => SaveTarget::New { name: name.into(), parent: None },
+        }
+    }
+
+    fn origin_of(file: DriveFile) -> Origin {
+        Origin { google_doc: file.is_google_doc(), parent: file.parents.into_iter().next(), id: file.id, name: file.name, version: file.version }
+    }
+
     fn open(app: &mut WordApp, file: DriveFile, bytes: &[u8]) {
         let name = file.open_name();
         let data = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -1006,7 +1019,7 @@ mod native {
                 app.session.file_name = Some(name.clone());
                 app.session.dirty = false;
                 let doc = app.session.document_id();
-                app.drive.origins.insert(doc, Origin { google_doc: file.is_google_doc(), id: file.id, name: file.name, version: file.version });
+                app.drive.origins.insert(doc, origin_of(file));
                 let _ = app.run("ui.backstage", json!({"value": false}));
                 app.canvas.want_focus = true;
                 app.status(i18n::fmt(tl!("Opened {name} from Google Drive"), &[("name", &name)]));

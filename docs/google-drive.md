@@ -32,7 +32,7 @@ flowchart LR
   file beside the original, so the Google Doc itself is never overwritten.
 - **Conflicts.** Before saving, WordCraft checks the file's Drive version. If the file changed
   since you opened it (someone edited it in Drive, or another device saved it), nothing is
-  overwritten. The save is refused, and **Save a Copy** saves your version as a new file.
+  overwritten. The save is refused, and **Save a Copy** saves your version as a new file in the same folder.
   Drive v3 has no conditional update, so a change landing in the fraction of a second between
   that check and the upload isn't caught.
 - **No local file.** A document opened from Drive has no path on disk. It isn't added to
@@ -116,8 +116,8 @@ WordCraft follows Google's flow for installed apps:
 
 There is no embedded browser, and WordCraft never sees your Google password. The **refresh token** is kept in the system
 keychain: Keychain on macOS, Credential Manager on Windows, Secret Service on Linux and the BSDs.
-It is never written to a file. If no keychain is available, sign-in lasts until you quit.
-**Sign out** revokes the token at Google and removes it from the keychain. A token revoked
+It is never written to a file. If no keychain is available, or storing the token fails, sign-in
+lasts until you quit. **Sign out** removes the token and asks Google to revoke it. A token revoked
 elsewhere (from your Google account's security page, say) signs WordCraft out the next time it
 calls Drive.
 
