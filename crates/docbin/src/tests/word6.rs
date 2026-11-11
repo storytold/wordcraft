@@ -357,6 +357,23 @@ fn another_character_set_leaves_only_ascii_readable() {
 }
 
 #[test]
+fn a_pieces_prm_formats_its_text() {
+    // As Word 95 fast-saves formatting: piece 0 has Prm1 -> a Prc setting font 1 and bold, which
+    // its character run doesn't. Piece 0 shows in font 1, bold (and decodes in its code page);
+    // piece 1 keeps the run's plain formatting.
+    let text = b"\xC4\xE0\xC4\xE0\r";
+    let d =
+        Doc6 { text, fonts: FONTS, pieces: Some(&[(2, 0), (3, 2)]), prms: &[0x0001], prcs: &[&[0x5D, 0x01, 0x00, 0x55, 0x01]], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let p = first_para(&doc);
+    assert_eq!(p.text, "ДаÄà");
+    let first = &p.runs.first().expect("a run").props;
+    assert_eq!((first.font.as_deref(), first.bold), (Some("Times New Roman Cyr"), Some(true)));
+    let last = &p.runs.last().expect("a run").props;
+    assert_eq!((last.font.as_deref(), last.bold), (None, None));
+}
+
+#[test]
 fn a_font_in_a_pieces_prm_chooses_its_code_page() {
     // As Word 95 fast-saves a font change: piece 0 ("\xC4\xE0") has Prm1 -> Prc 0 = sprm 0x5D font 1
     // (Cyrillic), while its character run names no font. Piece 1 keeps the run's font 0.

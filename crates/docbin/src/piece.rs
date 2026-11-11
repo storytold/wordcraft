@@ -29,8 +29,9 @@ enum Text {
 struct Pcd {
     fc: u32,
     text: Text,
-    /// `Prm`: either a single sprm (Prm0) or an index into the Clx's Prc grpprls (Prm1). Always 0
-    /// in Word 6.0/95 pieces, whose Prms use that version's sprm numbers.
+    /// `Prm`: either a single sprm (Prm0) or an index into the Clx's Prc grpprls (Prm1). In a Word
+    /// 6.0/95 table the Prcs hold translated grpprls ([`PieceTable::parse_word6`]), and a Prm0's
+    /// isprm is already the opcode [MS-DOC]'s isprm table maps.
     prm: u16,
     /// For a Word 6.0/95 [`Text::Bytes`] piece whose Prm names a font: that font's code page,
     /// which outranks the runs' ([`PieceTable::code_page_at`]).
@@ -86,23 +87,24 @@ impl PieceTable {
     }
 
     /// Parse a Word 6.0/95 `Clx` at `word[fc .. fc+lcb]`: the Word 97 shape, but every piece's text
-    /// is at its plain byte offset, and its Prm is not applied as Word 97 sprms.
-    /// `piece_code_page` gives the code page a piece's raw Prm imposes (with the Clx's Prc
-    /// grpprls to look Prm1 indices up in), if any.
+    /// is at its plain byte offset. `piece_code_page` gives the code page a piece's raw Prm
+    /// imposes (with the Clx's raw Prc grpprls to look Prm1 indices up in), if any; then each Prc
+    /// grpprl is replaced by `translate_prc`'s Word 97 sprms, which the walk applies to the piece.
     pub(crate) fn parse_word6(
         word: &[u8],
         fc: u32,
         lcb: u32,
         text: Word6Text,
         piece_code_page: impl Fn(u16, &[Vec<u8>]) -> Option<u16>,
+        translate_prc: impl Fn(&[u8]) -> Vec<u8>,
     ) -> Result<PieceTable, DocbinError> {
         let mut t = Self::parse_clx(word, fc, lcb, Some(text.wide))?;
-        let prcs = std::mem::take(&mut t.prc_grpprls);
-        for p in &mut t.pieces {
-            // The raw Prm was kept for this; it is not applied as a Word 97 one.
-            p.code_page = if text.wide { None } else { piece_code_page(p.prm, &prcs) };
-            p.prm = 0;
+        if !text.wide {
+            for p in &mut t.pieces {
+                p.code_page = piece_code_page(p.prm, &t.prc_grpprls);
+            }
         }
+        t.prc_grpprls = t.prc_grpprls.iter().map(|g| translate_prc(g)).collect();
         t.code_pages = text.code_pages;
         t.default_code_page = text.default_code_page;
         Ok(t)

@@ -1029,7 +1029,8 @@ struct FmtState<'a> {
 /// paragraph style stay the same, so a Prm grpprl (up to 64 KB) is interpreted once per
 /// formatting change, not once per character (#3692).
 struct FmtMemo<'a> {
-    /// The CHPX grpprl, compared by address: it is a slice of the WordDocument stream.
+    /// The CHPX grpprl, compared by address: a slice of the WordDocument stream, or of a Word 6.0/95
+    /// file's translated runs, both of which stay put for the walk.
     chpx: &'a [u8],
     prm: u16,
     style: Option<String>,

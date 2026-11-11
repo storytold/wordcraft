@@ -244,7 +244,8 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
             }
             last_font(prcs.get(usize::from(prm >> 1))?).map(|f| code_page_of(&fonts, f))
         };
-        PieceTable::parse_word6(word, fc, lcb, text, piece_code_page)?
+        // The Prcs then carry Word 97 sprms, as the CHPXs do, for the walk to apply to the piece.
+        PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate_chp)?
     } else {
         // Word reads no more characters than the text's byte range (fcMin..fcMac) holds, one byte
         // each or two for UTF-16, whatever the character count says.
