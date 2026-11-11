@@ -232,7 +232,7 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
         blocks.push(Block::Para(para));
     }
     s.clipboard_text = rows.join("\n");
-    s.clipboard = Some(Fragment { blocks, parts });
+    s.clipboard = Some(Fragment { blocks, parts, ..Default::default() });
     Ok(super::edit::copy_result(s))
 }
 

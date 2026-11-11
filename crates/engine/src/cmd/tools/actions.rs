@@ -131,7 +131,7 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
             None => {
                 let e = document_entry(&s.doc, name, gallery).and_then(|i| s.doc.glossary.get(i));
                 let e = e.ok_or_else(|| CmdError::Params(format!("no Quick Part `{name}`")))?;
-                wordcraft_doc::edit::Fragment { blocks: e.blocks.iter().map(|b| (**b).clone()).collect(), parts: Default::default() }
+                wordcraft_doc::edit::Fragment { blocks: e.blocks.iter().map(|b| (**b).clone()).collect(), ..Default::default() }
             }
         };
         let at = delete_selection(s)?;

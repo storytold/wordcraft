@@ -326,7 +326,7 @@ fn fan_out(story: Vec<Arc<Block>>, refs: usize) -> Fragment {
     }
     let mut parts = BTreeMap::new();
     parts.insert(1, crate::Part { kind: PartKind::TextBox, blocks: story, body: Default::default() });
-    Fragment { blocks: vec![Block::Para(p)], parts }
+    Fragment { blocks: vec![Block::Para(p)], parts, ..Default::default() }
 }
 
 #[test]

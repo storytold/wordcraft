@@ -1193,6 +1193,76 @@ fn clipboard_round_trip() {
     assert_eq!(text(&s), "plain\ntext");
 }
 
+/// The comments of the session's document: each one's text, its parent's text, and the text of
+/// the body's first paragraph it is anchored to (`None` without both its ends there).
+fn comment_threads(s: &Session) -> Vec<(String, Option<String>, Option<String>)> {
+    use wordcraft_doc::para::{InlineObject, OBJ};
+    let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.first().map(|b| &**b) else { return Vec::new() };
+    let story = |id: &u32| s.doc.comments.get(id).map(|c| s.doc.plain_text(StoryRef::Part(c.part)));
+    let mut out = Vec::new();
+    for (id, c) in &s.doc.comments {
+        let start = p.objects_with_offsets().find(|(_, o)| matches!(o, InlineObject::CommentStart { id: x } if x == id));
+        let end = p.objects_with_offsets().find(|(_, o)| matches!(o, InlineObject::CommentEnd { id: x } if x == id));
+        let scope = start.zip(end).map(|((a, _), (b, _))| p.text[a..b].replace(OBJ, ""));
+        out.push((story(id).unwrap_or_default(), c.parent.as_ref().and_then(story), scope));
+    }
+    out
+}
+
+#[test]
+fn a_copy_pasted_into_a_new_document_brings_its_comments_and_replies() {
+    // #6096: as in Word, the comments on the text come with it, under ids of the new document's
+    // own, and don't take over a comment it already has.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Alpha beta gamma"}));
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    let id = run(&mut s, "review.newComment", json!({"text": "Check this"}))["id"].clone();
+    run(&mut s, "review.reply", json!({"id": id, "text": "Done"}));
+    run(&mut s, "select.all", json!({}));
+    let clip = run(&mut s, "edit.copy", json!({}))["text"].as_str().unwrap_or_default().to_string();
+
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "document.setText", json!({"text": "Mine "}));
+    run(&mut s, "select.text", json!({"text": "Mine"}));
+    run(&mut s, "review.newComment", json!({"text": "Own note"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": clip}));
+    assert_eq!(text(&s), "Mine Alpha beta gamma");
+    let own = ("Own note".to_string(), None, Some("Mine".to_string()));
+    assert_eq!(
+        comment_threads(&s),
+        vec![own.clone(), ("Check this".into(), None, Some("beta".into())), ("Done".into(), Some("Check this".into()), None)]
+    );
+    // One undo step takes them away again.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(comment_threads(&s), vec![own]);
+}
+
+#[test]
+fn a_comment_pasted_into_another_document_comes_when_its_end_does() {
+    // As in Word: a copy holding a comment's end but not its start brings the comment, anchored
+    // where it ended; one holding only a comment's start leaves the comment behind.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Alpha beta gamma"}));
+    run(&mut s, "select.text", json!({"text": "Alpha"}));
+    run(&mut s, "review.newComment", json!({"text": "First"}));
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    run(&mut s, "review.newComment", json!({"text": "Second"}));
+    let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.first().map(|b| &**b) else { panic!("no paragraph") };
+    let (from, to) = (p.text.find("ha").unwrap_or_default(), p.text.find("ta").unwrap_or_default());
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": from}, "focus": {"block": 0, "off": to}}));
+    let clip = run(&mut s, "edit.copy", json!({}))["text"].as_str().unwrap_or_default().to_string();
+    assert_eq!(clip, "ha be");
+
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "edit.paste", json!({"text": clip}));
+    assert_eq!(text(&s), "ha be");
+    assert_eq!(comment_threads(&s), vec![("First".to_string(), None, Some(String::new()))]);
+    // Its anchor is where it ended, and nothing is left of the comment that stayed behind.
+    let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.first().map(|b| &**b) else { panic!("no paragraph") };
+    assert_eq!(p.text.replace(wordcraft_doc::para::OBJ, "|"), "ha|| be");
+}
+
 /// Equations in the paragraphs of a session's body, as linear text.
 fn equations(s: &Session) -> Vec<String> {
     let mut out = Vec::new();
