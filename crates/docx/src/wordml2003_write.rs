@@ -10,13 +10,14 @@
 //! changes (`aml:annotation`), lists (`w:listPr` and a `w:lists` block), pictures (`w:pict` with
 //! `w:binData` in base64) and the core properties (`o:DocumentProperties`).
 //!
-//! What the 2003 format cannot carry is dropped or degraded, never an error: drawings other than
+//! What the 2003 format cannot carry is dropped or degraded: drawings other than
 //! pictures (shapes, text boxes, groups, charts, SmartArt, ink), picture crop, rotation and
 //! floating position (pictures become inline), content controls (their content stays), math,
 //! revisions of formatting, theme colours and fonts, custom XML, macros, embedded objects and
 //! `docDefaults` other than fonts (folded into the Normal style). Elements outside the 2003
-//! vocabulary are not written, so Word has nothing to reject. Bounded: nesting is capped by the
-//! parser's depth limit, pictures and stories are capped in number.
+//! vocabulary are not written, so Word has nothing to reject. Documents requiring exact DOCX
+//! source preservation are refused instead of losing required markup. Bounded: nesting is capped
+//! by the parser's depth limit, pictures and stories are capped in number.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -45,6 +46,9 @@ const MAX_PICT_PT: f64 = 31_680.0;
 
 /// Write `doc` as a Word 2003 XML Document.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
+    if doc.passthrough.contains_key(crate::write::REQUIRED_SOURCE_GUARD) || crate::required::has(doc) {
+        return Err(DocxError::Preservation("Word 2003 XML cannot preserve required DOCX source markup".into()));
+    }
     let parts: BTreeMap<String, Vec<u8>> = crate::write::write_parts(doc, Flavor::Document)?.into_iter().collect();
     let pkg = Package::from_parts(parts);
     let doc_part = pkg

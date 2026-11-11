@@ -38,6 +38,10 @@ pub struct Paragraph {
     /// Set when this paragraph ends a section (OOXML keeps `w:sectPr` on the last paragraph).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<Box<SectionProps>>,
+    /// This paragraph came from a DOCX requiring its source package for safe preservation.
+    /// Copies retain the marker so another document cannot silently discard its markup.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub required_docx_source: bool,
     /// Change counter for caches (not part of equality).
     #[serde(skip, default = "next_rev")]
     pub rev: u64,
@@ -51,6 +55,7 @@ impl PartialEq for Paragraph {
             && self.mark == o.mark
             && self.objects == o.objects
             && self.section == o.section
+            && self.required_docx_source == o.required_docx_source
     }
 }
 
@@ -69,6 +74,7 @@ impl Paragraph {
             mark: CharProps::default(),
             objects: Vec::new(),
             section: None,
+            required_docx_source: false,
             rev: next_rev(),
         }
     }
@@ -468,6 +474,7 @@ impl Paragraph {
             mark: if self.text.is_empty() && off == 0 { self.mark.clone() } else { carry },
             objects: tail_objs,
             section: self.section.take(),
+            required_docx_source: self.required_docx_source,
             rev: next_rev(),
         };
         if tail.text.is_empty() {
@@ -481,7 +488,8 @@ impl Paragraph {
 
     /// Append `other`'s content (its paragraph properties are dropped; its section break kept).
     pub fn append(&mut self, other: Paragraph) {
-        let Paragraph { text, runs, objects, section, .. } = other;
+        let Paragraph { text, runs, objects, section, required_docx_source, .. } = other;
+        self.required_docx_source |= required_docx_source;
         self.text.push_str(&text);
         self.runs.extend(runs);
         self.objects.extend(objects);

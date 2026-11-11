@@ -158,12 +158,98 @@ fn clean_text(s: &str) -> String {
         .collect()
 }
 
+/// Check MustUnderstand against namespaces this reader handles, rather than every URI the
+/// XML serializer can name. Only the selected AlternateContent branch and processed content
+/// of ignorable wrappers participate. The active namespace lists are counted by scope, so
+/// deeply nested markup doesn't require repeatedly scanning every ancestor's lists.
+pub(super) fn validate_must_understand(root: &El) -> Result<(), crate::DocxError> {
+    use std::collections::HashMap;
+
+    fn attr<'a>(e: &'a El, name: &str) -> Option<&'a str> {
+        e.attrs.iter().find(|(key, _)| key == name).map(|(_, value)| value.as_str())
+    }
+    fn change<K: Eq + std::hash::Hash>(map: &mut HashMap<K, usize>, keys: impl Iterator<Item = K>, add: bool) {
+        for key in keys {
+            if add {
+                *map.entry(key).or_default() += 1;
+            } else if let Some(count) = map.get_mut(&key) {
+                *count -= 1;
+                if *count == 0 {
+                    map.remove(&key);
+                }
+            }
+        }
+    }
+    fn walk<'a>(
+        e: &'a El,
+        ignored: &mut HashMap<&'a str, usize>,
+        processed: &mut HashMap<(&'a str, &'a str), usize>,
+        depth: usize,
+    ) -> Result<(), crate::DocxError> {
+        if depth > crate::xml::MAX_DEPTH {
+            return Err(crate::DocxError::Limit("markup compatibility nesting too deep".into()));
+        }
+        let ignorable = attr(e, "mc:Ignorable").unwrap_or("");
+        let process = attr(e, "mc:ProcessContent").unwrap_or("");
+        change(ignored, ignorable.split_whitespace(), true);
+        change(processed, process.split_whitespace().filter_map(|s| s.split_once(':')), true);
+        let name = e.name.split_once(':');
+        let skip = name.is_some_and(|(prefix, local)| {
+            !crate::xml::mc_understood(prefix)
+                && ignored.contains_key(prefix)
+                && !processed.contains_key(&(prefix, local))
+                && !processed.contains_key(&(prefix, "*"))
+        });
+        let result = (|| {
+            if skip {
+                return Ok(());
+            }
+            if let Some(required) = attr(e, "mc:MustUnderstand")
+                && let Some(prefix) = required.split_whitespace().find(|prefix| !crate::xml::mc_understood(prefix))
+            {
+                return Err(crate::DocxError::Xml(format!("unsupported namespace in mc:MustUnderstand: {prefix}")));
+            }
+            if e.name == "mc:AlternateContent" {
+                let branch =
+                    children_of_choice(e).ok_or_else(|| crate::DocxError::Xml("mc:AlternateContent has no supported choice or fallback".into()))?;
+                walk(branch, ignored, processed, depth + 1)?;
+            } else {
+                for child in &e.kids {
+                    if let Node::El(child) = child {
+                        walk(child, ignored, processed, depth + 1)?;
+                    }
+                }
+            }
+            Ok(())
+        })();
+        change(processed, process.split_whitespace().filter_map(|s| s.split_once(':')), false);
+        change(ignored, ignorable.split_whitespace(), false);
+        result
+    }
+    walk(root, &mut HashMap::new(), &mut HashMap::new(), 0)
+}
+
 fn children_of_choice(ac: &El) -> Option<&El> {
-    // Prefer a Choice whose requirements we understand; else the Fallback; else any Choice.
-    // `m`: Office Math (a producer may guard an equation with a picture fallback, #1273).
-    const KNOWN: &[&str] = &["wps", "wpg", "wpc", "wpi", "w14", "w15", "wp14", "a14", "w16se", "w16cid", "w16", "w16cex", "w16sdtdh", "v", "m"];
-    let ok = |c: &El| c.attr("Requires").unwrap_or("").split_whitespace().all(|r| KNOWN.contains(&r));
-    ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback")).or_else(|| ac.child("mc:Choice"))
+    // Prefer a Choice whose requirements we understand; otherwise use the Fallback.
+    // Native ink content parts are handled specially: the choice and its fallback are retained
+    // together rather than losing the source by reading the fallback alone. That doesn't imply
+    // support for other wpi choices or for MustUnderstand of the whole wpi vocabulary.
+    let ok = |c: &El| {
+        let mut requirements = c.attr("Requires").unwrap_or("").split_whitespace().peekable();
+        let mut has_ink = None;
+        requirements.peek().is_some()
+            && requirements.all(|r| {
+                crate::xml::mc_understood(r)
+                    || (r == "wpi"
+                        && *has_ink.get_or_insert_with(|| {
+                            c.child("w14:contentPart").is_some()
+                                || c.child("w:drawing")
+                                    .and_then(|d| d.find("a:graphicData"))
+                                    .is_some_and(|gd| gd.attr("uri") == Some(INK_URI) && gd.child("w14:contentPart").is_some())
+                        }))
+            })
+    };
+    ac.children("mc:Choice").find(|c| ok(c)).or_else(|| ac.child("mc:Fallback"))
 }
 
 /// Gather `name` children (rows, cells), looking through content controls, custom XML and the
@@ -209,4 +295,165 @@ fn placeholder_of(s: &str) -> String {
 
 fn on_off_attr(e: &El, name: &str) -> bool {
     e.attr(name).is_some_and(|v| !matches!(v, "0" | "false" | "off"))
+}
+
+/// Whether parsed content contains explicitly preserved unknown markup.
+/// The source package is then the only ownership boundary we can currently reproduce exactly.
+pub(super) fn needs_source_preservation(root: &El) -> bool {
+    use std::collections::HashMap;
+    fn update<'a>(map: &mut HashMap<&'a str, usize>, value: &'a str, add: bool) {
+        for token in value.split_whitespace() {
+            if add {
+                *map.entry(token).or_default() += 1;
+            } else if let Some(n) = map.get_mut(token) {
+                *n -= 1;
+                if *n == 0 {
+                    map.remove(token);
+                }
+            }
+        }
+    }
+    fn matches_name(map: &HashMap<&str, usize>, name: &str) -> bool {
+        let Some((prefix, _)) = name.split_once(':') else { return false };
+        if crate::xml::mc_understood(prefix) {
+            return false;
+        }
+        map.contains_key(name) || map.contains_key(format!("{prefix}:*").as_str())
+    }
+    // Choice selection uses '?' for unknown requirements; raw serialization cannot restore the
+    // original prefix binding. Some recognized requirement aliases are not declared either.
+    fn raw_choice_needs_source(e: &El) -> bool {
+        e.name == "mc:Choice"
+            && e.attrs.iter().find(|(name, _)| name == "Requires").is_some_and(|(_, value)| {
+                value.split_whitespace().any(|prefix| !crate::xml::declared_namespaces().any(|(declared, _)| declared == prefix))
+            })
+    }
+    // Only exact paths consumed by sdt_pr may bypass opaque-attribute protection. In
+    // particular, a modeled-looking child inside a raw property is still raw markup.
+    #[derive(Clone, Copy)]
+    enum ControlPath<'a> {
+        Outside,
+        Root,
+        Direct(&'a str),
+        Nested(&'a str),
+        Raw,
+    }
+    impl<'a> ControlPath<'a> {
+        fn enter(self, name: &'a str) -> Self {
+            match (self, name) {
+                (Self::Outside, "w:sdtPr") => Self::Root,
+                (Self::Outside, "w:sdtEndPr") => Self::Raw,
+                (Self::Outside, _) => Self::Outside,
+                (Self::Root, name)
+                    if matches!(
+                        name,
+                        "w:alias"
+                            | "w:tag"
+                            | "w:id"
+                            | "w:lock"
+                            | "w:placeholder"
+                            | "w:temporary"
+                            | "w:showingPlcHdr"
+                            | "w:richText"
+                            | "w:text"
+                            | "w14:checkbox"
+                            | "w:comboBox"
+                            | "w:dropDownList"
+                            | "w:date"
+                            | "w:picture"
+                            | "w:docPartObj"
+                            | "w:docPartList"
+                            | "w15:repeatingSection"
+                            | "w15:repeatingSectionItem"
+                    ) =>
+                {
+                    Self::Direct(name)
+                }
+                (Self::Direct(root), name) if modeled_control_child(root, name) => Self::Nested(root),
+                _ => Self::Raw,
+            }
+        }
+    }
+    fn modeled_control_child(root: &str, name: &str) -> bool {
+        match root {
+            "w:placeholder" => name == "w:docPart",
+            "w:comboBox" | "w:dropDownList" => name == "w:listItem",
+            "w:date" => matches!(name, "w:dateFormat" | "w:lid" | "w:calendar" | "w:storeMappedDataAs"),
+            "w:docPartObj" | "w:docPartList" => matches!(name, "w:docPartGallery" | "w:docPartCategory" | "w:docPartUnique"),
+            "w14:checkbox" => matches!(name, "w14:checked" | "w14:checkedState" | "w14:uncheckedState"),
+            "w15:repeatingSection" => matches!(name, "w15:sectionTitle" | "w15:doNotAllowInsertDeleteSection"),
+            _ => false,
+        }
+    }
+    fn modeled_control_alias(path: ControlPath<'_>, element: &str, name: &str) -> bool {
+        match path {
+            ControlPath::Direct(element) => {
+                (matches!(element, "w:alias" | "w:tag" | "w:id" | "w:lock" | "w:temporary" | "w:showingPlcHdr") && name == "val")
+                    || element == "w:text" && name == "multiLine"
+                    || element == "w:date" && name == "fullDate"
+                    || matches!(element, "w:comboBox" | "w:dropDownList") && name == "lastValue"
+            }
+            ControlPath::Nested(root) => match root {
+                "w:placeholder" | "w:date" | "w:docPartObj" | "w:docPartList" | "w15:repeatingSection" => name == "val",
+                "w:comboBox" | "w:dropDownList" => matches!(name, "displayText" | "value"),
+                "w14:checkbox" => name == "val" || (element != "w14:checked" && name == "font"),
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+    fn walk<'a>(
+        e: &'a El,
+        elements: &mut HashMap<&'a str, usize>,
+        attrs: &mut HashMap<&'a str, usize>,
+        control_path: ControlPath<'a>,
+        in_opaque_control_property: bool,
+        depth: usize,
+    ) -> bool {
+        if depth > crate::xml::MAX_DEPTH {
+            return false;
+        }
+        let control_path = control_path.enter(&e.name);
+        let in_control_properties = !matches!(control_path, ControlPath::Outside);
+        let in_opaque_control_property = in_opaque_control_property
+            || (in_control_properties && e.name.split_once(':').is_some_and(|(prefix, _)| !crate::xml::mc_understood(prefix)));
+        if in_control_properties {
+            // Opaque attribute values may carry arbitrary QNames, including unprefixed ones.
+            // Their original namespace scope cannot be reconstructed by the raw serializer.
+            let ambiguous_attr = e.attrs.iter().any(|(name, _)| {
+                if name.starts_with('?') || name.starts_with("xmlns:") || name.starts_with("mc:") {
+                    return false;
+                }
+                if !in_opaque_control_property && modeled_control_alias(control_path, &e.name, name) {
+                    return false;
+                }
+                in_opaque_control_property
+                    || name == "xsi:type"
+                    || crate::xml::is_rel_attr(&e.name, name)
+                    || name.split_once(':').is_none_or(|(prefix, _)| !crate::xml::mc_understood(prefix))
+            });
+            // Opaque text can itself be a QName, even when it has no colon (the default
+            // namespace may matter), so do not guess from its contents.
+            let ambiguous_text = in_opaque_control_property && e.kids.iter().any(|n| matches!(n, Node::Text(text) if !text.trim().is_empty()));
+            if ambiguous_attr || ambiguous_text || raw_choice_needs_source(e) {
+                return true;
+            }
+        }
+        let element_values = e.attrs.iter().find(|(k, _)| k == "mc:PreserveElements").map_or("", |(_, v)| v.as_str());
+        let attr_values = e.attrs.iter().find(|(k, _)| k == "mc:PreserveAttributes").map_or("", |(_, v)| v.as_str());
+        update(elements, element_values, true);
+        update(attrs, attr_values, true);
+        // Arbitrary retained attribute values may be QNames: only the source package preserves
+        // all namespace bindings, even for a small, relationship-free ignored control property.
+        let found = matches_name(elements, &e.name)
+            || e.attrs.iter().any(|(k, _)| matches_name(attrs, k))
+            || e.kids.iter().any(|n| match n {
+                Node::El(c) => walk(c, elements, attrs, control_path, in_opaque_control_property, depth + 1),
+                Node::Text(_) => false,
+            });
+        update(attrs, attr_values, false);
+        update(elements, element_values, false);
+        found
+    }
+    walk(root, &mut HashMap::new(), &mut HashMap::new(), ControlPath::Outside, false, 0)
 }
