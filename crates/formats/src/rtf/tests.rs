@@ -711,6 +711,11 @@ fn floating_picture_shape_keeps_its_wrapping_and_anchor() -> Result<(), String> 
     };
     assert_eq!(float.wrap, Wrap::InFrontOfText);
     assert_eq!(float.h_align, Some(FloatAlign::Center));
+
+    // Non-picture `\shprslt` keeps its paragraph breaks.
+    let non_pic_rtf = r"{\rtf1\ansi{\shp{\*\shpinst{\sp{\sn shapeType}{\sv 1}}}{\shprslt First\par Second}}\par}";
+    let non_pic = import(non_pic_rtf.as_bytes())?;
+    assert_eq!(non_pic.plain_text(wordcraft_doc::StoryRef::Body).trim(), "First\nSecond");
     Ok(())
 }
 

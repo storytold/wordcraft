@@ -634,7 +634,7 @@ impl Reader {
                     }
                     _ => false,
                 },
-                "par" | "pard" if self.shp_pic.as_deref().is_some_and(|s| s.rslt_depth.is_some()) => true,
+                "par" | "pard" if self.shp_pic.as_deref().is_some_and(|s| s.rslt_depth.is_some() && s.shape_type.is_none_or(|t| t == 75)) => true,
                 _ if self.shp_pic.as_deref().is_some_and(|s| depth == s.shp_depth) => {
                     self.shp_pic.as_deref_mut().is_some_and(|s| s.control_word(w, p))
                 }
