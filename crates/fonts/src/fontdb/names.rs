@@ -228,6 +228,7 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
                 }
             }
         }
+        dirs = crate::ui_fallback::with_asset_data(dirs);
     } else if cfg!(windows) {
         let root = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
         dirs.push(root.join("Fonts"));

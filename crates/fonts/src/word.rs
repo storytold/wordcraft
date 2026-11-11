@@ -222,6 +222,12 @@ const METRIC_TWINS: &[&[&str]] = &[
     &["Calibri", "Carlito"],
     &["Cambria", "Caladea"],
     &["Palatino Linotype", "Palatino", "Book Antiqua", "TeX Gyre Pagella", "P052", "URW Palladio L", "Palladio"],
+    &["Yu Mincho", "YuMincho", "游明朝", "游明朝体"],
+    &["Yu Mincho Demibold", "YuMincho Demibold", "游明朝 Demibold", "游明朝体 Demibold"],
+    &["Yu Mincho Light", "YuMincho Light", "游明朝 Light", "游明朝体 Light"],
+    &["Yu Gothic", "YuGothic", "游ゴシック", "游ゴシック体"],
+    &["Yu Gothic Medium", "YuGothic Medium", "游ゴシック Medium", "游ゴシック体 Medium"],
+    &["Yu Gothic Light", "YuGothic Light", "游ゴシック Light", "游ゴシック体 Light"],
 ];
 
 /// The fonts that measure like `family` ([`METRIC_TWINS`]), in the order they are tried, without
@@ -798,10 +804,17 @@ mod tests {
         assert!(metric_compatible(" arial ", "Liberation Sans"));
         assert!(metric_compatible("Arial CE", "Helvetica"));
         assert!(metric_compatible("Book Antiqua", "TeX Gyre Pagella"));
+        assert!(metric_compatible("游明朝", "YuMincho"));
+        assert!(metric_compatible("Yu Mincho", "YuMincho"));
+        assert!(metric_compatible("Yu Mincho", "游明朝体"));
+        assert!(metric_compatible("游明朝 Demibold", "YuMincho Demibold"));
+        assert!(metric_compatible("游ゴシック", "YuGothic"));
+        assert!(metric_compatible("Yu Gothic", "YuGothic"));
         assert!(!metric_compatible("Calibri", "Helvetica Neue"));
         assert!(!metric_compatible("Open Sans", "Carlito"));
         assert!(!metric_compatible("Times New Roman", "Times"));
         assert_eq!(metric_twins("arial").collect::<Vec<_>>(), ["Liberation Sans", "Helvetica", "Arimo"]);
+        assert_eq!(metric_twins("游明朝").collect::<Vec<_>>(), ["Yu Mincho", "YuMincho", "游明朝体"]);
     }
 
     #[test]
