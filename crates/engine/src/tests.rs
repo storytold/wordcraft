@@ -1836,6 +1836,31 @@ fn opened_html_blockquote_stays_a_quote() {
     assert_eq!(q.props.style.as_deref(), Some("Quote"));
 }
 
+#[test]
+fn paste_special_external_formats_do_not_offer_an_older_copy() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "old post"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    let png = crate::cmd::insert::base64_encode(&tiny_png());
+    for (format, payload) in [("picture", png), ("html", "<p>new</p>".into()), ("rtf", r"{\rtf1 new}".into())] {
+        let mut params = json!({(format): payload});
+        let r = run(&mut s, "edit.pasteSpecial", params.clone());
+        let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().map(|f| f["id"].as_str().unwrap()).collect();
+        assert_eq!(ids, [format]);
+        for stale_format in ["formatted", "text"] {
+            params["as"] = json!(stale_format);
+            assert!(s.run("edit.pasteSpecial", &params).is_err(), "{format}: no stale {stale_format}");
+        }
+        assert_eq!(text(&s), "old post");
+    }
+    // Headless/internal paste and a matching system copy still keep the original fragment.
+    for params in [json!({}), json!({"text": "old post"})] {
+        assert_eq!(crate::cmd::paste::available(&s, &params), ["formatted", "text"]);
+    }
+}
+
 /// Paste Special lists a picture on the system clipboard and pastes it (#687).
 #[test]
 fn paste_special_lists_and_pastes_a_picture() {

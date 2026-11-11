@@ -213,6 +213,11 @@ mod tests {
             ..Default::default()
         };
         let mut a = app(services);
+        // Copy text in WordCraft, then replace the system clipboard with a picture only.
+        a.run("document.setText", json!({"text": "old post"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("edit.copy", json!({})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
         let r = a.run("edit.pasteSpecial", json!({})).unwrap();
         let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
         assert_eq!(ids, ["picture"]);
@@ -220,6 +225,7 @@ mod tests {
         let r = a.run("edit.pasteSpecial", json!({"as": "picture"})).unwrap();
         assert_eq!(r["pastedAs"], "picture");
         assert_eq!(a.session.doc.media.len(), 1);
+        assert_eq!(first_para(&a).matches("old post").count(), 1);
     }
 
     /// A clipboard holding nothing WordCraft can paste says what it holds (#833); one that can't

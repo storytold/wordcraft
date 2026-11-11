@@ -41,11 +41,22 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Clipboard text from the params (system clipboard), else WordCraft's own copy.
+/// WordCraft's copy is current only if the supplied clipboard still matches it.
+fn own_copy<'a>(s: &'a Session, v: &Value) -> Option<&'a Fragment> {
+    let f = s.clipboard.as_ref()?;
+    match p::str(v, "text") {
+        Some(t) if f.clipboard_text() == t.replace("\r\n", "\n") => Some(f),
+        // An external picture or rich payload without text must not revive an older copy.
+        None if ["html", "rtf", "picture"].iter().all(|k| p::str(v, k).is_none()) => Some(f),
+        _ => None,
+    }
+}
+
+/// Clipboard text from the params (system clipboard), else WordCraft's current copy.
 fn clip_text(s: &Session, v: &Value) -> Option<String> {
     match p::str(v, "text") {
         Some(t) => Some(t.replace("\r\n", "\n")),
-        None => s.clipboard.as_ref().map(Fragment::plain_text),
+        None => own_copy(s, v).map(Fragment::plain_text),
     }
 }
 
@@ -62,14 +73,7 @@ fn looks_like_html(t: &str) -> bool {
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" => {
-            let f = s.clipboard.as_ref()?;
-            // System clipboard text that isn't our own copy means someone else copied since.
-            match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
-                _ => Some(String::new()),
-            }
-        }
+        "formatted" => own_copy(s, v).map(|_| String::new()),
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
         "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
@@ -268,10 +272,7 @@ pub enum Pasted {
 /// another program's formatted copy (HTML, RTF), else the system clipboard's text.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    if let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
-    {
+    if let Some(f) = own_copy(s, v) {
         return Ok(Pasted::Fragment(f.clone()));
     }
     if let Some(f) = rich_fragment(s, v) {
