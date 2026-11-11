@@ -6,6 +6,9 @@
 //! like every WordCraft parser, is lenient by design (unknown structures are skipped, bad numbers
 //! fall back to defaults) and bounded (stream sizes, piece counts and property counts are
 //! capped), so hostile input yields an error or a best-effort document, never a panic.
+//!
+//! Word 6.0/95 files, which that specification does not cover, are read by `word6` from their
+//! observed layout: their text so far.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod crypt;
@@ -23,6 +26,7 @@ mod sections;
 mod sprm;
 mod stsh;
 mod table;
+mod word6;
 
 use std::io::{Read, Seek};
 use std::sync::Arc;
@@ -213,6 +217,9 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     let mut word = stream(&mut comp, "WordDocument").ok_or_else(|| DocbinError::NotWord("no WordDocument stream".into()))?;
     if word.len() as u64 > MAX_STREAM {
         return Err(DocbinError::Limit(format!("WordDocument stream is {} bytes", word.len())));
+    }
+    if word6::is_word6(&word) {
+        return read_word6(&mut comp, &word, max_paragraphs);
     }
     let enc = fib::peek_encryption(&word);
     // The FIB names the Table stream (0Table or 1Table); fall back to whichever exists,
@@ -416,6 +423,58 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         return Err(paragraph_limit(max_paragraphs));
     }
     doc.media.extend(pics.media);
+    doc.body = table::assemble(paras);
+    doc.ensure_nonempty();
+    work.log();
+    Ok(doc)
+}
+
+/// Read a Word 6.0/95 file ([`word6`]): its main text, as paragraphs, through the same walk as a
+/// Word 97 file, with no formatting, styles or other stories yet. A section mark reads as a page
+/// break, since sections are not read.
+fn read_word6<F: Read + Seek>(comp: &mut cfb::CompoundFile<F>, word: &[u8], max_paragraphs: usize) -> Result<Document, DocbinError> {
+    let fib = word6::Fib6::parse(word)?;
+    let pieces = word6::pieces(word, &fib)?;
+    let no_bins = Bins::parse(&[], 0, 0)?;
+    let mut doc = Document::new();
+    // Word opens these files in compatibility mode 11 too.
+    doc.settings.compat_mode = 11;
+    if let Some(core) = metadata::read(comp) {
+        doc.core = core;
+    }
+    doc.body.clear();
+    let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
+    // As for Word 97 files: the text read can't exceed twice the stream, nor the absolute ceiling.
+    let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
+    let work = Work::new(MAX_WORK);
+    let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
+    let mut pics = media::Pictures::for_input(word.len());
+    let ctx = WalkCtx {
+        word,
+        data: &[],
+        pieces: &pieces,
+        chpx_bins: &no_bins,
+        papx_bins: &no_bins,
+        fonts: &[],
+        raw_styles: &[],
+        sheet: &sheet,
+        notes: &[],
+        marks: &[],
+        drawn: &[],
+        sect_ends: &[],
+        budget: &budget,
+        paragraphs: &paragraphs,
+        work: &work,
+    };
+    let mut paras = walk(&ctx, 0, fib.ccp_text, &mut pics);
+    if paragraphs.exceeded.get() {
+        return Err(paragraph_limit(max_paragraphs));
+    }
+    // Where a table row ends is paragraph formatting, which is not read yet. Without it every
+    // cell of a table would land in one row, so a cell mark ends a plain paragraph instead.
+    for p in &mut paras {
+        p.row = None;
+    }
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
     work.log();

@@ -10,6 +10,7 @@ use super::read;
 mod drawing;
 mod encrypted;
 mod metadata;
+mod word6;
 
 /// Offset in the WordDocument stream where test text pieces are placed (past the FIB).
 const TEXT_FC: u32 = 0x600;
@@ -176,12 +177,15 @@ fn wrong_magic_rejected() {
 }
 
 #[test]
-fn word_6_95_rejected() {
-    let mut fib = fib_bytes(&FibSpec::default());
+fn word_6_95_magic_goes_to_the_word6_reader() {
+    // A Word 6.0/95 signature is no longer refused: the stream is read as that version (here an
+    // empty document, since a Word 97 FIB holds no Word 6 text length). The flags are cleared:
+    // the Word 97 default sets fExtChar, which the Word 6 reader refuses.
+    let mut fib = fib_bytes(&FibSpec { flags: 0, ..FibSpec::default() });
     fib[0] = 0xDC;
     fib[1] = 0xA5;
     let f = cfb_file(&[("WordDocument", &fib)]);
-    assert!(matches!(read(&f), Err(super::DocbinError::NotWord(m)) if m.contains("6.0/95")));
+    assert!(read(&f).is_ok());
 }
 
 #[test]
@@ -882,8 +886,6 @@ fn corpus_files_open() {
                 let bytes = std::fs::read(&p).expect("read");
                 let doc = match super::read(&bytes) {
                     Ok(d) => d,
-                    // Word 6/95 files are a documented, intentional rejection.
-                    Err(super::DocbinError::NotWord(m)) if m.contains("6.0/95") => continue,
                     Err(e) => panic!("{}: {e}", p.display()),
                 };
                 assert!(!doc.styles.styles.is_empty(), "{}: no styles", p.display());
