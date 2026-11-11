@@ -60,6 +60,7 @@ pub fn set_rich(text: &str, html: &str, rtf: &str, mathml: &str) -> bool {
     set
 }
 
+/// Write HTML and plain text to the system clipboard via the cached writer slot, recording ownership.
 fn set_html_text(html: &str, text: &str) -> bool {
     WRITER.with(|w| {
         let Ok(mut slot) = w.try_borrow_mut() else { return false };

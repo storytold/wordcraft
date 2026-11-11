@@ -110,8 +110,21 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, rt
     false
 }
 
+/// Return whether the command result `r` contains any copied payload (text, HTML, RTF, or MathML).
+fn has_copied_content(r: &Value) -> bool {
+    let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
+    !s("text").is_empty() || !s("html").is_empty() || !s("rtf").is_empty() || !s("mathml").is_empty()
+}
+
 /// Put what Copy or Cut returned on the system clipboard (see [`put`]).
+///
+/// When `r` contains no copied content (e.g. Copy on a collapsed selection),
+/// this does nothing: it avoids overwriting external clipboard contents with
+/// previously-copied fragments or modifying the published ownership state.
 pub(crate) fn put_result(app: &mut WordApp, ctx: &egui::Context, r: &Value) {
+    if !has_copied_content(r) {
+        return;
+    }
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
     app.clipboard_published = false;
     if app.services.set_clipboard_image.is_some()
@@ -438,5 +451,43 @@ mod tests {
         a.run("edit.paste", params).unwrap();
 
         assert!(!a.session.doc.media.is_empty());
+    }
+
+    #[test]
+    fn empty_copy_does_not_publish_or_overwrite_clipboard_state() {
+        let got_image = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(usize, usize, String, String)>::new()));
+        let sink = got_image.clone();
+        let services = Services {
+            set_clipboard_image: Some(Box::new(move |img, html, text| {
+                sink.borrow_mut().push((img.width, img.height, html.to_string(), text.to_string()));
+                true
+            })),
+            ..Default::default()
+        };
+        let mut a = app(services);
+        let png = paste_picture::png_from_rgba(2, 2, vec![255; 16]).unwrap();
+        let data = wordcraft_engine::cmd::insert::base64_encode(&png);
+        a.run("insert.picture", json!({"data": data})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &r);
+        assert!(a.clipboard_published);
+        assert_eq!(got_image.borrow().len(), 1);
+
+        a.run("caret.docEnd", json!({})).unwrap();
+        assert!(a.session.sel.is_collapsed());
+
+        let empty_r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a, &ctx, &empty_r);
+
+        assert_eq!(got_image.borrow().len(), 1, "empty copy must not call set_clipboard_image");
+        assert!(a.clipboard_published, "empty copy must not change published-copy state");
+
+        let mut a2 = app(Services { set_clipboard_image: Some(Box::new(|_, _, _| true)), ..Default::default() });
+        assert!(!a2.clipboard_published);
+        let empty_r2 = a2.run("edit.copy", json!({})).unwrap();
+        put_result(&mut a2, &ctx, &empty_r2);
+        assert!(!a2.clipboard_published, "empty copy must not change published-copy state when false");
     }
 }
