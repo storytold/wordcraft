@@ -274,7 +274,7 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     else {
         return false;
     };
-    let names = ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].map(|n| tl!(n).to_string());
+    let names = [tl!("Indents and Spacing").to_string(), tl!("Line and Page Breaks").to_string(), tl!("Asian Typography").to_string()];
     if let Some(k) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = k as u8;
     }
@@ -581,8 +581,20 @@ fn insert_table_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 /// A margin's number box, in the unit the interface measures in.
-fn margin(value: &mut f32) -> egui::DragValue<'_> {
-    egui::DragValue::new(value).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2)
+fn margin(value: &mut f32) -> impl egui::Widget + '_ {
+    move |ui: &mut Ui| {
+        // DragValue's unfocused button extends to fit its value; keep it inside the field too.
+        let (_, rect) = ui.allocate_space(egui::vec2(80.0, ui.spacing().interact_size.y));
+        let mut field = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(crate::rtl::row_layout(ui, egui::Align::Center)));
+        field.shrink_clip_rect(rect);
+        field.add(
+            egui::DragValue::new(value)
+                .speed(3.6 / crate::options::unit().pt_per_unit())
+                .measure(crate::options::unit())
+                .max_decimals(2)
+                .clip_text(true),
+        )
+    }
 }
 
 fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -640,9 +652,9 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     crate::rtl::Table::new("ps_grid").columns(4).show(ui, |t| {
         t.row(|r| {
             let chars_label = r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000)).labelled_by(chars_label.id));
+            r.cell(|ui| ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000).clip_text(true)).labelled_by(chars_label.id));
             let lines_label = r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:"))));
-            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000)).labelled_by(lines_label.id));
+            r.cell(|ui| ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000).clip_text(true)).labelled_by(lines_label.id));
         });
     });
     ui.horizontal(|ui| {
@@ -1055,6 +1067,15 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !r.has_focus() {
         r.request_focus();
     }
+    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    search_results(app, ui, query, enter, 380.0) || ui.input(|i| i.key_pressed(egui::Key::Escape))
+}
+
+/// Search's results under its box (the Search Commands dialog, or the title bar's drop-down,
+/// #5398): suggestions for an empty box, else the matching commands and "Find … in the
+/// document". A click, or `enter` (the first command, else the find), does it: `true` when one
+/// was done, so the search closes.
+pub(crate) fn search_results(app: &mut WordApp, ui: &mut Ui, query: &str, enter: bool, width: f32) -> bool {
     let reg = app.session.registry.clone();
     // An empty box suggests a few common commands, as Word's Search does.
     let mut hits: Vec<&wordcraft_engine::CommandSpec> = if query.trim().is_empty() {
@@ -1064,12 +1085,11 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         reg.all().iter().filter(|c| !NOT_IN_SEARCH.contains(&c.id) && command_matches(c, query)).collect()
     };
     hits.truncate(14);
-    let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
     let mut run: Option<&str> = enter.then(|| hits.first().map(|c| c.id)).flatten();
     for c in &hits {
         let sc = crate::widgets::shortcut_text(app, c.id);
         let label = format!("{}   —   {}", tl!(c.label), crate::i18n::location(c.location));
-        if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(380.0, 0.0))).clicked() {
+        if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(width, 0.0))).clicked() {
             run = Some(c.id);
         }
     }
@@ -1079,14 +1099,21 @@ fn commands_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     if !text.is_empty() {
         ui.separator();
         let label = crate::i18n::fmt(tl!("Find “{text}” in the document"), &[("text", &text)]);
-        find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty());
+        find = ui.add(egui::Button::new(label).min_size(vec2(width, 0.0))).clicked() || (enter && hits.is_empty());
     }
     if let Some(id) = run {
-        let _ = app.run(id, json!({}));
+        if id == "view.paperColor" {
+            // Command Search is an interactive UI entry point: open the selector instead of
+            // sending the engine command an empty value. Programmatic callers still get the
+            // command's normal parameter validation.
+            let _ = app.run("file.options", json!({"pane": "general"}));
+        } else {
+            let _ = app.run(id, json!({}));
+        }
     } else if find {
         find_in_navigation_pane(app, ui.ctx(), &text);
     }
-    run.is_some() || find || ui.input(|i| i.key_pressed(egui::Key::Escape))
+    run.is_some() || find
 }
 
 fn paste_special_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
@@ -1134,7 +1161,7 @@ fn about_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
         return false;
     };
     ui.set_width(820.0);
-    let names = ["About", "Contributors", "Models", "Language data"].map(|n| tl!(n).to_string());
+    let names = [tl!("About").to_string(), tl!("Contributors").to_string(), tl!("Models").to_string(), tl!("Language data").to_string()];
     if let Some(i) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
         *tab = i as u8;
     }
@@ -1270,7 +1297,7 @@ fn insert_merge_field_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> 
 }
 
 fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::Password { name, params, password, message } = d else {
+    let Dialog::Password { name, then, params, password, message } = d else {
         return false;
     };
     ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
@@ -1291,8 +1318,9 @@ fn password_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if let Some(o) = p.as_object_mut() {
             o.insert("password".into(), json!(password.as_str()));
         }
-        // `execute`, not `run`: Save Changes was asked when the open began.
-        match app.execute("file.open", p) {
+        // `execute`, not `run`: Save Changes was asked when the open began. The command that
+        // asked runs again, so a protected template still starts a new document (#3433).
+        match app.execute(then, p) {
             Ok(_) => {
                 app.ui.backstage = false;
                 return true;

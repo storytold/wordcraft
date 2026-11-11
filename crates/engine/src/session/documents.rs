@@ -250,6 +250,8 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
+            // What the drawn window knows of the others: its front end sets it as it draws.
+            windows: _,
             status: _,
             last_command: _,
             recording: _,
@@ -390,7 +392,7 @@ impl Session {
         let at = self.others.iter().position(|d| d.document_id == id).ok_or_else(|| unknown(id))?;
         let mut d = self.others.swap_remove(at);
         self.swap_doc(&mut d);
-        self.view.read_page_color = self.prefs.read_page_color;
+        self.view.follow_prefs(&self.prefs);
         self.others.push(d);
         Ok(())
     }
@@ -471,7 +473,7 @@ impl Session {
         doc.ensure_nonempty();
         let mut view = self.view.clone();
         view.outline.collapsed.clear();
-        view.read_page_color = self.prefs.read_page_color;
+        view.follow_prefs(&self.prefs);
         let mut d = DocState::new(doc, untitled, view);
         let id = d.document_id;
         self.order.push(id);
