@@ -111,7 +111,7 @@ mod services;
 mod state;
 
 use app::control_click_as_secondary;
-pub(crate) use app::{discards_document, works_without_document};
+pub(crate) use app::works_without_document;
 pub use clock::now_ms;
 pub use services::{HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
@@ -812,6 +812,9 @@ pub(crate) fn rust_sources(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files.sort();
     files
 }
+
+#[cfg(test)]
+mod tests_dialog_tabs;
 
 #[cfg(test)]
 mod tests;

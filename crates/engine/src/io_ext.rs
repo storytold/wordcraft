@@ -10,10 +10,15 @@ pub fn open(ext: &str, bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Opti
         "doc" | "dot" => Some(wordcraft_docbin::read(bytes).map_err(|e| e.to_string())),
         // Word XML Document (Flat OPC) or Word 2003 XML, told apart by the root element.
         "xml" => Some(wordcraft_docx::read_xml(bytes).map_err(|e| e.to_string())),
-        // HTML, Markdown, ODT, RTF…: pictures fit the text width (see `io::fit_pictures`).
+        // HTML, Markdown, RTF…: pictures fit the text width (see `io::fit_pictures`). An
+        // OpenDocument file says how big they are, and one wider than the text is meant to be;
+        // changing it would take its paragraph off being written as read. Its reader fits those
+        // that state no size.
         other => wordcraft_formats::import_on(other, bytes, page).map(|r| {
             r.map(|mut doc| {
-                crate::io::fit_pictures(&mut doc);
+                if !matches!(other, "odt" | "ott" | "fodt") {
+                    crate::io::fit_pictures(&mut doc);
+                }
                 draw_charts(&mut doc);
                 doc
             })
@@ -60,13 +65,7 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
             // Output shows the fields Word fills in as it prints (see `output_fields`).
             let out = crate::cmd::references::output_fields(doc);
             let doc = out.as_ref().unwrap_or(doc);
-            let pdf = wordcraft_pdf::PdfOptions {
-                include_markup: opts.markup,
-                comments: opts.markup && opts.comments,
-                numeral: opts.numeral,
-                ..Default::default()
-            };
-            Some(wordcraft_pdf::export(doc, &pdf).map_err(|e| e.to_string()))
+            Some(crate::strict::export_pdf(doc, opts))
         }
         other => wordcraft_formats::export_with(other, doc, &wordcraft_formats::ExportOptions { comments: opts.markup && opts.comments }),
     }
@@ -80,6 +79,12 @@ pub fn render_png(doc: &Document, page: usize, scale: f32, opts: &crate::io::Exp
     let lo = wordcraft_layout::LayoutOptions { comment_balloons: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() };
     let l = wordcraft_layout::layout(doc, &mut wordcraft_layout::LayoutCache::new(), &lo);
     let p = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
+    if opts.strict {
+        let report = crate::strict::strict_report(doc, &l, &crate::strict::png_display(), Some(page..=page), wordcraft_layout::StrictOutput::Png);
+        if !report.passed() {
+            return Err(report.refusal());
+        }
+    }
     let img = wordcraft_render::render_page(doc, p, scale, &Default::default());
     Ok(img.to_png())
 }
