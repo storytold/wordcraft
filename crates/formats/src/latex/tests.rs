@@ -254,6 +254,14 @@ fn a_blank_line_after_a_comment_ends_the_paragraph() {
 }
 
 #[test]
+fn a_blank_line_after_a_control_word_at_a_line_end_ends_the_paragraph() {
+    // The control word took the line end after it, so the blank line read as a single line end.
+    assert_eq!(texts("\\begin{document}first \\relax\n\nsecond\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax  \n \n second\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax\nsecond\\end{document}"), ["first second"]);
+}
+
+#[test]
 fn math_conversions() {
     for (tex, linear) in [
         (r"\frac{1}{2}", "1/2"),
