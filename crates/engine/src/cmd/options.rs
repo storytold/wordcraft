@@ -18,11 +18,12 @@ pub const MAX_WORD_CHARS: usize = 64;
 /// Most words one call may add or remove.
 const MAX_WORDS_PER_CALL: usize = 1000;
 
+/// Command specifications for options commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "customDictionary"?: string (a custom-word dictionary file like custom.dic, saved; auto: the default custom-dictionary.txt in the settings folder), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -78,6 +79,7 @@ fn words_param(v: &Value, k: &str) -> Result<Vec<String>, CmdError> {
     Ok(out)
 }
 
+/// Open File › Options (or change settings programmatically via `file.options`).
 fn options(s: &mut Session, v: &Value) -> CmdResult {
     let pane = match p::str(v, "pane") {
         Some(name) if PANES.contains(&name) => name,
@@ -120,6 +122,11 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         Some(Value::String(f)) => Some(folder_setting("dictionariesFolder", f, false)?),
         Some(_) => return Err(CmdError::Params("`dictionariesFolder` must be a folder path, or auto".into())),
     };
+    let custom_dictionary = match v.get("customDictionary") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(f)) => Some(file_setting("customDictionary", f)?),
+        Some(_) => return Err(CmdError::Params("`customDictionary` must be a file path, or auto".into())),
+    };
     let templates_folder = match v.get("userTemplatesFolder") {
         None | Some(Value::Null) => None,
         // Never a folder on another machine (#2852): listing it would make Windows authenticate there.
@@ -153,6 +160,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         || units.is_some()
         || region.is_some()
         || folder.is_some()
+        || custom_dictionary.is_some()
         || templates_folder.is_some()
         || !flag_values.is_empty()
         || !mark_values.is_empty()
@@ -174,6 +182,32 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(f) = folder {
         use_dictionaries_folder(f.as_deref());
         s.prefs.dictionaries_folder = f;
+    }
+    if let Some(f) = custom_dictionary {
+        let (new_path, new_words) = match f {
+            Some(ref path_str) => {
+                let path = std::path::PathBuf::from(path_str);
+                let words = crate::custom_dict::read_custom_dictionary_words_checked(&path).map_err(CmdError::Failed)?;
+                (Some(path), words)
+            }
+            None => {
+                let words = if let Some(ref def) = s.default_user_dict_path {
+                    if def.exists() { crate::custom_dict::read_custom_dictionary_words_checked(def).map_err(CmdError::Failed)? } else { Vec::new() }
+                } else {
+                    Vec::new()
+                };
+                (s.default_user_dict_path.clone(), words)
+            }
+        };
+
+        if s.user_dict_path.as_ref() != new_path.as_ref() {
+            crate::custom_dict::clear_user_dictionary();
+            for w in new_words {
+                wordcraft_proof::add_word(&w);
+            }
+            s.user_dict_path = new_path;
+        }
+        s.prefs.custom_dictionary = f;
     }
     if let Some(f) = templates_folder {
         s.prefs.user_templates_folder = f;
@@ -231,6 +265,7 @@ pub fn current(s: &Session) -> Value {
         "ignoreNumbers": pr.ignore_numbers,
         "ignoreInternet": pr.ignore_internet,
         "dictionary": wordcraft_proof::user_dictionary(),
+        "customDictionary": pr.custom_dictionary,
         "dictionariesFolder": pr.dictionaries_folder,
         "userTemplatesFolder": pr.user_templates_folder,
         "dictionaries": wordcraft_proof::installed_dictionaries()
@@ -267,6 +302,38 @@ fn folder_setting(key: &str, f: &str, local_only: bool) -> Result<Option<String>
     crate::file_access::check_read(&path.to_string_lossy()).map_err(CmdError::Failed)?;
     if !path.is_dir() {
         return Err(CmdError::Failed(format!("no folder at {}", path.display())));
+    }
+    Ok(Some(path.to_string_lossy().into_owned()))
+}
+
+/// A file setting (`customDictionary`): `auto` (or nothing) forgets it; otherwise an existing
+/// file, given as an absolute path or one starting with `~/`.
+fn file_setting(key: &str, f: &str) -> Result<Option<String>, CmdError> {
+    let f = f.trim();
+    if f.is_empty() || f.eq_ignore_ascii_case("auto") {
+        return Ok(None);
+    }
+    if f.chars().count() > MAX_FOLDER_CHARS || f.chars().any(char::is_control) {
+        return Err(CmdError::Params(format!("`{key}` isn't a file path")));
+    }
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
+    let path = if let Some(rest) = f.strip_prefix("~/") {
+        match home {
+            Some(h) => h.join(rest),
+            None => return Err(CmdError::Params(format!("`{key}`: cannot expand `~/` because HOME or USERPROFILE is not set"))),
+        }
+    } else {
+        std::path::PathBuf::from(f)
+    };
+    if !path.is_absolute() {
+        return Err(CmdError::Params(format!("`{key}`: {f:?} isn't a full path")));
+    }
+    match crate::io::check_regular_file_setting(&path, crate::custom_dict::MAX_CUSTOM_FILE_BYTES, key) {
+        Ok(()) => {}
+        Err(crate::io::FileCheckError::IsDirectory(msg) | crate::io::FileCheckError::IsSymlink(msg)) => return Err(CmdError::Params(msg)),
+        Err(crate::io::FileCheckError::Access(msg) | crate::io::FileCheckError::NotFound(msg) | crate::io::FileCheckError::TooLarge(msg)) => {
+            return Err(CmdError::Failed(msg));
+        }
     }
     Ok(Some(path.to_string_lossy().into_owned()))
 }

@@ -220,13 +220,50 @@ fn user_dict_path() -> Option<std::path::PathBuf> {
     wordcraft_control_key::settings_dir().map(|b| b.join(wordcraft_engine::Session::USER_DICT_FILE))
 }
 
+/// Load the user's custom dictionary into proofing, reconciling restored words with the file.
+///
+/// If a custom dictionary file is configured and successfully read, in-memory words are reconciled
+/// to match the file. Falls back to the default dictionary file if present. A missing default file
+/// or failed read preserves words restored from preferences.
 fn load_user_dictionary(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
     }
-    if let Some(p) = user_dict_path() {
-        wordcraft_proof::load_user_dictionary(&p);
-        app.session.user_dict_path = Some(p);
+    let default_path = user_dict_path();
+    app.session.default_user_dict_path = default_path.clone();
+    let custom_path = app.session.prefs.custom_dictionary.as_ref().map(std::path::PathBuf::from);
+    let mut loaded = false;
+    if let Some(ref p) = custom_path {
+        if p.is_file() {
+            match wordcraft_engine::custom_dict::load_custom_dictionary_replacing(p) {
+                Ok(_) => {
+                    app.session.user_dict_path = Some(p.clone());
+                    loaded = true;
+                }
+                Err(e) => {
+                    log::warn!("custom dictionary: failed to load '{}': {e}", p.display());
+                }
+            }
+        } else {
+            log::warn!("custom dictionary: '{}' is not a regular file", p.display());
+        }
+    }
+    if !loaded && let Some(ref def) = default_path {
+        if def.is_file() {
+            match wordcraft_engine::custom_dict::load_custom_dictionary_replacing(def) {
+                Ok(_) => {
+                    app.session.user_dict_path = Some(def.clone());
+                }
+                Err(e) => {
+                    log::warn!("default dictionary: failed to load '{}': {e}", def.display());
+                    app.session.user_dict_path = Some(def.clone());
+                }
+            }
+        } else {
+            // Missing default file is not treated as a successful replacement;
+            // preserve any backup words restored from preferences.
+            app.session.user_dict_path = Some(def.clone());
+        }
     }
 }
 
