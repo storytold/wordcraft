@@ -1,5 +1,7 @@
 # WordCraft roadmap
 
+
+> **Table join update — 2026-11-11:** Leaf #277: explicit `table.joinNext` and live availability API; compatible rows move unchanged in one transaction. Unsupported boundary formatting, sizing, source markup, protection and tracked content are declined. Synthetic validation and limitations: [table-joins](docs/table-joins.md). Native Word and Leaf integration remain pending; readiness estimates are unchanged.
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
@@ -909,6 +911,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | trivial | Leaf #277: explicit conservative table join and availability API; tests and restrictions in table-joins.md; no readiness estimate change. |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
