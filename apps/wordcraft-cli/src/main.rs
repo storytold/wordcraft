@@ -484,10 +484,16 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
         }
         s.run("file.save", &params)
     };
-    if let Err(e) = r {
-        return Err(if strict { refusal(&mut s, e, markup, to_png.then_some(1)) } else { engine_error(e) });
-    }
+    let result = match r {
+        Ok(result) => result,
+        Err(e) => return Err(if strict { refusal(&mut s, e, markup, to_png.then_some(1)) } else { engine_error(e) }),
+    };
     eprintln!("wrote {o}");
+    // What a Word package couldn't carry of embedded objects (#1343).
+    for d in result.get("dropped").and_then(|d| d.as_array()).into_iter().flatten() {
+        let field = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        eprintln!("dropped ({}): {} {}", field("kind"), field("part"), field("reason"));
+    }
     Ok(())
 }
 
