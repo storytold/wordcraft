@@ -42,6 +42,10 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -63,6 +67,11 @@ jobs:
         run: |
           echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
           echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+
+      # apt falls back to mirrors outside ubuntu.com when it doesn't resolve (as on 11 Nov 2026).
+      - name: Configure apt mirrors
+        if: runner.os == 'Linux'
+        uses: storytold/craft-common-actions/actions/configure-apt-mirrors@main
 
       - name: Install Linux build and software-rendering dependencies
         if: runner.os == 'Linux'
