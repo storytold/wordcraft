@@ -272,14 +272,15 @@ fn saved_ui() -> Option<UiState> {
 
 /// Whether the window runs through XWayland (X11) rather than native Wayland, and the log line
 /// saying why. `WORDCRAFT_WAYLAND` wins (`0`, `false`, `no` or `off` asks for X11, any other value
-/// for Wayland), then File › Options › Advanced › Linux display server (#2184). Automatic is X11
-/// whenever there's an X server: winit has no file drag-and-drop on Wayland, so dropping files from
-/// the file manager showed a "no" cursor. X11 is only forced with an X server (`DISPLAY`), and
-/// unforced winit picks Wayland when it's there and X11 otherwise, so a choice that isn't
-/// available falls back to the other instead of failing to start. The X11 libraries are only
-/// recommended by the packages, so when `x11_libraries` reports some missing (it's asked only when
-/// X11 would be forced) the app stays on Wayland: forced X11 without them failed to start, and
-/// winit panicked without libxkbcommon-x11.
+/// for Wayland), then File › Options › Advanced › Linux display server (#2184). Automatic keeps
+/// native Wayland when the session provides it: XWayland cannot deliver native touchpad pinches
+/// (#1688), and the pinned winit fork now supports Wayland file drag-and-drop too. Automatic keeps
+/// X11 on GNOME until native window controls are fixed (#78). Explicit choices still win. X11 is
+/// forced only with an X server (`DISPLAY`); unforced winit picks Wayland when it's there and X11
+/// otherwise, so an unavailable choice falls back to the other instead of failing to start.
+/// The X11 libraries are only recommended by the packages. If `x11_libraries` reports some missing
+/// (checked only when X11 would be forced), the app stays on Wayland: forced X11 without them
+/// failed to start, and winit panicked without libxkbcommon-x11.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn uses_x11(
     setting: wordcraft_ui_egui::DisplayServer,
@@ -295,9 +296,11 @@ fn uses_x11(
         Some(_) => (DisplayServer::Wayland, "WORDCRAFT_WAYLAND"),
         None => (setting, "the setting"),
     };
-    let missing = if wanted != DisplayServer::Wayland && set("DISPLAY") { x11_libraries().err() } else { None };
-    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY") && missing.is_none();
     let wayland = set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET");
+    let gnome = env("XDG_CURRENT_DESKTOP").is_some_and(|desktop| desktop.to_string_lossy().split(':').any(|name| name.eq_ignore_ascii_case("GNOME")));
+    let wants_x11 = wanted == DisplayServer::X11 || (wanted == DisplayServer::Auto && (!wayland || gnome));
+    let missing = if wants_x11 && set("DISPLAY") { x11_libraries().err() } else { None };
+    let x11 = wants_x11 && set("DISPLAY") && missing.is_none();
     let runs = if x11 {
         "X11"
     } else if wayland {
@@ -713,8 +716,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// #2184: `WORDCRAFT_WAYLAND` beats the setting, Automatic keeps XWayland where there's an X
-    /// server, and a choice that isn't available falls back to the other.
+    /// #2184: `WORDCRAFT_WAYLAND` beats the setting, and a choice that isn't available falls back
+    /// to the other.
     #[test]
     fn the_display_server_follows_the_variable_then_the_setting() {
         use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
@@ -722,7 +725,7 @@ mod tests {
             uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v)), || Ok(())).0
         };
         let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
-        assert!(x11(Auto, &both), "Automatic keeps XWayland, for file drag-and-drop");
+        assert!(!x11(Auto, &both), "Automatic keeps native Wayland, for touchpad gestures");
         assert!(x11(X11, &both));
         assert!(!x11(Wayland, &both));
         for (value, wants_x11) in [("1", false), ("", false), ("yes", false), ("0", true), (" Off ", true), ("FALSE", true), ("no", true)] {
@@ -739,6 +742,51 @@ mod tests {
         assert!(!forced && why.contains("X11 (no Wayland)"), "{why}");
     }
 
+    /// #1688: forcing XWayland bypasses the native pinch protocol even when winit supports it.
+    /// A Wayland socket inherited as a file descriptor is just as native as a display name.
+    #[test]
+    fn automatic_uses_native_wayland_for_touchpad_gestures() {
+        use wordcraft_ui_egui::DisplayServer::Auto;
+        for wayland in [("WAYLAND_DISPLAY", "wayland-1"), ("WAYLAND_SOCKET", "0")] {
+            let vars = [("DISPLAY", ":0"), wayland];
+            let (x11, why) = uses_x11(
+                Auto,
+                |name| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| (*value).into()),
+                || panic!("native Wayland must not load X11 libraries"),
+            );
+            assert!(!x11 && why.contains("native Wayland"), "{why}");
+        }
+        for wayland in ["WAYLAND_DISPLAY", "WAYLAND_SOCKET"] {
+            let (x11, why) = uses_x11(
+                Auto,
+                |name| match name {
+                    "DISPLAY" => Some(":0".into()),
+                    name if name == wayland => Some("".into()),
+                    _ => None,
+                },
+                || Ok(()),
+            );
+            assert!(x11 && why.contains("X11"), "an empty {wayland} is not a Wayland session: {why}");
+        }
+    }
+
+    /// GNOME supplies no server-side frame; keep its existing Automatic choice until the native
+    /// window controls are fixed (#78). An explicit Wayland choice must still win.
+    #[test]
+    fn gnome_keeps_automatic_xwayland_without_overriding_a_wayland_choice() {
+        use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+        for desktop in ["GNOME", "ubuntu:GNOME", "gnome"] {
+            let vars = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-1"), ("XDG_CURRENT_DESKTOP", desktop)];
+            let env = |name: &str| vars.iter().find(|(key, _)| *key == name).map(|(_, value)| std::ffi::OsString::from(value));
+            assert!(uses_x11(Auto, env, || Ok(())).0, "{desktop}: keep GNOME's existing frame");
+            assert!(!uses_x11(Wayland, env, || Ok(())).0, "the saved Wayland choice wins");
+            let forced = |name: &str| if name == "WORDCRAFT_WAYLAND" { Some("1".into()) } else { env(name) };
+            assert!(!uses_x11(X11, forced, || Ok(())).0, "the environment Wayland choice wins");
+            let no_x11 = |name: &str| if name == "DISPLAY" { None } else { env(name) };
+            assert!(!uses_x11(Auto, no_x11, || panic!("no X server, so no X11 libraries")).0);
+        }
+    }
+
     /// Without the X11 libraries (the packages only recommend them) X11 isn't forced, whatever asks
     /// for it: forced X11 failed to start, and winit panicked without libxkbcommon-x11. The check
     /// runs only when X11 would be forced.
@@ -746,7 +794,7 @@ mod tests {
     fn missing_x11_libraries_leave_the_app_on_wayland() {
         use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
         let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
-        for (setting, variable) in [(Auto, None), (X11, None), (Wayland, Some("0"))] {
+        for (setting, variable) in [(X11, None), (Wayland, Some("0"))] {
             let env = |name: &str| {
                 both.iter()
                     .find(|(k, _)| *k == name)
@@ -759,14 +807,14 @@ mod tests {
         }
         let checked = std::cell::Cell::new(false);
         let (x11, _) = uses_x11(
-            Wayland,
+            Auto,
             |name| both.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).into()),
             || {
                 checked.set(true);
                 Ok(())
             },
         );
-        assert!(!x11 && !checked.get(), "asked for Wayland, the libraries aren't checked");
+        assert!(!x11 && !checked.get(), "Automatic uses Wayland, the X11 libraries aren't checked");
     }
 
     /// A named pipe or a device under such a name is a warning, not a read: the pipe blocked

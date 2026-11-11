@@ -342,13 +342,18 @@ AppImage or the tarball, install one yourself if neither is there (`sudo apt ins
 `sudo dnf install espeak-ng`, `sudo pacman -S espeak-ng`). The Flatpak doesn't speak yet: it has
 no audio access and doesn't include `espeak-ng`, `espeak` or Speech Dispatcher.
 
-**Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
-winit (the windowing library) supports dragging files into the window only on X11. To use the
-native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
-of file drag-and-drop), choose **File › Options › Advanced › Linux display server › Wayland**; it
-applies the next time WordCraft starts, and **X11 (XWayland)** or **Automatic** switches back. The
-`WORDCRAFT_WAYLAND` environment variable overrides the setting: `1` for native Wayland, `0` for
-XWayland:
+**Wayland:** Automatic uses native Wayland on Wayland desktops, including Omarchy/Hyprland,
+so two-finger touchpad pinches reach the document. Pinch zoom keeps the document point under
+the cursor fixed and leaves the ribbon and other interface controls at their normal size.
+The pinned winit fork supports native file drag-and-drop too. On an X11 desktop the app uses X11.
+GNOME keeps Automatic on XWayland until its native window controls are fixed (#78); choose
+**Wayland** explicitly there to use native pinch gestures.
+
+Choose **File › Options › Advanced › Linux display server › X11 (XWayland)** to request XWayland,
+or **Wayland** to request native Wayland; changes apply at the next launch.
+The `WORDCRAFT_WAYLAND` environment variable overrides the setting: `1` for native Wayland,
+`0` for XWayland. Native pinch requires the compositor's pointer-gestures protocol and is not
+available through XWayland. Ctrl+scroll and the zoom controls remain available on either backend:
 
 ```sh
 WORDCRAFT_WAYLAND=1 wordcraft
