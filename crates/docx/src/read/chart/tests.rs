@@ -756,6 +756,28 @@ fn radar_points_take_their_marker_and_line_colours() {
     assert_eq!(filled(&items).iter().map(|f| f.0).collect::<Vec<_>>(), [accent(0)]);
 }
 
+/// Two `c:dPt` for the same point, as Word reads them (#5969 review, measured): the later one's
+/// `c:spPr` and `c:marker` each replace the earlier one's as a whole, and what it doesn't have
+/// stays.
+#[test]
+fn a_second_c_dpt_for_a_point_replaces_only_the_parts_it_has() {
+    let solid = |c: &str| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#);
+    let marker = format!(r#"<c:dPt><c:idx val="1"/><c:marker><c:spPr>{}</c:spPr></c:marker></c:dPt>"#, solid("FF0000"));
+    let line = format!(r#"<c:dPt><c:idx val="1"/><c:spPr><a:ln w="28575">{}</a:ln></c:spPr></c:dPt>"#, solid("0000FF"));
+    let fill = format!(r#"<c:dPt><c:idx val="1"/><c:spPr>{}</c:spPr></c:dPt>"#, solid("FF0000"));
+    let off = r#"<c:varyColors val="0"/>"#;
+    // A marker, then a line: both.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{marker}{line}"));
+    let plot = format!(r#"<c:radarChart><c:radarStyle val="marker"/>{off}{s}</c:radarChart><c:valAx/>"#);
+    let items = chart_items(&space(&plot), &theme(), 300.0, 220.0);
+    assert_eq!(marker_colours(&items), [accent(0), RED, accent(0)]);
+    assert_eq!(strokes_in(&items, &[RED, BLUE]), [BLUE]);
+    // A fill, then an outline: the outline's c:spPr replaces the fill.
+    let s = with_dpts(&ser(0, "S", None, &CATS, &["1", "2", "3"]), &format!("{fill}{line}"));
+    let bars: Vec<Rgb> = filled(&chart_items(&space(&column_chart(off, &[s])), &theme(), 300.0, 200.0)).iter().map(|b| b.0).collect();
+    assert_eq!(bars, [accent(0); 3]);
+}
+
 #[test]
 fn the_legend_of_a_varied_chart_lists_the_categories() {
     let items = with_legend(&column_chart("", &[ser(0, "Sales", None, &CATS, &["1", "2", "3"])]), "r", 300.0, 200.0);
@@ -857,4 +879,66 @@ fn a_formatted_point_leaves_the_series_legend_where_word_does() {
     let items = with_legend(&column_chart(OFF, &[red, ser(1, "Costs", None, &CATS, &["2", "1", "3"])]), "r", 300.0, 200.0);
     assert_eq!(swatch_colours(&items).len(), 2);
     assert!(texts(&items).contains(&"Sales") && texts(&items).contains(&"Costs"), "{:?}", texts(&items));
+}
+
+// An automatic series colour follows the series' `c:idx`, not its place in the file (#5963), as
+// measured in Word: `idx` 3 then 0 are accent4 then accent1, a lone `idx` 2 is accent3, and
+// `c:order` changes nothing.
+
+/// The fill colours of the bars of a column chart of `sers`, and of its legend swatches.
+fn column_colours(sers: &[String]) -> (Vec<Rgb>, Vec<Rgb>) {
+    let plot = format!(
+        r#"<c:barChart><c:barDir val="col"/><c:grouping val="clustered"/><c:varyColors val="0"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx>"#,
+        sers.concat()
+    );
+    let items = with_legend(&plot, "r", 300.0, 200.0);
+    let bars = filled(&items).iter().map(|b| b.0).collect();
+    let keys = items
+        .iter()
+        .filter_map(|it| if let GraphicItem::Shape { rect, fill, .. } = it { (rect[2] == SWATCH).then_some(*fill).flatten() } else { None })
+        .collect();
+    (bars, keys)
+}
+
+/// `ser` with its `c:idx` / `c:order` replaced by `idx_order` (an empty string drops them).
+fn renumbered(ser: &str, idx_order: &str) -> String {
+    let start = ser.find("<c:idx").expect("ser writes c:idx");
+    let end = ser.find("<c:tx>").expect("ser writes c:tx");
+    format!("{}{idx_order}{}", &ser[..start], &ser[end..])
+}
+
+#[test]
+fn automatic_series_colours_follow_c_idx() {
+    let accent = |k: usize| theme()[4 + k];
+    let a = ser(0, "A", None, &["Q1"], &["1"]);
+    let b = ser(1, "B", None, &["Q1"], &["2"]);
+    // idx 3 first, idx 0 second: accent4, accent1, in the bars and the legend.
+    let sers = [renumbered(&a, r#"<c:idx val="3"/><c:order val="0"/>"#), renumbered(&b, r#"<c:idx val="0"/><c:order val="1"/>"#)];
+    assert_eq!(column_colours(&sers), (vec![accent(3), accent(0)], vec![accent(3), accent(0)]));
+    // A lone series with idx 2 is accent3.
+    let lone = [renumbered(&a, r#"<c:idx val="2"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&lone).0, [accent(2)]);
+    // c:order doesn't matter: idx 0 and 1 stay accent1 and accent2 with their orders swapped.
+    let swapped = [renumbered(&a, r#"<c:idx val="0"/><c:order val="1"/>"#), renumbered(&b, r#"<c:idx val="1"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&swapped).0, [accent(0), accent(1)]);
+    // A series' own colour still wins.
+    let own = [renumbered(&ser(0, "A", Some("FF0000"), &["Q1"], &["1"]), r#"<c:idx val="3"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&own).0, [Rgb(0xFF, 0, 0)]);
+}
+
+#[test]
+fn series_without_a_usable_c_idx_take_their_place() {
+    let accent = |k: usize| theme()[4 + k];
+    let a = ser(0, "A", None, &["Q1"], &["1"]);
+    let b = ser(1, "B", None, &["Q1"], &["2"]);
+    // No c:idx at all: the place in the file.
+    assert_eq!(column_colours(&[renumbered(&a, ""), renumbered(&b, "")]).0, [accent(0), accent(1)]);
+    // Junk, negative and out-of-range values: no panic, the place in the file.
+    for junk in ["x", "-1", "1e3", "99999999999999999999999"] {
+        let sers = [renumbered(&a, &format!(r#"<c:idx val="{junk}"/>"#)), renumbered(&b, &format!(r#"<c:idx val="{junk}"/>"#))];
+        assert_eq!(column_colours(&sers).0, [accent(0), accent(1)], "{junk:?}");
+    }
+    // The largest unsignedInt `c:idx` allows draws, without a panic.
+    let big = [renumbered(&a, &format!(r#"<c:idx val="{}"/>"#, u32::MAX))];
+    assert_eq!(column_colours(&big).0.len(), 1);
 }

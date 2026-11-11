@@ -96,8 +96,11 @@ impl Chart {
         self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK)
     }
 
+    /// Colour of series `j`: its own, else the accent its `c:idx` picks (as Word does; `c:order`
+    /// doesn't matter), else the one its place in the file picks.
     pub(super) fn series_colour(&self, j: usize) -> Rgb {
-        self.series.get(j).and_then(|s| s.color).unwrap_or_else(|| self.accent(j))
+        let s = self.series.get(j);
+        s.and_then(|s| s.color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
     }
 
     /// Colour of point `i` of series `j`: its `c:dPt` fill, else the varied accent when the
@@ -252,6 +255,7 @@ pub(super) fn text_size(space: &El) -> f32 {
 impl Series {
     fn parse(ser: &El, scatter: bool, theme: &[Rgb], cap: usize) -> Series {
         let name = ser.child("c:tx").and_then(|t| t.find("c:v")).map(|v| label(v.text().trim())).unwrap_or_default();
+        let idx = ser.child("c:idx").and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<u32>().ok()).and_then(|v| usize::try_from(v).ok());
         let sp = ser.child("c:spPr");
         let ln = sp.and_then(|p| p.child("a:ln"));
         let marker = ser.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme));
@@ -266,18 +270,19 @@ impl Series {
         let mut points = vec![PointFmt::default(); values.len()];
         for dpt in ser.children("c:dPt") {
             let i = dpt.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok());
-            let sp = dpt.child("c:spPr");
-            let fmt = PointFmt {
-                fill: sp.and_then(|p| fill_colour(p, theme)),
-                line: sp.and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
-                marker: dpt.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme)),
-            };
-            if let Some(slot) = i.and_then(|i| points.get_mut(i)) {
-                *slot = fmt;
+            let Some(slot) = i.and_then(|i| points.get_mut(i)) else { continue };
+            // A later `c:dPt` for the same point replaces only what it has, its `c:spPr` (fill and
+            // line) and its `c:marker` each as a whole, as Word reads it.
+            if let Some(sp) = dpt.child("c:spPr") {
+                slot.fill = fill_colour(sp, theme);
+                slot.line = sp.child("a:ln").and_then(|l| fill_colour(l, theme));
+            }
+            if let Some(m) = dpt.child("c:marker") {
+                slot.marker = m.child("c:spPr").and_then(|p| fill_colour(p, theme));
             }
         }
         let labels = show_values(ser.child("c:dLbls"));
-        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
+        Series { name, idx, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
     }
 }
 

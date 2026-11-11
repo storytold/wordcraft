@@ -345,7 +345,7 @@ fn caret_contrasts_with_what_lies_under_it() {
     let at = |a: &mut WordApp, off: usize| {
         let layout = a.session.layout();
         let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-        let view = view_key(a, false, None);
+        let view = view_key(a, false, None, true);
         caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
     };
     assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -372,19 +372,19 @@ fn read_mode_page_color_sets_the_reading_paper() {
     a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
     let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
     assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-    let print_key = view_key(&a, false, None);
+    let print_key = view_key(&a, false, None, true);
     a.run("view.readMode", json!({})).unwrap();
     assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-    let none_key = view_key(&a, false, None);
+    let none_key = view_key(&a, false, None, true);
     a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
     assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
     assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-    let sepia_key = view_key(&a, false, None);
+    let sepia_key = view_key(&a, false, None, true);
     a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
     assert!(page_render_options(&a, false).dark);
     let d = wordcraft_render::DARK_PAPER;
     assert_eq!(paper(&a), Rgb(d, d, d));
-    let inverse_key = view_key(&a, false, None);
+    let inverse_key = view_key(&a, false, None, true);
     let keys = [print_key, none_key, sepia_key, inverse_key];
     for (i, k) in keys.iter().enumerate() {
         assert!(!keys[..i].contains(k), "each paper has its own view key");
@@ -752,6 +752,86 @@ fn dragging_the_scrollbar_names_the_page_at_the_top() {
         assert_eq!(h.state().canvas.scrollbar_page, None, "the tip goes with the button");
         assert!(h.query_all_by_label(&label).all(|n| n.rect().center().x < 700.0), "and its text (the status bar still names the page)");
         assert_eq!((h.state().session.rev(), &h.state().session.sel), (rev, &sel), "scrolling changes neither the document nor the selection");
+    }
+}
+
+/// #5746: the document's scroll bars are drawn wherever the pointer is: before it has moved and
+/// with it over the page, not only at the window's edge, with a thumb that stands out from its
+/// track in the light and the dark theme. The vertical one fills the room the pages leave for it,
+/// so it covers none of them; zoomed in, the horizontal one shows the same way.
+#[test]
+fn the_document_scroll_bars_show_with_the_pointer_away() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let bar = |h: &H, vertical: bool| {
+        h.query_all_by_role(Role::ScrollBar)
+            .map(|n| n.rect())
+            .filter(|r| (r.height() > r.width()) == vertical)
+            .max_by(|a, b| a.area().total_cmp(&b.area()))
+    };
+    // The opaque fills across the bar's whole width, longest first: its track, then its thumb.
+    let drawn = |h: &H, bar: Rect, vertical: bool| {
+        let across = |r: &Rect| if vertical { r.width() } else { r.height() };
+        let along = |r: &Rect| if vertical { r.height() } else { r.width() };
+        let mut fills: Vec<(f32, egui::Color32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill.a() > 0 && bar.expand(0.5).contains_rect(r.rect) && across(&r.rect) >= across(&bar) - 0.5 => {
+                    Some((along(&r.rect), r.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        fills.sort_by(|a, b| b.0.total_cmp(&a.0));
+        fills
+    };
+    // The thumb shows on its track: a clear step in grey, not the same fill.
+    let thumb_shows = |fills: &[(f32, egui::Color32)], what: &str| {
+        let [(track_len, track), (thumb_len, thumb), ..] = fills else { panic!("{what}: a track and a thumb are drawn: {fills:?}") };
+        assert!(thumb_len < track_len, "{what}: the thumb is shorter than its track: {fills:?}");
+        let step = (0..3).map(|i| (i32::from(track[i]) - i32::from(thumb[i])).abs()).max().unwrap_or(0);
+        assert!(step >= 40, "{what}: the thumb {thumb:?} stands out from its track {track:?}");
+    };
+    for theme in ["light", "dark"] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for _ in 0..3 {
+            a.run("text.insert", json!({"text": "Page text"})).unwrap();
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("ui.theme", json!({"value": theme})).unwrap();
+        let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        assert_eq!(Tokens::get(&h.ctx).dark, theme == "dark", "the {theme} theme is on");
+        let v = bar(&h, true).expect("the document's vertical scroll bar");
+        thumb_shows(&drawn(&h, v, true), &format!("{theme}, before the pointer has moved"));
+        let viewport = h.state().canvas.viewport.expect("the canvas is shown");
+        assert!((v.right() - viewport.right() - SCROLLBAR).abs() < 0.5, "the bar fills the room left for it: {v:?} beside {viewport:?}");
+        assert!(h.state().canvas.page_rects.iter().all(|p| p.right() <= v.left()), "the bar covers no page");
+        let page = h.state().canvas.page_rects.first().copied().expect("a page on screen");
+        h.event(egui::Event::PointerMoved(page.center()));
+        for _ in 0..30 {
+            h.step();
+        }
+        let v = bar(&h, true).expect("the document's vertical scroll bar");
+        thumb_shows(&drawn(&h, v, true), &format!("{theme}, the pointer over the page"));
+        h.state_mut().run("view.zoom", json!({"value": 400.0})).unwrap();
+        for _ in 0..30 {
+            h.step();
+        }
+        let across = bar(&h, false).expect("zoomed in, a horizontal scroll bar");
+        thumb_shows(&drawn(&h, across, false), &format!("{theme}, the horizontal bar"));
     }
 }
 
@@ -4850,9 +4930,83 @@ fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
     let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
     let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
     let object = Pos::body(0, 5);
-    let hidden = view_key(&app, false, Some(&object));
-    assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-    assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    let hidden = view_key(&app, false, Some(&object), true);
+    assert_ne!(hidden, view_key(&app, false, None, true), "the page without the dragged object is rendered again");
+    assert_eq!(hidden, view_key(&app, false, Some(&object), true), "the same drag keeps the key: no re-render every frame");
+}
+
+/// A zoom easing in (or a pinch) shows a new size every frame for a moment: those pages are
+/// drawn unhinted, so they fill no hint caches with sizes nobody rests on. The first frame
+/// without zooming draws the page hinted again, even at the size the last zoom frame drew.
+#[test]
+fn pages_are_hinted_again_once_a_zoom_stops() {
+    let platform = screen_render_options().hinting;
+    assert_eq!(hint_pages(1.0, false, true), platform, "at rest, as the platform draws text");
+    for zoom in [1.1, 0.9, 1.002, 0.998, f32::NAN, f32::INFINITY, 0.0] {
+        assert!(!hint_pages(zoom, true, true), "{zoom}: the scale changes under a gliding pointer zoom");
+        assert_eq!(hint_pages(zoom, false, true), platform, "{zoom}: at 10 % or 500 %, or over the ribbon: nothing changes");
+        assert_eq!(hint_pages(zoom, true, false), platform, "{zoom}: a wheel step with animation effects off lands finished");
+    }
+    assert_eq!(hint_pages(1.0, true, true), platform, "the Zoom dialog or slider, a fit zoom: hinted at once");
+    // The hinting is part of the page's key: the last zoom frame's raster is replaced.
+    let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
+    let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+    assert_ne!(view_key(&app, false, None, true), view_key(&app, false, None, false));
+}
+
+/// While a zoom goes on, a page raster stands in for one up to half again larger or smaller.
+#[test]
+fn a_raster_is_stretched_at_most_half_again_during_a_zoom() {
+    // A 612 pt page rendered 816 px wide (100 % at 1x): 1.333 px per point.
+    assert!(stretch_fits(816, 612.0, 816.0 / 612.0));
+    assert!(stretch_fits(816, 612.0, 1.9), "zoomed in 43 %");
+    assert!(!stretch_fits(816, 612.0, 2.1), "zoomed in 58 %: rendered again");
+    assert!(stretch_fits(816, 612.0, 0.95), "zoomed out to 71 %");
+    assert!(!stretch_fits(816, 612.0, 0.85), "zoomed out to 64 %: rendered again");
+    for hostile in [(0, 612.0, 1.0), (816, 0.0, 1.0), (816, 612.0, f32::NAN), (816, 612.0, f32::INFINITY), (816, f32::NAN, 1.0)] {
+        assert!(!stretch_fits(hostile.0, hostile.1, hostile.2), "{hostile:?}");
+    }
+}
+
+#[test]
+fn screen_paper_color_changes_raster_and_cache_without_changing_export_paper() {
+    use wordcraft_doc::props::Rgb;
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let layout = app.session.layout();
+    let page = &layout.pages[0];
+    let print_before = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
+    let mut keys = vec![view_key(&app, false, None, true)];
+    for (value, expected) in [("green", Rgb(0xCC, 0xE8, 0xCF)), ("cream", Rgb(0xFA, 0xF0, 0xDC)), ("gray", Rgb(0xE8, 0xEA, 0xED))] {
+        app.run("view.paperColor", json!({"value":value})).unwrap();
+        let key = view_key(&app, false, None, true);
+        assert!(!keys.contains(&key), "each preset invalidates page and tile caches");
+        keys.push(key);
+        let opts = page_render_options(&app, false);
+        assert_eq!(opts.paper_of(&app.session.doc), expected);
+        let screen = wordcraft_render::render_page(&app.session.doc, page, 0.1, &opts);
+        assert_eq!(&screen.pixels[..4], &[expected.0, expected.1, expected.2, 255]);
+        let print = wordcraft_render::render_page(&app.session.doc, page, 0.1, &Default::default());
+        assert_eq!(print.pixels, print_before.pixels, "screen tints cannot leak into output rasters");
+    }
+    app.run("view.darkMode", json!({"value":true})).unwrap();
+    let d = wordcraft_render::DARK_PAPER;
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(d, d, d));
+    app.run("view.darkMode", json!({"value":false})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("design.pageColor", json!({"color":"#102040"})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0x10, 0x20, 0x40));
+    app.run("view.readMode", json!({})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("view.darkMode", json!({"value":true})).unwrap();
+    assert!(!page_render_options(&app, false).dark, "Switch Modes is ignored in Read Mode");
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("view.darkMode", json!({"value":false})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(0xE8, 0xEA, 0xED));
+    app.run("view.readPageColor", json!({"value":"sepia"})).unwrap();
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), wordcraft_render::SEPIA_PAPER);
+    app.run("view.readPageColor", json!({"value":"inverse"})).unwrap();
+    let d = wordcraft_render::DARK_PAPER;
+    assert_eq!(page_render_options(&app, false).paper_of(&app.session.doc), Rgb(d, d, d));
 }
 
 /// A two-paragraph document with a 200-line comment (`line` gives each line's text) on the first
@@ -4992,4 +5146,117 @@ fn a_pictures_corrections_and_crop_change_its_page_key() {
     let plain = pages::page_content_key(&at([0.0; 4], PicFx::default()));
     assert_ne!(plain, pages::page_content_key(&at([0.1, 0.0, 0.0, 0.0], PicFx::default())), "crop");
     assert_ne!(plain, pages::page_content_key(&at([0.0; 4], PicFx::new(10_000, 0, 0))), "brightness");
+}
+
+/// #5267: a picture linked from its context menu (Link…) keeps the link, shows it on hover and
+/// follows it on Ctrl/⌘+click, in line with the text and floating over it.
+#[test]
+fn a_picture_linked_from_its_context_menu_shows_and_follows_its_link() {
+    use egui_kittest::kittest::Queryable;
+    for floating in [false, true] {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Text before the picture "})).unwrap();
+        a.run("select.text", json!({"text": "before"})).unwrap();
+        a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
+        a.run("caret.docEnd", json!({})).unwrap();
+        let mut png = Vec::new();
+        let img = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        a.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 160})).unwrap();
+        if floating {
+            a.run("arrange.wrap", json!({"wrap": "inFrontOfText"})).unwrap();
+        }
+        let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the picture is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+        h.get_by_label_contains("Link…").click();
+        steps(&mut h, 4);
+        h.event(egui::Event::Text("https://example.com/picture".into()));
+        steps(&mut h, 3);
+        h.get_by_label_contains("OK").click();
+        steps(&mut h, 4);
+        let s = &h.state().session;
+        let link = s.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
+        assert_eq!(link, Some(Some("https://example.com/picture".to_string())), "floating {floating}: the link is on the picture");
+        // Hovering the picture shows where it goes.
+        h.event(egui::Event::PointerMoved(at + egui::vec2(1.0, 0.0)));
+        steps(&mut h, 3);
+        assert!(h.query_by_label_contains("https://example.com/picture").is_some(), "floating {floating}: the hover tip names the link");
+        // Ctrl/⌘+click follows it, instead of picking the picture for a copy: here a link to a
+        // place in the document, which moves the caret (a web address goes to the browser).
+        h.state_mut().run("insert.link", json!({"bookmark": "Spot"})).unwrap();
+        steps(&mut h, 2);
+        let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+        h.event_modifiers(press, egui::Modifiers::COMMAND);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        steps(&mut h, 3);
+        let s = &h.state().session;
+        let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
+        assert!(s.sel.is_collapsed() && s.sel.focus == start, "floating {floating}: the caret went to the bookmark: {:?}", s.sel);
+        assert!(h.state().canvas.obj_drag.is_none(), "floating {floating}: no copy-drag started");
+    }
+}
+
+/// #5267: inside a linked text box, hovering shows the box's link and Ctrl/⌘+click follows it,
+/// although a click there reaches the box's text rather than the box.
+#[test]
+fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Text before the box "})).unwrap();
+    a.run("select.text", json!({"text": "before"})).unwrap();
+    a.run("insert.bookmark", json!({"name": "Spot"})).unwrap();
+    a.run("caret.docEnd", json!({})).unwrap();
+    a.run("insert.textBox", json!({"text": "Boxed words"})).unwrap();
+    let link_box = |a: &mut WordApp, link: serde_json::Value| {
+        let bx = a.session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box");
+        let end = Pos { off: bx.off + wordcraft_doc::para::OBJ.len_utf8(), ..bx.pos() };
+        a.run("select.range", json!({"anchor": bx.pos(), "focus": end})).unwrap();
+        a.run("insert.link", link).unwrap();
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        bx.pos()
+    };
+    let pos = link_box(&mut a, json!({"url": "https://example.com/box"}));
+    let link = a.session.doc.para_at(&pos).map(|p| p.props_of_char(pos.off).link.clone());
+    assert_eq!(link, Some(Some("https://example.com/box".to_string())), "the link is on the text box");
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 6);
+    let rect = h.state_mut().session.layout().find_object(0, |o| o.text_box.is_some()).expect("the box is laid out").rect;
+    let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+    h.event(egui::Event::PointerMoved(at));
+    steps(&mut h, 3);
+    assert!(h.query_by_label_contains("https://example.com/box").is_some(), "the hover tip names the box's link");
+    // Ctrl/⌘+click inside the box follows it: here a place in the document, which moves the caret.
+    link_box(h.state_mut(), json!({"bookmark": "Spot"}));
+    steps(&mut h, 2);
+    let press = egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::COMMAND };
+    h.event_modifiers(press, egui::Modifiers::COMMAND);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    steps(&mut h, 3);
+    let s = &h.state().session;
+    let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
+    assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
