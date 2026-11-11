@@ -241,46 +241,53 @@ fn endnote_queue(ctx: &Ctx) -> VecDeque<(u32, usize)> {
     ids.into_iter().map(|(_, id, sect)| (id, sect)).collect()
 }
 
+/// The page number on which a section's first page starts, matching `start_section_page`.
+fn next_section_page_num(
+    doc: &Document,
+    start: SectionStart,
+    restart: Option<u32>,
+    (pb_number, pb_pages_len): (u32, usize),
+    starts_new_page: bool,
+) -> u32 {
+    if !starts_new_page {
+        return pb_number.saturating_add(1);
+    }
+    let s = &doc.settings;
+    let (filler, restart) = section_side(start, restart, pb_number, pb_pages_len, s.even_odd_headers, s.mirror_margins);
+    restart.unwrap_or(pb_number.saturating_add(if filler { 2 } else { 1 }))
+}
+
 /// Unturn a vertical section for layout on its side (see `vertical`). The header measured for
 /// body room is the active slot for the section's first page under actual pagination state.
-fn turned_section(
-    ctx: &mut Ctx,
-    hf: &HfLinks,
-    (si, sect): (usize, &SectionProps),
-    (pb_number, pb_pages_len): (u32, usize),
-    start: SectionStart,
-) -> SectionProps {
+fn turned_section(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps), page_num: u32) -> SectionProps {
     ctx.fields.page_format = sect.page_num_format;
-    let s = &ctx.doc.settings;
-    let (filler, restart) = section_side(start, sect.page_num_start, pb_number, pb_pages_len, s.even_odd_headers, s.mirror_margins);
-    let page_num = restart.unwrap_or(pb_number.saturating_add(if filler { 2 } else { 1 }));
     let heads = hf.heads.set(si);
     let head = if sect.title_page {
         heads.first
-    } else if s.even_odd_headers && page_num.is_multiple_of(2) {
+    } else if ctx.doc.settings.even_odd_headers && page_num.is_multiple_of(2) {
         heads.even.or(heads.default)
     } else {
         heads.default
     };
-    let numbering = (ctx.counters.clone(), ctx.eq_count);
     let base = hf.defining_width(false, si, head);
-    let top = with_pct_base(ctx, base, |c| body_top_for(c, sect, head));
-    (ctx.counters, ctx.eq_count) = numbering;
+    let top = with_pct_base(ctx, base, |c| body_top_for(c, sect, head, page_num));
     vertical::unturned_sect(sect, top)
 }
 
 /// Where section `si`'s pages start and end. Headers and footers left out are linked to the
 /// previous section's, and take its room. `fixed`: the margins are the room (continuous views and
 /// turned sections).
-fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps), fixed: bool) -> Tops {
+fn section_tops(ctx: &mut Ctx, hf: &HfLinks, (si, sect): (usize, &SectionProps), fixed: bool, first_page_num: u32) -> Tops {
     ctx.fields.page_format = sect.page_num_format;
     let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
     let hb = |i: Option<u32>| hf.defining_width(false, si, i);
     let fb = |i: Option<u32>| hf.defining_width(true, si, i);
-    let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default)) };
-    let first = if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first)) };
-    let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
-    let first_foot = if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first)) };
+    let body = if fixed { sect.margin_top } else { with_pct_base(ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default, 1)) };
+    let first =
+        if fixed || !sect.title_page { body } else { with_pct_base(ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first, first_page_num)) };
+    let foot = if fixed { f32::MAX } else { with_pct_base(ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default, 1)) };
+    let first_foot =
+        if fixed || !sect.title_page { foot } else { with_pct_base(ctx, fb(feet.first), |c| foot_top_for(c, sect, feet.first, first_page_num)) };
     Tops { body, first, foot, first_foot }
 }
 
@@ -323,9 +330,10 @@ fn end_previous_section<'p>(ctx: &mut Ctx, pb: &mut PageBuilder<'p>, hf: &HfLink
     pb.page_format = prev.page_num_format;
     ctx.fields.page_format = prev.page_num_format;
     pb.sect_idx = si - 1;
+    let blank_page = pb.number.saturating_add(1);
     let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
-    let top = body_top_for(ctx, prev, ph.default);
-    pb.foot_top = foot_top_for(ctx, prev, pf.default);
+    let top = body_top_for(ctx, prev, ph.default, blank_page);
+    pb.foot_top = foot_top_for(ctx, prev, pf.default, blank_page);
     pb.new_page(block, top);
 }
 
@@ -565,21 +573,31 @@ pub(crate) fn layout_pass(
         let page_format = sect.page_num_format;
         let turn = if mode.reflow { TextDirection::Horizontal } else { sect.text_direction };
         let start = if si == 0 { SectionStart::NextPage } else { sect.start };
-        if !mode.web && !pb.pages.is_empty() && (start != SectionStart::Continuous || turn != prev_turn) {
+        let starts_new_page = !mode.web && (pb.pages.is_empty() || start != SectionStart::Continuous || turn != prev_turn);
+        if starts_new_page && !pb.pages.is_empty() {
             // The page the section before ends on is finished with its own margins and footnote
             // separators, before this section's replace them: the footnotes pending on it
             // belong to the section whose page it is (#5289).
             pb.finish_page();
+            // Retract any empty break page now (matching `start_section_page`) so header slot
+            // selection and page numbers see the real preceding page.
+            pb.take_back_break_page();
         }
+        // Reset grid and section fields before measuring turned-section headers (#4501).
+        ctx.grid = para::Grid::default();
+        ctx.fields.section = u32::try_from(si).unwrap_or(u32::MAX).saturating_add(1);
+        ctx.fields.section_pages = totals.section(si);
+        let first_page_num =
+            if mode.web { 1 } else { next_section_page_num(doc, start, sect.page_num_start, (pb.number, pb.pages.len()), starts_new_page) };
         let sect: &SectionProps = match turned.get(si) {
-            Some(Some(lock)) => lock.get_or_init(|| turned_section(&mut ctx, &hf, (si, sect), (pb.number, pb.pages.len()), start)),
+            Some(Some(lock)) => lock.get_or_init(|| turned_section(&mut ctx, &hf, (si, sect), first_page_num)),
             _ if mode.reflow => sect_ref,
             _ => sect,
         };
         // This section's fields and separators, without the previous section's grid, before its
         // header and footer room is measured; its own grid once that room is known (#4501).
         begin_section_state(&mut ctx, &mut pb, (si, sect, page_format), totals, mode.web);
-        let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned());
+        let tops = section_tops(&mut ctx, &hf, (si, sect), mode.reflow || turn.is_turned(), first_page_num);
         // Measuring the room took the (reflow) section's own number format; the body keeps the
         // document section's.
         ctx.fields.page_format = page_format;

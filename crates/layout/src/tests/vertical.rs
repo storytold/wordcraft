@@ -344,6 +344,7 @@ fn vertical_section_with_numbered_header_does_not_advance_body_numbering() {
 /// when even/odd headers are enabled, reserving room for it.
 #[test]
 fn vertical_section_with_even_page_start_selects_even_header() {
+    crate::test_fonts();
     let mut d = Document::from_text("Vertical section starting on even page");
     d.settings.even_odd_headers = true;
 
@@ -366,4 +367,95 @@ fn vertical_section_with_even_page_start_selects_even_header() {
     assert_eq!(l.pages.len(), 1);
     assert_eq!(l.pages[0].number, 2);
     assert!(l.pages[0].body.y > d.last_section.margin_top, "first page (page 2) selects and reserves space for the even header");
+}
+
+/// #4847: When a manual page break leaves an empty page at the end of the preceding section,
+/// `start_section_page` retracts it; `turned_section` must see the retracted page number so the
+/// header slot measured for vertical body clearance matches the rendered page parity.
+#[test]
+fn vertical_section_after_page_break_retracts_empty_page_before_selecting_even_header() {
+    crate::test_fonts();
+    use wordcraft_doc::para::PAGE_BREAK;
+    use wordcraft_doc::section::HeaderSet;
+
+    let mut d = Document::from_text(&format!("Page 1{PAGE_BREAK}\nSection 2 vertical"));
+    d.settings.even_odd_headers = true;
+
+    // Short odd/default header fits inside margin_top; tall even header pushes body down.
+    let short =
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Odd", Default::default()))]);
+    let tall_paras: Vec<_> = (0..5)
+        .map(|i| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Even header line {i}"), Default::default())))
+        .collect();
+    let even_id = d.add_part(wordcraft_doc::PartKind::Header, tall_paras);
+
+    let s1 = SectionProps { start: SectionStart::NextPage, margin_top: 50.0, ..Default::default() };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.margin_top = 50.0;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = HeaderSet { default: Some(short), even: Some(even_id), ..Default::default() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2, "empty break page retracted");
+    assert_eq!(l.pages[1].number, 2);
+    assert_eq!(l.pages[1].hf_slot, HfSlot::Even);
+    assert!(
+        l.pages[1].body.y > d.last_section.margin_top + 10.0,
+        "vertical page 2 reserves space for even header instead of default header: body.y={}",
+        l.pages[1].body.y
+    );
+}
+
+/// #4847: Measuring a turned section's header passes the actual page number to `body_top_for`
+/// so an inside/outside-aligned object with one-sided wrapping on an even page gives the same
+/// header height during measurement as when rendered.
+#[test]
+fn vertical_section_header_measurement_uses_actual_page_number_for_inside_outside_float() {
+    crate::test_fonts();
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap, WrapText};
+
+    let mut d = Document::from_text("Vertical section with inside float in header");
+    let mut hp = wordcraft_doc::Paragraph::with_text("Header text wrapped around inside float", Default::default());
+    let float = Float {
+        wrap: Wrap::Square,
+        wrap_text: WrapText::Right,
+        h_rel: Anchor::Margin,
+        h_align: Some(FloatAlign::Inside),
+        v_rel: Anchor::Paragraph,
+        ..Default::default()
+    };
+    hp.insert_object(0, super::rect_shape(100.0, 120.0, float), &Default::default()).unwrap();
+    let hid = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 80.0;
+    d.last_section.header = 20.0;
+    d.last_section.page_num_start = Some(2); // even page: Inside is right edge, so WrapText::Right wraps below the 120pt shape
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet { default: Some(hid), ..Default::default() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    assert_eq!(l.pages[0].number, 2);
+    let header_bottom = l.pages[0]
+        .header
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { y, para, l0, l1, .. } => crate::page::item_bottom(*y, para, *l0, *l1),
+            _ => None,
+        })
+        .fold(0.0f32, f32::max);
+    assert!(header_bottom > d.last_section.margin_top + 40.0, "header text wraps below 120pt float on even page: bottom={header_bottom}");
+    assert!(l.pages[0].body.y >= header_bottom - 0.5, "vertical body.y ({}) clears wrapped even-page header ({header_bottom})", l.pages[0].body.y);
+
+    // Control: on an odd page (page 1), Inside is left edge so WrapText::Right fits beside the float inside margin_top.
+    let mut d_odd = d.clone();
+    d_odd.last_section.page_num_start = Some(1);
+    let l_odd = lay(&d_odd);
+    assert!((l_odd.pages[0].body.y - d_odd.last_section.margin_top).abs() < 0.01);
 }

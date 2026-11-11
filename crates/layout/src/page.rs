@@ -486,18 +486,20 @@ pub(crate) fn item_bottom(y: f32, para: &ParaLayout, l0: usize, l1: usize) -> Op
 }
 
 /// Where body text starts: the top margin, or below the header if it's taller.
-pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
+pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>, page_num: u32) -> f32 {
     let Some(id) = header else { return sect.margin_top };
     let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
     let blocks = part.blocks.clone();
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
-    let frame = PageFrame { sect, margin_top: None, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
+    let frame = PageFrame { sect, margin_top: None, origin: (sect.margin_left + sect.gutter, sect.header), number: page_num, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
+    let page_field = std::mem::replace(&mut ctx.fields.page, page_num);
     let numbering = (ctx.counters.clone(), ctx.eq_count);
-    let (h, ..) = with_pin(ctx, id, sect, 1, None, |ctx| {
+    let (h, ..) = with_pin(ctx, id, sect, page_num, None, |ctx| {
         layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, Some(frame))).height
     });
     (ctx.counters, ctx.eq_count) = numbering;
+    ctx.fields.page = page_field;
     ctx.track_totals = track;
     // Word starts the body right below a header that reaches past the top margin, no gap;
     // ODF keeps the header's spacing.
@@ -506,16 +508,18 @@ pub(crate) fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u3
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
-pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 {
+pub(crate) fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>, page_num: u32) -> f32 {
     let Some(part) = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p))) else { return f32::MAX };
     let (id, blocks) = (part.0, part.1.blocks.clone());
     // A page total in the footer is filled in after pagination, like the header's: it doesn't
     // make the body lay out again.
     let track = std::mem::replace(&mut ctx.track_totals, false);
+    let page_field = std::mem::replace(&mut ctx.fields.page, page_num);
     let numbering = (ctx.counters.clone(), ctx.eq_count);
     let (laid, ..) =
-        with_pin(ctx, id, sect, 1, None, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
+        with_pin(ctx, id, sect, page_num, None, |ctx| layout_box(ctx, BoxInput::other(StoryRef::Part(id), &blocks, sect.text_width(), 0, None)));
     (ctx.counters, ctx.eq_count) = numbering;
+    ctx.fields.page = page_field;
     ctx.track_totals = track;
     let top = sect.page_h - sect.footer - laid.height;
     // Flow-table strokes extend above their cell boxes. Floating decorations keep their wrap rules.
