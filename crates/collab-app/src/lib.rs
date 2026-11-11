@@ -40,6 +40,12 @@ pub enum Status {
     Connecting,
     InSync,
     Resyncing,
+    /// A local edit stayed in this window while the room moved on: planning it
+    /// or handing it to the transport failed, so this document and the room's
+    /// confirmed version have parted. Writing and committing pause until a
+    /// snapshot replaces the document with the room's state (finding 8,
+    /// `docs/collab/STATUS.md` §5.33).
+    Diverged,
     Offline,
     Failed(String),
 }
@@ -119,6 +125,51 @@ pub fn refusal_status(reject: &Reject) -> (Status, bool) {
         RejectCode::UndoConflict | RejectCode::Unsupported => (Status::InSync, false),
         _ => (Status::Failed(reject.message.clone()), false),
     }
+}
+
+/// A local command the session could not hand to the room, and what the session
+/// must show instead of `InSync` (finding 8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pause {
+    /// Always [`Status::Diverged`]. Both gates read the status, so the next edit
+    /// and a commit are refused while it stands.
+    pub status: Status,
+    /// What the status bar and the participants panel show.
+    pub message: String,
+}
+
+impl Pause {
+    /// A command whose planning or submission failed left an edit in this
+    /// document that the room does not have. A commit builds the room's
+    /// version, so it would silently omit that edit; the session leaves
+    /// `InSync` until a resync lands.
+    pub fn after_failed_command(reason: &str) -> Pause {
+        Pause {
+            status: Status::Diverged,
+            message: format!("An edit did not reach the room ({reason}); editing pauses and a commit is blocked until the session is synchronized"),
+        }
+    }
+}
+
+/// Turn a local command into the operations the room expects, mapping a
+/// planning failure to the pause it causes. A diff that cannot address this
+/// document (a paragraph the server issued no id for, or a selection it cannot
+/// name) has already left the edit in the local document.
+pub fn plan_command(state: &SyncState, before: &Document, session: &Session, command: &str, params: &Value) -> Result<Vec<Outgoing>, Pause> {
+    state.plan(before, session, command, params).map_err(|reason| Pause::after_failed_command(&reason))
+}
+
+/// Hand every planned operation to `submit`, stopping at the first refusal: an
+/// operation the transport did not accept is an edit the room does not have,
+/// and anything planned after it would sit on a base the room never saw.
+pub fn submit_plans<F>(plans: Vec<Outgoing>, mut submit: F) -> Result<(), Pause>
+where
+    F: FnMut(Outgoing) -> Result<(), String>,
+{
+    for plan in plans {
+        submit(plan).map_err(|reason| Pause::after_failed_command(&reason))?;
+    }
+    Ok(())
 }
 
 /// A participant's cursor: a session node and a byte offset.
@@ -424,7 +475,14 @@ impl Collab {
                 self.state.version = self.state.version.max(version);
                 self.state.role = Role::parse(&role).unwrap_or(Role::Editor);
                 self.set_participants(&participants);
-                self.status = Status::InSync;
+                if self.status == Status::Diverged {
+                    // A handshake does not replace this document: the edit the
+                    // room never received is still in it. Stay paused and ask
+                    // again for the snapshot that repairs it (finding 8).
+                    let _ = self.handle.resync();
+                } else {
+                    self.status = Status::InSync;
+                }
             }
             Event::Nodes { nodes } => self.state.set_nodes(&nodes),
             Event::Applied { applied } => match self.state.apply(&applied, session) {
@@ -501,15 +559,42 @@ impl Collab {
 
     /// Apply a local command: the caller hands the document from before the
     /// command; the session sends the primitives or the command itself.
+    ///
+    /// A command that cannot be planned or submitted has already changed this
+    /// document and never reached the room. The session then leaves `InSync`
+    /// ([`Pause`]) instead of reporting a synchronized document whose newest
+    /// edit a commit would omit, and asks for a snapshot (finding 8).
     pub fn after_command(&mut self, before: &Document, session: &Session, command: &str, params: &Value) -> Result<(), String> {
         if !self.can_write() {
             return Ok(());
         }
-        let plans = self.state.plan(before, session, command, params)?;
-        for plan in plans {
-            self.handle.submit(plan.kind, plan.target, plan.payload)?;
+        let plans = match plan_command(&self.state, before, session, command, params) {
+            Ok(plans) => plans,
+            Err(pause) => return Err(self.pause(pause)),
+        };
+        let result = {
+            let handle = &self.handle;
+            submit_plans(plans, |plan| handle.submit(plan.kind, plan.target, plan.payload))
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(pause) => Err(self.pause(pause)),
         }
-        Ok(())
+    }
+
+    /// Show the pause and resynchronize: the snapshot that follows replaces
+    /// this document with the room's confirmed version, so what the room never
+    /// received stops being shown as synchronized (ADR-0002's price, taken
+    /// rather than a commit that would leave it out).
+    fn pause(&mut self, pause: Pause) -> String {
+        self.last_error = Some(pause.message.clone());
+        self.status = pause.status;
+        if self.handle.resync().is_err() {
+            // The session task is gone: nothing will bring the room's state
+            // back, so the pause is final.
+            self.status = Status::Failed(pause.message.clone());
+        }
+        pause.message
     }
 
     /// Publish the caret and selection at most every 100 ms.

@@ -206,6 +206,62 @@ fn an_empty_diff_sends_nothing() {
 }
 
 #[test]
+fn a_command_that_cannot_be_planned_pauses_the_session_before_a_commit() {
+    // The room issued no id for the paragraph this edit landed in, so the
+    // difference cannot be turned into a primitive and the command path has no
+    // selection to address either. The edit is in the document, not in the
+    // room: the session must stop claiming it is synchronized (finding 8).
+    let state = SyncState::new("alice", "Alice", Role::Editor);
+    let mut session = Session::new(Document::new());
+    let before = session.doc.clone();
+    session.run("text.insert", &json!({"text": "Hi"})).expect("type");
+
+    let pause = crate::plan_command(&state, &before, &session, "text.insert", &json!({"text": "Hi"})).expect_err("no id to plan with");
+    assert_eq!(pause.status, Status::Diverged);
+    assert_ne!(pause.status, Status::InSync, "a commit needs an InSync session");
+    assert!(pause.message.contains("did not reach the room"), "{}", pause.message);
+    assert!(pause.message.contains("commit is blocked"), "{}", pause.message);
+}
+
+#[test]
+fn a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit() {
+    let (room, nodes) = server();
+    let state = state_with(&nodes);
+    let mut session = Session::new(Document::new());
+    let before = session.doc.clone();
+    session.run("text.insert", &json!({"text": "Hi"})).expect("type");
+    let plans = crate::plan_command(&state, &before, &session, "text.insert", &json!({"text": "Hi"})).expect("the room issued the ids");
+    assert_eq!(plans.len(), 1);
+
+    // The transport is gone: the operation never left this window.
+    let pause = crate::submit_plans(plans, |_| Err("the session task is gone".to_string())).expect_err("the transport refused it");
+    assert_eq!(pause.status, Status::Diverged);
+    assert!(pause.message.contains("the session task is gone"), "{}", pause.message);
+    assert!(pause.message.contains("commit is blocked"), "{}", pause.message);
+
+    // The room still holds the document without the edit: a replica that
+    // commits now would build that version, which is why the status blocks it.
+    assert_eq!(room.version(), 0);
+}
+
+#[test]
+fn a_command_that_reaches_the_room_does_not_pause() {
+    let (_room, nodes) = server();
+    let state = state_with(&nodes);
+    let mut session = Session::new(Document::new());
+    let before = session.doc.clone();
+    session.run("text.insert", &json!({"text": "Hi"})).expect("type");
+    let plans = crate::plan_command(&state, &before, &session, "text.insert", &json!({"text": "Hi"})).expect("a plan");
+    let sent = std::cell::Cell::new(0);
+    crate::submit_plans(plans, |_| {
+        sent.set(sent.get() + 1);
+        Ok(())
+    })
+    .expect("the transport accepted it");
+    assert_eq!(sent.get(), 1);
+}
+
+#[test]
 fn presence_gives_a_new_peer_its_role() {
     let mut people = Vec::new();
     crate::apply_presence(&mut people, "c1", "owner", &json!({"cursor": {"story": "body", "nodeId": 2, "off": 4}}));

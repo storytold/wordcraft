@@ -46,6 +46,26 @@ pub(crate) fn after_command(app: &mut WordApp, before: &Document, id: &str, para
     }
 }
 
+/// Why editing pauses right now, in words the writer can act on.
+pub(crate) fn pause_message(status: &crate::collab_session::Status) -> &'static str {
+    match status {
+        // The edit is in this window and not in the room (finding 8): saying
+        // "reconnecting" would hide a state a resync has to repair.
+        crate::collab_session::Status::Diverged => "An edit did not reach the room; editing pauses until the session is synchronized",
+        _ => "Collaboration is reconnecting; editing resumes when it is synchronized",
+    }
+}
+
+/// Why the Commit button is disabled right now.
+fn commit_blocked_message(status: &crate::collab_session::Status) -> &'static str {
+    match status {
+        crate::collab_session::Status::Diverged => {
+            "An edit did not reach the room: the file would be built without it. Committing resumes after the resync"
+        }
+        _ => "Committing resumes when the session is synchronized",
+    }
+}
+
 /// Refuse a document edit on a read-only session before the engine runs it.
 pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
     let collab = app.collab.as_ref()?;
@@ -53,7 +73,7 @@ pub(crate) fn viewer_refusal(app: &WordApp, id: &str) -> Option<String> {
         return None;
     }
     if *collab.status() != crate::collab_session::Status::InSync {
-        return Some("Collaboration is reconnecting; editing resumes when it is synchronized".into());
+        return Some(pause_message(collab.status()).into());
     }
     if collab.role().can_write() {
         return None;
@@ -130,11 +150,13 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
         crate::collab_session::Status::Connecting => "connecting…",
         crate::collab_session::Status::InSync => "synchronized",
         crate::collab_session::Status::Resyncing => "synchronizing…",
+        crate::collab_session::Status::Diverged => "out of sync — an edit did not reach the room",
         crate::collab_session::Status::Offline => "offline, reconnecting",
         crate::collab_session::Status::Failed(_) => "error",
     };
     let role = collab.role();
     let can_commit = collab.can_commit();
+    let commit_blocked = !can_commit && role.can_commit();
     let participants: Vec<_> = collab
         .participants()
         .iter()
@@ -155,6 +177,12 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
             ui.label(role.as_str());
             if can_commit && ui.button("Commit").clicked() {
                 commit_clicked = true;
+            }
+            // The owner keeps a Commit button while the session is paused, so
+            // the reason a commit is refused is visible where the action is
+            // (finding 8) instead of the button silently disappearing.
+            if commit_blocked {
+                ui.add_enabled(false, egui::Button::new("Commit")).on_hover_text(commit_blocked_message(collab.status()));
             }
         });
         ui.separator();
@@ -234,23 +262,33 @@ impl WordApp {
 /// stored file instead gets `wordcraft:commit` (no `bytes`): that path is used
 /// only when the app has no live session to commit through.
 pub(crate) fn request_commit(app: &mut WordApp) {
-    if let Some(collab) = app.collab.as_mut()
-        && collab.can_commit()
-    {
+    // A commit on a session outside `InSync` would build the room's version,
+    // which may not hold the newest local edit (finding 8). Say so instead of
+    // doing nothing.
+    let blocked = app
+        .collab
+        .as_ref()
+        .filter(|collab| !collab.can_commit())
+        .map(|collab| if collab.role().can_commit() { commit_blocked_message(collab.status()) } else { "This session is read-only" });
+    if let Some(message) = blocked {
+        app.status(message.to_string());
+        return;
+    }
+    if let Some(collab) = app.collab.as_mut() {
         collab.commit();
-    } else {
-        #[cfg(target_arch = "wasm32")]
-        if let Some(session) = app.host_session.clone()
-            && let Some(commit) = &app.host_commit
-        {
-            // The cabinet assembles/fetches the file itself, so `bytes` is
-            // omitted (the contract's `bytes?` is for a host that does not hold
-            // it).
-            let result = commit(session.session_id(), None);
-            match result {
-                Ok(()) => app.status("Committing…"),
-                Err(message) => app.status(format!("Commit failed: {message}")),
-            }
+        return;
+    }
+    #[cfg(target_arch = "wasm32")]
+    if let Some(session) = app.host_session.clone()
+        && let Some(commit) = &app.host_commit
+    {
+        // The cabinet assembles/fetches the file itself, so `bytes` is
+        // omitted (the contract's `bytes?` is for a host that does not hold
+        // it).
+        let result = commit(session.session_id(), None);
+        match result {
+            Ok(()) => app.status("Committing…"),
+            Err(message) => app.status(format!("Commit failed: {message}")),
         }
     }
 }

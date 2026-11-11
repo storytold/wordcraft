@@ -145,7 +145,10 @@ impl HostState {
 pub fn host_status(status: &Status) -> &'static str {
     match status {
         Status::InSync => "synced",
-        Status::Connecting | Status::Resyncing => "pending",
+        // A diverged session asked for a snapshot and is on its way back; the
+        // panel and `last_error` carry the reason, and the cabinet keeps its
+        // spinner instead of freezing on an error (finding 8).
+        Status::Connecting | Status::Resyncing | Status::Diverged => "pending",
         Status::Offline => "offline",
         Status::Failed(_) => "error",
     }
@@ -349,7 +352,14 @@ impl Collab {
                 self.state.version = self.state.version.max(version);
                 self.state.role = Role::parse(&role).unwrap_or(self.state.role);
                 self.set_participants(&participants);
-                self.status = Status::InSync;
+                if self.status == Status::Diverged {
+                    // Reconnecting does not replace this document: the edit the
+                    // room never received is still in it. Stay paused and ask
+                    // for the snapshot that repairs it (finding 8).
+                    self.request_snapshot();
+                } else {
+                    self.status = Status::InSync;
+                }
             }
             Event::Nodes { nodes } => self.state.set_nodes(&nodes),
             Event::Applied { applied } => match self.state.apply(&applied, session) {
@@ -424,20 +434,48 @@ impl Collab {
 
     /// Apply a local command: the caller hands the document from before the
     /// command; the session sends the primitives or the command itself.
+    ///
+    /// A command that cannot be planned or sent has already changed this
+    /// document and never reached the room: the session leaves `InSync` so no
+    /// commit can build the room's version without it (finding 8).
     pub fn after_command(&mut self, before: &wordcraft_doc::Document, session: &Session, command: &str, params: &Value) -> Result<(), String> {
         if !self.can_write() {
             return Ok(());
         }
-        let plans = self.state.plan(before, session, command, params)?;
-        for plan in plans {
-            if self.client.state() == wordcraft_collab_client::State::Joined {
-                let op = self.client.op(plan.kind, plan.target, plan.payload);
-                self.send(&ClientMsg::Op { op })?;
-            } else {
-                self.waiting.push_back((plan.kind, plan.target, plan.payload));
-            }
+        let plans = match wordcraft_collab_app::plan_command(&self.state, before, session, command, params) {
+            Ok(plans) => plans,
+            Err(pause) => return Err(self.pause(pause)),
+        };
+        let result = wordcraft_collab_app::submit_plans(plans, |plan| self.deliver(plan));
+        match result {
+            Ok(()) => Ok(()),
+            Err(pause) => Err(self.pause(pause)),
         }
-        Ok(())
+    }
+
+    /// Hand one planned operation to the socket, or queue it until `welcome`.
+    fn deliver(&mut self, plan: wordcraft_collab_app::Outgoing) -> Result<(), String> {
+        if self.client.state() == wordcraft_collab_client::State::Joined {
+            let op = self.client.op(plan.kind, plan.target, plan.payload);
+            self.send(&ClientMsg::Op { op })
+        } else {
+            self.waiting.push_back((plan.kind, plan.target, plan.payload));
+            Ok(())
+        }
+    }
+
+    /// Show the pause and ask for the room's state. The snapshot that follows
+    /// replaces this document, so an edit the room never received stops being
+    /// shown as synchronized (finding 8). A snapshot that cannot be asked for
+    /// means there is no open socket; the transport reconnects and the status
+    /// follows it rather than pretending the edit was sent.
+    fn pause(&mut self, pause: wordcraft_collab_app::Pause) -> String {
+        self.last_error = Some(pause.message.clone());
+        self.status = pause.status;
+        if self.send(&ClientMsg::Resync { last_version: self.client.version() }).is_err() {
+            self.status = Status::Offline;
+        }
+        pause.message
     }
 
     /// Publish the caret and selection at most every 100 ms (`now_ms` is the
