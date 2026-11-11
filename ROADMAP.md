@@ -385,6 +385,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-11-11 | A first start takes the system account's name as the user name instead of "WordCraft User" (#2209): on Windows the account's first and last name, else its display name (the Windows Runtime's `Windows.System.User`, asked on its own thread); on Linux and the BSDs the full name in the account's `/etc/passwd` entry (its GECOS field, by uid, else by logon name); on macOS the name Directory Services keeps (`id -F`); with none of them the logon name (`USERNAME`/`USER`/`LOGNAME`). It goes through `file.setAuthor`, so it is cleaned like a name typed in File › Options, adds no undo step and never marks the document dirty. A name set in Options always wins and is saved as before; runs without preferences (`WORDCRAFT_NO_PREFS`) keep the default. |
 | 2026-11-05 | trivial | Progress log: ODT documents keep their language (gap 19) |
 | 2026-11-04 | The CLI opens a non-Unicode input filename even after options such as `--page 2` or `--format flatopc`; text option values still require Unicode; `run --file` and `run --script` retain native paths. |
 | 2026-11-06 | Accept All and Reject All no longer restyle the paragraph after an empty one carrying a section break (#5667): a Compare that added a section, then Reject All, left `Body` in the removed paragraph's Normal style and indents. The empty paragraph now goes whole and its section joins the following one, as deleting the break does. |
@@ -909,6 +910,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-11 | trivial | Progress log: the user name comes from the system account on a first start (#2209); readiness estimates unchanged |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
