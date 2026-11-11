@@ -11437,6 +11437,41 @@ fn right_to_left_character_shading_is_one_fill() {
     assert!((fills[0].x - glyphs.0).abs() < 0.001 && (fills[0].x + fills[0].w - glyphs.1).abs() < 0.001, "{fills:?} covers {glyphs:?}");
 }
 
+/// #6260 review: in mixed-direction text a shaded run's letters are not laid out in reading order.
+/// In `A\u{5d0}\u{5d1}B` the first Hebrew letter sits right of the second, so on screen `A` touches
+/// the second one; the run is still one fill. A fill still stops at unshaded text in between.
+#[test]
+fn mixed_direction_character_shading_joins_in_visual_order() {
+    crate::test_fonts();
+    let blue = wordcraft_doc::Rgb(0xBB, 0xDD, 0xFF);
+    let shaded = wordcraft_doc::CharProps { shading: Some(blue), ..Default::default() };
+    let plain = wordcraft_doc::CharProps::default();
+    let fills = |unshaded: &[usize], rtl: bool| {
+        let mut p = wordcraft_doc::Paragraph::with_text("", shaded.clone());
+        for (i, ch) in ["A", "\u{5d0}", "\u{5d1}", "B"].into_iter().enumerate() {
+            let n = p.len();
+            p.insert_text(n, ch, if unshaded.contains(&i) { &plain } else { &shaded }).unwrap();
+        }
+        p.props.bidi = Some(rtl);
+        let mut d = Document::from_text("x");
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        let fills: Vec<Rect> =
+            items.iter().filter_map(|i| if let display::Draw::Fill { rect, text_bg: true, .. } = i { Some(*rect) } else { None }).collect();
+        fills
+    };
+    for rtl in [false, true] {
+        let joined = fills(&[], rtl);
+        assert_eq!(joined.len(), 1, "rtl={rtl}: {joined:?}");
+        // Unshaded `\u{5d1}` sits between `A` and `\u{5d0}` on screen: two fills that don't meet.
+        let split = fills(&[2], rtl);
+        assert_eq!(split.len(), 2, "rtl={rtl}: {split:?}");
+        let (a, b) = if split[0].x < split[1].x { (split[0], split[1]) } else { (split[1], split[0]) };
+        assert!(a.x + a.w + 1.0 < b.x, "the fill does not cover the unshaded letter: rtl={rtl}: {split:?}");
+    }
+}
+
 /// #1252 review: an underline and strikethrough on a highlighted run carry the highlight, like
 /// its glyphs; other lines (here a paragraph border) don't.
 #[test]
