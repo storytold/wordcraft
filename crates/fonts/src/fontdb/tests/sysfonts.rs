@@ -741,11 +741,19 @@ fn catalog_postscript_names() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Verifies that cataloged families without a requested glyph are skipped before loading and that rescanning clears cached misses.
 #[test]
 fn cataloged_family_without_glyph_is_not_loaded_by_fallback_and_rescan_clears_misses() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
     let dir = std::env::temp_dir().join(format!("wc-sysfonts-{}-cmap-skip-and-rescan", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
     // SourceSerif4-Regular lacks '●' (\u{25CF}): cataloging it under Times New Roman and Arial
     // must not cause circle_fallback or system_fallback to load those families when searching for '●'.
     std::fs::write(dir.join("TNR.ttf"), named_face("SourceSerif4-Regular.ttf", "Times New Roman")).unwrap();
@@ -766,5 +774,4 @@ fn cataloged_family_without_glyph_is_not_loaded_by_fallback_and_rescan_clears_mi
     assert!(db.sys.lock().unwrap().tried.is_empty(), "rescan clears sys.tried");
     let resolved = db.fallback_for('●', primary.id()).expect("rescan drops cached miss and loads preferred family Arial");
     assert_eq!(resolved.family, "Arial");
-    std::fs::remove_dir_all(dir).unwrap();
 }
