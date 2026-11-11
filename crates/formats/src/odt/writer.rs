@@ -156,6 +156,8 @@ type SecStart = (String, Option<u32>);
 
 #[derive(Default)]
 pub(super) struct Writer {
+    pub(super) ink_pictures: std::rc::Rc<std::cell::RefCell<super::ink_picture::InkPictures>>,
+    pub(super) ink_images_emitted: usize,
     /// Bookmarks that cover text (written as a start and an end), and those started and ended.
     pub(super) ranged: std::collections::HashSet<String>,
     bookmarks: std::collections::HashSet<String>,
@@ -256,6 +258,7 @@ pub(super) struct Writer {
     /// Objects named so far (formulas, charts and kept objects share `Object n` names), and the
     /// kept objects' folders with their media types, for the manifest.
     pub(super) object_names: usize,
+    image_names: usize,
     pub(super) object_dirs: Vec<(String, String)>,
     /// The document's bibliography sources by tag: `CITATION` fields of one are written as
     /// bibliography marks carrying it.
@@ -288,6 +291,23 @@ pub(super) struct Writer {
     /// and which of them the text being written belongs to.
     chain: Vec<String>,
     part: usize,
+}
+
+/// Kept XML cannot be rewritten to reference a transformed fallback without losing unknown markup.
+fn ink_effect_inline(i: &Inline) -> bool {
+    match i {
+        Inline::Image(img) => !img.ink_fx.is_identity(),
+        Inline::Group { members, .. } => members.iter().any(|m| ink_effect_inline(&m.inline)),
+        Inline::Shape { blocks, .. } | Inline::Note { blocks, .. } => ink_effect_blocks(blocks),
+        Inline::Comment { comment, .. } => ink_effect_blocks(&comment.blocks),
+        _ => false,
+    }
+}
+fn ink_effect_blocks(blocks: &[FBlock]) -> bool {
+    blocks.iter().any(|b| match b {
+        FBlock::Para(p) => p.inlines.iter().any(ink_effect_inline),
+        FBlock::Table(t) => t.rows.iter().flatten().any(|c| ink_effect_blocks(&c.blocks)),
+    })
 }
 
 impl Writer {
@@ -643,7 +663,11 @@ impl Writer {
         if !self.group_whole(p) {
             return false;
         }
-        self.kept_markup(xml, out)
+        let written = self.kept_markup(xml, out);
+        if written && p.inlines.iter().any(ink_effect_inline) {
+            self.ink_pictures.borrow_mut().retained();
+        }
+        written
     }
 
     /// Whether paragraph `p`'s markup kept as read can be written so: it belongs to no group, or
@@ -794,6 +818,9 @@ impl Writer {
         let mut markup = String::new();
         if !self.kept_markup(&ix.0, &mut markup) {
             return None;
+        }
+        if ink_effect_blocks(blocks.get(i..i.saturating_add(ix.1.max(1))).unwrap_or(&[])) {
+            self.ink_pictures.borrow_mut().retained();
         }
         // A list without its own `xml:id` (older files' lists) is given one, for a list going on
         // with it to name.

@@ -398,12 +398,13 @@ fn drawing_inline(doc: &Document, o: &InlineObject, opts: FlowOpts, depth: usize
                 float: kept_float(float),
                 object: ole.as_deref().filter(|_| opts.boxes).and_then(|e| super::odf_object::load(doc, e)),
                 crop: if opts.paras { *crop } else { [0.0; 4] },
+                ink_fx: Default::default(),
             }))
         }
         InlineObject::Graphic { w, h, alt, float, graphic } if !float.hidden && graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink => {
             graphic_inline(doc, (alt, w * sx, h * sy), float, graphic, opts)
         }
-        InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if depth < MAX_GROUP_DEPTH => {
+        InlineObject::Group { w, h, float, ch_w, ch_h, children, .. } if !float.hidden && depth < MAX_GROUP_DEPTH => {
             let ratio = |outer: f32, inner: f32| {
                 let r = outer / inner;
                 if r.is_finite() && r > 0.0 { r } else { 1.0 }
@@ -604,6 +605,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                             float: kept_float(float).filter(|_| opts.paras),
                             object: ole.as_deref().filter(|_| opts.boxes).and_then(|e| super::odf_object::load(doc, e)),
                             crop: if opts.paras { *crop } else { [0.0; 4] },
+                            ink_fx: Default::default(),
                         })),
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}
@@ -719,6 +721,7 @@ fn graphic_inline(
             float: kept_float(float).filter(|_| opts.paras),
             object: None,
             crop: if opts.paras { graphic.ink_fallback_style.as_ref().map_or([0.0; 4], |style| style.crop) } else { [0.0; 4] },
+            ink_fx: graphic.ink_fallback_style.as_ref().map_or_default(|style| style.fx),
         }));
     }
     // `graphic_group` can convert taps to shapes but cannot express native stroke paths. Without
@@ -820,6 +823,7 @@ fn graphic_group(
                     float: None,
                     object: None,
                     crop: [0.0; 4],
+                    ink_fx: Default::default(),
                 };
                 Some(Member { x: rect[0] * sx, y: rect[1] * sy, inline: Inline::Image(img) })
             }
@@ -1152,6 +1156,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: FlowOpts) -> FTa
                         float: None,
                         object: None,
                         crop: [0.0; 4],
+                        ink_fx: Default::default(),
                     };
                     Some(Box::new(crate::model::CellPic { img, repeat: p.repeat, align: p.align }))
                 }),

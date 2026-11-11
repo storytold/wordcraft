@@ -409,6 +409,82 @@ fn native_ink_picture_crop_survives_odt_and_ott_export() {
     }
 }
 
+/// Reproduces lost fallback corrections without assuming how ODT represents them.
+#[test]
+fn native_ink_picture_effects_survive_odt_and_ott_export() {
+    use wordcraft_doc::{graphic::InkFallbackStyle, picfx::PicFx};
+
+    fn set_effect(objects: &mut [InlineObject], fx: PicFx) -> bool {
+        objects.iter_mut().any(|o| match o {
+            InlineObject::Graphic { graphic, .. } if graphic.kind == GraphicKind::Ink => {
+                std::sync::Arc::make_mut(graphic).ink_fallback_style = Some(InkFallbackStyle { fx, crop: [0.25, 0.1, 0.05, 0.0] });
+                true
+            }
+            InlineObject::Group { children, .. } => children.iter_mut().any(|c| set_effect(std::slice::from_mut(&mut c.obj), fx)),
+            _ => false,
+        })
+    }
+    fn pixel(doc: &Document, objects: &[InlineObject]) -> Option<([u8; 4], [f32; 4])> {
+        objects.iter().find_map(|o| match o {
+            InlineObject::Image { media, fx, crop, .. } => {
+                let mut rgba = image::load_from_memory(doc.media.get(media)?).ok()?.to_rgba8().get_pixel(0, 0).0;
+                fx.apply_rgba(&mut rgba);
+                rgba[3] = (f32::from(rgba[3]) * fx.opacity()).round() as u8;
+                Some((rgba, *crop))
+            }
+            InlineObject::Group { children, .. } => children.iter().find_map(|c| pixel(doc, std::slice::from_ref(&c.obj))),
+            _ => None,
+        })
+    }
+
+    let mut failures = Vec::new();
+    for placement in ["inline", "floating", "group", "canvas"] {
+        for fx in [PicFx::new(20_000, 0, 0), PicFx::new(0, 50_000, 0), PicFx::new(0, 0, 25_000)] {
+            let mut doc = crate::io::open_bytes("ink.docx", &with_fallback(placement, INK)).unwrap();
+            assert!(doc.body.iter_mut().any(|b| match &mut *std::sync::Arc::make_mut(b) {
+                Block::Para(p) => set_effect(&mut p.objects, fx),
+                _ => false,
+            }));
+            let before = serde_json::to_vec(&doc).unwrap();
+            let mut expected = [37, 99, 235, 255];
+            fx.apply_rgba(&mut expected);
+            expected[3] = (f32::from(expected[3]) * fx.opacity()).round() as u8;
+            for name in ["ink.odt", "ink.ott"] {
+                let reopened = crate::io::open_bytes(name, &crate::io::save_bytes(name, &doc).unwrap()).unwrap();
+                let actual = reopened.body.iter().find_map(|b| match &**b {
+                    Block::Para(p) => pixel(&reopened, &p.objects),
+                    _ => None,
+                });
+                if let Some((_, crop)) = actual {
+                    assert!(crop.into_iter().zip([0.25, 0.1, 0.05, 0.0]).all(|(a, b)| (a - b).abs() < 0.001));
+                }
+                if actual.map(|(rgba, _)| rgba) != Some(expected) {
+                    failures.push(format!("{placement}, {name}, {fx:?}: expected {expected:?}, got {actual:?}"));
+                }
+            }
+            assert_eq!(serde_json::to_vec(&doc).unwrap(), before, "export changed source document");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Unsupported fallbacks are refused instead of silently losing their corrections.
+#[test]
+fn native_ink_picture_effects_refuse_unsupported_export() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+    let graphic = first_graphic_mut(&mut doc);
+    let key = graphic.ink_fallback.clone().unwrap();
+    graphic.ink_fallback_style =
+        Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+    doc.media.insert(key, std::sync::Arc::new(b"unsupported picture".to_vec()));
+    let before = serde_json::to_vec(&doc).unwrap();
+    for name in ["ink.odt", "ink.ott"] {
+        let error = crate::io::save_bytes(name, &doc).unwrap_err();
+        assert!(error.contains("cannot preserve native ink picture effects"), "{error}");
+    }
+    assert_eq!(serde_json::to_vec(&doc).unwrap(), before);
+}
+
 /// Independent preview images survive JSON adoption and ODT/OTT export with vector ink.
 #[test]
 fn native_ink_picture_fallback_survives_odt_and_ott_export() {
@@ -435,5 +511,248 @@ fn native_ink_picture_fallback_survives_odt_and_ott_export() {
                 );
             }
         }
+    }
+}
+
+#[test]
+fn native_ink_unused_effect_fallbacks_do_not_block_odt_export() {
+    use wordcraft_doc::{graphic::InkFallbackStyle, picfx::PicFx};
+    for case in ["invisible", "hidden-group", "unreferenced-story"] {
+        let placement = if case == "hidden-group" { "group" } else { "inline" };
+        let mut doc = crate::io::open_bytes("ink.docx", &with_fallback(placement, INK)).unwrap();
+        fn mark(objects: &mut [InlineObject], case: &str) -> Option<String> {
+            objects.iter_mut().find_map(|o| match o {
+                InlineObject::Graphic { graphic, .. } => {
+                    let g = std::sync::Arc::make_mut(graphic);
+                    g.ink_fallback_style = Some(InkFallbackStyle { fx: PicFx::new(20_000, 0, 0), ..Default::default() });
+                    if case == "invisible" {
+                        g.items.clear();
+                    }
+                    g.ink_fallback.clone()
+                }
+                InlineObject::Group { children, float, .. } => {
+                    if case == "hidden-group" {
+                        float.hidden = true;
+                    }
+                    children.iter_mut().find_map(|c| mark(std::slice::from_mut(&mut c.obj), case))
+                }
+                _ => None,
+            })
+        }
+        let key = doc
+            .body
+            .iter_mut()
+            .find_map(|b| match &mut *std::sync::Arc::make_mut(b) {
+                Block::Para(p) => mark(&mut p.objects, case),
+                _ => None,
+            })
+            .unwrap();
+        doc.media.insert(key, std::sync::Arc::new(b"unsupported".to_vec()));
+        if case == "unreferenced-story" {
+            doc.parts.insert(9999, wordcraft_doc::Part { blocks: doc.body.clone(), ..Default::default() });
+            doc.body.clear();
+        }
+        for name in ["ink.odt", "ink.ott"] {
+            assert!(crate::io::save_bytes(name, &doc).is_ok(), "{case}: {name}");
+        }
+    }
+}
+
+#[test]
+fn native_ink_effects_do_not_drop_retained_markup() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+    first_graphic_mut(&mut doc).ink_fallback_style =
+        Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+    let p = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Graphic { .. }))).unwrap();
+    let fp = wordcraft_doc::kept::fingerprint(p);
+    let mut kept = wordcraft_doc::kept::KeptXml { format: "odt".into(), ..Default::default() };
+    kept.paras.insert(fp, r#"<text:p>Before <text:span wcx:extra="retained">important</text:span></text:p>"#.into());
+    kept.wraps.insert(fp, (vec![r#"<text:section text:name="retained-section">"#.into()], 1));
+    doc.kept = wordcraft_doc::kept::Kept::new(kept);
+    for name in ["ink.odt", "ink.ott"] {
+        match crate::io::save_bytes(name, &doc) {
+            Err(e) => assert!(e.contains("preserv"), "{e}"),
+            Ok(bytes) => {
+                let files = unpack(&bytes);
+                let content = String::from_utf8_lossy(&files["content.xml"]);
+                assert!(content.contains("wcx:extra=\"retained\"") && content.contains("retained-section"), "{content}");
+            }
+        }
+    }
+}
+
+#[test]
+fn native_ink_effects_in_referenced_header_are_exported() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+    first_graphic_mut(&mut doc).ink_fallback_style =
+        Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+    doc.parts.insert(9999, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: doc.body.clone(), ..Default::default() });
+    doc.last_section.headers.default = Some(9999);
+    for name in ["ink.odt", "ink.ott"] {
+        let bytes = crate::io::save_bytes(name, &doc).unwrap();
+        let files = unpack(&bytes);
+        let images: Vec<_> = files.iter().filter(|(name, _)| name.starts_with("Pictures/")).collect();
+        assert_eq!(images.len(), 1, "body and header should reuse the baked picture");
+        for (_, data) in images {
+            assert_eq!(image::load_from_memory(data).unwrap().to_rgba8().get_pixel(0, 0).0, [88, 150, 255, 255]);
+        }
+    }
+}
+
+#[test]
+fn native_ink_effects_keep_retained_section_wrapper() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+    first_graphic_mut(&mut doc).ink_fallback_style =
+        Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+    let p = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Graphic { .. }))).unwrap();
+    let mut kept = wordcraft_doc::kept::KeptXml { format: "odt".into(), ..Default::default() };
+    kept.wraps.insert(wordcraft_doc::kept::fingerprint(p), (vec![r#"<text:section text:name="retained-section">"#.into()], 1));
+    doc.kept = wordcraft_doc::kept::Kept::new(kept);
+    for name in ["ink.odt", "ink.ott"] {
+        let files = unpack(&crate::io::save_bytes(name, &doc).unwrap());
+        assert!(String::from_utf8_lossy(&files["content.xml"]).contains("retained-section"));
+    }
+}
+
+#[test]
+fn native_ink_shared_picture_different_effects_stay_distinct() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+    first_graphic_mut(&mut doc).ink_fallback_style =
+        Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+    let mut other = doc.clone();
+    first_graphic_mut(&mut other).ink_fallback_style.as_mut().unwrap().fx = wordcraft_doc::picfx::PicFx::new(-20_000, 0, 0);
+    doc.body.extend(other.body);
+    for name in ["ink.odt", "ink.ott"] {
+        let files = unpack(&crate::io::save_bytes(name, &doc).unwrap());
+        let mut pixels: Vec<_> = files
+            .iter()
+            .filter(|(name, _)| name.starts_with("Pictures/"))
+            .map(|(_, data)| image::load_from_memory(data).unwrap().to_rgba8().get_pixel(0, 0).0)
+            .collect();
+        pixels.sort();
+        assert_eq!(pixels, [[0, 48, 184, 255], [88, 150, 255, 255]]);
+    }
+}
+
+#[test]
+fn native_ink_nested_hidden_group_does_not_prepare_picture() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("group", INK)).unwrap();
+    let para = doc
+        .body
+        .iter_mut()
+        .filter_map(|b| match std::sync::Arc::make_mut(b) {
+            Block::Para(p) => Some(p),
+            _ => None,
+        })
+        .find(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Group { .. })))
+        .unwrap();
+    let object = para.objects.iter_mut().find(|o| matches!(o, InlineObject::Group { .. })).unwrap();
+    fn mark(o: &mut InlineObject) -> Option<String> {
+        match o {
+            InlineObject::Graphic { graphic, .. } => {
+                let g = std::sync::Arc::make_mut(graphic);
+                g.ink_fallback_style =
+                    Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+                g.ink_fallback.clone()
+            }
+            InlineObject::Group { children, .. } => children.iter_mut().find_map(|c| mark(&mut c.obj)),
+            _ => None,
+        }
+    }
+    let key = mark(object).unwrap();
+    let mut inner = object.clone();
+    if let InlineObject::Group { float, .. } = &mut inner {
+        float.hidden = true;
+    }
+    *object = InlineObject::Group {
+        w: 100.0,
+        h: 100.0,
+        ch_w: 100.0,
+        ch_h: 100.0,
+        float: Default::default(),
+        children: vec![wordcraft_doc::para::GroupChild { x: 0.0, y: 0.0, obj: inner }],
+        canvas: None,
+    };
+    doc.media.insert(key, std::sync::Arc::new(b"unsupported".to_vec()));
+    for name in ["ink.odt", "ink.ott"] {
+        crate::io::save_bytes(name, &doc).unwrap();
+    }
+}
+
+#[test]
+fn native_ink_effects_in_retained_master_are_not_silently_lost() {
+    for (footer, in_body) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+        first_graphic_mut(&mut doc).ink_fallback_style =
+            Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+        doc.parts.insert(
+            9999,
+            wordcraft_doc::Part {
+                kind: if footer { wordcraft_doc::PartKind::Footer } else { wordcraft_doc::PartKind::Header },
+                blocks: doc.body.clone(),
+                ..Default::default()
+            },
+        );
+        if footer {
+            doc.last_section.footers.default = Some(9999);
+        } else {
+            doc.last_section.headers.default = Some(9999);
+        }
+        if !in_body {
+            doc.body.clear();
+        }
+        let mut kept =
+            wordcraft_doc::kept::KeptXml { format: "odt".into(), pages_fp: Some(wordcraft_doc::kept::pages_fingerprint(&doc)), ..Default::default() };
+        kept.defs.insert(
+            "master:Standard".into(),
+            r#"<style:master-page style:name="Standard"><style:header><text:p>old content</text:p></style:header></style:master-page>"#.into(),
+        );
+        kept.order.push("master:Standard".into());
+        doc.kept = wordcraft_doc::kept::Kept::new(kept);
+        for name in ["ink.odt", "ink.ott"] {
+            let err = crate::io::save_bytes(name, &doc).map(|_| ()).expect_err("retained master must not hide ink effects");
+            assert!(err.contains("preserv"), "{err}");
+        }
+    }
+}
+
+#[test]
+fn native_ink_unrelated_or_unchanged_retained_masters_still_export() {
+    for (name, effect) in [("Other", true), ("Standard", false)] {
+        let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+        if effect {
+            first_graphic_mut(&mut doc).ink_fallback_style =
+                Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+        }
+        doc.parts.insert(9999, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Header, blocks: doc.body.clone(), ..Default::default() });
+        doc.last_section.headers.default = Some(9999);
+        doc.body.clear();
+        let mut kept =
+            wordcraft_doc::kept::KeptXml { format: "odt".into(), pages_fp: Some(wordcraft_doc::kept::pages_fingerprint(&doc)), ..Default::default() };
+        let key = format!("master:{name}");
+        kept.defs.insert(key.clone(), format!("<style:master-page style:name=\"{name}\"/>").into());
+        kept.order.push(key);
+        doc.kept = wordcraft_doc::kept::Kept::new(kept);
+        for path in ["ink.odt", "ink.ott"] {
+            crate::io::save_bytes(path, &doc).unwrap();
+        }
+    }
+}
+
+#[test]
+fn native_ink_picture_effects_refuse_crc_correct_extra_idat() {
+    let mut doc = crate::io::open_bytes("ink.docx", &with_fallback("inline", INK)).unwrap();
+    let graphic = first_graphic_mut(&mut doc);
+    let key = graphic.ink_fallback.clone().unwrap();
+    graphic.ink_fallback_style =
+        Some(wordcraft_doc::graphic::InkFallbackStyle { fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0), ..Default::default() });
+    let mut bytes = doc.media[&key].as_ref().clone();
+    let iend = bytes.len() - 12;
+    // An extra IDAT carrying "junk", with its correct PNG CRC.
+    bytes.splice(iend..iend, [0, 0, 0, 4, b'I', b'D', b'A', b'T', b'j', b'u', b'n', b'k', 0xcd, 0x9c, 0xa4, 0x22]);
+    doc.media.insert(key, std::sync::Arc::new(bytes));
+    for name in ["ink.odt", "ink.ott"] {
+        let err = crate::io::save_bytes(name, &doc).map(|_| ()).expect_err("invalid IDAT must not be re-encoded");
+        assert!(err.contains("invalid or incomplete PNG image stream"), "{err}");
     }
 }

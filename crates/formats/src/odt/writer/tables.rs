@@ -128,6 +128,9 @@ impl Writer {
             && (self.master.is_none() || self.kept_pages)
             && self.kept_markup(xml, out)
         {
+            if t.rows.iter().flatten().any(|c| super::ink_effect_blocks(&c.blocks)) {
+                self.ink_pictures.borrow_mut().retained();
+            }
             self.master = None;
             out.push('\n');
             return;
