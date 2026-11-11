@@ -155,6 +155,11 @@ impl Reader {
             // Odd hex digit count: drop the dangling nibble.
         }
         let data = std::mem::take(&mut self.pict_hex);
+        // The picture Word writes of a shape just read (`\defshp`), for readers without shapes.
+        let after_shape = std::mem::take(&mut self.pict_after_shape);
+        if std::mem::take(&mut self.pict_defshp) && after_shape {
+            return;
+        }
         if self.pict_kind == 0 || data.is_empty() {
             return;
         }
@@ -296,7 +301,8 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::ShpSn | Dest::ShpSv => self.shape_text(s),
+            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

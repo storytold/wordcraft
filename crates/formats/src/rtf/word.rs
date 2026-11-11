@@ -9,7 +9,11 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
+        self.note_defshp(w);
         if self.skip_destination_word(w, pv) {
+            return;
+        }
+        if self.shape_word(w, p, first_in_group) {
             return;
         }
         if w == "shppict" || self.start_header_footer_word(w) {
@@ -26,6 +30,9 @@ impl Reader {
                 }
                 Dest::Pict => {
                     self.pict_depth = Some(self.depth());
+                    self.pict_defshp = false;
+                    // The picture right after a shape read, in the same group, may be its copy.
+                    self.pict_after_shape = self.shape_read_at.take().is_some_and(|d| d + 1 == self.depth());
                     self.pict_hex.clear();
                     self.pict_half = None;
                     self.pict_kind = 0;
@@ -441,6 +448,8 @@ impl Reader {
             }
             Dest::RevTbl if !matches!(word, "u" | "uc") => true,
             Dest::RevTbl => false,
+            // Read by `shape_word`, which takes every word there.
+            Dest::ShpInst | Dest::ShpSn | Dest::ShpSv => true,
             Dest::Pict => {
                 self.picture_word(word, value);
                 true

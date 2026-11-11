@@ -27,7 +27,8 @@ struct Parsed {
 }
 
 /// `marks`: also read footnotes, endnotes and comments (as place markers in the flow's text, for
-/// [`import`] to turn into objects); without it they are skipped.
+/// [`import`] to turn into objects), and drawing shapes and text boxes; without it they are
+/// skipped.
 fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     if !bytes.get(start..).is_some_and(|b| b.starts_with(b"{\\rtf")) {
@@ -35,6 +36,7 @@ fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
     }
     let mut r = Reader::default();
     r.marks_on = marks;
+    r.boxes_on = marks;
     let mut i = start;
     let mut first_in_group = false;
     let mut starred = false;
@@ -233,6 +235,7 @@ fn finalize(mut r: Reader) -> Parsed {
     // truncated file.
     r.finish_multibyte();
     r.end_sub();
+    r.end_shape_text();
     r.end_header_footer();
     if r.para_has || !r.para.inlines.is_empty() {
         r.end_para(false);

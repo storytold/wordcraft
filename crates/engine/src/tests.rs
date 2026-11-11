@@ -1399,6 +1399,25 @@ fn copying_puts_rtf_on_the_clipboard() {
 }
 
 #[test]
+fn pasting_rtf_brings_its_text_box_with_its_text() {
+    // #6212: a text box in pasted RTF comes with its text, in a story of this document's own.
+    let rtf =
+        r"{\rtf1\ansi Before\par{\shp{\*\shpinst\shpright2880\shpbottom1440\shpwr1{\sp{\sn shapeType}{\sv 202}}{\shptxt \pard Boxed\par}}}After\par}";
+    let mut t = Session::new(wordcraft_doc::Document::new());
+    run(&mut t, "edit.paste", json!({"rtf": rtf}));
+    let stories: Vec<String> = t
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| o.text_box())
+        .map(|id| t.doc.parts.get(&id).map(|p| p.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect()).unwrap_or_default())
+        .collect();
+    assert_eq!(stories, vec!["Boxed".to_string()], "{}", text(&t));
+}
+
+#[test]
 fn pasting_hostile_rtf_never_panics() {
     let deep = format!("{{\\rtf1 {}x{}", "{\\b ".repeat(5000), "}".repeat(5000));
     let junk = ["{\\rtf1", "{\\rtf1 {\\b bo", "{\\rtf1\\ansi\\u-99999999999? \\bin999999999 x}", "{\\rtf1 \\'zz\\fonttbl{", "{\\rtf\u{0}\u{FFFF}}"];
