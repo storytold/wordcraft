@@ -4476,6 +4476,42 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+/// #6137: Word writes a tracked change in an equation as `w:ins`/`w:del` inside the math run,
+/// around its `w:rPr` and `m:t`, and a deleted math object as `w:del` in its `m:ctrlPr`.
+/// Inserted text shows with its formatting, deleted text and objects stay out (the fraction
+/// isn't left empty), and the saved file keeps the revisions and reopens the same.
+#[test]
+fn tracked_changes_inside_an_equation_are_read_and_saved() {
+    const REV: &str = r#"w:author="A" w:date="2026-11-09T00:00:00Z""#;
+    let ins = |t: &str, id: u32| format!(r#"<m:r><w:ins w:id="{id}" {REV}><w:rPr><w:color w:val="FF0000"/></w:rPr><m:t>{t}</m:t></w:ins></m:r>"#);
+    let del = |t: &str, id: u32| format!(r#"<m:r><w:del w:id="{id}" {REV}><w:rPr/><m:t>{t}</m:t></w:del></m:r>"#);
+    let changed = format!(
+        r#"<m:oMath {M_NS}><m:r><m:t>E=</m:t></m:r><m:f><m:num><m:r><m:t>h</m:t></m:r></m:num><m:den>{}{}</m:den></m:f></m:oMath>"#,
+        ins("3", 1),
+        del("2", 2)
+    );
+    let deleted = format!(
+        r#"<m:oMath {M_NS}><m:r><m:t>y=k</m:t></m:r><m:f><m:fPr><m:ctrlPr><w:del w:id="3" {REV}><w:rPr/></w:del></m:ctrlPr></m:fPr><m:num>{}</m:num><m:den>{}</m:den></m:f></m:oMath>"#,
+        del("p", 4),
+        del("q", 5)
+    );
+    let d = read_body(&format!("<w:p>{changed}<w:r><w:t xml:space=\"preserve\"> and </w:t></w:r>{deleted}</w:p>"));
+    let expected = vec![("E=h/3".to_string(), false), ("y=k".to_string(), false)];
+    assert_eq!(equations(paras(&d)[0]), expected);
+    let InlineObject::Equation { math, .. } = &paras(&d)[0].objects[0] else { panic!("{:?}", paras(&d)[0].objects) };
+    let mut colors = Vec::new();
+    wordcraft_doc::math_edit::each_run_mut(&mut math.nodes.clone(), &mut |r| colors.push((r.text.clone(), r.color)));
+    assert_eq!(colors, [("E=".to_string(), None), ("h".to_string(), None), ("3".to_string(), Some(Rgb(255, 0, 0)))]);
+
+    // Saved, the equations keep Word's revision markup and reopen the same.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = String::from_utf8_lossy(unzip(&bytes).get("word/document.xml").unwrap()).into_owned();
+    assert!(xml.contains(&format!(r#"<m:r><w:ins w:id="1" {REV}>"#)), "{xml}");
+    assert!(xml.contains(&format!(r#"<m:ctrlPr><w:del w:id="3" {REV}>"#)), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(equations(paras(&again)[0]), expected);
+}
+
 /// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
 /// hid the picture.
 #[test]

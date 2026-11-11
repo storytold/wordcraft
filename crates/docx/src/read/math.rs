@@ -101,8 +101,18 @@ fn arg(e: &El, depth: usize) -> Arg {
     out
 }
 
+/// A math object whose control character is a tracked deletion (`w:del` in its `m:ctrlPr`,
+/// ECMA-376 §22.1.2.23): Word marks a deleted fraction, script… this way, and it leaves the
+/// equation once the deletion is accepted, as deleted runs do.
+fn deleted_object(k: &El) -> bool {
+    k.els().any(|p| p.name.starts_with("m:") && p.name.ends_with("Pr") && p.child("m:ctrlPr").is_some_and(|c| c.child("w:del").is_some()))
+}
+
 fn node(k: &El, depth: usize, out: &mut Arg) {
     let d = depth + 1;
+    if deleted_object(k) {
+        return;
+    }
     match k.name.as_str() {
         "m:r" => {
             if let Some(r) = run(k) {
@@ -263,9 +273,9 @@ fn node(k: &El, depth: usize, out: &mut Arg) {
 /// Text in a symbol font (Symbol, Wingdings…) becomes its Unicode equivalent: the math font has
 /// no glyphs at those private-use codes (#1273).
 fn run_text(r: &El) -> String {
-    let font = r.child("w:rPr").and_then(|p| p.child("w:rFonts")).and_then(|f| f.attr("w:ascii").or_else(|| f.attr("w:hAnsi"))).unwrap_or("");
+    let font = run_rpr(r).and_then(|p| p.child("w:rFonts")).and_then(|f| f.attr("w:ascii").or_else(|| f.attr("w:hAnsi"))).unwrap_or("");
     let mut s = String::new();
-    for c in r.els() {
+    for c in run_content(r) {
         match c.name.as_str() {
             "m:t" | "w:t" => s.push_str(&symbol_fonts::map_text(font, &c.text())),
             "w:tab" => s.push('\t'),
@@ -283,13 +293,29 @@ fn run_text(r: &El) -> String {
     s
 }
 
+/// A run's children, with a tracked insertion inside the run opened: Word writes a tracked
+/// change in an equation as `w:ins` or `w:del` inside `m:r`, around its `w:rPr` and `m:t`
+/// (#6137). Inserted text shows; deleted text stays out, as for revisions around runs.
+fn run_content(r: &El) -> impl Iterator<Item = &El> {
+    r.els().flat_map(|c| {
+        let opened = matches!(c.name.as_str(), "w:ins" | "w:moveTo");
+        let (own, inner) = if opened { (None, Some(c.els())) } else { (Some(c), None) };
+        own.into_iter().chain(inner.into_iter().flatten())
+    })
+}
+
+/// A run's `w:rPr`, also inside a tracked insertion ([`run_content`]).
+fn run_rpr(r: &El) -> Option<&El> {
+    run_content(r).find(|c| c.name == "w:rPr")
+}
+
 fn run(r: &El) -> Option<MRun> {
     let text = run_text(r);
     if text.is_empty() {
         return None;
     }
     let mut out = MRun { text, ..Default::default() };
-    if let Some(pr) = r.child("m:rPr") {
+    if let Some(pr) = run_content(r).find(|c| c.name == "m:rPr") {
         out.sty = match pr.child("m:sty").and_then(|s| s.attr("m:val")) {
             Some("p") => Some(MSty::Plain),
             Some("b") => Some(MSty::Bold),
@@ -312,7 +338,7 @@ fn run(r: &El) -> Option<MRun> {
             out.brk = Some(aln.min(255) as u8);
         }
     }
-    wrpr(r.child("w:rPr"), &mut out);
+    wrpr(run_rpr(r), &mut out);
     Some(out)
 }
 
@@ -474,6 +500,21 @@ mod tests {
             }
         });
         assert_eq!(font, Some(None), "mapped symbol text takes the text font");
+    }
+
+    /// #6137: a tracked change inside a math run (Word's form) and a math object whose control
+    /// character is a tracked change: inserted content shows, deleted content stays out.
+    #[test]
+    fn tracked_changes_inside_runs_and_objects() {
+        let e = omath(
+            r#"<m:r><m:rPr><m:sty m:val="p"/></m:rPr><w:ins w:id="1" w:author="a"><w:rPr><w:sz w:val="28"/></w:rPr><m:t>sin</m:t></w:ins></m:r><m:r><w:del w:id="2" w:author="a"><w:rPr/><m:t>cos</m:t></w:del></m:r><m:sSup><m:sSupPr><m:ctrlPr><w:del w:id="3" w:author="a"><w:rPr/></w:del></m:ctrlPr></m:sSupPr><m:e><m:r><w:del w:id="4" w:author="a"><m:t>x</m:t></w:del></m:r></m:e><m:sup><m:r><w:del w:id="5" w:author="a"><m:t>2</m:t></w:del></m:r></m:sup></m:sSup><m:rad><m:radPr><m:degHide m:val="1"/><m:ctrlPr><w:ins w:id="6" w:author="a"><w:rPr/></w:ins></m:ctrlPr></m:radPr><m:deg/><m:e><m:r><w:moveTo w:id="7" w:author="a"><m:t>y</m:t></w:moveTo></m:r><m:r><w:moveFrom w:id="8" w:author="a"><m:t>z</m:t></w:moveFrom></m:r></m:e></m:rad>"#,
+        );
+        let m = read_omath(&e, MathJc::CenterGroup);
+        assert_eq!(m.nodes.len(), 2, "{:#?}", m.nodes);
+        let MNode::Run(r) = &m.nodes[0] else { panic!("{:#?}", m.nodes) };
+        assert_eq!((r.text.as_str(), r.sty, r.size), ("sin", Some(MSty::Plain), Some(14.0)));
+        let MNode::Rad { e, .. } = &m.nodes[1] else { panic!("{:#?}", m.nodes) };
+        assert_eq!(e, &vec![MNode::Run(MRun::new("y"))]);
     }
 
     /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).
