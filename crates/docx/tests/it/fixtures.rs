@@ -1014,6 +1014,52 @@ fn a_text_box_s_style_font_colour_is_read() {
     assert_eq!(d.parts[plain].body.auto_color, None);
 }
 
+/// A shape's resolved text-style colour survives saving without becoming a font-family
+/// reference or overwriting a run's own colour. Neutral backgrounds distinguish this from
+/// automatic white-on-dark contrast (Word Mac16.114.4, synthetic controls, #6377).
+#[test]
+fn text_box_font_ref_colours_survive_two_saves() {
+    let cases = [
+        (Some("CC0000"), Some("auto"), "Red auto"),
+        (Some("008000"), Some("auto"), "Green auto"),
+        (Some("CC0000"), Some("0000CC"), "Blue override"),
+        (None, Some("auto"), "Plain auto"),
+        (Some("CC0000"), None, "Red implicit"),
+        (Some("FFFFFF"), Some("auto"), "White style"),
+    ];
+    let shapes: String = cases.iter().map(|(font, own, label)| {
+        let style = font.map(|c| format!(r#"<wps:style><a:lnRef idx="0"><a:srgbClr val="000000"/></a:lnRef><a:fillRef idx="0"><a:srgbClr val="FFFFFF"/></a:fillRef><a:effectRef idx="0"><a:srgbClr val="000000"/></a:effectRef><a:fontRef idx="minor"><a:srgbClr val="{c}"/></a:fontRef></wps:style>"#)).unwrap_or_default();
+        let color = own.map(|c| format!(r#"<w:color w:val="{c}"/>"#)).unwrap_or_default();
+        format!(r#"<w:r><w:drawing><wp:anchor behindDoc="0"><wp:extent cx="1270000" cy="635000"/><wp:wrapNone/><wp:docPr id="1" name="Original box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:prstGeom prst="rect"/><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></wps:spPr>{style}<wps:txbx><w:txbxContent><w:p><w:r><w:rPr>{color}</w:rPr><w:t>{label}</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#)
+    }).collect();
+    let mut document = read_body(&format!("<w:p>{shapes}</w:p>"));
+    let values = |doc: &Document| {
+        doc.parts
+            .values()
+            .filter(|p| p.kind == wordcraft_doc::PartKind::TextBox)
+            .map(|part| {
+                let Block::Para(para) = part.blocks.first().unwrap().as_ref() else { panic!("text box paragraph") };
+                (para.text.clone(), part.body.auto_color, para.runs.first().unwrap().props.color)
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected: Vec<_> = cases
+        .iter()
+        .map(|(font, own, label)| {
+            let color = own.map(|c| if c == "auto" { TextColor::Auto } else { TextColor::Rgb(Rgb::parse(c).unwrap()) });
+            (label.to_string(), font.and_then(Rgb::parse), color)
+        })
+        .collect();
+    assert_eq!(values(&document), expected, "fixture imports explicit shape-style and run colours");
+    for pass in 1..=2 {
+        let bytes = wordcraft_docx::write(&document).unwrap();
+        document = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(values(&document), expected, "text-style or run colour changed on save {pass}");
+        let xml = text(&unzip(&bytes), "word/document.xml");
+        assert_eq!(attr_values(&xml, "a:fontRef", "idx"), vec!["none"; 5], "only the resolved colour is known, not a themed font family");
+    }
+}
+
 #[test]
 fn a_chart_part_is_built_once_and_only_through_a_chart_relationship() {
     let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;

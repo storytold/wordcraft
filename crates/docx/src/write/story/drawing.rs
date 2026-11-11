@@ -180,6 +180,20 @@ impl Writer<'_> {
         // from another (Create Link) shows the rest of that box's text: it names the chain and
         // its place in it instead.
         let part = (*story).and_then(|id| self.doc.parts.get(&id).filter(|p| p.kind == wordcraft_doc::PartKind::TextBox).map(|p| (id, p)));
+        if let Some(color) = part.and_then(|(_, p)| p.body.auto_color) {
+            // Only the resolved text colour is known. Neutral style references and `none`
+            // keep the shape's explicit formatting and do not invent a themed font family.
+            w.open("wps:style", &[]);
+            for tag in ["a:lnRef", "a:fillRef", "a:effectRef"] {
+                w.open(tag, &[("idx", "0")]);
+                w.empty("a:srgbClr", &[("val", "000000")]);
+                w.close(tag);
+            }
+            w.open("a:fontRef", &[("idx", "none")]);
+            w.empty("a:srgbClr", &[("val", &color.hex())]);
+            w.close("a:fontRef");
+            w.close("wps:style");
+        }
         let link = part.and_then(|(id, _)| self.txbx_links.get(&id).copied());
         if let Some((n, seq)) = link.filter(|(_, seq)| *seq > 0) {
             w.empty("wps:linkedTxbx", &[("id", &n.to_string()), ("seq", &seq.to_string())]);
