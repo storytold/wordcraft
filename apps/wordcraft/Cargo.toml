@@ -69,6 +69,11 @@ x11rb = "0.13"
 # these versions and with this feature.
 x11-dl = "2.21"
 xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
+# The account's uid, for the `user_name` passwd lookup: the environment's logon name can say
+# anything, and a non-dumpable process's `/proc/self` belongs to root (proc(5)), so neither says
+# which account this process runs as. `getuid` through `libc` needs unsafe, which the workspace
+# forbids; rustix is already in the build at this version, and this adds only its `process` module.
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The upstream default-apps button opens Windows Settings; printing uses craft-print instead.
