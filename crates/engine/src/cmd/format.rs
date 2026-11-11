@@ -385,8 +385,14 @@ fn step_size(s: &mut Session, dir: i32) -> CmdResult {
     resize(s, &|cur| {
         if dir > 0 {
             SIZES.iter().copied().find(|x| *x > cur + 0.01).unwrap_or(((cur / 10.0).floor() + 1.0) * 10.0)
+        } else if cur > 80.01 {
+            // Mirror Increase Font Size above 72 pt: down to the next lower multiple of 10.
+            (((cur - 0.01) / 10.0).ceil() - 1.0) * 10.0
+        } else if cur > 72.01 {
+            72.0
         } else {
-            SIZES.iter().rev().copied().find(|x| *x < cur - 0.01).unwrap_or(1.0)
+            // Below the list Word steps down one point at a time.
+            SIZES.iter().rev().copied().find(|x| *x < cur - 0.01).unwrap_or(((cur - 0.01).ceil() - 1.0).max(1.0))
         }
     })
 }

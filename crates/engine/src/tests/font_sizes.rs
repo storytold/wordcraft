@@ -186,7 +186,7 @@ fn relative_font_sizes_keep_column_cell_and_text_box_targets() {
 fn relative_font_sizes_keep_bounds_protection_and_saved_sizes() {
     for (command, values, expected) in [
         ("format.growFont", [72.0, 1638.0], [80.0, 1638.0]),
-        ("format.shrinkFont", [1.0, 8.0], [1.0, 1.0]),
+        ("format.shrinkFont", [1.0, 8.0], [1.0, 7.0]),
         ("format.growFont1", [1.0, 1638.0], [2.0, 1638.0]),
         ("format.shrinkFont1", [1.0, 1638.0], [1.0, 1637.0]),
     ] {
