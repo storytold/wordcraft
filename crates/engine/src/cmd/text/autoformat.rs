@@ -69,7 +69,9 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     typing_options(s, text);
     let smart_quote = if raw { None } else { autoformat(s, text) };
     let was_collapsed = s.sel.is_collapsed();
-    let effect = super::lead_in::type_text_lead(s, smart_quote.as_deref().unwrap_or(text))?;
+    // The lead-in before typing, in case the typed punctuation ends it before AutoCorrect runs.
+    let lead_before = super::lead_in::current(s);
+    let effect = super::lead_in::type_text_lead(s, smart_quote.as_deref().unwrap_or(text), None)?;
     let mut outcome = crate::ImeEditOutcome {
         classified: true,
         content_changed: effect.content_changed,
@@ -103,6 +105,8 @@ pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     }
     if leading {
         super::lead_in::follow(s);
+    } else if let Some(l) = &lead_before {
+        super::lead_in::follow_ended(s, l);
     }
     // Compare the paragraph with the one exactly as typed. This is the actual effect of
     // AutoCorrect (including formatting-only superscripts and links), not an undo label that

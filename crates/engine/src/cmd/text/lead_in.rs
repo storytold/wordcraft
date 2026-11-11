@@ -79,7 +79,6 @@ pub(super) fn is_active(s: &Session) -> bool {
 /// text from after that character to the caret then takes the formatting that follows the lead-in.
 pub(super) fn follow(s: &mut Session) {
     let f = s.sel.focus.clone();
-    let first_punctuation = |t: &str| t.char_indices().find(|(_, c)| is_punctuation(*c)).map(|(i, c)| i + c.len_utf8());
     let after = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).and_then(first_punctuation);
     let Some(l) = s.lead_in.as_mut().filter(|l| l.at.story == f.story && l.at.path == f.path) else { return };
     l.at = f.clone();
@@ -92,6 +91,34 @@ pub(super) fn follow(s: &mut Session) {
         p.touch();
     }
     finish(s);
+}
+
+/// Where the text after the first punctuation character of `t` starts.
+fn first_punctuation(t: &str) -> Option<usize> {
+    t.char_indices().find(|(_, c)| is_punctuation(*c)).map(|(i, c)| i + c.len_utf8())
+}
+
+/// The lead-in being typed at the caret, as it is before the next typing.
+pub(super) fn current(s: &Session) -> Option<LeadIn> {
+    active(s).cloned()
+}
+
+/// After a typed punctuation character ended the lead-in `l` and AutoCorrect then rewrote the text
+/// before the caret: when the paragraph now has an earlier punctuation character, the text from
+/// after that character to the caret takes the formatting that follows the lead-in.
+pub(super) fn follow_ended(s: &mut Session, l: &LeadIn) {
+    let f = s.sel.focus.clone();
+    if l.at.story != f.story || l.at.path != f.path {
+        return;
+    }
+    let Some(after) = s.doc.para_at(&f).and_then(|p| p.text.get(..f.off)).and_then(first_punctuation) else { return };
+    let changes = body_changes(l);
+    if after < f.off
+        && let Ok(p) = s.doc.para_mut(f.story, &f.path)
+        && p.format(after, f.off, &|c| apply_changes(c, &changes)).is_ok()
+    {
+        p.touch();
+    }
 }
 
 /// The properties, except [`KEPT`] ones, whose value in the lead-in differs from the formatting
@@ -259,8 +286,8 @@ pub(super) fn start(s: &mut Session, candidate: Option<Candidate>) {
 }
 
 /// Type `text`, all of it in the lead-in's formatting, and keep the lead-in at the caret.
-fn type_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
-    let effect = type_text_effect(s, text)?;
+fn type_lead(s: &mut Session, text: &str, language: Option<&str>) -> Result<InsertEffect, CmdError> {
+    let effect = type_text_effect(s, text, language)?;
     let at = s.sel.focus.clone();
     if let Some(l) = s.lead_in.as_mut() {
         l.at = at;
@@ -270,22 +297,23 @@ fn type_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
 
 /// Type `text` like [`type_text_effect`]; during a lead-in, the text up to and including its first
 /// punctuation character (or up to a paragraph break) takes the lead-in's formatting and the rest
-/// the formatting typing would use without the option.
-pub(crate) fn type_text_lead(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
+/// the formatting typing would use without the option. With `language`, all of it is in that
+/// language.
+pub(crate) fn type_text_lead(s: &mut Session, text: &str, language: Option<&str>) -> Result<InsertEffect, CmdError> {
     if active(s).is_none() {
         finish(s);
-        return type_text_effect(s, text);
+        return type_text_effect(s, text, language);
     }
     let end = text.char_indices().find_map(|(i, c)| match c {
         '\r' | '\u{2029}' => Some(i),
         c if is_punctuation(c) => Some(i + c.len_utf8()),
         _ => None,
     });
-    let Some((head, rest)) = end.and_then(|i| Some((text.get(..i)?, text.get(i..)?))) else { return type_lead(s, text) };
-    let mut effect = if head.is_empty() { InsertEffect::default() } else { type_lead(s, head)? };
+    let Some((head, rest)) = end.and_then(|i| Some((text.get(..i)?, text.get(i..)?))) else { return type_lead(s, text, language) };
+    let mut effect = if head.is_empty() { InsertEffect::default() } else { type_lead(s, head, language)? };
     finish(s);
     if !rest.is_empty() {
-        let more = type_text_effect(s, rest)?;
+        let more = type_text_effect(s, rest, language)?;
         effect.content_changed |= more.content_changed;
         effect.state_changed |= more.state_changed;
     }

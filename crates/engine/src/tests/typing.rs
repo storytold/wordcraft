@@ -1650,6 +1650,32 @@ fn text_after_punctuation_autoformat_adds_takes_the_formatting_after_the_lead_in
 }
 
 #[test]
+fn an_autocorrect_rewrite_at_the_typed_punctuation_gives_the_text_after_it_the_formatting_after_the_lead_in() {
+    // "Dont:" becomes "Don't:" when the colon is typed: the apostrophe ends the lead-in, so the
+    // "t" and the colon take the formatting typing would have had.
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\nDont: more");
+    let p = s.doc.para_at(&Pos::body(1, 0)).cloned().unwrap_or_default();
+    assert_eq!(p.text, "Don't: more");
+    let bold: Vec<_> = (0..p.len()).map(|i| char_at(&s, 1, i).bold).collect();
+    assert_eq!(bold, [Some(true), Some(true), Some(true), Some(true), None, None, None, None, None, None, None]);
+}
+
+#[test]
+fn turning_the_option_off_ends_the_lead_in_even_when_it_is_turned_back_on() {
+    let mut s = with_list_lead_in();
+    typ(&mut s, "* Label: explanation");
+    format_then_end(&mut s, "Label", "format.bold", json!({}), 0);
+    typ(&mut s, "\n");
+    run(&mut s, "tools.autocorrect", json!({"formatListItemStart": false}));
+    run(&mut s, "tools.autocorrect", json!({"formatListItemStart": true}));
+    typ(&mut s, "Next: more");
+    assert_eq!((char_at(&s, 1, 0).bold, char_at(&s, 1, 6).bold), (None, None));
+}
+
+#[test]
 fn text_a_command_types_ends_the_lead_in_at_its_punctuation() {
     // Insert › Date & Time as text: the lead-in ends at the date's first slash.
     let mut s = with_list_lead_in();

@@ -350,6 +350,11 @@ pub(super) fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
             *f = b;
         }
     }
+    // Turning the option off ends a list item's lead-in: turning it back on doesn't bring it back.
+    if !(ac.enabled && ac.format_list_item_start) {
+        crate::cmd::text::end_lead_in(s);
+    }
+    let ac = &mut s.prefs.autocorrect;
     let bad = |t: &str, max: usize| t.trim().is_empty() || t.chars().count() > max || t.contains(['\n', '\r']);
     if let Some(add) = v.get("add") {
         let (Some(f), Some(t)) = (add.get("from").and_then(Value::as_str), add.get("to").and_then(Value::as_str)) else {

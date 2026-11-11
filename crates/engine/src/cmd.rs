@@ -349,12 +349,12 @@ pub(crate) struct InsertEffect {
 /// changes. In a list item's lead-in, the text after its first punctuation character takes the
 /// formatting typing would have had without the lead-in.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    text::type_text_lead(s, text).map(|_| ())
+    text::type_text_lead(s, text, None).map(|_| ())
 }
 
-/// [`type_text`] with the effect the insertion had.
-pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
-    insert_text(s, text, true, None)
+/// [`type_text`] with the effect the insertion had, in `language` when one is given.
+pub(crate) fn type_text_effect(s: &mut Session, text: &str, language: Option<&str>) -> Result<InsertEffect, CmdError> {
+    insert_text(s, text, true, language)
 }
 
 /// Insert pasted plain text like [`type_text`], except that its paragraph separators are text
@@ -366,9 +366,10 @@ pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
     insert_text(s, text, false, None).map(|_| ())
 }
 
-/// Insert typed text in a chosen language without losing caret formatting or tracked changes.
+/// Insert typed text in a chosen language without losing caret formatting or tracked changes. In
+/// a list item's lead-in it behaves like [`type_text`].
 pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) -> Result<(), CmdError> {
-    insert_text(s, text, true, language).map(|_| ())
+    text::type_text_lead(s, text, language).map(|_| ())
 }
 
 /// Inserts typed or pasted text at the caret: resolves field ends and content-control placeholders,
