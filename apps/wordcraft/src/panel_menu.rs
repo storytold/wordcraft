@@ -2,10 +2,10 @@
 //!
 //! AppKit finds these shortcuts through the menu bar, and WordCraft's menu bar has no Edit menu, so
 //! the text boxes of an Open or Save panel (Go to Folder, the file name) ignored ⌘V. While the key
-//! window is a panel or a sheet on one (Go to Folder, New Folder), this small menu bar replaces the
-//! usual one. It goes away when another document's window becomes key or the panel closes, because
-//! WordCraft's own text handling gets these keys from egui. Its application menu has Hide, Hide
-//! Others and Show All; Quit is left out until the panel closes.
+//! window is a panel or a sheet on one (Go to Folder), this small menu bar replaces the usual one.
+//! It goes away when another document's window becomes key or the panel closes, because WordCraft's
+//! own text handling gets these keys from egui. Its application menu has Hide, Hide Others and Show
+//! All; Quit is left out until the panel closes.
 
 use muda::{Menu, PredefinedMenuItem, Submenu};
 use objc2::rc::Retained;
@@ -52,8 +52,8 @@ impl PanelMenu {
     }
 }
 
-/// Whether `window` is an Open or Save panel, or a window on one: Go to Folder and New Folder are
-/// sheets on the panel, in a window of their own.
+/// Whether `window` is an Open or Save panel, or a window on one: Go to Folder is a sheet on the
+/// panel, in a window of its own.
 pub fn in_file_panel(mut window: Option<Retained<NSWindow>>) -> bool {
     // A panel, its sheet and the document window under it: a few steps at most.
     for _ in 0..8 {
