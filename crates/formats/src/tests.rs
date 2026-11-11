@@ -1015,6 +1015,34 @@ fn rtf_notes_comments_tracked_changes_and_sections_work_together() {
     check(&d2);
 }
 
+#[test]
+fn rtf_header_inside_a_note_or_comment_is_ignored() {
+    use wordcraft_doc::PartKind;
+    // A header or footer belongs to a section, not to a note or comment: inside one it is skipped,
+    // as a note inside a header is. The body keeps its text and the note or comment's reference,
+    // whether the header word shares the note's group or sits in a group of its own.
+    let cases: [(&[u8], &str, &str); 4] = [
+        (br"{\rtf1 Body{\footnote\header X}More}", "Footnote:", ""),
+        (br"{\rtf1 Body{\footnote \pard Note{\footerl X}\par}More}", "Footnote:Note", ""),
+        (br"{\rtf1 Body{\*\annotation\header X}More}", "", ""),
+        (br"{\rtf1 Body{\*\annotation \pard Remark{\headerf X}\par}More}", "", "Remark"),
+    ];
+    for (rtf, note, comment) in cases {
+        let src = String::from_utf8_lossy(rtf);
+        let d = import("rtf", rtf).unwrap().unwrap();
+        let body: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+        assert_eq!(body.len(), 1, "{src}");
+        assert_eq!(body[0].plain_text().trim(), "BodyMore", "{src}");
+        let refs = body[0].objects.iter().filter(|o| matches!(o, InlineObject::NoteRef { .. } | InlineObject::CommentStart { .. })).count();
+        assert_eq!(refs, 1, "{src}");
+        let (notes, comments) = rtf_notes(&d);
+        assert_eq!(notes, if note.is_empty() { vec![] } else { vec![note.to_string()] }, "{src}");
+        assert_eq!(comments, if note.is_empty() { vec![comment.to_string()] } else { vec![] }, "{src}");
+        assert!(!d.parts.values().any(|p| matches!(p.kind, PartKind::Header | PartKind::Footer)), "{src}");
+        assert_eq!((d.last_section.headers, d.last_section.footers), Default::default(), "{src}");
+    }
+}
+
 /// A link target with any whitespace (a no-break or ideographic space too) is written in `<…>`,
 /// so the reader, which ends a bare destination at the first whitespace, reads it back whole.
 #[test]
