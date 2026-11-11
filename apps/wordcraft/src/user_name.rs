@@ -13,9 +13,12 @@
 //!   SSSD) have no entry there and take the logon name.
 //! - macOS: the full name Directory Services keeps for the account, from the system's own lookup
 //!   (`id -F`), else the logon name. `objc2-app-kit` binds no `NSFullUserName`, and reading
-//!   Directory Services directly needs unsafe, which our workspace forbids.
+//!   Directory Services directly needs unsafe, which our workspace forbids. A directory service
+//!   that doesn't answer must not hold up the start, so like the Windows call it is asked on its
+//!   own thread with a timeout ([`LOOKUP_TIMEOUT`]).
 //! - Runs without preferences (`WORDCRAFT_NO_PREFS`: agents' and screenshot runs) keep the
-//!   default, so what they save or show never carries the name of whoever ran them (`main` checks).
+//!   default, so what they save or show never carries the name of whoever ran them (main passes
+//!   that decision to the hook).
 //!
 //! Every source is untrusted: the name still goes through `file.setAuthor`, which trims it, drops
 //! control characters (they can't go into the saved XML) and caps its length.
@@ -28,8 +31,10 @@ const LOGON_VARS: &[&str] = &["USERNAME"];
 #[cfg(not(target_os = "windows"))]
 const LOGON_VARS: &[&str] = &["USER", "LOGNAME"];
 
-/// How long the Windows account lookup may take before the logon name is used instead.
-#[cfg(target_os = "windows")]
+/// How long a host account lookup may take before the logon name is used instead. Both the
+/// Windows Runtime call and macOS's `id -F` go through the directory services of the machine, and
+/// neither is guaranteed to answer when one of them is misconfigured or unreachable.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const LOOKUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most of `/etc/passwd` read: far more than any real one holds.
@@ -66,26 +71,36 @@ fn logon_name(var: impl Fn(&str) -> Option<OsString>) -> Option<String> {
     LOGON_VARS.iter().find_map(|name| Some(var(name)?.into_string().ok()?.trim().to_owned()).filter(|v| !v.is_empty()))
 }
 
-/// The account's name ([`account_name`]), asked on a thread of its own so a lookup that never
-/// answers can't hold up the start. `None` when there is none, or on any failure (logged).
+/// The account's name from the Windows Runtime ([`account_name`]), bounded by [`ask_with_timeout`].
+/// `None` when there is none, or on any failure (logged).
 #[cfg(target_os = "windows")]
 fn windows_account_name() -> Option<String> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    // A lookup still running after the timeout ends on its own; nobody waits for its answer.
-    if let Err(e) = std::thread::Builder::new().name("user-name".into()).spawn(move || {
-        let _ = tx.send(account_name().map_err(|e| e.to_string()));
-    }) {
-        log::debug!("user name: no lookup thread: {e}");
-        return None;
-    }
-    match rx.recv_timeout(LOOKUP_TIMEOUT) {
-        Ok(Ok(name)) => Some(name).filter(|n| !n.trim().is_empty()),
-        Ok(Err(e)) => {
+    ask_with_timeout("account lookup", || match account_name() {
+        Ok(name) => Some(name).filter(|n| !n.trim().is_empty()),
+        Err(e) => {
             log::debug!("user name: account lookup failed: {e}");
             None
         }
+    })
+}
+
+/// `ask`'s answer, asked on a thread of its own so a host lookup that never answers can't hold up
+/// opening the window: `what` names it in the log, [`LOOKUP_TIMEOUT`] bounds the wait. A lookup
+/// still running when the timeout passes carries on and finishes on its own, its own thread
+/// waiting for it (so an `id -F` child is still waited for and reaped); the start doesn't.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+fn ask_with_timeout(what: &str, ask: impl FnOnce() -> Option<String> + Send + 'static) -> Option<String> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    if let Err(e) = std::thread::Builder::new().name("user-name".into()).spawn(move || {
+        let _ = tx.send(ask());
+    }) {
+        log::debug!("user name: no {what} thread: {e}");
+        return None;
+    }
+    match rx.recv_timeout(LOOKUP_TIMEOUT) {
+        Ok(answer) => answer,
         Err(_) => {
-            log::debug!("user name: account lookup gave no answer within {LOOKUP_TIMEOUT:?}");
+            log::debug!("user name: {what} gave no answer within {LOOKUP_TIMEOUT:?}");
             None
         }
     }
@@ -181,10 +196,11 @@ fn full_name(passwd: &[u8], uid: Option<&str>, login: Option<&str>) -> Option<St
 }
 
 /// The macOS account's full name, from the system's own Directory Services lookup (`id -F`, which
-/// prints the login name when the account has no real name); `None` when it fails.
+/// prints the login name when the account has no real name), bounded by [`ask_with_timeout`];
+/// `None` when it fails.
 #[cfg(target_os = "macos")]
 fn directory_services_full_name() -> Option<String> {
-    match std::process::Command::new("id").arg("-F").output() {
+    ask_with_timeout("id -F", || match std::process::Command::new("id").arg("-F").output() {
         Ok(out) if out.status.success() => std::str::from_utf8(&out.stdout).ok().map(|name| name.trim().to_owned()).filter(|n| !n.is_empty()),
         Ok(out) => {
             log::debug!("user name: id -F: {}", String::from_utf8_lossy(&out.stderr).trim());
@@ -194,7 +210,7 @@ fn directory_services_full_name() -> Option<String> {
             log::debug!("user name: id -F: {e}");
             None
         }
-    }
+    })
 }
 
 /// `word` with its first letter upper case (`ada` → `Ada`).
