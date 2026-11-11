@@ -107,6 +107,7 @@ impl Writer<'_> {
         let mut open_rows = 0u32;
         // A table in a cell: its own style's formatting for its cells, the outer cell's after it.
         let outer_chr = self.table_chr.take();
+        let chrs = self.doc.styles.table_cells_chr(t);
         for (ri, r) in t.rows.iter().enumerate().filter(|(_, r)| !r.cells.is_empty()) {
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
@@ -124,7 +125,7 @@ impl Writer<'_> {
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
                 tcpr(w, &c.props, chg.as_ref());
-                self.table_chr = self.doc.styles.table_cell_chr(t, ri, ci);
+                self.table_chr = chrs.as_ref().and_then(|c| c.get(ri)?.get(ci).cloned());
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 self.table_chr = None;
                 w.close("w:tc");

@@ -169,7 +169,7 @@ fn text_is_written_complex_script_by_what_word_counts() {
     // style's run formatting.
     let drawn = |d: &Document| -> Vec<(String, f32, bool)> {
         let (p, table) = match &*d.body[0] {
-            Block::Table(t) => (t.rows[0].cells[0].blocks[0].as_para().unwrap(), d.styles.table_cell_chr(t, 0, 0)),
+            Block::Table(t) => (t.rows[0].cells[0].blocks[0].as_para().unwrap(), d.styles.table_cells_chr(t).map(|c| c[0][0].clone())),
             b => (b.as_para().unwrap(), None),
         };
         let mut out = Vec::new();
