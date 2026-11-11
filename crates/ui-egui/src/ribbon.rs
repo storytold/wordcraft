@@ -214,7 +214,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     t.on_accent,
                                 );
                             }
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
+                            crate::widgets::describe_button(&resp, share, ui.is_enabled(), None);
                             if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                                 let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                             }
@@ -254,6 +254,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             egui::Layout::left_to_right(egui::Align::Center)
                         };
                         ui.with_layout(tabs_layout, |ui| {
+                            // The tabs are a tab list to screen readers (#1012).
+                            ui.ctx().accesskit_node_builder(ui.unique_id(), |n| n.set_role(egui::accesskit::Role::TabList));
                             // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
                             for (i, ((tab, custom), _)) in tabs
                                 .iter()
@@ -276,7 +278,20 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
                                 }
                                 let active = app.ui.tab == tab && !app.ui.backstage;
-                                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, shown));
+                                let keytips = app.ui.keytips == crate::keytips::Phase::Tabs;
+                                ui.ctx().accesskit_node_builder(resp.id, |n| {
+                                    n.set_role(egui::accesskit::Role::Tab);
+                                    n.set_selected(active);
+                                    let letter = crate::keytips::tab_letter(tab);
+                                    if keytips && !letter.is_empty() {
+                                        n.set_access_key(letter);
+                                    }
+                                });
+                                // Alt or F10 puts the keyboard on the active tab.
+                                if active && ghost.is_none() {
+                                    crate::keytips::take_focus(ui.ctx(), &resp, crate::keytips::Phase::Tabs);
+                                }
                                 if resp.hovered() && !active && ghost.is_none() {
                                     ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                                 }
@@ -351,7 +366,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 );
                                 // "»" means nothing read aloud: the button says what it holds.
                                 let more = tl!("More tabs");
-                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, more));
+                                crate::widgets::describe_button(&resp, more, true, None);
+                                crate::widgets::opens_menu(&resp);
                                 let resp = resp.on_hover_text(more);
                                 crate::rtl::menu(&resp).show(|ui| {
                                     for (tab, shown) in left_out {
@@ -383,6 +399,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.disable();
             }
             let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
+            // Only a right-click target: nothing for a screen reader to name.
+            ui.ctx().accesskit_node_builder(bg.id, |n| n.set_hidden());
             crate::rtl::context_menu(&bg, |ui| crate::rtl::root(ui, |ui| crate::widgets::customize_menu_items(ui, app)));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
@@ -416,29 +434,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
                         _ => {}
                     }
-                    match app.ui.tab.as_str() {
-                        "Home" => home(app, ui),
-                        "Insert" => insert(app, ui),
-                        "Draw" => draw(app, ui),
-                        "Design" => design(app, ui),
-                        "Layout" => layout(app, ui),
-                        "References" => references(app, ui),
-                        "Mailings" => mailings(app, ui),
-                        "Review" => review(app, ui),
-                        "View" => view(app, ui),
-                        "Developer" => developer(app, ui),
-                        "Zotero" => zotero(app, ui),
-                        "Help" => help(app, ui),
-                        "Table Design" => table_design(app, ui),
-                        "Table Layout" => table_layout(app, ui),
-                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
-                        "Picture Format" => picture_format(app, ui),
-                        "Shape Format" => shape_format(app, ui),
-                        "SmartArt Design" => smart_art_design(app, ui),
-                        "Outlining" => outlining(app, ui),
-                        "Chart Design" => chart_design(app, ui),
-                        _ => home(app, ui),
-                    }
+                    tab_content(app, ui);
                     if let Some(e) = entry {
                         custom_groups(app, ui, &e.groups);
                     }
@@ -492,6 +488,33 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.ctx().request_repaint();
             }
         });
+}
+
+/// The active tab's groups (built-in and contextual tabs; custom groups are added after).
+fn tab_content(app: &mut WordApp, ui: &mut Ui) {
+    match app.ui.tab.as_str() {
+        "Home" => home(app, ui),
+        "Insert" => insert(app, ui),
+        "Draw" => draw(app, ui),
+        "Design" => design(app, ui),
+        "Layout" => layout(app, ui),
+        "References" => references(app, ui),
+        "Mailings" => mailings(app, ui),
+        "Review" => review(app, ui),
+        "View" => view(app, ui),
+        "Developer" => developer(app, ui),
+        "Zotero" => zotero(app, ui),
+        "Help" => help(app, ui),
+        "Table Design" => table_design(app, ui),
+        "Table Layout" => table_layout(app, ui),
+        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
+        "Picture Format" => picture_format(app, ui),
+        "Shape Format" => shape_format(app, ui),
+        "SmartArt Design" => smart_art_design(app, ui),
+        "Outlining" => outlining(app, ui),
+        "Chart Design" => chart_design(app, ui),
+        _ => home(app, ui),
+    }
 }
 
 #[cfg(test)]

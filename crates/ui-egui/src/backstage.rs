@@ -6,8 +6,13 @@ use serde_json::json;
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
+/// The page button the Backstage focused for the open page (#1012), while it keeps the focus.
+pub(crate) fn page_focus_id() -> egui::Id {
+    egui::Id::unique("wc_backstage_page_focus")
+}
+
 /// The side menu: page id, label and icon (#1714).
-const PAGES: [(&str, &str, &str); 11] = [
+pub(crate) const PAGES: [(&str, &str, &str); 11] = [
     ("home", "Home", "homeFolder"),
     ("new", "New", "blankPage"),
     ("open", "Open", "open"),
@@ -136,6 +141,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
+                // The keyboard (and a screen reader) lands on the open page when nothing else has it (#1012).
+                if active && on && app.dialog.is_none() && ui.ctx().memory(|m| m.focused().is_none()) {
+                    resp.request_focus();
+                    ui.data_mut(|d| d.insert_temp(page_focus_id(), resp.id));
+                }
                 if active {
                     ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
                 } else if on && resp.hovered() {

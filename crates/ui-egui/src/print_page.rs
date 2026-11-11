@@ -155,11 +155,14 @@ fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize
 }
 
 /// Return pressed with nothing else to take it: no field or list open and no control focused (a
-/// focused button takes Return itself). Consumes it when so.
+/// focused button takes Return itself, but the Backstage's own page button does not). Consumes it when so.
 fn return_prints(ctx: &egui::Context) -> bool {
     !ctx.text_edit_focused()
         && !egui::Popup::is_any_open(ctx)
-        && ctx.memory(|m| m.focused().is_none())
+        && ctx.memory(|m| {
+            // The page button the Backstage focused for screen readers (#1012) doesn't take Return.
+            m.focused().is_none_or(|f| ctx.data(|d| d.get_temp::<egui::Id>(crate::backstage::page_focus_id())) == Some(f))
+        })
         && ctx.input_mut(|i| {
             // A fresh press only: `consume_key` also takes key repeats, so holding Return would
             // send a job per repeat once the first is handed off.

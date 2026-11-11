@@ -49,12 +49,12 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "nextComment", Some("Next"), "Next Comment", crate::widgets::ButtonAction::new("review.nextComment", json!({}), false));
         });
         let shown = app.session.view.comments_pane;
-        big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+        crate::widgets::big_toggle_with(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), shown);
     });
     group(ui, "Tracking", Some("review.trackingOptions"), app, |ui, app| {
         let on = app.session.doc.settings.track_changes;
-        let r = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "Track\nChanges" }, "review.trackChanges", json!({}), false);
-        let _ = r;
+        // Drawn pressed while on, and a toggle to screen readers (#1012 review).
+        big_toggle(ui, app, "trackChanges", "Track\nChanges", "review.trackChanges", on);
         stack(ui, |ui| {
             menu_button(
                 ui,
@@ -157,7 +157,7 @@ pub(super) fn developer(app: &mut WordApp, ui: &mut Ui) {
                 "designMode",
                 Some("Design Mode"),
                 "Design Mode",
-                crate::widgets::ButtonAction::new("developer.designMode", json!({}), design),
+                crate::widgets::ButtonAction::toggle("developer.designMode", json!({}), design),
             );
             small(
                 ui,

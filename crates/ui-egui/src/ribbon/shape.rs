@@ -195,7 +195,7 @@ fn shape_text_group(app: &mut WordApp, ui: &mut Ui) {
                     "textBoxLink",
                     Some("Create Link"),
                     "Create Link",
-                    crate::widgets::ButtonAction::new("ui.linkTextBox", json!({}), waiting),
+                    crate::widgets::ButtonAction::toggle("ui.linkTextBox", json!({}), waiting),
                 );
             }
         });

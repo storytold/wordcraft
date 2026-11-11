@@ -691,7 +691,11 @@ mod tests {
             a,
         );
         h.run_steps(4);
-        h.get_by_label("Save").click();
+        // The dialog's Save is the lowest: the Quick Access Toolbar has one too.
+        h.query_all(egui_kittest::kittest::By::new().label("Save"))
+            .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+            .expect("a Save button")
+            .click();
         h.run_steps(4);
         assert!(h.state().dialog.is_none() && h.state().file_browser_open(), "Save As goes on in the browser");
         let before = h.state().file_browser.open.as_ref().map(|b| b.name.clone());

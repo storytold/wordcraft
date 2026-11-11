@@ -113,6 +113,8 @@ fn record_box(ui: &mut Ui, app: &mut WordApp) {
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| shown.clone());
     let r = ui.add_enabled(on, egui::TextEdit::singleline(&mut text).desired_width(36.0).align(egui::Align2::CENTER_TOP));
     let r = r.on_hover_text(tl!("Go to Record"));
+    // A screen reader reads the tooltip's text as the box's name.
+    r.ctx.accesskit_node_builder(r.id, |n| n.set_label(tl!("Go to Record")));
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
     }

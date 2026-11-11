@@ -376,7 +376,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens, preview_on_hover: b
 /// A bar button that, while hovered, makes the page show its command run on the selection. The
 /// preview runs on a copy, so the document, its undo history and the selection stay as they are.
 fn hover_small(ui: &mut egui::Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, checked: bool, preview: bool) {
-    let action = crate::widgets::ButtonAction::new(id, json!({}), checked);
+    let action = crate::widgets::ButtonAction::toggle(id, json!({}), checked);
     let r = widgets::small(ui, app, icon, None, tip, action);
     preview_on_hover_if(app, &r, id, json!({}), preview);
 }
