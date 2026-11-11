@@ -5,53 +5,60 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- The delivered head is `a32524b5` — the documentation commit that records the
-  triage of review `5855379673` (`docs/collab/STATUS.md`, ADR 0003 and
-  `server.md`: three files, +152/−41) — on `65037c7b`, the code answer to that
-  review (six files, +493/−48), on `fab0530c` (the page that recorded the
-  delivery of `2e414114`) and above `2e414114`, `af6c311b` and `50c68e3a`.
-  `2e414114`, which §5.36 described as the delivered head, and `50c68e3a`, the
-  head of §5.34 and §5.35, are history now. `a32524b5` is **delivered**: the
-  fork branch (`git ls-remote fork refs/heads/feature/realtime-collaboration`)
-  and the `headRefOid` of PR #5834 answer
-  `a32524b53a87536e19853816f14d12b1f30f1d8f`, the local `HEAD` of `upstream/`
-  was the same commit when this page was written, the PR was updated at
-  11:27:33Z, the tree was clean and `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` was `0 0` (§5.38). This page
-  rides on one documentation commit above `a32524b5` — `docs/collab/STATUS.md`
-  only, not pushed — and every fact it records is about `a32524b5`. The branch
-  is 100 commits over `4b0d3995` and its diff is 69 files, +31547/−22; upstream
-  `main` is `060768f1` now, 45 commits past that base, and the branch was not
-  rebased again. The eight findings of `5853542478` are answered in
-  `af6c311b`, each with the test or ADR §5.35 names; the ninth, the snapshot
-  rollback in the review body, is confirmed and open (§4). The nine findings of
-  `5855379673` are answered in `65037c7b` and `a32524b5` and triaged in §5.37;
-  the whole branch, all 100 commits, is in the fork and in the PR. It was
+- The delivered head is `b4b5f50b` — one documentation commit above the code
+  answer to review `5855379673`: `docs/collab/STATUS.md` only, +126/−70,
+  "docs(collab): the delivered head is a32524b5, and the runs on it are
+  action_required". It rides on `a32524b5` (the documentation triage of that
+  review — `docs/collab/STATUS.md`, ADR 0003 and `server.md`: three files,
+  +152/−41), on `65037c7b` (the code answer to the same review — six files,
+  +493/−48), on `fab0530c` (the page that recorded the delivery of
+  `2e414114`) and above `2e414114`, `af6c311b` and `50c68e3a`. `2e414114`,
+  which §5.36 described as the delivered head, and `50c68e3a`, the head of
+  §5.34 and §5.35, are history now. `b4b5f50b` is **delivered**: the fork
+  branch (`git ls-remote fork refs/heads/feature/realtime-collaboration`), the
+  `headRefOid` of PR #5834 and the local `HEAD` of `upstream/` all answered
+  `b4b5f50b4e3eb08e74be50d85e790509cb9fdcba` when the delivery was verified;
+  the PR was updated at 2026-11-11T13:29:46Z, the tree was clean and `git
+  rev-list --left-right
+  --count fork/feature/realtime-collaboration...HEAD` was `0 0` (§5.39). The
+  code head under it is `a32524b5`, and every code fact on this page is about
+  that commit. At `b4b5f50b`, the branch is 101 commits over `4b0d3995` and its
+  diff is 69 files, +31603/−22; the PR's `baseRefOid` is still `4b0d3995`,
+  upstream `main` was `06c2ae6f` (61 commits past that base) when this page was
+  updated, and the branch was not rebased again. The eight findings of
+  `5853542478` are
+  answered in `af6c311b`, each with the test or ADR §5.35 names; the ninth, the
+  snapshot rollback in the review body, is confirmed and open (§4). The nine
+  findings of `5855379673` are answered in `65037c7b` and `a32524b5` and
+  triaged in §5.37; the whole branch is in the fork and in the PR. It was
   pushed on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`), at
   20:15Z (`af9a43a2`), around 03:27Z on 2026-11-11 (`50c68e3a`), at 07:26Z
-  (`af6c311b` and `2e414114` together) and at 11:27Z (`fab0530c`, `65037c7b`
-  and `a32524b5` together); at each point the local `HEAD`, the fork branch and
-  the `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26,
-  §5.27, §5.35, §5.36, §5.38).
+  (`af6c311b` and `2e414114` together), at 11:27Z (`fab0530c`, `65037c7b` and
+  `a32524b5` together) and at 13:29Z (`b4b5f50b`); at each point the local
+  `HEAD`, the fork branch and the `headRefOid` of PR #5834 were the same commit
+  (§5.21, §5.24, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39). This page is the
+  documentation sync above it (`docs/collab/STATUS.md` only); the owner's one
+  fast-forward publishes it.
 - The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
   branch merges cleanly, and `BLOCKED` is the required review plus the
-  unapproved workflows. It was marked ready for review at 14:57:53Z, and the
-  title reads "Real-time collaboration: authoritative sync server, document
-  adapter, client core". The fork git source is gone from the manifest and the
+  unapproved workflows. It was marked ready for review at 2026-11-10
+  14:57:53Z, and the title reads "Real-time collaboration: authoritative sync
+  server, document adapter, client core". Its rollup on `b4b5f50b` holds one
+  check, CodeRabbit's `skipped` (started and finished at 13:31:54Z); no run on
+  that head has executed. The fork git source is gone from the manifest and the
   lock (§5.24), and the three `printing.yml` steps are green on the pushed tree
   at the build host (§5.25).
 - CI has still not executed on any pushed head. The five runs created at
-  11:27:00Z on `a32524b5` — `CI` (#9805), `Printing` (#7396), `Packaging lint`
-  (#694), `Nix` (#1606) and `SonarCloud` (#9579) — were created and not
+  13:29:41Z on `b4b5f50b` — `CI` (#9837), `Printing` (#7417), `Packaging lint`
+  (#695), `Nix` (#1608) and `SonarCloud` (#9611) — were created and not
   executed: each has `conclusion: action_required`, as do the five on
-  `2e414114` (07:26:39Z), the five on `50c68e3a` (03:27:31Z), the five on
-  `077b4056` (17:14Z) and the five on `af9a43a2` (20:15:37Z), until a
-  maintainer approves them (§5.2, §5.26, §5.27, §5.35, §5.36, §5.38). The only
-  check in the PR's rollup on this head is CodeRabbit's `skipped`, started and
-  finished at 11:29:52Z, so `mergeStateStatus` is `BLOCKED` with an empty
-  `reviewDecision`. A maintainer had approved the workflows for `467948fa`;
-  there `Nix` and `SonarCloud` passed and `Printing` failed on a stale
-  `Cargo.lock`, not on code (§5.23).
+  `a32524b5` (11:27:00Z: `CI` #9805, `Printing` #7396, `Packaging lint` #694,
+  `Nix` #1606, `SonarCloud` #9579), the five on `2e414114` (07:26:39Z), the
+  five on `50c68e3a` (03:27:31Z), the five on `077b4056` (17:14Z) and the five
+  on `af9a43a2` (20:15:37Z), until a maintainer approves them (§5.2, §5.26,
+  §5.27, §5.35, §5.36, §5.38, §5.39). A maintainer had approved the workflows
+  for `467948fa`; there `Nix` and `SonarCloud` passed and `Printing` failed on
+  a stale `Cargo.lock`, not on code (§5.23).
 - The branch carries exactly one CI change, declared here so that a reviewer
   does not have to find it alone: `15c9625b` adds a `git-sources` job to
   `.github/workflows/ci.yml` (45 lines, one `ubuntu-latest` job; no shared
@@ -66,11 +73,11 @@
 - CodeRabbit's last completed review is `5855379673` on `2e414114`
   (07:39:16Z, three inline comments and six outside the diff); all nine are
   triaged in §5.37, and the confirmed ones are fixed in `65037c7b` and
-  `a32524b5`, both delivered. On the new head the check is `skipped` (11:29:52Z)
-  and no review exists for it. The review before it, `5853542478` on
-  `50c68e3a` (03:42:23Z, eight actionable comments), is answered in `af6c311b`
-  and triaged in §5.35. The one finding of that earlier review body without an
-  inline id stays confirmed and open (§4).
+  `a32524b5`, both delivered. On the delivered head `b4b5f50b` the check is
+  `skipped` (13:31:54Z) and no review exists for it. The review before it,
+  `5853542478` on `50c68e3a` (03:42:23Z, eight actionable comments), is answered
+  in `af6c311b` and triaged in §5.35. The one finding of that earlier review
+  body without an inline id stays confirmed and open (§4).
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
   `production.md`.
@@ -363,7 +370,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; `headRefOid` and the fork branch are `a32524b5`, the local `HEAD` was the same commit when this page was written, tree clean, `rev-list fork...HEAD` `0 0` (§5.38); `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on that head were created at 11:27:00Z as `action_required` and the rollup holds only CodeRabbit's `skipped` (§5.2, §5.38); the eight findings of review `5853542478` are answered in `af6c311b` (§5.35) and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; the fork branch and `headRefOid` are `b4b5f50b` (delivered at 13:29Z with the local `HEAD` and a clean tree, §5.39); the code head under it is `a32524b5`; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `b4b5f50b` were created at 13:29:41Z as `action_required` and the rollup holds only CodeRabbit's `skipped` at 13:31:54Z (§5.2, §5.39); the eight findings of review `5853542478` are answered in `af6c311b` (§5.35) and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -687,25 +694,24 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    the cabinet's ticket must carry the numeric `fileId` in `doc`, and the shared
    service token must be in both `.env`s.
 2. Get a maintainer's approval for the runs on the PR head. The head is
-   delivered: the fork branch and the PR `headRefOid` are `a32524b5`, the local
-   `HEAD` was the same commit when this page was written, the tree is clean and
-   `rev-list fork...HEAD` is `0 0` (§5.38); the PR is `MERGEABLE`, and it was
-   marked ready for review at 14:57:53Z, so the draft flag is gone (§5.21,
-   §5.26, §5.35). A maintainer had approved the workflows for the earlier head
+   delivered: the fork branch and the PR `headRefOid` are `b4b5f50b` (the local
+   `HEAD` and a clean tree matched at delivery, §5.39); the code under it is
+   `a32524b5`; the PR is `MERGEABLE`, and it was marked
+   ready for review at 14:57:53Z, so the draft flag is gone (§5.21, §5.26,
+   §5.35). A maintainer had approved the workflows for the earlier head
    `467948fa`: `Nix` and `SonarCloud` passed, `Printing` failed on a stale
    `Cargo.lock` rather than on code, and `39f2e1a4` fixes it (§5.23). Every push
    since started a fresh set
    of five runs that sit in `action_required`, so nothing has executed on any of
    them; the three `printing.yml` steps and the gates of §5.36 and §5.37 have
    been run on the pushed tree at the build host instead (§5.25). The latest set
-   is the one on `a32524b5`, created at 11:27:00Z — `CI` (#9805), `Printing`
-   (#7396), `Packaging lint` (#694), `Nix` (#1606) and `SonarCloud` (#9579), all
+   is the one on `b4b5f50b`, created at 13:29:41Z — `CI` (#9837), `Printing`
+   (#7417), `Packaging lint` (#695), `Nix` (#1608) and `SonarCloud` (#9611), all
    `action_required` — and CodeRabbit's check on that head is `skipped`
-   (11:29:52Z), so the PR has no executing check at all (§5.38). The code and
-   the documentation of §5.37 are in that head already; what is left is a
-   maintainer's approval and a review decision. This page rides on one
-   documentation commit above `a32524b5`; publishing it is one fast-forward for
-   the owner, and nothing else waits for a push.
+   (13:31:54Z), so the PR has no executing check at all (§5.39). The code and
+   the documentation of §5.37 are in `a32524b5` already; what is left is a
+   maintainer's approval and a review decision, and nothing else waits for a
+   push.
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -2728,7 +2734,8 @@ were then taken one slice each: 1 in §5.28, 5 in §5.29, 2 in §5.30, 3 in §5.
 6 in §5.32, 8 in §5.33 and 10 in §5.34; 9 (per-document connections) is the
 only one of the ten still open and is named in §4. All of those commits are
 delivered: they are in `50c68e3a`, which was the fork branch and the PR
-`headRefOid` then; the head has since moved on to `a32524b5` (§5.35–§5.38). A
+`headRefOid` then; the head has since moved on, to `a32524b5` (§5.35–§5.38)
+and then to `b4b5f50b` (§5.39). A
 maintainer still has to approve the five runs on that head; the runs on
 `077b4056` validate neither `4ecab864` nor this page, so their approval would
 prove nothing about either.
@@ -3728,7 +3735,8 @@ so that push was the owner's.
 
 **Superseded by §5.38.** Everything below describes the delivery at 07:26Z. The
 branch was pushed again at 11:27Z with `fab0530c`, `65037c7b` and `a32524b5`,
-so `a32524b5` is the delivered head now and the five runs named here were
+so `a32524b5` became the delivered head then (and `b4b5f50b` after it, §5.39),
+and the five runs named here were
 replaced by the five created for it. The numbers below (97 commits,
 +30888/−22, `main` 43 commits past the base) were true of this head.
 
@@ -3866,10 +3874,9 @@ files, +493/−48) and `a32524b5` (the triage of that review —
 the `headRefOid` of PR #5834 all answered
 `a32524b53a87536e19853816f14d12b1f30f1d8f`, `git rev-list --left-right --count
 fork/feature/realtime-collaboration...HEAD` was `0 0`, the tree was clean, and
-the PR was updated at 11:27:33Z. This page rides on one documentation commit
-above that head — `docs/collab/STATUS.md` only, no code — which is local and not
-pushed; publishing it is one fast-forward for the owner. Every fact below
-describes `a32524b5`.
+the PR was updated at 11:27:33Z. The documentation commit above that head,
+`b4b5f50b` (`docs/collab/STATUS.md` only, no code), was pushed at 13:29Z and
+is delivered too (§5.39). Every fact in this section describes `a32524b5`.
 
 **The tree.** The branch is 100 commits over `4b0d3995` and its diff is 69
 files, +31547/−22; the PR's `baseRefOid` is still `4b0d3995`. Upstream `main`
@@ -3891,12 +3898,47 @@ the code of `65037c7b`, which is inside this head. The gate run was not repeated
 for the push: the tree it measured is the tree that was pushed, and the only
 change after it is this page.
 
-**What is left.** A maintainer's approval of the five runs on `a32524b5`, then
+**What is left.** A maintainer's approval of the five runs on the delivered head
+(`b4b5f50b`, §5.39), then
 a review decision; and, if the reviewer asks for it, a merge of `main`. Nothing
 else in the repository waits on the envoy: review `5855379673` is answered in
 the delivered code (`65037c7b`) and the delivered documentation (`a32524b5`),
 and the one finding that stays open is the snapshot rollback named in §4, which
 this head does not change.
+
+### 5.39 The documentation head `b4b5f50b` is delivered, and the five runs on it are `action_required` (run 2026-11-11)
+
+**The delivery.** The owner pushed the documentation commit that §5.38 meant to
+publish at 13:29Z: `b4b5f50b` ("docs(collab): the delivered head is a32524b5,
+and the runs on it are action_required"; `docs/collab/STATUS.md` only,
++126/−70). The fork branch, the `headRefOid` of PR #5834 and the local `HEAD` of
+`upstream/` all answered
+`b4b5f50b4e3eb08e74be50d85e790509cb9fdcba`, the PR was updated at
+2026-11-11T13:29:46Z, `git rev-list --left-right --count
+fork/feature/realtime-collaboration...HEAD` was `0 0` and the tree was clean.
+The code head under it is `a32524b5`; no code changed in `b4b5f50b`.
+
+**The tree.** At `b4b5f50b`, the branch is 101 commits over `4b0d3995` and its
+diff is 69
+files, +31603/−22; the PR's `baseRefOid` is still `4b0d3995`, and upstream
+`main` was `06c2ae6f` (61 commits past that base) when this page was updated.
+The branch was not rebased again.
+
+**CI and the PR.** Five workflow runs were created at 2026-11-11T13:29:41Z, and
+every one has `conclusion: action_required` — created and not executed: `CI`
+(#9837), `Printing` (#7417), `Packaging lint` (#695), `Nix` (#1608) and
+`SonarCloud` (#9611). The rollup of the PR on this head holds exactly one check:
+CodeRabbit, `completed` and `skipped`, started and finished at 13:31:54Z, and no
+review exists for the head. So `mergeable` is `MERGEABLE`, `mergeStateStatus` is
+`BLOCKED` (the required review plus the unapproved workflows), `reviewDecision`
+is empty and `isDraft` is false. The gate evidence for the code stays §5.37's
+run over `65037c7b`, which is inside `a32524b5`, and nothing but
+`docs/collab/STATUS.md` changed between that head and `b4b5f50b`.
+
+**What is left.** A maintainer's approval of the five runs on `b4b5f50b`, then a
+review decision; and, if the reviewer asks for it, a merge of `main`. Nothing
+else in the repository waits on the envoy for a push; the sync of this page is
+one fast-forward for the owner.
 
 ## 6. Where things live
 
