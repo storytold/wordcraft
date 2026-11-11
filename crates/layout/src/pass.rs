@@ -250,7 +250,7 @@ fn turned_sections(ctx: &mut Ctx, hf: &HfLinks, web: bool) -> Vec<Option<Section
             (!web && s.text_direction.is_turned()).then(|| {
                 ctx.fields.page_format = s.page_num_format;
                 let heads = hf.heads.set(si);
-                let top = body_top_for(ctx, s, heads.default);
+                let top = with_pct_base(ctx, hf.defining_width(false, si, heads.default), |c| body_top_for(c, s, heads.default));
                 vertical::unturned_sect(s, top)
             })
         })

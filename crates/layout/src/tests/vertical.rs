@@ -203,3 +203,43 @@ fn a_click_outside_a_floating_table_in_a_vertical_section_skips_its_cells() {
     // Inside the table a click still lands in a cell.
     assert!(l.hit(0, cx, cy, StoryRef::Body).unwrap().path.0.len() > 1);
 }
+
+#[test]
+fn vertical_section_inherits_percentage_width_header_table_using_defining_width() {
+    use wordcraft_doc::section::SectionStart;
+    let mut d = Document::from_text("Section 1 text\nSection 2 vertical text");
+
+    let mut table = wordcraft_doc::Table::new(1, 1, 0.0);
+    table.props.width_pct = Some(100.0);
+    let p = wordcraft_doc::Paragraph::with_text(
+        "A somewhat long line of text inside the percentage header table cell that wraps differently depending on width",
+        Default::default(),
+    );
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    let h_id = d.add_part(wordcraft_doc::PartKind::Header, vec![Block::Table(table).into()]);
+
+    let s1 = SectionProps {
+        start: SectionStart::NextPage,
+        page_w: 600.0,
+        page_h: 800.0,
+        margin_left: 50.0,
+        margin_right: 50.0,
+        margin_top: 50.0,
+        headers: wordcraft_doc::section::HeaderSet { default: Some(h_id), ..Default::default() },
+        ..Default::default()
+    };
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(s1));
+
+    d.last_section.start = SectionStart::NextPage;
+    d.last_section.page_w = 300.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 50.0;
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet::default();
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    assert!(l.pages[1].body.y > d.last_section.margin_top, "header table reserves room on vertical page");
+}
