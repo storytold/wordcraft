@@ -1050,8 +1050,9 @@ fn backstage_close_asks_then_closes() {
     );
     h.run_steps(4);
     let export = h.get_by_label("Export").rect().min.y;
-    assert!(h.get_by_label("Close").rect().min.y > export, "Close comes after Export");
-    h.get_by_label("Close").click();
+    let close = h.query_all_by_label("Close").find(|n| n.rect().min.y > export).expect("Close on side menu");
+    assert!(close.rect().min.y > export, "Close comes after Export");
+    close.click();
     h.run_steps(4);
     assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "unsaved changes ask first");
     assert!(h.state().has_document());
@@ -1061,7 +1062,7 @@ fn backstage_close_asks_then_closes() {
     assert!(h.state().has_document(), "Cancel keeps the document open");
     assert!(h.state().ui.backstage && h.state().ui.backstage_page == "info", "Cancel leaves the Backstage as it was");
 
-    h.get_by_label("Close").click();
+    h.query_all_by_label("Close").find(|n| n.rect().min.y > export).expect("Close on side menu").click();
     h.run_steps(4);
     h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
     assert!(!h.state().has_document() && !h.state().quit_requested, "Don't Save closes the document, not the window (#1712)");
@@ -1081,7 +1082,7 @@ fn backstage_close_on_a_clean_document_closes_at_once() {
         a,
     );
     h.run_steps(4);
-    h.get_by_label("Close").click();
+    h.query_all_by_label("Close").find(|n| n.rect().min.y > 50.0).expect("Close on side menu").click();
     h.run_steps(1);
     assert!(h.state().dialog.is_none(), "no prompt");
     assert!(!h.state().has_document() && !h.state().quit_requested);
