@@ -56,6 +56,10 @@ pub(super) struct Reader {
     pub(super) ov_list: i32,
     pub(super) ov_ls: i32,
     pub(super) fields: Vec<String>,
+    /// The fields being read in the text, innermost last (`import` only).
+    pub(super) open_fields: Vec<super::field::OpenField>,
+    /// Counts the paragraphs ended, so a field knows whether its result stayed in one.
+    pub(super) para_seq: u64,
     // Picture being read.
     pub(super) pict_depth: Option<usize>,
     pub(super) pict_hex: Vec<u8>,
@@ -344,6 +348,7 @@ impl Reader {
         if self.sub.as_ref().is_some_and(|s| s.depth == self.depth()) {
             self.end_sub();
         }
+        self.close_field_group();
         let closing = self.st.dest;
         // Destination-level commits.
         match closing {
@@ -428,6 +433,7 @@ impl Reader {
 
     /// End the current paragraph (`\par`, `\cell`).
     pub(super) fn end_para(&mut self, in_cell: bool) {
+        self.para_seq += 1;
         let read = std::mem::take(&mut self.para);
         let props = self.para_props(&self.st);
         let mut p = Para { inlines: read.inlines, mark_ins: read.mark_ins, mark_del: read.mark_del, ..props };

@@ -63,6 +63,7 @@ impl Reader {
             "row" => self.end_row(),
             "line" | "softline" => self.ch('\n'),
             "tab" => self.ch('\t'),
+            "chpgn" => self.page_number_symbol(),
             "page" | "softpage" => self.ch('\u{000C}'),
             "column" => self.ch('\u{000E}'),
             "emdash" => self.ch('—'),
@@ -267,8 +268,13 @@ impl Reader {
                     self.defs.push(d);
                 }
             }
-            "field" => self.start_field(),
+            "field" => {
+                self.start_field();
+                self.open_field();
+            }
+            "fldlock" => self.field_word(w),
             "fldrslt" => {
+                self.field_word(w);
                 let link = self.st.field.and_then(|i| self.fields.get(i)).and_then(|s| hyperlink(s));
                 if link.is_some() {
                     self.st.fmt.link = link.as_deref().and_then(model::kept_link);
