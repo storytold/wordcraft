@@ -1305,6 +1305,70 @@ fn view_tab_zoom_steps_from_the_shown_zoom_in_fit_modes() {
     assert!((frame(&mut a) - 1.0).abs() < 1e-3);
 }
 
+/// #6113: Draft's Page Width fits its fixed text column, follows a resize, and supplies the
+/// visible zoom to subsequent Zoom In/Out commands instead of retaining the old manual zoom.
+#[test]
+fn draft_page_width_fits_the_window_and_zoom_steps_from_it() {
+    let ctx = egui::Context::default();
+    let mut a = app();
+    a.run("view.draft", json!({})).unwrap();
+    a.run("view.zoom", json!({"value": 175})).unwrap();
+    a.run("ui.tab", json!({"tab": "View"})).unwrap();
+    let frame = |a: &mut WordApp, width| {
+        for _ in 0..4 {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 900.0));
+            ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                a.logic(ui.ctx());
+                a.ui(ui);
+            })
+            .drop_without_applying_deltas();
+        }
+        a.canvas.scale / canvas::PX_PER_PT
+    };
+    let manual = frame(&mut a, 1440.0);
+    a.run("view.pageWidth", json!({})).unwrap();
+    let wide = frame(&mut a, 1440.0);
+    assert!((wide - manual).abs() > 0.05, "Page Width changes Draft's zoom: {manual} -> {wide}");
+    let narrow = frame(&mut a, 900.0);
+    assert!(narrow < wide, "the fitted zoom follows the window width: {wide} -> {narrow}");
+    let column_width = a.session.layout().pages[0].w;
+    assert_eq!(column_width, 800.0, "Draft retains its fixed layout width");
+    let page = a.canvas.page_rects[0];
+    let viewport = a.canvas.canvas_rect.unwrap();
+    assert!(page.left() >= viewport.left() && page.right() <= viewport.right(), "Draft's column fits the viewport: {page:?} in {viewport:?}");
+    assert!(viewport.width() - page.width() < 100.0, "Page Width fills the available space");
+    assert!((a.session.view.zoom - narrow).abs() < 1e-3, "the session exposes the visible zoom");
+    a.run("view.zoomIn", json!({})).unwrap();
+    assert!(frame(&mut a, 900.0) > narrow, "Zoom In starts from Page Width's zoom");
+    a.run("view.pageWidth", json!({})).unwrap();
+    let fitted = frame(&mut a, 900.0);
+    a.run("view.zoomOut", json!({})).unwrap();
+    assert!(frame(&mut a, 900.0) < fitted, "Zoom Out starts from Page Width's zoom");
+    a.run("view.zoom100", json!({})).unwrap();
+    assert!((frame(&mut a, 900.0) - 1.0).abs() < 1e-3, "manual zoom still overrides Page Width");
+}
+
+/// #6113 changes only Draft's Page Width: other continuous-view fit modes retain manual zoom.
+#[test]
+fn continuous_views_keep_manual_zoom_except_draft_page_width() {
+    let mut a = app();
+    for mode in ["view.webLayout", "view.outline", "view.draft"] {
+        a.run(mode, json!({})).unwrap();
+        for fit in ["view.pageWidth", "view.onePage", "view.multiplePages"] {
+            if mode == "view.draft" && fit == "view.pageWidth" {
+                continue;
+            }
+            a.run("view.zoom", json!({"value": 150})).unwrap();
+            a.run(fit, json!({})).unwrap();
+            let layout = a.session.layout().clone();
+            let geo = canvas::geometry(&a, &layout, egui::vec2(900.0, 600.0));
+            assert!((geo.scale / canvas::PX_PER_PT - 1.5).abs() < 1e-3, "{mode}: {fit} retains manual zoom");
+            canvas::sync_fit_zoom(&mut a, geo.scale);
+            assert_eq!(a.session.view.zoom, 1.5);
+        }
+    }
+}
+
 /// Issue #122: touchpad deltas scroll the page 1:1 at once; a wheel notch eases in to about
 /// three lines.
 #[test]
