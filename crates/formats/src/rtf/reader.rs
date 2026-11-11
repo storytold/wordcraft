@@ -6,6 +6,87 @@ use super::state::{
 };
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
+use wordcraft_doc::section::NumFormat;
+
+/// A list level as the list table writes it (`\listlevel`).
+#[derive(Clone, Debug)]
+pub(super) struct ListLevel {
+    pub(super) ordered: bool,
+    /// `\levelnfc`, when given.
+    pub(super) format: Option<NumFormat>,
+    /// `\levelstartat`.
+    pub(super) start: u32,
+    /// The label `\leveltext` gives, its number format still to be set.
+    pub(super) label: Option<model::Label>,
+}
+
+impl Default for ListLevel {
+    fn default() -> Self {
+        ListLevel { ordered: true, format: None, start: 1, label: None }
+    }
+}
+
+impl ListLevel {
+    /// The label of this level, the `lv`-th (0-based): its number format and level text, `%N.`
+    /// when it gives a format but no text, or none when it gives neither.
+    pub(super) fn label(&self, lv: u8) -> Option<model::Label> {
+        if self.label.is_none() && self.format.is_none() {
+            return None;
+        }
+        let mut label = self.label.unwrap_or_else(|| model::Label::of_level(NumFormat::Decimal, &format!("%{}.", u32::from(lv.min(8)) + 1)));
+        label.format = self.format.unwrap_or(NumFormat::Decimal);
+        Some(label)
+    }
+}
+
+/// The highest `\levelstartat` read, as ODT's `text:start-value` is held.
+pub(super) const MAX_LEVEL_START: u32 = 32_767;
+
+/// `\levelnfc`: Word's number format codes, which follow `NumFormat::ALL` from 0 (decimal) to 39
+/// (23 is a bullet), and 255 for none. Later codes are drawn as decimal.
+pub(super) fn level_format(nfc: i32) -> NumFormat {
+    match usize::try_from(nfc) {
+        Ok(255) => NumFormat::None,
+        Ok(i @ 0..=39) => NumFormat::ALL.get(i).copied().unwrap_or(NumFormat::Decimal),
+        _ => NumFormat::Decimal,
+    }
+}
+
+/// A `\leveltext` being read: a length, then that many characters, where 0 to 8 stand for the
+/// numbers of levels 1 to 9 (`\'02\'00.` is `%1.`).
+#[derive(Debug, Default)]
+pub(super) struct LevelText {
+    /// Characters still to come; `None` until the length is read.
+    left: Option<u32>,
+    /// The text so far, with `%1` to `%9` for the numbers.
+    text: String,
+}
+
+impl LevelText {
+    /// Adds `c`; true once the text is complete.
+    pub(super) fn push(&mut self, c: char) -> bool {
+        let Some(left) = self.left else {
+            let len = u32::from(c).min(255);
+            self.left = Some(len);
+            return len == 0;
+        };
+        let left = left.saturating_sub(1);
+        self.left = Some(left);
+        match u32::from(c) {
+            n @ 0..=8 => {
+                self.text.push('%');
+                self.text.extend(char::from_digit(n + 1, 10));
+            }
+            _ => self.text.push(c),
+        }
+        left == 0
+    }
+
+    /// The label the text read gives: none without a number in it.
+    pub(super) fn label(&self) -> Option<model::Label> {
+        self.text.contains('%').then(|| model::Label::of_level(NumFormat::Decimal, &self.text))
+    }
+}
 
 #[derive(Default)]
 pub(super) struct Reader {
@@ -48,10 +129,12 @@ pub(super) struct Reader {
     pub(super) style_def_cur: StyleDef,
     pub(super) meta: Meta,
     pub(super) info_text: String,
-    // Lists: list id → ordered per level; override ls → list id.
-    pub(super) lists: HashMap<i32, Vec<bool>>,
-    pub(super) list_cur: Vec<bool>,
+    // Lists: list id → its levels; override ls → list id.
+    pub(super) lists: HashMap<i32, Vec<ListLevel>>,
+    pub(super) list_cur: Vec<ListLevel>,
     pub(super) list_cur_id: i32,
+    /// The current level's `\leveltext` while it is read.
+    pub(super) level_text: Option<LevelText>,
     pub(super) overrides: HashMap<i32, i32>,
     pub(super) ov_list: i32,
     pub(super) ov_ls: i32,
@@ -280,7 +363,7 @@ impl Reader {
     /// A section formatting word: applied to the current section, unless it's inside a header
     /// or footer (whose `\sectd` isn't the body's). False when `w` isn't one.
     pub(super) fn section_word(&mut self, w: &str, p: Option<i32>) -> bool {
-        use wordcraft_doc::section::{NumFormat, SectionStart};
+        use wordcraft_doc::section::SectionStart;
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
         // Inside a header or footer the word is read into a scratch copy and dropped.

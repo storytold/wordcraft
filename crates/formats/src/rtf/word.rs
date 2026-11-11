@@ -1,3 +1,4 @@
+use super::reader::{LevelText, ListLevel, MAX_LEVEL_START, level_format};
 use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
@@ -509,13 +510,25 @@ impl Reader {
             "list" => {
                 self.list_cur.clear();
                 self.list_cur_id = 0;
+                self.level_text = None;
             }
-            "listlevel" if self.list_cur.len() < 9 => self.list_cur.push(true),
+            "listlevel" if self.list_cur.len() < 9 => {
+                self.list_cur.push(ListLevel::default());
+                self.level_text = None;
+            }
             "levelnfc" | "levelnfcn" => {
                 if let Some(level) = self.list_cur.last_mut() {
-                    *level = !matches!(value, 23 | 255);
+                    level.ordered = !matches!(value, 23 | 255);
+                    level.format = Some(level_format(value));
                 }
             }
+            "levelstartat" => {
+                if let Some(level) = self.list_cur.last_mut() {
+                    level.start = u32::try_from(value).unwrap_or(0).min(MAX_LEVEL_START);
+                }
+            }
+            "leveltext" => self.level_text = Some(LevelText::default()),
+            "levelnumbers" => self.level_text = None,
             "listid" => {
                 self.list_cur_id = value;
                 if self.lists.len() < 4096 {

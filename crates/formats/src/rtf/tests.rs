@@ -1827,3 +1827,58 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+
+/// The labels the numbered paragraphs of `doc` show, in order.
+fn list_labels(doc: &Document) -> Vec<String> {
+    let mut counters = wordcraft_doc::numbering::Counters::default();
+    doc_paras(doc)
+        .iter()
+        .filter_map(|p| p.props.numbering)
+        .filter_map(|n| counters.next_label(&doc.numbering, n.num, n.level))
+        .map(|(label, _)| label)
+        .collect()
+}
+
+#[test]
+fn list_levels_keep_their_number_format_start_and_text() {
+    // The list table was read only for bullet or number: every numbered list came in as `1.`,
+    // `2.`, whatever number format, start and text its levels gave.
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}
+{\*\listtable
+{\list\listtemplateid1\listsimple{\listlevel\levelnfc4\levelnfcn4\leveljc0\levelfollow0\levelstartat3{\leveltext\'02\'00);}{\levelnumbers\'01;}\fi-360\li720}{\listname ;}\listid100}
+{\list\listtemplateid2\listsimple{\listlevel\levelnfc2\levelnfcn2\leveljc0\levelfollow0\levelstartat1{\leveltext\'03(\'00);}{\levelnumbers\'02;}\fi-360\li720}{\listname ;}\listid200}
+{\list\listtemplateid3\listsimple{\listlevel\levelnfc0\levelnfcn0\leveljc0\levelfollow0\levelstartat7{\leveltext\'02\'00.;}{\levelnumbers\'01;}\fi-360\li720}{\listname ;}\listid300}
+{\list\listtemplateid4{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'02\'00.;}{\levelnumbers\'01;}}{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'04\'00.\'01.;}{\levelnumbers\'01\'03;}}{\listname ;}\listid400}}
+{\*\listoverridetable{\listoverride\listid100\listoverridecount0\ls1}{\listoverride\listid200\listoverridecount0\ls2}{\listoverride\listid300\listoverridecount0\ls3}{\listoverride\listid400\listoverridecount0\ls4}}
+\pard\ls1\ilvl0 {\listtext c)\tab}one\par
+\pard\ls1\ilvl0 {\listtext d)\tab}two\par
+\pard Between.\par
+\pard\ls2\ilvl0 {\listtext (i)\tab}three\par
+\pard\ls2\ilvl0 {\listtext (ii)\tab}four\par
+\pard Between.\par
+\pard\ls3\ilvl0 {\listtext 7.\tab}five\par
+\pard Between.\par
+\pard\ls4\ilvl0 {\listtext 1.\tab}six\par
+\pard\ls4\ilvl1 {\listtext 1.1.\tab}seven\par
+}"#;
+    let doc = import(rtf).unwrap();
+    assert_eq!(list_labels(&doc), ["c)", "d)", "(i)", "(ii)", "7.", "1.", "1.1."]);
+}
+
+#[test]
+fn a_level_text_cut_short_and_a_start_past_the_limit_are_held() {
+    // A level text shorter than its length gives no label of its own (the format still
+    // applies), and a start past the limit is held to it.
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}
+{\*\listtable{\list\listsimple{\listlevel\levelnfc3\levelstartat99999{\leveltext\'09\'00);}{\levelnumbers\'01;}}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\pard\ls1\ilvl0 one\par
+}"#;
+    let doc = import(rtf).unwrap();
+    let paras = doc_paras(&doc);
+    let n = paras.first().and_then(|p| p.props.numbering).unwrap();
+    let level = doc.numbering.level(n.num, 0).unwrap();
+    assert_eq!(level.format, wordcraft_doc::section::NumFormat::UpperLetter);
+    assert_eq!(level.text, "%1.");
+    assert_eq!(level.start, 32_767);
+}

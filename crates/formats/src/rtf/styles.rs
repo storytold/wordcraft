@@ -93,8 +93,10 @@ impl Reader {
         if let Some(ls) = st.ls {
             let list = self.overrides.get(&ls).and_then(|id| self.lists.get(id));
             let lv = st.ilvl.min(8);
-            let ordered = list.and_then(|l| l.get(lv as usize).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv, start: 1, ..Default::default() });
+            let level = list.and_then(|l| l.get(lv as usize));
+            let ordered = level.is_some_and(|l| l.ordered);
+            let label = level.filter(|l| l.ordered).and_then(|l| l.label(lv));
+            p.list = Some(ListInfo { ordered, level: lv, start: level.map_or(1, |l| l.start), label, ..Default::default() });
         }
         p
     }

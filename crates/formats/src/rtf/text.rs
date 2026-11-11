@@ -296,7 +296,22 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::ListTable => {
+                // A `\leveltext` read in full gives its level's label.
+                if let Some(t) = self.level_text.as_mut() {
+                    for c in s.chars() {
+                        if t.push(c) {
+                            let label = t.label();
+                            if let Some(level) = self.list_cur.last_mut() {
+                                level.label = label;
+                            }
+                            self.level_text = None;
+                            break;
+                        }
+                    }
+                }
+            }
+            Dest::Skip | Dest::ListOverride | Dest::OldProps(_) => {}
         }
     }
 
