@@ -339,3 +339,31 @@ fn vertical_section_with_numbered_header_does_not_advance_body_numbering() {
     });
     assert_eq!(body_label_text.as_deref(), Some("1."), "body paragraph numbering starts at 1, not advanced by header measurement");
 }
+
+/// #4847: A vertical section starting on an even page (via page_num_start) selects the even header
+/// when even/odd headers are enabled, reserving room for it.
+#[test]
+fn vertical_section_with_even_page_start_selects_even_header() {
+    let mut d = Document::from_text("Vertical section starting on even page");
+    d.settings.even_odd_headers = true;
+
+    let p = wordcraft_doc::Paragraph::with_text(
+        "A multi-line tall even header paragraph that pushes the body top boundary downward by many points.",
+        Default::default(),
+    );
+    let even_id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+
+    d.last_section.page_w = 400.0;
+    d.last_section.page_h = 800.0;
+    d.last_section.margin_left = 50.0;
+    d.last_section.margin_right = 50.0;
+    d.last_section.margin_top = 50.0;
+    d.last_section.page_num_start = Some(2); // starts on even page (page 2)
+    d.last_section.text_direction = TextDirection::Down;
+    d.last_section.headers = wordcraft_doc::section::HeaderSet { even: Some(even_id), ..Default::default() };
+
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    assert_eq!(l.pages[0].number, 2);
+    assert!(l.pages[0].body.y > d.last_section.margin_top, "first page (page 2) selects and reserves space for the even header");
+}
