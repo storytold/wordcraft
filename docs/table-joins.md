@@ -30,7 +30,9 @@ The following are deliberately unavailable rather than silently reconciled:
 - Floating tables, captions/descriptions and preserved source table markup or
   wrappers whose relationships/unsupported properties cannot be reconstructed.
 - A non-default or source-preserved empty separator; any intervening content,
-  section boundary, page break or unrelated container/story.
+  section boundary, page break or unrelated container/story. A separator also
+  remains content when it inherits visible shading or outer borders from Normal
+  or the document defaults.
 - Protection, Track Changes, existing document revisions, tracked formatting,
   and content controls/permission markers anywhere in the current story. This
   conservative first API does not try to decide which control locks overlap.
@@ -42,6 +44,8 @@ The following are deliberately unavailable rather than silently reconciled:
   retained. No new merge is created across the boundary.
 - Invalid/empty row grids, malformed vertical continuations, non-prefix headers,
   row-level table exceptions, or a combined row count exceeding the model limit.
+  Vertical continuations must start in the same grid column as their predecessor;
+  equal spans alone do not make shifted cells a valid merge.
 - Nonzero inter-table spacing, different outside/inside horizontal table borders,
   or conflicting cell borders facing the boundary: a join must not erase lines.
 - Automatic sizing: joining changes the set of rows contributing to AutoFit. The

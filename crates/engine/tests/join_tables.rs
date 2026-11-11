@@ -476,3 +476,51 @@ fn an_inherited_page_break_does_not_make_a_removable_empty_separator() {
     Arc::make_mut(&mut s.doc.styles).get_mut("Normal").unwrap().para.page_break_before = Some(true);
     assert_refused(&mut s, "plain empty");
 }
+
+#[test]
+fn inherited_separator_decoration_is_not_removed() {
+    for defaults in [false, true] {
+        for side in 0..5 {
+            let mut s = fixture(true);
+            let sheet = Arc::make_mut(&mut s.doc.styles);
+            let props = if defaults { &mut sheet.default_para } else { &mut sheet.get_mut("Normal").unwrap().para };
+            if side == 0 {
+                props.shading = Some(Rgb(30, 60, 90));
+            } else {
+                let mut borders = Borders::default();
+                match side {
+                    1 => borders.top = Some(Border::single(1.0)),
+                    2 => borders.left = Some(Border::single(1.0)),
+                    3 => borders.bottom = Some(Border::single(1.0)),
+                    _ => borders.right = Some(Border::single(1.0)),
+                }
+                props.borders = Some(borders);
+            }
+            assert_refused(&mut s, "plain empty");
+        }
+    }
+}
+
+#[test]
+fn vertical_continuations_require_matching_start_columns() {
+    for malformed in [0, 1] {
+        let mut s = fixture(false);
+        for i in [0, 1] {
+            let t = s.doc.table_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            *t = Table::new(2, 3, 300.0);
+            t.props.fixed = true;
+        }
+        let t = s.doc.table_mut(StoryRef::Body, &Path::top(malformed)).unwrap();
+        t.rows[0].cells[0].props.span = 2;
+        t.rows[0].cells[0].props.vmerge = VMerge::Restart;
+        t.rows[0].cells.remove(1);
+        t.rows[1].cells[1].props.span = 2;
+        t.rows[1].cells[1].props.vmerge = VMerge::Continue;
+        t.rows[1].cells.pop();
+        assert_eq!(t.cell_at_grid(0, 1), Some(0));
+        assert_eq!(t.grid_col(0, 0), 0);
+        assert_eq!(t.grid_col(1, 1), 1);
+        s.sel = Selection::caret(Pos::new(StoryRef::Body, Path(vec![0, 0, 0, 0]), 0));
+        assert_refused(&mut s, "vertical merge");
+    }
+}

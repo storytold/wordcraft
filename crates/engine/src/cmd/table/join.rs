@@ -62,6 +62,10 @@ fn target(s: &Session) -> Result<Target, &'static str> {
         if effective.page_break_before
             || effective.numbering.is_some_and(|n| n.num != 0)
             || effective.outline_level.is_some_and(|n| n < 9)
+            // A default paragraph can still paint inherited decoration. Removing that
+            // separator would delete visible content even though its direct props are empty.
+            || effective.shading.is_some()
+            || effective.borders.is_some_and(|b| [b.top, b.left, b.bottom, b.right].into_iter().flatten().any(|side| side.is_visible()))
             || *p != Paragraph::new()
             || s.doc.kept.get().is_some_and(|k| k.para(p).is_some() || k.wrap(p).is_some() || k.group(p).is_some() || k.index(p).is_some())
         {
@@ -148,6 +152,9 @@ fn compatible_table(doc: &Document, t: &Table) -> Result<(), &'static str> {
                 && (ri == 0
                     || !t
                         .cell_at_grid(ri - 1, g)
+                        // Covering the column is insufficient: shifted equal-span cells do
+                        // not form the same vertical merge in Table::vertical_extent.
+                        .filter(|&ci| t.grid_col(ri - 1, ci) == g)
                         .and_then(|ci| t.rows.get(ri - 1)?.cells.get(ci))
                         .is_some_and(|above| above.props.vmerge != VMerge::None && above.span() == cell.span()))
             {
