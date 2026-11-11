@@ -41,7 +41,7 @@ fmv-macos-events = "=0.1.0"
 # NSWorkspace: a safe call in these bindings. Already in the build through eframe, rfd and arboard,
 # at this version; this adds the `NSAccessibility` bindings and, to fit the title bar around the
 # traffic lights, the window, button and view ones; and `NSPasteboard` for the clipboard's RTF.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard", "NSMenu"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard", "NSMenu", "NSPanel", "NSSavePanel"] }
 objc2 = "0.6"
 # The Edit menu a system file panel needs for ⌘V and the like (panel_menu.rs), behind a safe API.
 muda = { version = "0.21", default-features = false }
@@ -99,7 +99,7 @@ craft-update = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 # tests/mac_panel_menu_appkit.rs reads AppKit's menu bar back.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSResponder", "NSMenu", "NSMenuItem", "NSWindow", "NSPanel", "NSSavePanel"] }
 
 [[test]]
 name = "mac_panel_menu_appkit"

@@ -124,7 +124,15 @@ impl Launcher {
             }
         }
         #[cfg(target_os = "macos")]
-        self.panel_menu.borrow_mut().sync(self.open.load(Ordering::SeqCst) > 0);
+        {
+            let open = self.open.load(Ordering::SeqCst) > 0;
+            self.panel_menu.borrow_mut().sync(open);
+            if open {
+                // The panel's menu bar follows the key window (the panel or another document's
+                // window), so look again while a panel is open.
+                self.ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        }
     }
 }
 
