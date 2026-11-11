@@ -265,6 +265,7 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
             start: lv.start,
             list: n.num,
             label: Some(super::types::Label::of_level(lv.format, &lv.text).placed(lv.indent, lv.hanging, lv.align)),
+            defs: None,
         })
     });
     (kind, list)
@@ -1198,6 +1199,7 @@ fn flow_of(doc: &Document, tracked: FlowOpts) -> Flow {
             description: c.description.clone(),
             created: c.created.clone(),
         },
+        lists: Vec::new(),
     }
 }
 

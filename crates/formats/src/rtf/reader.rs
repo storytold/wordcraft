@@ -37,6 +37,12 @@ impl ListLevel {
         label.format = self.format.unwrap_or(NumFormat::Decimal);
         Some(label)
     }
+
+    /// This level, the `lv`-th (0-based), as the flow model holds it: a bulleted level has no
+    /// label of its own.
+    pub(super) fn def(&self, lv: u8) -> model::LevelDef {
+        model::LevelDef { ordered: self.ordered, start: self.start, label: if self.ordered { self.label(lv) } else { None } }
+    }
 }
 
 /// The highest `\levelstartat` read, as ODT's `text:start-value` is held.
@@ -136,8 +142,9 @@ pub(super) struct Reader {
     pub(super) style_def_cur: StyleDef,
     pub(super) meta: Meta,
     pub(super) info_text: String,
-    // Lists: list id → its levels; override ls → list id.
-    pub(super) lists: HashMap<i32, Vec<ListLevel>>,
+    // Lists: list id → its levels' place in `list_defs`; override ls → list id.
+    pub(super) lists: HashMap<i32, u32>,
+    pub(super) list_defs: Vec<model::ListDef>,
     pub(super) list_cur: Vec<ListLevel>,
     pub(super) list_cur_id: i32,
     /// The current level's `\leveltext` while it is read.

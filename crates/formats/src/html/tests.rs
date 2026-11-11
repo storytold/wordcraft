@@ -346,7 +346,7 @@ fn font_names_are_written_as_css_strings() {
     for (i, font) in fonts.iter().enumerate() {
         p.push_text(&format!("t{i}"), &Fmt { font: Some((*font).into()), ..Default::default() });
     }
-    let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() }));
+    let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
     assert!(html.contains("font-family:'Times New Roman'") && html.contains("font-family:'M+ 1p'"), "{html}");
     let styles: Vec<&str> = html.split(" style=\"").skip(1).filter_map(|s| s.split('"').next()).filter(|s| s.contains("font-family")).collect();
     assert_eq!(styles.len(), fonts.len(), "{html}");

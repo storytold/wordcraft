@@ -957,7 +957,7 @@ fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
     item.push_text("Item", &Fmt::default());
     let mut next = Para { list: li, ..Default::default() };
     next.push_text("Next", &Fmt::default());
-    let flow = Flow { blocks: vec![FBlock::Para(item), FBlock::Para(next)], meta: Meta::default() };
+    let flow = Flow { blocks: vec![FBlock::Para(item), FBlock::Para(next)], ..Default::default() };
     let check = |doc: &Document, what: &str| {
         let paras = doc_paras(doc);
         let p = paras.first().unwrap();
@@ -983,7 +983,7 @@ fn paragraph_that_was_a_list_item_gets_its_old_list_back_on_reject() {
     let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() }), ..Default::default() };
     let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
     item.push_text("Item", &Fmt::default());
-    let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
+    let flow = Flow { blocks: vec![FBlock::Para(item)], ..Default::default() };
     let doc = model::to_doc(&flow);
     let paras = doc_paras(&doc);
     let p = paras.first().unwrap();
@@ -1003,7 +1003,7 @@ fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
         ..Default::default()
     };
     item.push_text("Item", &Fmt::default());
-    let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
+    let flow = Flow { blocks: vec![FBlock::Para(item)], ..Default::default() };
     let doc = model::to_doc(&flow);
     let paras = doc_paras(&doc);
     let p = paras.first().unwrap();
@@ -1132,7 +1132,7 @@ fn old_formatting_in_styled_paragraphs_is_the_styles() {
         "let x",
         &Fmt { size: Some(14.0), fmt_change: Some(Box::new(FmtChange { mark: mark(), old: Fmt::default() })), ..Default::default() },
     );
-    let flow = Flow { blocks: vec![FBlock::Para(head), FBlock::Para(code)], meta: Meta::default() };
+    let flow = Flow { blocks: vec![FBlock::Para(head), FBlock::Para(code)], ..Default::default() };
     let rtf = export(&model::to_doc(&flow));
     let back = parse(rtf.as_bytes()).unwrap();
     let runs: Vec<&Fmt> = back
@@ -1346,7 +1346,7 @@ fn a_code_paragraph_round_trips_without_a_direct_code_font() {
     // stands in for the style's.
     let mut code = Para { kind: Kind::Code, ..Default::default() };
     code.push_text("let x", &Fmt::default());
-    let flow = Flow { blocks: vec![FBlock::Para(code)], meta: Meta::default() };
+    let flow = Flow { blocks: vec![FBlock::Para(code)], ..Default::default() };
     let rtf = export(&model::to_doc(&flow));
     let runs = text_runs(rtf.as_bytes());
     let f = run_fmt(&runs, "let x");
@@ -1375,7 +1375,7 @@ fn a_semicolon_in_a_font_name_round_trips() {
     for (t, font) in fonts {
         p.push_text(t, &Fmt { font: Some(font.into()), ..Default::default() });
     }
-    let flow = Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() };
+    let flow = Flow { blocks: vec![FBlock::Para(p)], ..Default::default() };
     let rtf = export(&model::to_doc(&flow));
     assert!(rtf.contains(r"Semi\'3bColon;") && !rtf.contains(r"\line"), "{rtf}");
     let runs = text_runs(rtf.as_bytes());
@@ -1898,4 +1898,23 @@ fn a_level_text_cut_short_ends_with_its_group() {
     let level = doc.numbering.level(n.num, 0).unwrap();
     assert_eq!(level.format, wordcraft_doc::section::NumFormat::UpperLetter);
     assert_eq!(level.text, "%1.");
+}
+
+#[test]
+fn levels_no_paragraph_uses_keep_the_list_tables_definition() {
+    // A paragraph carried only its own level, so a level no paragraph used took the default
+    // (decimal from 1): a list of only second-level items showed `1.1.` where the list table's
+    // first level (lower letter from 3) gives `c.1.`.
+    let rtf = br#"{\rtf1\ansi\deff0{\fonttbl{\f0 Times New Roman;}}
+{\*\listtable{\list\listtemplateid1{\listlevel\levelnfc4\levelnfcn4\levelstartat3{\leveltext\'02\'00);}{\levelnumbers\'01;}}{\listlevel\levelnfc0\levelnfcn0\levelstartat1{\leveltext\'04\'00.\'01.;}{\levelnumbers\'01\'03;}}{\listlevel\levelnfc2\levelnfcn2\levelstartat2{\leveltext\'02\'02.;}{\levelnumbers\'01;}}{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\pard\ls1\ilvl1 {\listtext c.1.\tab}one\par
+\pard\ls1\ilvl1 {\listtext c.2.\tab}two\par
+}"#;
+    let doc = import(rtf).unwrap();
+    assert_eq!(list_labels(&doc), ["c.1.", "c.2."]);
+    // The third level, which no paragraph uses either, is the list table's too.
+    let n = doc_paras(&doc).first().and_then(|p| p.props.numbering).unwrap();
+    let third = doc.numbering.level(n.num, 2).unwrap();
+    assert_eq!((third.format, third.start, third.text.as_str()), (wordcraft_doc::section::NumFormat::LowerRoman, 2, "%3."));
 }

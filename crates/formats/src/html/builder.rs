@@ -1188,6 +1188,6 @@ impl<'r> Builder<'r> {
         if let Some(t) = self.title.take() {
             self.meta.title = t;
         }
-        Flow { blocks, meta: self.meta }
+        Flow { blocks, meta: self.meta, lists: Vec::new() }
     }
 }

@@ -531,8 +531,16 @@ impl Reader {
             "levelnumbers" => self.level_text = None,
             "listid" => {
                 self.list_cur_id = value;
-                if self.lists.len() < 4096 {
-                    self.lists.insert(value, self.list_cur.clone());
+                let mut def: model::ListDef = [None; 9];
+                for (i, (d, level)) in def.iter_mut().zip(&self.list_cur).enumerate() {
+                    *d = Some(level.def(i as u8));
+                }
+                // A list id given again replaces the list it named.
+                if let Some(d) = self.lists.get(&value).and_then(|&i| self.list_defs.get_mut(i as usize)) {
+                    *d = def;
+                } else if self.lists.len() < 4096 {
+                    self.lists.insert(value, self.list_defs.len() as u32);
+                    self.list_defs.push(def);
                 }
             }
             _ => {}
