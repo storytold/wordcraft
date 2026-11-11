@@ -44,6 +44,7 @@ pub(super) fn shape_gallery(ui: &mut Ui, app: &mut WordApp) {
     });
 }
 
+/// Render the Insert ribbon tab controls.
 pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
         stack(ui, |ui| {
@@ -189,7 +190,7 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             small(ui, app, "signature", None, "Signature Line", crate::widgets::ButtonAction::new("insert.signatureLine", json!({}), false));
-            small(ui, app, "dateTime", None, "Date & Time", crate::widgets::ButtonAction::new("insert.dateTime", json!({}), false));
+            small(ui, app, "dateTime", None, "Date & Time", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "dateTime"}), false));
             small(ui, app, "object", None, "Object", crate::widgets::ButtonAction::new("insert.object", json!({}), false));
         });
     });
