@@ -15148,6 +15148,41 @@ fn header_margin_wrap_keeps_measured_header_height() {
     }
 }
 
+/// The header laid out again with the declared margins (above) counts its list labels from the
+/// same place as the layout it replaces: each page's header shows the next number, once.
+#[test]
+fn header_margin_wrap_retry_counts_labels_once() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    let labels = |wrap: Wrap| {
+        let mut doc = Document::from_text(&"Body\n".repeat(120));
+        let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        let s = &mut doc.last_section;
+        s.margin_top = 20.0;
+        s.margin_bottom = 20.0;
+        s.header = 36.0;
+        s.footer = 36.0;
+        let (pw, ph) = (s.page_w, s.page_h);
+        let mut hp = boundary_header_para();
+        hp.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Margin, v_align: Some(FloatAlign::End), ..Default::default() };
+        hp.insert_object(0, rect_shape(pw, ph - 136.0, float), &Default::default()).unwrap();
+        let header = doc.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        doc.last_section.headers.default = Some(header);
+        let footer = doc.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(boundary_header_para())]);
+        doc.last_section.footers.default = Some(footer);
+        let laid = lay(&doc);
+        assert!(laid.pages.len() >= 2, "{wrap:?}: {} pages", laid.pages.len());
+        laid.pages
+            .iter()
+            .map(|p| {
+                p.header.iter().find_map(|it| if let Placed::Lines { para, .. } = it { para.label.as_ref().map(|l| l.text.clone()) } else { None })
+            })
+            .collect::<Vec<_>>()
+    };
+    let retried = labels(Wrap::Square);
+    assert_eq!(retried, labels(Wrap::BehindText), "the retried header counts like the one laid out once");
+}
+
 #[test]
 fn header_boundary_obstacle() {
     use wordcraft_doc::para::Anchor;

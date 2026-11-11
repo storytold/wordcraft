@@ -366,14 +366,21 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
                     with_pct_base(ctx, base, |c| layout_box(c, BoxInput::other(StoryRef::Part(id), &blocks, w, 0, Some(frame))))
                 })
             };
+            // List counters and equation numbers before the header, so a second layout counts
+            // from the same place and only the layout kept advances them.
+            let before = (ctx.counters.clone(), ctx.eq_count);
             let (mut laid, mut behind, mut front) = lay_header(ctx, frame);
             // The body top was measured with the declared margins (`body_top_for`). If the rendered
             // area moves a wrapping Margin-anchored object into the header's text and the header
             // grows past that body top, keep the measured layout: its text can't run into the body.
             if sect.header + laid.height > page.body.y + 0.01 {
+                let rendered = (std::mem::replace(&mut ctx.counters, before.0), ctx.eq_count);
+                ctx.eq_count = before.1;
                 let measured = lay_header(ctx, PageFrame { margin_area: None, ..frame });
                 if measured.0.height < laid.height - 0.01 {
                     (laid, behind, front) = measured;
+                } else {
+                    (ctx.counters, ctx.eq_count) = rendered;
                 }
             }
             let mut items = laid.items;
