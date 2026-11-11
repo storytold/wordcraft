@@ -7,7 +7,7 @@ use super::{Borders, Cell, FTable};
 /// while WordCraft's cells each draw their own four sides. The cell below is the one in the next
 /// row starting at the same column.
 pub(in crate::odt) fn share_edges(rows: &mut [Vec<Cell>]) {
-    let visible = |b: Option<wordcraft_doc::props::Border>| b.filter(|b| b.is_visible());
+    let visible = |b: Option<wordcraft_doc::props::Border>| b.filter(|b| b.is_drawn());
     for r in 0..rows.len() {
         let starts: Vec<usize> = rows
             .get(r)

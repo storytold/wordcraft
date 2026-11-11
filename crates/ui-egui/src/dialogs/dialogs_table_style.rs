@@ -200,7 +200,7 @@ pub fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
         // (or the based-on style) draws.
         .filter(|((_, a), (_, b))| a != b)
         .filter_map(|((e, a), _)| match a {
-            Some(l) if l.is_visible() => Some(json!({"edges": e, "style": l.style.ooxml(), "width": l.width, "color": l.color.map(Rgb::hex)})),
+            Some(l) if l.is_drawn() => Some(json!({"edges": e, "style": l.style.ooxml(), "width": l.width, "color": l.color.map(Rgb::hex)})),
             Some(_) => Some(json!({"edges": e, "style": "none"})),
             // The picker never unsets an edge.
             None => None,
@@ -217,7 +217,7 @@ pub fn region_changes(r: &TableRegion, basis: &TableRegion) -> Value {
 pub fn pick_edges(b: &mut Borders, edges: &str, pen: &BorderPen) {
     let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
     let line = pen.line();
-    let toggle = |e: &mut Option<Border>| *e = Some(if e.is_some_and(|x| x.is_visible()) { none } else { line });
+    let toggle = |e: &mut Option<Border>| *e = Some(if e.is_some_and(|x| x.is_drawn()) { none } else { line });
     match edges {
         "all" => *b = Borders::all(line),
         "none" => *b = Borders::all(none),
@@ -235,11 +235,11 @@ pub fn pick_edges(b: &mut Borders, edges: &str, pen: &BorderPen) {
 
 /// Whether `edges` are all drawn in `b` (the picker shows those choices checked).
 fn edges_on(b: &Borders, edges: &str) -> bool {
-    let on = |e: Option<Border>| e.is_some_and(|x| x.is_visible());
+    let on = |e: Option<Border>| e.is_some_and(|x| x.is_drawn());
     match edges {
         "all" => [b.top, b.bottom, b.left, b.right, b.between, b.inside_v].into_iter().all(on),
         // Only explicit "no line" edges: unset ones still show what the part inherits.
-        "none" => [b.top, b.bottom, b.left, b.right, b.between, b.inside_v].into_iter().all(|e| e.is_some_and(|x| !x.is_visible())),
+        "none" => [b.top, b.bottom, b.left, b.right, b.between, b.inside_v].into_iter().all(|e| e.is_some_and(|x| !x.is_drawn())),
         "outside" => [b.top, b.bottom, b.left, b.right].into_iter().all(on),
         "inside" => on(b.between) && on(b.inside_v),
         "top" => on(b.top),
@@ -402,7 +402,7 @@ pub fn table_style_preview(ui: &mut Ui, style: Option<&TableStyleProps>, look: T
                 painter.rect_filled(cell, 0.0, rgb(f));
             }
             let edge = |from: egui::Pos2, to: egui::Pos2, e: Option<Border>| {
-                if let Some(e) = e.filter(Border::is_visible) {
+                if let Some(e) = e.filter(Border::is_drawn) {
                     let color = e.color.map_or(egui::Color32::BLACK, rgb);
                     let stroke = Stroke::new(e.width.clamp(0.5, 3.0) * 1.3, color);
                     if matches!(e.style, BorderStyle::Dotted | BorderStyle::Dashed | BorderStyle::DotDash) {
@@ -722,6 +722,17 @@ mod tests {
         assert_eq!(v["cellAlign"], "bottomRight");
         assert_eq!(align_name(Some(Align::Center), Some(VAlign::Bottom)), "bottomCenter");
         assert_eq!(align_name(None, None), "");
+    }
+
+    /// A width-0 edge (a DOCX border with `w:sz="0"` or no `w:sz`, which Word draws as a hairline)
+    /// shows as a line in the picker, and toggling it turns it off.
+    #[test]
+    fn a_width_zero_edge_is_a_line_in_the_picker() {
+        let hair = Border { style: BorderStyle::Single, width: 0.0, color: None, space: 0.0 };
+        let mut b = Borders { bottom: Some(hair), ..Borders::default() };
+        assert!(edges_on(&b, "bottom") && !edges_on(&b, "none"));
+        pick_edges(&mut b, "bottom", &BorderPen::default());
+        assert!(!edges_on(&b, "bottom"), "the toggle turns the hairline off: {:?}", b.bottom);
     }
 
     /// #1288: "No Border" on a part that inherits its lines (the header row of a style based on

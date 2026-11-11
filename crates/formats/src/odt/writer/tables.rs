@@ -23,7 +23,7 @@ pub(in crate::odt) fn cell_starting_at(row: &[model::Cell], g: usize) -> Option<
 pub(in crate::odt) fn cell_props(t: &FTable, ri: usize, g0: usize, c: &model::Cell, cols: usize) -> String {
     let grid = (!t.borderless).then_some(Border { style: BorderStyle::Single, width: 0.5, color: Some(Rgb(0, 0, 0)), space: 0.0 });
     let line = |c: &model::Cell, pick: fn(&Borders) -> Option<Border>| match c.borders.as_ref().and_then(pick) {
-        Some(b) => Some(b).filter(|b| b.is_visible()),
+        Some(b) => Some(b).filter(|b| b.is_drawn()),
         None => grid,
     };
     let row = t.rows.get(ri).map(Vec::as_slice).unwrap_or(&[]);

@@ -282,6 +282,12 @@ impl Border {
     pub fn is_visible(&self) -> bool {
         self.style != BorderStyle::None && self.width > 0.0
     }
+    /// Drawn: visible, or a width-0 line (`w:sz="0"` or no `w:sz` on a table border), drawn as a
+    /// hairline that takes no room. Word for Mac draws one for a table style's border and none for
+    /// a direct cell or table border; it takes no room in either.
+    pub fn is_drawn(&self) -> bool {
+        self.style != BorderStyle::None && self.width.is_finite() && self.width >= 0.0
+    }
 }
 
 /// Borders on the four sides (plus inner borders for tables and runs of bordered paragraphs).
