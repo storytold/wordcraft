@@ -8197,8 +8197,13 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
     let mut raw_fast = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0, false)], ..Default::default() };
     a.raw_input_hook(&ctx, &mut raw_fast);
+    let expected_fast = if cfg!(target_arch = "wasm32") {
+        -10.0 * a.ui.scroll_speed.wheel_factor()
+    } else {
+        -10.0 * crate::scroll::ScrollSpeed::Fast.touchpad_factor()
+    };
     if let egui::Event::MouseWheel { delta, .. } = &raw_fast.events[0] {
-        assert_eq!(delta.y, -10.0 * crate::scroll::ScrollSpeed::Fast.touchpad_factor());
+        assert_eq!(delta.y, expected_fast);
     }
 
     // 2. Commands ui.touchpadScrollSpeed and ui.scrollSpeed set the preferences.
@@ -8320,5 +8325,78 @@ fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui()
     let expected_2 = scaled_1 * factor;
     if let egui::Event::MouseWheel { delta, .. } = &raw2.events[0] {
         assert_eq!(delta.y, expected_2, "fresh event matching previous scaled delta must be scaled, not skipped as replay");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: changing mouse-wheel scroll speed (Slow / Normal / Fast)
+/// must only affect scrolling distance, not Ctrl/⌘+Line-wheel zoom distance.
+/// Tests both animation settings (`animate == true` eased zoom and `animate == false`
+/// `CanvasScroll::zoom` discrete steps).
+#[test]
+fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
+    let mut a = app();
+    let default_opts = egui::InputOptions::default();
+    let default_notch_zoom = (default_opts.scroll_zoom_speed * default_opts.line_scroll_speed).exp();
+
+    let ctrl_wheel_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. Establish baseline zoom with Normal speed
+    a.ui.scroll_speed = crate::scroll::ScrollSpeed::Normal;
+    let ctx_baseline = egui::Context::default();
+    a.logic(&ctx_baseline);
+    let opts_baseline = ctx_baseline.options(|o| o.input_options);
+    let mut baseline_eased_zoom = 1.0;
+    let mut baseline_discrete_zoom = 1.0;
+    ctx_baseline
+        .run_ui(egui::RawInput { events: vec![ctrl_wheel_event()], ..Default::default() }, |ui| {
+            baseline_eased_zoom = ui.input(|i| i.zoom_delta());
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            baseline_discrete_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_baseline, false));
+        })
+        .drop_without_applying_deltas();
+
+    assert!((baseline_discrete_zoom - default_notch_zoom).abs() < 1e-3, "discrete zoom equals notch zoom");
+    assert!(baseline_eased_zoom > 1.0 && baseline_eased_zoom < default_notch_zoom, "eased zoom begins in first frame");
+
+    // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings
+    for speed in [crate::scroll::ScrollSpeed::Slow, crate::scroll::ScrollSpeed::Normal, crate::scroll::ScrollSpeed::Fast] {
+        a.ui.scroll_speed = speed;
+        let ctx = egui::Context::default();
+        a.logic(&ctx);
+
+        let opts = ctx.options(|o| o.input_options);
+        let factor = speed.wheel_factor();
+        assert!(
+            (opts.line_scroll_speed - default_opts.line_scroll_speed * factor).abs() < 1e-4,
+            "line scroll speed scales by factor for ordinary scrolling"
+        );
+        assert!(
+            (opts.scroll_zoom_speed - default_opts.scroll_zoom_speed / factor).abs() < 1e-6,
+            "scroll zoom speed inverts factor to preserve zoom distance"
+        );
+
+        ctx.run_ui(egui::RawInput { events: vec![ctrl_wheel_event()], ..Default::default() }, |ui| {
+            // Eased zoom (animate == true)
+            let zoom_delta = ui.input(|i| i.zoom_delta());
+            assert!(
+                (zoom_delta - baseline_eased_zoom).abs() < 1e-5,
+                "eased zoom delta for speed {speed:?} matches baseline ({zoom_delta} vs {baseline_eased_zoom})"
+            );
+
+            // CanvasScroll::zoom (animate == false)
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            let discrete_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts, false));
+            assert!(
+                (discrete_zoom - baseline_discrete_zoom).abs() < 1e-5,
+                "discrete CanvasScroll::zoom for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_zoom})"
+            );
+        })
+        .drop_without_applying_deltas();
     }
 }

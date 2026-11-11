@@ -303,11 +303,20 @@ impl WordApp {
         if ctx.zoom_factor() != zoom {
             ctx.set_zoom_factor(zoom);
         }
-        // Mouse-wheel line scroll speed (#6146): scales egui's own scroll areas.
+        // Mouse-wheel line scroll speed (#6146): scales egui's own scroll areas while preserving
+        // default Ctrl/⌘+Line-wheel zoom distance across animation settings.
         let base_line_speed = egui::InputOptions::default().line_scroll_speed;
-        let target_line_speed = base_line_speed * self.ui.scroll_speed.wheel_factor();
-        if (ctx.options(|o| o.input_options.line_scroll_speed) - target_line_speed).abs() > 1e-4 {
-            ctx.options_mut(|o| o.input_options.line_scroll_speed = target_line_speed);
+        let base_zoom_speed = egui::InputOptions::default().scroll_zoom_speed;
+        let factor = self.ui.scroll_speed.wheel_factor();
+        let target_line_speed = base_line_speed * factor;
+        let target_zoom_speed = base_zoom_speed / factor;
+        if (ctx.options(|o| o.input_options.line_scroll_speed) - target_line_speed).abs() > 1e-4
+            || (ctx.options(|o| o.input_options.scroll_zoom_speed) - target_zoom_speed).abs() > 1e-6
+        {
+            ctx.options_mut(|o| {
+                o.input_options.line_scroll_speed = target_line_speed;
+                o.input_options.scroll_zoom_speed = target_zoom_speed;
+            });
         }
         // Animation effects: the host is asked every frame what the system says (it answers from
         // memory), so a change made in the system's settings is followed without a restart.
