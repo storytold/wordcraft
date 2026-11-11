@@ -2105,6 +2105,29 @@ fn one_section(text: &'static str, sepx: Vec<u8>, papx_entries: Vec<(u32, u16, V
 }
 
 #[test]
+fn piece_prm_paragraph_formatting_applies_to_the_marks_paragraph() {
+    // [MS-DOC] §2.4.6.1 step 5: the Prm of the piece holding the paragraph mark adds its paragraph
+    // sprms after the PAPX's. Prm1 -> a Prc with sprmPDxaLeft80 (1440 twips) and sprmPJc80
+    // (centred); Prm0 isprm 0x05 (sprmPJc) with operand 2 (right).
+    let prcs = vec![grpprl(&[(0x840F, &1440i16.to_le_bytes()), (0x2403, &[0x01])])];
+    let para = |prm: u16| {
+        let spec = RichSpec {
+            text: "Text\r",
+            styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+            fonts: vec!["Times New Roman"],
+            chpx_runs: vec![(0, Vec::new())],
+            papx_entries: vec![(4, 0, grpprl(&[(0x840F, &360i16.to_le_bytes())]))],
+        };
+        let doc = read(&rich_doc_with(&spec, &RichExtra { prcs: prcs.clone(), prm, ..Default::default() })).expect("opens");
+        let p = para0(&doc);
+        (p.props.indent_left, p.props.align)
+    };
+    assert_eq!(para(0x0000), (Some(18.0), None), "no Prm: the PAPX's indent");
+    assert_eq!(para(0x0001), (Some(72.0), Some(wordcraft_doc::props::Align::Center)), "Prm1: the Prc's sprms override the PAPX's");
+    assert_eq!(para(0x020A), (Some(18.0), Some(wordcraft_doc::props::Align::Right)), "Prm0: sprmPJc right");
+}
+
+#[test]
 fn piece_prm_character_formatting_applied() {
     // #458. Bit 0 of a Prm is fComplex ([MS-DOC] §2.9.215/§2.9.216): Prm0 = isprm in bits
     // 1-7 plus a one-byte operand in bits 8-15 (isprm 0x55 is sprmCFBold); Prm1 = a

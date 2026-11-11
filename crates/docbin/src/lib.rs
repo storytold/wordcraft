@@ -689,6 +689,20 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
                 // querying at the mark's own FC finds that paragraph's properties.
                 let fc_mark = ctx.pieces.fc_of_cp(cp).unwrap_or(0);
                 let (istd, papx) = ctx.papx_bins.papx(ctx.word, fc_mark);
+                // The Prm of the piece holding the mark adds its paragraph sprms after the PAPX's
+                // ([MS-DOC] §2.4.6.1, step 5), as Word 6/95's fast saves record a paragraph change.
+                let extra = prm_paragraph_sprms(ctx.pieces.piece_prm(cp), ctx.work);
+                let combined;
+                let papx: &[u8] = if extra.is_empty() {
+                    papx
+                } else {
+                    // Re-framed from its Prls, so that a pad byte at its end can't swallow the
+                    // first appended opcode.
+                    let mut v: Vec<u8> = sprm::iter(papx).flat_map(|p| p.op.to_le_bytes().into_iter().chain(p.operand.iter().copied())).collect();
+                    v.extend_from_slice(&extra);
+                    combined = v;
+                    &combined
+                };
                 if let Some(st) = ctx.raw_styles.get(istd as usize).filter(|s| !s.name.is_empty()) {
                     pb.props.style = Some(fmt::style_id(&st.name));
                 }
@@ -1038,6 +1052,34 @@ struct FmtMemo<'a> {
     prm: u16,
     style: Option<String>,
     props: CharProps,
+}
+
+/// The paragraph and table sprms (sgc 1 and 5) of a piece's Prm, as Prls to append to a
+/// paragraph's PAPX: a Prm0's single sprm, or those of the Prm1's grpprl. A Prm1 grpprl is
+/// charged to `work`, as for [`apply_prm`].
+fn prm_paragraph_sprms(prm: PrmRef<'_>, work: &Work) -> Vec<u8> {
+    let mut out = Vec::new();
+    match prm {
+        PrmRef::Sprm0 { isprm, val } => {
+            if let Some(op) = sprm::from_prm0(isprm)
+                && matches!(Prl { op, operand: &[] }.sgc(), 1 | 5)
+            {
+                out.extend_from_slice(&op.to_le_bytes());
+                out.push(val);
+            }
+        }
+        PrmRef::Grpprl(Some(g)) => {
+            if !work.charge(g.len() as u64, Cost::Formatting) {
+                return out;
+            }
+            for prl in sprm::iter(g).filter(|p| matches!(p.sgc(), 1 | 5)) {
+                out.extend_from_slice(&prl.op.to_le_bytes());
+                out.extend_from_slice(prl.operand);
+            }
+        }
+        PrmRef::None | PrmRef::Grpprl(None) => {}
+    }
+    out
 }
 
 /// Apply a piece's Prm (Prm0 short sprm or Prm1 grpprl) to character properties. A Prm1

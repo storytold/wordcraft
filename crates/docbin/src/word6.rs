@@ -269,8 +269,10 @@ pub(crate) fn content(word: &[u8], fib: &Fib6) -> Result<Content, DocbinError> {
             }
             last_font(prcs.get(usize::from(prm >> 1))?).and_then(|f| font_code_page(&fonts, f))
         };
-        // The Prcs then carry Word 97 sprms, as the CHPXs do, for the walk to apply to the piece.
-        PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate_chp)?
+        // The Prcs then carry Word 97 sprms, as the CHPXs and PAPXs do: the walk applies their
+        // character sprms to the piece's text and their paragraph sprms to the paragraph whose mark
+        // the piece holds.
+        PieceTable::parse_word6(word, fc, lcb, text, piece_code_page, translate_prc)?
     } else {
         // Word reads no more characters than the text's byte range (fcMin..fcMac) holds, one byte
         // each or two for UTF-16, whatever the character count says.
@@ -663,6 +665,12 @@ fn translate_chp(grpprl: &[u8]) -> Vec<u8> {
         }
     }
     out
+}
+
+/// A Word 6.0/95 Prc grpprl as the Word 97 sprms it stands for: character and paragraph sprms
+/// alike (Word 95 records a paragraph change before a fast save as a Prc on the mark's piece).
+fn translate_prc(grpprl: &[u8]) -> Vec<u8> {
+    [translate_chp(grpprl), translate_pap(grpprl)].concat()
 }
 
 /// A Word 6.0/95 PAPX grpprl as the Word 97 sprms it stands for, table rows included. Sprms not

@@ -421,6 +421,20 @@ fn another_character_set_leaves_only_ascii_readable() {
 }
 
 #[test]
+fn a_prm_on_the_marks_piece_formats_its_paragraph() {
+    // As Word 95 fast-saves a 1" left indent on the first paragraph: the piece holding its mark
+    // has Prm1 -> Prc `11 a0 05` (left indent 1440), and its PAPX says nothing. Word shows 72 pt;
+    // the second paragraph keeps none.
+    let text = b"First\rSecond\r";
+    let pieces: &[(u32, u32)] = &[(5, 0), (1, 5), (7, 6)];
+    let d = Doc6 { text, pieces: Some(pieces), prms: &[0, 0x0001], prcs: &[&[0x11, 0xA0, 0x05]], ..Default::default() };
+    let doc = read(&word6_file(&d)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paras.iter().map(|p| p.text.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
+    assert_eq!((paras[0].props.indent_left, paras[1].props.indent_left), (Some(72.0), None));
+}
+
+#[test]
 fn a_pieces_prm_formats_its_text() {
     // As Word 95 fast-saves formatting: piece 0 has Prm1 -> a Prc setting font 1 and bold, which
     // its character run doesn't. Piece 0 shows in font 1, bold (and decodes in its code page);
