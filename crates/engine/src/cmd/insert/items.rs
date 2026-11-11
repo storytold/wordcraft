@@ -147,8 +147,8 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
 /// Insert date and time at the caret or selection, formatted with a Word picture or default format.
 pub(super) fn date_time(s: &mut Session, v: &Value) -> CmdResult {
     let language = p::str(v, "language");
-    if language.is_some_and(|l| !matches!(l, "en-US" | "pt-BR")) {
-        return Err(CmdError::Params("language must be en-US or pt-BR".into()));
+    if language.is_some_and(|l| !matches!(l, "en-US" | "pt-BR" | "pt-PT")) {
+        return Err(CmdError::Params("language must be en-US, pt-BR or pt-PT".into()));
     }
     let mut props = s.typing_props();
     if let Some(lang) = language {
@@ -224,7 +224,8 @@ const ENGLISH: DateNames = DateNames {
 };
 
 /// Portuguese (observed in Word for Mac with a pt-BR document): lower-case names, `MMM` = `out`,
-/// `ddd` = `qui`, and `dd/MM/yyyy` for a field without a picture.
+/// `ddd` = `qui`, and `dd/MM/yyyy` for a field without a picture. Portugal (`pt-PT`) uses the same
+/// names, written in lower case there too since the 1990 spelling agreement, and the same picture.
 const PORTUGUESE: DateNames = DateNames {
     months: ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"],
     days: ["quinta-feira", "sexta-feira", "sábado", "domingo", "segunda-feira", "terça-feira", "quarta-feira"],
@@ -572,6 +573,24 @@ mod date_time_locale_tests {
         assert_eq!(format("ddd", 20), "sáb");
         assert_eq!(format("MMM", 20), "out");
         assert_eq!(format("MMMM", 20), "outubro");
+    }
+
+    /// Fixed date text inserted for Portugal keeps `pt-PT` on its run, with the Portuguese month
+    /// and weekday names; the command used to reject `pt-PT`.
+    #[test]
+    fn fixed_date_text_keeps_european_portuguese() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.dateTime", &json!({"format": "dddd, d 'de' MMMM 'de' yyyy", "language": "pt-PT"})).unwrap();
+        let path = s.doc.para_paths(StoryRef::Body).remove(0);
+        let p = s.doc.para(StoryRef::Body, &path).unwrap();
+        assert_eq!(p.props_of_char(0).lang.as_deref(), Some("pt-PT"));
+        assert_eq!(p.plain_text(), format_date_in("dddd, d 'de' MMMM 'de' yyyy", Some("pt-PT")));
+        assert_eq!(
+            format_date_parts_in("dddd, d 'de' MMMM 'de' yyyy", Some("pt-PT"), 2026, 11, 12, (9, 0, 0), 20_769),
+            "quinta-feira, 12 de novembro de 2026"
+        );
+        assert_eq!(default_date_picture(Some("pt-PT")), "dd/MM/yyyy");
+        assert!(s.run("insert.dateTime", &json!({"language": "pt-AO"})).is_err());
     }
 
     /// A pt-BR dynamic field keeps its result after DOCX round-trip and refresh.

@@ -8,7 +8,7 @@ use super::field::DATE_FORMATS;
 use crate::WordApp;
 use crate::theme::Tokens;
 
-/// Predefined Portuguese (Brazil) date and time format pictures.
+/// Predefined Portuguese date and time format pictures, for Brazil and Portugal alike.
 const PT_DATE_FORMATS: &[&str] = &[
     "dd/MM/yyyy",
     "dddd, d 'de' MMMM 'de' yyyy",
@@ -55,26 +55,37 @@ pub struct DateTimeForm {
 impl DateTimeForm {
     /// Restore a saved format/language or choose a sensible default for the UI language.
     pub fn new(app: &WordApp) -> Self {
-        let language = if app.ui.date_time_language.is_empty() {
-            if crate::i18n::current().code().to_ascii_lowercase().starts_with("pt") { "pt-BR" } else { "en-US" }.to_string()
-        } else if app.ui.date_time_language.to_ascii_lowercase().starts_with("pt") {
-            "pt-BR".to_string()
-        } else {
-            "en-US".to_string()
-        };
-        let list = if language == "pt-BR" { PT_DATE_FORMATS } else { DATE_FORMATS };
+        let saved = app.ui.date_time_language.as_str();
+        let language = date_language(if saved.is_empty() { crate::i18n::current().code() } else { saved }).to_string();
+        let list = formats_of(&language);
         let format = if list.contains(&app.ui.date_time_format.as_str()) { app.ui.date_time_format.clone() } else { list[0].to_string() };
         Self { format, language, update: app.ui.date_time_update, error: None, status: None }
     }
     /// Pictures available in the chosen language.
     fn formats(&self) -> &'static [&'static str] {
-        if self.language == "pt-BR" { PT_DATE_FORMATS } else { DATE_FORMATS }
+        formats_of(&self.language)
     }
     /// Engine command parameters corresponding to the current controls.
     pub fn params(&self) -> Value {
         json!({"format": self.format, "language": self.language, "update": self.update})
     }
 }
+/// The dialog's language for a saved or interface language tag (`pt-PT`, `pt_PT.UTF-8`, `pt-pt`…):
+/// Portuguese (Portugal) when a `pt` tag names the region `PT`, Portuguese (Brazil) for any other
+/// `pt` tag, English (United States) otherwise. A private-use part (`pt-x-pt`) names no region.
+fn date_language(tag: &str) -> &'static str {
+    let mut parts = tag.trim().split(['-', '_', '.', '@']);
+    if !parts.next().is_some_and(|p| p.eq_ignore_ascii_case("pt")) {
+        return "en-US";
+    }
+    if parts.take_while(|p| !p.eq_ignore_ascii_case("x")).any(|p| p.eq_ignore_ascii_case("pt")) { "pt-PT" } else { "pt-BR" }
+}
+
+/// The pictures offered for a dialog language.
+fn formats_of(language: &str) -> &'static [&'static str] {
+    if language.starts_with("pt-") { PT_DATE_FORMATS } else { DATE_FORMATS }
+}
+
 /// Draw the interactive format list, language picker and update checkbox; close on successful
 /// insertion or Cancel, keeping errors visible rather than silently dismissing the dialog.
 pub(super) fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm) -> bool {
@@ -98,18 +109,26 @@ pub(super) fn date_time_ui(app: &mut WordApp, ui: &mut Ui, f: &mut DateTimeForm)
         ui.add_space(12.0);
         ui.vertical(|ui| {
             ui.label(tl!("Language"));
-            craft_ui::ComboBox::from_id_salt("date_time_lang")
-                .selected_text(if f.language == "pt-BR" { tl!("Portuguese (Brazil)") } else { tl!("English (United States)") })
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(f.language == "pt-BR", tl!("Portuguese (Brazil)")).clicked() {
-                        f.language = "pt-BR".into();
-                        f.format = PT_DATE_FORMATS[0].into();
+            let selected = match f.language.as_str() {
+                "pt-BR" => tl!("Portuguese (Brazil)"),
+                "pt-PT" => tl!("Portuguese (Portugal)"),
+                _ => tl!("English (United States)"),
+            };
+            craft_ui::ComboBox::from_id_salt("date_time_lang").selected_text(selected).show_ui(ui, |ui| {
+                for (tag, name) in [("pt-BR", tl!("Portuguese (Brazil)")), ("pt-PT", tl!("Portuguese (Portugal)"))] {
+                    if ui.selectable_label(f.language == tag, name).clicked() {
+                        // The two share their pictures, so a chosen one stays chosen.
+                        if !f.language.starts_with("pt-") {
+                            f.format = PT_DATE_FORMATS[0].into();
+                        }
+                        f.language = tag.into();
                     }
-                    if ui.selectable_label(f.language == "en-US", tl!("English (United States)")).clicked() {
-                        f.language = "en-US".into();
-                        f.format = DATE_FORMATS[0].into();
-                    }
-                });
+                }
+                if ui.selectable_label(f.language == "en-US", tl!("English (United States)")).clicked() {
+                    f.language = "en-US".into();
+                    f.format = DATE_FORMATS[0].into();
+                }
+            });
         });
     });
     ui.add_space(8.0);
