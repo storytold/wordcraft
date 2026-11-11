@@ -669,6 +669,28 @@ fn metafile_pictures_are_imported() -> Result<(), String> {
 }
 
 #[test]
+fn floating_picture_shape_keeps_its_wrapping_and_anchor() -> Result<(), String> {
+    use wordcraft_doc::para::{Anchor, Wrap};
+    let wmf: Vec<u8> = [1u16, 9, 0x300, 12, 0, 0, 3, 0, 0, 3, 0, 0].iter().flat_map(|w| w.to_le_bytes()).collect();
+    let hex: String = wmf.iter().map(|b| format!("{b:02x}")).collect();
+    let pict = format!("{{\\pict\\picscalex67\\picscaley67\\picw7939\\pich7939\\picwgoal4501\\pichgoal4501\\wmetafile8 {hex}}}");
+    let rtf = format!(
+        "{{\\rtf1\\ansi{{\\shp{{\\*\\shpinst\\shpleft6000\\shptop0\\shpright9000\\shpbottom3000\\shpbxmargin\\shpbxignore\\shpbypara\\shpbyignore\\shpwr2\\shpwrk0\\shpfblwtxt0{{\\sp{{\\sn shapeType}}{{\\sv 75}}}}{{\\sp{{\\sn posrelh}}{{\\sv 0}}}}}}{{\\shprslt\\par\\pard{pict}\\par}}}}Paragraph beside the picture.\\par}}"
+    );
+    let doc = import(rtf.as_bytes())?;
+    assert_eq!(doc.body.len(), 1, "the picture stays in its anchor paragraph instead of splitting it");
+    let p = doc.body[0].as_para().ok_or("expected paragraph")?;
+    assert_eq!(p.plain_text(), "Paragraph beside the picture.");
+    let Some(InlineObject::Image { float, .. }) = p.objects.first() else {
+        return Err(format!("expected floating image, got {:?}", p.objects));
+    };
+    assert_eq!(float.wrap, Wrap::Square);
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Margin, Anchor::Paragraph));
+    assert_eq!((float.x, float.y), (300.0, 0.0));
+    Ok(())
+}
+
+#[test]
 fn unicode_in_info_bookmarks_and_field_instructions() {
     // #435: `\uN` (with its `\ucN` fallback skipped) decodes in every text destination.
     let rtf = br#"{\rtf1\ansi\uc1{\info{\title Caf\u233?}{\author Caf\u233\'3f}}{\*\bkmkstart caf\u233?}{\*\bkmkend caf\u233?}{\field{\*\fldinst{HYPERLINK "https://example.test/caf\u233?"}}{\fldrslt{link}}}\par Caf\u233?\par}"#;

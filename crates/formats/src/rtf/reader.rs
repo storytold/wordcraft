@@ -2,7 +2,7 @@ use super::date::{dttm_to_iso, iso_date};
 use super::parse::column_grid;
 use super::state::{
     CellDef, CommentData, Dest, HeaderFooter, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS, MAX_SECTIONS, NoteData,
-    Output, PageGeom, SecFmt, St, Sub,
+    Output, PageGeom, SecFmt, ShpPicSt, St, Sub,
 };
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
@@ -11,7 +11,7 @@ use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta
 pub(super) struct Reader {
     pub(super) st: St,
     stack: Vec<St>,
-    overflow: usize,
+    pub(super) overflow: usize,
     pub(super) fonts: HashMap<i32, Arc<str>>,
     pub(super) font_cur: i32,
     pub(super) font_name: String,
@@ -110,6 +110,7 @@ pub(super) struct Reader {
     pub(super) range_ends: HashSet<i32>,
     pub(super) claimed: HashSet<i32>,
     pub(super) synth: i32,
+    pub(super) shp_pic: Option<Box<ShpPicSt>>,
 }
 
 impl Reader {
@@ -363,6 +364,11 @@ impl Reader {
                 self.in_creatim = false;
             }
             Dest::Atn(k) => self.commit_atn(k),
+            Dest::ShpSv => {
+                if let Some(s) = self.shp_pic.as_deref_mut() {
+                    s.commit_prop();
+                }
+            }
             _ => {}
         }
         let Some(mut prev) = self.stack.pop() else { return };
@@ -386,6 +392,15 @@ impl Reader {
         if self.pict_depth.is_some_and(|d| self.depth() < d) {
             self.pict_depth = None;
             self.finish_pict();
+        }
+        let depth = self.depth();
+        if let Some(s) = self.shp_pic.as_deref_mut() {
+            if s.rslt_depth.is_some_and(|d| depth < d) {
+                s.rslt_depth = None;
+            }
+            if depth < s.shp_depth {
+                self.shp_pic = None;
+            }
         }
         if let Some((d, _)) = &self.bkmk
             && self.depth() < *d

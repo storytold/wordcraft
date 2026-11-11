@@ -183,7 +183,12 @@ impl Reader {
         } else {
             make_img(data, w, h, "")
         };
-        if let Some(img) = img {
+        if let Some(mut img) = img {
+            if let Some(s) = self.shp_pic.as_deref()
+                && s.rslt_depth.is_some()
+            {
+                img.float = s.float();
+            }
             self.para.inlines.push(Inline::Image(img));
             self.para_has = true;
         }
@@ -296,7 +301,19 @@ impl Reader {
                     }
                 }
             }
-            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) => {}
+            Dest::ShpSn | Dest::ShpSv => {
+                let name = self.st.dest == Dest::ShpSn;
+                if let Some(shp) = self.shp_pic.as_deref_mut() {
+                    let into = if name { &mut shp.sn } else { &mut shp.sv };
+                    for c in s.chars() {
+                        if into.len() >= 64 {
+                            break;
+                        }
+                        into.push(c);
+                    }
+                }
+            }
+            Dest::Skip | Dest::ListTable | Dest::ListOverride | Dest::OldProps(_) | Dest::ShpInst => {}
         }
     }
 

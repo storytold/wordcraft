@@ -1,4 +1,4 @@
-use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, St};
+use super::state::{CellDef, Dest, FmtRevSt, HeaderFooter, HfPages, MAX_OLD_WORDS, RevSt, ShpPicSt, St};
 use super::styles::{StyleDef, is_char_format_word, is_format_word};
 use super::{Align, Fmt, Reader, VAlign, model};
 
@@ -9,7 +9,7 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
-        if self.skip_destination_word(w, pv) {
+        if self.skip_destination_word(w, pv) || self.shape_pic_word(w, p, first_in_group) {
             return;
         }
         if w == "shppict" || self.start_header_footer_word(w) {
@@ -441,6 +441,7 @@ impl Reader {
             }
             Dest::RevTbl if !matches!(word, "u" | "uc") => true,
             Dest::RevTbl => false,
+            Dest::ShpInst | Dest::ShpSn | Dest::ShpSv => true,
             Dest::Pict => {
                 self.picture_word(word, value);
                 true
@@ -579,6 +580,75 @@ impl Reader {
 
     fn in_info(&self) -> bool {
         self.info_depth.is_some_and(|d| self.depth() > d)
+    }
+
+    fn shape_pic_word(&mut self, w: &str, p: Option<i32>, first_in_group: bool) -> bool {
+        use wordcraft_doc::para::Anchor;
+        let depth = self.depth();
+        match self.st.dest {
+            Dest::ShpInst => {
+                let pv = p.unwrap_or(0);
+                let Some(s) = self.shp_pic.as_deref_mut() else {
+                    self.st.dest = Dest::Skip;
+                    return true;
+                };
+                match w {
+                    "shpleft" => s.rect[0] = i64::from(pv),
+                    "shptop" => s.rect[1] = i64::from(pv),
+                    "shpright" => s.rect[2] = i64::from(pv),
+                    "shpbottom" => s.rect[3] = i64::from(pv),
+                    "shpbxpage" => s.bx = Some(Anchor::Page),
+                    "shpbxmargin" => s.bx = Some(Anchor::Margin),
+                    "shpbxcolumn" => s.bx = Some(Anchor::Column),
+                    "shpbxignore" => s.bx_ignore = true,
+                    "shpbypage" => s.by = Some(Anchor::Page),
+                    "shpbymargin" => s.by = Some(Anchor::Margin),
+                    "shpbypara" => s.by = Some(Anchor::Paragraph),
+                    "shpbyignore" => s.by_ignore = true,
+                    "shpwr" => s.wr = Some(pv),
+                    "shpwrk" => s.wrk = pv,
+                    "shpfblwtxt" => s.behind = p != Some(0),
+                    "sp" => {}
+                    "sn" => {
+                        s.sn.clear();
+                        self.st.dest = Dest::ShpSn;
+                    }
+                    "sv" => {
+                        s.sv.clear();
+                        self.st.dest = Dest::ShpSv;
+                    }
+                    _ if first_in_group => self.st.dest = Dest::Skip,
+                    _ => {}
+                }
+                true
+            }
+            Dest::ShpSn | Dest::ShpSv => {
+                if first_in_group {
+                    self.st.dest = Dest::Skip;
+                }
+                true
+            }
+            Dest::Body => match w {
+                "shp" if self.shp_pic.is_none() && self.overflow == 0 => {
+                    self.shp_pic = Some(Box::new(ShpPicSt { shp_depth: depth, ..Default::default() }));
+                    true
+                }
+                "shpinst" if self.shp_pic.as_deref().is_some_and(|s| depth == s.shp_depth + 1) => {
+                    self.st.dest = Dest::ShpInst;
+                    true
+                }
+                "shprslt" => match self.shp_pic.as_deref_mut() {
+                    Some(s) if depth == s.shp_depth + 1 => {
+                        s.rslt_depth = Some(depth);
+                        true
+                    }
+                    _ => false,
+                },
+                "par" | "pard" if self.shp_pic.as_deref().is_some_and(|s| s.rslt_depth.is_some()) => true,
+                _ => false,
+            },
+            _ => false,
+        }
     }
 }
 

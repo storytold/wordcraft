@@ -42,6 +42,138 @@ pub(super) enum Dest {
     /// Formatting before a tracked change (`\oldpprops` when true, else `\oldcprops`): read
     /// into the group's own state, which the group's end keeps as the change's old formatting.
     OldProps(bool),
+    /// A shape's description (`\shpinst`), and the name (`\sn`) and value (`\sv`) of one of
+    /// its properties.
+    ShpInst,
+    ShpSn,
+    ShpSv,
+}
+
+/// A `\shp` group's placement and wrapping, read from `\shpinst` for the picture in its
+/// `\shprslt` (#6221).
+#[derive(Clone, Debug, Default)]
+pub(super) struct ShpPicSt {
+    pub(super) shp_depth: usize,
+    pub(super) rslt_depth: Option<usize>,
+    /// `\shpleft`, `\shptop`, `\shpright`, `\shpbottom` (twips).
+    pub(super) rect: [i64; 4],
+    pub(super) bx: Option<wordcraft_doc::para::Anchor>,
+    pub(super) by: Option<wordcraft_doc::para::Anchor>,
+    pub(super) bx_ignore: bool,
+    pub(super) by_ignore: bool,
+    pub(super) wr: Option<i32>,
+    pub(super) wrk: i32,
+    pub(super) behind: bool,
+    pub(super) sn: String,
+    pub(super) sv: String,
+    pub(super) shape_type: Option<i64>,
+    pub(super) posrelh: Option<i64>,
+    pub(super) posrelv: Option<i64>,
+    pub(super) posh: Option<i64>,
+    pub(super) posv: Option<i64>,
+    pub(super) pseudo_inline: bool,
+    pub(super) hidden: bool,
+    pub(super) flip_h: bool,
+    pub(super) flip_v: bool,
+    pub(super) rotation: Option<i64>,
+    pub(super) behind_prop: Option<bool>,
+    pub(super) dist: [Option<i64>; 3],
+}
+
+impl ShpPicSt {
+    pub(super) fn commit_prop(&mut self) {
+        let v = self.sv.trim().parse::<i64>().ok();
+        let on = v.map(|v| v != 0);
+        match self.sn.trim() {
+            "shapeType" => self.shape_type = v,
+            "posrelh" => self.posrelh = v,
+            "posrelv" => self.posrelv = v,
+            "posh" => self.posh = v,
+            "posv" => self.posv = v,
+            "fPseudoInline" => self.pseudo_inline = on == Some(true),
+            "fHidden" => self.hidden = on == Some(true),
+            "fFlipH" => self.flip_h = on == Some(true),
+            "fFlipV" => self.flip_v = on == Some(true),
+            "rotation" => self.rotation = v,
+            "fBehindDocument" => self.behind_prop = on,
+            "dxWrapDistLeft" => self.dist[0] = v,
+            "dyWrapDistTop" => self.dist[1] = v,
+            "dyWrapDistBottom" => self.dist[2] = v,
+            _ => {}
+        }
+        self.sn.clear();
+        self.sv.clear();
+    }
+
+    /// Floating placement for the picture in `\shprslt`, when the shape places it outside the
+    /// line (`shapeType` 75 or omitted, with wrapping or flip/rotation).
+    pub(super) fn float(&self) -> Option<Box<wordcraft_doc::para::Float>> {
+        use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap, WrapText};
+        if self.shape_type.is_some_and(|t| t != 75) {
+            return None;
+        }
+        let align = |v: Option<i64>| match v? {
+            1 => Some(FloatAlign::Start),
+            2 => Some(FloatAlign::Center),
+            3 => Some(FloatAlign::End),
+            4 => Some(FloatAlign::Inside),
+            5 => Some(FloatAlign::Outside),
+            _ => None,
+        };
+        let points = |v: i64, per: f32| (v.clamp(-31_680 * 12_700, 31_680 * 12_700) as f32 / per).clamp(-1584.0, 1584.0);
+        let rot = self.rotation.map_or(0.0, |r| (r.clamp(-360 * 65_536, 360 * 65_536) as f32 / 65_536.0).rem_euclid(360.0));
+        let mut f = Float { flip_h: self.flip_h, flip_v: self.flip_v, rot, hidden: self.hidden, ..Float::default() };
+        if !self.pseudo_inline
+            && (self.wr.is_some()
+                || self.behind
+                || self.behind_prop == Some(true)
+                || self.bx.is_some()
+                || self.by.is_some()
+                || self.posrelh.is_some()
+                || self.posrelv.is_some())
+        {
+            let behind = self.behind_prop.unwrap_or(self.behind);
+            f.wrap = match self.wr {
+                Some(1) => Wrap::TopAndBottom,
+                Some(2) => Wrap::Square,
+                Some(4) => Wrap::Tight,
+                Some(5) => Wrap::Through,
+                _ if behind => Wrap::BehindText,
+                _ => Wrap::InFrontOfText,
+            };
+            f.wrap_text = match self.wrk {
+                1 => WrapText::Left,
+                2 => WrapText::Right,
+                3 => WrapText::Largest,
+                _ => WrapText::BothSides,
+            };
+            let rel_h = self.posrelh.and_then(|v| match v {
+                0 => Some(Anchor::Margin),
+                1 => Some(Anchor::Page),
+                2 => Some(Anchor::Column),
+                3 => Some(Anchor::Character),
+                _ => None,
+            });
+            let rel_v = self.posrelv.and_then(|v| match v {
+                0 => Some(Anchor::Margin),
+                1 => Some(Anchor::Page),
+                2 => Some(Anchor::Paragraph),
+                3 => Some(Anchor::Line),
+                _ => None,
+            });
+            f.h_rel = if self.bx_ignore { rel_h.or(self.bx) } else { self.bx.or(rel_h) }.unwrap_or(Anchor::Column);
+            f.v_rel = if self.by_ignore { rel_v.or(self.by) } else { self.by.or(rel_v) }.unwrap_or(Anchor::Paragraph);
+            f.x = points(self.rect[0], 20.0);
+            f.y = points(self.rect[1], 20.0);
+            f.h_align = align(self.posh);
+            f.v_align = align(self.posv);
+            let dist = |v: Option<i64>, d: f32| v.map_or(d, |v| points(v, 12_700.0).max(0.0));
+            f.dist = dist(self.dist[0], 9.0);
+            f.dist_top = dist(self.dist[1], 0.0);
+            f.dist_bottom = dist(self.dist[2], 0.0);
+        }
+        (f != Float::default()).then(|| Box::new(f))
+    }
 }
 
 /// A footnote, endnote or comment group being read into an output of its own.
