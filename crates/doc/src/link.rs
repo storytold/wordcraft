@@ -19,6 +19,12 @@ pub fn is_web_or_mail_link(url: &str) -> bool {
 /// names another machine — following it on Windows leaks the user's NTLM credentials — so it is
 /// refused too.
 pub fn is_safe_href(url: &str) -> bool {
+    // Exporters drop other control characters and noncharacters when they write the link
+    // (`file\u{85}:` comes out `file:`), so a link holding one is refused, not judged as it
+    // stands and written as something else.
+    if url.chars().any(|c| (c.is_control() && !c.is_ascii_control()) || matches!(c, '\u{FFFE}' | '\u{FFFF}')) {
+        return false;
+    }
     let cleaned: String = url.chars().filter(|c| !c.is_ascii_control() && *c != ' ').collect();
     // `//host` (protocol-relative) and `\\host` (UNC), with `\` read as `/` the way Windows does.
     if cleaned.replace('\\', "/").starts_with("//") {
@@ -200,6 +206,10 @@ mod tests {
             "\\\\attacker.example\\share\\x",
             "/\\attacker.example\\x",
             " //attacker.example/x",
+            // Characters the exporters drop on writing don't hide a scheme.
+            "file\u{85}:///etc/passwd",
+            "java\u{9F}script:alert(1)",
+            "/\u{FFFE}/attacker.example/x",
             "",
         ] {
             assert!(!is_safe_href(bad), "{bad:?}");
