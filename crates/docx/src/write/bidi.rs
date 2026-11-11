@@ -124,6 +124,60 @@ pub(super) fn direction_spans<'a>(
     out
 }
 
+/// `spans` with Thai, Lao and Indic text written `w:cs`. WordCraft draws those characters with
+/// the complex-script font, size, bold and italic; Word does so only in a run that is complex
+/// script (or right to left) and draws them in the run's other font and `w:sz` anywhere else
+/// (measured in Word for Windows), as it does text typed without a Thai keyboard. A run that
+/// isn't complex script, whose two formattings differ, is therefore split where its text changes
+/// between those scripts and the rest, and the complex-script pieces are written `w:cs`, as Word
+/// writes Thai typed on a Thai keyboard. Runs that say whether they are complex script or right
+/// to left are written as they are.
+pub(super) fn complex_script_spans<'a>(
+    text: &str,
+    spans: Vec<(Range<usize>, Cow<'a, CharProps>)>,
+    styles: &StyleSheet,
+    para_style: Option<&str>,
+) -> Vec<(Range<usize>, Cow<'a, CharProps>)> {
+    use wordcraft_doc::bidi::{is_complex_script, is_rtl_script};
+    let complex = |c: char| is_complex_script(c) && !is_rtl_script(c);
+    let mut out = Vec::with_capacity(spans.len());
+    for (range, props) in spans {
+        let Some(run) = text.get(range.clone()).filter(|t| props.cs.is_none() && props.rtl.is_none() && t.chars().any(complex)) else {
+            out.push((range, props));
+            continue;
+        };
+        let rc = styles.resolve_char(para_style, &props);
+        let cs = rc.complex();
+        if rc.cs || rc.rtl || (rc.font == cs.font && rc.size == cs.size && rc.bold == cs.bold && rc.italic == cs.italic) {
+            out.push((range, props));
+            continue;
+        }
+        let marked = {
+            let mut p = props.clone().into_owned();
+            p.cs = Some(true);
+            if let Some(ch) = p.fmt_change.as_mut() {
+                ch.old.cs.get_or_insert(true);
+            }
+            p
+        };
+        let mut start = range.start;
+        let mut cur: Option<bool> = None;
+        for (i, c) in run.char_indices() {
+            let at = range.start.saturating_add(i);
+            let is = complex(c);
+            if let Some(was) = cur
+                && was != is
+            {
+                out.push((start..at, if was { Cow::Owned(marked.clone()) } else { props.clone() }));
+                start = at;
+            }
+            cur = Some(is);
+        }
+        out.push((start..range.end, if cur == Some(true) { Cow::Owned(marked) } else { props }));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

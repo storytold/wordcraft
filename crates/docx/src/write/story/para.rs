@@ -143,6 +143,8 @@ impl Writer<'_> {
         let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
             para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
         });
+        // Thai and Indic text gets `w:cs`, so Word draws it in the formatting WordCraft does.
+        let spans = crate::write::bidi::complex_script_spans(&p.text, spans, styles, para_style);
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();
