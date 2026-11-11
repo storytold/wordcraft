@@ -820,7 +820,8 @@ fn goto(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Word for Mac 16.114.4: a caret or whole paragraph captures paragraph properties;
-/// a partial text selection copies character formatting only (see #5964).
+/// cross-paragraph selections also qualify; partial text copies character formatting
+/// only. Ordered endpoints make `b` the paragraph whose end must be selected (#5964).
 fn paragraph_format_selection(s: &Session) -> bool {
     let (a, b) = s.sel.ordered();
     a == b || a.path != b.path || (a.off == 0 && s.doc.para_at(&b).is_some_and(|p| b.off == p.len()))

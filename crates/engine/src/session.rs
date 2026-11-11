@@ -47,7 +47,9 @@ pub struct PainterFormat {
     pub chr: CharProps,
     /// Absent when only part of the source paragraph was selected.
     pub para: Option<wordcraft_doc::props::ParaProps>,
+    /// Keep the toolbar brush armed after an application (double-click mode).
     pub sticky: bool,
+    /// Toolbar capture applies eligible paragraph properties even to a word target.
     pub brush: bool,
 }
 
