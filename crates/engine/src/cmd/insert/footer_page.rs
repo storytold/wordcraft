@@ -22,6 +22,25 @@
 //! The command checks its own result by laying the document out again: the page count, the
 //! page numbers and the header and footer of every other page must be unchanged, else it fails
 //! and the session puts the document back.
+//!
+//! # Using it
+//!
+//! Commands go through [`Session::run`]; the payloads are JSON:
+//!
+//! ```text
+//! layout.pageFooterVisible {"page": 3, "visible": false}
+//!   -> {"page": 3, "number": 3, "visible": false, "changed": true, "pageFrom": "argument"}
+//! layout.pageFooterVisible {"page": 3, "visible": false}      (again: nothing to do)
+//!   -> {"page": 3, "number": 3, "visible": false, "changed": false, "pageFrom": "argument"}
+//! layout.pageFooterVisible {"toggle": true}                   (the caret's page, flipped)
+//!   -> {"page": 2, "number": 2, "visible": true, "changed": true, "pageFrom": "caret"}
+//! layout.pageFooters {}
+//!   -> {"pages": [{"page": 1, "number": 1, "footer": true, "header": false,
+//!                  "blocked": null, "blockedCode": null}, ...]}
+//! ```
+//!
+//! From Rust, [`page_footers`] and [`page_footer_info`] give the same map as [`PageFooterInfo`]
+//! values, and [`footer_visible`] and [`header_visible`] answer for one laid-out page.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -37,19 +56,31 @@ use super::{Block, CmdError, CmdResult, Paragraph, PartKind, Path, Pos, Session,
 /// Deepest table nesting looked into when deciding whether a footer is empty.
 const BLANK_DEPTH: usize = 8;
 
-/// What a page shows in the map of footers (see [`page_footers`]).
+/// What a page shows in the map of footers (see [`page_footers`] and [`page_footer_info`]).
+///
+/// `page` and `number` are different things: `page` is the position in the laid-out document
+/// (what `layout.pageFooterVisible` takes as `page`), `number` is what the page displays, which
+/// differs after a section restarts its numbering (pages 1 to 5, then a chapter that starts over:
+/// `page` 6 has `number` 1) or uses another number format's start.
+///
+/// `blocked` and `blocked_code` are both `None` when the footer of the page can be hidden or
+/// shown on its own: that is always so for the first page of a section, which uses Different
+/// First Page. Otherwise both are set: `blocked` is a sentence for people (it may be reworded),
+/// `blocked_code` the stable [`BlockedReason`] for programs, and `layout.pageFooterVisible`
+/// refuses the page with the same reason.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PageFooterInfo {
-    /// Page number in the layout, from 1.
+    /// Position of the page in the layout, from 1.
     pub page: usize,
-    /// The number the page displays (after section restarts and number formats).
+    /// The number the page displays (after section restarts and number formats); can differ
+    /// from `page`.
     pub number: u32,
     /// The page shows a footer with something in it.
     pub footer: bool,
     /// The page shows a header with something in it.
     pub header: bool,
-    /// Why the footer of this page cannot be hidden or shown on its own (`layout.pageFooterVisible`
-    /// refuses it), if so.
+    /// The sentence saying why the footer of this page cannot be hidden or shown on its own
+    /// (`layout.pageFooterVisible` refuses it), or `None` when it can.
     pub blocked: Option<String>,
     /// The stable code of the reason in `blocked` (`None` exactly when `blocked` is).
     pub blocked_code: Option<BlockedReason>,
@@ -108,7 +139,8 @@ impl From<Refusal> for CmdError {
     }
 }
 
-/// Whether `blocks` show nothing: paragraphs without text or objects, and tables of such.
+/// Whether `blocks` show nothing: paragraphs without text or objects, and tables of such. An
+/// empty list shows nothing too.
 pub fn blocks_blank(blocks: &[Arc<Block>]) -> bool {
     blank_at(blocks, 0)
 }
@@ -136,14 +168,15 @@ pub fn header_visible(doc: &Document, page: &Page) -> bool {
     blocks_of(doc, page.header_story).is_some_and(|b| !blocks_blank(b))
 }
 
-/// Every page of the layout with whether it shows a header and a footer: the map the footer
-/// panel is drawn from.
+/// Every page of the layout with whether it shows a header and a footer, and whether its footer
+/// can be changed alone: the map the footer panel is drawn from. Empty when there are no pages.
 pub fn page_footers(s: &mut Session) -> Vec<PageFooterInfo> {
     let layout = s.layout();
     (0..layout.pages.len()).filter_map(|i| info_of(&s.doc, &layout, i)).collect()
 }
 
-/// [`page_footers`] for the page with 0-based index `idx` only (the right-click menu's).
+/// [`page_footers`] for the page with 0-based index `idx` only (the right-click menu's), or
+/// `None` when the layout has no such page.
 pub fn page_footer_info(s: &mut Session, idx: usize) -> Option<PageFooterInfo> {
     let layout = s.layout();
     info_of(&s.doc, &layout, idx)
@@ -436,6 +469,39 @@ fn verify(s: &mut Session, before: &View, idx: usize, want_visible: bool) -> Res
 }
 
 /// `layout.pageFooterVisible`: hide or show the footer on one page of the current layout.
+///
+/// # Parameters
+/// - `page` (optional): a whole JSON number from 1 to the page count of the current layout. Left
+///   out, it is the page the caret is on (the last known page when the caret is in a header, a
+///   footer or a note), which depends on the session: the result says so in `pageFrom`. Anything
+///   else (null, a string, a boolean, a fraction, `2.0`, a negative, 0, a number past the last
+///   page) is a [`CmdError::Params`] and never falls back to the caret's page.
+/// - `visible` (a boolean) and `toggle` (a boolean): exactly one is required. `visible` sets the
+///   state and is idempotent; `toggle: true` flips the current state. Neither, both, a `visible`
+///   that is not a boolean, or a `toggle` that is not a boolean is a [`CmdError::Params`]
+///   (`toggle: false` counts as absent, `null` counts as absent for both).
+///
+/// # Returns
+/// `{"page", "number", "visible", "changed", "pageFrom"}`: the page changed (from 1), the number
+/// it displays (which can differ from `page` after a section restart), the state it now has,
+/// whether the document changed (`false` when the page was in that state already), and where
+/// `page` came from (`"argument"` or `"caret"`).
+///
+/// # Errors
+/// - [`CmdError::Params`] for the invalid parameters above.
+/// - [`CmdError::Failed`] for a document with no pages, or when laying the result out again
+///   shows that other pages would move (the session restores the document).
+/// - [`CmdError::Disabled`] when the page cannot be changed alone (it starts or ends inside a
+///   paragraph or table, holds a continuous break, follows or ends with a table, has no text of
+///   its own). The text ends with the reason code in brackets, as listed by [`BlockedReason`],
+///   and names the page when the caret chose it. Nothing changes.
+///
+/// # Example
+/// ```text
+/// {"page": 4, "visible": false}   hide the footer of page 4 only
+/// {"page": 4, "visible": true}    show it again
+/// {"toggle": true}                flip the footer of the page the caret is on
+/// ```
 pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> CmdResult {
     let explicit = match v.get("visible") {
         None | Some(serde_json::Value::Null) => None,
