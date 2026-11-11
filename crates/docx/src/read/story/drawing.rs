@@ -230,10 +230,20 @@ impl Reader<'_> {
             // crop, effects and other valid markup are not lost when it is saved again.
             let whole = self.keep_embedded(&kept, rels, &[]).or_else(|| {
                 let pic = fallback.child("pic:pic")?;
-                let clean_fallback = El { name: "mc:Fallback".into(), attrs: Vec::new(), kids: vec![Node::El(pic.clone())] };
-                let clean =
-                    El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(clean_fallback)] };
-                self.keep_embedded(&clean, rels, &[])
+                let make_alternate = |pic: El| {
+                    let clean_fallback = El { name: "mc:Fallback".into(), attrs: Vec::new(), kids: vec![Node::El(pic)] };
+                    El { name: "mc:AlternateContent".into(), attrs: Vec::new(), kids: vec![Node::El(choice.clone()), Node::El(clean_fallback)] }
+                };
+                self.keep_embedded(&make_alternate(pic.clone()), rels, &[]).or_else(|| {
+                    // A picture extension may itself reference a missing relationship. Drop
+                    // only that broken extension, retaining the crop and other picture effects.
+                    let mut pic = pic.clone();
+                    let mut removed = false;
+                    if prune_missing_preview_extensions(&mut pic, rels, self.pkg, &mut removed, 0) || !removed {
+                        return None;
+                    }
+                    self.keep_embedded(&make_alternate(pic), rels, &[])
+                })
             });
             if let Some(whole) = whole {
                 Arc::make_mut(&mut graphic).source = Some(whole);
@@ -674,6 +684,33 @@ impl Reader<'_> {
 }
 
 /// The `mc:Choice` holding an Office 2016 chart (`cx:chart`) in an `mc:AlternateContent`.
+/// Remove only extension subtrees that name an absent relationship. Returns whether any
+/// unresolved reference remains outside an extension. One bounded post-order walk, rather
+/// than repeatedly scanning nested extensions, keeps hostile pictures linear in their size.
+fn prune_missing_preview_extensions(e: &mut El, rels: &Rels, pkg: &crate::package::Package, removed: &mut bool, depth: usize) -> bool {
+    if depth > crate::xml::MAX_DEPTH {
+        return true;
+    }
+    let mut missing = e
+        .attrs
+        .iter()
+        .any(|(k, v)| crate::xml::is_rel_attr(&e.name, k) && rels.by_id(v).is_none_or(|r| !r.external && pkg.get_shared(&r.target).is_none()));
+    e.kids.retain_mut(|node| match node {
+        Node::El(child) => {
+            let child_missing = prune_missing_preview_extensions(child, rels, pkg, removed, depth + 1);
+            if child_missing && child.name == "a:ext" {
+                *removed = true;
+                false
+            } else {
+                missing |= child_missing;
+                true
+            }
+        }
+        Node::Text(_) => true,
+    });
+    missing
+}
+
 fn chartex_choice(ac: &El) -> Option<&El> {
     ac.children("mc:Choice").find(|c| c.child("w:drawing").and_then(|d| d.find("a:graphicData")).and_then(|g| g.attr("uri")) == Some(CHARTEX_URI))
 }

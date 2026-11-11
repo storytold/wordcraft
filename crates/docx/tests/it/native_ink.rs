@@ -58,7 +58,7 @@ fn native_ink_strokes_render_in_all_frames_and_survive_json_and_two_docx_saves()
 fn grouped_ink_preview_survives_an_unretainable_alternate() {
     for canvas in [false, true] {
         for nested in [false, true] {
-            for broken in [false, true] {
+            for broken in [0, 1, 2, 3] {
                 let member = ink_member(914400, true);
                 let member = if nested {
                     format!(
@@ -69,9 +69,17 @@ fn grouped_ink_preview_survives_an_unretainable_alternate() {
                 };
                 let bytes = nested_ink_docx(canvas, &member, true);
                 let mut files = unzip(&bytes);
-                let mut body = text(&files, "word/document.xml").replace("<a:stretch>", r#"<a:srcRect l="25000"/><a:stretch>"#);
-                if broken {
+                let mut body = text(&files, "word/document.xml")
+                    .replace("<a:stretch>", r#"<a:srcRect l="25000"/><a:stretch>"#)
+                    .replace(r#"<a:blip r:embed="rPreview"/>"#, r#"<a:blip r:embed="rPreview"><a:lum bright="20000"/></a:blip>"#);
+                if broken == 1 {
                     body = body.replace("</mc:Fallback>", r#"<a:ext r:id="missing"/></mc:Fallback>"#);
+                } else if broken >= 2 {
+                    body = body.replace("</pic:spPr>", r#"</pic:spPr><a:ext r:id="missing"/>"#);
+                    if broken == 3 {
+                        let rels = text(&files, "word/_rels/document.xml.rels").replace("</Relationships>", r#"<Relationship Id="missing" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/absent.png"/></Relationships>"#);
+                        files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
+                    }
                 }
                 files.insert("word/document.xml".into(), body.into_bytes());
                 let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
@@ -91,6 +99,7 @@ fn grouped_ink_preview_survives_an_unretainable_alternate() {
                         let body = text(&files, "word/document.xml");
                         assert!(!body.contains("missing"));
                         assert!(body.contains(r#"l="25000""#), "fallback crop lost: {body}");
+                        assert!(body.contains(r#"bright="20000""#), "fallback brightness lost: {body}");
                         doc = wordcraft_docx::read(&saved).unwrap();
                     }
                 }
