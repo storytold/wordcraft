@@ -538,18 +538,35 @@ mod platform {
 
     const OWNER_FORMAT: &str = "WordCraft Copy Owner";
 
+    /// Process-unique ownership token placed into Windows clipboard marker.
+    fn owner_token() -> [u8; 16] {
+        static TOKEN: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+        *TOKEN.get_or_init(|| {
+            let mut b = [0u8; 16];
+            let _ = getrandom::fill(&mut b);
+            b
+        })
+    }
+
     /// Record clipboard ownership for Windows clipboard.
     pub fn record_own() {
         let Some(format) = raw::register_format(OWNER_FORMAT) else { return };
         let Ok(_open) = Clipboard::new_attempts(10) else { return };
-        let _ = raw::set_without_clear(format.get(), &[1u8]);
+        let _ = raw::set_without_clear(format.get(), &owner_token());
     }
 
     /// Whether WordCraft still owns the Windows clipboard contents.
     pub fn is_own() -> bool {
         let Some(format) = raw::register_format(OWNER_FORMAT) else { return false };
         let Ok(_open) = Clipboard::new_attempts(10) else { return false };
-        raw::is_format_avail(format.get())
+        if !raw::is_format_avail(format.get()) {
+            return false;
+        }
+        let mut out = Vec::new();
+        if raw::get_vec(format.get(), &mut out).is_err() {
+            return false;
+        }
+        out == owner_token()
     }
 
     /// Windows supports clipboard setting via arboard and clipboard_win.
