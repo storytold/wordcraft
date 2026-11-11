@@ -60,11 +60,16 @@ pub fn parse_csv_streaming(text: &str, cap: Option<CsvCap>) -> (Vec<Vec<String>>
         let Some(cap) = cap else { return push_csv_row(rows, row) };
         let width = if cap.width_from_first_row { rows.first().map_or(MAX_FIELDS, Vec::len) } else { MAX_FIELDS };
         row.truncate(width.max(1));
-        if rows.len() > MAX_RECORDS || kept_cells.saturating_add(row.len()) > cap.max_cells {
+        // A header row is not a record: it takes no part of the cell budget (the rows path keeps
+        // `max_records(fields)` records beside its header too).
+        let free = cap.width_from_first_row && rows.is_empty();
+        if rows.len() > MAX_RECORDS || (!free && kept_cells.saturating_add(row.len()) > cap.max_cells) {
             omitted += 1;
             row.clear();
         } else {
-            kept_cells += row.len();
+            if !free {
+                kept_cells += row.len();
+            }
             rows.push(std::mem::take(row));
         }
     };

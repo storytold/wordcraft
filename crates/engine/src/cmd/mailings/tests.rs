@@ -752,9 +752,27 @@ fn csv_streaming_cap_keeps_at_most_the_cells_and_counts_the_rest() {
     let csv = format!("a,b\n{}", "1,2\n".repeat(10));
     let cap = Some(CsvCap { max_cells: 8, width_from_first_row: true });
     let (rows, omitted) = parse_csv_streaming(&csv, cap);
-    assert_eq!((rows.len(), omitted), (4, 7)); // the header and three records fit in 8 cells
+    assert_eq!((rows.len(), omitted), (5, 6)); // the header is free; four records fit in 8 cells
     // Rows wider than the header are cut to it before they are counted.
-    let (rows, omitted) = parse_csv_streaming("a,b\n1,2,3\n4,5,6\n", Some(CsvCap { max_cells: 4, width_from_first_row: true }));
+    let (rows, omitted) = parse_csv_streaming("a,b\n1,2,3\n4,5,6\n", Some(CsvCap { max_cells: 2, width_from_first_row: true }));
     assert_eq!((rows, omitted), (vec![vec!["a".to_string(), "b".to_string()], vec!["1".to_string(), "2".to_string()]], 1));
     assert_eq!(parse_csv_streaming(&csv, None), (parse_csv(&csv), 0));
+    // A full-width header takes none of the budget: exactly `max_cells / width` records are kept.
+    let (rows, omitted) = parse_csv_streaming("a,b,c\n1,2,3\n4,5,6\n7,8,9\n", Some(CsvCap { max_cells: 6, width_from_first_row: true }));
+    assert_eq!((rows.len(), omitted), (3, 1));
+    // Without a header the first row is a record and is charged.
+    let (rows, omitted) = parse_csv_streaming("1,2,3\n4,5,6\n7,8,9\n", Some(CsvCap { max_cells: 6, width_from_first_row: false }));
+    assert_eq!((rows.len(), omitted), (2, 1));
+}
+
+/// A CSV with a full-width header keeps as many records as the `rows` path does: the header takes
+/// no part of the cell budget.
+#[test]
+fn a_full_width_csv_header_does_not_cost_a_record() {
+    let header = (1..=80).map(|i| format!("F{i}")).collect::<Vec<_>>().join(",");
+    let record = format!("x{}", ",".repeat(79));
+    let csv = format!("{header}\n{}", format!("{record}\n").repeat(50_000));
+    let mut s = Session::new(Document::from_text("Hello"));
+    let r = s.run("mailings.recipients", &json!({"csv": csv})).unwrap();
+    assert_eq!((r["records"].clone(), r.get("dropped")), (json!(50_000), None));
 }
