@@ -181,6 +181,12 @@ fn a_page_that_starts_or_ends_inside_a_paragraph_is_refused_and_nothing_changes(
     let info = page_footers(&mut s);
     assert_eq!(info.len(), pages);
     assert!(info[1].blocked.is_some() && info[0].blocked.is_none());
+    assert_eq!(info[0].blocked_code, None);
+    assert_eq!(info[1].blocked_code, Some(BlockedReason::StartsMidBlock));
+    assert!(err.to_string().ends_with("[starts_mid_block]"), "{err}");
+    let listed = s.run("layout.pageFooters", &json!({})).unwrap();
+    assert_eq!(listed["pages"][1]["blockedCode"], "starts_mid_block");
+    assert!(listed["pages"][0]["blockedCode"].is_null() && listed["pages"][0]["blocked"].is_null());
 }
 
 #[test]
@@ -305,8 +311,11 @@ fn page_break_paragraph_forms_are_fine_and_tables_at_the_edge_are_refused() {
     let info = page_footers(&mut s);
     assert!(info[1].blocked.as_deref().is_some_and(|m| m.contains("table")), "{:?}", info[1].blocked);
     assert!(info[2].blocked.as_deref().is_some_and(|m| m.contains("table")), "{:?}", info[2].blocked);
+    assert_eq!(info[1].blocked_code, Some(BlockedReason::EndsWithTable));
+    assert_eq!(info[2].blocked_code, Some(BlockedReason::AfterTable));
     let e = hide(&mut s, 2).unwrap_err();
     assert!(matches!(e, CmdError::Disabled(_)) && e.to_string().contains("table"), "{e}");
+    assert!(e.to_string().ends_with("[ends_with_table]"), "{e}");
     assert_eq!(s.doc, before, "nothing changed");
 }
 
@@ -399,4 +408,19 @@ fn a_visible_that_is_not_a_boolean_is_a_params_error_and_changes_nothing() {
         assert_eq!(s.doc, before, "{visible}");
     }
     assert_eq!(shown(&mut s), vec![true; 3]);
+}
+
+#[test]
+fn blocked_codes_are_stable_strings() {
+    let all = [
+        (BlockedReason::StartsMidBlock, "starts_mid_block"),
+        (BlockedReason::EndsMidBlock, "ends_mid_block"),
+        (BlockedReason::ContinuousBreak, "continuous_break"),
+        (BlockedReason::AfterTable, "after_table"),
+        (BlockedReason::EndsWithTable, "ends_with_table"),
+        (BlockedReason::NoText, "no_text"),
+    ];
+    for (reason, code) in all {
+        assert_eq!(reason.code(), code);
+    }
 }

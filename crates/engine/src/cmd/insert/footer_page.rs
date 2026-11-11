@@ -51,6 +51,61 @@ pub struct PageFooterInfo {
     /// Why the footer of this page cannot be hidden or shown on its own (`layout.pageFooterVisible`
     /// refuses it), if so.
     pub blocked: Option<String>,
+    /// The stable code of the reason in `blocked` (`None` exactly when `blocked` is).
+    pub blocked_code: Option<BlockedReason>,
+}
+
+/// Why the footer of a page cannot be hidden or shown on its own. The text of the reason can be
+/// reworded; the code from [`BlockedReason::code`] is stable and meant for programs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockedReason {
+    /// The page starts in the middle of a paragraph or a table.
+    StartsMidBlock,
+    /// The page ends in the middle of a paragraph or a table.
+    EndsMidBlock,
+    /// The page holds a continuous section break.
+    ContinuousBreak,
+    /// The page follows a table, and a section break needs a paragraph before it.
+    AfterTable,
+    /// The page ends with a table, and a section break needs a paragraph to hold it.
+    EndsWithTable,
+    /// The page has no text of its own.
+    NoText,
+}
+
+impl BlockedReason {
+    /// The stable machine-readable code: `starts_mid_block`, `ends_mid_block`, `continuous_break`,
+    /// `after_table`, `ends_with_table` or `no_text`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::StartsMidBlock => "starts_mid_block",
+            Self::EndsMidBlock => "ends_mid_block",
+            Self::ContinuousBreak => "continuous_break",
+            Self::AfterTable => "after_table",
+            Self::EndsWithTable => "ends_with_table",
+            Self::NoText => "no_text",
+        }
+    }
+}
+
+/// A refusal to change a page's footer alone: the code and the sentence that explains it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Refusal {
+    code: BlockedReason,
+    text: String,
+}
+
+impl Refusal {
+    fn new(code: BlockedReason, text: String) -> Self {
+        Self { code, text }
+    }
+}
+
+impl From<Refusal> for CmdError {
+    /// The command's error: the sentence, then the code in brackets.
+    fn from(r: Refusal) -> Self {
+        CmdError::Disabled(format!("{} [{}]", r.text, r.code.code()))
+    }
 }
 
 /// Whether `blocks` show nothing: paragraphs without text or objects, and tables of such.
@@ -97,12 +152,14 @@ pub fn page_footer_info(s: &mut Session, idx: usize) -> Option<PageFooterInfo> {
 /// The footer and header state of page `i`, and why its footer cannot be changed alone, if so.
 fn info_of(doc: &Document, layout: &DocLayout, i: usize) -> Option<PageFooterInfo> {
     let pg = layout.pages.get(i)?;
-    let blocked = match PageUse::of(doc, layout, i) {
+    let refusal = match PageUse::of(doc, layout, i) {
         _ if first_of_section(layout, i) => None,
-        Some(u) => u.refusal(doc, i + 1).err().map(reason),
-        None => Some(reason(no_text(i + 1))),
+        Some(u) => u.refusal(doc, i + 1).err(),
+        None => Some(no_text(i + 1)),
     };
-    Some(PageFooterInfo { page: i + 1, number: pg.number, footer: footer_visible(doc, pg), header: header_visible(doc, pg), blocked })
+    let blocked_code = refusal.as_ref().map(|r| r.code);
+    let blocked = refusal.map(|r| r.text);
+    Some(PageFooterInfo { page: i + 1, number: pg.number, footer: footer_visible(doc, pg), header: header_visible(doc, pg), blocked, blocked_code })
 }
 
 /// What a page holds of the body, by top-level block.
@@ -207,46 +264,53 @@ impl PageUse {
     }
 
     /// Why a section break can't go before and after this page, if so.
-    fn refusal(&self, doc: &Document, n: usize) -> Result<(), CmdError> {
+    fn refusal(&self, doc: &Document, n: usize) -> Result<(), Refusal> {
         if self.starts_mid && self.split_before.is_none() {
-            return Err(CmdError::Disabled(format!(
-                "page {n} starts in the middle of a paragraph or table, and section breaks go between paragraphs: put the paragraph that starts it on a page of its own (Page Break Before) first"
-            )));
+            return Err(Refusal::new(
+                BlockedReason::StartsMidBlock,
+                format!(
+                    "page {n} starts in the middle of a paragraph or table, and section breaks go between paragraphs: put the paragraph that starts it on a page of its own (Page Break Before) first"
+                ),
+            ));
         }
         if self.ends_mid && self.split_after.is_none() {
-            return Err(CmdError::Disabled(format!(
-                "page {n} ends in the middle of a paragraph or table, and section breaks go between paragraphs: put a page break after that paragraph first"
-            )));
+            return Err(Refusal::new(
+                BlockedReason::EndsMidBlock,
+                format!(
+                    "page {n} ends in the middle of a paragraph or table, and section breaks go between paragraphs: put a page break after that paragraph first"
+                ),
+            ));
         }
         let sections = doc.sections();
         let sidx = doc.section_index_of(self.first);
         if doc.section_index_of(self.last) != sidx {
-            return Err(CmdError::Disabled(format!("page {n} holds a continuous section break: make it a next-page break first")));
+            return Err(Refusal::new(
+                BlockedReason::ContinuousBreak,
+                format!("page {n} holds a continuous section break: make it a next-page break first"),
+            ));
         }
         let start = if sidx == 0 { 0 } else { sections.get(sidx - 1).map_or(0, |(e, _)| e + 1) };
         let end = sections.get(sidx).map_or(self.last, |(e, _)| *e);
         let para = |b: usize| matches!(doc.body.get(b).map(|x| &**x), Some(Block::Para(_)));
         if self.first > start && self.split_before.is_none() && !para(self.first - 1) {
-            return Err(CmdError::Disabled(format!("page {n} follows a table, and a section break needs a paragraph before it")));
+            return Err(Refusal::new(
+                BlockedReason::AfterTable,
+                format!("page {n} follows a table, and a section break needs a paragraph before it"),
+            ));
         }
         if self.last < end && self.split_after.is_none() && !para(self.last) {
-            return Err(CmdError::Disabled(format!("page {n} ends with a table, and a section break needs a paragraph to hold it")));
+            return Err(Refusal::new(
+                BlockedReason::EndsWithTable,
+                format!("page {n} ends with a table, and a section break needs a paragraph to hold it"),
+            ));
         }
         Ok(())
     }
 }
 
-/// The reason an error gives, without the command's name.
-fn reason(e: CmdError) -> String {
-    match e {
-        CmdError::Disabled(why) | CmdError::Failed(why) | CmdError::Params(why) => why,
-        other => other.to_string(),
-    }
-}
-
 /// The refusal for a page with no text of its own, where a section break cannot be placed.
-fn no_text(n: usize) -> CmdError {
-    CmdError::Disabled(format!("page {n} has no text of its own, so there is nothing to put a section break around"))
+fn no_text(n: usize) -> Refusal {
+    Refusal::new(BlockedReason::NoText, format!("page {n} has no text of its own, so there is nothing to put a section break around"))
 }
 
 /// Whether page `idx` is the first page of its section.
@@ -385,7 +449,8 @@ pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> Cmd
     };
     if explicit.is_some() == toggle {
         return Err(CmdError::Params(
-            if toggle { "give either visible or toggle: true, not both" } else { "give visible (true or false), or toggle: true to flip the footer" }.into(),
+            if toggle { "give either visible or toggle: true, not both" } else { "give visible (true or false), or toggle: true to flip the footer" }
+                .into(),
         ));
     }
     let layout = s.layout();
@@ -522,7 +587,7 @@ fn content_of(doc: &Document, id: u32) -> Blocks {
 fn set_inner_page(s: &mut Session, layout: &DocLayout, idx: usize, content: Blocks, orig: Blocks) -> Result<(), CmdError> {
     let n = idx + 1;
     let Some(pg) = layout.pages.get(idx) else { return Ok(()) };
-    let usage = PageUse::of(&s.doc, layout, idx).ok_or_else(|| no_text(n))?;
+    let usage = PageUse::of(&s.doc, layout, idx).ok_or_else(|| CmdError::from(no_text(n)))?;
     usage.refusal(&s.doc, n)?;
     let slot = pg.hf_slot;
     if slot == HfSlot::First {

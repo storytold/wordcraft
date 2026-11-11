@@ -253,11 +253,11 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.pageFooters", "Footers by Page", "Header & Footer › Options", |s, _| {
             let pages: Vec<_> = crate::cmd::insert::page_footers(s)
                 .into_iter()
-                .map(|i| json!({"page": i.page, "number": i.number, "footer": i.footer, "header": i.header, "blocked": i.blocked}))
+                .map(|i| json!({"page": i.page, "number": i.number, "footer": i.footer, "header": i.header, "blocked": i.blocked, "blockedCode": i.blocked_code.map(|c| c.code())}))
                 .collect();
             Ok(json!({"pages": pages}))
         })
-        .params(r#"{} — every page of the layout with whether it shows a footer and a header, and why its footer can't be changed alone (blocked) if so"#)
+        .params(r#"{} — every page of the layout with whether it shows a footer and a header, and why its footer can't be changed alone if so: blocked (sentence) and blockedCode (stable code: starts_mid_block, ends_mid_block, continuous_break, after_table, ends_with_table, no_text), both null when it can"#)
         .pure(),
         CommandSpec::new("hf.next", "Next Section", "Header & Footer › Navigation", |s, _| hf_nav(s, 1)).pure(),
         CommandSpec::new("hf.previous", "Previous Section", "Header & Footer › Navigation", |s, _| hf_nav(s, -1)).pure(),
