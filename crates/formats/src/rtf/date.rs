@@ -1,3 +1,8 @@
+/// An ISO 8601 date-time from year, month, day, hour and minute.
+pub(super) fn iso_date((y, mo, d, h, mi): (u32, u32, u32, u32, u32)) -> String {
+    format!("{y:04}-{:02}-{:02}T{:02}:{:02}:00Z", mo.clamp(1, 12), d.clamp(1, 31), h.min(23), mi.min(59))
+}
+
 pub(super) fn rtf_date(s: &str) -> Option<String> {
     let num = |a: usize, b: usize| s.get(a..b).and_then(|x| x.parse::<u32>().ok());
     let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
