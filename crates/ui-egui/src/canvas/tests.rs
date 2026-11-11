@@ -1212,6 +1212,26 @@ fn the_text_pointer_stays_off_the_grey_around_the_page() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow during a drag that began in the grey area");
     h.event(egui::Event::PointerButton { pos: further_beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
     h.step();
+
+    // A press on the page and a move onto the grey that arrive in one frame: the press decides.
+    h.event(egui::Event::PointerMoved(on_page));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: on_page, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "press and move in one frame keep the text pointer");
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
+
+    // A Ctrl/Cmd press in the grey area starts a unit selection, but the pointer stays an arrow.
+    let ctrl = egui::Modifiers::COMMAND;
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: ctrl });
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow during a unit selection that began in the grey area");
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: ctrl });
+    h.step();
 }
 
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the

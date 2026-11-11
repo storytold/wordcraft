@@ -1425,11 +1425,17 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         // the arrow stays. A drag that started on the page keeps its I-beam.
         let on_here = latest.is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p));
         if ui.input(|i| i.pointer.primary_pressed()) {
-            app.canvas.press_on_paper = Some(on_here);
+            let pressed_at = ui.input(|i| {
+                i.events.iter().rev().find_map(|e| match e {
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, .. } => Some(*pos),
+                    _ => None,
+                })
+            });
+            app.canvas.press_on_paper = Some(pressed_at.map_or(on_here, |p| area.contains(p) && on_visible_page(&rects, &geo.bands, p)));
         } else if !ui.input(|i| i.pointer.primary_down()) {
             app.canvas.press_on_paper = None;
         }
-        let on_paper = on_here || app.canvas.unit_drag.is_some() || (resp.dragged() && app.canvas.press_on_paper == Some(true));
+        let on_paper = on_here || ((app.canvas.unit_drag.is_some() || resp.dragged()) && app.canvas.press_on_paper == Some(true));
         let fallback = if in_bar || !on_paper {
             egui::CursorIcon::Default
         } else if app.session.painter.is_some() {
