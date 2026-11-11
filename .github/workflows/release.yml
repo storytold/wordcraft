@@ -18,7 +18,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Regenerates contributors/contributors.json for the release commit; every build bundles it.
+  credits:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: storytold/craft-common-actions/.github/workflows/refresh-contributors.yml@main
   release:
+    needs: credits
     # Only this job publishes the GitHub release, so only it gets write access.
     permissions:
       contents: write
@@ -31,6 +38,7 @@ jobs:
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       web-craft-fonts: true
       version: ${{ inputs.version }}
+      contributors-artifact: ${{ needs.credits.outputs.artifact-name }}
     secrets:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}

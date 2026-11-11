@@ -102,7 +102,9 @@ struct SeqCount {
 
 /// The fresh results of the unlocked SEQ fields in the body and in the text boxes anchored there
 /// ([`update_seq`]). A text box's fields count where the box is anchored, before the fields after
-/// the anchor in its paragraph and after those before it (measured in Word for Windows).
+/// the anchor in its paragraph and after those before it (measured in Word for Windows). A locked
+/// SEQ keeps its result but still counts, `\r` included; a SEQ in a tracked deletion keeps its
+/// result and doesn't count, with markup shown or not (measured in Word for Windows, exporting).
 fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut count = SeqCount::default();
     for path in doc.para_paths(StoryRef::Body) {
@@ -120,7 +122,11 @@ fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
 
 /// Number the SEQ fields of paragraph `p` (at `path` in `story`) and of the text boxes anchored in it.
 fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Paragraph, count: &mut SeqCount) {
-    for (k, o) in p.objects.iter().enumerate() {
+    // The runs come in order and the objects by offset, so one cursor walks the deleted ranges.
+    let mut deleted = p.deleted_ranges().into_iter().peekable();
+    for (k, (off, o)) in p.objects_with_offsets().enumerate() {
+        while deleted.next_if(|r| r.end <= off).is_some() {}
+        let in_deletion = deleted.peek().is_some_and(|r| r.contains(&off));
         for id in o.text_boxes() {
             if count.boxes.insert(id) {
                 let part = StoryRef::Part(id);
@@ -131,9 +137,9 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
                 }
             }
         }
-        let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+        let InlineObject::Field { instr, locked, .. } = o else { continue };
         let f = FieldCode::parse(instr);
-        if f.name != "SEQ" {
+        if f.name != "SEQ" || in_deletion {
             continue;
         }
         let Some(id) = f.args.first() else { continue };
@@ -148,6 +154,9 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
             n.0 = r;
         } else if !f.has('c') {
             n.0 = n.0.saturating_add(1);
+        }
+        if *locked {
+            continue;
         }
         let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or_default();
         let r = if f.has('h') { String::new() } else { wordcraft_layout::fields::field_number(instr, fmt, n.0) };
