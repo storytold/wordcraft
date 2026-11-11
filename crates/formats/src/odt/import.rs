@@ -812,6 +812,10 @@ struct Parsed {
     parts: page_parts::Parts,
     /// Some paragraph hyphenates: the document hyphenates (see [`hyphenation`]).
     hyphenate: bool,
+    /// The hyphenation options the default paragraph style (else Standard) states.
+    hyphen_options: super::styles::HyphenOptions,
+    /// The body's first master page is mirrored (§19.505): mirror margins.
+    mirror_margins: bool,
     /// Custom document properties (`meta:user-defined`) and user fields.
     custom: Vec<wordcraft_doc::CustomProp>,
     /// The bibliography sources the citations carry.
@@ -958,6 +962,15 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
     let sources = std::mem::take(&mut body.sources);
     resolve_groups(&mut blocks);
     let section_masters = std::mem::take(&mut body.section_masters);
+    // Mirror margins are the document's in WordCraft (as in Word): as the master page the body
+    // starts with says (Standard, else the first one, when no paragraph names one).
+    let first_master = section_masters
+        .first()
+        .cloned()
+        .flatten()
+        .filter(|m| pages.masters.contains_key(m))
+        .or_else(|| if pages.masters.contains_key("Standard") { Some("Standard".to_string()) } else { pages.first_name.clone() });
+    let mirror_margins = first_master.is_some_and(|m| pages.mirrored.contains(&m));
     // And the pictures paragraphs and tables kept as read show.
     let mut linking: Vec<(String, std::sync::Arc<str>)> = kept_defs.clone();
     kept_markup(&blocks, 0, &mut linking);
@@ -1004,6 +1017,8 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         page_doc: pages.doc.clone(),
         parts,
         hyphenate,
+        hyphen_options: styles.hyphen_options(),
+        mirror_margins,
         custom,
         sources,
         kept,
@@ -1050,6 +1065,8 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         page_doc,
         parts,
         hyphenate,
+        hyphen_options,
+        mirror_margins,
         custom,
         sources,
         kept,
@@ -1071,6 +1088,12 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     (doc.core.last_modified_by, doc.core.modified, doc.core.revision) = changes;
     doc.sources = sources;
     doc.settings.auto_hyphenation |= hyphenate;
+    doc.settings.mirror_margins = mirror_margins;
+    doc.settings.consecutive_hyphen_limit = hyphen_options.ladder.unwrap_or(0);
+    if let Some(z) = hyphen_options.zone {
+        doc.settings.hyphenation_zone = z;
+    }
+    doc.settings.hyphenate_caps = !hyphen_options.no_caps.unwrap_or(false);
     if font.is_some() {
         Arc::make_mut(&mut doc.styles).default_chr.font = font;
     }
@@ -1159,6 +1182,8 @@ pub(super) struct Pages {
     /// Each master page's next one (§19.511 `style:next-style-name`): the page style the pages
     /// after its first take.
     pub(super) next: HashMap<String, String>,
+    /// The master pages whose layout is mirrored (§19.505 `style:page-usage`).
+    pub(super) mirrored: std::collections::HashSet<String>,
     /// What the document's first page style and its note and line numbering settings say for
     /// the whole document.
     pub(super) doc: PageDoc,
@@ -1247,6 +1272,8 @@ struct Layout {
     image: Option<(String, &'static str)>,
     columns: Option<Columns>,
     column_specs: Vec<super::styles::ColumnSpec>,
+    /// §19.505 `style:page-usage="mirrored"`: left pages mirror right ones (Word's mirror margins).
+    mirrored: bool,
     header: Band,
     footer: Band,
 }
@@ -1292,7 +1319,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                 if let Some(n) = &cur
                     && layouts.len() < MAX_SECTIONS
                 {
-                    layouts.entry(n.clone()).or_default();
+                    layouts.entry(n.clone()).or_default().mirrored = get(&a, "style:page-usage").is_some_and(|u| u.trim() == "mirrored");
                 }
             }
             // A page background picture (§17.3, in `style:page-layout-properties`): §20.249
@@ -1377,7 +1404,10 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     });
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
-        let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
+        let Some(Layout { attrs: a, columns: cols, column_specs, mirrored, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
+        if *mirrored {
+            pages.mirrored.insert(name.clone());
+        }
         // What a layout leaves unsaid: the default paper, and no margins.
         let mut sec = unstated_page(paper);
         apply_layout(a, &mut sec);

@@ -273,10 +273,13 @@ impl KeptXml {
     }
 }
 
-/// What `doc`'s style definitions are: its styles, lists and default tab interval.
+/// What `doc`'s style definitions are: its styles, lists, default tab interval and the
+/// hyphenation options the default paragraph style carries.
 pub fn styles_fingerprint(doc: &crate::Document) -> u64 {
+    let s = &doc.settings;
+    let hyphenation = (s.auto_hyphenation, s.consecutive_hyphen_limit, s.hyphenation_zone, s.hyphenate_caps);
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    match serde_json::to_vec(&(&doc.styles, &doc.numbering, doc.settings.default_tab)) {
+    match serde_json::to_vec(&(&doc.styles, &doc.numbering, s.default_tab, hyphenation)) {
         Ok(v) => v.hash(&mut h),
         Err(_) => u64::MAX.hash(&mut h),
     }
@@ -479,8 +482,8 @@ fn family_fingerprint(doc: &crate::Document, root: u32, replies: &HashMap<u32, V
 
 /// What `doc`'s page setup is: each section's setup (where it starts, its size, margins,
 /// columns, headers and footers), the headers' and footers' content, whether odd and even pages
-/// differ, the page colour and picture, the watermark (one with no text isn't written), and the
-/// notes' numbering.
+/// differ, whether margins mirror, the page colour and picture, the watermark (one with no text
+/// isn't written), and the notes' numbering.
 pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
     let mut sections: Vec<&crate::SectionProps> = doc.body.iter().filter_map(|b| b.as_para()).filter_map(|p| p.section.as_deref()).collect();
     sections.push(&doc.last_section);
@@ -492,6 +495,7 @@ pub fn pages_fingerprint(doc: &crate::Document) -> u64 {
         sections,
         parts,
         s.even_odd_headers,
+        s.mirror_margins,
         &s.page_color,
         &s.page_picture,
         s.watermark.as_ref().filter(|w| !w.text.trim().is_empty()),
