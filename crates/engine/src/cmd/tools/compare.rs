@@ -1,6 +1,8 @@
 use super::{
-    Arc, Block, CharProps, CmdError, CmdResult, Document, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p, para_block,
+    Arc, Block, CharProps, CmdError, CmdResult, Document, InlineObject, Paragraph, RevisionKind, Selection, Session, StoryRef, Value, json, p,
+    para_block,
 };
+use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
 pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
@@ -64,7 +66,13 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
     let old: Vec<Arc<Block>> = s.doc.body.clone();
-    let new: Vec<Arc<Block>> = revised.body.clone();
+    let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
+        // The revised document's text boxes get stories of their own in the result, so its
+        // boxes never show a story of the original's (or none at all).
+        s.doc.adopt_fragment(&revised.body_fragment()).into_iter().map(Arc::new).collect()
+    } else {
+        revised.body.clone()
+    };
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Insert, author: author.clone(), date: date.clone(), move_name: None });
     let ins = (s.doc.revisions.len() - 1) as u32;
     s.doc.revisions.push(wordcraft_doc::Revision { kind: RevisionKind::Delete, author: author.clone(), date: date.clone(), move_name: None });
@@ -86,6 +94,16 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let (a, b) = (old.get(i), new.get(j));
                 // The revised block, with its formatting changes tracked.
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
+                    if !same_objects(&s.doc, pa, pb) {
+                        // Same text, but objects (text boxes, pictures…) differ: diffed, so the
+                        // original's objects aren't lost.
+                        out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)));
+                        changes += 1;
+                        i += 1;
+                        j += 1;
+                        k += 1;
+                        continue;
+                    }
                     let mut p = pb.clone();
                     if opts.formatting && pa.text == pb.text {
                         let before = s.doc.revisions.len();
@@ -111,7 +129,9 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(pa, pb, ins, del, &opts, &mut budget))),
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
+                            out.push(para_block(word_diff(&s.doc, pa, pb, ins, del, &opts, &mut budget)))
+                        }
                         _ => {
                             if let Some(x) = a {
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
@@ -308,30 +328,97 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
     out.extend(std::iter::repeat_n(Op::Ins, inss));
 }
 
-/// Words with the spaces after them ("The ", "cat "), or single characters.
-fn tokens(s: &str, characters: bool) -> Vec<String> {
-    if characters {
-        return s.chars().map(String::from).collect();
+/// A token of a changed paragraph: a word (or character), or an inline object without text
+/// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+enum Tok<'a> {
+    Text(String),
+    Obj(&'a InlineObject),
+}
+
+/// What a comparison sees of a token: the text as the options say, an object with the text of
+/// the text boxes it shows instead of their story ids (each document numbers its own stories).
+#[derive(PartialEq)]
+enum Key {
+    Text(String),
+    Obj(Box<InlineObject>, Vec<String>),
+}
+
+fn obj_key(doc: &Document, o: &InlineObject) -> Key {
+    let texts = o.text_boxes().into_iter().map(|id| doc.plain_text(StoryRef::Part(id))).collect();
+    let mut o = o.clone();
+    for story in o.text_box_slots() {
+        *story = None;
+    }
+    Key::Obj(Box::new(o), texts)
+}
+
+/// Whether two paragraphs hold the same objects, as compared.
+fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
+    a.objects.len() == b.objects.len() && a.objects.iter().zip(&b.objects).all(|(x, y)| x == y || obj_key(doc, x) == obj_key(doc, y))
+}
+
+/// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
+/// between them. Objects with text (fields, equations…) count as their text.
+fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
+    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
+        cur.push(c);
+        if characters || c == ' ' {
+            v.push(Tok::Text(std::mem::take(cur)));
+        }
     }
     let mut v = Vec::new();
     let mut cur = String::new();
-    for c in s.chars() {
-        cur.push(c);
-        if c == ' ' {
-            v.push(std::mem::take(&mut cur));
+    let mut objects = p.objects.iter();
+    for c in p.text.chars() {
+        if c != OBJ {
+            push(&mut v, &mut cur, c, characters);
+            continue;
+        }
+        match objects.next() {
+            Some(o) if o.plain_text().is_empty() => {
+                if !cur.is_empty() {
+                    v.push(Tok::Text(std::mem::take(&mut cur)));
+                }
+                v.push(Tok::Obj(o));
+            }
+            Some(o) => o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters)),
+            None => {
+                // A marker without its object (a broken paragraph): kept as a visible
+                // placeholder, so the loss shows in the result instead of vanishing.
+                log::warn!("compare: an object marker without its object");
+                push(&mut v, &mut cur, char::REPLACEMENT_CHARACTER, characters);
+            }
         }
     }
     if !cur.is_empty() {
-        v.push(cur);
+        v.push(Tok::Text(cur));
     }
     v
 }
 
-fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOptions, budget: &mut u64) -> Paragraph {
+/// Add a token at the end of `p` with `props`.
+fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
+    let at = p.len();
+    match t {
+        Some(Tok::Text(t)) => {
+            let _ = p.insert_text(at, t, props);
+        }
+        Some(Tok::Obj(o)) => {
+            let _ = p.insert_object(at, (*o).clone(), props);
+        }
+        None => {}
+    }
+}
+
+fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOptions, budget: &mut u64) -> Paragraph {
     let (at, bt) = (a.plain_text(), b.plain_text());
     let chars = opts.characters && at.chars().count().max(bt.chars().count()) <= MAX_CHAR_DIFF;
-    let (ta, tb) = (tokens(&at, chars), tokens(&bt, chars));
-    let ops = lcs_ops(&ta.iter().map(|t| opts.key(t)).collect::<Vec<_>>(), &tb.iter().map(|t| opts.key(t)).collect::<Vec<_>>(), budget);
+    let (ta, tb) = (tokens(a, chars), tokens(b, chars));
+    let key = |t: &Tok<'_>| match t {
+        Tok::Text(t) => Key::Text(opts.key(t)),
+        Tok::Obj(o) => obj_key(doc, o),
+    };
+    let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
     // but a matched single character very often does (digits, punctuation), so only there does
     // a short interior match need folding back into its surrounding edit.
@@ -341,20 +428,19 @@ fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOpt
     let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
-        let at = p.len();
         match op {
             Op::Same => {
                 // Equal as compared (perhaps up to case or spacing): the revised text.
-                let _ = p.insert_text(at, tb.get(j).map(String::as_str).unwrap_or(""), &base);
+                put(&mut p, tb.get(j), &base);
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                let _ = p.insert_text(at, ta.get(i).map(String::as_str).unwrap_or(""), &CharProps { del: Some(del), ..base.clone() });
+                put(&mut p, ta.get(i), &CharProps { del: Some(del), ..base.clone() });
                 i += 1;
             }
             Op::Ins => {
-                let _ = p.insert_text(at, tb.get(j).map(String::as_str).unwrap_or(""), &CharProps { ins: Some(ins), ..base.clone() });
+                put(&mut p, tb.get(j), &CharProps { ins: Some(ins), ..base.clone() });
                 j += 1;
             }
         }

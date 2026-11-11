@@ -116,6 +116,12 @@ fn piece_bytes(p: &Piece) -> Vec<u8> {
 
 /// A document whose main text is the given pieces (extra subdocument text may follow).
 fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
+    text_doc_with(main, extra, FibSpec { ccp_hdd, ..Default::default() }, &[])
+}
+
+/// [`text_doc`] with the FIB knobs given (`ccp_text` is filled in from `main`; `pairs` must be empty) and extra
+/// Table-stream data placed after the piece table: `(pair index, bytes)` for each.
+fn text_doc_with(main: &[Piece], extra: &[Piece], spec: FibSpec, table_data: &[(usize, &[u8])]) -> Vec<u8> {
     let all: Vec<Piece> = main.iter().chain(extra.iter()).cloned().collect();
     let ccp_text: u32 = main.iter().map(|p| p.text.chars().count() as u32).sum();
     let mut word = vec![0u8; TEXT_FC as usize];
@@ -128,7 +134,13 @@ fn text_doc(main: &[Piece], extra: &[Piece], ccp_hdd: u32) -> Vec<u8> {
     clx.extend_from_slice(&plc);
     let mut table = vec![0u8; CLX_AT as usize];
     table.extend_from_slice(&clx);
-    let spec = FibSpec { ccp_text, ccp_hdd, pairs: vec![(33, CLX_AT, clx.len() as u32)], ..Default::default() };
+    let mut pairs = vec![(33, CLX_AT, clx.len() as u32)];
+    for (pair, bytes) in table_data {
+        pairs.push((*pair, table.len() as u32, bytes.len() as u32));
+        table.extend_from_slice(bytes);
+    }
+    debug_assert!(spec.pairs.is_empty(), "text_doc_with sets the pairs itself");
+    let spec = FibSpec { ccp_text, pairs, ..spec };
     word[..fib_bytes(&spec).len()].copy_from_slice(&fib_bytes(&spec));
     cfb_file(&[("WordDocument", &word), ("0Table", &table)])
 }
@@ -247,11 +259,91 @@ fn empty_paragraphs_kept() {
     assert_eq!(body_texts(&doc), ["a", "", "b"]);
 }
 
+/// A document of `n` copies of `mark` as one compressed piece.
+fn marks_doc(mark: char, n: usize) -> Vec<u8> {
+    text_doc(&[Piece { compressed: true, text: mark.to_string().repeat(n) }], &[], 0)
+}
+
+/// Paragraph marks are one byte each in the file but about 1 KB each in memory, so they have
+/// their own cap ([`super::MAX_PARAGRAPHS`]); a file past it is refused instead of growing
+/// until the machine runs out. A document exactly at the cap still opens.
+#[test]
+fn a_flood_of_paragraph_marks_is_refused() {
+    let at_cap = super::read_limited(&marks_doc('\r', 1000), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 1000);
+    let over = super::read_limited(&marks_doc('\r', 1001), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The paragraph cap is one budget for the whole document, not one per story: marks in the
+/// body and in a footnote add up. (A walk that got its own budget would open both over-cap files.)
+#[test]
+fn the_paragraph_cap_is_shared_by_the_body_and_a_footnote() {
+    // One footnote at CP 0 whose text is `note` marks, stored right after the body in the stream.
+    let doc_of = |body: usize, note: usize| {
+        let cps = |v: &[u32]| v.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
+        let mut refs = cps(&[0, 1]);
+        refs.extend_from_slice(&[0, 0]); // the one reference's data
+        let txt = cps(&[0, note as u32, note as u32]); // story 0..note, then the limit
+        let spec = FibSpec { ccp_ftn: note as u32, ..Default::default() };
+        text_doc_with(
+            &[Piece { compressed: true, text: "\r".repeat(body) }],
+            &[Piece { compressed: true, text: "\r".repeat(note) }],
+            spec,
+            &[(2, &refs), (3, &txt)],
+        )
+    };
+    let at_cap = super::read_limited(&doc_of(600, 400), None, 1000).expect("opens");
+    assert_eq!(at_cap.body.len(), 600);
+    assert_eq!(at_cap.parts.len(), 1);
+    let over = super::read_limited(&doc_of(600, 401), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+    let over = super::read_limited(&doc_of(601, 400), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// Cell marks are paragraph marks too: a never-closed row of them is refused the same way.
+#[test]
+fn a_flood_of_cell_marks_is_refused() {
+    let over = super::read_limited(&marks_doc('\u{7}', 5000), None, 1000);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
+}
+
+/// The budget counts down across spends and notes the overrun (`walk` receives one shared by
+/// every story of the document).
+#[test]
+fn the_paragraph_budget_counts_down_and_notes_the_overrun() {
+    let budget = super::ParaBudget { left: std::cell::Cell::new(2), exceeded: std::cell::Cell::new(false) };
+    assert!(budget.spend() && budget.spend());
+    assert!(!budget.exceeded.get());
+    assert!(!budget.spend());
+    assert!(budget.exceeded.get());
+}
+
+/// The cap is far above any real document (10,000 pages of 50 paragraphs is 500,000), and a
+/// paragraph outside a table no longer carries a table context (a `ParaOut` was 1,224 bytes).
+#[test]
+fn the_paragraph_cap_leaves_room_and_a_paragraph_stays_small() {
+    const { assert!(super::MAX_PARAGRAPHS >= 1_000_000) };
+    assert!(std::mem::size_of::<crate::table::ParaOut>() < 1000, "{}", std::mem::size_of::<crate::table::ParaOut>());
+    let doc = read(&marks_doc('\r', 10)).expect("opens");
+    assert_eq!(doc.body.len(), 10);
+}
+
 #[test]
 fn empty_document_gets_a_paragraph() {
     let f = text_doc(&[Piece { compressed: false, text: "".into() }], &[], 0);
     let doc = read(&f).expect("opens");
     assert_eq!(doc.body.len(), 1);
+}
+
+#[test]
+fn a_doc_opens_in_word_97_2003_compatibility_mode() {
+    let f = text_doc(&[Piece { compressed: false, text: "body\r".into() }], &[], 0);
+    let doc = read(&f).expect("opens");
+    // Word 97-2003 files are mode 11 in Word 2013+; mode 15 would change justification and
+    // line breaking.
+    assert_eq!(doc.settings.compat_mode, 11);
 }
 
 #[test]
@@ -421,7 +513,17 @@ fn std_bytes_next(stk: u8, istd_base: u16, istd_next: u16, name: &str, papx: &[u
 
 /// An STSH with the given styles.
 fn stsh_bytes(styles: &[Vec<u8>]) -> Vec<u8> {
-    let stshi = [(styles.len() as u16).to_le_bytes(), 10u16.to_le_bytes()].concat(); // cstd, cbSTDBaseInFile
+    stsh_bytes_with(styles, None)
+}
+
+/// An STSH with the given styles; with `standard`, a full Stshif and ftcBi giving the standard
+/// fonts' indexes (ASCII, East Asian, other, complex script), as Word writes them.
+fn stsh_bytes_with(styles: &[Vec<u8>], standard: Option<[u16; 4]>) -> Vec<u8> {
+    let mut stshi = [(styles.len() as u16).to_le_bytes(), 10u16.to_le_bytes()].concat(); // cstd, cbSTDBaseInFile
+    if let Some(fonts) = standard {
+        stshi.extend_from_slice(&[0u8; 8]); // flags, stiMaxWhenSaved, istdMaxFixedWhenSaved, nVerBuiltInNamesWhenSaved
+        stshi.extend(fonts.iter().flat_map(|f| f.to_le_bytes()));
+    }
     let mut v = (stshi.len() as u16).to_le_bytes().to_vec();
     v.extend_from_slice(&stshi);
     for s in styles {
@@ -532,6 +634,8 @@ struct RichExtra {
     prm: u16,
     alt_fonts: Vec<Option<&'static str>>,
     style_next: Vec<u16>,
+    /// The stylesheet's standard fonts (ASCII, East Asian, other, complex script).
+    standard_fonts: Option<[u16; 4]>,
 }
 
 fn rich_doc(spec: &RichSpec) -> Vec<u8> {
@@ -571,7 +675,7 @@ fn rich_doc_with(spec: &RichSpec, extra: &RichExtra) -> Vec<u8> {
         .enumerate()
         .map(|(i, s)| std_bytes_next(s.0, s.1, extra.style_next.get(i).copied().unwrap_or(0x0FFF), s.2, &s.3, &s.4))
         .collect();
-    let stsh = stsh_bytes(&styles);
+    let stsh = stsh_bytes_with(&styles, extra.standard_fonts);
     let fonts: Vec<(&str, Option<&str>)> = spec.fonts.iter().enumerate().map(|(i, n)| (*n, extra.alt_fonts.get(i).copied().flatten())).collect();
     let ffn = ffn_bytes_alt(&fonts);
     let clx_at = 0x40;
@@ -652,6 +756,67 @@ fn font_and_size_from_style_and_direct() {
     assert!(doc.styles.styles.iter().any(|s| s.name == "Normal" && s.chr.size == Some(12.0)), "Normal 12pt");
     let p = para0(&doc);
     assert!(p.runs.first().is_some_and(|r| r.props.font.as_deref() == Some("Arial")), "run font: {:?}", p.runs);
+}
+
+/// #5066: the default font is the stylesheet's standard font (Aptos in a Word 365 file), not
+/// the font table's first entry (still Times New Roman there); the East Asian and complex-script
+/// standard fonts are the defaults for those scripts, and runs name theirs with sprmCRgFtc1 and
+/// sprmCFtcBi.
+#[test]
+fn the_default_font_is_the_stylesheets_standard_font() {
+    let spec = |runs: Vec<(u32, Vec<u8>)>| RichSpec {
+        text: "Hello\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), grpprl(&[(0x4A43, &24u16.to_le_bytes())]))],
+        fonts: vec!["Times New Roman", "Symbol", "Arial", "Aptos", "MS Mincho", "Arial Unicode"],
+        chpx_runs: runs,
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let with = |standard: Option<[u16; 4]>, runs| {
+        read(&rich_doc_with(&spec(runs), &RichExtra { standard_fonts: standard, ..Default::default() })).expect("opens")
+    };
+    let doc = with(Some([3, 4, 3, 2]), vec![(0, Vec::new())]);
+    let d = &doc.styles.default_chr;
+    assert_eq!((d.font.as_deref(), d.font_ea.as_deref(), d.font_cs.as_deref()), (Some("Aptos"), Some("MS Mincho"), Some("Arial")));
+    let p = para0(&doc);
+    let resolved = doc.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!(resolved.font, "Aptos", "Normal names no font, so the text takes the standard one");
+    // A run's own East Asian and complex-script fonts.
+    let doc = with(Some([3, 4, 3, 2]), vec![(0, grpprl(&[(0x4A50, &5u16.to_le_bytes()), (0x4A5E, &3u16.to_le_bytes())]))]);
+    let run = &para0(&doc).runs[0].props;
+    assert_eq!((run.font_ea.as_deref(), run.font_cs.as_deref()), (Some("Arial Unicode"), Some("Aptos")));
+    // Indexes past the font table, or a header too short to hold them, keep entry 0.
+    for standard in [Some([99, 99, 99, 99]), None] {
+        let doc = with(standard, vec![(0, Vec::new())]);
+        let d = &doc.styles.default_chr;
+        assert_eq!((d.font.as_deref(), d.font_ea.as_deref(), d.font_cs.as_deref()), (Some("Times New Roman"), None, None), "{standard:?}");
+    }
+}
+
+/// #5066: `ftcBi` is optional in the stylesheet header, and the latent style data (`cbLSD`, 4,
+/// then the LSDs) follows it: a header that leaves it out doesn't make `cbLSD` the complex-script
+/// font.
+#[test]
+fn the_complex_script_standard_font_is_read_only_when_present() {
+    let header = |tail: &[u16]| -> Vec<u8> {
+        // cstd, cbSTDBaseInFile, flags, stiMaxWhenSaved, istdMaxFixedWhenSaved,
+        // nVerBuiltInNamesWhenSaved; ASCII, East Asian, other.
+        let words = [&[0u16, 10, 0, 1, 0, 0, 3, 4, 3][..], tail].concat();
+        let stshi: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        [(stshi.len() as u16).to_le_bytes().to_vec(), stshi].concat()
+    };
+    let bidi = |tail: &[u16]| {
+        let b = header(tail);
+        crate::stsh::standard_fonts(&b, 0, b.len() as u32).bidi
+    };
+    assert_eq!(bidi(&[2]), Some(2), "a header that ends with it (Word 97)");
+    assert_eq!(bidi(&[4]), Some(4), "font 4, at the end of the header");
+    assert_eq!(bidi(&[2, 4, 0, 0]), Some(2), "followed by the latent style data");
+    assert_eq!(bidi(&[4, 4, 0, 0]), Some(4), "font 4, followed by the latent style data");
+    assert_eq!(bidi(&[4, 0, 0]), None, "left out: cbLSD is in its place");
+    assert_eq!(bidi(&[]), None, "a header too short for it");
+    let b = header(&[4, 0, 0]);
+    let fonts = crate::stsh::standard_fonts(&b, 0, b.len() as u32);
+    assert_eq!((fonts.ascii, fonts.east_asian, fonts.other), (Some(3), Some(4), Some(3)), "the other fonts are read all the same");
 }
 
 #[test]
@@ -946,6 +1111,32 @@ fn two_sections_box_the_first() {
 }
 
 #[test]
+fn sections_ending_off_a_paragraph_mark_attach_nowhere() {
+    // Hostile section ends that miss every paragraph mark are skipped; the one that ends a
+    // paragraph still boxes it. Paragraphs are found by their end, not scanned per section.
+    let mut sections: Vec<(u32, Vec<u8>)> = (1..6).map(|cp| (cp, Vec::new())).collect();
+    sections.push((6, grpprl(&[(0x300A, &[0x01])])));
+    sections.push((12, Vec::new()));
+    let spec = StructSpec {
+        text: "first\rsecond\r",
+        header_stories: vec![],
+        sections,
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, Vec::new()), (6, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| b.as_para()).collect();
+    assert!(paras.first().and_then(|p| p.section.as_ref()).expect("first paragraph boxed").title_page);
+    assert_eq!(paras.iter().filter(|p| p.section.is_some()).count(), 1, "the missing ends attach nowhere");
+}
+
+#[test]
 fn header_story_becomes_part() {
     let spec = StructSpec {
         text: "body\r",
@@ -964,6 +1155,58 @@ fn header_story_becomes_part() {
     let id = doc.last_section.headers.default.expect("odd header part");
     let part = doc.parts.get(&id).expect("part");
     assert!(part.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains("Header text"))));
+}
+
+/// The odd header's blocks for a one-section document whose header story is `story`, with
+/// `papx_entries` over the whole stream (the header story starts at CP 5, after `body\r`):
+/// paragraph texts, a table as `<table>`; `None` when the slot has no part.
+fn odd_header_blocks(story: &'static str, papx_entries: Vec<(u32, u16, Vec<u8>)>) -> Option<Vec<String>> {
+    let spec = StructSpec {
+        text: "body\r",
+        header_stories: vec![story],
+        sections: vec![(5, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries,
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let id = doc.last_section.headers.default?;
+    let part = doc.parts.get(&id).expect("part");
+    Some(part.blocks.iter().map(|b| b.as_para().map_or_else(|| "<table>".to_string(), |p| p.text.clone())).collect())
+}
+
+/// #5922: [MS-DOC] 2.3.3 ends every non-empty header story with a guard paragraph mark that
+/// is not part of its contents. Read as a paragraph, it put an empty line under every header
+/// and pushed the first body line down when the header reached past the top margin.
+#[test]
+fn header_story_guard_mark_is_not_a_paragraph() {
+    let plain = || vec![(0, 0, Vec::new())];
+    // One line typed into the header: content "Header\r" + guard.
+    assert_eq!(odd_header_blocks("Header\r\r", plain()), Some(vec!["Header".to_string()]));
+    // Enter pressed after it: the empty paragraph is content and stays, only the guard goes.
+    assert_eq!(odd_header_blocks("Header\r\r\r", plain()), Some(vec!["Header".to_string(), String::new()]));
+    // An empty header (one empty content paragraph + guard) is still a header of its own.
+    assert_eq!(odd_header_blocks("\r\r", plain()), Some(vec![String::new()]));
+    // A story that is only a mark (no guard) keeps its paragraph and its part.
+    assert_eq!(odd_header_blocks("\r", plain()), Some(vec![String::new()]));
+    // A story without a guard keeps its last paragraph.
+    assert_eq!(odd_header_blocks("Header\r", plain()), Some(vec!["Header".to_string()]));
+}
+
+/// #5922: a mark right after a table row in a header story is kept: it is the paragraph that
+/// closes the table, not a guard to drop.
+#[test]
+fn header_story_mark_after_a_table_row_is_kept() {
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table(&[0, 2880])].concat();
+    // Stream: "body\r" (CPs 0-4), then the header story "a\x07" (5-6), row end "\x07" (7), "\r" (8).
+    let papx = vec![(0, 0, Vec::new()), (5, 0, in_tbl), (7, 0, ttp), (8, 0, Vec::new())];
+    assert_eq!(odd_header_blocks("a\u{7}\u{7}\r", papx), Some(vec!["<table>".to_string(), String::new()]));
 }
 
 /// A `sprmTDefTable` Prl for `edges` twip boundaries and TC80s of 20 bytes per column,
@@ -1108,6 +1351,53 @@ fn table_merges_borders_shading() {
     let top = b.top.expect("top border");
     assert_eq!(top.style, wordcraft_doc::props::BorderStyle::Single);
     assert_eq!(top.width, 0.5);
+}
+
+/// Table borders read the BrcType byte as paragraph borders do; a nil Brc80 is no border.
+#[test]
+fn table_borders_read_border_types_as_paragraphs_do() {
+    use wordcraft_doc::props::BorderStyle as S;
+    let text = "a\u{7}\u{7}tail\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let row_end = {
+        let mut v = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]), t_def_edges(&[0, 2880])].concat();
+        v.extend_from_slice(&0xD605u16.to_le_bytes());
+        v.push(0x18);
+        // Dotted, triple, double wave, nil, 3-D emboss 255/8 pt wide, all zero.
+        for brc in [[8, 0x06, 1, 0], [8, 0x0A, 1, 0], [8, 0x15, 1, 0], [0xFF; 4], [0xFF, 0x18, 1, 0], [0, 0, 0, 0]] {
+            v.extend_from_slice(&brc);
+        }
+        v
+    };
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl), (2, 0, row_end), (3, 0, grpprl(&[(0x6424, &[0xFF, 0x01, 1, 0])]))],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tbl = doc.body.iter().find_map(|b| b.as_table()).expect("table");
+    let b = tbl.props.borders.expect("table borders");
+    let seen = [b.top, b.left, b.bottom, b.right, b.between, b.inside_v].map(|s| s.map(|s| (s.style, s.is_visible(), s.width)));
+    let want = [
+        (S::Dotted, true, 1.0),
+        (S::Triple, true, 1.0),
+        (S::Wave, true, 1.0),
+        (S::None, false, 0.0),
+        (S::Single, true, 12.0),
+        (S::None, false, 0.25),
+    ];
+    assert_eq!(seen, want.map(Some));
+    // A paragraph border is at most 12 points too, as a table border and a DOCX `w:sz` are.
+    let tail = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == "tail").expect("tail paragraph");
+    assert_eq!(tail.props.borders.and_then(|b| b.top).map(|t| t.width), Some(12.0));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1368,6 +1658,16 @@ fn hyperlink_target_sublocation_and_quotes() {
 fn hyperlink_target_needs_the_whole_field_name() {
     assert_eq!(super::hyperlink_target(r#"HYPERLINKS "x""#), None);
     assert_eq!(super::hyperlink_target(r#"HYPERLINK	"http://example.com""#), Some("http://example.com".into()));
+}
+
+/// A bare `\m` or `\n` keeps the address after it; escapes, an empty address and `%22` read as in DOCX.
+#[test]
+fn hyperlink_target_keeps_the_address_after_a_bare_switch() {
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \m "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK \n "http://example.com""#), Some("http://example.com".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "C:\\Docs\\f.doc""#), Some(r"C:\Docs\f.doc".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "" \l "bm""#), Some("#bm".into()));
+    assert_eq!(super::hyperlink_target(r#"HYPERLINK "http://example.com/a%22b""#), Some("http://example.com/a%22b".into()));
 }
 
 #[test]
@@ -2303,6 +2603,23 @@ fn second_table_gets_its_own_grid() {
 }
 
 #[test]
+fn repeated_cell_sprms_keep_one_override_per_cell() {
+    // A PAPX repeating cell-range sprms (shared by every paragraph mark that names it) keeps one
+    // slot per cell, the last value winning, instead of a copy per repetition.
+    let mut sprms = Vec::new();
+    for w in 0..200u16 {
+        let [w0, w1] = (w * 20).to_le_bytes();
+        sprms.push(sprm_cb(0xD635, &[0, 63, 3, w0, w1]));
+        sprms.push(sprm_cb(0xD62C, &[0, 255, 1]));
+        sprms.push([0x24, 0x56, 0, 2].to_vec());
+    }
+    let row = crate::table::decode(&sprms.concat());
+    assert_eq!(row.width_of(0), Some(199.0), "the last width wins");
+    assert_eq!(row.width_of(62), Some(199.0));
+    assert!(row.overrides() <= 63 + 255 + 63, "{}", row.overrides());
+}
+
+#[test]
 fn sprm_t_cell_width_twips_and_percentage() {
     // [MS-DOC] §2.9.290 sprmTCellWidth (0xD635):
     // cb (1 byte), itcFirst (1 byte), itcLim (1 byte), ftsWidth (1 byte), wWidth (2 bytes).
@@ -2366,17 +2683,21 @@ fn symbol_runs_read_the_character_and_font_from_sprm_c_symbol() {
 }
 
 /// Paragraph borders around a block are read from both storage forms: the Word 97 Brc80
-/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour).
+/// (palette colour) and the Word 2000+ BrcOperand (cb + Brc with a full colour). A thick
+/// border (type 0x02) stays thick in both, as tables read it too.
 #[test]
 fn paragraph_borders_read_from_both_forms() {
+    use wordcraft_doc::props::BorderStyle as S;
     let b80 = [8u8, 0x01, 0x06, 0x01]; // 1 pt single line, palette red (6), 1 pt from the text
+    let thick80 = [8u8, 0x02, 0x06, 0x01];
     let brc = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x01, 0x02, 0x00]; // cb 8, red COLORREF, 1 pt single, space 2
+    let thick = [8u8, 0xFF, 0x00, 0x00, 0x00, 8, 0x02, 0x02, 0x00];
     let text = "boxed\r\r";
     let spec = StructSpec {
         text,
         papx_entries: vec![
-            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &b80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
-            (6, 0, grpprl(&[(0xC64E, &brc)])),
+            (0, 0, grpprl(&[(0x6424, &b80), (0x6425, &thick80), (0x6426, &b80), (0x6427, &b80), (0x6428, &b80)])),
+            (6, 0, grpprl(&[(0xC64E, &brc), (0xC64F, &thick)])),
         ],
         ..structured_spec(text, text.chars().count() as u32)
     };
@@ -2384,13 +2705,16 @@ fn paragraph_borders_read_from_both_forms() {
     let p0 = doc.body.first().and_then(|b| b.as_para()).expect("first paragraph");
     let b = p0.props.borders.expect("borders");
     let top = b.top.expect("top border");
-    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 1.0));
+    assert_eq!((top.style, top.width, top.space), (S::Single, 1.0, 1.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
-    assert!(b.left.is_some() && b.bottom.is_some() && b.right.is_some() && b.between.is_some());
+    assert_eq!(b.left.map(|l| (l.style, l.width)), Some((S::Thick, 1.0)), "Brc80 thick");
+    assert!(b.bottom.is_some() && b.right.is_some() && b.between.is_some());
     let p1 = doc.body.get(1).and_then(|b| b.as_para()).expect("second paragraph");
-    let top = p1.props.borders.expect("borders").top.expect("top border");
-    assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 2.0));
+    let b = p1.props.borders.expect("borders");
+    let top = b.top.expect("top border");
+    assert_eq!((top.style, top.width, top.space), (S::Single, 1.0, 2.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
+    assert_eq!(b.left.map(|l| (l.style, l.width)), Some((S::Thick, 1.0)), "BrcOperand thick");
 }
 
 /// #3642: a small compound file whose DIFAT names one FAT sector thousands of times made `cfb`
@@ -2480,7 +2804,8 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
     assert_eq!(linked.first().map(|r| r.len), Some(n));
     // One copy of the target for the one run, not one per character (~2.5 s here): counted by
     // what the copies charge to the work budget, which a busy machine can't skew.
-    let result = vec![('y', wordcraft_doc::props::CharProps::default()); n];
+    let mut result = super::FieldResult::default();
+    (0..n).for_each(|_| result.push('y', wordcraft_doc::props::CharProps::default()));
     let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"http://{target}\""), sep: Some(result) };
     let work = super::Work::new(u64::MAX);
     super::finish_field(&mut super::ParaBuild::default(), f, &work);
@@ -2493,7 +2818,8 @@ fn a_long_hyperlink_over_a_long_result_is_one_linked_run() {
 fn hyperlink_target_copies_are_charged_to_the_work_budget() {
     use wordcraft_doc::props::CharProps;
     let bold = CharProps { bold: Some(true), ..Default::default() };
-    let result: Vec<(char, CharProps)> = (0..1000).map(|i| ('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() })).collect();
+    let mut result = super::FieldResult::default();
+    (0..1000).for_each(|i| result.push('a', if i % 2 == 0 { bold.clone() } else { CharProps::default() }));
     let f = super::FieldBuild { depth: 1, instr: format!("HYPERLINK \"{}\"", "u".repeat(100)), sep: Some(result) };
     let mut pb = super::ParaBuild::default();
     let budget = super::Work::new(10_000);
@@ -2566,4 +2892,202 @@ fn prm_grpprls_past_the_work_budget_are_skipped() {
     assert_eq!(second.bold, None);
     assert_eq!(work.left.get(), 1);
     assert_eq!(work.dropped(), [super::Cost::Formatting]);
+}
+
+/// A field's cached result keeps one `CharProps` per formatting run, not one per character
+/// (365 bytes each: 4 million result characters took 1.4 GB).
+#[test]
+fn a_field_result_stores_one_props_per_run() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut r = super::FieldResult::default();
+    for _ in 0..200_000 {
+        r.push('x', CharProps::default());
+    }
+    assert_eq!(r.runs.len(), 1);
+    assert_eq!(r.runs.first().map(|(n, _)| *n), Some(200_000));
+    r.push('\u{e9}', bold.clone());
+    r.push('y', bold);
+    r.push('z', CharProps::default());
+    assert_eq!(r.runs.iter().map(|(n, _)| *n).collect::<Vec<_>>(), [200_000, 3, 1], "a two-byte char counts its bytes");
+    assert_eq!(r.text.len(), 200_004);
+}
+
+/// A hyperlink whose result changes formatting, with multi-byte text, keeps every run's text and
+/// links all of it; a plain field keeps its result text whole.
+#[test]
+fn field_results_keep_their_text_and_runs() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut result = super::FieldResult::default();
+    for (c, p) in
+        [('a', CharProps::default()), ('\u{e9}', CharProps::default()), ('\u{20ac}', bold.clone()), ('b', bold), ('c', CharProps::default())]
+    {
+        result.push(c, p);
+    }
+    let f = super::FieldBuild { depth: 1, instr: "HYPERLINK \"http://x\"".into(), sep: Some(result) };
+    let mut pb = super::ParaBuild::default();
+    super::finish_field(&mut pb, f, &super::Work::new(u64::MAX));
+    assert_eq!(pb.text, "a\u{e9}\u{20ac}bc");
+    assert_eq!(pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(), [3, 4, 1]);
+    assert!(pb.runs.iter().all(|r| r.props.link.as_deref() == Some("http://x")));
+    let doc = read(&text_doc(&[Piece { compressed: false, text: "\u{13} PAGE \u{14}1\u{e9}2\u{15}\r".into() }], &[], 0)).expect("opens");
+    let p = doc.body.first().and_then(|b| b.as_para()).expect("paragraph");
+    assert!(
+        p.objects
+            .iter()
+            .any(|o| matches!(o, wordcraft_doc::para::InlineObject::Field { instr, result, .. } if instr == "PAGE" && result == "1\u{e9}2")),
+        "{:?}",
+        p.objects
+    );
+}
+
+/// A one-page CHPX bin table over `page`: FCs 0..`end` live in page 1 of the returned stream.
+fn one_page_bins(page: &[u8], end: u32) -> (Vec<u8>, crate::fkp::Bins) {
+    let mut word = vec![0u8; 512];
+    word.extend_from_slice(page);
+    let plc = [0u32.to_le_bytes().as_slice(), end.to_le_bytes().as_slice(), 1u32.to_le_bytes().as_slice()].concat();
+    let bins = crate::fkp::Bins::parse(&plc, 0, 12).expect("bins");
+    (word, bins)
+}
+
+/// The CHPX run a lookup reports covers exactly the FCs that give the same grpprl: the walk
+/// reuses it for the following characters without asking again.
+#[test]
+fn a_chpx_run_covers_the_fcs_with_the_same_answer() {
+    let runs = [(0u32, grpprl(&[(0x0835, &[1])])), (5, Vec::new()), (9, grpprl(&[(0x0836, &[1])])), (30, grpprl(&[(0x0835, &[1])]))];
+    let (word, bins) = one_page_bins(&chpx_fkp(&runs, 60), 0x2000);
+    for fc in (fc_of(0) - 4)..(fc_of(70)) {
+        let run = bins.chpx_run(&word, fc);
+        assert_eq!(run.grpprl, bins.chpx(&word, fc), "fc {fc}");
+        for other in (fc_of(0) - 4)..(fc_of(70)) {
+            if run.contains(other) {
+                assert_eq!(bins.chpx(&word, other), run.grpprl, "fc {fc} run reused at {other}");
+            }
+        }
+    }
+    assert!(bins.chpx_run(&word, fc_of(6)).contains(fc_of(8)) && !bins.chpx_run(&word, fc_of(6)).contains(fc_of(9)));
+}
+
+/// A page whose run starts do not ascend (a corrupt file) gives the same answers as before and
+/// a range that never claims an FC with a different answer.
+#[test]
+fn a_chpx_run_is_sound_on_a_page_whose_starts_do_not_ascend() {
+    let runs = [(10u32, grpprl(&[(0x0835, &[1])])), (3, grpprl(&[(0x0836, &[1])])), (20, Vec::new()), (7, grpprl(&[(0x0835, &[1])]))];
+    let (word, bins) = one_page_bins(&chpx_fkp(&runs, 60), 0x2000);
+    for fc in (fc_of(0) - 4)..(fc_of(70)) {
+        let run = bins.chpx_run(&word, fc);
+        assert_eq!(run.grpprl, bins.chpx(&word, fc));
+        for other in (fc_of(0) - 4)..(fc_of(70)) {
+            if run.contains(other) {
+                assert_eq!(bins.chpx(&word, other), run.grpprl, "fc {fc} run reused at {other}");
+            }
+        }
+    }
+}
+
+/// A piece span answers exactly what the per-CP lookup answers, in every piece (compressed
+/// and UTF-16) and past the last.
+#[test]
+fn a_piece_span_matches_the_per_cp_lookups() {
+    let doc = text_doc(
+        &[
+            Piece { compressed: true, text: "abc".into() },
+            Piece { compressed: false, text: "d\u{e9}fgh".into() },
+            Piece { compressed: true, text: "ij".into() },
+        ],
+        &[],
+        0,
+    );
+    let mut comp = crate::open_container(&doc).expect("container");
+    let table = crate::stream(&mut comp, "0Table").expect("table");
+    let pieces = crate::piece::PieceTable::parse(&table, CLX_AT, table.len() as u32 - CLX_AT).expect("pieces");
+    for cp in 0..14 {
+        let span = pieces.span(cp);
+        assert_eq!(span.and_then(|s| s.fc_at(cp)), pieces.fc_of_cp(cp), "cp {cp}");
+        for other in 0..14 {
+            if span.is_some_and(|s| s.contains(other)) {
+                assert_eq!(pieces.span(other).and_then(|s| s.fc_at(other)), pieces.fc_of_cp(other));
+            }
+        }
+    }
+    assert!(pieces.span(10).is_none(), "past the last piece");
+}
+
+/// Characters of one formatting share one `CharProps`: it is cloned when a run starts, and not
+/// even compared while the formatting stays the same.
+#[test]
+fn shared_props_start_one_run_per_formatting() {
+    use wordcraft_doc::props::CharProps;
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let mut pb = super::ParaBuild::default();
+    for _ in 0..100_000 {
+        pb.push_shared('a', &bold, 1);
+    }
+    pb.push_shared('b', &CharProps::default(), 2);
+    pb.push_shared('c', &bold, 3);
+    pb.push_shared('d', &bold, 4);
+    assert_eq!(pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(), [100_000, 1, 2], "equal props under a new generation join the run");
+    pb.push('e', bold.clone());
+    pb.push_shared('f', &bold, 4);
+    assert_eq!(
+        pb.runs.iter().map(|r| r.len).collect::<Vec<_>>(),
+        [100_000, 1, 4],
+        "a plain push forgets the generation but still joins an equal run"
+    );
+    assert_eq!(pb.text.len(), 100_005);
+}
+
+/// Several bins, equal and descending breakpoints, a missing page and the last FC: wherever a
+/// run is reported as valid it gives the answer a fresh lookup gives.
+#[test]
+fn chpx_runs_are_sound_across_bins() {
+    let page_a = chpx_fkp(&[(0, grpprl(&[(0x0835, &[1])])), (8, grpprl(&[(0x0836, &[1])]))], 20);
+    let page_b = chpx_fkp(&[(20, Vec::new()), (26, grpprl(&[(0x0835, &[1])]))], 40);
+    let mut word = vec![0u8; 512];
+    word.extend_from_slice(&page_a);
+    word.extend_from_slice(&page_b);
+    let (a, b, end) = (fc_of(20), fc_of(40), fc_of(60));
+    let plc = |fcs: &[u32], pns: &[u32]| {
+        [fcs.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>(), pns.iter().flat_map(|p| p.to_le_bytes()).collect()].concat()
+    };
+    let tables = [
+        ("two bins", plc(&[0, a, end], &[1, 2])),
+        ("an empty bin", plc(&[0, a, a, end], &[1, 2, 2])),
+        ("a missing page", plc(&[0, a, end], &[1, 9])),
+        ("descending breakpoints", plc(&[0, b, a, end], &[1, 2, 1])),
+        ("fcs up to the maximum", plc(&[0, a, u32::MAX], &[1, 2])),
+    ];
+    for (what, t) in &tables {
+        let bins = crate::fkp::Bins::parse(t, 0, t.len() as u32).expect("bins");
+        let probes: Vec<u32> = (0..fc_of(50)).step_by(2).chain([u32::MAX - 1, u32::MAX]).collect();
+        for &fc in &probes {
+            let run = bins.chpx_run(&word, fc);
+            assert_eq!(run.grpprl, bins.chpx(&word, fc), "{what}: fc {fc}");
+            for &other in &probes {
+                if run.contains(other) {
+                    assert_eq!(bins.chpx(&word, other), run.grpprl, "{what}: fc {fc} run reused at {other}");
+                }
+            }
+        }
+    }
+}
+
+/// The same formatting changes through a whole read: runs break exactly where the CHPX changes
+/// (with a field and a symbol character in between), and nowhere else.
+#[test]
+fn formatting_runs_break_where_the_chpx_changes() {
+    let spec = RichSpec {
+        text: "aaaabbbb\u{13}PAGE\u{14}12\u{15}ccdd(ee\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), Vec::new())],
+        fonts: vec!["Times New Roman", "Arial"],
+        chpx_runs: vec![(0, grpprl(&[(0x0835, &[1])])), (4, Vec::new()), (8, grpprl(&[(0x0835, &[1])])), (20, grpprl(&[(0x0836, &[1])]))],
+        papx_entries: vec![(30, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let p = para0(&doc);
+    let shape: Vec<(usize, Option<bool>, Option<bool>)> = p.runs.iter().map(|r| (r.len, r.props.bold, r.props.italic)).collect();
+    // "aaaa" bold, "bbbb" plain plus the field's anchor (3 bytes, default formatting), "ccd" bold
+    // (the run from the field to CP 20), "d(ee" italic.
+    assert_eq!(shape, [(4, Some(true), None), (7, None, None), (3, Some(true), None), (4, None, Some(true))], "{shape:?}");
 }

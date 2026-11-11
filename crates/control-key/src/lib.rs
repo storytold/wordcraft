@@ -1,5 +1,6 @@
 //! The control channel's key file, one rule for the app (which writes it) and the MCP bridge
 //! (which reads it): `<settings>/control-key.<instance>`. See `docs/control-protocol.md`, Keys.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::path::{Path, PathBuf};
 

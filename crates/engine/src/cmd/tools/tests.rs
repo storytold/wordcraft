@@ -81,6 +81,86 @@ fn compare_at_word_level_still_matches_a_whole_unchanged_word() {
 }
 
 #[test]
+fn compare_keeps_text_boxes_of_the_original() {
+    // Text boxes are anchored in body paragraphs: one after changed text, one alone in an
+    // otherwise empty paragraph, one after text the revised document keeps. Their anchors must
+    // survive the compare (marked deleted, since the revised text has no boxes), so no text is lost.
+    for show_in in ["original", "revised", "new"] {
+        let mut s = Session::new(Document::from_text("Body one.\n\nKeep."));
+        let mut boxes = Vec::new();
+        for (para, off, text) in [(0usize, "Body one.".len(), "Alpha boxword gamma."), (1, 0, "Vml onlyword here."), (2, "Keep.".len(), "Kept box.")]
+        {
+            s.run("caret.set", &json!({"pos": Pos::body(para, off)})).unwrap();
+            let id = s.run("insert.textBox", &json!({"text": text})).unwrap()["story"].as_u64().unwrap() as u32;
+            boxes.push((id, text));
+        }
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        s.run("review.compare", &json!({"text": "Totally new first.\nSecond new line.\nKeep.", "showIn": show_in})).unwrap();
+        for (id, text) in &boxes {
+            let anchor = s.doc.text_box_anchor(*id).unwrap_or_else(|| panic!("{show_in}: the box \"{text}\" lost its anchor"));
+            assert_eq!(s.doc.plain_text(StoryRef::Part(*id)), *text);
+            let p = s.doc.para(anchor.story, &anchor.path).unwrap();
+            assert!(
+                p.props_of_char(anchor.off - wordcraft_doc::para::OBJ.len_utf8()).del.is_some(),
+                "{show_in}: the box \"{text}\" is not marked deleted"
+            );
+        }
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Body one.\n\nKeep.");
+        for (id, text) in &boxes {
+            assert!(s.doc.text_box_anchor(*id).is_some(), "{show_in}: rejecting lost the box \"{text}\"");
+            assert_eq!(s.doc.plain_text(StoryRef::Part(*id)), *text);
+        }
+    }
+}
+
+#[test]
+fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
+    // Text boxes in both documents, the revised one from a file: every anchor in the result
+    // shows a text box story of the result, and both documents' boxes are there, marked.
+    fn with_boxes(text: &str, boxes: &[(usize, usize, &str)]) -> Session {
+        let mut s = Session::new(Document::from_text(text));
+        for (para, off, text) in boxes {
+            s.run("caret.set", &json!({"pos": Pos::body(*para, *off)})).unwrap();
+            s.run("insert.textBox", &json!({"text": text})).unwrap();
+        }
+        s
+    }
+    /// Each text box anchored in the body: its story's text, and whether its anchor is deleted
+    /// or inserted.
+    fn boxes(d: &Document) -> Vec<(String, bool, bool)> {
+        let mut out = Vec::new();
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            for (off, o) in p.objects_with_offsets() {
+                for id in o.text_boxes() {
+                    let part = d.parts.get(&id).unwrap_or_else(|| panic!("an anchor shows story {id}, which the result lacks"));
+                    assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox, "story {id}");
+                    let c = p.props_of_char(off);
+                    out.push((d.plain_text(StoryRef::Part(id)), c.del.is_some(), c.ins.is_some()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+    let rev = with_boxes("Body one.\nNew middle.\nKeep.", &[(1, "New middle.".len(), "Revised box."), (2, "Keep.".len(), "Kept box.")]);
+    let path = std::env::temp_dir().join(format!("wc-compare-boxes-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev.doc).unwrap();
+    let t = |t: &str, del, ins| (t.to_string(), del, ins);
+    for show_in in ["original", "revised", "new"] {
+        for (then, left) in [("review.acceptAll", "Revised box."), ("review.rejectAll", "Original box.")] {
+            let mut s = with_boxes("Body one.\nOld middle.\nKeep.", &[(1, "Old middle.".len(), "Original box."), (2, "Keep.".len(), "Kept box.")]);
+            s.run("review.compare", &json!({"path": path.to_string_lossy(), "showIn": show_in})).unwrap();
+            assert_eq!(boxes(&s.doc), [t("Kept box.", false, false), t("Original box.", true, false), t("Revised box.", false, true)], "{show_in}");
+            s.run(then, &json!({})).unwrap();
+            assert_eq!(boxes(&s.doc), [t("Kept box.", false, false), t(left, false, false)], "{show_in} {then}");
+        }
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn compare_bounds_total_diff_work() {
     // Many long, slightly different paragraphs: each pair alone fits one comparison table,
     // but the work over all pairs must stay bounded. Pairs past the budget are compared
@@ -173,6 +253,59 @@ fn proofing_language_options() {
     s.run("review.language", &json!({"lang": "de-DE", "default": true})).unwrap();
     assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
     assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
+}
+
+/// #2242: `insert.spreadsheet` fills a table from `values`, with a repeating header and a style.
+#[test]
+fn spreadsheet_takes_values_header_and_style() {
+    let mut s = Session::new(Document::from_text(""));
+    s.run("insert.spreadsheet", &json!({"values": [["Month", "Cases"], ["Jan", 12], ["Feb", null]], "header": true, "style": "TableGrid"})).unwrap();
+    let Some(Block::Table(t)) = s.doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    assert_eq!((t.rows.len(), t.rows[0].cells.len()), (3, 2));
+    assert!(t.rows[0].props.header && !t.rows[1].props.header);
+    assert_eq!(t.rows[1].cells[1].blocks[0].as_para().unwrap().text, "12");
+    assert_eq!(t.props.style.as_deref(), Some("TableGrid"));
+}
+
+/// An explicit `values: null` is a parameter error, not the legacy CSV sample table: the document
+/// and the undo history stay as they were. Only an absent `values` falls back to `csv`.
+#[test]
+fn spreadsheet_rejects_an_explicit_null_values_without_changing_anything() {
+    let mut s = Session::new(Document::from_text("keep"));
+    let depth = s.undo_depth();
+    for args in [json!({"values": null}), json!({"values": null, "csv": "a,b\n1,2"})] {
+        assert!(s.run("insert.spreadsheet", &args).is_err(), "{args}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
+        assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
+        assert_eq!(s.undo_depth(), depth, "{args}: no undo step");
+    }
+    s.run("insert.spreadsheet", &json!({"csv": "a,b\n1,2"})).unwrap();
+    let Some(Block::Table(t)) = s.doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+    assert_eq!((t.rows.len(), t.rows[0].cells.len()), (2, 2), "an absent `values` still takes the csv");
+}
+
+/// #2242: malformed `values` is an error, never a panic, and leaves the document alone.
+#[test]
+fn spreadsheet_rejects_hostile_values() {
+    let wide: Vec<Value> = (0..64).map(|i| json!(i)).collect();
+    let many: Vec<Value> = (0..1001).map(|_| json!(["x"])).collect();
+    for bad in [
+        json!("x"),
+        json!(5),
+        json!([]),
+        json!(["a"]),
+        json!([["a", "b"], ["c"]]),
+        json!([wide]),
+        json!(many),
+        json!([[{"a": 1}]]),
+        json!([[[1]]]),
+        json!([[]]),
+    ] {
+        let mut s = Session::new(Document::from_text("keep"));
+        assert!(s.run("insert.spreadsheet", &json!({"values": bad})).is_err(), "{bad}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
+        assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
+    }
 }
 
 /// The inspector's removals delete straight from the document, so they aren't tracked: on a
