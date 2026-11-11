@@ -380,6 +380,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     qat_end = if rtl { ui.min_rect().min.x } else { ui.min_rect().max.x };
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                        // The room left of the account button and its space, less the spaces between the
+                        // three controls and a gap from the Quick Access Toolbar.
+                        let room = ui.available_width() - control_h - 8.0 - 3.0 * ui.spacing().item_spacing.x - 8.0;
+                        let fit = TitleBarFit::new(room, app.ui.show_discord, control_h);
                         // Account / community.
                         let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                         ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
@@ -391,28 +395,32 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.add_space(8.0);
                         if app.ui.show_discord {
-                            let (r, resp) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::click());
+                            let (r, resp) = ui.allocate_exact_size(vec2(if fit.discord_label { 84.0 } else { 22.0 }, 22.0), Sense::click());
                             ui.painter().rect_filled(r, 11.0, if resp.hovered() { t.accent_text } else { t.accent });
+                            let icon_x = if fit.discord_label { 13.0 } else { 11.0 };
                             icons::paint(
                                 ui.painter(),
-                                Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 13.0), r.center().y), vec2(14.0, 14.0)),
+                                Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, icon_x), r.center().y), vec2(14.0, 14.0)),
                                 "discord",
                                 t.on_accent,
                                 t.on_accent,
                             );
-                            ui.painter().text(
-                                pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y),
-                                crate::rtl::lead_center(rtl),
-                                tl!("Discord"),
-                                medium(11.5),
-                                t.on_accent,
-                            );
+                            if fit.discord_label {
+                                ui.painter().text(
+                                    pos2(crate::rtl::lead_x(rtl, r, 24.0), r.center().y),
+                                    crate::rtl::lead_center(rtl),
+                                    tl!("Discord"),
+                                    medium(11.5),
+                                    t.on_accent,
+                                );
+                            }
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Discord")));
                             if resp.on_hover_text(tl!("Join the ArtCraft community on Discord")).clicked() {
                                 let _ = app.run("ui.discord", json!({}));
                             }
                             ui.add_space(8.0);
                         }
-                        search_box(app, ui, control_h);
+                        search_box(app, ui, control_h, fit.search);
                         right_start = if rtl { ui.min_rect().max.x } else { ui.min_rect().min.x };
                     });
                 })
@@ -468,6 +476,39 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
+/// How the title bar's controls on the right fit a narrow window (#5886): the search box gives up
+/// width first, then Discord its label, then the search box its text.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TitleBarFit {
+    /// The search box's width; a square shows the magnifier alone.
+    pub(crate) search: f32,
+    /// Whether the Discord button has room for its label text.
+    pub(crate) discord_label: bool,
+}
+
+impl TitleBarFit {
+    /// The search box's width when there is room for it.
+    pub(crate) const SEARCH: f32 = 260.0;
+    /// The narrowest search box that still shows its text.
+    pub(crate) const SEARCH_TEXT: f32 = 160.0;
+
+    /// The fit in `room`, the width left of the account button; `discord` when its button shows.
+    pub(crate) fn new(room: f32, discord: bool, control_h: f32) -> TitleBarFit {
+        for discord_label in [true, false] {
+            let discord_w = match (discord, discord_label) {
+                (false, _) => 0.0,
+                (true, true) => 84.0 + 8.0,
+                (true, false) => 22.0 + 8.0,
+            };
+            let search = room - discord_w;
+            if search >= Self::SEARCH_TEXT {
+                return TitleBarFit { search: search.min(Self::SEARCH), discord_label };
+            }
+        }
+        TitleBarFit { search: control_h, discord_label: false }
+    }
+}
+
 /// The title bar's Search box while it is typed in (#5398): the query, whether the text of the
 /// shortcut that opened it (Alt+Q's `q` on some platforms) is still to be dropped, and where the
 /// results showed last frame.
@@ -478,8 +519,7 @@ struct TitleSearch {
     results: Option<Rect>,
 }
 
-/// Width of the Search box, and of its results under it.
-const SEARCH_BOX_W: f32 = 260.0;
+/// Width of the Search box results under it.
 const SEARCH_RESULTS_W: f32 = 380.0;
 
 /// Search in the title bar's box, as Word's: when this window drew the box in its last frame
@@ -528,7 +568,7 @@ pub(crate) fn title_search_open(app: &WordApp, ctx: &egui::Context) -> bool {
 
 /// The Search box being typed in: a text box in its place and the results under it. `false`
 /// once it closes: a command or the find ran, Escape, or a click outside both.
-fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSearch) -> bool {
+fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSearch, width: f32) -> bool {
     if s.swallow {
         ui.ctx().input_mut(|i| i.events.retain(|e| !crate::dialogs::swallow_shortcut_text(&mut s.swallow, e)));
     }
@@ -547,14 +587,16 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
         ui.memory_mut(|m| m.request_focus(id));
     }
     let typing = ui.memory(|m| m.has_focus(id));
+    let hint = if width >= TitleBarFit::SEARCH_TEXT { ph } else { "" };
     let edit = ui.add_sized(
-        vec2(SEARCH_BOX_W, control_h),
-        egui::TextEdit::singleline(&mut s.query).id(id).hint_text(ph).align(if crate::rtl::on() {
+        vec2(width, control_h),
+        egui::TextEdit::singleline(&mut s.query).id(id).hint_text(hint).align(if crate::rtl::on() {
             Align2::RIGHT_CENTER
         } else {
             Align2::LEFT_CENTER
         }),
     );
+    edit.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, true, ph));
     let r = edit.rect;
     // Enter in the box runs the first result, and is used up: a dialog that result opens (Word
     // Count) mustn't take the same Enter as its OK. A result Tab moved to takes Enter or Space
@@ -590,14 +632,15 @@ fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSe
     !done
 }
 
-/// Search ("Tell me"): a box that opens command search. In the title bar, and in the Commands bar
-/// of Full Screen (#1678). Clicked (or Alt+Q), it takes the typing in place (#5398).
-fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
+/// Search ("Tell me"): a box `width` wide that opens command search, its text shortened to fit
+/// and left out of a square box. In the title bar, and in the Commands bar of Full Screen (#1678).
+/// Clicked (or Alt+Q), it takes the typing in place (#5398).
+fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32, width: f32) {
     let frame = ui.ctx().cumulative_frame_nr();
     ui.ctx().data_mut(|d| d.insert_temp(app.window_id("title_search_shown"), frame));
     let id = app.window_id("title_search");
     if let Some(mut s) = ui.ctx().data(|d| d.get_temp::<TitleSearch>(id)) {
-        let open = typing_search(app, ui, control_h, &mut s);
+        let open = typing_search(app, ui, control_h, &mut s, width);
         ui.ctx().data_mut(|d| {
             if open {
                 d.insert_temp(id, s);
@@ -609,7 +652,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     }
     let t = Tokens::get(ui.ctx());
     let rtl = crate::rtl::on();
-    let (r, resp) = ui.allocate_exact_size(vec2(SEARCH_BOX_W, control_h), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, control_h), Sense::click());
     let ph = tl!("Search commands and help");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
@@ -622,7 +665,26 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     );
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
-    paint_text(ui.painter(), pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y), crate::rtl::lead_center(rtl), ph, &pfont, ptrack, t.text_dim);
+    let room = width - 30.0 - 8.0;
+    if room >= 40.0 {
+        let mut shown = ph.to_string();
+        while shown.chars().count() > 1 && text_width(ui.painter(), &shown, &pfont, ptrack, t.text_dim) > room {
+            shown.pop();
+        }
+        if shown != ph {
+            shown.pop();
+            shown.push('…');
+        }
+        paint_text(
+            ui.painter(),
+            pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y),
+            crate::rtl::lead_center(rtl),
+            &shown,
+            &pfont,
+            ptrack,
+            t.text_dim,
+        );
+    }
     if app.ui.keytips == crate::keytips::Phase::Tabs {
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
@@ -691,7 +753,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             }
         } else {
             ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {
-                search_box(app, ui, 22.0);
+                search_box(app, ui, 22.0, TitleBarFit::SEARCH);
             });
         }
     });
@@ -745,12 +807,36 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     } else {
                         l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
                     };
+                    // The texts on the left stop before the controls on the right (#5886). Those are
+                    // laid out after the texts, so their width from the edge is kept from the pass
+                    // before, which is redone when it changes: in a narrow window a text that
+                    // doesn't fit before them is left out, not drawn over them.
+                    // On a cache miss (first pass), conservatively constrain the text edge so text never
+                    // overlaps the controls even when the pass cannot be discarded (e.g. max_passes = 1).
+                    const CONSERVATIVE_CONTROLS_W: f32 = 420.0;
+                    let row_right = ui.max_rect().right();
+                    let row_left = ui.max_rect().left();
+                    let controls_id = app.window_id("status_controls_width");
+                    let controls_w = ui.data(|d| d.get_temp::<f32>(controls_id));
+                    let edge = if rtl {
+                        row_left + controls_w.unwrap_or(CONSERVATIVE_CONTROLS_W)
+                    } else {
+                        row_right - controls_w.unwrap_or(CONSERVATIVE_CONTROLS_W)
+                    };
                     // A status item: its text, after an icon when it has one (one click target).
-                    let st_icon = |ui: &mut Ui, icon: Option<&str>, s: &str| {
+                    let st_icon = |ui: &mut Ui, icon: Option<&str>, s: &str| -> Option<egui::Response> {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
                         let w = text_width(ui.painter(), s, &font, track, t.text_dim);
                         let lead = if icon.is_some() { 17.0 } else { 0.0 };
+                        let fits = if rtl {
+                            ui.cursor().max.x - (lead + w + 1.0) >= edge + ui.spacing().item_spacing.x
+                        } else {
+                            ui.cursor().min.x + lead + w + 1.0 <= edge - ui.spacing().item_spacing.x
+                        };
+                        if !fits {
+                            return None;
+                        }
                         let (r, resp) = ui.allocate_exact_size(vec2(lead + w + 1.0, TypeRung::Caption.line_height()), Sense::click());
                         if let Some(icon) = icon {
                             let ir = Rect::from_min_size(pos2(crate::rtl::lead_left(rtl, r, 0.0, 13.0), r.center().y - 6.5), vec2(13.0, 13.0));
@@ -768,12 +854,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
                         }
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
-                        resp
+                        Some(resp)
                     };
                     let st = |ui: &mut Ui, s: &str| st_icon(ui, None, s);
                     if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                        .on_hover_text(tl!("Go To (⌘⌥G)"))
-                        .clicked()
+                        .is_some_and(|r| r.on_hover_text(tl!("Go To (⌘⌥G)")).clicked())
                     {
                         let _ = app.run("ui.dialog", json!({"name": "goto"}));
                     }
@@ -789,18 +874,20 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         status_count_text(unit, counts.in_unit(unit), Some(selected))
                     };
                     let counted = st(ui, &wtxt);
-                    // Right-click, as Word's status bar offers: choose what the count shows (#2797).
-                    counted.context_menu(|ui| {
-                        ui.set_min_width(180.0);
-                        for c in crate::StatusCount::ALL {
-                            if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
-                                let _ = app.run("ui.statusCount", json!({"value": c.code()}));
-                                ui.close();
+                    if let Some(counted) = &counted {
+                        // Right-click, as Word's status bar offers: choose what the count shows (#2797).
+                        counted.context_menu(|ui| {
+                            ui.set_min_width(180.0);
+                            for c in crate::StatusCount::ALL {
+                                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                                    ui.close();
+                                }
                             }
+                        });
+                        if counted.clicked() {
+                            let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                         }
-                    });
-                    if counted.clicked() {
-                        let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                     }
                     if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
                         let label = match crate::canvas::part_kind(app, app.session.sel.focus.story) {
@@ -808,7 +895,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             Some(PartKind::Endnote) => tl!("Editing endnote"),
                             _ => tl!("Editing header/footer"),
                         };
-                        st(ui, label);
+                        let _ = st(ui, label);
                     }
                     // The language at the caret; a click sets the proofing language (Review › Language).
                     let lang = crate::ribbon::caret_language(app);
@@ -821,14 +908,17 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     } else {
                         lang.clone()
                     };
-                    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
-                    let resp = st(ui, &shown).on_hover_text(tip);
-                    crate::rtl::menu(&resp).show(|ui| {
-                        ui.set_min_width(200.0);
-                        crate::rtl::root(ui, |ui| crate::ribbon::language_menu(ui, app));
-                    });
+                    let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| shown.clone());
+                    if let Some(resp) = st(ui, &shown).or_else(|| st(ui, "…")) {
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &shown));
+                        let resp = resp.on_hover_text(tip);
+                        crate::rtl::menu(&resp).show(|ui| {
+                            ui.set_min_width(200.0);
+                            crate::rtl::root(ui, |ui| crate::ribbon::language_menu(ui, app));
+                        });
+                    }
                     if app.session.doc.settings.track_changes {
-                        st(ui, tl!("Track Changes: On"));
+                        let _ = st(ui, tl!("Track Changes: On"));
                     }
                     // Fonts the document uses that aren't installed: they're drawn in other fonts, so
                     // the text can wrap and paginate unlike where the document was made.
@@ -836,26 +926,30 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let count = missing.iter().filter(|f| !f.metric_compatible).count();
                     if count > 0 {
                         let label = crate::i18n::tn(count as u64, "{n} font not installed", "{n} fonts not installed");
-                        let resp = st_icon(ui, Some("fontMissing"), &label).on_hover_text(tl!("Shown in substitute fonts. Click for details."));
-                        crate::rtl::menu(&resp).show(|ui| {
-                            ui.set_min_width(260.0);
-                            ui.label(egui::RichText::new(tl!("Not installed — shown as")).strong());
-                            // A hostile file can name thousands of fonts: list the first few.
-                            const SHOWN: usize = 20;
-                            for f in missing.iter().filter(|f| !f.metric_compatible).take(SHOWN) {
-                                ui.label(format!("{} → {}", f.font, f.shown_as.join(", ")));
-                            }
-                            if count > SHOWN {
-                                ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
-                            }
-                            ui.separator();
-                            if ui.button(tl!("Add Font…")).clicked() {
-                                let _ = app.run("font.add", json!({}));
-                                ui.close();
-                            }
-                        });
+                        if let Some(resp) = st_icon(ui, Some("fontMissing"), &label) {
+                            let resp = resp.on_hover_text(tl!("Shown in substitute fonts. Click for details."));
+                            crate::rtl::menu(&resp).show(|ui| {
+                                ui.set_min_width(260.0);
+                                ui.label(egui::RichText::new(tl!("Not installed — shown as")).strong());
+                                // A hostile file can name thousands of fonts: list the first few.
+                                const SHOWN: usize = 20;
+                                for f in missing.iter().filter(|f| !f.metric_compatible).take(SHOWN) {
+                                    ui.label(format!("{} → {}", f.font, f.shown_as.join(", ")));
+                                }
+                                if count > SHOWN {
+                                    ui.label(crate::i18n::tn((count - SHOWN) as u64, "…and {n} more", "…and {n} more"));
+                                }
+                                ui.separator();
+                                if ui.button(tl!("Add Font…")).clicked() {
+                                    let _ = app.run("font.add", json!({}));
+                                    ui.close();
+                                }
+                            });
+                        }
                     }
-                    if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
+                    if app.session.prefs.overtype
+                        && st(ui, tl!("Overtype")).is_some_and(|r| r.on_hover_text(tl!("Click to switch back to inserting")).clicked())
+                    {
                         let _ = app.run("text.overtype", json!({"value": false}));
                     }
                     // The message is drawn where the row is now; the controls on the right are laid
@@ -961,6 +1055,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             let _ = app.run("view.focus", json!({}));
                         }
                     });
+                    // The controls' width from the edge they cling to, for the texts of the next pass.
+                    let width = if rtl { controls_left - row_left } else { row_right - controls_left };
+                    if width.is_finite() && controls_w.is_none_or(|w| (w - width).abs() > 0.5) {
+                        ui.data_mut(|d| d.insert_temp(controls_id, width));
+                        ui.ctx().request_discard("the status bar's controls moved");
+                        ui.ctx().request_repaint();
+                    }
                     if let Some((msg, at)) = &app.status_msg
                         && crate::now_ms() - at < 6000.0
                     {
