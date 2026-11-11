@@ -176,13 +176,21 @@ control-row count (1, 2 or 3; a 5 is a menu with nested rows) at the width where
 | Help | Help | 450: 3 → 550: 1 |
 
 The planner keeps a section's natural rows while it fits and collapses it to one row below the
-measured narrow breakpoint. Home's wide two-row forms are modelled for Font and Paragraph (from 1520 logical
-points, 1900 px at 125%); other tabs' two-row states are not modelled yet.
+measured narrow breakpoint. Two-row forms are modelled from the measured first width: Insert ›
+Symbols from 1120 pt, References › Index and Table of Authorities from 819.2 pt, Mailings › Create
+from 880 pt back to one row at 1120 pt, Review › Tracking from 1520 pt and View › Views from 880 pt
+(`ribbon_fit::rows_in`, tested by `measured_section_rows_switch_at_their_first_widths`). Home's wide
+Font and Paragraph are two rows from 1520 pt. Still not modelled: References › Table of Contents
+(2 rows from 600 pt) and Footnotes (3 from 600 pt), Mailings › Start Mail Merge (3 from 520 pt,
+1 from 960 pt) and Review › Markup (3 from 1120 pt; WordCraft has no Markup section — its Display for
+Review menu lives in Tracking — so this one is impossible as drawn), and the 3-row states of the
+tabs' wide sections; their current natural layouts are kept.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-10 | minor | Measured two-row forms for Insert › Symbols (1120 pt), References › Index and Table of Authorities (819.2 pt), Mailings › Create (880–1120 pt, then one row), Review › Tracking (1520 pt) and View › Views (880 pt), each with a `rows_in` breakpoint test; Home's Font/Paragraph wide form unchanged. Remaining: TOC/Footnotes/Start Mail Merge/Review Markup transitions and the 3-row wide states |
 | 2026-11-10 | minor | Home's wide form: from 1520 pt of client (Word's 1900 px at 125 %) Font and Paragraph draw the same controls in two rows instead of three (`ribbon_fit::WIDE_MIN`); below it they keep three rows, and 1024 × 768 still shows Clipboard and Font natural with Paragraph onward one row |
 | 2026-11-10 | minor | Ribbon card checked against Word at a 1024 × 768 client on a 125 % display (819 × 614 pt): the three bands — tab strip, 66 pt command row, 18 pt group-label row — are drawn on every tab, labels centred in the band and separators through it; a section keeps its natural rows while the card has room, and the first that doesn't fit and every later one become Word's one-row drop-down with the name in the band (at 1024 Clipboard and Font stay natural; Paragraph onward is one row). The band is anchored to the row's cursor instead of the content child's rect, which had lost the Font, Paragraph and Styles labels at 1024. Insert's Illustrations group is Media, as Word. Not built: Home Sensitivity/Add-ins, Insert eSignature/Add-ins, Draw Stencils/Edit, Review OneNote; Home Paragraph Tools, View Dark Mode/Templates, References Research are WordCraft extras |
 | 2026-11-10 | minor | Ribbon card checked against Word at a 1024 × 768 client on a 125 % display (819 × 614 pt): the three bands — tab strip, 66 pt command row, 18 pt group-label row — are drawn on every tab, labels centred in the band and separators through it; COMPACT Font, Paragraph and Styles groups lost their labels at 1024, and every band is now anchored to the row's cursor instead of the content child's rect. Insert's Illustrations group is Media, as Word. Not built: Home Sensitivity/Add-ins, Insert eSignature/Add-ins, Draw Stencils/Edit, Review OneNote; Home Paragraph Tools, View Dark Mode/Templates, References Research are WordCraft extras |

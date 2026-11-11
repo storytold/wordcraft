@@ -4,8 +4,20 @@ use super::{Ui, WordApp, big, group, json, menu_button, small};
 
 pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Create", None, app, |ui, app| {
-        big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
-        big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+        // Measured: two rows from 1100 px (880 pt) to 1400 px, one row from 1400 px (1120 pt).
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Mailings", "Create", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
+                });
+                crate::widgets::row(ui, |ui| {
+                    big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+                });
+            });
+        } else {
+            big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
+            big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+        }
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
         // The kinds of merge document the engine makes, the current one checked.

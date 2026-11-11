@@ -53,9 +53,10 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
     });
     group(ui, "Tracking", Some("review.trackingOptions"), app, |ui, app| {
         let on = app.session.doc.settings.track_changes;
-        let r = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "Track\nChanges" }, "review.trackChanges", json!({}), false);
-        let _ = r;
-        stack(ui, |ui| {
+        let track = |ui: &mut Ui, app: &mut WordApp| {
+            let _ = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "Track\nChanges" }, "review.trackChanges", json!({}), false);
+        };
+        let options = |ui: &mut Ui, app: &mut WordApp| {
             menu_button(
                 ui,
                 app,
@@ -79,7 +80,17 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 "Reviewing Pane",
                 crate::widgets::ButtonAction::new("review.changes", json!({}), false),
             );
-        });
+        };
+        // Measured: two rows from 1900 px (1520 pt).
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Review", "Tracking", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| track(ui, app));
+                crate::widgets::row(ui, |ui| options(ui, app));
+            });
+        } else {
+            track(ui, app);
+            stack(ui, |ui| options(ui, app));
+        }
     });
     group(ui, "Changes", None, app, |ui, app| {
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("accept", Some("Accept"), "Accept", true, "review.accept"), |ui, app| {

@@ -134,6 +134,37 @@ pub fn position(ctx: &Context) -> usize {
     ctx.data(|d| d.get_temp::<Frame>(frame_id()).map(|f| f.drawn.len())).unwrap_or(0)
 }
 
+/// The measured first widths (logical points) at which a section changes its row count, from
+/// `_parity/uia-word.json` (Office 16.0.20527, 125 %); the last entry holds above its width.
+const SECTION_ROWS: &[(&str, &str, &[(f32, u8)])] = &[
+    ("Insert", "Symbols", &[(1120.0, 2)]),
+    ("References", "Index", &[(819.2, 2)]),
+    ("References", "Table of Authorities", &[(819.2, 2)]),
+    ("Mailings", "Create", &[(880.0, 2), (1120.0, 1)]),
+    ("Review", "Tracking", &[(1520.0, 2)]),
+    ("View", "Views", &[(880.0, 2)]),
+];
+
+/// The rows `section` takes at a client width of `width`, below its first measured change as its
+/// natural form `natural`.
+pub fn rows_in(tab: &str, section: &str, width: f32, natural: u8) -> u8 {
+    let Some((_, _, breaks)) = SECTION_ROWS.iter().find(|(t, n, _)| *t == tab && *n == section) else {
+        return natural;
+    };
+    let mut rows = natural;
+    for (min, count) in *breaks {
+        if width >= *min {
+            rows = *count;
+        }
+    }
+    rows
+}
+
+/// The rows this section takes at the card's current client width.
+pub fn rows_for(ctx: &Context, tab: &str, section: &str, natural: u8) -> u8 {
+    rows_in(tab, section, ctx.content_rect().width(), natural)
+}
+
 /// Whether this frame's card is wide enough for the two-row Home forms (Font, Paragraph).
 pub fn wide(ctx: &Context) -> bool {
     ctx.data(|d| d.get_temp::<Frame>(frame_id()).is_some_and(|f| f.wide))
@@ -241,6 +272,27 @@ mod tests {
         ];
         assert_eq!(plan(&gs, 819.0), vec![FULL, FULL, COMPACT, COMPACT, COMPACT, COMPACT, COMPACT]);
         assert_eq!(plan(&gs, 960.0), vec![FULL, FULL, FULL, COMPACT, COMPACT, COMPACT, COMPACT]);
+    }
+
+    /// Every measured two-row finding switches just at its first measured width, just below it
+    /// keeps the natural form, and Mailings › Create returns to one row where Word measured it.
+    #[test]
+    fn measured_section_rows_switch_at_their_first_widths() {
+        // (tab, section, natural, widths below/at, rows below/at)
+        for (tab, sec, natural, below, at, low, high) in [
+            ("Insert", "Symbols", 1, 1119.9, 1120.0, 1, 2),
+            ("References", "Index", 1, 819.1, 819.2, 1, 2),
+            ("References", "Table of Authorities", 1, 819.1, 819.2, 1, 2),
+            ("Mailings", "Create", 1, 879.9, 880.0, 1, 2),
+            ("Review", "Tracking", 1, 1519.9, 1520.0, 1, 2),
+            ("View", "Views", 1, 879.9, 880.0, 1, 2),
+        ] {
+            assert_eq!(rows_in(tab, sec, below, natural), low, "{tab} › {sec} below {at}");
+            assert_eq!(rows_in(tab, sec, at, natural), high, "{tab} › {sec} at {at}");
+        }
+        assert_eq!(rows_in("Mailings", "Create", 1119.9, 1), 2, "two rows until 1120 pt");
+        assert_eq!(rows_in("Mailings", "Create", 1120.0, 1), 1, "one row from 1120 pt");
+        assert_eq!(rows_in("Home", "Font", 2000.0, 3), 3, "unlisted sections keep their form");
     }
 
     #[test]

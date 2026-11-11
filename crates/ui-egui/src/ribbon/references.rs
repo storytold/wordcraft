@@ -137,8 +137,7 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Index", None, app, |ui, app| {
-        big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
-        stack(ui, |ui| {
+        let insert = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "index", Some("Insert Index"), "Insert Index", crate::widgets::ButtonAction::new("references.index", json!({}), false));
             small(
                 ui,
@@ -148,11 +147,22 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Update Index",
                 crate::widgets::ButtonAction::new("references.updateIndex", json!({}), false),
             );
-        });
+        };
+        // Measured: two rows from 1024 px (819.2 pt), the first width it was seen at.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Index", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
+                });
+                crate::widgets::row(ui, |ui| insert(ui, app));
+            });
+        } else {
+            big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
+            stack(ui, |ui| insert(ui, app));
+        }
     });
     group(ui, "Table of Authorities", None, app, |ui, app| {
-        big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
-        stack(ui, |ui| {
+        let insert = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -169,7 +179,19 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
                 "Update Table",
                 crate::widgets::ButtonAction::new("references.updateAuthorities", json!({}), false),
             );
-        });
+        };
+        // Measured: two rows from 1024 px (819.2 pt), as the Index.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Table of Authorities", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
+                });
+                crate::widgets::row(ui, |ui| insert(ui, app));
+            });
+        } else {
+            big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
+            stack(ui, |ui| insert(ui, app));
+        }
     });
 }
 

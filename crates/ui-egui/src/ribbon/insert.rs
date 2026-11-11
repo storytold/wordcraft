@@ -194,38 +194,51 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Symbols", None, app, |ui, app| {
-        crate::equation_tab::insert_button(ui, app);
-        menu_button(ui, app, crate::widgets::MenuButtonOptions::new("symbol", Some("Symbol"), "Symbol", true, "insert.symbol"), |ui, app| {
-            // Recently used symbols first (their font on hover), then common ones.
-            let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
-            for c in [
-                "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓",
-                "★", "♥", "—", "…",
-            ] {
-                if !items.iter().any(|(ch, f)| ch == c && f.is_empty()) {
-                    items.push((c.to_string(), String::new()));
+        let symbol = |ui: &mut Ui, app: &mut WordApp| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("symbol", Some("Symbol"), "Symbol", true, "insert.symbol"), |ui, app| {
+                // Recently used symbols first (their font on hover), then common ones.
+                let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
+                for c in [
+                    "©", "®", "™", "§", "¶", "€", "£", "¥", "°", "±", "≠", "≤", "≥", "÷", "×", "∞", "µ", "α", "β", "π", "Ω", "∑", "√", "→", "←", "✓",
+                    "★", "♥", "—", "…",
+                ] {
+                    if !items.iter().any(|(ch, f)| ch == c && f.is_empty()) {
+                        items.push((c.to_string(), String::new()));
+                    }
                 }
-            }
-            items.truncate(30);
-            crate::rtl::grid(ui, egui::Grid::new("syms"), |ui| {
-                for (i, (c, font)) in items.iter().enumerate() {
-                    let b = ui.button(egui::RichText::new(c).size(16.0));
-                    let b = if font.is_empty() { b } else { b.on_hover_text(font) };
-                    if b.clicked() {
-                        let params = if font.is_empty() { json!({"char": c}) } else { json!({"char": c, "font": font}) };
-                        if app.run("insert.symbol", params).is_ok() {
-                            crate::dialogs_insert::remember_symbol(app, c, font);
+                items.truncate(30);
+                crate::rtl::grid(ui, egui::Grid::new("syms"), |ui| {
+                    for (i, (c, font)) in items.iter().enumerate() {
+                        let b = ui.button(egui::RichText::new(c).size(16.0));
+                        let b = if font.is_empty() { b } else { b.on_hover_text(font) };
+                        if b.clicked() {
+                            let params = if font.is_empty() { json!({"char": c}) } else { json!({"char": c, "font": font}) };
+                            if app.run("insert.symbol", params).is_ok() {
+                                crate::dialogs_insert::remember_symbol(app, c, font);
+                            }
+                            ui.close();
                         }
-                        ui.close();
+                        if i % 6 == 5 {
+                            ui.end_row();
+                        }
                     }
-                    if i % 6 == 5 {
-                        ui.end_row();
-                    }
-                }
+                });
+                ui.separator();
+                mi(ui, app, "More Symbols…", "ui.dialog", json!({"name": "symbol"}));
             });
-            ui.separator();
-            mi(ui, app, "More Symbols…", "ui.dialog", json!({"name": "symbol"}));
-        });
+        };
+        // Measured: Symbols is one row below 1120 pt and two rows from there (1400 px at 125 %).
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Symbols", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    crate::equation_tab::insert_button(ui, app);
+                });
+                crate::widgets::row(ui, |ui| symbol(ui, app));
+            });
+        } else {
+            crate::equation_tab::insert_button(ui, app);
+            symbol(ui, app);
+        }
     });
 }
 

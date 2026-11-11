@@ -6,13 +6,25 @@ use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small, vec2}
 pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
     let v = app.session.view.clone();
     group(ui, "Views", None, app, |ui, app| {
-        big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
-        big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
-        big(ui, app, "webLayout", "Web\nLayout", "view.webLayout", json!({}), false);
-        stack(ui, |ui| {
+        // Measured: two rows from 1100 px (880 pt): the view buttons, then Outline and Draft.
+        let layout = |ui: &mut Ui, app: &mut WordApp| {
+            big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
+            big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
+            big(ui, app, "webLayout", "Web\nLayout", "view.webLayout", json!({}), false);
+        };
+        let modes = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "outline", Some("Outline"), "Outline", crate::widgets::ButtonAction::new("view.outline", json!({}), false));
             small(ui, app, "draft", Some("Draft"), "Draft", crate::widgets::ButtonAction::new("view.draft", json!({}), false));
-        });
+        };
+        if crate::ribbon_fit::rows_for(ui.ctx(), "View", "Views", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| layout(ui, app));
+                crate::widgets::row(ui, |ui| modes(ui, app));
+            });
+        } else {
+            layout(ui, app);
+            stack(ui, |ui| modes(ui, app));
+        }
     });
     group(ui, "Immersive", None, app, |ui, app| {
         big(ui, app, "focus", "Focus", "view.focus", json!({}), false);
