@@ -29,6 +29,31 @@ pub struct AltChunk<'a> {
     pub bytes: &'a [u8],
 }
 
+/// A paragraph style a Word chunk names but doesn't have as a paragraph style is its Normal, as in
+/// any document Word opens. So such a paragraph is read as being in none before the chunk's
+/// styles are adopted, where the id could otherwise land on a style of ours (a character style of
+/// that id, say).
+fn forget_missing_para_styles(styles: &wordcraft_doc::StyleSheet, blocks: &mut Blocks) {
+    for b in blocks.iter_mut() {
+        let missing = |id: &str| styles.get(id).is_none_or(|s| s.kind != StyleKind::Paragraph);
+        match &**b {
+            Block::Para(p) if p.props.style.as_deref().is_some_and(missing) => {
+                if let Block::Para(p) = Arc::make_mut(b) {
+                    p.props.style = None;
+                }
+            }
+            Block::Table(_) => {
+                if let Block::Table(t) = Arc::make_mut(b) {
+                    for cell in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                        forget_missing_para_styles(styles, &mut cell.blocks);
+                    }
+                }
+            }
+            Block::Para(_) => {}
+        }
+    }
+}
+
 /// Turns a chunk the docx reader can't read itself into a document whose body takes the chunk's
 /// place; `None` leaves the chunk out.
 pub type ChunkImporter<'a> = &'a dyn Fn(&AltChunk) -> Option<Document>;
@@ -76,6 +101,9 @@ impl Reader<'_> {
             {
                 p.section = None;
             }
+        }
+        if is_docx {
+            forget_missing_para_styles(&doc.styles, &mut doc.body);
         }
         // `w:matchSrc`: a Word document's content keeps its own styles (other formats' formatting
         // is their own already).

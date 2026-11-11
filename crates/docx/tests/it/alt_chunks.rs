@@ -307,7 +307,7 @@ fn match_src_keeps_a_word_chunks_own_formatting() {
 #[test]
 fn a_match_src_chunks_last_paragraph_stands_on_our_style() {
     use wordcraft_doc::Align;
-    let ours = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="248" w:line="248" w:lineRule="exact"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:i/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type="character" w:styleId="Note"><w:name w:val="Note"/><w:rPr><w:i/></w:rPr></w:style>"#;
+    let ours = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="200"/></w:pPr></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:spacing w:after="248" w:line="248" w:lineRule="exact"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:i/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:b/></w:rPr></w:style><w:style w:type="character" w:styleId="Note"><w:name w:val="Note"/><w:rPr><w:i/></w:rPr></w:style><w:style w:type="character" w:styleId="Ghost"><w:name w:val="Ghost"/><w:rPr><w:i/></w:rPr></w:style>"#;
     let theirs = r#"<w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/><w:basedOn w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Quote"><w:name w:val="Quote"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="720"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="MyInd"><w:name w:val="My Ind"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/><w:jc w:val="right"/></w:pPr><w:rPr><w:b/></w:rPr></w:style><w:style w:type="character" w:styleId="Strong"><w:name w:val="Strong"/><w:rPr><w:sz w:val="40"/></w:rPr></w:style><w:style w:type="paragraph" w:styleId="Note"><w:name w:val="Note"/><w:basedOn w:val="Normal"/><w:pPr><w:ind w:left="360"/><w:jc w:val="right"/></w:pPr><w:rPr><w:b/></w:rPr></w:style>"#;
     let styled = |style: &str, ppr: &str, text: &str| {
         let s = if style.is_empty() { String::new() } else { format!(r#"<w:pStyle w:val="{style}"/>"#) };
@@ -390,6 +390,13 @@ fn a_match_src_chunks_last_paragraph_stands_on_our_style() {
     let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Note", "", "NoteLast")), "");
     assert_ne!(last.style.as_deref(), Some("Note"));
     assert_eq!((last.left, last.align, last.bold, last.italic), (18.0, Align::Right, true, false));
+    // A style the chunk doesn't have is its Normal, as in Word, even where ours of that id is a
+    // character style: the last paragraph stands on our Normal like a plain one.
+    let (_, last, _) = read_last(&format!("{}{}", p("Plain"), styled("Ghost", "", "GhostLast")), "");
+    assert_eq!(last, on(None, 0.0, 12.4, 0.0, Align::Left, false));
+    // Any other paragraph in it keeps the chunk's Normal: 12pt, nothing after, not italic.
+    let (first, _, _) = read_last(&format!("{}{}", styled("Ghost", "", "GhostFirst"), p("PlainLast")), "");
+    assert_eq!((first.after, first.size, first.italic), (0.0, 12.0, false));
 }
 
 #[test]
