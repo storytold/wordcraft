@@ -117,7 +117,7 @@ impl Reader<'_> {
     fn keep_last_look(&self, doc: &mut Document) -> Option<Option<String>> {
         let Some(Block::Para(p)) = doc.body.last().map(|b| &**b) else { return None };
         let id = p.props.style.clone().unwrap_or_else(|| "Normal".into());
-        self.doc.styles.get(&id)?;
+        self.doc.styles.get(&id).filter(|s| s.kind == StyleKind::Paragraph)?;
         let (_, theirs) = doc.styles.para_style_props(&id);
         let (_, ours) = self.doc.styles.para_style_props(&id);
         let look = theirs.against(&ours);
