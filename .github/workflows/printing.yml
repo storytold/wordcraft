@@ -64,6 +64,11 @@ jobs:
           echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
           echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
 
+      # apt falls back to mirrors outside ubuntu.com when it doesn't resolve (as on 11 Nov 2026).
+      - name: Configure apt mirrors
+        if: runner.os == 'Linux'
+        uses: storytold/craft-common-actions/actions/configure-apt-mirrors@main
+
       - name: Install Linux build and software-rendering dependencies
         if: runner.os == 'Linux'
         run: |
