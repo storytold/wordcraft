@@ -3794,9 +3794,11 @@ fn tracked_delete_keeps_another_authors_deletion() {
     s.author = "Ana".into();
     run(&mut s, "select.text", json!({"text": "beta"}));
     run(&mut s, "text.delete", json!({}));
-    // A second author deletes the whole line, including the text Ana already deleted.
+    // A second author deletes the whole line, including the text Ana already deleted. That
+    // text sits outside the default projection (it reads as accepted), so Ben selects the
+    // raw paragraph text.
     s.author = "Ben".into();
-    run(&mut s, "select.text", json!({"text": "alpha beta gamma"}));
+    run(&mut s, "select.text", json!({"text": "alpha beta gamma", "includeHidden": true}));
     run(&mut s, "text.delete", json!({}));
     let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
     let by: Vec<(String, Option<String>)> = p.run_ranges().map(|(r, c)| (p.text[r].to_string(), author_of(&s, c.del))).collect();
