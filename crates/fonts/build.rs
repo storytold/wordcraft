@@ -17,6 +17,11 @@ fn main() {
         match craft_fonts(&dir) {
             Ok((entries, covered)) => {
                 src.push_str(&entries);
+                // The metric-compatible Office substitutes, from the opt-in Latin manifest.
+                match office_substitutes(&dir) {
+                    Ok(latin) => src.push_str(&latin),
+                    Err(e) => println!("cargo::warning=building without the Office substitute fonts: {e}"),
+                }
                 // Each CJK interface language needs its own face: without the Chinese one, Chinese
                 // menus fall back to the Japanese face and show boxes for simplified hanzi (#241).
                 let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
@@ -43,12 +48,35 @@ fn main() {
 /// interface languages' (Japanese, Simplified Chinese).
 const REQUIRED_SCRIPTS: &[&str] = &["Jpan", "Hans"];
 
+/// Families of craft-fonts' opt-in Latin manifest (`fonts/latin-manifest.txt`) a native build
+/// embeds: the metric-compatible substitutes for Calibri, Cambria, Arial, Times New Roman and
+/// Courier New (about 7 MB). `crate::word` already prefers them, but without them a Calibri
+/// document fell back to a wider system font (Helvetica Neue on a Mac) and every line broke
+/// earlier than in Word. The web build leaves them out, for its size budget.
+const OFFICE_SUBSTITUTES: &[&str] = &["Carlito", "Caladea", "Liberation Sans", "Liberation Serif", "Liberation Mono"];
+
 /// One `CraftFont { .. }` initialiser per manifest line, and the scripts the embedded fonts cover.
 fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
-    let manifest = dir.join("fonts/manifest.txt");
+    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+    // Arabic interface faces are small, so the web build keeps them too.
+    manifest_fonts(dir, "fonts/manifest.txt", |_, scripts| !wasm || scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Geor")))
+}
+
+/// The Office substitutes of the Latin manifest (none on the web).
+fn office_substitutes(dir: &std::path::Path) -> Result<String, String> {
+    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
+    if wasm {
+        return Ok(String::new());
+    }
+    manifest_fonts(dir, "fonts/latin-manifest.txt", |family, _| OFFICE_SUBSTITUTES.contains(&family)).map(|(out, _)| out)
+}
+
+/// One `CraftFont { .. }` initialiser per line of the manifest at `rel` that `keep(family,
+/// scripts)` accepts, and the scripts those fonts cover.
+fn manifest_fonts(dir: &std::path::Path, rel: &str, keep: impl Fn(&str, &str) -> bool) -> Result<(String, Vec<String>), String> {
+    let manifest = dir.join(rel);
     println!("cargo::rerun-if-changed={}", manifest.display());
     let text = std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
-    let wasm = std::env::var("CARGO_CFG_TARGET_ARCH").is_ok_and(|a| a == "wasm32");
     let mut out = String::new();
     let mut covered = Vec::new();
     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
@@ -56,9 +84,7 @@ fn craft_fonts(dir: &std::path::Path) -> Result<(String, Vec<String>), String> {
         let [family, style, file, scripts, ..] = f.as_slice() else {
             return Err(format!("malformed manifest line: {line}"));
         };
-        // Arabic interface faces are small, so the web build keeps them too.
-        let small_ui_face = scripts.split(',').any(|s| matches!(s.trim(), "Arab" | "Geor"));
-        if wasm && !small_ui_face {
+        if !keep(family, scripts) {
             continue;
         }
         let path = dir.join(file).canonicalize().map_err(|e| format!("{file}: {e}"))?;
