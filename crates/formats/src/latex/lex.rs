@@ -264,6 +264,14 @@ impl Lexer<'_> {
 }
 
 pub(super) fn tokenize(src: &str) -> Vec<Tok> {
+    // TeX ends a line at LF, CR or CRLF alike; the lexer reads LF only.
+    let lf;
+    let src = if src.contains('\r') {
+        lf = src.replace("\r\n", "\n").replace('\r', "\n");
+        lf.as_str()
+    } else {
+        src
+    };
     Lexer { s: src, i: 0, out: Vec::new() }.run()
 }
 
