@@ -8,10 +8,17 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
         if crate::ribbon_fit::rows_for(ui.ctx(), "Mailings", "Create", 1) >= 2 {
             stack(ui, |ui| {
                 crate::widgets::row(ui, |ui| {
-                    big(ui, app, "envelope", "Envelopes", "mailings.envelopes", json!({}), false);
+                    small(
+                        ui,
+                        app,
+                        "envelope",
+                        Some("Envelopes"),
+                        "Envelopes",
+                        crate::widgets::ButtonAction::new("mailings.envelopes", json!({}), false),
+                    );
                 });
                 crate::widgets::row(ui, |ui| {
-                    big(ui, app, "labels", "Labels", "mailings.labels", json!({}), false);
+                    small(ui, app, "labels", Some("Labels"), "Labels", crate::widgets::ButtonAction::new("mailings.labels", json!({}), false));
                 });
             });
         } else {
@@ -20,37 +27,77 @@ pub(super) fn mailings(app: &mut WordApp, ui: &mut Ui) {
         }
     });
     group(ui, "Start Mail Merge", None, app, |ui, app| {
-        // The kinds of merge document the engine makes, the current one checked.
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("mailMerge", Some("Start Mail\nMerge"), "Start Mail Merge", true, "mailings.start"),
-            |ui, app| {
-                let kind = app.session.merge.kind.clone();
-                for (label, k) in [
-                    ("Letters", "letters"),
-                    ("E-mail Messages", "emails"),
-                    ("Envelopes", "envelopes"),
-                    ("Labels", "labels"),
-                    ("Directory", "directory"),
-                    ("Normal Word Document", "normal"),
-                ] {
-                    let current = kind == k || (k == "normal" && kind.is_empty());
-                    mi_check(ui, app, label, current, "mailings.start", json!({"kind": k}));
-                }
-            },
-        );
-        // The command needs data, so the button offers the two ways to give it (#240).
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("recipients", Some("Select\nRecipients"), "Select Recipients", true, "mailings.recipients"),
-            |ui, app| {
-                mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
-                mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
-            },
-        );
-        big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
+        // Measured: one row below 650 px (520 pt), three rows from there, and one row again
+        // from 1200 px (960 pt). Each control is its own row in the three-row form.
+        let start_merge = |ui: &mut Ui, app: &mut WordApp, big: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "mailMerge",
+                    Some(if big { "Start Mail\nMerge" } else { "Start Mail Merge" }),
+                    "Start Mail Merge",
+                    big,
+                    "mailings.start",
+                ),
+                |ui, app| {
+                    let kind = app.session.merge.kind.clone();
+                    for (label, k) in [
+                        ("Letters", "letters"),
+                        ("E-mail Messages", "emails"),
+                        ("Envelopes", "envelopes"),
+                        ("Labels", "labels"),
+                        ("Directory", "directory"),
+                        ("Normal Word Document", "normal"),
+                    ] {
+                        let current = kind == k || (k == "normal" && kind.is_empty());
+                        mi_check(ui, app, label, current, "mailings.start", json!({"kind": k}));
+                    }
+                },
+            );
+        };
+        let recipients = |ui: &mut Ui, app: &mut WordApp, big: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "recipients",
+                    Some(if big { "Select\nRecipients" } else { "Select Recipients" }),
+                    "Select Recipients",
+                    big,
+                    "mailings.recipients",
+                ),
+                |ui, app| {
+                    mi(ui, app, "Type a New List…", "ui.dialog", json!({"name": "newRecipientList"}));
+                    mi(ui, app, "Use an Existing List…", "ui.openRecipientList", json!({}));
+                },
+            );
+        };
+        let edit = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "editRecipients", "Edit\nRecipient List", "mailings.editRecipients", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "editRecipients",
+                    Some("Edit Recipient List"),
+                    "Edit Recipient List",
+                    crate::widgets::ButtonAction::new("mailings.editRecipients", json!({}), false),
+                );
+            }
+        };
+        if crate::ribbon_fit::rows_for(ui.ctx(), "Mailings", "Start Mail Merge", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| start_merge(ui, app, false));
+                crate::widgets::row(ui, |ui| recipients(ui, app, false));
+                crate::widgets::row(ui, |ui| edit(ui, app, false));
+            });
+        } else {
+            start_merge(ui, app, true);
+            recipients(ui, app, true);
+            edit(ui, app, true);
+        }
     });
     group(ui, "Write & Insert Fields", None, app, |ui, app| {
         big(ui, app, "highlightFields", "Highlight\nMerge Fields", "mailings.highlightFields", json!({}), false);

@@ -84,7 +84,16 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
         // Measured: two rows from 1900 px (1520 pt).
         if crate::ribbon_fit::rows_for(ui.ctx(), "Review", "Tracking", 1) >= 2 {
             stack(ui, |ui| {
-                crate::widgets::row(ui, |ui| track(ui, app));
+                crate::widgets::row(ui, |ui| {
+                    small(
+                        ui,
+                        app,
+                        "trackChanges",
+                        Some("Track Changes"),
+                        "Track Changes",
+                        crate::widgets::ButtonAction::new("review.trackChanges", json!({}), false),
+                    );
+                });
                 crate::widgets::row(ui, |ui| options(ui, app));
             });
         } else {

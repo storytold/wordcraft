@@ -152,7 +152,14 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
         if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Index", 1) >= 2 {
             stack(ui, |ui| {
                 crate::widgets::row(ui, |ui| {
-                    big(ui, app, "markEntry", "Mark\nEntry", "references.markEntry", json!({}), false);
+                    small(
+                        ui,
+                        app,
+                        "markEntry",
+                        Some("Mark Entry"),
+                        "Mark Entry",
+                        crate::widgets::ButtonAction::new("references.markEntry", json!({}), false),
+                    );
                 });
                 crate::widgets::row(ui, |ui| insert(ui, app));
             });
@@ -184,7 +191,14 @@ pub(super) fn references(app: &mut WordApp, ui: &mut Ui) {
         if crate::ribbon_fit::rows_for(ui.ctx(), "References", "Table of Authorities", 1) >= 2 {
             stack(ui, |ui| {
                 crate::widgets::row(ui, |ui| {
-                    big(ui, app, "markCitation", "Mark\nCitation", "references.markCitation", json!({}), false);
+                    small(
+                        ui,
+                        app,
+                        "markCitation",
+                        Some("Mark Citation"),
+                        "Mark Citation",
+                        crate::widgets::ButtonAction::new("references.markCitation", json!({}), false),
+                    );
                 });
                 crate::widgets::row(ui, |ui| insert(ui, app));
             });

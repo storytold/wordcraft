@@ -134,24 +134,52 @@ pub fn position(ctx: &Context) -> usize {
     ctx.data(|d| d.get_temp::<Frame>(frame_id()).map(|f| f.drawn.len())).unwrap_or(0)
 }
 
-/// The measured first widths (logical points) at which a section changes its row count, from
-/// `_parity/uia-word.json` (Office 16.0.20527, 125 %); the last entry holds above its width.
-const SECTION_ROWS: &[(&str, &str, &[(f32, u8)])] = &[
-    ("Insert", "Symbols", &[(1120.0, 2)]),
-    ("References", "Index", &[(819.2, 2)]),
-    ("References", "Table of Authorities", &[(819.2, 2)]),
-    ("Mailings", "Create", &[(880.0, 2), (1120.0, 1)]),
-    ("Review", "Tracking", &[(1520.0, 2)]),
-    ("View", "Views", &[(880.0, 2)]),
+/// The measured row counts from `_parity/uia-word.json` (Office 16.0.20527, 125 %), in logical
+/// points (px / 1.25): `(tab, section, narrow, &[(first width, rows)])`. Below the first width a
+/// section is `narrow` (one row in Word's matrix unless the entry says otherwise); the last entry
+/// holds above its width.
+const SECTION_ROWS: &[(&str, &str, u8, &[(f32, u8)])] = &[
+    ("Home", "Font", 1, &[(819.2, 3), (1520.0, 2)]),
+    ("Home", "Paragraph", 1, &[(960.0, 3), (1520.0, 2)]),
+    ("Home", "Editing", 1, &[(1520.0, 3)]),
+    ("Insert", "Pages", 1, &[(1280.0, 3)]),
+    ("Insert", "Media", 1, &[(880.0, 3), (1520.0, 1)]),
+    ("Insert", "Links", 1, &[(1280.0, 3)]),
+    ("Insert", "Header & Footer", 1, &[(928.8, 3), (1520.0, 1)]),
+    ("Insert", "Text", 1, &[(1040.0, 3)]),
+    ("Insert", "Symbols", 1, &[(1120.0, 2)]),
+    ("Design", "Document Formatting", 1, &[(520.0, 3)]),
+    ("Design", "Page Background", 3, &[(600.0, 1)]),
+    ("Layout", "Page Setup", 1, &[(440.0, 3)]),
+    ("Layout", "Arrange", 1, &[(819.2, 3)]),
+    ("References", "Table of Contents", 1, &[(600.0, 2)]),
+    ("References", "Footnotes", 1, &[(600.0, 3)]),
+    ("References", "Citations & Bibliography", 1, &[(760.0, 3)]),
+    ("References", "Captions", 1, &[(819.2, 3)]),
+    ("References", "Index", 1, &[(819.2, 2)]),
+    ("References", "Table of Authorities", 1, &[(819.2, 2)]),
+    ("Mailings", "Create", 1, &[(880.0, 2), (1120.0, 1)]),
+    ("Mailings", "Start Mail Merge", 1, &[(520.0, 3), (960.0, 1)]),
+    ("Mailings", "Write & Insert Fields", 1, &[(680.0, 3)]),
+    ("Mailings", "Preview Results", 1, &[(880.0, 3)]),
+    ("Review", "Proofing", 1, &[(928.8, 3)]),
+    ("Review", "Comments", 1, &[(1280.0, 3)]),
+    // Review › Markup (1 → 3 rows from 1400 px) is not applicable: WordCraft has no independent
+    // Markup section; Display for Review lives in Tracking.
+    ("Review", "Tracking", 1, &[(1520.0, 2)]),
+    ("View", "Views", 1, &[(880.0, 2)]),
+    ("View", "Zoom", 1, &[(1120.0, 3)]),
+    ("View", "Window", 1, &[(1040.0, 3)]),
+    ("Help", "Help", 3, &[(440.0, 1)]),
 ];
 
-/// The rows `section` takes at a client width of `width`, below its first measured change as its
-/// natural form `natural`.
+/// The rows `section` takes at a client width of `width`; a section not in the measured table
+/// keeps its natural form `natural`.
 pub fn rows_in(tab: &str, section: &str, width: f32, natural: u8) -> u8 {
-    let Some((_, _, breaks)) = SECTION_ROWS.iter().find(|(t, n, _)| *t == tab && *n == section) else {
+    let Some((_, _, narrow, breaks)) = SECTION_ROWS.iter().find(|(t, n, ..)| *t == tab && *n == section) else {
         return natural;
     };
-    let mut rows = natural;
+    let mut rows = *narrow;
     for (min, count) in *breaks {
         if width >= *min {
             rows = *count;
@@ -274,25 +302,64 @@ mod tests {
         assert_eq!(plan(&gs, 960.0), vec![FULL, FULL, FULL, COMPACT, COMPACT, COMPACT, COMPACT]);
     }
 
-    /// Every measured two-row finding switches just at its first measured width, just below it
-    /// keeps the natural form, and Mailings › Create returns to one row where Word measured it.
+    /// Every measured 1↔3 transition (and Table of Contents' 1↔2), at the first width it was
+    /// seen: `(tab, section, first width in pt, rows below it, rows at and above it)`.
+    ///
+    /// Review › Markup measures 1 → 3 rows from 1400 px but is not applicable: WordCraft has no
+    /// independent Markup section; Display for Review lives in Tracking.
+    const ROW_TRANSITIONS: &[(&str, &str, f32, u8, u8)] = &[
+        ("Home", "Font", 819.2, 1, 3),
+        ("Home", "Paragraph", 960.0, 1, 3),
+        ("Home", "Editing", 1520.0, 1, 3),
+        ("Insert", "Pages", 1280.0, 1, 3),
+        ("Insert", "Media", 880.0, 1, 3),
+        ("Insert", "Media", 1520.0, 3, 1),
+        ("Insert", "Links", 1280.0, 1, 3),
+        ("Insert", "Header & Footer", 928.8, 1, 3),
+        ("Insert", "Header & Footer", 1520.0, 3, 1),
+        ("Insert", "Text", 1040.0, 1, 3),
+        ("Design", "Document Formatting", 520.0, 1, 3),
+        ("Design", "Page Background", 600.0, 3, 1),
+        ("Layout", "Page Setup", 440.0, 1, 3),
+        ("Layout", "Arrange", 819.2, 1, 3),
+        ("References", "Table of Contents", 600.0, 1, 2),
+        ("References", "Footnotes", 600.0, 1, 3),
+        ("References", "Citations & Bibliography", 760.0, 1, 3),
+        ("References", "Captions", 819.2, 1, 3),
+        ("Mailings", "Start Mail Merge", 520.0, 1, 3),
+        ("Mailings", "Start Mail Merge", 960.0, 3, 1),
+        ("Mailings", "Write & Insert Fields", 680.0, 1, 3),
+        ("Mailings", "Preview Results", 880.0, 1, 3),
+        ("Review", "Proofing", 928.8, 1, 3),
+        ("Review", "Comments", 1280.0, 1, 3),
+        ("View", "Zoom", 1120.0, 1, 3),
+        ("View", "Window", 1040.0, 1, 3),
+        ("Help", "Help", 440.0, 3, 1),
+    ];
+
+    /// Every measured row transition switches just at its first measured width: the row count
+    /// below it is the entry's narrow form (or the previous transition), and the count at and
+    /// above later widths follows the table. Table of Contents (2) and Footnotes (3) are included.
     #[test]
     fn measured_section_rows_switch_at_their_first_widths() {
-        // (tab, section, natural, widths below/at, rows below/at)
-        for (tab, sec, natural, below, at, low, high) in [
-            ("Insert", "Symbols", 1, 1119.9, 1120.0, 1, 2),
-            ("References", "Index", 1, 819.1, 819.2, 1, 2),
-            ("References", "Table of Authorities", 1, 819.1, 819.2, 1, 2),
-            ("Mailings", "Create", 1, 879.9, 880.0, 1, 2),
-            ("Review", "Tracking", 1, 1519.9, 1520.0, 1, 2),
-            ("View", "Views", 1, 879.9, 880.0, 1, 2),
-        ] {
-            assert_eq!(rows_in(tab, sec, below, natural), low, "{tab} › {sec} below {at}");
-            assert_eq!(rows_in(tab, sec, at, natural), high, "{tab} › {sec} at {at}");
+        for (tab, section, narrow, breaks) in SECTION_ROWS {
+            let mut previous = *narrow;
+            for (first, rows) in *breaks {
+                assert_eq!(rows_in(tab, section, first - 0.1, 3), previous, "{tab} › {section} below {first}");
+                assert_eq!(rows_in(tab, section, *first, 3), *rows, "{tab} › {section} at {first}");
+                previous = *rows;
+            }
+            // The measured matrix ends at 1900 px (1520 pt); the last count holds there.
+            assert_eq!(rows_in(tab, section, 1520.0, 3), previous, "{tab} › {section} at 1520 pt");
         }
-        assert_eq!(rows_in("Mailings", "Create", 1119.9, 1), 2, "two rows until 1120 pt");
-        assert_eq!(rows_in("Mailings", "Create", 1120.0, 1), 1, "one row from 1120 pt");
-        assert_eq!(rows_in("Home", "Font", 2000.0, 3), 3, "unlisted sections keep their form");
+        // Every 1↔3 transition (and Table of Contents' 2-row form) in the measured matrix, at
+        // its first width and just below it.
+        for (tab, section, first, below, at) in ROW_TRANSITIONS {
+            assert_eq!(rows_in(tab, section, first - 0.1, 3), *below, "{tab} › {section} below {first} pt");
+            assert_eq!(rows_in(tab, section, *first, 3), *at, "{tab} › {section} at {first} pt");
+        }
+        assert_eq!(rows_in("Mailings", "Create", 1120.0, 1), 1, "Create one row from 1120 pt");
+        assert_eq!(rows_in("Home", "Font", 2000.0, 3), 2, "the Home wide form");
     }
 
     #[test]

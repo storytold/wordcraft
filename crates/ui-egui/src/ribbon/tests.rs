@@ -610,29 +610,35 @@ fn chart_design_tab_appears_when_chart_selected_and_buttons_open_dialogs() {
 }
 
 /// No group's content runs into its label: View › Show stacked four check boxes in a column
-/// made for three, so "Hide White Space" was drawn under "Show". Every tab, every language.
+/// made for three, so "Hide White Space" was drawn under "Show". Every tab, every language, at a
+/// width that shows every measured wide form and at one that shows Mailings' two- and three-row
+/// forms.
 #[test]
 fn ribbon_groups_fit_above_their_labels() {
-    let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
-    // Wide enough that no tab hides groups behind its scroll arrows.
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
     let mut tall = Vec::new();
-    for lang in crate::i18n::Lang::all() {
-        h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
-        for tab in TABS.iter().filter(|t| **t != "File") {
-            h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
-            h.run_steps(2);
-            crate::widgets::TALL_GROUPS.with(|g| g.borrow_mut().clear());
-            h.run_steps(1);
-            let found = crate::widgets::TALL_GROUPS.with(|g| g.take());
-            tall.extend(found.into_iter().map(|g| format!("{} {tab} › {g}", lang.code())));
+    // 2560 pt shows the wide forms (Symbols, Index, Table of Authorities, Tracking, Views);
+    // 900 pt shows Mailings › Create's two rows and Start Mail Merge's three.
+    for width in [2560.0, 900.0] {
+        let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        // Wide enough that no tab hides groups behind its scroll arrows.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for lang in crate::i18n::Lang::all() {
+            h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
+            for tab in TABS.iter().filter(|t| **t != "File") {
+                h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
+                h.run_steps(2);
+                crate::widgets::TALL_GROUPS.with(|g| g.borrow_mut().clear());
+                h.run_steps(1);
+                let found = crate::widgets::TALL_GROUPS.with(|g| g.take());
+                tall.extend(found.into_iter().map(|g| format!("{} {width} {tab} › {g}", lang.code())));
+            }
         }
     }
     tall.sort();

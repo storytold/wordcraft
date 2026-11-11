@@ -194,8 +194,8 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Symbols", None, app, |ui, app| {
-        let symbol = |ui: &mut Ui, app: &mut WordApp| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("symbol", Some("Symbol"), "Symbol", true, "insert.symbol"), |ui, app| {
+        let symbol = |ui: &mut Ui, app: &mut WordApp, big: bool| {
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("symbol", Some("Symbol"), "Symbol", big, "insert.symbol"), |ui, app| {
                 // Recently used symbols first (their font on hover), then common ones.
                 let mut items: Vec<(String, String)> = app.ui.recent_symbols.iter().map(|r| (r.ch.clone(), r.font.clone())).collect();
                 for c in [
@@ -231,13 +231,13 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Symbols", 1) >= 2 {
             stack(ui, |ui| {
                 crate::widgets::row(ui, |ui| {
-                    crate::equation_tab::insert_button(ui, app);
+                    small(ui, app, "equation", Some("Equation"), "Equation", crate::widgets::ButtonAction::new("insert.equation", json!({}), false));
                 });
-                crate::widgets::row(ui, |ui| symbol(ui, app));
+                crate::widgets::row(ui, |ui| symbol(ui, app, false));
             });
         } else {
             crate::equation_tab::insert_button(ui, app);
-            symbol(ui, app);
+            symbol(ui, app, true);
         }
     });
 }

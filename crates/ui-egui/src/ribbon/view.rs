@@ -18,7 +18,25 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         };
         if crate::ribbon_fit::rows_for(ui.ctx(), "View", "Views", 1) >= 2 {
             stack(ui, |ui| {
-                crate::widgets::row(ui, |ui| layout(ui, app));
+                crate::widgets::row(ui, |ui| {
+                    small(ui, app, "readMode", Some("Read Mode"), "Read\nMode", crate::widgets::ButtonAction::new("view.readMode", json!({}), false));
+                    small(
+                        ui,
+                        app,
+                        "printLayout",
+                        Some("Print Layout"),
+                        "Print\nLayout",
+                        crate::widgets::ButtonAction::new("view.printLayout", json!({}), false),
+                    );
+                    small(
+                        ui,
+                        app,
+                        "webLayout",
+                        Some("Web Layout"),
+                        "Web\nLayout",
+                        crate::widgets::ButtonAction::new("view.webLayout", json!({}), false),
+                    );
+                });
                 crate::widgets::row(ui, |ui| modes(ui, app));
             });
         } else {
