@@ -88,17 +88,16 @@ impl ScrollSpeed {
         NORMAL_TOUCHPAD_FACTOR * self.factor()
     }
 
-    /// Scales this frame's point scrolling by [`Self::touchpad_factor`].
+    /// Scales point scrolling events in the given slice by [`Self::touchpad_factor`].
     /// On wasm32, browser mouse wheels and touchpads arrive as [`egui::MouseWheelUnit::Point`],
     /// so the user-selected `wheel_speed` is applied there directly (#6146).
-    /// Call this before egui or canvas reads raw input.
     /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
-    pub fn apply_input_scroll(self, raw: &mut egui::RawInput, wheel_speed: ScrollSpeed) {
+    pub fn apply_events_scroll(self, events: &mut [egui::Event], wheel_speed: ScrollSpeed) {
         let factor = if cfg!(target_arch = "wasm32") { wheel_speed.factor() } else { self.touchpad_factor() };
         if (factor - 1.0).abs() < 1e-4 {
             return;
         }
-        for event in &mut raw.events {
+        for event in events {
             if let egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers, .. } = event
                 && !modifiers.command
                 && !modifiers.ctrl
@@ -107,6 +106,15 @@ impl ScrollSpeed {
                 *delta *= factor;
             }
         }
+    }
+
+    /// Scales this frame's point scrolling by [`Self::touchpad_factor`].
+    /// On wasm32, browser mouse wheels and touchpads arrive as [`egui::MouseWheelUnit::Point`],
+    /// so the user-selected `wheel_speed` is applied there directly (#6146).
+    /// Call this before egui or canvas reads raw input.
+    /// Ctrl/⌘-wheel zoom is left alone so it zooms at egui's own rate.
+    pub fn apply_input_scroll(self, raw: &mut egui::RawInput, wheel_speed: ScrollSpeed) {
+        self.apply_events_scroll(&mut raw.events, wheel_speed);
     }
 
     /// Scales this frame's touchpad (point) scrolling by [`Self::touchpad_factor`].

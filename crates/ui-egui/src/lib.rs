@@ -683,6 +683,11 @@ pub struct WordApp {
     synthetic_pending: bool,
     /// How many events of `synthetic` the pending batch contains.
     synthetic_injected: usize,
+    /// Number of raw input events whose scroll delta has already been scaled in the pending host batch.
+    pub(crate) raw_scroll_events_scaled: usize,
+    /// Exact snapshot of the raw input events scaled during the current pending batch, to avoid
+    /// compounding scroll multipliers when eframe replays unconsumed RawInput across hidden logic ticks.
+    pub(crate) last_scaled_scroll_events: Vec<egui::Event>,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).

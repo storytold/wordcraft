@@ -178,6 +178,8 @@ impl WordApp {
             synthetic: _,
             synthetic_pending: _,
             synthetic_injected: _,
+            raw_scroll_events_scaled: _,
+            last_scaled_scroll_events: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
             styled: _,

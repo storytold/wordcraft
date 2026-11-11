@@ -114,6 +114,8 @@ impl WordApp {
             synthetic: Vec::new(),
             synthetic_pending: false,
             synthetic_injected: 0,
+            raw_scroll_events_scaled: 0,
+            last_scaled_scroll_events: Vec::new(),
             styled: false,
             fonts_hans: false,
             fonts_korean: false,

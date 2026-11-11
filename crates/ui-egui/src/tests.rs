@@ -8219,3 +8219,61 @@ fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
     assert_eq!(restored.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
     assert_eq!(restored.scroll_speed, crate::scroll::ScrollSpeed::Fast);
 }
+
+/// Issue #6146 / PR #6167: unconsumed raw input is replayed by eframe across hidden logic ticks.
+/// The touchpad scroll multiplier must be applied once per event, never compounded across replays.
+#[test]
+fn touchpad_point_scrolling_is_scaled_once_across_hidden_logic_ticks() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    let mut raw = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0)], ..Default::default() };
+
+    // 1. First raw_input_hook call scales the point delta by the touchpad factor.
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected = -10.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    assert_eq!(raw.events[0], wheel_event(egui::MouseWheelUnit::Point, expected));
+
+    // 2. Hidden logic tick: eframe saves raw into pending_raw_input and invokes the hook again
+    // on the next tick without a UI pass having consumed it. The delta must not compound.
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "hidden logic tick replay must not compound the scroll delta");
+    }
+
+    // 3. Appending a new event during a subsequent hidden tick: older events stay scaled once,
+    // and only the new event is scaled.
+    raw.events.push(wheel_event(egui::MouseWheelUnit::Point, -5.0));
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected_new = -5.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "initial event still scaled once");
+    }
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[1] {
+        assert_eq!(delta.y, expected_new, "new event is scaled once");
+    }
+
+    // 4. A UI pass consumes the input, acknowledging the frame.
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+
+    // 5. Subsequent fresh frame scales fresh input once.
+    let mut fresh = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -20.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut fresh);
+    let expected_fresh = -20.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &fresh.events[0] {
+        assert_eq!(delta.y, expected_fresh, "fresh input is scaled once");
+    }
+}
