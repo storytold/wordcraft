@@ -193,7 +193,10 @@ impl Writer<'_> {
             w.open("w:txbxContent", &[]);
             if self.written_boxes.insert(id) {
                 let blocks = part.blocks.clone();
+                // A text box in a cell is a story of its own: the table style doesn't reach it.
+                let cell_chr = self.table_chr.take();
                 self.blocks(w, &blocks, rels, false, depth + 1);
+                self.table_chr = cell_chr;
             } else {
                 w.empty("w:p", &[]);
             }

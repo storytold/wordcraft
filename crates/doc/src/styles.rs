@@ -822,6 +822,20 @@ impl StyleSheet {
         out.chr.style = None;
         Some(out)
     }
+    /// The run formatting `t`'s table style gives the text of cell `c` of row `r`: each of the
+    /// cell's parts' over the last, lowest precedence first (ECMA-376 §17.7.6), as layout applies
+    /// it between document defaults and the paragraph's style. `None` when the table has no style.
+    pub fn table_cell_chr(&self, t: &crate::table::Table, r: usize, c: usize) -> Option<CharProps> {
+        let st = self.table_style(t.props.style.as_deref()?)?;
+        let span = t.rows.get(r)?.cells.get(c)?.span();
+        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+        let ncols = t.cols().clamp(1, crate::table::MAX_COLS);
+        let mut chr = CharProps::default();
+        for part in PartSet::of_cell(&t.props.look, sizes, (r, t.rows.len()), (t.grid_col(r, c), span, ncols)).iter() {
+            chr.overlay(&st.part(part).chr);
+        }
+        Some(chr)
+    }
     /// Add or replace a style.
     pub fn upsert(&mut self, st: Style) {
         match self.styles.iter_mut().find(|s| s.id == st.id) {

@@ -157,6 +157,95 @@ fn thai_text_is_written_complex_script_where_its_formatting_differs() {
     }
 }
 
+/// What Word counts for a run being complex script, measured in Word for Windows: its table
+/// style's `w:cs` and run formatting do count, a character style's `w:cs` (or `w:cs w:val="0"`)
+/// doesn't, for Latin and Thai text alike. Text is written so Word draws it as WordCraft does.
+#[test]
+fn text_is_written_complex_script_by_what_word_counts() {
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, Cell, Row, Style, StyleKind, Table};
+    let text = "ทดสอบ ABC";
+    // Each character's font, size and bold as WordCraft draws it, a table cell's with the table
+    // style's run formatting.
+    let drawn = |d: &Document| -> Vec<(String, f32, bool)> {
+        let (p, table) = match &*d.body[0] {
+            Block::Table(t) => (t.rows[0].cells[0].blocks[0].as_para().unwrap(), d.styles.table_cell_chr(t, 0, 0)),
+            b => (b.as_para().unwrap(), None),
+        };
+        let mut out = Vec::new();
+        for (range, props) in p.run_ranges() {
+            let rc = d.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref(), props);
+            for ch in p.text[range].chars() {
+                let c = if rc.uses_complex(ch) { rc.complex() } else { rc.clone() };
+                out.push((c.font, c.size, c.bold));
+            }
+        }
+        out
+    };
+    let doc = |defaults: CharProps, styles: Vec<Style>, run: CharProps, table: Option<&str>| {
+        let mut d = Document::new();
+        let sheet = Arc::make_mut(&mut d.styles);
+        sheet.default_chr = defaults;
+        for s in styles {
+            sheet.upsert(s);
+        }
+        let para = para_block(Paragraph::with_text(text, run));
+        d.body = vec![match table {
+            Some(id) => {
+                let mut t = Table { grid: vec![300.0], ..Default::default() };
+                t.props.style = Some(id.into());
+                let cell = Cell {
+                    props: wordcraft_doc::props::CellProps { span: 1, ..Default::default() },
+                    blocks: vec![para],
+                    controls: Default::default(),
+                };
+                t.rows = vec![Row { props: Default::default(), cells: vec![cell], controls: Default::default() }];
+                Arc::new(Block::Table(t))
+            }
+            None => para,
+        }];
+        d
+    };
+    let style = |id: &str, kind: StyleKind, chr: CharProps| Style { id: id.into(), name: id.into(), kind, chr, ..Default::default() };
+    let tahoma = CharProps { font: Some("Tahoma".into()), font_cs: Some("Tahoma".into()), ..Default::default() };
+    let differing =
+        CharProps { font: Some("Angsana New".into()), font_cs: Some("Tahoma".into()), size: Some(10.0), size_cs: Some(20.0), ..Default::default() };
+    let cs_on = CharProps { cs: Some(true), ..Default::default() };
+    let in_char_style = |id: &str| CharProps { style: Some(id.into()), ..Default::default() };
+    let cases = [
+        // A table style's sizes make the two formattings differ: the Thai word is marked.
+        (
+            "table style sizes",
+            doc(
+                tahoma,
+                vec![style("T", StyleKind::Table, CharProps { size: Some(20.0), size_cs: Some(10.0), ..Default::default() })],
+                CharProps::default(),
+                Some("T"),
+            ),
+            1,
+        ),
+        // A table style's `w:cs` makes the run complex script for Word too: nothing to mark.
+        ("table style cs", doc(differing.clone(), vec![style("T", StyleKind::Table, cs_on.clone())], CharProps::default(), Some("T")), 0),
+        // A character style's `w:cs` doesn't count in Word: the whole run, Latin too, is marked.
+        ("character style cs", doc(differing.clone(), vec![style("CsOn", StyleKind::Character, cs_on.clone())], in_char_style("CsOn"), None), 1),
+    ];
+    for (name, d, marks) in cases {
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let xml = document_xml(&bytes);
+        assert_eq!(xml.matches("<w:cs/>").count(), marks, "{name}: {xml}");
+        assert_eq!(drawn(&wordcraft_docx::read(&bytes).unwrap()), drawn(&d), "{name}: drawn the same after a save");
+    }
+    // A character style's `w:cs w:val="0"` doesn't turn off its paragraph style's `w:cs` in Word:
+    // the text WordCraft draws in the run's other formatting is written `w:cs w:val="0"`.
+    let normal = Style { id: "Normal".into(), name: "Normal".into(), kind: StyleKind::Paragraph, chr: cs_on, ..Default::default() };
+    let cs_off = style("CsOff", StyleKind::Character, CharProps { cs: Some(false), ..Default::default() });
+    let d = doc(differing, vec![normal, cs_off], in_char_style("CsOff"), None);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(r#"<w:cs w:val="0"/>"#), "{xml}");
+    assert_eq!(drawn(&wordcraft_docx::read(&bytes).unwrap()), drawn(&d), "drawn the same after a save");
+}
+
 #[test]
 fn reads_word_style_bidi_markup() {
     // What a right-to-left paragraph looks like in a Word document: w:bidi, logical
