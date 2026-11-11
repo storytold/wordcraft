@@ -5,14 +5,14 @@
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft)
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
-- HEAD at this writing: `c1582864` (§5.32, the finding-6 fix) plus this page on
+- HEAD at this writing: `3b05f844` (§5.33, the finding-8 fix) plus this page on
   top of it. The fork branch and the `headRefOid` of PR #5834 are still
-  `af9a43a2` (the CodeRabbit triage, §5.26): the ten commits after it —
+  `af9a43a2` (the CodeRabbit triage, §5.26): the eleven commits after it —
   `2a6f39c7`, `925bb0c9`, `3225e644`, `264afd18`, `c6e3df4a`, `bcca9bce`,
-  `37af31cb`, `bf632378`, `4e95d929` and `c1582864` — are committed locally and
-  **not pushed**, because the envoy role cannot push; the owner sends it
-  (§5.27–§5.32). The branch is 89 commits over `4b0d3995` before this page and 90
-  with it. The branch was pushed
+  `37af31cb`, `bf632378`, `4e95d929`, `c1582864` and `3b05f844` — are committed
+  locally and **not pushed**, because the envoy role cannot push; the owner
+  sends it (§5.27–§5.33). The branch is 91 commits over `4b0d3995` before this
+  page and 92 with it. The branch was pushed
   on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`) and at
   20:15Z (`af9a43a2`); at each point the local `HEAD`, the fork branch and the
   `headRefOid` of PR #5834 were the same commit (§5.21, §5.24, §5.26, §5.27).
@@ -243,6 +243,11 @@ missing, and where the next session should start.
 - The Commit button commits through the room when a session is live (the room
   publishes the file, §5.18); the host-owned `wordcraft:commit` path is the
   fallback for an app without a session to commit through.
+- A plan or a submission that fails does not leave the session reporting
+  `InSync`: it moves to `Status::Diverged`, keeps the reason for the panel,
+  refuses the next edit and the commit with that reason, and asks for a resync
+  (`Pause`, `plan_command`, `submit_plans`; ADR `0006`, §5.33). The same two
+  helpers serve the web session, so both transports pause the same way.
 - `collab.disable` drops the session; with the flag off nothing opens a socket.
 - Saved preferences plus a token in the environment resume the session on start.
 
@@ -310,7 +315,7 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31 and 6 (connection identity) in §5.32; 8, 9 and 10 (session status, per-document connections, token renewal) remain open, named in §4 |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 9 and 10 (per-document connections, token renewal) remain open, named in §4 |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
@@ -470,11 +475,15 @@ Results at this writing:
   can no longer remove the connection that replaced it: a peer is removed by the
   connection that registered it, and only the same account in the same cabinet
   session may take an id over — a reconnect
-  (`docs/collab/adr/0005-client-id-belongs-to-a-connection.md`, §5.32). Three
-  findings of §5.26 stay open, each with its own slice: a failed edit leaves the
-  session reporting `InSync` (8), the connection is app-wide while documents are
-  per window (9), and a session event replaces the client and drops its
-  unconfirmed edits (10).
+  (`docs/collab/adr/0005-client-id-belongs-to-a-connection.md`, §5.32). Finding
+  8 no longer leaves a failed edit in a session that reports `InSync`: a plan or
+  a submission that fails moves the session to `Status::Diverged`, which pauses
+  editing and refuses a commit with the reason, and a resync replaces the local
+  document with the room's confirmed one
+  (`docs/collab/adr/0006-diverged-session-pauses.md`, §5.33). Two findings of
+  §5.26 stay open, each with its own slice: the connection is app-wide while
+  documents are per window (9), and a session event replaces the client and
+  drops its unconfirmed edits (10).
 - A step of several operations is now one transaction (every inverse or none);
   character and paragraph formatting commands carry an exact inverse (§5.10),
   including the two that rewrite the characters, `format.changeCase` and
@@ -3327,6 +3336,126 @@ on the new head. Two things this slice names and does not take:
 
 In the code, findings 8, 9 and 10 of §5.26 remain (§4), each with its own slice
 and test; they are client-side state, not the protocol. Finding 6 is closed here.
+
+### 5.33 Finding 8: an edit that did not reach the room pauses the session (run 2026-11-11)
+
+**What the defect was.** A local command runs in this window before the room
+hears about it: `before_command` clones the document, the engine runs the
+command, and `after_command` plans the difference and submits the operations
+(`crates/ui-egui/src/collab.rs:29-47` at `af9a43a2`, §5.26 finding 8). Both of
+the last two steps can fail:
+
+1. **Planning.** `SyncState::plan` answers `Err` when the diff cannot address the
+   document (`DiffError::MissingId` — a paragraph the server issued no id for)
+   or when the command fallback has no addressable selection (`"{command} needs
+   a session id for its selection"`).
+2. **Submission.** `Handle::submit` answers `Err("the session task is gone")`
+   when the transport task has ended; the browser's `send` answers `Err` when the
+   socket is not open. With several planned operations the failure can also land
+   after the first ones were accepted, so the room holds part of the edit.
+
+The old `after_command` showed the string in the status bar and changed nothing
+else. `Status` stayed `InSync`, so `can_write` and `can_commit` stayed true, the
+panel said "synchronized", and the next commit asked the room to build the file
+**at the room's version**, which does not contain the edit. `TASK.md` §2's
+convergence criterion was reported as met while a writer's paragraphs could be
+left out of the stored `.docx`.
+
+**The decision.** `docs/collab/adr/0006-diverged-session-pauses.md` (ADR
+WC-0006; repository-local). It rejects three alternatives: keeping the status and
+only showing the message (that is the defect); restoring the pre-command document
+(the engine has already run the command, and a command's inverse is not
+universal — §4); keeping the edit and retrying later (the offline queue that does
+not exist). The rules it picks:
+
+- **`Status::Diverged` is a status of its own**, not `Resyncing`: "this document
+  holds an edit the room does not have" is a different fact from "a handshake is
+  in progress". Both gates require `InSync`, so writing and committing stop
+  without a second flag.
+- **Both failures are one outcome.** `Pause`, `plan_command` and `submit_plans`
+  in `wordcraft-collab-app` turn either stage into the same status and the same
+  message ("…a commit is blocked until the session is synchronized"); the
+  desktop and the web session use the same two helpers, so the transports cannot
+  drift apart here.
+- **A pause asks for the room's state, and only a snapshot ends it.** The
+  desktop sends `Handle::resync`, the web session `ClientMsg::Resync`. A
+  `welcome` no longer ends it: a reconnect hands back the handshake, not the
+  document, so a diverged session stays paused across it and asks for the
+  snapshot again.
+- **A transport that cannot even ask is not left paused.** If the resync request
+  fails too, the desktop reports `Failed(…)` (the task is gone; nothing will
+  repair it) and the web reports `Offline` (the socket is not open; the transport
+  reconnects and rejoins). Neither hides the reason: `last_error` keeps it.
+- **The commit is refused with the reason.** The owner keeps a disabled Commit
+  button whose hover text says why, `request_commit` reports the same reason when
+  a menu or a shortcut calls it, and the edit gate answers with the divergence
+  sentence instead of "reconnecting". A read-only role can no longer reach the
+  host-owned commit path through this branch either. The cabinet's
+  `session-state` reports `pending` while diverged (the contract has no word for
+  this state and a snapshot is on its way); the cabinet gets no detail by
+  design.
+
+**The change.** Five files, +385/−33:
+
+- `crates/collab-app/src/lib.rs` — `Status::Diverged`; `Pause` with its one
+  message; `plan_command` and `submit_plans`; `Collab::after_command` calls them
+  and pauses on either failure; `Collab::pause` keeps the reason, sets the
+  status, and asks for the snapshot; the welcome handler keeps `Diverged` and
+  asks again.
+- `crates/collab-web/src/lib.rs` — the same path over the browser socket:
+  `deliver` (send when joined, queue before `welcome`), `pause`, the same welcome
+  rule; `host_status` maps `Diverged` to `pending`.
+- `crates/ui-egui/src/collab.rs` — the panel label "out of sync — an edit did not
+  reach the room", a disabled Commit button with the reason on hover,
+  `request_commit` reporting the reason instead of doing nothing, and
+  `pause_message` used by the edit gate.
+- `crates/collab-app/src/tests.rs` — the three tests below.
+- `docs/collab/adr/0006-diverged-session-pauses.md` — the record.
+
+**What ran** (build host `agents`, on this tree):
+
+- `cargo fmt --all -- --check` EXIT=0;
+- `cargo clippy -p wordcraft-collab -p wordcraft-collab-app -p wordcraft-collab-web
+  -p wordcraft-collab-client -p wordcraft-collab-doc -p wordcraft-collab-server
+  --all-targets -- -D warnings` EXIT=0;
+- `cargo check -p wordcraft-ui-egui --all-targets` EXIT=0;
+- tests: `wordcraft-collab` 61 passed, `wordcraft-collab-server` 66 passed and 1
+  ignored (the LibreOffice commit gate), `wordcraft-collab-client` 20,
+  `wordcraft-collab-doc` 116, `wordcraft-collab-app` 42 (39 before this slice; the
+  three new ones are the failure paths and the guard against a false pause),
+  `wordcraft-collab-web` 5 — **310 passed, 0 failed, 1 ignored** in the six
+  crates. The two new failure-path tests fail with the `Pause`'s status set back
+  to `InSync`, which is the pre-fix behaviour; the patch was reverted after the
+  check.
+- `wordcraft-ui-egui`: 1191 passed, 3 ignored, 0 failed, with
+  `CRAFT_I18N_DIR`/`CRAFT_FONTS_DIR` from the host. Without them the suite's
+  `theme::tests::interface_symbols_have_glyphs` fails on the missing font
+  sources — the same environmental dependency the earlier passes record (§3,
+  §5.22). It passes with them, unmodified.
+
+**Local head.**
+
+| | |
+|---|---|
+| head | `3b05f844` — `collab: an edit that did not reach the room pauses the session` |
+| files | `crates/collab-app/src/lib.rs` +90/−5, `src/tests.rs` +56, `crates/collab-web/src/lib.rs` +49/−11, `crates/ui-egui/src/collab.rs` +55/−17, `docs/collab/adr/0006-diverged-session-pauses.md` +135 (five files, +385/−33), plus this page |
+| pushed | no: the envoy role denies `git push`; the fork and PR #5834 are still `af9a43a2` (§5.26, §5.27) |
+
+**What is left.** The push is the owner's, as in §5.27–§5.32: from `upstream/`,
+`git push fork HEAD:refs/heads/feature/realtime-collaboration` — a fast-forward
+from `af9a43a2`, no rebase and no force. Then a maintainer's approval of the runs
+on the new head. Two things this slice names and does not take:
+
+- **The price is the one ADR WC-0002 already names.** The resync continues from
+  the room's snapshot, so an edit that never reached the room is dropped locally
+  rather than merged. Keeping it needs the offline queue §4 has always named as
+  absent; the pause is the safe half of that queue.
+- **`edit.undo`/`edit.redo` while diverged keep a generic sentence.** They are
+  gated by the same `InSync` test (`crates/ui-egui/src/app/commands.rs`) and are
+  refused, which is correct, but the wording still says "reconnecting".
+
+In the code, findings 9 and 10 of §5.26 remain (§4), each with its own slice and
+test. Finding 8 is closed here.
 
 ## 6. Where things live
 
