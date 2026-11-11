@@ -115,12 +115,21 @@ fn ask_with_timeout(what: &str, ask: impl FnOnce() -> Option<String> + Send + 's
 #[cfg(target_os = "windows")]
 fn account_name() -> windows::core::Result<String> {
     use windows::System::{KnownUserProperties, User};
-    let users = User::FindAllAsync()?.join()?;
-    // A desktop app sees the one account it runs under; any other answer can't say which is ours.
-    if users.Size()? != 1 {
-        return Ok(String::new());
-    }
-    let user = users.GetAt(0)?;
+    // The account this process runs as. `GetDefault` names that one; `FindAllAsync` enumerates the
+    // session's users, so it is the fallback, and only when it answers with exactly one — a
+    // machine with two signed-in accounts (fast user switching) gets no name from us rather than a
+    // guess at which of them this is.
+    let user = match User::GetDefault() {
+        Ok(user) => user,
+        Err(e) => {
+            log::debug!("user name: no default account: {e}");
+            let users = User::FindAllAsync()?.join()?;
+            if users.Size()? != 1 {
+                return Ok(String::new());
+            }
+            users.GetAt(0)?
+        }
+    };
     let first = user_property(&user, "first name", KnownUserProperties::FirstName);
     let last = user_property(&user, "last name", KnownUserProperties::LastName);
     Ok(chosen(&first, &last, || user_property(&user, "display name", KnownUserProperties::DisplayName)).unwrap_or_default())
