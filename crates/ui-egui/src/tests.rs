@@ -1055,9 +1055,8 @@ fn table_properties_keep_a_six_point_column() {
     let mut a = app();
     a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
     a.run("table.properties", json!({"columnWidth": 6.0})).unwrap();
-    let col = |a: &WordApp| {
-        a.session.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { t.grid.first().copied() } else { None })
-    };
+    let col =
+        |a: &WordApp| a.session.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { t.grid.first().copied() } else { None });
     let before = col(&a);
     a.run("table.properties", json!({})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
