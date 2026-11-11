@@ -1,4 +1,4 @@
-use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected, with_obj};
+use super::select::{edit_float, min_size, movable_story, obj_size, select_object, selected_or_text_box, with_obj};
 use super::{CmdError, CmdResult, Float, InlineObject, Pos, Selection, Session, StoryRef, Value, Wrap, json, p};
 
 /// Largest object offset or move, points.
@@ -9,7 +9,7 @@ pub(super) fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(r) = crate::cmd::canvas::member_bounds(s, v) {
         return r;
     }
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
         (None, None) => None,
@@ -87,7 +87,7 @@ fn move_in_text(s: &mut Session, pos: Pos, to: &Pos) -> Result<Pos, CmdError> {
 /// (x, y), or for an In Line with Text object put it at the text position `to`, leaving the
 /// original in place and the clipboard alone. The copy is selected.
 pub(super) fn copy_to(s: &mut Session, v: &Value) -> CmdResult {
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let len = wordcraft_doc::para::OBJ.len_utf8();
     let end = Pos { off: pos.off + len, ..pos.clone() };
     if let Some(to) = text_target(v, &obj)? {
@@ -217,7 +217,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
 /// column / paragraph that keeps it where it is, so it can be moved by an offset.
 pub(super) fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let Some((_, _, float)) = obj.frame() else { return Ok(()) };
     if float.h_align.is_none() && float.v_align.is_none() {
         return Ok(());
@@ -251,7 +251,7 @@ pub fn moves_with_text(f: &Float) -> bool {
 /// object's vertical position to its paragraph or to the page, keeping it where it is now.
 pub(super) fn move_with_text(s: &mut Session, with_text: bool) -> CmdResult {
     use wordcraft_doc::para::Anchor;
-    let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
+    let (pos, obj) = selected_or_text_box(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let Some((_, _, float)) = obj.frame() else { return Err(CmdError::Disabled("select a floating picture or shape first".into())) };
     if moves_with_text(float) == with_text {
         return Ok(json!({"object": serde_json::to_value(&obj).unwrap_or(Value::Null)}));

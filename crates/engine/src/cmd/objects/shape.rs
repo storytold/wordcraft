@@ -141,6 +141,12 @@ pub(super) fn shape_effects(s: &mut Session, v: &Value) -> CmdResult {
             targets.push(pos);
         }
     }
+    if targets.is_empty()
+        && selected(s).is_none()
+        && let Some((pos, _)) = text_box_target(s)
+    {
+        targets.push(pos);
+    }
     if targets.is_empty() {
         return Err(CmdError::Disabled("no shape selected".into()));
     }
