@@ -222,6 +222,11 @@ const METRIC_TWINS: &[&[&str]] = &[
     &["Calibri", "Carlito"],
     &["Cambria", "Caladea"],
     &["Palatino Linotype", "Palatino", "Book Antiqua", "TeX Gyre Pagella", "P052", "URW Palladio L", "Palladio"],
+];
+
+/// Platform-specific family names for the same font (Windows vs macOS Yu Mincho / Yu Gothic).
+/// Resolving an alias selects the installed face itself (`substituted = false`), not a substitute.
+const FAMILY_ALIASES: &[&[&str]] = &[
     &["Yu Mincho", "YuMincho", "游明朝", "游明朝体"],
     &["Yu Mincho Demibold", "YuMincho Demibold", "游明朝 Demibold", "游明朝体 Demibold"],
     &["Yu Mincho Light", "YuMincho Light", "游明朝 Light", "游明朝体 Light"],
@@ -229,6 +234,16 @@ const METRIC_TWINS: &[&[&str]] = &[
     &["Yu Gothic Medium", "YuGothic Medium", "游ゴシック Medium", "游ゴシック体 Medium"],
     &["Yu Gothic Light", "YuGothic Light", "游ゴシック Light", "游ゴシック体 Light"],
 ];
+
+/// Other platform names for `family` ([`FAMILY_ALIASES`]), without `family` itself.
+pub fn family_aliases(family: &str) -> impl Iterator<Item = &'static str> + '_ {
+    let f = family.trim();
+    FAMILY_ALIASES
+        .iter()
+        .filter(move |g| g.iter().any(|t| t.eq_ignore_ascii_case(f)))
+        .flat_map(|g| g.iter().copied())
+        .filter(move |t| !t.eq_ignore_ascii_case(f))
+}
 
 /// The fonts that measure like `family` ([`METRIC_TWINS`]), in the order they are tried, without
 /// `family` itself.
@@ -241,13 +256,15 @@ fn metric_twins(family: &str) -> impl Iterator<Item = &'static str> + '_ {
         .filter(move |t| !t.eq_ignore_ascii_case(f))
 }
 
-/// Whether `substitute` was made to measure like `family` ([`METRIC_TWINS`]), so text drawn in it
-/// wraps and paginates as in `family`.
+/// Whether `substitute` was made to measure like `family` ([`METRIC_TWINS`] or [`FAMILY_ALIASES`]),
+/// so text drawn in it wraps and paginates as in `family`.
 pub fn metric_compatible(family: &str, substitute: &str) -> bool {
     let s = substitute.trim();
     family.split(';').map(str::trim).filter(|f| !f.is_empty()).any(|f| {
         let base = charset_base_family(f);
-        base.eq_ignore_ascii_case(s) || metric_twins(base).any(|t| t.eq_ignore_ascii_case(s))
+        base.eq_ignore_ascii_case(s)
+            || family_aliases(base).any(|a| a.eq_ignore_ascii_case(s))
+            || metric_twins(base).any(|t| t.eq_ignore_ascii_case(s))
     })
 }
 
@@ -576,13 +593,15 @@ fn remember_list_resolution(generation: u64, key: (u64, usize), family: &str, re
 }
 
 /// Resolve a single family or semicolon-separated fallback list to `(family_name, substituted)`.
-fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
+pub(crate) fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
     if !family.contains(';') {
         let base = if family.trim().eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(family) };
         return if db.has_family(family) {
             (family.to_string(), false)
         } else if base != family && db.has_family(base) {
             (base.to_string(), false)
+        } else if let Some(alias) = family_aliases(base).find(|a| db.has_family(a)) {
+            (alias.to_string(), false)
         } else {
             (substitute(db, base).unwrap_or(crate::FALLBACK_FAMILY).to_string(), true)
         };
@@ -608,7 +627,7 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
 
     let mut direct_probes = MAX_DIRECT_CANDIDATE_PROBES;
 
-    // 1. First installed family in the list:
+    // 1. First installed family (or same-font platform alias) in the list:
     for &cand in &candidates {
         let base = if cand.eq_ignore_ascii_case("Symbol (PCL6)") { "Symbol" } else { charset_base_family(cand) };
         if candidate_has_family(db, cand, &mut direct_probes) {
@@ -616,6 +635,9 @@ fn resolve_family(db: &FontDb, family: &str) -> (String, bool) {
         }
         if base != cand && candidate_has_family(db, base, &mut direct_probes) {
             return remember_list_resolution(generation, list_key, family, (base.to_string(), false));
+        }
+        if let Some(alias) = family_aliases(base).find(|a| candidate_has_family(db, a, &mut direct_probes)) {
+            return remember_list_resolution(generation, list_key, family, (alias.to_string(), false));
         }
     }
 
@@ -814,7 +836,22 @@ mod tests {
         assert!(!metric_compatible("Open Sans", "Carlito"));
         assert!(!metric_compatible("Times New Roman", "Times"));
         assert_eq!(metric_twins("arial").collect::<Vec<_>>(), ["Liberation Sans", "Helvetica", "Arimo"]);
-        assert_eq!(metric_twins("游明朝").collect::<Vec<_>>(), ["Yu Mincho", "YuMincho", "游明朝体"]);
+        assert_eq!(family_aliases("游明朝").collect::<Vec<_>>(), ["Yu Mincho", "YuMincho", "游明朝体"]);
+    }
+
+    #[test]
+    fn yu_mincho_alias_resolves_before_later_fallback_candidate() {
+        // When `Source Serif 4` stands in for a known alias via an installed face, or when
+        // resolving against the bundled db, `family_aliases` covers every Windows/macOS pair
+        // without pulling in unrelated metric substitutes.
+        assert_eq!(family_aliases("Yu Mincho").collect::<Vec<_>>(), ["YuMincho", "游明朝", "游明朝体"]);
+        assert_eq!(family_aliases("YuGothic").collect::<Vec<_>>(), ["Yu Gothic", "游ゴシック", "游ゴシック体"]);
+        // Verify candidate-level alias resolution on a fresh database when only an alias is present:
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let (fam, sub) = resolve_family(&db, "游明朝; Source Serif 4");
+        // Neither `游明朝` nor `YuMincho` is bundled, so it moves on to `Source Serif 4`.
+        assert_eq!((fam.as_str(), sub), ("Source Serif 4", false));
     }
 
     #[test]

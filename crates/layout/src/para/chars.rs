@@ -139,7 +139,8 @@ pub(super) fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
         && if font.contains(';') {
             wordcraft_fonts::word::resolve(font, false, false).substituted
         } else {
-            !db.has_family(font) && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
+            let base = wordcraft_fonts::word::charset_base_family(font);
+            !db.has_family(font) && !db.has_family(base) && !wordcraft_fonts::word::family_aliases(base).any(|a| db.has_family(a))
         }
     {
         MISSING_ROMAN_FONT

@@ -740,3 +740,15 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn yu_mincho_aliases_resolve_before_fallback_candidates() {
+    let dir = font_dir("yu-mincho-alias");
+    std::fs::write(dir.join("YuMincho-Regular.ttf"), named_face("SourceSans3-Regular.ttf", "YuMincho")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    for req in ["Yu Mincho", "游明朝", "游明朝体", "游明朝; Source Serif 4", "Yu Mincho; Arial"] {
+        let (fam, sub) = crate::word::resolve_family(&db, req);
+        assert_eq!((fam.as_str(), sub), ("YuMincho", false), "for {req}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
