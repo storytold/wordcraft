@@ -175,3 +175,75 @@ fn rtl_tables_and_sections_round_trip() {
     assert_eq!(again, vec![true, false]);
     assert!(r.last_section.rtl && r.last_section.columns.count == 2);
 }
+
+/// A package whose body is `body` and whose styles part holds `styles`.
+fn docx_with_styles(body: &str, styles: &str) -> Vec<u8> {
+    let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+    let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let doc = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {ns}><w:body>{body}</w:body></w:document>"#);
+    let st = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles {ns}>{styles}</w:styles>"#);
+    zip(&[
+        ("_rels/.rels", root.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/styles.xml", st.as_bytes()),
+    ])
+}
+
+/// Thai text draws in the complex-script formatting only where Word draws it so (measured in Word
+/// for Windows; run defaults Angsana New 22 pt, complex script Tahoma 11 pt bold). Without
+/// `w:cs` or `w:rtl` on the run, its paragraph style or the run defaults, Thai text measures as
+/// Angsana New 22 pt, whatever its language, `w:hint` or character style.
+#[test]
+fn thai_text_takes_the_complex_script_formatting_only_in_a_complex_script_run() {
+    let thai = "ทดสอบ ภาษาไทย";
+    let defaults = |extra: &str| {
+        format!(
+            r#"<w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Angsana New" w:hAnsi="Angsana New" w:cs="Tahoma"/><w:bCs/><w:sz w:val="44"/><w:szCs w:val="22"/>{extra}</w:rPr></w:rPrDefault></w:docDefaults>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="CsPara"><w:name w:val="CsPara"/><w:basedOn w:val="Normal"/><w:rPr><w:cs/></w:rPr></w:style>
+<w:style w:type="character" w:styleId="CsChar"><w:name w:val="CsChar"/><w:rPr><w:cs/></w:rPr></w:style>"#
+        )
+    };
+    let latin = ("Angsana New", 22.0, false);
+    let complex = ("Tahoma", 11.0, true);
+    let run = |rpr: &str| format!(r#"<w:p><w:r><w:rPr>{rpr}</w:rPr><w:t xml:space="preserve">{thai}</w:t></w:r></w:p>"#);
+    let styled = |p: &str, rpr: &str| {
+        format!(r#"<w:p><w:pPr><w:pStyle w:val="{p}"/></w:pPr><w:r><w:rPr>{rpr}</w:rPr><w:t xml:space="preserve">{thai}</w:t></w:r></w:p>"#)
+    };
+    let cases: Vec<(&str, String, String, (&str, f32, bool))> = vec![
+        ("plain", defaults(""), run(""), latin),
+        ("bidi language", defaults(""), run(r#"<w:lang w:val="th-TH" w:bidi="th-TH"/>"#), latin),
+        ("hint", defaults(""), run(r#"<w:rFonts w:hint="cs"/>"#), latin),
+        ("character style", defaults(""), run(r#"<w:rStyle w:val="CsChar"/>"#), latin),
+        ("run cs", defaults(""), run("<w:cs/>"), complex),
+        ("run rtl", defaults(""), run("<w:rtl/>"), complex),
+        ("paragraph style", defaults(""), styled("CsPara", ""), complex),
+        ("paragraph style, run cs off", defaults(""), styled("CsPara", r#"<w:cs w:val="0"/>"#), latin),
+        ("run defaults", defaults("<w:cs/>"), run(""), complex),
+    ];
+    let check = |d: &Document, name: &str, want: (&str, f32, bool), when: &str| {
+        let p = paras(d)[0];
+        let rc = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+        for ch in p.text.chars() {
+            let drawn = if rc.uses_complex(ch) { rc.complex() } else { rc.clone() };
+            let want = if ch == ' ' && want != complex { latin } else { want };
+            assert_eq!((drawn.font.as_str(), drawn.size, drawn.bold), want, "{name} {when}: {ch:?}");
+        }
+        let c = &p.runs[0].props;
+        assert_eq!((c.font_cs.as_deref(), c.size_cs, c.bold_cs), (None, None, None), "{name} {when}: nothing is pinned");
+    };
+    for (name, styles, body, want) in &cases {
+        let d = wordcraft_docx::read(&docx_with_styles(body, styles)).unwrap();
+        check(&d, name, *want, "read");
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        check(&again, name, *want, "after a save");
+    }
+    // Latin text and right-to-left text are left as they were.
+    let body = r#"<w:p><w:r><w:t>Latin only</w:t></w:r></w:p><w:p><w:r><w:t>سلام</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx_with_styles(body, &defaults(""))).unwrap();
+    for p in paras(&d) {
+        assert_eq!(p.runs[0].props.cs, None, "{}", p.text);
+    }
+}

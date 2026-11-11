@@ -4,6 +4,34 @@ use super::{
     placeholder_of, sectpr, tcpr, trpr,
 };
 
+/// Word draws Thai, Lao and Indic text with the complex-script font, size, bold and italic only in
+/// a run that is complex script or right to left (`w:cs`, `w:rtl`) by its own properties, its
+/// paragraph style or the run defaults; a character style saying so doesn't count. Anywhere else
+/// the text takes the run's other font and `w:sz`, whatever its language or `w:hint` (measured in
+/// Word for Windows: Thai text at `w:sz` 22 pt, `w:szCs` 11 pt is drawn at 22 pt). WordCraft
+/// draws those characters with the complex-script formatting unless the run says it is not
+/// complex script, so such a run is marked so (`w:cs w:val="0"`, which Word reads the same way).
+/// Runs with right-to-left text are left as they are: they are written right to left.
+fn mark_runs_word_draws_without_complex_script(styles: &wordcraft_doc::StyleSheet, para: &mut Paragraph) {
+    use wordcraft_doc::bidi::{is_complex_script, is_rtl_script};
+    let style = para.props.style.as_deref();
+    let mut at = 0;
+    for run in &mut para.runs {
+        let text = para.text.get(at..at + run.len).unwrap_or("");
+        at += run.len;
+        if !text.chars().any(is_complex_script) || text.chars().any(is_rtl_script) {
+            continue;
+        }
+        let word = styles.resolve_char(style, &CharProps { style: None, ..run.props.clone() });
+        if word.cs || word.rtl {
+            continue;
+        }
+        if !styles.resolve_char(style, &run.props).cs_off {
+            run.props.cs = Some(false);
+        }
+    }
+}
+
 impl Reader<'_> {
     /// Read a story's blocks from a container element (`w:body`, `w:hdr`, `w:tc`, `w:txbxContent`…).
     pub fn read_blocks(&mut self, sc: &mut StoryCtx, parent: &El, rels: &Rels, out: &mut Blocks, depth: usize) {
@@ -276,6 +304,7 @@ impl Reader<'_> {
         if sc.fields.iter().any(|f| f.phase == Phase::Instr) && para.plain_text().is_empty() {
             para.mark.hidden = Some(true);
         }
+        mark_runs_word_draws_without_complex_script(&self.doc.styles, &mut para);
         para.normalize();
         para
     }
