@@ -1019,49 +1019,77 @@ async fn handle_op(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSink<W
     let structural = op.kind.is_structural();
     let result = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        if guard.window.elapsed() >= std::time::Duration::from_secs(1) {
-            guard.window = std::time::Instant::now();
-            guard.ops_in_window = 0;
-        }
-        if guard.ops_in_window >= 200 {
-            Err(Reject::new(op.op_id.clone(), RejectCode::TooLarge, "too many operations; retry in a moment"))
+        if guard.session != claims.sid {
+            // The lease moved to another cabinet session (ADR WC-0008). This
+            // connection is still open, but it no longer speaks for the
+            // document: without this check an earlier session keeps writing
+            // after a takeover took the document from it (review 5855379673).
+            Err(Reject::new(op.op_id.clone(), RejectCode::Lease, "another session holds this document"))
         } else {
-            guard.ops_in_window += 1;
-            guard.room.submit(&claims.sub, role, op)
+            if guard.window.elapsed() >= std::time::Duration::from_secs(1) {
+                guard.window = std::time::Instant::now();
+                guard.ops_in_window = 0;
+            }
+            if guard.ops_in_window >= 200 {
+                Err(Reject::new(op.op_id.clone(), RejectCode::TooLarge, "too many operations; retry in a moment"))
+            } else {
+                guard.ops_in_window += 1;
+                guard.room.submit(&claims.sub, role, op)
+            }
         }
     };
     match result {
         Ok(applied) => {
             Metrics::inc(&state.metrics.ops);
-            // A command that allocates ids carries them on the answer; peers
-            // apply the delta instead of replacing the whole map.
-            let delta_sent = applied.nodes.is_some();
-            // The author's own answer: without it the pending operation is never
-            // acknowledged on this connection, so a failed write ends it.
-            if !broadcast(state, room, client_id, ServerMsg::Applied { applied }, sink).await {
-                return false;
-            }
-            let nodes = {
-                let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-                let moved = guard.room.take_nodes_changed();
-                if !delta_sent && (structural || moved) { Some(guard.room.nodes()) } else { None }
-            };
-            if let Some(nodes) = nodes
-                && !broadcast(state, room, "", ServerMsg::Nodes { nodes }, sink).await
-            {
-                return false;
-            }
-            let due = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.should_snapshot();
-            if due && let Err(message) = state.persist(&claims.doc, room, None) {
-                log::warn!("snapshot failed for {}: {message}", claims.doc);
-            }
-            true
+            publish_applied(state, room, &claims.doc, client_id, applied, structural, sink).await
         }
         Err(reject) => {
             Metrics::inc(&state.metrics.rejects);
             send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok()
         }
     }
+}
+
+/// The frames an accepted operation owes the room: the author's answer, the
+/// node update every peer needs, and the snapshot that is due.
+///
+/// The order is the contract. A write to the author that fails ends its session
+/// — the answer it waits for is gone — but the node update and the due snapshot
+/// belong to the rest of the room and still happen first: peers that received
+/// `Applied` for a paragraph split without its new id cannot address that
+/// paragraph, and `take_nodes_changed` has already cleared the flag that would
+/// send the map later (review 5855379673).
+async fn publish_applied<S>(
+    state: &AppState,
+    room: &Arc<Mutex<RoomState>>,
+    doc: &str,
+    client_id: &str,
+    applied: wordcraft_collab::wire::Applied,
+    structural: bool,
+    sink: &mut S,
+) -> bool
+where
+    S: futures_util::Sink<Message, Error = axum::Error> + Unpin,
+{
+    // A command that allocates ids carries them on the answer; peers apply the
+    // delta instead of replacing the whole map.
+    let delta_sent = applied.nodes.is_some();
+    let author_ok = broadcast(state, room, client_id, ServerMsg::Applied { applied }, sink).await;
+    let nodes = {
+        let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+        let moved = guard.room.take_nodes_changed();
+        if !delta_sent && (structural || moved) { Some(guard.room.nodes()) } else { None }
+    };
+    if let Some(nodes) = nodes {
+        // Every peer is queued before the write to the author is attempted, so
+        // a session that is already gone does not cost them the update.
+        broadcast(state, room, "", ServerMsg::Nodes { nodes }, sink).await;
+    }
+    let due = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.should_snapshot();
+    if due && let Err(message) = state.persist(doc, room, None) {
+        log::warn!("snapshot failed for {doc}: {message}");
+    }
+    author_ok
 }
 
 /// One commit frame from the owner: the caller's client id (so the answer
@@ -1078,6 +1106,16 @@ async fn handle_commit(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSi
     let CommitCall { client_id, op_id, expected_version } = call;
     if !role.can_commit() {
         let reject = Reject::new(op_id, RejectCode::Forbidden, "only the owner commits");
+        return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
+    }
+    // A commit is a write like any other: the session that lost the lease may
+    // not publish over the one that holds it (review 5855379673).
+    let holds_lease = {
+        let guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
+        guard.session == claims.sid
+    };
+    if !holds_lease {
+        let reject = Reject::new(op_id, RejectCode::Lease, "another session holds this document");
         return send(sink, &ServerMsg::Rejected { reject }, limit).await.is_ok();
     }
     let version = room.lock().unwrap_or_else(|poison| poison.into_inner()).room.version();

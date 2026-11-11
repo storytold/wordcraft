@@ -1516,3 +1516,28 @@ fn a_divergence_outlives_the_connection_status_until_a_snapshot_lands() {
     assert!(!divergence.is_paused(), "the snapshot replaced the document and with it the lost edit");
     assert_eq!(divergence.status_after_welcome(), Status::InSync);
 }
+
+/// A refused undo reads `InSync` — the session is not broken — but it must not
+/// clear a pause: both gates read the status, so `InSync` would enable editing
+/// and an owner commit while the document still holds an edit the room never
+/// received (review 5855379673).
+#[test]
+fn a_refusal_that_reads_in_sync_does_not_clear_the_pause() {
+    let refusal = Reject::new(OpId::new("alice", 4), RejectCode::UndoConflict, "the step's target changed");
+    let (status, resync) = crate::refusal_status(&refusal);
+    assert_eq!(status, Status::InSync, "a refused undo is shown, not treated as a broken session");
+    assert!(!resync, "and it does not ask for a snapshot");
+
+    let mut divergence = Divergence::default();
+    assert_eq!(divergence.status_after_refusal(status.clone()), Status::InSync, "an unpaused session keeps the refusal's status");
+
+    divergence.pause();
+    assert_eq!(divergence.status_after_refusal(status.clone()), Status::Diverged, "a refusal does not clear the pause");
+    // `can_write` and `can_commit` both compare the status with `InSync`, so the
+    // gates stay closed while it is `Diverged`.
+    assert!(divergence.is_paused());
+    assert_ne!(divergence.status_after_refusal(status.clone()), Status::InSync);
+
+    divergence.snapshot();
+    assert_eq!(divergence.status_after_refusal(status), Status::InSync, "only the snapshot that repairs the edit reopens the session");
+}

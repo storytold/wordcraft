@@ -396,7 +396,9 @@ impl Collab {
             },
             Event::Rejected { reject } => {
                 let (status, resync) = wordcraft_collab_app::refusal_status(&reject);
-                self.status = status;
+                // A refusal that reads `InSync` leaves a paused session paused:
+                // only a snapshot clears the divergence (review 5855379673).
+                self.status = self.divergence.status_after_refusal(status);
                 // A refused undo is visible at its author; the document stays as
                 // it was because the room refused before changing it.
                 self.last_error = Some(reject.message.clone());
@@ -869,5 +871,43 @@ mod tests {
         let text = serde_json::to_string(&snapshot).expect("json");
         collab.on_text(&text, &mut session);
         assert_eq!(*collab.status(), Status::InSync, "the room's document is this document again");
+    }
+
+    /// The outstanding undo of a paused session is refused `undo-conflict` when
+    /// its target moved. That refusal reads `InSync`, and writing it over the
+    /// status would reopen both gates while the document still holds the edit the
+    /// room never received (review 5855379673).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_refused_undo_does_not_reopen_a_paused_session() {
+        use wordcraft_collab::wire::{OpId, Reject, RejectCode};
+
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "owner");
+        let mut collab = test_collab(&opened, "c1");
+        collab.state.role = Role::Owner;
+        let mut session = Session::new(wordcraft_doc::Document::new());
+        assert!(collab.can_write() && collab.can_commit(), "an owner in sync writes and commits");
+
+        collab.pause(wordcraft_collab_app::Pause::after_failed_command("the socket closed"));
+        // What the handshake after a reconnect leaves: still paused.
+        let welcome =
+            ServerMsg::Welcome { session_id: "s1".into(), role: "owner".into(), version: 3, epoch: 0, participants: Vec::new(), resync: true };
+        let text = serde_json::to_string(&welcome).expect("json");
+        collab.on_text(&text, &mut session);
+        assert_eq!(*collab.status(), Status::Diverged);
+
+        let refusal = ServerMsg::Rejected { reject: Reject::new(OpId::new("c1", 3), RejectCode::UndoConflict, "the step's target changed") };
+        let text = serde_json::to_string(&refusal).expect("json");
+        collab.on_text(&text, &mut session);
+        assert_eq!(*collab.status(), Status::Diverged, "the refusal is shown without clearing the pause");
+        assert!(!collab.can_write(), "the editor stays paused");
+        assert!(!collab.can_commit(), "and an owner commit would omit the lost edit");
+
+        let bytes = serde_json::to_vec(&wordcraft_doc::Document::new()).expect("model");
+        let snapshot = ServerMsg::Snapshot { version: 3, bytes, last: true };
+        let text = serde_json::to_string(&snapshot).expect("json");
+        collab.on_text(&text, &mut session);
+        assert_eq!(*collab.status(), Status::InSync);
+        assert!(collab.can_write() && collab.can_commit(), "the snapshot is what reopens the session");
     }
 }

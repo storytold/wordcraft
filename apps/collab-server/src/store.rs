@@ -16,9 +16,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+use sha2::Digest;
 use wordcraft_collab::journal::DedupWindow;
 
 use crate::cabinet::Published;
+use crate::hex;
 
 /// One stored snapshot.
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +95,7 @@ impl Store {
     /// empty room, which would be persisted over the stored file (ADR WC-0003).
     pub fn load(&self, doc: &str) -> Result<Option<Snapshot>, Corrupt> {
         let dir = self.doc_dir(doc);
+        self.adopt_legacy(doc, &dir);
         let path = dir.join("model.json");
         // A bounded read: the file is rejected before it is in memory, which is
         // the whole point of `MAX_MODEL` (CodeRabbit 4533747500).
@@ -157,9 +161,10 @@ impl Store {
         let source = fs::read(dir.join("source.docx")).ok();
         // A snapshot written before the window was stored has no `dedup.json`:
         // the room still opens, only without deduplication across the restart.
-        // A damaged window is a cache, not the document: losing it costs a
-        // duplicate answer, not text.
-        let dedup = fs::read(dir.join("dedup.json")).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+        // A window that cannot be tied to **this** snapshot is not read either:
+        // an answer it holds may name an edit this model never had, and
+        // acknowledging that retry would drop the edit (review 5855379673).
+        let dedup = read_window(&dir.join("dedup.json"), version, &model);
         Ok(Some(Snapshot { version, epoch, model, source, dedup, cabinet }))
     }
 
@@ -182,10 +187,15 @@ impl Store {
         if let Some(source) = &snapshot.source {
             write_atomic(&dir.join("source.docx"), source)?;
         }
-        let dedup = serde_json::to_vec(&snapshot.dedup).map_err(|err| format!("cannot encode the opId window: {err}"))?;
+        // The window travels with the snapshot it belongs to: the version and
+        // the digest of the model it was written beside are its stamp, so a
+        // later restore cannot pair it with a different model (review
+        // 5855379673).
+        let window = WindowStamp { version: snapshot.version, model: digest(&snapshot.model), window: &snapshot.dedup };
+        let dedup = serde_json::to_vec(&window).map_err(|err| format!("cannot encode the opId window: {err}"))?;
         write_atomic(&dir.join("dedup.json"), &dedup)?;
         // Metadata last: its presence means the pair is complete.
-        let mut meta = format!("version={}\nepoch={}\n", snapshot.version, snapshot.epoch);
+        let mut meta = format!("version={}\nepoch={}\ndoc_sha256={}\n", snapshot.version, snapshot.epoch, digest(doc.as_bytes()));
         if let Some(cabinet) = &snapshot.cabinet {
             meta.push_str(&format!("cabinet_version={}\ncabinet_etag={}\n", cabinet.version, cabinet.etag));
         }
@@ -195,6 +205,35 @@ impl Store {
     pub fn doc_dir(&self, doc: &str) -> PathBuf {
         self.dir.join(sanitize(doc))
     }
+
+    /// Move a snapshot written under the old, lossy directory name to the name
+    /// the digest gives it, once.
+    ///
+    /// The old name could not tell `a/b` from `a_b` (review 5855379673). One id
+    /// owned the directory and the other was handed its snapshot; the first
+    /// load claims the data by renaming it, so exactly one of them keeps it and
+    /// the other is left with nothing instead of another document. A snapshot
+    /// that records its own id and belongs to a different one is not claimed:
+    /// it stays where it is, untouched, and `save` never writes over it.
+    fn adopt_legacy(&self, doc: &str, dir: &Path) {
+        if dir.join("model.json").exists() {
+            return;
+        }
+        let legacy = self.dir.join(legacy_name(doc));
+        if legacy == dir || !legacy.join("model.json").exists() {
+            return;
+        }
+        if let Ok(meta) = fs::read_to_string(legacy.join("meta"))
+            && let Some(stored) = meta.lines().find_map(|line| line.strip_prefix("doc_sha256="))
+            && stored != digest(doc.as_bytes())
+        {
+            return;
+        }
+        // A rename that fails (another id claimed it first, or the directory is
+        // not ours to move) leaves the snapshot for the next load to find where
+        // it is: nothing is copied over and nothing is deleted.
+        let _ = fs::rename(&legacy, dir);
+    }
 }
 
 /// A known `meta` number. A value that is not one is damage, not a default:
@@ -203,8 +242,32 @@ fn parse_number(key: &'static str, value: &str) -> Result<u64, Corrupt> {
     value.parse::<u64>().map_err(|_| Corrupt::new("meta", format!("has a {key} that is not a number: {value:?}")))
 }
 
-/// Keep a document id from escaping the data directory.
+/// Keep a document id from escaping the data directory, and keep it apart from
+/// every other id.
+///
+/// A readable prefix stays, so an operator can still tell a directory from its
+/// name; the digest of the **whole** id is what makes the mapping injective.
+/// The old, lossy name mapped `a/b` and `a_b` to one directory — a client could
+/// be handed another document's snapshot and a save could overwrite it — and
+/// cut every id at 64 characters, so two ids that agreed there collided too
+/// (review 5855379673).
 fn sanitize(doc: &str) -> String {
+    let mut out = String::with_capacity(48 + 1 + 64);
+    for ch in doc.chars().take(48) {
+        if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    out.push('-');
+    out.push_str(&digest(doc.as_bytes()));
+    out
+}
+
+/// The name this store used before the digest: only [`Store::adopt_legacy`]
+/// reads it, and `save` never writes to it.
+fn legacy_name(doc: &str) -> String {
     let mut out = String::with_capacity(doc.len().min(64));
     for ch in doc.chars().take(64) {
         if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
@@ -214,6 +277,49 @@ fn sanitize(doc: &str) -> String {
         }
     }
     if out.is_empty() { "doc".to_string() } else { out }
+}
+
+/// `sha256` as lower-case hex: the identity a directory name and a window stamp
+/// are built from.
+fn digest(bytes: &[u8]) -> String {
+    hex(&sha2::Sha256::digest(bytes))
+}
+
+/// The window file: the stored answers and the snapshot they belong to.
+///
+/// The stamp is the point. A window read on its own could come from a
+/// divergent history — a restore that put `model.json` and `meta` back from one
+/// backup while a newer `dedup.json` stayed behind — and hold an answer for an
+/// edit the restored model never had; a retry would then be acknowledged
+/// without being applied, which loses the text. A window that cannot prove it
+/// belongs to this model is dropped, which costs a duplicate answer instead
+/// (review 5855379673).
+#[derive(Serialize)]
+struct WindowStamp<'a> {
+    version: u64,
+    model: String,
+    window: &'a DedupWindow,
+}
+
+#[derive(Deserialize)]
+struct StoredWindow {
+    version: u64,
+    #[serde(default)]
+    model: String,
+    #[serde(default)]
+    window: DedupWindow,
+}
+
+/// Read the `opId` window back only when it carries the stamp of `version` and
+/// `model`. Anything else — a window from another snapshot, a window written
+/// before the stamp existed, a damaged file — is no window: the answer it holds
+/// would be about an edit this model does not have.
+fn read_window(path: &Path, version: u64, model: &[u8]) -> DedupWindow {
+    let Ok(bytes) = fs::read(path) else { return DedupWindow::default() };
+    match serde_json::from_slice::<StoredWindow>(&bytes) {
+        Ok(stored) if stored.version == version && stored.model == digest(model) => stored.window,
+        _ => DedupWindow::default(),
+    }
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -433,5 +539,117 @@ mod tests {
         let path = store.doc_dir("../../etc/passwd");
         assert!(path.starts_with(&dir), "{} must stay under {}", path.display(), dir.display());
         assert!(!path.to_string_lossy().contains(".."));
+    }
+
+    /// The directory name is a key, not a label: two documents that the old
+    /// lossy name mapped together must never share a snapshot, or a client is
+    /// handed another document and a save overwrites it (review 5855379673).
+    #[test]
+    fn ids_the_old_name_could_not_tell_apart_are_stored_apart() {
+        let dir = temp_dir("injective");
+        let store = Store::new(&dir);
+        assert_ne!(store.doc_dir("a/b"), store.doc_dir("a_b"), "a separator and an underscore are different documents");
+        let shared = "x".repeat(64);
+        assert_ne!(store.doc_dir(&format!("{shared}1")), store.doc_dir(&format!("{shared}2")), "an id is not cut at 64 characters");
+        assert!(store.doc_dir("a/b").starts_with(&dir));
+
+        store
+            .save("a/b", &Snapshot { version: 1, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("save");
+        assert_eq!(store.load("a_b").expect("load"), None, "the other id is not handed this snapshot");
+        assert!(store.load("a/b").expect("load").is_some(), "and its owner still has it");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A snapshot written under the old name is adopted once, by the id it
+    /// belongs to; the data is moved, never copied over or deleted.
+    #[test]
+    fn an_old_snapshot_directory_is_adopted_once() {
+        let dir = temp_dir("legacy");
+        let store = Store::new(&dir);
+        let legacy = dir.join("a_b");
+        fs::create_dir_all(&legacy).expect("dir");
+        fs::write(legacy.join("model.json"), b"{}").expect("model");
+        fs::write(legacy.join("meta"), b"version=3\nepoch=0\n").expect("meta");
+
+        let snapshot = store.load("a/b").expect("load").expect("the snapshot written under the old name is found");
+        assert_eq!(snapshot.version, 3);
+        assert!(!legacy.exists(), "the data moved to the name the digest gives it");
+        assert_eq!(store.load("a_b").expect("load"), None, "the id that never owned it is left with nothing, not another document");
+        assert_eq!(store.load("a/b").expect("load").map(|snapshot| snapshot.version), Some(3), "the owner still opens it");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A snapshot that records an id of its own is never claimed by another, so
+    /// a lost-looking directory is left for its owner instead of being reused.
+    #[test]
+    fn a_snapshot_of_another_id_is_not_adopted() {
+        let dir = temp_dir("legacy-stamped");
+        let store = Store::new(&dir);
+        let legacy = dir.join("a_b");
+        fs::create_dir_all(&legacy).expect("dir");
+        fs::write(legacy.join("model.json"), b"{}").expect("model");
+        fs::write(legacy.join("meta"), format!("version=5\nepoch=0\ndoc_sha256={}\n", digest(b"someone-else")).as_bytes()).expect("meta");
+
+        assert_eq!(store.load("a/b").expect("load"), None, "the snapshot says it belongs to another document");
+        assert!(legacy.join("model.json").exists(), "and it is left where it is");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A window that cannot prove which snapshot it was written with is not
+    /// read: an answer in it may name an edit this model never had, and
+    /// acknowledging that retry would drop the edit (review 5855379673).
+    #[test]
+    fn a_window_without_the_snapshot_stamp_is_not_used() {
+        let dir = temp_dir("untrusted-window");
+        let store = Store::new(&dir);
+        store
+            .save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("save");
+        // The shape an older server wrote: the answers alone, no stamp.
+        let answers = DedupWindow {
+            entries: vec![wordcraft_collab::wire::Applied {
+                op_id: wordcraft_collab::wire::OpId::new("web-1", 1),
+                version: 2,
+                epoch: 0,
+                delta: Some(serde_json::json!({"op": "insert_text", "text": "lost"})),
+                conflict: false,
+                history: None,
+                nodes: None,
+            }],
+        };
+        fs::write(store.doc_dir("doc-1").join("dedup.json"), serde_json::to_vec(&answers).expect("json")).expect("dedup");
+
+        let snapshot = store.load("doc-1").expect("load").expect("the document still opens");
+        assert!(snapshot.dedup.is_empty(), "a window with no stamp is not evidence about this model");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A window stamped by a snapshot at the same version but with another
+    /// model belongs to a different history and is dropped too.
+    #[test]
+    fn a_window_stamped_for_another_model_is_not_used() {
+        let dir = temp_dir("foreign-window");
+        let store = Store::new(&dir);
+        store
+            .save("doc-1", &Snapshot { version: 2, epoch: 0, model: b"{}".to_vec(), source: None, dedup: DedupWindow::default(), cabinet: None })
+            .expect("save");
+        let foreign = serde_json::json!({
+            "version": 2,
+            "model": digest(b"{\"body\":[]}"),
+            "window": {"entries": [{
+                "opId": {"client": "web-1", "seq": 1},
+                "version": 2,
+                "epoch": 0,
+                "delta": {"op": "insert_text", "text": "lost"},
+                "conflict": false,
+            }]},
+        });
+        fs::write(store.doc_dir("doc-1").join("dedup.json"), serde_json::to_vec(&foreign).expect("json")).expect("dedup");
+
+        let snapshot = store.load("doc-1").expect("load").expect("the document still opens");
+        assert_eq!(snapshot.version, 2);
+        assert!(snapshot.dedup.is_empty(), "the window belongs to a model this snapshot is not");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

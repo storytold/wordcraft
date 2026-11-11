@@ -719,6 +719,10 @@ fn a_takeover_the_lease_refuses_leaves_the_old_connection_alone() {
 
 /// Building a room outside the room map means two first joins can both load the
 /// document; they must still end up on one room (CodeRabbit 4533747484).
+///
+/// A join that lost the race is answered from the published room, not from the
+/// copy it loaded: it asks with no `lastVersion`, and that room's plan carries
+/// the snapshot (review 5855379673, nitpick).
 #[test]
 fn two_first_joins_share_the_room_that_was_published() {
     let state = AppState::new(dev_config());
@@ -726,17 +730,21 @@ fn two_first_joins_share_the_room_that_was_published() {
         .map(|_| {
             let state = state.clone();
             std::thread::spawn(move || {
-                state
-                    .room_for("doc-first-joins", Some(blank_model()), wordcraft_collab::room::Role::Editor)
-                    .map(|(room, seeded)| (std::sync::Arc::as_ptr(&room) as usize, seeded))
+                state.room_for("doc-first-joins", Some(blank_model()), wordcraft_collab::room::Role::Editor).map(|(room, seeded)| {
+                    // What `register` does next: the join plan of the room the
+                    // caller got, asked the way a first join asks (no version).
+                    let snapshot = room.lock().expect("room lock").room.join(None, false).snapshot.is_some();
+                    (std::sync::Arc::as_ptr(&room) as usize, seeded, snapshot)
+                })
             })
         })
         .collect();
-    let opened: Vec<(usize, bool)> = handles.into_iter().map(|handle| handle.join().expect("thread").expect("a room")).collect();
+    let opened: Vec<(usize, bool, bool)> = handles.into_iter().map(|handle| handle.join().expect("thread").expect("a room")).collect();
     assert_eq!(opened.len(), 8, "every join got a room");
-    assert!(opened.iter().all(|(room, _)| *room == opened[0].0), "every join shares the room that was published first");
+    assert!(opened.iter().all(|(room, _, _)| *room == opened[0].0), "every join shares the room that was published first");
     assert_eq!(state.room_count(), 1, "only one room is in the map");
-    assert!(opened.iter().filter(|(_, seeded)| *seeded).count() <= 1, "at most the published room was built from the client's copy");
+    assert!(opened.iter().filter(|(_, seeded, _)| *seeded).count() <= 1, "at most the published room was built from the client's copy");
+    assert!(opened.iter().all(|(_, _, snapshot)| *snapshot), "a losing join is answered with the published room's snapshot");
     let _ = std::fs::remove_dir_all(state.store.doc_dir("doc-first-joins"));
 }
 
@@ -781,6 +789,42 @@ async fn an_answer_that_cannot_reach_its_author_is_reported() {
     )
     .await;
     assert!(!written, "a failed write to the author is reported to the caller");
+}
+
+/// Ending the author's session is not a reason to drop the frames the rest of
+/// the room needs: peers that took `Applied` for a split without its new id
+/// cannot address the paragraph, and the node flag is cleared on the way
+/// (review 5855379673).
+#[tokio::test]
+async fn a_failed_author_write_still_sends_the_node_update_to_peers() {
+    let state = AppState::new(dev_config());
+    let doc = "doc-dead-sink-nodes";
+    let room = open_room(&state, doc);
+    let (tx, mut outbox) = tokio::sync::mpsc::channel(8);
+    {
+        let mut guard = room.lock().expect("room lock");
+        guard.room.join(None, false);
+        guard.peers.insert("bob".to_string(), super::Peer::new(super::next_connection(), "bob", wordcraft_collab::room::Role::Editor, "sid-2", tx));
+    }
+    let applied = wordcraft_collab::wire::Applied {
+        op_id: OpId::new("alice", 1),
+        version: 1,
+        epoch: 1,
+        delta: Some(json!({"op": "split_para"})),
+        conflict: false,
+        history: None,
+        nodes: None,
+    };
+    let mut sink = DeadSink;
+    let written = super::publish_applied(&state, &room, doc, "alice", applied, true, &mut sink).await;
+
+    assert!(!written, "the author's own answer failed and its session still ends");
+    assert!(matches!(outbox.try_recv().expect("the peer got the applied answer"), ServerMsg::Applied { .. }));
+    match outbox.try_recv().expect("the peer got the node update too") {
+        ServerMsg::Nodes { nodes } => assert!(nodes.iter().any(|node| node.story == "body"), "the new paragraph's id travels"),
+        other => panic!("the node update must follow the answer, got {other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(state.store.doc_dir(doc));
 }
 
 /// The `MAX_MODEL` bound is checked before the file is held: a model over it is
@@ -1191,6 +1235,66 @@ fn a_second_session_needs_the_owner_role() {
     assert!(super::register(&state, &room, "carol", &claims("carol", "sid-3"), wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
 }
 
+/// The lease is not only a join rule. When another cabinet session takes the
+/// document, the connection that held it is still open, and it may no longer
+/// write or commit: otherwise the session that was taken over keeps changing
+/// the document under the one that now holds it (review 5855379673).
+#[tokio::test]
+async fn a_session_that_lost_the_lease_cannot_write_or_commit() {
+    let cfg = config_for("lease-write");
+    let (url, _state) = spawn_server_state(cfg.clone()).await;
+    // The owner's session opens the room and holds the lease.
+    let mut earlier = connect_as(&url, &cfg, "alice", "alice", "owner", "sid-1").await;
+    assert!(matches!(next_msg(&mut earlier).await, ServerMsg::Welcome { .. }));
+    let node = node_of(&mut earlier).await;
+    // An owner of another cabinet session takes the document over (ADR WC-0008).
+    let mut holder = connect_as(&url, &cfg, "owner", "owner", "owner", "sid-2").await;
+    assert!(matches!(next_msg(&mut holder).await, ServerMsg::Welcome { .. }));
+    // The new session is sent the snapshot and the node map; draining them also
+    // keeps the frames below unambiguous.
+    assert_eq!(node_of(&mut holder).await, node, "both sessions address the same paragraph");
+
+    assert!(send_op(&mut earlier, insert("alice", 1, 0, node, 0, "late")).await);
+    match next_msg(&mut earlier).await {
+        ServerMsg::Rejected { reject } => assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Lease),
+        other => panic!("the earlier session must not write after the takeover, got {other:?}"),
+    }
+    // A commit from the same session is a write too: it must not publish over
+    // the document its successor holds.
+    let commit = ClientMsg::Commit { op_id: OpId::new("alice", 2), expected_version: 0, etag: None };
+    earlier.send(Message::Text(serde_json::to_string(&commit).expect("json").into())).await.expect("send commit");
+    match next_msg(&mut earlier).await {
+        ServerMsg::Rejected { reject } => assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Lease),
+        other => panic!("an earlier session must not commit, got {other:?}"),
+    }
+
+    // The session that holds the lease still writes, on the flow it had.
+    assert!(send_op(&mut holder, insert("owner", 1, 0, node, 0, "the room's")).await);
+    match next_msg(&mut holder).await {
+        ServerMsg::Applied { applied } => assert_eq!(applied.version, 1),
+        other => panic!("the lease holder's operation was not accepted: {}", frame_name(&other)),
+    }
+}
+
+/// The frame's variant, for a failure message that does not print a whole
+/// snapshot.
+fn frame_name(msg: &ServerMsg) -> &'static str {
+    match msg {
+        ServerMsg::Welcome { .. } => "welcome",
+        ServerMsg::Snapshot { .. } => "snapshot",
+        ServerMsg::Tail { .. } => "tail",
+        ServerMsg::Applied { .. } => "applied",
+        ServerMsg::Nodes { .. } => "nodes",
+        ServerMsg::Rejected { .. } => "rejected",
+        ServerMsg::Presence { .. } => "presence",
+        ServerMsg::Left { .. } => "left",
+        ServerMsg::Pong { .. } => "pong",
+        ServerMsg::Committed { .. } => "committed",
+        ServerMsg::Error { .. } => "error",
+        ServerMsg::SaveCopy { .. } => "saveCopy",
+    }
+}
+
 /// The acceptance gate from TASK.md §8: the committed file opens in LibreOffice
 /// without a repair prompt. Ignored by default because it needs `soffice`.
 #[tokio::test]
@@ -1227,7 +1331,7 @@ async fn the_committed_docx_opens_in_libreoffice() {
     assert_eq!(committed.0, 1);
     assert!(!committed.1.is_empty());
 
-    let docx = cfg.data_dir.join("doc-1").join("source.docx");
+    let docx = doc_dir(&cfg, "doc-1").join("source.docx");
     let bytes = std::fs::read(&docx).expect("the server saved the committed file");
     assert!(bytes.starts_with(b"PK"), "a .docx is a zip package");
 
@@ -1392,8 +1496,15 @@ async fn the_transport_client_edits_through_the_server() {
     }
 }
 
+/// The directory the store puts a document in. The name carries the digest of
+/// the id, so a test asks the store instead of spelling the old, lossy name
+/// (review 5855379673).
+fn doc_dir(cfg: &Config, doc: &str) -> std::path::PathBuf {
+    crate::store::Store::new(&cfg.data_dir).doc_dir(doc)
+}
+
 fn committed_text(cfg: &Config) -> String {
-    let bytes = std::fs::read(cfg.data_dir.join("doc-1").join("source.docx")).expect("a committed file");
+    let bytes = std::fs::read(doc_dir(cfg, "doc-1").join("source.docx")).expect("a committed file");
     let doc = wordcraft_docx::read_with_password(&bytes, None).expect("read the committed docx");
     doc.body.iter().filter_map(|block| block.as_para()).map(|para| para.text.clone()).collect::<Vec<_>>().join("\n")
 }
@@ -1524,7 +1635,7 @@ async fn comments_and_tracked_changes_keep_the_jwt_actor() {
         .expect("commit");
     assert_eq!(next_committed(&mut owner).await.0, 4);
 
-    let bytes = std::fs::read(cfg.data_dir.join("doc-1").join("source.docx")).expect("the committed file");
+    let bytes = std::fs::read(doc_dir(&cfg, "doc-1").join("source.docx")).expect("the committed file");
     let doc = wordcraft_docx::read_with_password(&bytes, None).expect("read the committed docx");
     assert!(doc.comments.values().any(|comment| comment.author == "owner"), "the comment carries the JWT sub: {:?}", doc.comments);
     assert!(

@@ -179,6 +179,17 @@ impl Divergence {
         if self.paused { Status::Diverged } else { Status::InSync }
     }
 
+    /// What a refusal leaves the session in.
+    ///
+    /// A refused undo is not a broken session and reads `InSync`, but a paused
+    /// session is still paused: the status is what both gates read, so writing
+    /// `InSync` over `Diverged` would enable editing and an owner commit while
+    /// the document still holds an edit the room never received (review
+    /// 5855379673).
+    pub fn status_after_refusal(self, status: Status) -> Status {
+        if self.paused && status == Status::InSync { Status::Diverged } else { status }
+    }
+
     /// A snapshot replaced the document: the edit the room never received went
     /// with the document it was in.
     pub fn snapshot(&mut self) {
@@ -536,7 +547,9 @@ impl Collab {
             },
             Event::Rejected { reject } => {
                 let (status, resync) = refusal_status(&reject);
-                self.status = status;
+                // A refusal that reads `InSync` does not undo the pause: only a
+                // snapshot does (review 5855379673).
+                self.status = self.divergence.status_after_refusal(status);
                 // The panel shows the reason; a refused undo must be visible at
                 // its author, not silent.
                 self.last_error = Some(reject.message.clone());
