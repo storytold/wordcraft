@@ -470,3 +470,25 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+/// A placeholder font maps code points to boxes, not readable glyphs. It may be selected
+/// explicitly, but must not make missing-glyph detection or automatic fallback claim coverage.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn edge_case_last_resort_is_not_automatic_character_or_run_coverage() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    // Reuse licensed bundled bytes with synthetic family names; no host font is required.
+    let face =
+        |family: &str| Arc::new(make_face(FontBytes::Static(BUNDLED[0]), 0, family.into(), "Regular".into(), family.into(), Vec::new()).unwrap());
+    let placeholder = face(".LastResort");
+    assert!(placeholder.covers('A'), "the fixture maps a glyph, as a placeholder would");
+    *db.faces.write().unwrap() = vec![placeholder.clone()];
+    assert!(db.find(".LastResort", "Regular").is_some(), "explicit font selection is retained");
+    assert!(db.fallback_for('A', u32::MAX).is_none(), "a placeholder is not real character coverage");
+    assert!(db.fallback_for_run(&['A', 'B'], u32::MAX, false, false).is_none(), "nor real run coverage");
+    let readable = face("Readable fallback");
+    db.faces.write().unwrap().push(readable.clone());
+    assert_eq!(db.fallback_for('A', u32::MAX).unwrap().id(), readable.id());
+    assert_eq!(db.fallback_for_run(&['A', 'B'], u32::MAX, false, false).unwrap().id(), readable.id());
+}
