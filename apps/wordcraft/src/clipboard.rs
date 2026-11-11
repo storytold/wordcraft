@@ -108,8 +108,8 @@ pub fn formats() -> Vec<String> {
 
 /// The picture on the clipboard: copied files, else image pixels, else (Wayland) an encoded
 /// picture in a format arboard doesn't decode. A picture that is there but can't be read says
-/// why (#833). The UI checks the sizes before inserting anything; on Windows they are checked
-/// from the header before anything is decoded (#3623).
+/// why (#833). The UI checks the sizes before inserting anything; on Windows and Wayland they are
+/// checked from the header before anything is decoded (#3623).
 pub fn picture() -> Option<ClipboardPicture> {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -136,6 +136,10 @@ fn decoded_picture(_: &mut arboard::Clipboard) -> Option<ClipboardPicture> {
 /// The picture arboard decodes from the clipboard, else an encoded one read past it.
 #[cfg(not(target_os = "windows"))]
 fn decoded_picture(clipboard: &mut arboard::Clipboard) -> Option<ClipboardPicture> {
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))]
+    if let Some(picture) = platform::picture() {
+        return Some(picture);
+    }
     match clipboard.get_image() {
         Ok(image) => Some(ClipboardPicture::Pixels { width: image.width, height: image.height, rgba: image.bytes.into_owned() }),
         Err(arboard::Error::ContentNotAvailable) => platform::encoded_picture().map(ClipboardPicture::Encoded),
@@ -160,6 +164,7 @@ mod platform {
     use std::io::Read;
 
     use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents, get_mime_types_ordered};
+    use wordcraft_ui_egui::paste_picture::{self, ClipboardPicture};
 
     fn wayland() -> bool {
         std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -363,6 +368,22 @@ mod platform {
             assert!(!complete(8, 4, 10), "more left to read");
             assert!(complete(0, 0, 0));
         }
+    }
+
+    /// The Wayland clipboard's picture, read encoded under the paste's byte cap and refused from
+    /// its header when a paste can't take its size, before anything decodes it. arboard decodes
+    /// and converts the PNG to RGBA with no size limits. `None` when Wayland offers no picture
+    /// (or isn't reachable): arboard is asked then, which also covers X11.
+    pub fn picture() -> Option<ClipboardPicture> {
+        if !wayland() {
+            return None;
+        }
+        let offered = formats();
+        let mime = super::PICTURE_MIMES.into_iter().find(|m| offered.iter().any(|o| o == m))?;
+        Some(match read(mime, wordcraft_ui_egui::paste_picture::MAX_FILE_BYTES) {
+            Some(bytes) => wordcraft_ui_egui::paste_picture::encoded_picture(bytes),
+            None => ClipboardPicture::Unreadable("the clipboard picture is larger than 200 MB, or couldn't be read".into()),
+        })
     }
 }
 
