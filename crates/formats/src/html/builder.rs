@@ -31,6 +31,11 @@ struct El {
     name: String,
     kind: ElKind,
     fmt: Fmt,
+    /// Block or container background declared on this element (e.g. div, p, pre, table, cell),
+    /// kept separate from character shading (`fmt.background`) so child elements can explicitly
+    /// inherit it (`background: inherit` / `background-color: inherit`) and table cells can
+    /// resolve shading through transparent row groups or rows (#6157).
+    block_background: Option<wordcraft_doc::Rgb>,
     /// Margins, indents and line height its CSS states (blocks only; they don't inherit; on a
     /// page's spans, their margins).
     spacing: Spacing,
@@ -54,6 +59,7 @@ struct TableB {
 
 struct ElementStyle {
     fmt: Fmt,
+    block_background: Option<wordcraft_doc::Rgb>,
     align: Option<Align>,
     preserve: bool,
     page_break: bool,
@@ -650,6 +656,16 @@ impl<'r> Builder<'r> {
             }
             let pb_before = self.stack.iter_mut().rev().take_while(|e| e.kind != ElKind::Cell).any(|e| std::mem::take(&mut e.page_break));
             p.page_break = pb_before || std::mem::take(&mut self.pending_page_break);
+            let block_shading = self
+                .stack
+                .iter()
+                .rev()
+                .take_while(|e| e.kind != ElKind::Cell && e.kind != ElKind::Table)
+                .filter(|e| self.page || !matches!(e.name.as_str(), "body" | "html"))
+                .find_map(|e| e.block_background);
+            if let Some(bg) = block_shading {
+                p.extra.get_or_insert_with(Default::default).shading = Some(bg);
+            }
             self.para = Some(p);
         }
         self.para.get_or_insert_with(Para::default)
@@ -663,6 +679,8 @@ impl<'r> Builder<'r> {
         &mut self.containers[n]
     }
 
+    /// Commit the current open paragraph to the active container, trimming edge whitespace and
+    /// preserving separate background regions when merging list continuation paragraphs (#6157).
     fn flush(&mut self) {
         let Some(mut p) = self.para.take() else { return };
         let (pre_lead, pre_tail) = (self.pre_lead.take().unwrap_or(false), std::mem::take(&mut self.pre_tail));
@@ -700,6 +718,35 @@ impl<'r> Builder<'r> {
             && prev.list.is_some()
             && prev.list.map(|l| l.level) == level
         {
+            let prev_bg = prev.extra.as_ref().and_then(|x| x.shading);
+            let cont_bg = p.extra.as_ref().and_then(|x| x.shading);
+            if prev_bg != cont_bg {
+                if let Some(bg) = prev_bg {
+                    for inline in &mut prev.inlines {
+                        let fmt = match inline {
+                            Inline::Text(_, fmt) | Inline::Ruby { fmt, .. } => fmt,
+                            _ => continue,
+                        };
+                        if fmt.background.is_none() {
+                            fmt.background = Some(bg);
+                        }
+                    }
+                    if let Some(extra) = &mut prev.extra {
+                        extra.shading = None;
+                    }
+                }
+                if let Some(bg) = cont_bg {
+                    for inline in &mut p.inlines {
+                        let fmt = match inline {
+                            Inline::Text(_, fmt) | Inline::Ruby { fmt, .. } => fmt,
+                            _ => continue,
+                        };
+                        if fmt.background.is_none() {
+                            fmt.background = Some(bg);
+                        }
+                    }
+                }
+            }
             prev.push_text("\n", &Fmt::default());
             prev.inlines.extend(p.inlines);
             return;
@@ -818,6 +865,7 @@ impl<'r> Builder<'r> {
         }
     }
 
+    /// Close an element, updating pending page breaks, flushing blocks, and handling cell containers.
     fn close(&mut self, e: &El) {
         if e.page_break_after || e.page_break {
             self.pending_page_break = true;
@@ -912,6 +960,7 @@ impl<'r> Builder<'r> {
         false
     }
 
+    /// Close unclosed elements implicitly per HTML rules when a new element begins.
     fn close_implicitly(&mut self, name: &str, is_table_part: bool) {
         if closes_p(name)
             && let Some(k) = self.find_open(|e| e.name == "p", |e| matches!(e.kind, ElKind::Cell | ElKind::Table | ElKind::Li | ElKind::Quote))
@@ -930,6 +979,11 @@ impl<'r> Builder<'r> {
         if matches!(name, "dt" | "dd")
             && let Some(k) =
                 self.find_open(|e| e.name == "dt" || e.name == "dd", |e| matches!(e.kind, ElKind::Table | ElKind::Cell) || e.name == "dl")
+        {
+            self.pop_to(k);
+        }
+        if matches!(name, "tbody" | "thead" | "tfoot")
+            && let Some(k) = self.find_open(|e| matches!(e.name.as_str(), "tbody" | "thead" | "tfoot"), |e| e.kind == ElKind::Table)
         {
             self.pop_to(k);
         }
@@ -1001,7 +1055,8 @@ impl<'r> Builder<'r> {
         true
     }
 
-    /// `css`: the element's declarations in cascade order ([`Builder::css_of`]).
+    /// Compute the effective formatting, alignment, and page-break properties for an element
+    /// based on its tag, HTML attributes, and cascaded CSS declarations (`css` in cascade order).
     fn element_style(&self, name: &str, attrs: &[(String, String)], kind: ElKind, css: &str) -> ElementStyle {
         let mut fmt = self.fmt();
         let mut align = None;
@@ -1049,13 +1104,30 @@ impl<'r> Builder<'r> {
             fmt.color.get_or_insert(wordcraft_doc::Rgb(0, 0, 0));
             fmt.size = PAGE_HEADING_SIZES.get(usize::from(n.clamp(1, 6)) - 1).copied();
         }
-        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+        if kind != ElKind::Inline {
+            // CSS background does not inherit from inline ancestors to non-inline elements (#6157).
+            // HTML bgcolor presentational attribute supplies the initial background, which can be
+            // overridden or cleared by CSS declarations in apply_style.
+            fmt.background = attr(attrs, "bgcolor").and_then(parse_color);
+        }
+        let parent_bg = self
+            .stack
+            .last()
+            .and_then(|e| if !self.page && matches!(e.name.as_str(), "body" | "html") { None } else { e.fmt.background.or(e.block_background) });
+        apply_style(css, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after, parent_bg);
         if kind == ElKind::Pre {
             preserve = true;
         }
-        ElementStyle { fmt, align, preserve, page_break, page_break_after }
+        // CSS background-color does not inherit to child text runs; container elements (div, p,
+        // pre, table, row groups, cells, etc.) do not set character shading (#6157). Container
+        // backgrounds are saved to `block_background` for paragraph shading on block containers,
+        // explicit child inheritance (`background: inherit`), and table cell shading, while
+        // character shading `fmt.background` is kept `None`.
+        let block_background = if kind != ElKind::Inline { fmt.background.take() } else { None };
+        ElementStyle { fmt, block_background, align, preserve, page_break, page_break_after }
     }
 
+    /// Begin processing an HTML start tag: metadata, implicit closes, element styling, and stack state.
     pub(super) fn start(&mut self, name: &str, attrs: &[(String, String)], self_close: bool) {
         if self.start_head_metadata(name, attrs) {
             return;
@@ -1089,7 +1161,7 @@ impl<'r> Builder<'r> {
             self.flush();
         }
         let css = self.css_of(name, attrs);
-        let ElementStyle { mut fmt, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
+        let ElementStyle { mut fmt, block_background, align, preserve, page_break, page_break_after } = self.element_style(name, attrs, kind, &css);
         match kind {
             ElKind::Table => self.tables.push(TableB { rows: Vec::new(), row: None, bordered: declares_border(attrs, &css, true) }),
             ElKind::Tr => {
@@ -1115,7 +1187,20 @@ impl<'r> Builder<'r> {
                 }
                 let num = |k: &str| attr(attrs, k).and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 63));
                 let colspan = num("colspan").unwrap_or(1);
-                let shading = attr(attrs, "bgcolor").and_then(parse_color).or(fmt.background);
+                let shading = block_background.or_else(|| {
+                    for e in self.stack.iter().rev() {
+                        if !self.page && matches!(e.name.as_str(), "body" | "html") {
+                            continue;
+                        }
+                        if let Some(bg) = e.block_background {
+                            return Some(bg);
+                        }
+                        if e.kind == ElKind::Cell {
+                            break;
+                        }
+                    }
+                    None
+                });
                 let mut valign = attr(attrs, "valign").and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
                     "top" => Some(VAlign::Top),
                     "middle" | "center" => Some(VAlign::Center),
@@ -1153,7 +1238,19 @@ impl<'r> Builder<'r> {
         let spacing =
             if (kind != ElKind::Inline || self.page) && !matches!(name, "body" | "html") { block_spacing(&css) } else { Spacing::default() };
         let auto_margins = self.page && (name == "p" || matches!(kind, ElKind::Heading(_)));
-        self.stack.push(El { name: name.to_string(), kind, fmt, spacing, auto_margins, align, preserve, page_break, page_break_after, used: false });
+        self.stack.push(El {
+            name: name.to_string(),
+            kind,
+            fmt,
+            block_background,
+            spacing,
+            auto_margins,
+            align,
+            preserve,
+            page_break,
+            page_break_after,
+            used: false,
+        });
     }
 
     pub(super) fn end(&mut self, name: &str) {
