@@ -471,3 +471,43 @@ fn a_new_table_takes_the_width_of_the_caret_s_section_and_column() {
     s.run("insert.table", &json!({"rows": 1, "cols": 4})).unwrap();
     assert!(close(new_table_width(&s), 468.0), "{}", new_table_width(&s));
 }
+
+/// #6303 review: unequal columns with no space between them share an edge, where the caret
+/// stands at the start of the second column. The table takes the second column's width.
+#[test]
+fn a_new_table_at_the_start_of_a_touching_column_takes_that_column_s_width() {
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 0.0], [324.0, 0.0]]})).unwrap();
+    s.run("text.insert", &json!({"text": "Left"})).unwrap();
+    s.run("layout.break", &json!({"kind": "column"})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 324.0), "{}", new_table_width(&s));
+}
+
+/// #6303 review: with a selection across a section break, Insert Table first deletes the
+/// selection; the table takes the width of the section it ends up in, whichever way the
+/// selection was made.
+#[test]
+fn a_new_table_replacing_a_selection_across_sections_takes_its_own_section_s_width() {
+    for backward in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "Portrait"})).unwrap();
+        s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+        s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+        s.run("text.insert", &json!({"text": "Landscape"})).unwrap();
+        let widths: Vec<f32> = s.doc.sections().iter().map(|(_, x)| x.text_width()).collect();
+        assert_eq!(widths.len(), 2, "{widths:?}");
+        let last = s.doc.body.len() as u32 - 1;
+        let (a, b) = (Pos { story: StoryRef::Body, path: Path(vec![0]), off: 4 }, Pos { story: StoryRef::Body, path: Path(vec![last]), off: 4 });
+        s.sel = if backward { Selection { anchor: b, focus: a } } else { Selection { anchor: a, focus: b } };
+        let before = s.doc.plain_text(StoryRef::Body);
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        let at = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+        let own = s.doc.sections().get(s.doc.section_index_of(at)).map(|(_, x)| x.text_width()).unwrap();
+        assert!((new_table_width(&s) - own).abs() < 0.5, "backward={backward}: {} in a section {own} wide ({widths:?})", new_table_width(&s));
+        // Deleting the selection and inserting the table are one step to undo.
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), before, "backward={backward}");
+    }
+}
