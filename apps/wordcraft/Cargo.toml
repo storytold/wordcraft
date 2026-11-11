@@ -68,3 +68,8 @@ xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 # The update helper: a copy of this program started with `--finish-update`
 # (`craft::update::self_update::finish`).
 craft = { workspace = true, features = ["update"] }
+# The account's first and last name a first start takes as the user name (#2209), read through
+# the Windows Runtime's `Windows.System.User`: a safe API, where the Win32 call needs unsafe,
+# which the workspace forbids. Already in the build through wgpu and AccessKit, at this version;
+# the feature is named to record why it is asked for.
+windows = { version = "0.62", features = ["System"] }
