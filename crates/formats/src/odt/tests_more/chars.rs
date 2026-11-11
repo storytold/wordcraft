@@ -285,6 +285,431 @@ fn objects_in_hidden_text_are_kept() {
     assert!(p.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::BookmarkStart { name } if name == "Secret")), "{:?}", p.objects);
 }
 
+/// A paragraph in style `style` holding `span`, with `auto` among its automatic styles.
+fn off_doc(styles: &str, style: &str, auto: &str, span: &str) -> Document {
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles>{auto}</office:automatic-styles><office:body><office:text><text:p text:style-name="{style}">{span}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let styles = format!("<office:document-styles {NS_T}><office:styles>{styles}</office:styles></office:document-styles>");
+    import(&crate::odt::tests::package(&content, Some(&styles))).unwrap()
+}
+
+#[test]
+fn text_turning_off_what_its_style_turns_on_stays_off() {
+    // A word not bold in a bold heading: it showed bold, on screen and after a save.
+    let on = r#"fo:font-weight="bold" fo:font-style="italic" style:text-underline-style="solid" style:text-line-through-style="solid" fo:font-variant="small-caps" fo:text-transform="uppercase""#;
+    let off = r#"fo:font-weight="normal" fo:font-style="normal" style:text-underline-style="none" style:text-line-through-style="none" fo:font-variant="normal" fo:text-transform="none""#;
+    let styles = format!(r#"<style:style style:name="Laut" style:family="paragraph"><style:text-properties {on}/></style:style>"#);
+    let auto = format!(r#"<style:style style:name="T1" style:family="text"><style:text-properties {off}/></style:style>"#);
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let shown = |run: usize| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[run].props);
+        assert_eq!(p.text, "onoff", "{what}");
+        let (a, b) = (shown(0), shown(1));
+        assert_eq!((a.bold, a.italic, a.strike, a.small_caps, a.caps), (true, true, true, true, true), "{what}: the style's");
+        assert!(a.underline != Underline::None, "{what}");
+        assert_eq!((b.bold, b.italic, b.strike, b.small_caps, b.caps), (false, false, false, false, false), "{what}: turned off");
+        assert_eq!(b.underline, Underline::None, "{what}");
+    };
+    let d = off_doc(&styles, "Laut", &auto, r#"on<text:span text:style-name="T1">off</text:span>"#);
+    check(&d, "read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+    check(&import(&export(&d).unwrap()).unwrap(), "written as read");
+    // Turned back on inside it: on.
+    let auto = format!(
+        r#"{auto}<style:style style:name="T2" style:family="text"><style:text-properties fo:font-weight="bold" style:text-underline-style="solid"/></style:style>"#
+    );
+    let d = off_doc(&styles, "Laut", &auto, r#"<text:span text:style-name="T1"><text:span text:style-name="T2">x</text:span></text:span>"#);
+    let p = d.body[0].as_para().unwrap();
+    let x = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert!(x.bold);
+    assert!(x.underline != Underline::None, "{x:?}");
+    assert!(!x.italic, "still off");
+    // A character style's: off in the automatic style based on it.
+    let styles = r#"<style:style style:name="Zeichen" style:family="text"><style:text-properties fo:font-weight="bold" style:text-underline-style="solid"/></style:style>"#;
+    let auto = r#"<style:style style:name="T3" style:family="text" style:parent-style-name="Zeichen"><style:text-properties fo:font-weight="normal" style:text-underline-style="none"/></style:style>"#;
+    let d = off_doc(styles, "Standard", auto, r#"<text:span text:style-name="T3">x</text:span>"#);
+    let p = d.body[0].as_para().unwrap();
+    let x = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!((x.bold, x.underline), (false, Underline::None), "{x:?}");
+    // Text nothing turned on says nothing.
+    let d = off_doc("", "Standard", "", "plain");
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert!(!c.contains(r#"fo:font-weight="normal""#) && !c.contains(r#"style:text-underline-style="none""#), "{c}");
+}
+
+/// A weight or slant only for Asian or complex-script text says nothing of Latin text when it is
+/// normal: the heading's bold stays, on screen and saved. Latin text's own "normal" still counts.
+#[test]
+fn an_asian_or_complex_normal_doesnt_turn_latin_text_off() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style></office:styles></office:document-styles>"#
+    );
+    let open = |attr: &str| {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties {attr}/></style:style></office:automatic-styles><office:body><office:text><text:h text:style-name="Heading_20_1" text:outline-level="1">Bold <text:span text:style-name="T1">word</text:span></text:h></office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let run = |d: &Document| d.body[0].as_para().unwrap().runs.last().unwrap().props.clone();
+    for attr in [
+        r#"style:font-weight-complex="normal""#,
+        r#"style:font-weight-asian="normal""#,
+        r#"style:font-style-complex="normal""#,
+        r#"style:font-style-asian="normal""#,
+    ] {
+        let d = open(attr);
+        assert_eq!((run(&d).bold, run(&d).italic), (None, None), "{attr}");
+        let saved = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+        assert!(!saved.contains(r#"fo:font-weight="normal""#) && !saved.contains(r#"fo:font-style="normal""#), "{attr}: {saved}");
+    }
+    assert_eq!(run(&open(r#"fo:font-weight="normal""#)).bold, Some(false));
+    assert_eq!(run(&open(r#"fo:font-style="normal""#)).italic, Some(false));
+}
+
+/// Strike-through turned off over a double one is off, not the double one again.
+#[test]
+fn strike_turned_off_over_a_double_strike_stays_off() {
+    let double = r#"<style:text-properties style:text-line-through-style="solid" style:text-line-through-type="double"/>"#;
+    let none = r#"<style:text-properties style:text-line-through-style="none"/>"#;
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.strike, c.double_strike), (false, false), "{what}");
+    };
+    // A style over its parent.
+    let styles = format!(
+        r#"<style:style style:name="Parent" style:family="paragraph">{double}</style:style><style:style style:name="Kid" style:family="paragraph" style:parent-style-name="Parent">{none}</style:style>"#
+    );
+    let d = off_doc(&styles, "Kid", "", "One");
+    check(&d, "a style, read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "a style, written from the model");
+    // A span over its paragraph's style.
+    let styles = format!(r#"<style:style style:name="Parent" style:family="paragraph">{double}</style:style>"#);
+    let auto = format!(r#"<style:style style:name="T1" style:family="text">{none}</style:style>"#);
+    let d = off_doc(&styles, "Parent", &auto, r#"<text:span text:style-name="T1">One</text:span>"#);
+    check(&d, "a span, read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "a span, written from the model");
+}
+
+/// A span's character style is its own: a paragraph turning bold or italic off doesn't reach past it.
+#[test]
+fn a_spans_character_style_wins_over_its_paragraph_turning_off() {
+    let styles = r#"<style:style style:name="Standard" style:family="paragraph"/><style:style style:name="Strong_20_Emphasis" style:display-name="Strong Emphasis" style:family="text"><style:text-properties fo:font-weight="bold" fo:font-style="italic"/></style:style>"#;
+    let auto = r#"<style:style style:name="P1" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-weight="normal" fo:font-style="normal"/></style:style>"#;
+    let d = off_doc(styles, "P1", auto, r#"<text:span text:style-name="Strong_20_Emphasis">One</text:span>"#);
+    let check = |d: &Document, what: &str| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.bold, c.italic), (true, true), "{what}: {:?}", p.runs.last().unwrap().props);
+    };
+    check(&d, "read");
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap(), "written from the model");
+}
+
+/// `default` as a document's default paragraph style's text properties, with `standard` as its
+/// Standard style's.
+fn with_default_text(default: &str, standard: &str) -> Vec<u8> {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties {default}/></style:default-style><style:style style:name="Standard" style:family="paragraph"><style:text-properties {standard}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>Hallo</text:p></office:text></office:body></office:document-content>"#
+    );
+    crate::odt::tests::package(&content, Some(&styles))
+}
+
+/// `styles`' default paragraph style.
+fn default_style(styles: &str) -> &str {
+    let at = styles.find(r#"<style:default-style style:family="paragraph">"#).expect("a default paragraph style");
+    styles[at..].split("</style:default-style>").next().unwrap_or_default()
+}
+
+/// A document's language is the one its file states, and a model-written save says it.
+#[test]
+fn the_default_language_is_the_files_and_written_back_from_the_model() {
+    let d = import(&with_default_text(r#"fo:language="de" fo:country="DE""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
+    assert_eq!(d.styles.resolve_char(None, &Default::default()).lang.as_deref(), Some("de-DE"));
+    // Written from the model (a style or list definition changed), it is still the file's: without
+    // it LibreOffice shows the document in its own default language.
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="de" fo:country="DE""#), "{styles}");
+    assert!(!styles.contains(r#"fo:language="en""#), "no style says English: {styles}");
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang.as_deref(), Some("de-DE"));
+    // Saved as read, the styles WordCraft adds beside the file's don't say English either.
+    let styles = crate::odt::tests::entry(&export(&d).unwrap(), "styles.xml");
+    assert!(!styles.contains(r#"fo:language="en""#), "{styles}");
+}
+
+/// The document's language as WordCraft has it is Normal's (a Word file's Normal may state
+/// another than its defaults): that is what the default style says when written from the model.
+#[test]
+fn the_documents_language_written_is_normals() {
+    use std::sync::Arc;
+    let mut d = Document::new();
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("en-US".into());
+    Arc::make_mut(&mut d.styles).get_mut("Normal").unwrap().chr.lang = Some("fr-FR".into());
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let s = crate::odt::tests::styles_of(&saved);
+    let def = s.split(r#"<style:default-style style:family="paragraph""#).nth(1).and_then(|t| t.split("</style:default-style>").next()).unwrap();
+    assert!(def.contains(r#"fo:language="fr""#) && def.contains(r#"fo:country="FR""#), "{def}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.styles.resolve_char(None, &Default::default()).lang.as_deref(), Some("fr-FR"));
+}
+
+/// A file stating no language, or `none` or `zxx`, has none: not the English of new documents.
+#[test]
+fn a_file_stating_no_language_has_none_and_writes_none() {
+    let d = import(&with_default_text("", "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang, None, "not the English of WordCraft's new documents");
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    assert!(!crate::odt::tests::entry(&saved, "styles.xml").contains("fo:language"));
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang, None);
+    // `none` and `zxx` are no language.
+    for none in ["none", "zxx"] {
+        let d = import(&with_default_text(&format!(r#"fo:language="{none}" fo:country="none""#), "")).unwrap();
+        assert_eq!(d.styles.default_chr.lang, None, "{none}");
+    }
+}
+
+/// A language only Standard states is the document's, and a model-written save says it in the
+/// default style.
+#[test]
+fn a_language_only_the_standard_style_states_survives_a_rewrite() {
+    let d = import(&with_default_text("", r#"fo:language="nb" fo:country="NO""#)).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="nb" fo:country="NO""#), "{styles}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.styles.default_chr.lang.as_deref(), Some("nb-NO"));
+    let p = back.body[0].as_para().unwrap();
+    let lang =
+        p.runs.first().and_then(|r| r.props.lang.clone()).or_else(|| back.styles.resolve_char(p.props.style.as_deref(), &Default::default()).lang);
+    assert_eq!(lang.as_deref(), Some("nb-NO"), "{}", crate::odt::tests::entry(&saved, "styles.xml"));
+}
+
+/// A language with a script keeps it, read and written: the document's, a style's for each kind
+/// of text, and a run's.
+#[test]
+fn a_language_with_a_script_keeps_it() {
+    let d = import(&with_default_text(r#"fo:language="sr" fo:script="Latn" fo:country="RS""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("sr-Latn-RS"));
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="sr" fo:script="Latn" fo:country="RS""#), "{styles}");
+    assert!(!styles.contains(r#"fo:country="Latn""#), "{styles}");
+    assert_eq!(import(&saved).unwrap().styles.default_chr.lang.as_deref(), Some("sr-Latn-RS"));
+
+    let (latin, asian, complex) = (
+        r#"fo:language="sr" fo:script="Cyrl" fo:country="BA""#,
+        r#"style:language-asian="zh" style:script-asian="Hant" style:country-asian="TW""#,
+        r#"style:language-complex="az" style:script-complex="Arab" style:country-complex="IR""#,
+    );
+    let run = r#"fo:language="bs" fo:script="Latn" fo:country="BA""#;
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties {latin} {asian} {complex}/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties {run}/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="Eigen">Own <text:span text:style-name="T1">span</text:span></text:p></office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &wordcraft_doc::Document| {
+        let chr = &d.styles.get("Eigen").unwrap().chr;
+        assert_eq!(
+            (chr.lang.as_deref(), chr.lang_ea.as_deref(), chr.lang_bidi.as_deref()),
+            (Some("sr-Cyrl-BA"), Some("zh-Hant-TW"), Some("az-Arab-IR"))
+        );
+        assert_eq!(d.body[0].as_para().unwrap().runs.iter().find_map(|r| r.props.lang.as_deref()), Some("bs-Latn-BA"));
+    };
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    check(&d);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let written = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(written.contains(latin) && written.contains(asian) && written.contains(complex), "{written}");
+    assert!(crate::odt::tests::entry(&saved, "content.xml").contains(run));
+    check(&import(&saved).unwrap());
+
+    // No country, a region of digits, and what isn't a script.
+    let attrs = crate::odt::writer::lang_attrs;
+    assert_eq!(attrs("zh-Hant", ""), r#" fo:language="zh" fo:script="Hant""#);
+    assert_eq!(attrs("es-419", ""), r#" fo:language="es" fo:country="419""#);
+    assert_eq!(attrs("de-DE", "-asian"), r#" style:language-asian="de" style:country-asian="DE""#);
+    let d = import(&with_default_text(r#"fo:language="sr" fo:script="Latin1" fo:country="RS""#, "")).unwrap();
+    assert_eq!(d.styles.default_chr.lang.as_deref(), Some("sr-RS"));
+}
+
+/// A style with no parent inherits the default style's language, not Standard's (the document's
+/// here), and one based on Standard takes Standard's.
+#[test]
+fn a_style_with_no_parent_has_the_default_styles_language() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:language="en" fo:country="US"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"><style:text-properties fo:language="de" fo:country="DE"/></style:style><style:style style:name="Eigen" style:display-name="Eigen" style:family="paragraph"/><style:style style:name="Gesagt" style:display-name="Gesagt" style:family="paragraph"><style:text-properties fo:language="fr" fo:country="FR"/></style:style><style:style style:name="Kind" style:display-name="Kind" style:family="paragraph" style:parent-style-name="Standard"/></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="Eigen">a</text:p><text:p text:style-name="Gesagt">b</text:p><text:p text:style-name="Kind">c</text:p></office:text></office:body></office:document-content>"#
+    );
+    let check = |d: &wordcraft_doc::Document| {
+        assert_eq!(d.styles.default_chr.lang.as_deref(), Some("de-DE"));
+        let lang = |id: &str| d.styles.resolve_char(Some(id), &Default::default()).lang;
+        assert_eq!(lang("Eigen").as_deref(), Some("en-US"), "no parent: the default style's");
+        assert_eq!(lang("Gesagt").as_deref(), Some("fr-FR"), "its own");
+        assert_eq!(lang("Kind").as_deref(), Some("de-DE"), "based on Standard");
+    };
+    let d = import(&crate::odt::tests::package(&content, Some(&styles))).unwrap();
+    check(&d);
+    check(&import(&crate::odt::tests::export_model(&d).unwrap()).unwrap());
+}
+
+/// WordCraft's own documents say their language, so a reader doesn't use its own default.
+#[test]
+fn a_new_documents_language_is_stated() {
+    let styles = crate::odt::tests::entry(&export(&wordcraft_doc::Document::new()).unwrap(), "styles.xml");
+    assert!(default_style(&styles).contains(r#"fo:language="en" fo:country="US""#), "{styles}");
+}
+
+#[test]
+fn a_size_is_every_scripts_size() {
+    // Chinese text set to 24 pt stayed at the default size in LibreOffice: only the Latin size was
+    // written.
+    let mut d = Document::new();
+    let mut p = Paragraph::with_text("漢字", CharProps { size: Some(24.0), ..Default::default() });
+    p.props = Default::default();
+    d.body = vec![para_block(p)];
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let c = crate::odt::tests::content_of(&saved);
+    assert!(c.contains(r#"fo:font-size="24pt" style:font-size-asian="24pt" style:font-size-complex="24pt""#), "{c}");
+    let styles = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(styles.contains(r#"fo:font-size="12pt" style:font-size-asian="12pt" style:font-size-complex="12pt""#), "{styles}");
+    // Read back every script has it.
+    let back = import(&saved).unwrap();
+    let run = &back.body[0].as_para().unwrap().runs[0].props;
+    assert_eq!(back.styles.resolve_char(None, run).size_cs, 24.0);
+    // A complex-script size of its own stays its own, written once.
+    let mut d = Document::new();
+    d.body = vec![para_block(Paragraph::with_text("x", CharProps { size: Some(24.0), size_cs: Some(30.0), ..Default::default() }))];
+    let c = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert_eq!(c.matches("style:font-size-complex").count(), 1, "{c}");
+    assert!(c.contains(r#"style:font-size-complex="30pt""#), "{c}");
+}
+
+/// Text and its complex-script size stated alike, over a default style with a smaller one (as
+/// LibreOffice's files have): that size stays, on screen and saved, for a run and for a heading.
+#[test]
+fn a_complex_size_like_the_texts_stays_over_the_default() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="14pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Heading_20_1" style:display-name="Heading 1" style:family="paragraph" style:default-outline-level="1"><style:text-properties fo:font-size="18pt" style:font-size-complex="18pt"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="24pt" style:font-size-complex="24pt"/></style:style></office:automatic-styles><office:body><office:text><text:p>a <text:span text:style-name="T1">big</text:span></text:p><text:h text:style-name="Heading_20_1" text:outline-level="1">h</text:h></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    let check = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        assert_eq!((c.size, c.size_cs), (24.0, 24.0));
+        let h = d.body[1].as_para().unwrap();
+        let c = d.styles.resolve_char(h.props.style.as_deref(), &h.runs[0].props);
+        assert_eq!((c.size, c.size_cs), (18.0, 18.0));
+    };
+    check(&d);
+    let saved = crate::odt::tests::export_model(&d).unwrap();
+    let written = crate::odt::tests::entry(&saved, "styles.xml");
+    let heading = written.split(r#"style:name="Heading_20_1""#).nth(1).and_then(|t| t.split("</style:style>").next()).unwrap();
+    assert!(heading.contains(r#"style:font-size-complex="18pt""#) && !heading.contains(r#"style:font-size-complex="14pt""#), "{heading}");
+    check(&import(&saved).unwrap());
+
+    // A default stating one size for all goes with that size: Normal changed takes it along.
+    let same = styles.replace(r#"style:font-size-complex="14pt""#, r#"style:font-size-complex="12pt""#);
+    let d = import(&package(&content, Some(&same))).unwrap();
+    assert_eq!(d.styles.default_chr.size_cs, None);
+}
+
+/// A complex size equal to the text's goes only where no run's complex size changes without it:
+/// not under a character style over another size, nor under a size stated alone.
+#[test]
+fn a_complex_size_something_shows_stays() {
+    let open = |s: &str, auto: &str, body: &str| {
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="12pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/>{s}</office:styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>{auto}</office:automatic-styles><office:body><office:text>{body}</office:text></office:body></office:document-content>"#
+        );
+        import(&package(&content, Some(&styles))).unwrap()
+    };
+    let sizes = |d: &Document| {
+        let p = d.body[0].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        (c.size, c.size_cs)
+    };
+    // A character style's, over a paragraph style with another complex size.
+    let d = open(
+        r#"<style:style style:name="P" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="12pt" style:font-size-complex="18pt"/></style:style><style:style style:name="C" style:family="text"><style:text-properties fo:font-size="24pt" style:font-size-complex="24pt"/></style:style>"#,
+        "",
+        r#"<text:p text:style-name="P"><text:span text:style-name="C">One</text:span></text:p>"#,
+    );
+    assert_eq!(sizes(&d), (24.0, 24.0));
+    let parent = r#"<style:style style:name="Parent" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="16pt" style:font-size-complex="16pt"/></style:style>"#;
+    // A parent's, under a child stating only a size.
+    let kid = format!(
+        r#"{parent}<style:style style:name="Kid" style:family="paragraph" style:parent-style-name="Parent"><style:text-properties fo:font-size="20pt"/></style:style>"#
+    );
+    assert_eq!(sizes(&open(&kid, "", r#"<text:p text:style-name="Kid">One</text:p>"#)), (20.0, 16.0));
+    // A style's, under a run stating only a size.
+    let d = open(
+        parent,
+        r#"<style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="30pt"/></style:style>"#,
+        r#"<text:p text:style-name="Parent"><text:span text:style-name="T1">One</text:span></text:p>"#,
+    );
+    assert_eq!(sizes(&d), (30.0, 16.0));
+    // Nothing shows it: one size for all, so a change of size takes it along.
+    let d = open(parent, "", r#"<text:p text:style-name="Parent">One</text:p>"#);
+    assert_eq!(sizes(&d), (16.0, 16.0));
+    assert_eq!(d.styles.get("Parent").unwrap().chr.size_cs, None);
+}
+
+/// A size stated alone, by a run or a style, under a different complex size above it: saved from the
+/// model, and saved again, the complex size is still the one above, not the stated size.
+#[test]
+fn a_size_stated_alone_keeps_the_complex_size_above_it_when_saved() {
+    let sizes = |d: &Document, i: usize| {
+        let p = d.body[i].as_para().unwrap();
+        let c = d.styles.resolve_char(p.props.style.as_deref(), &p.runs.last().unwrap().props);
+        (c.size, c.size_cs)
+    };
+    let twice = |d: Document| {
+        let once = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
+        let again = import(&crate::odt::tests::export_model(&once).unwrap()).unwrap();
+        (once, again)
+    };
+    // From a file: a run stating only a size, and a style stating only a size, under a parent
+    // style with its own complex size.
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt" style:font-size-complex="12pt"/></style:default-style><style:style style:name="Standard" style:family="paragraph" style:class="text"/><style:style style:name="Parent" style:family="paragraph" style:parent-style-name="Standard"><style:text-properties fo:font-size="16pt" style:font-size-complex="16pt"/></style:style><style:style style:name="Kid" style:family="paragraph" style:parent-style-name="Parent"><style:text-properties fo:font-size="20pt"/></style:style></office:styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="T1" style:family="text"><style:text-properties fo:font-size="30pt"/></style:style></office:automatic-styles><office:body><office:text><text:p text:style-name="Parent"><text:span text:style-name="T1">One</text:span></text:p><text:p text:style-name="Kid">Two</text:p></office:text></office:body></office:document-content>"#
+    );
+    let d = import(&package(&content, Some(&styles))).unwrap();
+    assert_eq!((sizes(&d, 0), sizes(&d, 1)), ((30.0, 16.0), (20.0, 16.0)));
+    let (once, again) = twice(d);
+    assert_eq!((sizes(&once, 0), sizes(&once, 1)), ((30.0, 16.0), (20.0, 16.0)), "saved once");
+    assert_eq!((sizes(&again, 0), sizes(&again, 1)), ((30.0, 16.0), (20.0, 16.0)), "saved twice");
+    // Built in the model (a DOCX run with `w:sz` and no `w:szCs`): the default's complex size.
+    let mut d = Document::new();
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.size = Some(12.0);
+    styles.default_chr.size_cs = Some(16.0);
+    let mut p = Paragraph::with_text("x", CharProps { size: Some(30.0), ..Default::default() });
+    p.props = Default::default();
+    d.body = vec![para_block(p)];
+    assert_eq!(sizes(&d, 0), (30.0, 16.0));
+    let (once, again) = twice(d);
+    assert_eq!((sizes(&once, 0), sizes(&again, 0)), ((30.0, 16.0), (30.0, 16.0)));
+}
+
 #[test]
 fn a_headings_text_of_another_size_keeps_it() {
     // Only the size its style gives goes with the style: a smaller word in a heading came back

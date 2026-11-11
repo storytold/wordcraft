@@ -455,6 +455,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let resp = egui::Modal::new(Id::unique("wordcraft.colorsDialog")).show(ctx, |ui| body(ui, &mut d));
     // egui's Modal blocks the window behind it, but not the document's keyboard.
     crate::dialogs::release_keyboard(app, ctx);
+    crate::dialogs::drag_by_title_bar(ctx, &resp.backdrop_response, resp.response.rect);
     let mut done = resp.inner;
     if done.is_none() && resp.should_close() {
         done = Some(false);
@@ -490,14 +491,11 @@ fn body(ui: &mut Ui, d: &mut ColorsDialog) -> Option<bool> {
     ui.set_width(430.0);
     ui.label(egui::RichText::new(tl!("Colors")).font(crate::theme::semibold(14.0)));
     ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        for (tab, label) in [(ColorsTab::Standard, "Standard"), (ColorsTab::Custom, "Custom")] {
-            if ui.selectable_label(d.tab == tab, tl!(label)).clicked() {
-                d.tab = tab;
-            }
-        }
-    });
-    ui.separator();
+    let names = [tl!("Standard").to_string(), tl!("Custom").to_string()];
+    if let Some(k) = crate::widgets::dialog_tabs(ui, &names, d.tab as usize) {
+        d.tab = if k == 0 { ColorsTab::Standard } else { ColorsTab::Custom };
+    }
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         crate::rtl::vertical(ui, |ui| {
             ui.set_width(330.0);
