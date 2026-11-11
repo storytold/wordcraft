@@ -469,3 +469,43 @@ fn an_east_asian_font_is_shown_as_the_face_its_text_is_drawn_in() {
     assert_eq!(m[0].shown_as, [shown], "{m:?}");
     assert!(crate::cmd::font::east_asian_shown_as(&doc, "JetBrains Mono", "JetBrains Mono").is_none(), "installed");
 }
+
+/// A semicolon-separated LibreOffice font fallback list is not reported as missing when any
+/// candidate is installed, and substitutes by candidate family when none is.
+#[test]
+fn libreoffice_font_fallback_lists_are_not_reported_as_missing_when_installed() {
+    let db = wordcraft_fonts::FontDb::global();
+    let doc = doc_of(vec![para_in("Text", "Liberation Sans;Arial")]);
+    if db.has_family("Liberation Sans") || db.has_family("Arial") {
+        let m = missing_in(doc.clone());
+        assert!(m.is_empty(), "expected not to be reported as missing: {m:?}");
+    }
+    let bundled_fallback = doc_of(vec![para_in("Text", "NonExistentSans123;Source Sans 3")]);
+    assert!(missing_in(bundled_fallback).is_empty(), "bundled fallback candidate is installed");
+
+    // Roundtrip through DOCX export and import:
+    let docx_bytes = crate::io::save_bytes("out.docx", &doc).unwrap();
+    let loaded = wordcraft_docx::read(&docx_bytes).unwrap();
+    assert_eq!(loaded.body[0].as_para().unwrap().runs[0].props.font.as_deref(), Some("Liberation Sans;Arial"));
+    if db.has_family("Liberation Sans") || db.has_family("Arial") {
+        let m = missing_in(loaded);
+        assert!(m.is_empty(), "expected not to report installed fallback font as missing: {m:?}");
+    }
+
+    // When none of the fonts is installed, missing_fonts flags it with an appropriate substitute:
+    if !db.has_family("NonExistentSans123") && !db.has_family("Times New Roman") {
+        let m = missing_in(doc_of(vec![para_in("Text", "NonExistentSans123;Times New Roman")]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].font, "NonExistentSans123;Times New Roman");
+        let drawn = m[0].shown_as.first().expect("drawn face");
+        assert!(drawn.contains("Serif") || drawn == "Times" || drawn == "Tinos", "drawn: {drawn}");
+    }
+    let m = missing_in(doc_of(vec![para_in("Text", "NonExistentSans123;NonExistentSerif123")]));
+    assert_eq!(m.len(), 1);
+    assert_eq!(m[0].font, "NonExistentSans123;NonExistentSerif123");
+    let drawn = m[0].shown_as.first().expect("drawn face");
+    assert!(
+        drawn.contains("Serif") || drawn == "Times" || drawn == "Times New Roman" || drawn == "Tinos" || drawn == "Caladea" || drawn == "Georgia",
+        "drawn: {drawn}"
+    );
+}

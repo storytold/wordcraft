@@ -287,6 +287,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     if let Some(a) = p.align {
         w.val("w:jc", align_val(a));
     }
+    if let Some(direction) = p.text_direction {
+        w.val("w:textDirection", direction.ooxml());
+    }
     if let Some(t) = p.text_alignment {
         w.val("w:textAlignment", t.ooxml());
     }

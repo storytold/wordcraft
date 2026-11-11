@@ -290,6 +290,67 @@ fn text_darkening_adds_ink_on_screen_only() {
     assert!(!RenderOptions::default().text_darkening);
 }
 
+/// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
+fn grey(img: &Rendered) -> usize {
+    img.pixels.as_chunks::<4>().0.iter().filter(|p| (40..215).contains(&p[0])).count()
+}
+
+/// The first and last pixel columns with any ink.
+fn ink_columns(img: &Rendered) -> (usize, usize) {
+    let w = img.width as usize;
+    let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i % w.max(1)).collect();
+    (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+}
+
+#[test]
+fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
+    let mut d =
+        Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");
+    // A bundled face at a fixed size, so the pixel thresholds below do not follow the machine's
+    // default-font substitution.
+    let styles = std::sync::Arc::make_mut(&mut d.styles);
+    styles.default_chr.font = Some("Source Sans 3".into());
+    styles.default_chr.size = Some(12.0);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    // 100 % zoom on a 145 % desktop: glyph edges land between pixels.
+    let scale = 96.0 / 72.0 * 1.45;
+    let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
+    let hinted = render_page(&d, &l.pages[0], scale, &RenderOptions { hinting: true, ..Default::default() });
+    // Fewer grey pixels: the baseline, x-height and cap height fill whole pixel rows. Only
+    // horizontal edges snap (the vertical stems stay put), so on the bundled face the drop is
+    // 4 to 5 %: asked for at least 3 %.
+    let (g0, g1) = (grey(&plain), grey(&hinted));
+    assert!((g1 as f64) < g0 as f64 * 0.97, "grey pixels: plain {g0}, hinted {g1}");
+    // The same weight, as FreeType's light hinting draws it: no darker than a few percent.
+    let (a, b) = (ink(&plain), ink(&hinted));
+    assert!(b as f64 > a as f64 * 0.95 && (b as f64) < a as f64 * 1.12, "ink: plain {a}, hinted {b}");
+    // Nothing moves sideways: the text starts and ends in the same pixel columns.
+    let ((l0, r0), (l1, r1)) = (ink_columns(&plain), ink_columns(&hinted));
+    assert!(l0.abs_diff(l1) <= 1 && r0.abs_diff(r1) <= 1, "plain {l0}..{r0}, hinted {l1}..{r1}");
+    // Off by default: exports and thumbnails are untouched.
+    assert!(!RenderOptions::default().hinting);
+}
+
+#[test]
+fn rotated_or_mirrored_views_are_not_hinted() {
+    let d = Document::from_text("Rotated text stays as the font draws it.");
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let hint = RenderOptions { hinting: true, ..Default::default() };
+    for view in [
+        Affine::translate((300.0, -50.0)) * Affine::rotate(0.3) * Affine::scale(1.9),
+        Affine::translate((600.0, 0.0)) * Affine::scale_non_uniform(-1.9, 1.9),
+        Affine::scale_non_uniform(1.9, 2.4),
+    ] {
+        let plain = render_region(&d, &l.pages[0], 600, 300, view, &RenderOptions::default());
+        let hinted = render_region(&d, &l.pages[0], 600, 300, view, &hint);
+        assert!(ink(&plain) > 0, "{view:?}");
+        assert_eq!(plain.pixels, hinted.pixels, "{view:?}");
+    }
+    assert!(is_upright(Affine::translate((3.5, 7.25)) * Affine::scale(1.93)));
+    assert!(!is_upright(Affine::scale(f64::NAN)));
+    assert!(!is_upright(Affine::scale(0.0)));
+}
+
 #[test]
 fn page_picture_is_painted_behind_the_text() {
     let mut png = Vec::new();
@@ -1410,4 +1471,57 @@ fn rounded_rectangle_corners_follow_their_radius() {
 fn a_line_runs_from_top_left_to_bottom_right() {
     let p = shape_path(ShapeKind::Line, kurbo::Rect::new(10.0, 20.0, 30.0, 60.0), None);
     assert_eq!(p.elements(), &[kurbo::PathEl::MoveTo((10.0, 20.0).into()), kurbo::PathEl::LineTo((30.0, 60.0).into())]);
+}
+
+#[test]
+fn paths_far_past_every_canvas_are_not_flattened() {
+    let line = |x: f64| {
+        let mut p = kurbo::BezPath::new();
+        p.move_to((0.0, 0.0));
+        p.curve_to((x, 0.0), (x, x), (0.0, x));
+        p
+    };
+    assert!(path_extent_ok(Affine::IDENTITY, &line(500.0)));
+    assert!(path_extent_ok(Affine::scale(4.0), &line(200_000.0)), "a large page at a high zoom");
+    assert!(!path_extent_ok(Affine::IDENTITY, &line(1e15)));
+    assert!(!path_extent_ok(Affine::scale(1e12), &line(10.0)));
+    assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
+}
+
+/// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
+/// pixels are what they were before strict export existed (#6005).
+#[test]
+fn undecodable_pictures_keep_their_grey_box_pixels() {
+    let mut whole = Vec::new();
+    image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut whole), image::ImageFormat::Png)
+        .unwrap();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    let mut p = wordcraft_doc::Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &Default::default()).unwrap();
+    }
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let boxes = page_display(&d, &l.pages[0], &opts.display).iter().filter(|i| matches!(i, Draw::Image { .. })).count();
+    assert_eq!(boxes, 3);
+    // FNV-1a of the pixels, recorded before the shared decode check existed.
+    let h = img.pixels.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x79f9f1d3602a9925, "{h:#x}");
 }
