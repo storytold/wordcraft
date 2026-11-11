@@ -116,6 +116,9 @@ mod tests {
             rows: vec![vec![Cell { rowspan: 2, ..Default::default() }; n], vec![Cell::default(); n]],
             widths: Vec::new(),
             borderless: false,
+            extra: None,
+            kept: None,
+            wrap: None,
         };
         let start = std::time::Instant::now();
         t.insert_covered();
