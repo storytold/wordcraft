@@ -444,4 +444,40 @@ mod transition_tests {
         note_contextual_tabs(&ctx, &both[..1], 7.0, true);
         assert!(note_contextual_tabs(&ctx, &both, 7.1, true).is_empty(), "back again");
     }
+
+    #[test]
+    fn tab_underline_slides_and_can_reverse_mid_motion() {
+        let ctx = egui::Context::default();
+        let draw = |tab: &str, x: f32, now: f64| {
+            ctx.run_ui(egui::RawInput { time: Some(now), ..Default::default() }, |ui| {
+                slide_underline(
+                    ui,
+                    tab,
+                    egui::Rect::from_min_size(egui::pos2(x - 25.0, 10.0), egui::vec2(50.0, 3.0)),
+                    egui::Color32::WHITE,
+                    now,
+                    true,
+                );
+            })
+            .drop_without_applying_deltas();
+        };
+        draw("Home", 40.0, 1.0);
+        draw("Insert", 140.0, 2.0);
+        let frame = ctx.run_ui(egui::RawInput { time: Some(2.1), ..Default::default() }, |ui| {
+            slide_underline(ui, "Draw", egui::Rect::from_min_size(egui::pos2(215.0, 10.0), egui::vec2(50.0, 3.0)), egui::Color32::WHITE, 2.1, true);
+        });
+        assert!(!frame.shapes.is_empty());
+    }
+
+    #[test]
+    fn tab_content_motion_comes_from_the_new_tab_side() {
+        let ctx = egui::Context::default();
+        assert_eq!(tab_content_entry(&ctx, "Home", 1, 1.0, true), (1.0, 0.0));
+        let (p, dir) = tab_content_entry(&ctx, "Insert", 2, 2.0, true);
+        assert_eq!((p, dir), (0.0, 1.0));
+        let (p, dir) = tab_content_entry(&ctx, "Home", 1, 2.05, true);
+        assert!(p < 1.0);
+        assert_eq!(dir, -1.0);
+        assert_eq!(tab_content_entry(&ctx, "Draw", 3, 3.0, false), (1.0, 0.0));
+    }
 }

@@ -1081,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "craft-pdf"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "krilla",
  "thiserror 2.0.21",
@@ -1135,7 +1135,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "chrono",
  "dunce",
@@ -2981,7 +2981,7 @@ dependencies = [
 [[package]]
 name = "krilla"
 version = "0.8.2"
-source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
+source = "git+https://github.com/storytold/craft-libs?rev=1b34eba41e62138fc2438d2734523b302840b45d#1b34eba41e62138fc2438d2734523b302840b45d"
 dependencies = [
  "base64 0.22.1",
  "bumpalo",
@@ -6846,13 +6846,16 @@ dependencies = [
 name = "wordcraft-cli"
 version = "0.15.1"
 dependencies = [
+ "image",
  "serde_json",
  "sys-locale",
  "wordcraft-doc",
  "wordcraft-engine",
+ "wordcraft-fonts",
  "wordcraft-mcp",
  "wordcraft-render",
  "wordcraft-zotero",
+ "zip 3.0.0",
 ]
 
 [[package]]
@@ -6932,6 +6935,7 @@ dependencies = [
  "log",
  "regex",
  "regex-automata",
+ "rustix 1.1.5",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -7562,7 +7566,6 @@ dependencies = [
  "nix",
  "typed-path",
  "windows-sys 0.61.2",
- "zopfli",
 ]
 
 [[package]]

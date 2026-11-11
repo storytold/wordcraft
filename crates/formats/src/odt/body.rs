@@ -1259,6 +1259,7 @@ impl Body<'_> {
                 if self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc {
                     self.group = Some(OpenGroup {
                         anchor: get(a, "text:anchor-type").map(String::from),
+                        page: get(a, "text:anchor-page-number").map(String::from),
                         style: get(a, "draw:style-name").map(String::from),
                         members: Vec::new(),
                     });
@@ -1300,10 +1301,14 @@ impl Body<'_> {
             }
             "table-column" => {
                 let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
+                let share = self.styles.column_share(get(a, "table:style-name")).unwrap_or(0.0);
+                let cells = get(a, "table:default-cell-style-name").and_then(|s| self.styles.cell_background(s));
                 let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
                 if let Some(t) = self.tables.last_mut() {
                     let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
                     t.widths.extend(std::iter::repeat_n(w, n.min(room)));
+                    t.shares.extend(std::iter::repeat_n(share, n.min(room)));
+                    t.column_backgrounds.extend(std::iter::repeat_n(cells, n.min(room)));
                 }
             }
             "table-row" => self.start_row(a),
@@ -1311,7 +1316,16 @@ impl Body<'_> {
                 self.end_para();
                 let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
                 let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
-                let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
+                // WordCraft's tables have their backgrounds on their cells: a row's or table's on
+                // those with none of their own, as it shows behind them. A cell with no style has
+                // its column's default cell style; LibreOffice doesn't apply a row's.
+                let behind = self.tables.last().and_then(|t| t.row_background.or(t.background));
+                let in_column = self.tables.last().and_then(|t| {
+                    let at: usize = t.row.iter().map(|c| c.colspan.max(1) as usize).sum();
+                    t.column_backgrounds.get(at).copied().flatten()
+                });
+                let own = get(a, "table:style-name").map_or(in_column, |s| self.styles.cell_background(s));
+                let shading = own.or(behind);
                 let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
                 let borders = get(a, "table:style-name").and_then(|s| self.styles.cell_borders(s));
                 let margins = get(a, "table:style-name").and_then(|s| self.styles.cell_padding(s));
@@ -1391,16 +1405,35 @@ impl Body<'_> {
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
+        // What the shares divide: an aligned table's stated width, however wide, as LibreOffice
+        // keeps it; else its part of the text width.
+        let room = width.filter(|_| align.is_some() && rel.is_none()).or_else(|| width_pct.map(|p| self.sec.text_width() * p / 100.0));
+        let contained = !self.tables.is_empty() || self.containers.len() > 1 || self.sec.columns.count > 1;
         let extra =
             model::TableExtra { align, width: None, width_pct, heights: Vec::new(), keep_rows: Vec::new(), fixed: true, space, header_rows: 0 };
-        self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new(), extra });
+        let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
+        self.tables.push(TableB {
+            rows: Vec::new(),
+            row: Vec::new(),
+            hcover: 0,
+            widths: Vec::new(),
+            shares: Vec::new(),
+            room,
+            contained,
+            column_backgrounds: Vec::new(),
+            extra,
+            background,
+            row_background: None,
+        });
     }
 
     /// A table row (`table:table-row`) begins: its height, kept as rows are (see the row's end).
     fn start_row(&mut self, a: &Attrs) {
         let height = get(a, "table:style-name").and_then(|s| self.styles.row_height(s));
+        let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
         let keep = self.styles.row_keep(get(a, "table:style-name"));
         if let Some(t) = self.tables.last_mut() {
+            t.row_background = background;
             t.row.clear();
             t.hcover = 0;
             if t.extra.heights.len() < wordcraft_doc::table::MAX_ROWS {

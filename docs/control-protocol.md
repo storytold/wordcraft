@@ -1,6 +1,6 @@
 # Control protocol
 
-> **Last updated:** 2026-10-31 · #2596: accept-thread startup failure disables the server and removes its key file; MCP retry policy distinguishes file exports from in-memory images.
+> **Last updated:** 2026-11-09 · #6159: refuse ui.screenshot on secondary document windows and support root window selection with view.switchWindows.
 
 Start the app with a control port: `wordcraft --control 7981` (or `WORDCRAFT_CONTROL_PORT=7981`).
 A missing or invalid port after `--control` (not 1–65535) prints an error and exits with status 2.
@@ -72,9 +72,11 @@ Unauthenticated connections are limited to 64 while they wait for their first au
 The app's native windows (one per document, or several on one document) take part in View ›
 Window (#322): `view.arrangeAll` tiles them over the monitor, `view.sideBySide {value?, window?}`
 places this window and another one in the left and right halves and turns on Synchronous
-Scrolling, `view.syncScroll {value?}` turns that on or off, and `view.switchWindows {id?}` lists
-and switches documents. `window` is a window id from `ui.inspect` → `windows.others`, the windows
-other than the one the command runs in (optional when only one other window is open). The
+Scrolling, `view.syncScroll {value?}` turns that on or off, and `view.switchWindows {id?, window?}`
+lists documents and switches documents or windows. For Side by Side, `window` is an id from
+`ui.inspect` → `windows.others` and is optional when only one other window is open. For Switch
+Windows, `window` is an open window's key. A secondary-window screenshot refusal can include
+the root window key in the suggested `view.switchWindows` command. The
 commands are disabled where there is one window (web, CLI, MCP without the app). Wayland doesn't
 let apps move windows, so there Arrange All and Side by Side only resize.
 
@@ -93,7 +95,7 @@ let apps move windows, so there Arrange All and Side by Side only resize.
 | `ui.wheel` | `x`, `y`, `dy`, `dx?`, `unit?` (`point`/`line`/`page`), `phase?` (`start`/`move`/`end`), modifiers | mouse-wheel or trackpad scroll at window coordinates (`dy` < 0 scrolls down) |
 | `ui.key` | `key` (`B`, `Enter`, `Left`…), `shift?`, `alt?`, `cmd?` | key press through egui (shortcuts apply) |
 | `ui.text` | `text` | typed text through egui |
-| `ui.screenshot` | `path?` | PNG of the window: written to `path`, or without one returned as base64 `png` in the reply |
+| `ui.screenshot` | `path?` | PNG of the window in the root viewport: written to `path`, or without one returned as base64 `png` in the reply. Capturing a secondary document window is not supported by the viewport renderer; select the root window with `view.switchWindows {"window": root}` first |
 | `ui.render` | `path?`, `page?` (1-based), `scale?`, `doc?` | PNG of a page, rendered by the engine: written to `path`, or without one returned as base64 `png` in the reply (never a fixed name in the shared temporary folder) |
 | `ui.parity` | — | feature-catalog parity |
 | `ui.resize` | `width`, `height` | asks for that window content size in points; sizes that aren't positive and finite are refused, the rest are clamped to the app's minimum (760 × 480) and to the largest surface the GPU can draw (at most 16384; that limit wins over the minimum), and the reply's `width` and `height` are the size asked for |
@@ -131,7 +133,7 @@ window); in the browser, the one the window shows. Commands work on it unless to
   (`"alreadyOpen": true`). Its result carries the document's `id`.
 - `view.switchWindows` lists the open documents (`{"documents": [{"id", "title", "path",
   "dirty", "active"}]}`); with `{"id": n}` it makes that document active and brings its window to
-  the front.
+  the front. With `{"window": key}` it selects that window directly and brings it to the front.
 - `file.closeDocument {"id"?, "force"?}` closes a document; its window closes with it unless it
   is the last window.
 - `engine.execute`, `document.inspect` and `ui.render` take `doc`, the id of the document to work
@@ -153,6 +155,14 @@ Input and window methods go to the active window, the one focused last: `ui.clic
 `ui.text`, `ui.wheel` and the other input methods (coordinates are that window's),
 `ui.screenshot` (a PNG of that window), `ui.inspect` (its size), `ui.resize` and `ui.focus`. To
 work in another window, make its document active first with `view.switchWindows {"id": n}`.
+
+`ui.screenshot` is the exception when multiple document windows are open: the desktop renderer
+captures only the window in the root viewport (the first window opened, until that window closes and
+another is adopted in its place). While the active window is a secondary document window in a separate
+native viewport, `ui.screenshot` returns an error directing the caller to select the root window
+instead of hanging for 8 seconds and timing out. Select the root window with
+`view.switchWindows {"window": root}` and request the capture again. The error gives the root
+window key when it is available.
 
 The `CharProps` and `ParaProps` that `format.set`, `para.set` and `styles.modify` take are listed
 in [MCP server](mcp.md#character-and-paragraph-properties).
