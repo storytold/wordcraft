@@ -491,3 +491,12 @@ fn a_control_space_at_a_line_end_adds_no_second_space() {
     assert_eq!(texts("\\begin{document}\\ref{one\\\ntwo}\\end{document}"), vec!["one two".to_string()]);
     assert_eq!(texts("\\begin{document}\\ref{one\\\r\n   two}\\end{document}"), vec!["one two".to_string()]);
 }
+
+#[test]
+fn a_control_space_in_an_item_label_is_a_space() {
+    // The optional argument kept a control symbol as written, so the label read `one\ two`.
+    for src in ["one\\ two", "one\\\ttwo", "one\\\ntwo"] {
+        let t = texts(&format!("\\begin{{document}}\\begin{{description}}\\item[{src}] x\\end{{description}}\\end{{document}}"));
+        assert_eq!(t.iter().map(|s| s.trim()).collect::<Vec<_>>(), vec!["one two x"], "{src:?}");
+    }
+}

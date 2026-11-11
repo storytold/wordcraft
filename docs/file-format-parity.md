@@ -338,7 +338,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-11 | trivial | LaTeX: `\` before a line end or a tab is a control space, as in TeX; the line end went with it, so a blank line after it no longer ended the paragraph |
+| 2026-11-11 | trivial | LaTeX: `\` before a line end or a tab is a control space, as in TeX; the line end went with it, so a blank line after it no longer ended the paragraph; a control space in an item label is a space |
 | 2026-11-04 | trivial | ODT: a later paragraph default style that names no font no longer clears the document's default font; a regression from the #4501 refactor (#4683) |
 | 2026-11-08 | trivial | ODT row corrected: a file whose tab stops are measured from the indent is saved measuring from it, not always from the margin (the 2026-11-03 change); the default stops are counted from the indent |
 | 2026-11-05 | trivial | ODT: a table's columns stating only their share (`style:rel-column-width`, as LibreOffice's CV template does) keep their proportions; they opened and saved as equal columns. An aligned table's stated width is what they divide, columns with only a width take it first, and the default style can give a share. In an aligned table whose every column has a share, the shares win over any widths stated with them, as LibreOffice 26.8 reads them, and a share too small for a column gives the narrowest one (6 pt) instead of losing the grid. A table in a cell, frame or narrower column with widths stated as well as shares, or with nothing to divide, splits equally as before. |
