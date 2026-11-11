@@ -151,14 +151,24 @@ fn group(page: usize, mut glyphs: Vec<G>) -> Vec<Line> {
         .collect()
 }
 
-/// Matched index pairs of two key lists, in order (longest common subsequence).
-fn lcs(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
+/// Cells the exact alignment's table may have (`u32` each: 200 MB).
+const LCS_CELLS: usize = 50_000_000;
+
+/// How far ahead the greedy alignment looks for a line's match.
+const GREEDY_WINDOW: usize = 400;
+
+/// Matched index pairs of two key lists, in order, and whether they are exact: the longest common
+/// subsequence when its table fits in `cells`, else a greedy match that pairs each line with the
+/// next equal one within [`GREEDY_WINDOW`] lines, so a long comparison with differences near both
+/// ends still matches the unchanged lines between them.
+fn lcs(a: &[&str], b: &[&str], cells: usize) -> (Vec<(usize, usize)>, bool) {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let suf = a[pre..].iter().rev().zip(b[pre..].iter().rev()).take_while(|(x, y)| x == y).count();
     let (ma, mb) = (&a[pre..a.len() - suf], &b[pre..b.len() - suf]);
     let (n, m) = (ma.len(), mb.len());
     let mut out: Vec<(usize, usize)> = (0..pre).map(|i| (i, i)).collect();
-    if (n + 1).saturating_mul(m + 1) <= 50_000_000 {
+    let exact = (n + 1).saturating_mul(m + 1) <= cells;
+    if exact {
         let mut t = vec![0u32; (n + 1) * (m + 1)];
         for i in (0..n).rev() {
             for j in (0..m).rev() {
@@ -177,9 +187,17 @@ fn lcs(a: &[&str], b: &[&str]) -> Vec<(usize, usize)> {
                 j += 1;
             }
         }
+    } else {
+        let mut j = 0;
+        for (i, k) in ma.iter().enumerate() {
+            if let Some(d) = mb.iter().skip(j).take(GREEDY_WINDOW).position(|x| x == k) {
+                out.push((pre + i, pre + j + d));
+                j += d + 1;
+            }
+        }
     }
     out.extend((0..suf).map(|k| (a.len() - suf + k, b.len() - suf + k)));
-    out
+    (out, exact)
 }
 
 /// Tolerance for "same place", in points.
@@ -189,7 +207,7 @@ pub const TOL: f64 = 0.5;
 pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
     let ka: Vec<&str> = r.iter().map(|l| l.key.as_str()).collect();
     let kb: Vec<&str> = t.iter().map(|l| l.key.as_str()).collect();
-    let pairs = lcs(&ka, &kb);
+    let (pairs, exact) = lcs(&ka, &kb, LCS_CELLS);
     let mut matched = vec![None; r.len()];
     for &(a, b) in &pairs {
         matched[a] = Some(b);
@@ -264,6 +282,9 @@ pub fn compare(r: &[Line], rp: usize, t: &[Line], tp: usize) -> Value {
         "dw_max": round(max_dw),
         "width_diff": [round(drs.first().copied().unwrap_or(0.0)), round(drs.get(drs.len() / 2).copied().unwrap_or(0.0)), round(drs.last().copied().unwrap_or(0.0))],
         "first_difference": first,
+        // "greedy": too many differing lines for the exact alignment, so a line can count as
+        // unmatched that an exact alignment would pair.
+        "alignment": if exact { "exact" } else { "greedy" },
     })
 }
 
@@ -294,6 +315,24 @@ mod tests {
         // Text starting with digits keeps them: only the number before the wide gap goes.
         let l = group(0, vec![g(36.0, 100.0, 10.0, "6"), g(72.0, 100.0, 11.0, "2"), g(78.0, 100.0, 11.0, ")")]);
         assert_eq!((l[0].key.as_str(), l[0].x), ("2)", 72.0));
+    }
+
+    #[test]
+    fn past_the_table_limit_the_unchanged_middle_still_matches() {
+        // Differences near both ends, 100 unchanged lines between them, and a table limit far
+        // below the 102 × 102 the exact alignment needs.
+        let mut a: Vec<String> = vec!["a-start".into()];
+        a.extend((0..100).map(|i| format!("line {i}")));
+        a.push("a-end".into());
+        let mut b: Vec<String> = vec!["b-start".into()];
+        b.extend((0..100).map(|i| format!("line {i}")));
+        b.push("b-end".into());
+        let (a, b): (Vec<&str>, Vec<&str>) = (a.iter().map(String::as_str).collect(), b.iter().map(String::as_str).collect());
+        let (exact, whole) = lcs(&a, &b, LCS_CELLS);
+        assert!(whole && exact.len() == 100);
+        let (greedy, whole) = lcs(&a, &b, 100);
+        assert!(!whole, "the limit forces the greedy alignment");
+        assert_eq!(greedy, exact, "the middle lines still match");
     }
 
     #[test]
