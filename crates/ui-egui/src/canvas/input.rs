@@ -1,7 +1,7 @@
 use super::balloons::over_balloon;
 use super::links::{field_showing_code, follow_link, is_generated_bookmark_link, link_under};
 use super::navigation::page_at;
-use super::story::{enters_header_footer, in_text_box, part_kind, text_box_host};
+use super::story::{double_click_leaves, enters_header_footer, part_kind, text_box_host};
 use super::{CanvasState, DocLayout, PartKind, Pos, Pos2, Rect, StoryRef, Ui, WordApp, json};
 
 /// Drag-select auto-scroll (#688): the pointer within this many points of the viewport's edge
@@ -249,7 +249,7 @@ fn handle_primary_press(
         app.canvas.hf_press_switched = false;
     }
     // A double-click that enters or leaves a header/footer is handled on release.
-    let hf_switch = hf_enter || app.canvas.hf_press_switched || (matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none());
+    let hf_switch = hf_enter || app.canvas.hf_press_switched || (double_click_leaves(app, story) && hf_zone.is_none());
     // Clicking into a footnote/endnote or a text box edits it; clicking outside a text box goes
     // back to where it is. While editing a header/footer, only its own text boxes are in reach.
     let story = pointer_story(app, layout, page, x, y, story);
@@ -426,7 +426,7 @@ fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool 
             }
             return true;
         }
-        if matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none() {
+        if double_click_leaves(app, story) && hf_zone.is_none() {
             let _ = app.run("insert.closeHeader", json!({}));
             if let Some(pos) = layout.hit(page, x, y, StoryRef::Body) {
                 app.session.sel = wordcraft_engine::Selection::caret(pos);

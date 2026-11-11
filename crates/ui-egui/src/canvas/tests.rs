@@ -1206,6 +1206,62 @@ fn double_clicking_a_word_with_the_format_painter_paints_it() {
     assert!(s.painter.is_none(), "the painter is used up");
 }
 
+/// #6290: in a footnote or an endnote, a double-click selects the word and a triple-click the
+/// paragraph, as in the body, whether the caret was in the note or in the body; it stays in the
+/// note instead of going back to the body.
+#[test]
+fn double_and_triple_click_select_in_a_note() {
+    use egui::{Event, PointerButton};
+    for command in ["references.footnote", "references.endnote"] {
+        for from_body in [false, true] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            a.run("text.insert", json!({"text": "Body text"})).unwrap();
+            a.run("view.commentsPane", json!({"value": false})).unwrap();
+            a.run(command, json!({"text": "Alpha bravo charlie"})).unwrap();
+            let note = a.session.sel.focus.story;
+            assert!(matches!(part_kind(&a, note), Some(PartKind::Footnote | PartKind::Endnote)), "{command}");
+            if from_body {
+                a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 2));
+            }
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 2200.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            for _ in 0..6 {
+                h.step();
+            }
+            let clicks = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2, n: usize| {
+                h.event(Event::PointerMoved(at));
+                for _ in 0..n {
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                    h.step();
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                    h.step();
+                }
+                // Let the click time pass before the next clicks.
+                for _ in 0..40 {
+                    h.step();
+                }
+            };
+            let start = Pos::new(note, wordcraft_doc::Path::top(0), 0);
+            let bravo = h.state().session.doc.para_at(&start).and_then(|p| p.text.find("bravo")).expect("the note's word") + 2;
+            let c = h.state_mut().session.layout().caret(&Pos { off: bravo, ..start }).expect("caret in the note");
+            let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("note on screen");
+            let case = format!("{command}, from the body: {from_body}");
+            clicks(&mut h, at, 2);
+            assert_eq!(h.state().session.sel.focus.story, note, "{case}: the double-click stays in the note");
+            assert_eq!(h.state().session.selected_text().trim_end(), "bravo", "{case}: the word is selected");
+            clicks(&mut h, at, 3);
+            assert_eq!(h.state().session.sel.focus.story, note, "{case}: the triple-click stays in the note");
+            assert!(h.state().session.selected_text().contains("Alpha bravo charlie"), "{case}: the paragraph is selected");
+        }
+    }
+}
+
 /// #1085: a selected balloon's buttons work (pressing them is not a click on the page that
 /// leaves the balloon): a new comment with no text resolves and deletes from its balloon.
 #[test]
