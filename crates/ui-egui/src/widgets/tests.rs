@@ -569,4 +569,3 @@ fn big_toggle_reports_accessible_label_and_selected_state() {
     let node = h.get_by_role_and_label(egui::accesskit::Role::Button, "Link to Previous");
     assert!(node.accesskit_node().toggled().is_some() || node.accesskit_node().is_selected().is_some());
 }
-}
