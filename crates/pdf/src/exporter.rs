@@ -5,10 +5,10 @@ use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap,
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
 use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text};
 use super::{
-    Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DisplayOptions, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font,
-    HashMap, HashSet, Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node,
-    NonZeroU16, Outline, OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface,
-    Tag, TagGroup, TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
+    Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font, HashMap, HashSet,
+    Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node, NonZeroU16, Outline,
+    OutlineNode, Page, PathBuilder, Placed, Point, Rect, Rgb, ShapeKind, Size, SpanTag, StoryRef, Stroke, StrokeDash, Surface, Tag, TagGroup,
+    TagKind, TagTree, Target, Transform, WriteError, XyzDestination, krilla, rgb, write,
 };
 use wordcraft_doc::picfx::PicFx;
 
@@ -240,14 +240,7 @@ impl Exporter<'_> {
             let area = page.body;
             self.tagged(s, Role::Artifact(ArtifactType::Watermark), None, |me, s| me.watermark(s, &wm, w, h, area));
         }
-        let dopts = DisplayOptions {
-            marks: false,
-            dim_header: false,
-            dim_body: false,
-            markup: self.opts.include_markup,
-            placeholders: false,
-            ..Default::default()
-        };
+        let dopts = self.opts.display_options();
         // What the items share (the authors' colours, the clipped cells) is worked out once per page.
         let shown = ItemDisplay::new(self.doc, page);
         for it in page.header.iter().chain(page.footer.iter()) {
@@ -356,10 +349,7 @@ impl Exporter<'_> {
     /// the baseline) on the box's bottom; the box centred on the margins (`area`, else the page)
     /// and, when diagonal, turned 45° counterclockwise.
     fn watermark(&mut self, s: &mut Surface, wm: &wordcraft_doc::Watermark, w: f32, h: f32, area: Rect) {
-        let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
-        let face = r.face;
-        let text: String = wm.text.chars().take(200).collect();
-        let shaped = wordcraft_fonts::shape(&face, &text, &[], |c| c);
+        let Some((face, text, shaped)) = wordcraft_layout::watermark_run(wm, super::WATERMARK_MAX_CHARS) else { return };
         let upem = face.upem.max(1.0) as f32;
         let raw_w: f32 = shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() / upem;
         if raw_w <= 0.0 || !raw_w.is_finite() {

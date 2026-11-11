@@ -33,8 +33,11 @@ use craft_window::{Document, Frame, Viewports, WindowEvent, WindowId, WindowList
 use egui::{ViewportCommand, ViewportId};
 use serde_json::{Value, json};
 use wordcraft_engine::WindowView;
+use wordcraft_engine::cmd::view::OtherWindow;
 
 use crate::{WordApp, documents, window_ui::WindowUi};
+
+pub(crate) mod arrange;
 
 /// The window title for a document called `name`.
 pub(crate) fn title(name: &str, dirty: bool) -> String {
@@ -90,6 +93,8 @@ pub struct Windows {
     input_plugin: bool,
     /// The viewport driver draws the windows this frame, and titles them.
     driven: bool,
+    /// View › Window: Side by Side and Synchronous Scrolling (#322).
+    arranged: arrange::State,
 }
 
 impl Windows {
@@ -113,6 +118,7 @@ impl Windows {
             builder: egui::ViewportBuilder::default().with_inner_size([1440.0, 920.0]).with_min_inner_size([760.0, 480.0]),
             input_plugin: false,
             driven: false,
+            arranged: arrange::State::default(),
         }
     }
 
@@ -299,6 +305,17 @@ impl WordApp {
         }
         let (info, screen_rect, max_texture_side) = ctx.input_for(viewport, |i| (i.viewport().clone(), i.raw.screen_rect, i.raw.max_texture_side));
         (viewport, crate::control::SurfaceGeometry::from_viewport(&info, screen_rect, max_texture_side, ctx))
+    }
+
+    /// Returns the window key, document ID and display title of the window currently occupying
+    /// the root viewport, if one exists and native viewports are in use.
+    pub(crate) fn root_window_info(&self) -> Option<(u64, u64, String)> {
+        let viewports = self.windows.viewports.as_ref()?;
+        let root_id = viewports.root()?;
+        let root_win = self.windows.open.iter().find(|w| w.id == Some(root_id))?;
+        let doc_id = root_win.doc;
+        let title = self.session.documents().iter().find(|d| d.id == doc_id).map(documents::display_title).unwrap_or_default();
+        Some((root_win.key, doc_id, title))
     }
 
     /// The viewport new windows start from: the host's size, icon and app id. Their title and
@@ -658,6 +675,15 @@ impl WordApp {
         self.settle_windows();
         if let Some(&active) = self.windows.recent_keys().first() {
             self.enter_window(active);
+            self.session.windows.current = Some(active);
+            if self.session.windows.available {
+                self.session.windows.others = self
+                    .switch_windows_entries()
+                    .into_iter()
+                    .filter(|(k, ..)| *k != active)
+                    .map(|(id, title, _)| OtherWindow { id, title })
+                    .collect();
+            }
         }
     }
 
@@ -691,6 +717,7 @@ impl WordApp {
             return;
         }
         self.window_ui(ui);
+        arrange::forward_scroll(self, &ctx);
         // Drawing can close the window or bring another forward: the fields then hold another
         // window's state.
         if self.windows.shown != key {
