@@ -132,13 +132,14 @@ fn compare_pins_the_terminal_deleted_paragraph_limitation() {
 
 #[test]
 fn compare_pins_rejecting_an_inserted_section_restyles_the_next_paragraph() {
-    // Characterizes a known limitation recorded on `mark_block` (compare.rs): rejecting an
-    // inserted paragraph that carries a section break. `resolve`'s `remove_empty_para` refuses
-    // paragraphs carrying a section, so once the inserted paragraph's text is rejected the empty
-    // paragraph is joined into the next one, which takes its properties. Here the original "Body"
-    // is Heading 1; after Reject All it carries the inserted paragraph's Normal properties. The
-    // real fix belongs to `resolve` (`remove_empty_para`/`join_next_para`): flip this test when it
-    // lands.
+    // Pins the fixed behaviour for rejecting an inserted paragraph that carries a section
+    // break. This was a known limitation recorded on `mark_block` (compare.rs): `resolve`'s
+    // `remove_empty_para` refused paragraphs carrying a section, so once the inserted
+    // paragraph's text was rejected the empty paragraph was joined into the next one, which
+    // took its properties ("Body" came back Normal instead of its original Heading 1). Fixed
+    // on main by #5734 (issue #5667): `resolve_para` now removes the section break first, so
+    // the empty paragraph goes whole and the following paragraph keeps its own properties.
+    // After Reject All the original is restored exactly.
     let mut original = Document::from_text("Intro\nBody");
     original.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props.style = Some("Heading1".into());
     let mut s = Session::new(original);
@@ -161,8 +162,8 @@ fn compare_pins_rejecting_an_inserted_section_restyles_the_next_paragraph() {
     assert_eq!(body.plain_text(), "Body");
     assert_eq!(
         body.props.style.as_deref(),
-        Some("Normal"),
-        "the current (wrong) outcome: the following paragraph took the inserted sectioned paragraph's properties"
+        Some("Heading1"),
+        "the following paragraph keeps its own properties (fixed on main by #5734)"
     );
 }
 
