@@ -521,3 +521,82 @@ fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     h.run_steps(3);
     assert_eq!(h.state().session.prefs.paper_color, PaperColor::Cream);
 }
+
+/// #5840: File › Options › Proofing shows the Dictionary file setting.
+#[test]
+fn proofing_custom_dictionary_file_setting_is_visible() {
+    let mut a = app();
+    a.run("file.options", json!({"pane": "proofing"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    assert!(h.query_by_label("Dictionary file:").is_some());
+    assert!(h.query_by_label("Words in dictionary").is_some());
+}
+
+/// #5840: File › Options › Proofing supports setting, clearing, and validating custom dictionary paths.
+#[test]
+fn proofing_custom_dictionary_interaction() {
+    let dir = std::env::temp_dir().join(format!("wc-ui-dict-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let valid_path = dir.join("ui_custom.dic");
+    std::fs::write(&valid_path, "uiword\n").unwrap();
+    let valid_path_str = valid_path.to_string_lossy().into_owned();
+
+    let mut a = app();
+    a.run("file.options", json!({"pane": "proofing"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+
+    // 1. Verify accessible labels of input and buttons
+    let input = h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:");
+    assert_eq!(input.accesskit_node().role(), egui::accesskit::Role::TextInput);
+    let apply_btn = h.get_by_label("Apply");
+    let clear_btn = h.get_by_label("Clear");
+    assert!(apply_btn.accesskit_node().is_disabled(), "Apply is initially disabled when path is unchanged");
+    assert!(clear_btn.accesskit_node().is_disabled(), "Clear is initially disabled when using default dictionary");
+
+    // 2. Interaction: Apply with an invalid path
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").type_text("/invalid/path/nonexistent.dic");
+    h.run_steps(4);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled(), "Apply is enabled when text changed");
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None, "invalid path was not applied to prefs");
+
+    // 3. Interaction: Apply with a valid path
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").click();
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.run_steps(1);
+    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Dictionary file:").type_text(&valid_path_str);
+    h.run_steps(4);
+    assert!(!h.get_by_label("Apply").accesskit_node().is_disabled(), "Apply is enabled with valid text");
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.custom_dictionary.as_deref(), Some(&valid_path_str[..]));
+    assert!(!h.get_by_label("Clear").accesskit_node().is_disabled(), "Clear is enabled after custom dictionary is set");
+
+    // 4. Interaction: Click Clear to revert to default
+    h.get_by_label("Clear").click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.prefs.custom_dictionary, None, "Clear reverts custom dictionary to default");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

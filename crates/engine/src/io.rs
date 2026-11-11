@@ -729,6 +729,94 @@ pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>, String> {
     Ok(head)
 }
 
+/// Web fallback for [`read_file_capped`] and [`read_file_head`], returning an error explaining
+/// that files are opened through the browser on the web.
+pub fn wasm_read_file_fallback(path: &str) -> Result<Vec<u8>, String> {
+    Err(format!("{path}: files are opened through the browser on the web"))
+}
+
+/// Web fallback for [`read_file_capped`].
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_capped(path: &str, _max: u64, _what: &str) -> Result<Vec<u8>, String> {
+    wasm_read_file_fallback(path)
+}
+
+/// Web fallback for [`read_file_head`].
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_head(path: &str, _max: u64) -> Result<Vec<u8>, String> {
+    wasm_read_file_fallback(path)
+}
+
+/// Classification of file validation errors for configuration settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileCheckError {
+    /// Automation access violation or I/O error.
+    Access(String),
+    /// The target path is a directory instead of a regular file.
+    IsDirectory(String),
+    /// The target path is a symbolic link instead of a regular file.
+    IsSymlink(String),
+    /// The path does not exist or is not a regular file.
+    NotFound(String),
+    /// The file exceeds the permitted size limit.
+    TooLarge(String),
+}
+
+impl std::fmt::Display for FileCheckError {
+    /// Format the file check error message.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Access(s) | Self::IsDirectory(s) | Self::IsSymlink(s) | Self::NotFound(s) | Self::TooLarge(s) => f.write_str(s),
+        }
+    }
+}
+
+/// Check that `path` is an accessible regular file within `max` bytes.
+///
+/// Ensures the path is within automation read and write roots, exists, is not a symbolic link,
+/// is not a directory, is a regular writable file, and does not exceed `max` bytes.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn check_regular_file_setting(path: &std::path::Path, max: u64, key: &str) -> Result<(), FileCheckError> {
+    crate::file_access::check_read(&path.to_string_lossy()).map_err(FileCheckError::Access)?;
+    crate::file_access::check_write(&path.to_string_lossy()).map_err(FileCheckError::Access)?;
+    let sym_meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(e) => return Err(FileCheckError::Access(format!("{}: {e}", path.display()))),
+    };
+    if sym_meta.file_type().is_symlink() {
+        return Err(FileCheckError::IsSymlink(format!("`{key}`: {} is a symbolic link, not a regular file", path.display())));
+    }
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => return Err(FileCheckError::Access(format!("{}: {e}", path.display()))),
+    };
+    if meta.is_dir() {
+        return Err(FileCheckError::IsDirectory(format!("`{key}`: {} is a folder, not a file", path.display())));
+    }
+    if !meta.is_file() {
+        return Err(FileCheckError::NotFound(format!("no file at {}", path.display())));
+    }
+    if meta.len() > max {
+        return Err(FileCheckError::TooLarge(format!("{} is larger than the custom dictionary limit", path.display())));
+    }
+    if meta.permissions().readonly() {
+        return Err(FileCheckError::Access(format!("{}: file is read-only", path.display())));
+    }
+    let mut open = std::fs::OpenOptions::new();
+    open.write(true);
+    // A named pipe swapped in after the metadata check would block `open`; non-blocking fails it at once.
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut open, libc::O_NONBLOCK);
+    open.open(path).map_err(|e| FileCheckError::Access(format!("{}: {e}", path.display())))?;
+    Ok(())
+}
+
+/// Web fallback for [`check_regular_file_setting`].
+#[cfg(target_arch = "wasm32")]
+pub fn check_regular_file_setting(path: &std::path::Path, _max: u64, _key: &str) -> Result<(), FileCheckError> {
+    Err(FileCheckError::Access(format!("{}: files are opened through the browser on the web", path.display())))
+}
+
 /// An entry of [`list_dir`]: a file or folder (links followed).
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]
