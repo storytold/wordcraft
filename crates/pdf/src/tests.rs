@@ -3158,6 +3158,10 @@ fn undecodable_pictures_keep_their_grey_box_bytes() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            stroke: None,
+            stroke_width: 0.0,
+            dash: Default::default(),
+            compound: Default::default(),
         };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
     }
