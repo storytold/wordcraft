@@ -24,4 +24,6 @@ serde_json = { workspace = true }
 sys-locale = "0.3"
 
 [dev-dependencies]
+wordcraft-fonts = { workspace = true }
+image = { workspace = true }
 zip = { workspace = true }
