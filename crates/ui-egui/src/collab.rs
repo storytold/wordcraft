@@ -276,6 +276,10 @@ pub(crate) fn request_commit(app: &mut WordApp) {
     }
     if let Some(collab) = app.collab.as_mut() {
         collab.commit();
+        // On wasm the host-owned commit path below is still reachable when the
+        // session cannot commit through the room; on native it is compiled out,
+        // which is why clippy cannot see a statement after this one.
+        #[allow(clippy::needless_return)]
         return;
     }
     #[cfg(target_arch = "wasm32")]

@@ -96,6 +96,10 @@ pub enum HostAction {
     /// Dial the session; the host opened it, so the app owns no network call
     /// before this point.
     Connect(HostSession),
+    /// The host repeated the message for the connection this shell already
+    /// holds (a fresh JWT before the old one expires, ADR WC-0007). Update the
+    /// credentials on the existing [`Collab`]; do not build a second one.
+    Renew(HostSession),
     /// The cabinet stored the commit; show its version and etag.
     Committed { version: u64, etag: String },
 }
@@ -117,12 +121,26 @@ pub struct HostState {
 
 impl HostState {
     /// Apply one host message. Anything else leaves the app single-user.
+    ///
+    /// A `session` message for the connection this shell already holds — the
+    /// same `session_id` at the same `ws_url` — is a credential renewal, not a
+    /// new session: it answers [`HostAction::Renew`] and leaves `connected`
+    /// alone, so the shell hands the token to the live client instead of
+    /// replacing it and losing its unconfirmed edits (ADR WC-0007). The token is
+    /// what rotates, so it is not part of the identity; a different URL is a
+    /// different room and a different session.
     pub fn on_event(&mut self, event: HostEvent) -> HostAction {
         match event {
             HostEvent::Session(session) => {
-                self.connected = false;
+                let same_connection =
+                    self.session.as_ref().is_some_and(|current| current.session_id() == session.session_id() && current.ws_url() == session.ws_url());
                 self.session = Some(session.clone());
-                HostAction::Connect(session)
+                if same_connection {
+                    HostAction::Renew(session)
+                } else {
+                    self.connected = false;
+                    HostAction::Connect(session)
+                }
             }
             HostEvent::Committed { version, etag } => {
                 self.committed = Some((version, etag.clone()));
@@ -551,6 +569,26 @@ impl Collab {
         self.transport.reconnect();
     }
 
+    /// Take a repeated `session` message for this connection (ADR WC-0007): the
+    /// cabinet pushes a fresh JWT before the old one expires, with the same
+    /// `session_id`. Only the credentials change — the client keeps its
+    /// unconfirmed operations, its version and the participant list, so the
+    /// writer's edit and presence survive the rotation. An unchanged token is
+    /// not a reason to drop the socket, so that repeat costs nothing.
+    ///
+    /// `false` means the message is not for this connection (another
+    /// `session_id`); the caller installs a new [`Collab`] instead.
+    pub fn renew(&mut self, session: &HostSession) -> bool {
+        if self.session_id != session.session_id() {
+            return false;
+        }
+        self.server = session.ws_url().to_string();
+        if self.token != session.token() {
+            self.renew_token(session.token());
+        }
+        true
+    }
+
     /// Add the server's own view of the participants after `welcome`.
     pub fn set_participants(&mut self, participants: &[wordcraft_collab::wire::Participant]) {
         for participant in participants {
@@ -627,6 +665,125 @@ mod tests {
         assert!(debug.contains("s1"), "{debug}");
         assert!(!debug.contains("jwt-secret"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
+    }
+
+    /// A web session as the shell holds it, built without a socket: the native
+    /// build has no transport, and these tests drive the state machine.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn test_collab(session: &HostSession, client_id: &str) -> Collab {
+        Collab {
+            client: Client::new(client_id),
+            state: SyncState::new(client_id, "writer", Role::Editor),
+            session_id: session.session_id().to_string(),
+            server: session.ws_url().to_string(),
+            token: session.token().to_string(),
+            status: Status::InSync,
+            participants: Vec::new(),
+            commit: None,
+            conflict: None,
+            copy: None,
+            copy_buffer: CopyBuffer::default(),
+            snapshot: Vec::new(),
+            snapshot_version: 0,
+            seed: Vec::new(),
+            last_presence_ms: 0.0,
+            last_error: None,
+            waiting: VecDeque::new(),
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit() {
+        const URL: &str = "wss://collab.example/ws";
+        let mut host = HostState::default();
+        let opened = HostSession::new("s1", URL, "jwt-1", "editor");
+        assert_eq!(host.on_event(HostEvent::Session(opened.clone())), HostAction::Connect(opened.clone()));
+        let mut live = Some(test_collab(&opened, "c1"));
+        if let Some(collab) = live.as_mut() {
+            // The writer's edit, planned and sent, not answered yet.
+            collab.client.op(OpKind::Primitive, Target::new("body", 7, 0), json!({"replaceRange": {"text": "x"}}));
+            collab.participants.push(ParticipantView {
+                client_id: "c2".into(),
+                role: "viewer".into(),
+                color: None,
+                cursor: None,
+                selection: None,
+                active: true,
+            });
+            assert_eq!(collab.client.unconfirmed().len(), 1);
+        }
+        // The cabinet pushes a fresh JWT before the old one expires.
+        let renewed = HostSession::new("s1", URL, "jwt-2", "editor");
+        let action = host.on_event(HostEvent::Session(renewed.clone()));
+        assert_eq!(action, HostAction::Renew(renewed.clone()));
+        let mut dials = 0;
+        if let HostAction::Renew(session) = action {
+            let in_place = live.as_mut().is_some_and(|collab| collab.renew(&session));
+            if !in_place {
+                live = Some(test_collab(&session, "c1"));
+                dials += 1;
+            }
+        }
+        assert_eq!(dials, 0, "a renewal for the live session must not dial a second connection");
+        assert!(live.is_some());
+        if let Some(collab) = live.as_ref() {
+            assert_eq!(collab.session_id(), "s1");
+            assert_eq!(collab.token, "jwt-2", "the new credentials are in the live client");
+            assert_eq!(collab.status, Status::Connecting, "the transport re-dials with them");
+            assert_eq!(collab.client_id(), "c1", "the room still knows this tab by the same id");
+            assert_eq!(collab.client.unconfirmed().len(), 1, "the edit the room has not confirmed is still queued");
+            assert_eq!(collab.participants.len(), 1, "presence survives the rotation");
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_repeated_session_with_the_same_token_keeps_the_socket() {
+        const URL: &str = "wss://collab.example/ws";
+        let mut host = HostState::default();
+        let opened = HostSession::new("s1", URL, "jwt-1", "editor");
+        let _ = host.on_event(HostEvent::Session(opened.clone()));
+        let mut collab = test_collab(&opened, "c1");
+        // The same message again, unchanged: nothing to renew, nothing to drop.
+        let repeat = HostSession::new("s1", URL, "jwt-1", "editor");
+        let action = host.on_event(HostEvent::Session(repeat.clone()));
+        assert_eq!(action, HostAction::Renew(repeat.clone()));
+        if let HostAction::Renew(session) = action {
+            assert!(collab.renew(&session));
+        }
+        assert_eq!(collab.status, Status::InSync, "an unchanged token is no reason to reconnect");
+        assert_eq!(collab.token, "jwt-1");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_session_for_another_id_still_replaces_the_connection() {
+        const URL: &str = "wss://collab.example/ws";
+        let mut host = HostState::default();
+        let opened = HostSession::new("s1", URL, "jwt-1", "editor");
+        let _ = host.on_event(HostEvent::Session(opened.clone()));
+        host.mark_connected();
+        let other = HostSession::new("s2", URL, "jwt-2", "editor");
+        assert_eq!(host.on_event(HostEvent::Session(other.clone())), HostAction::Connect(other.clone()));
+        assert!(!host.connected, "a new session has not joined yet");
+        // And the live client does not take another session's message in place.
+        let mut collab = test_collab(&opened, "c1");
+        assert!(!collab.renew(&other));
+        assert_eq!(collab.token, "jwt-1");
+        assert_eq!(collab.session_id(), "s1");
+    }
+
+    #[test]
+    fn a_session_for_another_url_is_a_new_connection() {
+        let mut host = HostState::default();
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let _ = host.on_event(HostEvent::Session(opened.clone()));
+        assert!(!host.connected);
+        host.mark_connected();
+        let moved = HostSession::new("s1", "wss://collab.example/other", "jwt-2", "editor");
+        assert_eq!(host.on_event(HostEvent::Session(moved.clone())), HostAction::Connect(moved.clone()));
+        assert!(!host.connected, "another room is another connection");
     }
 
     #[test]

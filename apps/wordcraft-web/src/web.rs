@@ -10,7 +10,7 @@ use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
 use crate::host::Bridge;
-use crate::host_session::{HostAction, HostInbox, HostState};
+use crate::host_session::{HostAction, HostInbox, HostSession, HostState};
 use wordcraft_collab_web::HostParticipant;
 
 const DOC_EXTS: &[&str] =
@@ -247,28 +247,43 @@ impl WebShell {
         let events = std::mem::take(&mut *self.host_events.borrow_mut());
         for event in events {
             match self.host_state.on_event(event) {
-                HostAction::Connect(session) => {
-                    let client_id = wordcraft_collab_web::session_client_id("web", self.app.session.document_id());
-                    let actor = self.app.session.author.clone();
-                    let name = session.session_id().to_string();
-                    // Store the session first, then dial: an app without it makes
-                    // no network call.
+                HostAction::Connect(session) => self.connect(session),
+                // The cabinet pushes a fresh JWT for the session this shell already
+                // holds (ADR WC-0007): the token changes on the live client, and its
+                // unconfirmed edit and the participant list stay. A first dial that
+                // never finished has no client to renew, so that one is dialled.
+                HostAction::Renew(session) => {
                     self.app.host_session = Some(session.clone());
-                    match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id, &self.app.session.doc) {
-                        Ok(collab) => {
-                            self.app.collab = Some(collab);
-                            self.app.status(format!("Joined collaboration session {name}"));
-                        }
-                        Err(message) => {
-                            self.app.host_session = None;
-                            self.app.status(format!("Collaboration is unavailable: {message}"));
-                        }
+                    let renewed = self.app.collab.as_mut().is_some_and(|collab| collab.renew(&session));
+                    if renewed {
+                        self.app.status(format!("Renewed collaboration session {}", session.session_id()));
+                    } else {
+                        self.connect(session);
                     }
                 }
                 HostAction::Committed { version, etag } => {
                     self.app.host_committed = Some((version, etag.clone()));
                     self.app.status(format!("Committed as version {version} · etag {etag}"));
                 }
+            }
+        }
+    }
+
+    /// Open the session the host sent. The session is stored first, then dialled:
+    /// an app without it makes no network call.
+    fn connect(&mut self, session: HostSession) {
+        let client_id = wordcraft_collab_web::session_client_id("web", self.app.session.document_id());
+        let actor = self.app.session.author.clone();
+        let name = session.session_id().to_string();
+        self.app.host_session = Some(session.clone());
+        match wordcraft_collab_web::Collab::connect(&session, &actor, &client_id, &self.app.session.doc) {
+            Ok(collab) => {
+                self.app.collab = Some(collab);
+                self.app.status(format!("Joined collaboration session {name}"));
+            }
+            Err(message) => {
+                self.app.host_session = None;
+                self.app.status(format!("Collaboration is unavailable: {message}"));
             }
         }
     }
