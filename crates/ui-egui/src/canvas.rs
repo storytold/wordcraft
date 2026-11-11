@@ -791,6 +791,16 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
 fn prepare_layout(app: &mut WordApp, ui: &Ui, full: Rect) -> std::sync::Arc<DocLayout> {
     let now = ui.input(|i| i.time);
     let reflow_anchor = update_viewport(app, ui, full, now);
+    // A window back in front (another document's window was, #6306): `focused` is still what the
+    // last pass saw while the window was in the background, where egui reports no widget
+    // focused, though the page kept the keyboard. Read it again before this pass's keys, or the
+    // first of them (a Ctrl+V straight after switching) would go nowhere.
+    if !app.canvas.focused
+        && ui.input(|i| i.focused)
+        && let Some((id, _)) = app.canvas.widget_id
+    {
+        app.canvas.focused = ui.memory(|m| m.has_focus(id));
+    }
     // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
     // document behind it, also in the frame it opens, before the canvas has given up focus.
     if app.canvas.focused && !app.modal_open() {
