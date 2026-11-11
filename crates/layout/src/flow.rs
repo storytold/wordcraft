@@ -777,7 +777,8 @@ fn add_notes(pb: &mut PageBuilder, mut new_notes: Vec<NoteBox>, notes: &[(usize,
     }
 }
 
-/// Line numbers in the left margin for lines `l0..l1` of `pl` laid out from `y`.
+/// Line numbers for lines `l0..l1` of `pl` laid out from `y`, left of the column they are in:
+/// each column of a multi-column section gets its own (#6018), as in Word.
 fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): (usize, usize), y: f32) -> Vec<Placed> {
     let mut items = Vec::new();
     if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && !pl.rp.suppress_line_numbers)
@@ -800,7 +801,7 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
                 para: num.clone(),
                 l0: 0,
                 l1: 1,
-                x: pb.sect.margin_left + pb.sect.gutter - dist - w,
+                x: pb.col_x() - dist - w,
                 y: ly,
                 turn: TextDirection::Horizontal,
             });
