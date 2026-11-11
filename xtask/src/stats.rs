@@ -110,7 +110,7 @@ pub fn run(_root: &Path, exact: bool) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Counts, count_tests, walk};
+    use super::count_tests;
 
     #[test]
     fn counts_attributes_and_proptest_blocks() {
@@ -121,6 +121,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_walk_does_not_follow_directory_links() {
+        use super::{Counts, walk};
         let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
         let dir = std::env::temp_dir().join(format!("wordcraft-xtask-stats-{}-{nanos}", std::process::id()));
         std::fs::create_dir(&dir).unwrap();
