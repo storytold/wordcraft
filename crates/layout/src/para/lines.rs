@@ -484,8 +484,8 @@ impl<'e> Breaker<'e> {
         // Word, measured with Arial at 10 and 20 pt, single, 1.15 and 1.5 spacing: a 30 pt picture
         // alone takes 30, 30 + 0.15 and 30 + 0.5 times the font's height, lowered 10 or 30 pt or
         // not; raised 10 pt, 10 more; a 6 pt one, the font's height; beside text and lowered
-        // 10 pt, 30. Not on a line lowered further than the picture's height, which layout limits
-        // to that height where Word's line keeps growing.
+        // 10 pt, 30; lowered 30 pt, a 6 pt one makes a 30 pt line (`drawing` leaves the lowering
+        // whole; exact spacing keeps it to the picture's height, see `extents`).
         let spacing = if let LineSpacing::Multiple(m) = rp.line_spacing { Some(m) } else { None };
         let pictures_alone = !text && obj_asc + obj_desc > 0.0 && spacing.is_some();
         let below = if pictures_alone { obj_desc } else { desc };
