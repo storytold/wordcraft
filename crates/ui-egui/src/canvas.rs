@@ -156,6 +156,9 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// Whether the press now held went down on a page: kept until release, so scrolling under the
+    /// pointer does not change it.
+    press_on_paper: Option<bool>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -401,6 +404,7 @@ impl Default for CanvasState {
             last_press: None,
             hf_press_switched: false,
             unit_drag: None,
+            press_on_paper: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
@@ -1419,9 +1423,13 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
         // so the copy pointer stands in (#3453). The selection bar keeps its arrow.
         // Off the paper (the rulers, the grey around and between pages) no text can be typed:
         // the arrow stays. A drag that started on the page keeps its I-beam.
-        let on_paper = latest.is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p))
-            || app.canvas.unit_drag.is_some()
-            || (resp.dragged() && ui.input(|i| i.pointer.press_origin().is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p))));
+        let on_here = latest.is_some_and(|p| area.contains(p) && on_visible_page(&rects, &geo.bands, p));
+        if ui.input(|i| i.pointer.primary_pressed()) {
+            app.canvas.press_on_paper = Some(on_here);
+        } else if !ui.input(|i| i.pointer.primary_down()) {
+            app.canvas.press_on_paper = None;
+        }
+        let on_paper = on_here || app.canvas.unit_drag.is_some() || (resp.dragged() && app.canvas.press_on_paper == Some(true));
         let fallback = if in_bar || !on_paper {
             egui::CursorIcon::Default
         } else if app.session.painter.is_some() {
