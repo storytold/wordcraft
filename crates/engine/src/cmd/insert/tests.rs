@@ -416,3 +416,58 @@ fn local_civil_date_follows_the_utc_offset() {
         assert!(crate::cmd::local_offset_secs(unix).abs() <= 26 * 3600);
     }
 }
+
+/// The width of the first table's columns together.
+fn new_table_width(s: &Session) -> f32 {
+    s.doc.body.iter().find_map(|b| b.as_table()).map_or(0.0, |t| t.grid.iter().sum())
+}
+
+/// #6303: as in Word, Insert Table splits the text width of the section the caret is in among
+/// the columns, not the first section's; in a section set in columns, the caret's column's.
+#[test]
+fn a_new_table_takes_the_width_of_the_caret_s_section_and_column() {
+    let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+    // A landscape second section: 9" of text, not the first section's 6.5".
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Portrait"})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.orientation", &json!({"value": "landscape"})).unwrap();
+    let first = s.doc.sections().first().map(|(_, x)| x.text_width()).unwrap();
+    let here = crate::cmd::page::sect(&s).text_width();
+    assert!(close(first, 468.0) && close(here, 648.0), "{first} {here}");
+    s.run("insert.table", &json!({"rows": 2, "cols": 3})).unwrap();
+    assert!(close(new_table_width(&s), here), "{} in a section {here} wide", new_table_width(&s));
+
+    // Narrow margins first, wide ones where the caret is: the table stays within them.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.margins", &json!({"preset": "narrow"})).unwrap();
+    s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();
+    s.run("layout.margins", &json!({"preset": "wide"})).unwrap();
+    let here = crate::cmd::page::sect(&s).text_width();
+    assert!(here < s.doc.sections().first().map(|(_, x)| x.text_width()).unwrap() - 100.0);
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), here), "{} in a section {here} wide", new_table_width(&s));
+
+    // Two equal columns: one column's width.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"count": 2, "space": 36.0})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 216.0), "{}", new_table_width(&s));
+
+    // Unequal columns: the width of the column the caret is in.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 36.0], [288.0, 0.0]]})).unwrap();
+    s.run("text.insert", &json!({"text": "Left"})).unwrap();
+    s.run("layout.break", &json!({"kind": "column"})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 288.0), "{}", new_table_width(&s));
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("layout.columns", &json!({"widths": [[144.0, 36.0], [288.0, 0.0]]})).unwrap();
+    s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+    assert!(close(new_table_width(&s), 144.0), "{}", new_table_width(&s));
+
+    // A single-section document is as before.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.table", &json!({"rows": 1, "cols": 4})).unwrap();
+    assert!(close(new_table_width(&s), 468.0), "{}", new_table_width(&s));
+}

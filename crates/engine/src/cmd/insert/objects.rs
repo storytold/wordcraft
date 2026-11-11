@@ -23,10 +23,30 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
     Ok(insert_at)
 }
 
+/// The width a new table's columns share, as in Word (#6303): the text width of the section the
+/// caret is in, or in a section set in columns, the width of the caret's column. Headers,
+/// footers and notes take their section's text width.
+fn table_width_at_caret(s: &mut Session) -> f32 {
+    let sect = crate::cmd::page::sect(s);
+    let boxes = sect.column_boxes();
+    let Some(&(_, first)) = boxes.first().filter(|_| boxes.len() > 1 && s.sel.focus.story == StoryRef::Body) else {
+        return sect.text_width();
+    };
+    if boxes.iter().all(|(_, w)| (w - first).abs() < 0.01) {
+        return first;
+    }
+    // Unequal columns: the one the caret is laid out in (the first when it isn't laid out).
+    let focus = s.sel.focus.clone();
+    let l = s.layout();
+    let Some((caret, page)) = l.caret(&focus).and_then(|c| Some((c, l.pages.get(c.page)?))) else { return first };
+    let x = caret.x - page.body.x;
+    boxes.iter().find(|(cx, w)| x >= cx - 0.5 && x <= cx + w + 0.5).map_or(first, |(_, w)| *w)
+}
+
 pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
-    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    let width = table_width_at_caret(s);
     let mut t = Table::new(rows, cols, width);
     if let Some(st) = p::str(v, "style") {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
