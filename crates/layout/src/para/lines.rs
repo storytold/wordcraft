@@ -152,22 +152,63 @@ pub(super) fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, l
     let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
     let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
     let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
-    loop {
-        let mut sc = bk.begin_line(pl);
-        sc.scan(&mut bk, pl);
-        if sc.skip {
-            bk.skip_row(&sc);
-            continue;
-        }
-        let end = bk.close_line(pl, sc);
-        if bk.next_line(pl, end) {
-            break;
-        }
-    }
+    bk.run(pl);
     bk.finish(pl);
 }
 
+/// Break the remaining clusters afresh rather than cutting the tail off a line whose head
+/// has already been placed in another column. The usual breaker supplies alignment, tabs,
+/// justification, bidi ordering and the destination's float spans for every new line.
+pub(super) fn break_lines_from(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>, (resume, top): (usize, f32)) {
+    let width = env.width.max(MIN_LINE_WIDTH);
+    let mirrored = pl.rp.bidi.then(|| mirrored_exclusions(env.exclusions, width));
+    let exclusions = mirrored.as_deref().unwrap_or(env.exclusions);
+    let mut prefix = Breaker::new(pl, (env, exclusions), mark_style, level);
+    prefix.run(pl);
+    let cluster = pl.clusters.iter().position(|c| c.start == resume);
+    let line = prefix.lines.iter().position(|l| l.start <= resume && resume < l.stop);
+    if let (Some(jc), Some(k)) = (cluster, line) {
+        let mut lines = prefix.lines;
+        let keep = if lines.get(k).is_some_and(|l| l.start == resume) { k } else { k + 1 };
+        lines.truncate(keep);
+        if let Some(head) = lines.last_mut().filter(|l| l.stop > resume) {
+            head.stop = resume;
+            head.c1 = jc;
+            head.xs.truncate(jc.saturating_sub(head.c0) + 1);
+            head.leaders.retain(|(i, _)| *i < jc);
+            head.vis.clear();
+            head.hyphen = None;
+            head.end = LineEnd::Wrap;
+        }
+        let mut bk = Breaker::new(pl, (env, exclusions), mark_style, level);
+        bk.i = jc;
+        bk.top = top;
+        bk.first = false;
+        bk.row_first = lines.len();
+        bk.lines = lines;
+        bk.run(pl);
+        bk.finish(pl);
+    } else {
+        prefix.finish(pl);
+    }
+}
+
 impl<'e> Breaker<'e> {
+    fn run(&mut self, pl: &mut ParaLayout) {
+        loop {
+            let mut sc = self.begin_line(pl);
+            sc.scan(self, pl);
+            if sc.skip {
+                self.skip_row(&sc);
+                continue;
+            }
+            let end = self.close_line(pl, sc);
+            if self.next_line(pl, end) {
+                break;
+            }
+        }
+    }
+
     fn new(pl: &ParaLayout, (env, exclusions): (&'e ParaEnv<'e>, &'e [Exclusion]), mark_style: u32, level: Option<&'e Level>) -> Self {
         let rp = pl.rp.clone();
         let width = env.width.max(MIN_LINE_WIDTH);

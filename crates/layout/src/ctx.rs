@@ -275,6 +275,25 @@ impl Ctx<'_> {
         pl
     }
 
+    /// A continuation is broken from the first byte not placed yet, using the same shaping
+    /// and field inputs as a whole paragraph. It must not reuse a whole-paragraph cache entry.
+    pub(crate) fn para_continued(
+        &mut self,
+        p: &Paragraph,
+        width: f32,
+        exclusions: &[para::Exclusion],
+        label: Option<(String, Level)>,
+        resume: (usize, f32),
+    ) -> Arc<ParaLayout> {
+        let fitted = self.fitted_boxes(p);
+        let (key, eq_number) = self.para_key(p, width, None, exclusions, label.as_ref(), &fitted);
+        Arc::new(para::layout_para_continued(
+            p,
+            &self.para_env(ParaEnvInput { width, label, table: None, exclusions, eq_number, typing_word: key.typing, fitted: &fitted }),
+            resume,
+        ))
+    }
+
     /// `p` laid out on its own, as the paragraph after a kept one is measured before it is placed
     /// (no wrap areas, proofing, typed word or resized text boxes), through the cache when
     /// [`Ctx::para_labelled`] would lay it out with those same inputs: it is then not laid out a

@@ -14,7 +14,6 @@ use super::{
 };
 #[cfg(test)]
 use crate::WRAP_RELAYS;
-use wordcraft_doc::props::Align;
 
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
@@ -113,85 +112,6 @@ thread_local! {
     pub(crate) static WIDTH_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// The line a paragraph laid out again for another column width continues the text from `resume`
-/// on at, and the layout to place it from: the line starting exactly there, or, when the new
-/// width cuts that text mid-line, the line holding it as its tail (a natural column overflow cuts
-/// a line at the new width's break, unlike a column break, which is a break of its own). The tail
-/// is placed per the paragraph's alignment. `None` when the tail cut is not supported (a
-/// bidirectional line), leaving the lines as they are.
-fn resume_relaid(relaid: &Arc<ParaLayout>, resume: usize) -> Option<(usize, Arc<ParaLayout>)> {
-    if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
-        return Some((k, relaid.clone()));
-    }
-    let k = relaid.lines.iter().position(|l| l.start < resume && resume < l.stop)?;
-    let line = relaid.lines.get(k)?;
-    // Right-to-left lines carry per-cluster visual boxes this tail cut does not reorder.
-    if !line.vis.is_empty() {
-        return None;
-    }
-    let jc = (line.c0..line.c1).find(|&k| relaid.clusters.get(k).is_some_and(|c| c.start == resume))?;
-    let base = *line.xs.get(jc - line.c0)?;
-    // The tail continues on a fresh line of its own, at the paragraph's continuation indent, and
-    // keeps the paragraph's alignment: an end-aligned tail sits at the line's right edge and a
-    // centred one is centred by its own width, as Word lays the rest out in the new column.
-    let indent = relaid.rp.indent_left;
-    let mut content_end = line.xs.last().copied().unwrap_or(base);
-    for k in (jc..line.c1).rev() {
-        match relaid.clusters.get(k).map(|c| c.kind) {
-            Some(para::ClKind::Space)
-            | Some(para::ClKind::Marker)
-            | Some(para::ClKind::LineBreak)
-            | Some(para::ClKind::PageBreak)
-            | Some(para::ClKind::ColumnBreak) => {
-                content_end = line.xs.get(k - line.c0).copied().unwrap_or(content_end);
-            }
-            _ => {
-                content_end -= relaid.auto_space_after(k);
-                break;
-            }
-        }
-    }
-    let start = match relaid.rp.align {
-        Align::Right => base + (line.right - content_end),
-        Align::Center => indent + ((line.right - indent) - (content_end - base)) / 2.0,
-        _ => indent,
-    };
-    let shift = start - base;
-    let mut pl = (**relaid).clone();
-    // A justified line was stretched to the width of the column it was broken for; its tail is
-    // only the text from `resume` on, so it keeps natural word spacing, like a last line, rather
-    // than the stretched gaps of a line that then stops short of the right edge (#2382).
-    let xs: Vec<f32> = match relaid.rp.align {
-        Align::Justify | Align::Distribute => {
-            let mut out = Vec::with_capacity(line.c1 - jc + 1);
-            let mut x = indent;
-            for k in jc..line.c1 {
-                out.push(x);
-                x += relaid.clusters.get(k).map(|c| c.adv).unwrap_or(0.0);
-            }
-            out.push(x);
-            out
-        }
-        _ => line.xs.get(jc - line.c0..)?.iter().map(|x| x + shift).collect(),
-    };
-    let leaders = line.leaders.iter().filter(|(k, _)| *k >= jc).cloned().collect();
-    let tail = para::Line { start: resume, c0: jc, xs, leaders, left: indent, right: line.right, ..line.clone() };
-    // Keep the head (the text before `resume`) as line `k` and put the tail after it: the piece
-    // placed from the tail then starts at a later line, as a continuation of the paragraph, so
-    // `push_para` no longer draws the paragraph's top border on it and display no longer draws
-    // its list label (both belong to the paragraph's first piece).
-    if let Some(head) = pl.lines.get_mut(k) {
-        head.stop = resume;
-        head.c1 = jc;
-        head.xs.truncate(jc - line.c0 + 1);
-        head.leaders.retain(|(i, _)| *i < jc);
-        head.hyphen = None;
-        head.end = para::LineEnd::Wrap;
-    }
-    pl.lines.insert(k + 1, tail);
-    Some((k + 1, Arc::new(pl)))
-}
-
 /// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`), then take it back.
 fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&mut Ctx) -> T) -> T {
     ctx.fields.page_from = std::mem::take(map);
@@ -264,6 +184,9 @@ struct Flow<'a> {
     width_relays: usize,
     /// The first line not placed yet.
     l0: usize,
+    /// The top where this piece was rebroken from, before an exclusion moved its first line
+    /// down. Placement retains that leading clearance instead of moving the line back up.
+    resume_top: Option<f32>,
     /// Its floats anchored on a later page or column than its first piece (#4250).
     late: LateFloats,
     /// Whether the floats past the first piece were checked ([`Flow::recheck_late`]), and those
@@ -308,6 +231,7 @@ impl<'a> Flow<'a> {
             wrap_relays: 0,
             width_relays: 0,
             l0: 0,
+            resume_top: None,
             late: LateFloats::new(&late),
             rechecked: false,
             forced: Vec::new(),
@@ -338,7 +262,16 @@ impl<'a> Flow<'a> {
     /// Lay the paragraph out again around the wrap areas `rel`, with its fields on their pages.
     fn relay(&mut self, ctx: &mut Ctx, rel: &[para::Exclusion]) -> Arc<ParaLayout> {
         let (p, width, eq_start, label) = (self.p, self.laid_width, self.eq_start, &self.label);
-        with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width, None, rel, label.clone())))
+        let resume = if self.width_relays > 0 { self.pl.lines.get(self.l0).map(|l| (l.start, *self.resume_top.get_or_insert(l.top))) } else { None };
+        with_page_map(ctx, &mut self.page_map, |ctx| {
+            again(ctx, eq_start, |ctx| {
+                if let Some(resume) = resume {
+                    ctx.para_continued(p, width, rel, label.clone(), resume)
+                } else {
+                    ctx.para_labelled(p, width, None, rel, label.clone())
+                }
+            })
+        })
     }
 
     /// The space before the paragraph, after the one between it and the previous paragraph is
@@ -458,32 +391,17 @@ impl<'a> Flow<'a> {
         #[cfg(test)]
         WIDTH_RELAYS.with(|c| c.set(c.get() + 1));
         let width_now = pb.col_w();
-        // The old column's exclusions must not follow the text into another column. A new
-        // width can move the resume's top, so resolve the destination's areas from that top
-        // once more; a top that still moves leaves the previous layout in place.
-        let mut offset = t;
-        let mut here = continued_exclusions(&[], &body_wraps(ctx, pb), pb.col_x(), pb.y, offset, width_now);
+        // Destination exclusions are mapped from the continuation's fixed top; the prefix
+        // is retained only to identify a continuation, never to choose its new line breaks.
+        let here = continued_exclusions(&[], &body_wraps(ctx, pb), pb.col_x(), pb.y, t, width_now);
         let (p, eq_start, label) = (self.p, self.eq_start, &self.label);
-        let mut relaid =
-            with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width_now, None, &here, label.clone())));
-        let mut relayed = resume_relaid(&relaid, resume);
-        let moved = relayed.as_ref().and_then(|(k, r)| r.lines.get(*k)).map(|l| l.top);
-        if let Some(t1) = moved
-            && (t1 - offset).abs() > 0.01
-            && !here.is_empty()
-        {
-            offset = t1;
-            here = continued_exclusions(&[], &body_wraps(ctx, pb), pb.col_x(), pb.y, offset, width_now);
-            relaid =
-                with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width_now, None, &here, label.clone())));
-            relayed = match resume_relaid(&relaid, resume) {
-                Some((k, r)) if r.lines.get(k).is_some_and(|l| (l.top - offset).abs() < 0.01) => Some((k, r)),
-                _ => None,
-            };
-        }
-        if let Some((k, relaid)) = relayed {
+        let relaid = with_page_map(ctx, &mut self.page_map, |ctx| {
+            again(ctx, eq_start, |ctx| ctx.para_continued(p, width_now, &here, label.clone(), (resume, t)))
+        });
+        if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
             (self.pl, self.rel, self.l0) = (relaid, here, k);
             self.laid_width = width_now;
+            self.resume_top = Some(t);
         }
     }
 
@@ -495,6 +413,7 @@ impl<'a> Flow<'a> {
             return;
         }
         let Some((resume, t)) = self.pl.lines.get(self.l0).map(|l| (l.start, l.top)) else { return };
+        let t = self.resume_top.unwrap_or(t);
         let here = continued_exclusions(&self.rel, &body_wraps(ctx, pb), pb.col_x(), pb.y, t, self.laid_width);
         if here == self.rel {
             return;
@@ -504,10 +423,11 @@ impl<'a> Flow<'a> {
         #[cfg(test)]
         WRAP_RELAYS.with(|c| c.set(c.get() + 1));
         let relaid = self.relay(ctx, &here);
-        // Only if the rest still starts at the same line, at the same height (an outline
-        // reaching above it could move the lines before down, and the column's areas with them).
+        // A normal whole-paragraph relay must keep the original line and height. After a
+        // width relay, the breaker starts at the saved continuation origin; an exclusion may
+        // move its first line below that origin, and placement keeps the resulting clearance.
         if let Some(k) = relaid.lines.iter().position(|l| l.start == resume)
-            && relaid.lines.get(k).is_some_and(|l| (l.top - t).abs() < 0.01)
+            && relaid.lines.get(k).is_some_and(|l| if self.width_relays > 0 { l.top >= t - 0.01 } else { (l.top - t).abs() < 0.01 })
         {
             (self.pl, self.rel, self.l0) = (relaid, here, k);
         }
@@ -631,6 +551,7 @@ impl<'a> Flow<'a> {
     /// Nothing fits on this page: move to the next column or page, and place the floats again
     /// there if this is the paragraph's start.
     fn move_on(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
+        self.resume_top = None;
         pb.advance(self.block, self.body_top);
         if self.l0 == 0 {
             let y0 = pb.y;
@@ -711,6 +632,7 @@ impl<'a> Flow<'a> {
             pb.content_bottom = pb.content_bottom.max(pb.y);
         }
         self.l0 = l1;
+        self.resume_top = None;
     }
 
     /// Start the next page or column if the lines just placed end one, or are not the last.
@@ -764,23 +686,31 @@ impl<'a> Flow<'a> {
         }
     }
 
+    fn continuation_lead(&self) -> f32 {
+        self.resume_top.zip(self.pl.lines.get(self.l0)).map_or(0.0, |(top, line)| (line.top - top).max(0.0))
+    }
+
     /// Late floats anchored in the lines that fit in this column are placed here, so these lines
     /// are broken again around them ([`Flow::relay_wrap`]).
-    fn place_due_late(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
+    fn place_due_late(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) -> bool {
         if self.l0 == 0 || pb.web || self.late.placed.is_empty() {
-            return;
+            return false;
         }
         self.late.piece = (pb.pages.len(), pb.col);
-        let lines = self.l0..fitting(&self.pl, self.l0, pb.y, pb.bottom, (0, pb.top));
-        self.place_due(ctx, pb, lines, pb.y - self.space_here);
+        let lead = self.continuation_lead();
+        let lines = self.l0..fitting(&self.pl, self.l0, pb.y + lead, pb.bottom, (0, pb.top));
+        self.place_due(ctx, pb, lines, pb.y - self.space_here)
     }
 
     /// Place the late floats due with this piece whose anchor line is in `lines`, positioned from
     /// `top`.
-    fn place_due(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, lines: std::ops::Range<usize>, top: f32) {
-        for oi in self.late.due(self.p, &self.pl, lines) {
+    fn place_due(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, lines: std::ops::Range<usize>, top: f32) -> bool {
+        let due = self.late.due(self.p, &self.pl, lines);
+        let placed = !due.is_empty();
+        for oi in due {
             place_late(ctx, pb, self.p, oi, top, &mut self.late);
         }
+        placed
     }
 
     /// Late floats placed for lines that went on after all (past `l1`) wait for the next piece;
@@ -977,15 +907,24 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.anchor_y = y0 - applied_before;
     }
     while f.l0 < f.n() {
-        f.place_due_late(ctx, pb);
         f.relay_width(ctx, pb);
-        f.relay_wrap(ctx, pb);
+        // A wider continuation can bring another deferred anchor into this piece. Place
+        // newly due floats before painting and rebreak around them, including any further
+        // anchors admitted by that rebreak. The same global relay bound limits this work.
+        for _ in 0..MAX_WRAP_RELAYS {
+            let placed = f.place_due_late(ctx, pb);
+            let before = f.pl.clone();
+            f.relay_wrap(ctx, pb);
+            if (!placed && Arc::ptr_eq(&before, &f.pl)) || f.wrap_relays >= MAX_WRAP_RELAYS {
+                break;
+            }
+        }
         f.relay_pages(ctx, pb);
         // What is laid out for these lines from here (their footnotes) is on this page.
         ctx.fields.page = pb.number;
         // A paragraph's first line may start below its top (pushed down by a floating object).
         let Some(first) = f.pl.lines.get(f.l0) else { break };
-        let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { 0.0 };
+        let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { f.continuation_lead() };
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
         fit.l1 = f.settled_end(pb, &fit);
