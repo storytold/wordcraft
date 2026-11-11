@@ -380,7 +380,18 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
                     let lang = field_lang(&s.doc, p, k);
                     let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
-                    updates.push((k, text_result(instr, crate::cmd::insert::format_date_in(&pic, lang.as_deref()))));
+                    let created = s.doc.core.created.trim();
+                    // CREATEDATE shows when the document was created (ECMA-376 §17.16.5.11). One
+                    // never saved has no creation date yet and saving stamps now; an unreadable
+                    // date keeps the result it has.
+                    let text = if name != "CREATEDATE" || created.is_empty() {
+                        crate::cmd::insert::format_date_in(&pic, lang.as_deref())
+                    } else if let Some(unix) = unix_from_w3cdtf(created) {
+                        crate::cmd::insert::format_date_at_in(&pic, lang.as_deref(), unix, crate::cmd::local_offset_secs(unix))
+                    } else {
+                        continue;
+                    };
+                    updates.push((k, text_result(instr, text)));
                 }
                 "REF" | "PAGEREF" => {
                     let f = FieldCode::parse(instr);
@@ -528,6 +539,12 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
 fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
     let off = p.object_offsets().get(k).copied()?;
     doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
+}
+
+/// Seconds since the epoch of a core-properties timestamp (`2019-05-05T12:00:00Z`, any offset or
+/// fraction); `None` for another form or an instant before 1970.
+fn unix_from_w3cdtf(stamp: &str) -> Option<u64> {
+    u64::try_from(chrono::DateTime::parse_from_rfc3339(stamp).ok()?.timestamp()).ok()
 }
 
 /// Word's default date or time picture when a field instruction carries no `\@` picture switch.
