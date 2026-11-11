@@ -276,9 +276,16 @@ fn saved_ui() -> Option<UiState> {
 /// whenever there's an X server: winit has no file drag-and-drop on Wayland, so dropping files from
 /// the file manager showed a "no" cursor. X11 is only forced with an X server (`DISPLAY`), and
 /// unforced winit picks Wayland when it's there and X11 otherwise, so a choice that isn't
-/// available falls back to the other instead of failing to start.
+/// available falls back to the other instead of failing to start. The X11 libraries are only
+/// recommended by the packages, so when `x11_libraries` reports some missing (it's asked only when
+/// X11 would be forced) the app stays on Wayland: forced X11 without them failed to start, and
+/// winit panicked without libxkbcommon-x11.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn uses_x11(setting: wordcraft_ui_egui::DisplayServer, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> (bool, String) {
+fn uses_x11(
+    setting: wordcraft_ui_egui::DisplayServer,
+    env: impl Fn(&str) -> Option<std::ffi::OsString>,
+    x11_libraries: impl FnOnce() -> Result<(), String>,
+) -> (bool, String) {
     use wordcraft_ui_egui::DisplayServer;
     let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
     let (wanted, by) = match env("WORDCRAFT_WAYLAND") {
@@ -288,17 +295,39 @@ fn uses_x11(setting: wordcraft_ui_egui::DisplayServer, env: impl Fn(&str) -> Opt
         Some(_) => (DisplayServer::Wayland, "WORDCRAFT_WAYLAND"),
         None => (setting, "the setting"),
     };
-    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY");
+    let missing = if wanted != DisplayServer::Wayland && set("DISPLAY") { x11_libraries().err() } else { None };
+    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY") && missing.is_none();
+    let wayland = set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET");
     let runs = if x11 {
         "X11"
-    } else if set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET") {
+    } else if wayland {
         "native Wayland"
     } else if set("DISPLAY") {
         "X11 (no Wayland)"
     } else {
         "neither (no Wayland or X server found)"
     };
-    (x11, format!("display: {runs}; {} asks for {}", by, wanted.code()))
+    let mut why = format!("display: {runs}; {} asks for {}", by, wanted.code());
+    if let Some(missing) = missing {
+        why += &format!("; not X11 because its libraries are missing: {missing}");
+    }
+    (x11, why)
+}
+
+/// `Err` naming the libraries winit's X11 backend opens at startup that can't be loaded: libX11,
+/// libXcursor, libX11-xcb (which brings in libxcb), libXi, and libxkbcommon-x11 for the keyboard.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn x11_libraries() -> Result<(), String> {
+    use x11_dl::{xcursor::Xcursor, xinput2::XInput2, xlib::Xlib, xlib_xcb::Xlib_xcb};
+    let mut missing: Vec<String> = [Xlib::open().err(), Xcursor::open().err(), Xlib_xcb::open().err(), XInput2::open().err()]
+        .into_iter()
+        .flatten()
+        .map(|e| e.to_string())
+        .collect();
+    if xkbcommon_dl::x11::xkbcommon_x11_option().is_none() {
+        missing.push("libxkbcommon-x11.so.0 could not be loaded".into());
+    }
+    if missing.is_empty() { Ok(()) } else { Err(missing.join("; ")) }
 }
 
 fn save_prefs(app: &WordApp) {
@@ -558,7 +587,7 @@ fn main() -> eframe::Result {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name));
+        let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name), x11_libraries);
         log::info!("{why}");
         if x11 {
             options.event_loop_builder = Some(Box::new(|b| {
@@ -690,7 +719,7 @@ mod tests {
     fn the_display_server_follows_the_variable_then_the_setting() {
         use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
         let x11 = |setting, vars: &[(&str, &str)]| {
-            uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v))).0
+            uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v)), || Ok(())).0
         };
         let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
         assert!(x11(Auto, &both), "Automatic keeps XWayland, for file drag-and-drop");
@@ -706,8 +735,38 @@ mod tests {
         let wayland_only = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", "")];
         assert!(!x11(X11, &wayland_only) && !x11(Auto, &wayland_only));
         // Without Wayland, Wayland isn't forced either: unforced winit picks X11.
-        let (forced, why) = uses_x11(Wayland, |name| (name == "DISPLAY").then(|| ":0".into()));
+        let (forced, why) = uses_x11(Wayland, |name| (name == "DISPLAY").then(|| ":0".into()), || Ok(()));
         assert!(!forced && why.contains("X11 (no Wayland)"), "{why}");
+    }
+
+    /// Without the X11 libraries (the packages only recommend them) X11 isn't forced, whatever asks
+    /// for it: forced X11 failed to start, and winit panicked without libxkbcommon-x11. The check
+    /// runs only when X11 would be forced.
+    #[test]
+    fn missing_x11_libraries_leave_the_app_on_wayland() {
+        use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+        let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        for (setting, variable) in [(Auto, None), (X11, None), (Wayland, Some("0"))] {
+            let env = |name: &str| {
+                both.iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| (*v).into())
+                    .or_else(|| (name == "WORDCRAFT_WAYLAND").then_some(variable).flatten().map(Into::into))
+            };
+            let (x11, why) = uses_x11(setting, env, || Err("libxkbcommon-x11.so.0 could not be loaded".into()));
+            assert!(!x11, "{setting:?} with WORDCRAFT_WAYLAND={variable:?}: {why}");
+            assert!(why.contains("native Wayland") && why.contains("libxkbcommon-x11"), "{why}");
+        }
+        let checked = std::cell::Cell::new(false);
+        let (x11, _) = uses_x11(
+            Wayland,
+            |name| both.iter().find(|(k, _)| *k == name).map(|(_, v)| (*v).into()),
+            || {
+                checked.set(true);
+                Ok(())
+            },
+        );
+        assert!(!x11 && !checked.get(), "asked for Wayland, the libraries aren't checked");
     }
 
     /// A named pipe or a device under such a name is a warning, not a read: the pipe blocked

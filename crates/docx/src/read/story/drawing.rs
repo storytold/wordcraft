@@ -279,7 +279,15 @@ impl Reader<'_> {
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
         float.set_spin(xfrm_spin(pic.find("pic:spPr")));
-        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        let Some(embed) = blip.attr("r:embed") else {
+            // A linked picture holds no copy: nothing to draw, and nothing is fetched.
+            if let Some(link) = blip.attr("r:link") {
+                let target = rels.by_id(link).map_or_else(|| link.to_string(), |r| r.target.clone());
+                self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+            }
+            return None;
+        };
+        let media = self.media_for(rels, embed)?;
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {
