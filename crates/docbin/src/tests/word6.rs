@@ -403,6 +403,17 @@ fn unseen_operand_values_are_left_unread() {
 }
 
 #[test]
+fn an_unseen_alignment_value_is_left_unread() {
+    // Only 0-3 were seen; 4 would otherwise become "distribute" and 0xFF "left".
+    for jc in [0x04u8, 0xFF] {
+        let g = [0x05, jc];
+        let paras: &[(u32, u32, &[u8])] = &[(0, 3, &g)];
+        let doc = read(&word6_file(&Doc6 { text: b"Hi\r", paras, ..Default::default() })).expect("opens");
+        assert_eq!(first_para(&doc).props.align, None, "jc {jc:#04x}");
+    }
+}
+
+#[test]
 fn paragraph_formatting_is_read() {
     // Justified, 0.5" left and 0.25" right indents, a 0.5" hanging first line, at least 27 pt.
     let g: &[u8] = &[0x05, 0x03, 0x11, 0xD0, 0x02, 0x10, 0x68, 0x01, 0x13, 0x30, 0xFD, 0x14, 0x1C, 0x02, 0x00, 0x00];

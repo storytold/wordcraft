@@ -410,7 +410,8 @@ fn translate_pap(grpprl: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     for (op, v) in sprms(grpprl) {
         match op {
-            pap::JC => prl(&mut out, w97::P_JC80, v),
+            // Only 0-3 were seen: another value is left unread.
+            pap::JC if matches!(v, [0..=3]) => prl(&mut out, w97::P_JC80, v),
             pap::RIGHT => prl(&mut out, w97::P_DXA_RIGHT80, v),
             pap::LEFT => prl(&mut out, w97::P_DXA_LEFT80, v),
             pap::FIRST => prl(&mut out, w97::P_DXA_LEFT1_80, v),
