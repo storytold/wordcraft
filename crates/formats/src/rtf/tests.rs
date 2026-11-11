@@ -38,6 +38,73 @@ fn basic_reader() {
 }
 
 #[test]
+fn stylesheet_names_take_unicode_escapes() {
+    // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn stylesheet_names_take_negative_escapes() {
+    // 't' as a signed 16-bit escape: 116 - 65536 = -65420.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u-65420?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn stylesheet_names_honour_the_uc_fallback_count() {
+    // \uc2: two fallback bytes follow each \uN? — here a second `?`.
+    let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \uc2\u116??\u105??\u116??\u108??\u101??;}}\pard\s2 T\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Title:T");
+}
+
+#[test]
+fn a_malformed_hex_escape_leaves_no_stray_text() {
+    // A `\'` that is not followed by two hex digits is malformed: the escape itself goes, any
+    // hex digits of a truncated pair go with it, and everything else — non-hex bytes, `}` —
+    // is read as what it is. `\'gZ` keeps "gZ" as text; `\'4}` keeps the closing brace.
+    let rtf = br"{\rtf1\ansi \'gZok\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Normal:gZok");
+
+    // The bytes after a truncated pair must not swallow the group's closing brace or the next
+    // control word: the group and its destination state end where they should. Paragraph text
+    // alone would not show that: `survivor` reads the same inside the bold group, so the run's
+    // formatting is checked too.
+    let rtf = br"{\rtf1\ansi{\b \'4}survivor\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains("survivor")), "{:?}", texts(&f));
+    let survivor_bold = f.blocks.iter().find_map(|b| match b {
+        FBlock::Para(p) => p.inlines.iter().find_map(|i| match i {
+            Inline::Text(t, fmt) if t.contains("survivor") => Some(fmt.bold),
+            _ => None,
+        }),
+        FBlock::Table(_) => None,
+    });
+    assert_eq!(survivor_bold, Some(false), "survivor must not be inside the bold group: {:?}", f.blocks);
+    // The truncated pair's hex digit goes with the escape: no stray "4" is left in the text.
+    assert!(!texts(&f).iter().any(|t| t.contains('4')), "{:?}", texts(&f));
+
+    // A leading `+` is not a hex digit: `\'+4` is no escape: it stays text, not the byte 0x04.
+    let rtf = br"{\rtf1\ansi \'+4z\par}";
+    let f = parse(rtf).unwrap();
+    assert_eq!(texts(&f)[0], "Normal:+4z");
+
+    let rtf = br"{\rtf1\ansi{\'}}after\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains("after")), "{:?}", texts(&f));
+
+    // A hex digit that starts a valid pair with the byte after it is part of the escape:
+    // \'4} reads '4' as the escape's byte and leaves `}` to close the group.
+    let rtf = br"{\rtf1\ansi\'4}x\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains('x') && !t.contains('}')), "{:?}", texts(&f));
+}
+
+#[test]
 fn unicode_fallback_uses_the_declared_count() {
     for (rtf, expected) in [
         (br"{\rtf1\uc18\u8804less than or equal rest}".as_slice(), "≤ rest"),
