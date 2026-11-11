@@ -496,6 +496,21 @@ fn custom_dictionary(app: &mut WordApp, ui: &mut Ui) {
 
 fn save(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Save documents");
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Save files in this format:"));
+        let selected = app.session.prefs.default_save_format;
+        let fmt_label = |f: wordcraft_engine::DefaultSaveFormat| format!("{} (*.{})", tl!(f.name()), f.ext());
+        let combo = craft_ui::ComboBox::from_id_salt("default_save_format").selected_text(fmt_label(selected)).width(260.0).show_ui(ui, |ui| {
+            for fmt in wordcraft_engine::DefaultSaveFormat::ALL {
+                if ui.selectable_label(selected == fmt, fmt_label(fmt)).clicked() {
+                    set(app, json!({"defaultSaveFormat": fmt.ext()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "The format suggested when saving a new document.");
+    ui.add_space(4.0);
     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
     let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
     let mut autosave = app.autosave && !browser;

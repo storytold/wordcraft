@@ -1,5 +1,56 @@
 use serde::{Deserialize, Serialize};
 
+/// The default format suggested when saving a new document (File › Options › Save).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultSaveFormat {
+    #[default]
+    Docx,
+    Docm,
+    Odt,
+    Fodt,
+    Rtf,
+    Xml,
+    Json,
+}
+
+impl DefaultSaveFormat {
+    /// Formats offered in File › Options › Save › Save files in this format.
+    pub const ALL: [DefaultSaveFormat; 7] = [Self::Docx, Self::Docm, Self::Odt, Self::Fodt, Self::Rtf, Self::Xml, Self::Json];
+
+    /// File extension (lowercase, without a leading dot).
+    pub fn ext(self) -> &'static str {
+        match self {
+            Self::Docx => "docx",
+            Self::Docm => "docm",
+            Self::Odt => "odt",
+            Self::Fodt => "fodt",
+            Self::Rtf => "rtf",
+            Self::Xml => "xml",
+            Self::Json => "json",
+        }
+    }
+
+    /// Human-readable format name (English lookup key for `tl!`).
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Docx => "Word Document",
+            Self::Docm => "Word Macro-Enabled Document",
+            Self::Odt => "OpenDocument Text",
+            Self::Fodt => "Flat OpenDocument Text",
+            Self::Rtf => "Rich Text Format",
+            Self::Xml => "Word XML Document",
+            Self::Json => "WordCraft Document",
+        }
+    }
+
+    /// Parse a format string (`"odt"` or `".odt"`, case-insensitive).
+    pub fn from_ext(s: &str) -> Option<Self> {
+        let s = s.trim().trim_start_matches('.');
+        Self::ALL.into_iter().find(|f| f.ext().eq_ignore_ascii_case(s))
+    }
+}
+
 /// Editing preferences that persist between runs (the front end saves and restores them).
 /// File › Options sets most of them (`file.options`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -62,6 +113,9 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Default file format suggested when saving a new document (File › Options › Save).
+    #[serde(default, deserialize_with = "lenient_default_save_format")]
+    pub default_save_format: DefaultSaveFormat,
 }
 
 impl Default for Prefs {
@@ -88,6 +142,7 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            default_save_format: DefaultSaveFormat::default(),
         }
     }
 }
@@ -120,10 +175,29 @@ fn lenient_read_page_color<'de, D: serde::Deserializer<'de>>(d: D) -> Result<cra
     Ok(serde_json::from_value(value).unwrap_or_default())
 }
 
+/// Ignore an unknown saved default save format without discarding other preferences.
+fn lenient_default_save_format<'de, D: serde::Deserializer<'de>>(d: D) -> Result<DefaultSaveFormat, D::Error> {
+    let value = serde_json::Value::deserialize(d)?;
+    Ok(value.as_str().and_then(DefaultSaveFormat::from_ext).unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Prefs;
+    use super::{DefaultSaveFormat, Prefs};
     use crate::cmd::view::ReadPageColor;
+
+    #[test]
+    fn default_save_format_loads_from_old_and_damaged_prefs() {
+        let old: Prefs = serde_json::from_str(r#"{"checkSpelling":false}"#).unwrap();
+        assert_eq!(old.default_save_format, DefaultSaveFormat::Docx);
+        for bad in [r#"{"defaultSaveFormat":"unknown"}"#, r#"{"defaultSaveFormat":42}"#] {
+            let prefs: Prefs = serde_json::from_str(bad).unwrap();
+            assert_eq!(prefs.default_save_format, DefaultSaveFormat::Docx);
+        }
+        let saved: Prefs = serde_json::from_str(r#"{"defaultSaveFormat":"odt"}"#).unwrap();
+        assert_eq!(saved.default_save_format, DefaultSaveFormat::Odt);
+        assert_eq!(serde_json::to_value(saved).unwrap()["defaultSaveFormat"], "odt");
+    }
 
     #[test]
     fn read_page_color_loads_from_old_and_damaged_prefs() {

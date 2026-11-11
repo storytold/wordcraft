@@ -10704,6 +10704,28 @@ fn new_documents_follow_the_region() {
     assert_eq!(t.prefs.region.as_deref(), Some("en-US"), "junk is saved as en-US");
 }
 
+#[test]
+fn options_sets_and_validates_default_save_format() {
+    use crate::DefaultSaveFormat;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let initial = run(&mut s, "file.options", json!({}));
+    assert_eq!(initial["defaultSaveFormat"], "docx");
+
+    let r = run(&mut s, "file.options", json!({"defaultSaveFormat": "odt"}));
+    assert_eq!(r["defaultSaveFormat"], "odt");
+    assert_eq!(r["opened"], false);
+    assert_eq!(s.prefs.default_save_format, DefaultSaveFormat::Odt);
+
+    let r = run(&mut s, "file.options", json!({"defaultSaveFormat": ".RTF"}));
+    assert_eq!(r["defaultSaveFormat"], "rtf");
+    assert_eq!(s.prefs.default_save_format, DefaultSaveFormat::Rtf);
+
+    for bad in [json!({"defaultSaveFormat": "pdf"}), json!({"defaultSaveFormat": "doc"}), json!({"defaultSaveFormat": 7})] {
+        assert!(s.run("file.options", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.prefs.default_save_format, DefaultSaveFormat::Rtf, "rejected inputs keep the previous choice");
+}
+
 /// Automatic (HTML-style) paragraph spacing: `para.spacing` turns it on and off, and a number
 /// replaces it, as typing one in Word's Paragraph dialog does; Ctrl+0 and Remove Space After work
 /// on it too.

@@ -140,6 +140,8 @@ fn save_as_suggests_the_first_words_of_a_new_document() {
     );
     app.session.doc.core.title = "Board minutes".into();
     assert_eq!(app.default_save_name(), "Board minutes.docx", "a title wins");
+    app.run("file.options", json!({"defaultSaveFormat": "odt"})).unwrap();
+    assert_eq!(app.default_save_name(), "Board minutes.odt", "uses configured default save format");
     app.session.doc.core.title.clear();
     app.session.path = Some(std::path::PathBuf::from("/tmp/kept.docm"));
     assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
