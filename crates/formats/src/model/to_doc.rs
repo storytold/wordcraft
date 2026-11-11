@@ -50,6 +50,20 @@ impl WithExtra for CharProps {
         if f.underline {
             self.underline_color = x.underline_color;
         }
+        // Turned off on the text, over what the style of its paragraph or span turns on.
+        if !f.bold && x.bold == Some(false) {
+            self.bold = Some(false);
+        }
+        if !f.italic && x.italic == Some(false) {
+            self.italic = Some(false);
+        }
+        if !f.strike && x.strike == Some(false) {
+            // A double strike under it goes too.
+            (self.strike, self.double_strike) = (Some(false), Some(false));
+        }
+        if !f.underline && x.underline == Some(Underline::None) {
+            self.underline = Some(Underline::None);
+        }
         if x.double_strike == Some(true) {
             (self.strike, self.double_strike) = (None, Some(true));
         }
