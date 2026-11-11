@@ -143,6 +143,8 @@ impl Writer<'_> {
         let spans = crate::write::bidi::direction_spans(&p.text, rtl_para, p.run_ranges(), |c| {
             para_lang || crate::write::bidi::char_style_has_lang_bidi(styles, c)
         });
+        // Embedding and override characters written as `w:dir` / `w:bdo`.
+        let dirs = crate::write::bidi::direction_elements(p);
         for (range, props) in &spans {
             let props: &CharProps = props;
             let range = range.clone();
@@ -152,6 +154,9 @@ impl Writer<'_> {
             let mut buf = String::new();
             for (ci, c) in text.char_indices() {
                 let special = match c {
+                    '\u{202A}'..='\u{202E}' if dirs.contains_key(&base.saturating_add(ci)) => {
+                        dirs.get(&base.saturating_add(ci)).map(|d| Piece::Dir(*d))
+                    }
                     '\t' => Some(Piece::Tab),
                     '\n' => Some(Piece::Br(None)),
                     '\u{000C}' => Some(Piece::Br(Some("page"))),
@@ -224,6 +229,14 @@ impl Writer<'_> {
                 }
             }
             match piece {
+                Piece::Dir(crate::write::bidi::DirElement::Open(tag, val)) => {
+                    w.open(tag, &[("w:val", val)]);
+                    i += 1;
+                }
+                Piece::Dir(crate::write::bidi::DirElement::Close(tag)) => {
+                    w.close(tag);
+                    i += 1;
+                }
                 Piece::Obj(o, _) => {
                     self.object(w, o, props, rels, depth);
                     i += 1;
@@ -232,7 +245,7 @@ impl Writer<'_> {
                     // Gather simple pieces sharing these props into one run.
                     let mut j = i;
                     while let Some((pc, pr)) = pieces.get(j) {
-                        if matches!(pc, Piece::Obj(..)) || !(std::ptr::eq(*pr, props) || *pr == props) {
+                        if matches!(pc, Piece::Obj(..) | Piece::Dir(..)) || !(std::ptr::eq(*pr, props) || *pr == props) {
                             break;
                         }
                         j += 1;

@@ -12,12 +12,18 @@
 //! Word gives right-to-left text without a bidi language (`w:lang w:bidi`, §17.3.2.20) its
 //! default complex-script language, Arabic, so Hebrew would proof and show as Arabic. The pieces
 //! marked `w:rtl` therefore also say their language, unless the run or its styles already do.
+//!
+//! Embeddings and overrides (`w:dir`, §17.3.2.8; `w:bdo`, §17.3.2.3) are kept in the paragraph
+//! text as the Unicode explicit formatting characters; [`direction_elements`] finds the pairs
+//! that are written back as the elements.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::ops::Range;
 
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::styles::StyleSheet;
+use wordcraft_doc::{InlineObject, Paragraph};
 
 /// The language Word expects for right-to-left text of `c`'s script, for the scripts that have
 /// one usual language.
@@ -124,6 +130,81 @@ pub(super) fn direction_spans<'a>(
     out
 }
 
+/// One end of a `w:dir` / `w:bdo` element: `Open(element, w:val)` or `Close(element)`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DirElement {
+    Open(&'static str, &'static str),
+    Close(&'static str),
+}
+
+/// Nesting deeper than this stays text (the bidi algorithm stops at 125 levels anyway).
+const MAX_NEST: usize = 32;
+
+/// The explicit formatting characters of `p` (U+202A LRE, U+202B RLE, U+202D LRO, U+202E RLO
+/// and their U+202C PDF) written as `w:dir` / `w:bdo` elements, by byte offset. A pair is
+/// written so only when both ends are in the same hyperlink and no field, content control or
+/// comment range boundary lies between them; other characters stay text.
+pub(super) fn direction_elements(p: &Paragraph) -> HashMap<usize, DirElement> {
+    let mut out = HashMap::new();
+    if !p.text.chars().any(|c| ('\u{202A}'..='\u{202E}').contains(&c)) {
+        return out;
+    }
+    let runs: Vec<(Range<usize>, &CharProps)> = p.run_ranges().collect();
+    let mut ri = 0usize;
+    // A segment ends at every boundary a pair may not cross.
+    let mut seg = 0usize;
+    let mut link: Option<&Option<String>> = None;
+    let mut k = 0usize;
+    // Open characters: (offset, element, w:val, segment, written as an element).
+    let mut stack: Vec<(usize, &'static str, &'static str, usize, bool)> = Vec::new();
+    for (at, c) in p.text.char_indices() {
+        while runs.get(ri).is_some_and(|(r, _)| r.end <= at) {
+            ri += 1;
+        }
+        let here = runs.get(ri).filter(|(r, _)| r.start <= at).map(|(_, props)| &props.link);
+        if here.is_some() && link.is_some() && here != link {
+            seg += 1;
+        }
+        if here.is_some() {
+            link = here;
+        }
+        let open = match c {
+            '\u{202A}' => Some(("w:dir", "ltr")),
+            '\u{202B}' => Some(("w:dir", "rtl")),
+            '\u{202D}' => Some(("w:bdo", "ltr")),
+            '\u{202E}' => Some(("w:bdo", "rtl")),
+            _ => None,
+        };
+        if let Some((tag, val)) = open {
+            let ok = stack.iter().filter(|e| e.4).count() < MAX_NEST;
+            stack.push((at, tag, val, seg, ok));
+        } else if c == '\u{202C}' {
+            if let Some((from, tag, val, s, true)) = stack.pop()
+                && s == seg
+            {
+                out.insert(from, DirElement::Open(tag, val));
+                out.insert(at, DirElement::Close(tag));
+            }
+        } else if c == wordcraft_doc::para::OBJ {
+            if matches!(
+                p.objects.get(k),
+                Some(
+                    InlineObject::FieldStart { .. }
+                        | InlineObject::FieldEnd
+                        | InlineObject::ControlStart { .. }
+                        | InlineObject::ControlEnd
+                        | InlineObject::CommentStart { .. }
+                        | InlineObject::CommentEnd { .. }
+                )
+            ) {
+                seg += 1;
+            }
+            k += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -135,6 +216,25 @@ mod tests {
         let runs = vec![(0..3, &p), (3..1000, &p), (usize::MAX - 1..usize::MAX, &p), (2..text.len(), &p)];
         let out = direction_spans(text, true, runs.into_iter(), |_| false);
         assert_eq!(out.len(), 5, "bad ranges pass through unsplit: {out:?}");
+    }
+
+    #[test]
+    fn pairs_become_elements_only_within_one_link() {
+        let mut p = Paragraph::with_text("a\u{202B}b\u{202C}c\u{202E}d", CharProps::default());
+        let d = direction_elements(&p);
+        assert_eq!(d.get(&1), Some(&DirElement::Open("w:dir", "rtl")));
+        assert_eq!(d.get(&5), Some(&DirElement::Close("w:dir")));
+        assert_eq!(d.len(), 2, "the unpaired RLO stays text: {d:?}");
+        // A link starting inside the pair: both characters stay text.
+        p.format(5, p.text.len(), &|c| c.link = Some("#x".into())).unwrap();
+        assert!(direction_elements(&p).is_empty());
+    }
+
+    #[test]
+    fn deep_nesting_is_capped() {
+        let text = format!("{}x{}", "\u{202B}".repeat(1000), "\u{202C}".repeat(1000));
+        let d = direction_elements(&Paragraph::with_text(&text, CharProps::default()));
+        assert_eq!(d.len(), 2 * MAX_NEST);
     }
 
     #[test]

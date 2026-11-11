@@ -38,4 +38,6 @@ enum Piece<'a> {
     Sym(&'a str, char),
     /// An object and its byte offset in the paragraph.
     Obj(&'a InlineObject, usize),
+    /// The start or end of a `w:dir` / `w:bdo` element.
+    Dir(super::bidi::DirElement),
 }
