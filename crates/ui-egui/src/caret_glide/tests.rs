@@ -185,16 +185,18 @@ fn a_new_key_move_sets_off_from_where_the_caret_was_heading() {
     assert!(!r.glide.is_gliding());
 }
 
-/// Word: a click puts the caret where it was clicked, a script's move likewise; only keys glide.
+/// A click glides like a key; a script's move does not.
 #[test]
-fn clicks_and_scripts_do_not_glide() {
+fn clicks_glide_and_scripts_do_not() {
     let mut r = Rig::new(bar(100.0, 100.0));
     r.click_to(bar(400.0, 300.0));
     let look = r.step(DT);
-    assert_eq!(look.bar, bar(400.0, 300.0));
-    assert!(!r.glide.is_gliding());
+    assert!(r.glide.is_gliding(), "a click glides to its place");
+    assert_ne!(look.bar, bar(400.0, 300.0));
     assert_eq!(look.opacity, 1.0, "a lit caret stays lit");
     r.rest(0.2);
+    assert!(!r.glide.is_gliding());
+    assert_eq!(r.step(DT).bar, bar(400.0, 300.0));
     r.script_to(bar(50.0, 50.0));
     assert_eq!(r.step(DT), Look { bar: bar(50.0, 50.0), opacity: 1.0, moving: false });
     // A script's move during a glide ends the glide.
@@ -204,12 +206,12 @@ fn clicks_and_scripts_do_not_glide() {
     assert!(r.glide.is_gliding());
     r.script_to(bar(20.0, 20.0));
     assert_eq!(r.step(DT), Look { bar: bar(20.0, 20.0), opacity: 1.0, moving: false });
-    // A click during a glide too.
+    // A click during a glide starts a new glide.
     r.key_to(bar(250.0, 20.0));
     r.step(DT);
     r.click_to(bar(300.0, 300.0));
-    assert_eq!(r.step(DT).bar, bar(300.0, 300.0));
-    assert!(!r.glide.is_gliding());
+    r.step(DT);
+    assert!(r.glide.is_gliding());
 }
 
 /// Word: the blink is a fade, and a move turns the caret on from however visible it was.
@@ -243,15 +245,15 @@ fn the_blink_fades_and_a_move_turns_the_caret_on() {
     assert!(seen.windows(2).all(|w| w[1] >= w[0]) && seen[1] > 0.1 && seen[2] > seen[1], "{seen:?}");
     assert!((seen[3] - 0.5).abs() < 0.02, "half lit half-way: {seen:?}");
     assert_eq!(r.step(DT).opacity, 1.0);
-    // A click while it is off fades in too, in place.
+    // A click while it is off fades in too, as it glides.
     r.rest(0.8);
     assert_eq!(r.glide.opacity(), 0.0);
     r.click_to(bar(300.0, 200.0));
     let look = r.step(DT);
-    assert_eq!((look.bar, look.opacity, look.moving), (bar(300.0, 200.0), 0.0, true));
-    let look = r.rest(0.05);
-    assert!(look.opacity > 0.3 && look.opacity < 0.7 && look.bar == bar(300.0, 200.0), "{look:?}");
-    assert_eq!(r.rest(0.1).opacity, 1.0);
+    assert!(look.opacity < 0.2 && look.moving, "{look:?}");
+    r.rest(0.05);
+    assert!(r.glide.opacity() > 0.2, "fading in");
+    assert_eq!(r.rest(0.2).opacity, 1.0);
     // A script's move while it is off: lit at once.
     r.rest(0.7);
     assert_eq!(r.glide.opacity(), 0.0);
