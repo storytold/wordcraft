@@ -500,8 +500,7 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
         let mut chars: Vec<(usize, usize, usize)> = Vec::with_capacity(p.text.len());
         let mut v = 0;
         for (r, c) in p.run_ranges() {
-            let hidden =
-                !include_hidden && !r.is_empty() && (c.del.is_some() || s.doc.styles.resolve_char(style, c).hidden);
+            let hidden = !include_hidden && !r.is_empty() && (c.del.is_some() || s.doc.styles.resolve_char(style, c).hidden);
             for (i, ch) in p.text[r.clone()].char_indices() {
                 if hidden {
                     continue;
