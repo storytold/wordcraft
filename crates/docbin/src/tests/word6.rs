@@ -295,6 +295,14 @@ fn utf16_text_stops_at_the_end_of_its_bytes() {
 }
 
 #[test]
+fn text_stops_at_the_end_of_its_bytes() {
+    // The same for 8-bit text: Word read 19 characters of a file whose count said 40. The font
+    // table after the text must not be read as body text.
+    let d = Doc6 { text: b"Hi\r", ccp: Some(50), fonts: FONTS, ..Default::default() };
+    assert_eq!(texts(&d), ["Hi"]);
+}
+
+#[test]
 fn fast_saved_utf16_pieces_are_at_plain_byte_offsets() {
     let text = utf16("World\rHello\r");
     let d = Doc6 { flags: 0x1000, text: &text, pieces: Some(&[(6, 12), (6, 0)]), ..Default::default() };

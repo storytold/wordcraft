@@ -155,8 +155,10 @@ pub(crate) fn pieces(word: &[u8], fib: &Fib6) -> Result<PieceTable, DocbinError>
         };
         PieceTable::parse_word6(word, fc, lcb, text, piece_code_page)
     } else {
-        // Word reads no more 16-bit characters than the text's byte range holds.
-        let ccp = if fib.wide { fib.ccp_text.min(fib.fc_mac.saturating_sub(fib.fc_min) / 2) } else { fib.ccp_text };
+        // Word reads no more characters than the text's byte range (fcMin..fcMac) holds, one byte
+        // each or two for UTF-16, whatever the character count says.
+        let unit = if fib.wide { 2 } else { 1 };
+        let ccp = fib.ccp_text.min(fib.fc_mac.saturating_sub(fib.fc_min) / unit);
         Ok(PieceTable::contiguous_word6(fib.fc_min, ccp, text))
     }
 }
