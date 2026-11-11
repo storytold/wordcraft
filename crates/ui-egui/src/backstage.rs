@@ -1,6 +1,6 @@
 //! File tab (Backstage): Home/New, Open, Info, Save As, Print, Export, Close, Options, About.
 
-use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
+use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
 
 use crate::theme::{Tokens, medium, regular, semibold};
@@ -21,12 +21,49 @@ const PAGES: [(&str, &str, &str); 11] = [
     ("options", "Options", "options"),
 ];
 
+/// The Backstage pages' keytips, as Word's (#4960): Alt, F, then a letter. V is Word's older
+/// Print Preview key, which opens the Print page too.
+const KEYTIPS: [(&str, &str); 11] = [
+    ("home", "H"),
+    ("new", "N"),
+    ("open", "O"),
+    ("info", "I"),
+    ("save", "S"),
+    ("saveAs", "A"),
+    ("print", "P"),
+    ("print", "V"),
+    ("export", "E"),
+    ("close", "C"),
+    ("options", "T"),
+];
+
+/// The page a Backstage keytip letter opens.
+pub(crate) fn keytip_page(letter: &str) -> Option<&'static str> {
+    KEYTIPS.iter().find(|(_, l)| *l == letter).map(|(page, _)| *page)
+}
+
+/// The badge a Backstage page shows while its keytips do (the first letter listed).
+fn keytip_letter(page: &str) -> Option<&'static str> {
+    KEYTIPS.iter().find(|(p, _)| *p == page).map(|(_, l)| *l)
+}
+
 /// The Backstage back chevron's centre on macOS (#1873): beside the traffic lights in a
 /// window (the title bar's content edge), at the plain control inset in full screen, where the
 /// lights aren't docked top-left and the reserved offset would leave dead space.
 fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left: f32) -> egui::Pos2 {
     let x = if fullscreen { 26.0 } else { content_left + 3.0 };
     pos2(band_min_x + x, center_y)
+}
+
+/// The bottom of the backstage menu: About, and the community link unless the user turned the
+/// community button off — the title bar pill honors the same setting, so the menu hides the
+/// link with it.
+fn bottom_links(app: &WordApp) -> Vec<(&'static str, &'static str)> {
+    let mut links = vec![("About", "about")];
+    if app.ui.show_discord {
+        links.push(("Discord community", "discord"));
+    }
+    links
 }
 
 /// Draws the Backstage side menu and the active page. Without a document only the Home, New, Open
@@ -39,12 +76,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.ui.backstage_page = "home".into();
     }
     let mac = app.integrated_titlebar;
-    egui::Panel::left("backstage_nav")
+    crate::rtl::start_panel("backstage_nav")
         .exact_size(200.0)
         // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
         .resizable(false)
         .frame(egui::Frame::NONE.fill(t.nav).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
+            // Right to left the navigation is on the right, away from the macOS traffic lights.
+            let rtl = crate::rtl::on();
             let back = if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
@@ -53,19 +92,36 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 if drag.drag_started() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
                 }
+                crate::chrome::note_title_drag(ui.ctx(), band);
                 // The chevron's stroke starts at the content edge.
-                let c = back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left);
+                let c = if rtl {
+                    pos2(band.max.x - 26.0, band.center().y)
+                } else {
+                    back_chevron_c(band.min.x, band.center().y, app.session.view.full_screen, app.mac_titlebar.content_left)
+                };
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, band.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(c, vec2(18.0, 18.0)),
+                    if rtl { "chevronRight" } else { "chevronLeft" },
+                    egui::Color32::WHITE,
+                    egui::Color32::WHITE,
+                );
                 resp
             } else {
                 // The hit area is scoped to the chevron, not the whole 200px-wide row (#3041):
                 // the row reads as plain sidebar background next to it, so clicking there must
                 // not also close the File page, same as the macOS chevron fix (#2972) below.
                 let (r, _) = ui.allocate_exact_size(vec2(200.0, 40.0), Sense::hover());
-                let c = pos2(r.min.x + 26.0, r.center().y);
+                let c = pos2(crate::rtl::lead_x(rtl, r, 26.0), r.center().y);
                 let resp = ui.interact(Rect::from_center_size(c, vec2(22.0, r.height())), ui.scope_id().with("backstage_back"), Sense::click());
-                icons::paint(ui.painter(), Rect::from_center_size(c, vec2(18.0, 18.0)), "chevronLeft", egui::Color32::WHITE, egui::Color32::WHITE);
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(c, vec2(18.0, 18.0)),
+                    if rtl { "chevronRight" } else { "chevronLeft" },
+                    egui::Color32::WHITE,
+                    egui::Color32::WHITE,
+                );
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
@@ -86,51 +142,39 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                 }
                 let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
-                icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 31.0, r.center().y), vec2(18.0, 18.0)), icon, ink, ink);
+                icons::paint(
+                    ui.painter(),
+                    Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 31.0), r.center().y), vec2(18.0, 18.0)),
+                    icon,
+                    ink,
+                    ink,
+                );
                 ui.painter().text(
-                    pos2(r.min.x + 52.0, r.center().y),
-                    Align2::LEFT_CENTER,
+                    pos2(crate::rtl::lead_x(rtl, r, 52.0), r.center().y),
+                    crate::rtl::lead_center(rtl),
                     tl!(label),
                     if active { semibold(14.0) } else { medium(14.0) },
                     ink,
                 );
+                if on
+                    && app.ui.keytips == crate::keytips::Phase::Backstage
+                    && let Some(letter) = keytip_letter(id)
+                {
+                    crate::keytips::badge(ui, Rect::from_min_size(pos2(r.min.x + 16.0, r.min.y), vec2(20.0, 16.0)), letter);
+                }
                 if resp.clicked() {
-                    match id {
-                        // A document without a file goes to the Save As page (as in Word) instead
-                        // of `file.save`, which would also open the native Save As dialog.
-                        // In the browser a save is a download, so it saves right away.
-                        "save" if app.session.path.is_none() && app.services.download.is_none() => {
-                            app.ui.backstage_page = "saveAs".into();
-                        }
-                        "save" => {
-                            let r = app.run("file.save", json!({}));
-                            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
-                                app.ui.backstage = false;
-                                app.canvas.want_focus = true;
-                            } else {
-                                app.ui.backstage_page = "saveAs".into();
-                            }
-                        }
-                        "saveAs" => {
-                            app.ui.backstage_page = "saveAs".into();
-                        }
-                        // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
-                        // are unsaved changes, and Cancel leaves the Backstage where it was.
-                        "close" => {
-                            let _ = app.run("file.close", json!({}));
-                        }
-                        _ => app.ui.backstage_page = id.into(),
-                    }
+                    go_to_page(app, id);
                 }
             }
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                for (label, id) in [("About", "about"), ("Discord community", "discord")] {
+                for (label, id) in bottom_links(app) {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!(label)));
                     if resp.hovered() {
                         ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
                     }
-                    ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), egui::Color32::WHITE);
+                    let at = pos2(crate::rtl::lead_x(rtl, r, 22.0), r.center().y);
+                    ui.painter().text(at, crate::rtl::lead_center(rtl), tl!(label), regular(13.0), egui::Color32::WHITE);
                     if resp.clicked() {
                         if id == "discord" {
                             let _ = app.run("ui.discord", json!({}));
@@ -141,22 +185,29 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(0, 30))).show(ui, |ui| {
+        // The side padding sits inside the pages, so the scroll area reaches the window's edge.
+        let pad = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(40, 0));
         // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
         if app.ui.backstage_page == "print" {
-            export_page(app, ui);
+            pad.show(ui, |ui| crate::rtl::root(ui, |ui| export_page(app, ui)));
             return;
         }
-        egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
-            "home" => home_page(app, ui),
-            "new" => new_page(app, ui),
-            "open" => open_page(app, ui),
-            "saveAs" => save_as_page(app, ui),
-            "info" => info_page(app, ui),
-            "recover" => recovery_page(app, ui),
-            "print" | "export" => export_page(app, ui),
-            "options" => crate::options::page(app, ui),
-            _ => home_page(app, ui),
+        // Full width, so the bar sits at the window's edge and the wheel works over the whole page (#5282).
+        egui::ScrollArea::vertical().auto_shrink([false, true]).show(ui, |ui| {
+            pad.show(ui, |ui| {
+                crate::rtl::root(ui, |ui| match app.ui.backstage_page.as_str() {
+                    "home" => home_page(app, ui),
+                    "new" => new_page(app, ui),
+                    "open" => open_page(app, ui),
+                    "saveAs" => save_as_page(app, ui),
+                    "info" => info_page(app, ui),
+                    "recover" => recovery_page(app, ui),
+                    "print" | "export" => export_page(app, ui),
+                    "options" => crate::options::page(app, ui),
+                    _ => home_page(app, ui),
+                })
+            })
         });
     });
 }
@@ -180,7 +231,7 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
         ui.label(tl!("No recovery copies."));
     }
     let busy = app.session.recovery_busy();
-    egui::Grid::new("recovery_documents").min_col_width(180.0).spacing(vec2(24.0, 16.0)).show(ui, |ui| {
+    crate::rtl::grid(ui, egui::Grid::new("recovery_documents").min_col_width(180.0).spacing(vec2(24.0, 16.0)), |ui| {
         if !documents.is_empty() {
             ui.strong(tl!("Document"));
             ui.strong(tl!("Recovery copy"));
@@ -214,6 +265,40 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Opens a side-menu page, as a click on it (or its keytip) does. Without a document only the
+/// pages that work without one open.
+pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
+    if !app.has_document() && !works_without_document(id) {
+        return;
+    }
+    match id {
+        // A document without a file goes to the Save As page (as in Word) instead
+        // of `file.save`, which would also open the native Save As dialog.
+        // In the browser a save is a download, so it saves right away.
+        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+            app.ui.backstage_page = "saveAs".into();
+        }
+        "save" => {
+            let r = app.run("file.save", json!({}));
+            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
+                app.ui.backstage = false;
+                app.canvas.want_focus = true;
+            } else {
+                app.ui.backstage_page = "saveAs".into();
+            }
+        }
+        "saveAs" => {
+            app.ui.backstage_page = "saveAs".into();
+        }
+        // Not a page: `file.close` asks Save / Don't Save / Cancel first when there
+        // are unsaved changes, and Cancel leaves the Backstage where it was.
+        "close" => {
+            let _ = app.run("file.close", json!({}));
+        }
+        _ => app.ui.backstage_page = id.into(),
+    }
+}
+
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
     matches!(page, "home" | "new" | "open" | "options")
@@ -228,7 +313,7 @@ fn heading(ui: &mut Ui, s: &str) {
 /// region-aware page preview, and creates a document from the template on click.
 fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
     let t = Tokens::get(ui.ctx());
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         // The thumbnail and its caption are one button named by the caption, so a screen reader
         // announces "Blank document, button" rather than unnamed text (#3176); the caption opens
         // the template too, as in Word.
@@ -236,7 +321,9 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         let galley = ui.painter().layout_no_wrap(caption.to_string(), regular(12.5), ui.visuals().text_color());
         let (tile, resp) = ui.allocate_exact_size(vec2(galley.size().x.max(150.0), 194.0 + galley.size().y), Sense::click());
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), caption));
-        let r = Rect::from_min_size(tile.min, vec2(150.0, 194.0));
+        let flows = crate::rtl::flows(ui);
+        let r_min_x = if flows { tile.max.x - 150.0 } else { tile.min.x };
+        let r = Rect::from_min_size(pos2(r_min_x, tile.min.y), vec2(150.0, 194.0));
         ui.painter().rect(
             r,
             2.0,
@@ -267,7 +354,8 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         if let Some(h) = tex {
             ui.painter().image(h.id(), r.shrink(1.0), Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
-        ui.painter().galley(pos2(r.min.x, r.max.y), galley, ui.visuals().text_color());
+        let x = if flows { r.max.x - galley.size().x } else { r.min.x };
+        ui.painter().galley(pos2(x, r.max.y), galley, ui.visuals().text_color());
         if resp.clicked() {
             let _ = app.run("file.new", json!({"template": template}));
             app.ui.backstage = false;
@@ -298,7 +386,7 @@ fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
 /// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
 fn home_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let hour = wordcraft_engine::cmd::now_iso().get(11..13).and_then(|h| h.parse::<u32>().ok()).unwrap_or(9);
+    let hour = wordcraft_engine::cmd::local_now().3.0;
     heading(
         ui,
         if hour < 12 {
@@ -472,7 +560,7 @@ fn matching_personal(query: &str, list: &[PersonalTemplate]) -> Vec<PersonalTemp
 /// click makes a new document from it.
 fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
     let t = Tokens::get(ui.ctx());
-    ui.vertical(|ui| {
+    crate::rtl::vertical(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         ui.set_max_width(150.0);
         let (r, resp) = ui.allocate_exact_size(vec2(150.0, 194.0), Sense::click());
@@ -508,6 +596,28 @@ fn personal_error_id() -> egui::Id {
     egui::Id::unique("backstage_personal_error")
 }
 
+/// How the × of a recent row is drawn (#2716): not at all while nothing is hovered, dimmed while
+/// the row is, and with the stronger fill only when the pointer is on the × itself.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoveCue {
+    Hidden,
+    Dim,
+    Strong,
+}
+
+fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
+    if x_active {
+        RemoveCue::Strong
+    } else if row_active {
+        RemoveCue::Dim
+    } else {
+        RemoveCue::Hidden
+    }
+}
+
+/// Width of the × that sits at the trailing end of a recent row (#2716).
+const REMOVE_W: f32 = 28.0;
+
 /// Draws the Recent documents list, distinguishes duplicate names by path for screen readers, and
 /// stores an open failure in this page's temporary state.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -526,20 +636,60 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
     for (p, name) in shown.iter().zip(&names) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
+        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
+        // of its own at the trailing end, so it never opens the document; clicking the rest of the
+        // row opens it as before.
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
+        // The row shows a name and a path that may not fit: the path in full is its tooltip.
+        let resp = resp.on_hover_text(crate::i18n::isolate_path(p));
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &spoken));
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
+        // Names and paths are set apart (a right-to-left line would scramble their marks and
+        // folders) and the row starts at the side reading starts from.
+        let rtl = crate::rtl::on();
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(crate::rtl::lead_x(rtl, r, 18.0), r.center().y), vec2(22.0, 22.0)),
+            "printLayout",
+            t.icon,
+            t.accent,
+        );
+        let side = crate::rtl::lead_center(rtl);
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 13.0), side, crate::i18n::isolate(name), medium(13.0), t.text);
+        ui.painter().text(pos2(crate::rtl::lead_x(rtl, r, 40.0), r.min.y + 29.0), side, crate::i18n::isolate_path(p), regular(11.0), t.text_dim);
+        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
+        // Right-to-left: the × sits on the left, past the row's trailing edge.
+        let xr = if rtl { xr.translate(vec2(-(r.width() + REMOVE_W + 2.0), 0.0)) } else { xr };
+        let xresp = ui.interact(xr, ui.scope_id().with(("recent-remove", &p)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Remove from list")));
+        // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
+        // be found; only the × itself gets the stronger fill and full-strength glyph.
+        match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
+            RemoveCue::Hidden => {}
+            RemoveCue::Dim => {
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
+            }
+            RemoveCue::Strong => {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+                ui.painter().text(xr.center(), egui::Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+            }
+        }
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+        if xresp.clicked() {
+            let _ = app.run("ui.recentRemove", json!({"path": p}));
+        }
+    }
+    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
+        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
+    {
+        let _ = app.run("ui.recentClear", json!({}));
     }
 }
 
@@ -623,73 +773,108 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
     let info = app.session.run("file.info", &json!({})).unwrap_or_default();
+    // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
+    let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };
     ui.columns(2, |cols| {
-        let ui = &mut cols[0];
-        ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
-        // The fields edit a copy of the document's properties that is read afresh every frame,
-        // so each change goes into the document as it is typed (#260): waiting for the field to
-        // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
-        // The keystrokes of one visit to a field are a single undo step.
-        let mut props = app.session.doc.core.clone();
-        let mut edited = None;
-        let mut focused = None;
-        egui::Grid::new("props").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
-            for (l, v) in [("Title", &mut props.title), ("Subject", &mut props.subject), ("Author", &mut props.creator), ("Keywords", &mut props.keywords), ("Category", &mut props.category)] {
-                let label = ui.label(tl!(l));
-                let r = ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id);
-                if r.changed() {
+        crate::rtl::root(&mut cols[first], |ui| info_properties(app, ui, &info));
+        crate::rtl::root(&mut cols[second], |ui| info_statistics(ui, &info));
+    });
+}
+
+fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
+    ui.label(egui::RichText::new(tl!("Properties")).font(semibold(15.0)));
+    // The fields edit a copy of the document's properties that is read afresh every frame,
+    // so each change goes into the document as it is typed (#260): waiting for the field to
+    // lose focus dropped the keystrokes, and leaving File with Escape never loses it at all.
+    // The keystrokes of one visit to a field are a single undo step.
+    let mut props = app.session.doc.core.clone();
+    let mut edited = None;
+    let mut focused = None;
+    crate::rtl::Table::new("props").columns(2).spacing(vec2(12.0, 6.0)).show(ui, |t| {
+        for (l, v) in [
+            ("Title", &mut props.title),
+            ("Subject", &mut props.subject),
+            ("Author", &mut props.creator),
+            ("Keywords", &mut props.keywords),
+            ("Category", &mut props.category),
+        ] {
+            t.row(|r| {
+                let label = r.cell(|ui| ui.label(tl!(l)));
+                let field = r.cell(|ui| ui.add(egui::TextEdit::singleline(v).id_salt(("info-prop", l))).labelled_by(label.id));
+                if field.changed() {
                     edited = Some(l);
                 }
-                if r.has_focus() {
+                if field.has_focus() {
                     focused = Some(l);
                 }
-                ui.end_row();
-            }
-        });
-        if let Some(field) = edited {
-            if app.info_editing == Some((field, app.session.rev())) {
-                app.session.join_next_undo();
-            }
-            let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
-            app.info_editing = ok.then(|| (field, app.session.rev()));
+            });
         }
-        if focused != app.info_editing.map(|(f, _)| f) {
-            app.info_editing = None;
+    });
+    if let Some(field) = edited {
+        if app.info_editing == Some((field, app.session.rev())) {
+            app.session.join_next_undo();
         }
-        // Advanced Properties › Custom (#2982): view and edit the document's custom properties.
-        ui.add_space(6.0);
-        if ui
-            .button(egui::RichText::new(tl!("Advanced Properties…")).font(medium(13.5)))
-            .on_hover_text(tl!("View and edit the document's custom properties."))
-            .clicked()
-        {
-            let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
+        let ok = app.run("file.properties", json!({"title": props.title, "subject": props.subject, "author": props.creator, "keywords": props.keywords, "category": props.category})).is_ok();
+        app.info_editing = ok.then(|| (field, app.session.rev()));
+    }
+    if focused != app.info_editing.map(|(f, _)| f) {
+        app.info_editing = None;
+    }
+    // Advanced Properties › Custom (#2982): view and edit the document's custom properties.
+    ui.add_space(6.0);
+    if ui
+        .button(egui::RichText::new(tl!("Advanced Properties…")).font(medium(13.5)))
+        .on_hover_text(tl!("View and edit the document's custom properties."))
+        .clicked()
+    {
+        let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
+    }
+    // Protect Document › Encrypt with Password (#55).
+    ui.add_space(18.0);
+    ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
+    let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
+    ui.label(if encrypted {
+        tl!("A password is required to open this document.")
+    } else {
+        tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
+    });
+    ui.horizontal(|ui| {
+        let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
+        if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
+            let _ = app.run("file.encrypt", json!({}));
         }
-        // Protect Document › Encrypt with Password (#55).
-        ui.add_space(18.0);
-        ui.label(egui::RichText::new(tl!("Protect Document")).font(semibold(15.0)));
-        let encrypted = info.get("encrypted").and_then(|v| v.as_bool()).unwrap_or(false);
-        ui.label(if encrypted {
-            tl!("A password is required to open this document.")
-        } else {
-            tl!("Anyone can open this document. Encrypt it with a password to keep it private.")
-        });
-        ui.horizontal(|ui| {
-            let label = if encrypted { tl!("Change Password…") } else { tl!("Encrypt with Password…") };
-            if ui.button(egui::RichText::new(label).font(medium(13.5))).clicked() {
-                let _ = app.run("file.encrypt", json!({}));
-            }
-            if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
-                let _ = app.run("file.encrypt", json!({"password": null}));
-            }
-        });
-        let ui = &mut cols[1];
-        ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
-        for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
-            ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
+        if encrypted && ui.button(egui::RichText::new(tl!("Remove Password")).font(medium(13.5))).clicked() {
+            let _ = app.run("file.encrypt", json!({"password": null}));
         }
-        let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
-        ui.label(crate::i18n::fmt(tl!("Location: {path}"), &[("path", path)]));
+    });
+}
+
+fn info_statistics(ui: &mut Ui, info: &serde_json::Value) {
+    ui.label(egui::RichText::new(tl!("Statistics")).font(semibold(15.0)));
+    for (l, k) in [("Pages", "pages"), ("Words", "words"), ("Paragraphs", "paragraphs"), ("Sections", "sections"), ("Comments", "comments")] {
+        ui.label(format!("{}: {}", tl!(l), info.get(k).map(|v| v.to_string()).unwrap_or_default()));
+    }
+    let path = info.get("path").and_then(|v| v.as_str()).unwrap_or(tl!("Not saved yet"));
+    // A path reads left to right whatever its folders are called, so it is a label of its own
+    // beside the words around it (one right-to-left line would swap its folders), and a long
+    // one is cut short, the whole path on hover, rather than wrapped to strand its last part.
+    let shown = crate::i18n::isolate_path(path);
+    let template = tl!("Location: {path}");
+    let (before, after) = template.split_once("{path}").unwrap_or((template, ""));
+    // The columns start left to right, so the row's own direction is set: the words before the
+    // path come first at the right edge, the path after them.
+    let row = if crate::rtl::on() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.scope_builder(egui::UiBuilder::new().layout(row), |ui| {
+        if !before.trim().is_empty() {
+            ui.label(before.trim_end());
+        }
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let room = ui.available_width() - if after.trim().is_empty() { 0.0 } else { 40.0 };
+        let fitted = crate::theme::fit_text(ui.painter(), &shown, &font, 0.0, ui.visuals().text_color(), room);
+        ui.label(fitted).on_hover_text(&shown);
+        if !after.trim().is_empty() {
+            ui.label(after.trim_start());
+        }
     });
 }
 
