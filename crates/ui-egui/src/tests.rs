@@ -8371,6 +8371,9 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
     ctx_line_base
         .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
             baseline_eased_line_zoom = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+            if baseline_eased_line_zoom != 1.0 {
+                canvas_scroll_base.cancel();
+            }
             baseline_cumulative_line_zoom *= baseline_eased_line_zoom;
             let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
             baseline_discrete_line_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_line_base, false));
@@ -8379,7 +8382,11 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
     for f in 1..25 {
         ctx_line_base
             .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
-                baseline_cumulative_line_zoom *= ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+                let z = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+                if z != 1.0 {
+                    canvas_scroll_base.cancel();
+                }
+                baseline_cumulative_line_zoom *= z;
             })
             .drop_without_applying_deltas();
     }
@@ -8449,6 +8456,9 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
         ctx_line
             .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
                 let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                if eased_zoom != 1.0 {
+                    canvas_scroll_eased.cancel();
+                }
                 cumulative_line_zoom *= eased_zoom;
                 assert!(
                     (eased_zoom - baseline_eased_line_zoom).abs() < 1e-5,
@@ -8468,7 +8478,11 @@ fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
         for f in 1..25 {
             ctx_line
                 .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
-                    cumulative_line_zoom *= ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                    let z = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                    if z != 1.0 {
+                        canvas_scroll_eased.cancel();
+                    }
+                    cumulative_line_zoom *= z;
                 })
                 .drop_without_applying_deltas();
         }

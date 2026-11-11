@@ -380,7 +380,6 @@ impl CanvasScroll {
     /// on top of the anchor correction that keeps the pointer's page point in place (#1743).
     pub fn cancel(&mut self) {
         self.hit_edge();
-        self.line_zoom_smoothing = false;
     }
 
     /// Scrolling continues without new input: keep repainting.
