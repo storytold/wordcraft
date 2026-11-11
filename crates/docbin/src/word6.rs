@@ -29,7 +29,7 @@
 use wordcraft_doc::encoding::charset_code_page;
 
 use crate::DocbinError;
-use crate::piece::{CodePageRun, PieceTable};
+use crate::piece::{CodePageRun, PieceTable, SYMBOL_CODE_PAGE, Word6Text};
 
 /// `wIdent` of a Word 6.0/95 file.
 const W_IDENT: u16 = 0xA5DC;
@@ -38,9 +38,14 @@ const OFF_FLAGS: usize = 0x0A;
 const F_COMPLEX: u16 = 0x0004;
 /// Password-protected (Word 97's bit; no unprotected file sets it).
 const F_ENCRYPTED: u16 = 0x0100;
-/// Word 97's `fExtChar` bit. No Word 6.0/95 file seen sets it; it may mark text stored other
-/// than one byte per character, which this reader would garble, so such a file is refused.
+/// Word 97's `fExtChar` bit. Word reads a Word 6.0/95 file that sets it as UTF-16 text (each
+/// piece's fc a plain byte offset), and so does this reader.
 const F_EXT_CHAR: u16 = 0x1000;
+/// The document's character set (u16): 0 Windows, 0x0100 Macintosh (all 8-bit text is Mac Roman,
+/// whatever the fonts say), 0x0002 Symbol (every byte a private-use character). Word reads the
+/// bytes above ASCII of any other value as U+FFFD.
+const OFF_CHSE: usize = 0x14;
+const OFF_FC_MAC: usize = 0x1C;
 /// Bin table entries read, as for Word 97 (`fkp::MAX_BINS`).
 const MAX_BINS: usize = 100_000;
 /// Code page runs kept: far more than any real file's, and few enough to stay small.
@@ -69,7 +74,11 @@ pub(crate) fn is_word6(word: &[u8]) -> bool {
 #[derive(Clone, Debug)]
 pub(crate) struct Fib6 {
     complex: bool,
+    /// Text is UTF-16 (fExtChar).
+    wide: bool,
+    chse: u16,
     fc_min: u32,
+    fc_mac: u32,
     /// Characters in the main text.
     pub(crate) ccp_text: u32,
     pairs: [(u32, u32); PAIRS],
@@ -86,9 +95,6 @@ impl Fib6 {
         if flags & F_ENCRYPTED != 0 {
             return Err(DocbinError::Encryption("password-protected Word 6.0/95 files can't be opened".into()));
         }
-        if flags & F_EXT_CHAR != 0 {
-            return Err(DocbinError::NotWord("this Word 6.0/95 file may store its text in a form that can't be read yet".into()));
-        }
         let ccp_text = u32_at(OFF_CCP_TEXT).unwrap_or(0);
         if ccp_text > MAX_CCP {
             return Err(DocbinError::Limit(format!("document claims {ccp_text} characters")));
@@ -98,7 +104,15 @@ impl Fib6 {
             let at = OFF_PAIRS + i * 8;
             *p = (u32_at(at).unwrap_or(0), u32_at(at + 4).unwrap_or(0));
         }
-        Ok(Fib6 { complex: flags & F_COMPLEX != 0, fc_min: u32_at(OFF_FC_MIN).unwrap_or(0), ccp_text, pairs })
+        Ok(Fib6 {
+            complex: flags & F_COMPLEX != 0,
+            wide: flags & F_EXT_CHAR != 0,
+            chse: u16_at(OFF_CHSE).unwrap_or(0),
+            fc_min: u32_at(OFF_FC_MIN).unwrap_or(0),
+            fc_mac: u32_at(OFF_FC_MAC).unwrap_or(0),
+            ccp_text,
+            pairs,
+        })
     }
 
     /// The (fc, lcb) pair at index `i`, if it points at anything.
@@ -108,17 +122,47 @@ impl Fib6 {
 }
 
 /// The text of the file: its piece table (or, for a file that was not fast-saved, the one
-/// stretch of text after the FIB), with the code page of every run of characters.
+/// stretch of text after the FIB), with how its characters are stored and decoded.
+///
+/// 8-bit text decodes in the code page of, in order: the document's character set when it isn't
+/// Windows ([`OFF_CHSE`]); else the font a piece's Prm names (as Word 95 writes when a fast save
+/// changes a font); else the font of the character run; else Windows-1252.
 pub(crate) fn pieces(word: &[u8], fib: &Fib6) -> Result<PieceTable, DocbinError> {
     let charsets = fib.pair(PAIR_FONTS).map(|(fc, lcb)| font_charsets(word, fc, lcb)).unwrap_or_default();
-    let runs = fib.pair(PAIR_BTE_CHPX).map(|(fc, lcb)| code_page_runs(word, fc, lcb, &charsets)).unwrap_or_default();
+    let code_page_of = |font: u16| -> u16 { charsets.get(usize::from(font)).and_then(|&c| charset_code_page(i32::from(c))).unwrap_or(1252) };
+    let windows = fib.chse == 0;
+    let default_code_page = match fib.chse {
+        0 => 1252,
+        0x0100 => MAC_ROMAN,
+        0x0002 => SYMBOL_CODE_PAGE,
+        // Not a code page: bytes above ASCII read as U+FFFD.
+        _ => 0,
+    };
+    let code_pages = match fib.pair(PAIR_BTE_CHPX) {
+        Some((fc, lcb)) if windows => code_page_runs(word, fc, lcb, &charsets),
+        _ => Vec::new(),
+    };
+    let text = Word6Text { wide: fib.wide, default_code_page, code_pages };
     if fib.complex {
         let (fc, lcb) = fib.pair(PAIR_CLX).ok_or_else(|| DocbinError::Malformed("the fast-saved file has no piece table".into()))?;
-        PieceTable::parse_word6(word, fc, lcb, runs)
+        // A Prm1's Prc may name the piece's font (sprm 0x5D); a Prm0 can't, its operand being one
+        // byte.
+        let piece_code_page = |prm: u16, prcs: &[Vec<u8>]| -> Option<u16> {
+            if !windows || prm & 1 == 0 {
+                return None;
+            }
+            font(prcs.get(usize::from(prm >> 1))?).map(code_page_of)
+        };
+        PieceTable::parse_word6(word, fc, lcb, text, piece_code_page)
     } else {
-        Ok(PieceTable::contiguous_bytes(fib.fc_min, fib.ccp_text, runs))
+        // Word reads no more 16-bit characters than the text's byte range holds.
+        let ccp = if fib.wide { fib.ccp_text.min(fib.fc_mac.saturating_sub(fib.fc_min) / 2) } else { fib.ccp_text };
+        Ok(PieceTable::contiguous_word6(fib.fc_min, ccp, text))
     }
 }
+
+/// Mac OS Roman, the 8-bit text of a Macintosh Word document.
+const MAC_ROMAN: u16 = wordcraft_doc::encoding::MAC_ROMAN_CODE_PAGE;
 
 /// The charset of every font in the font table at `word[fc..fc+lcb]`, by font index. A truncated
 /// entry ends the table.

@@ -24,6 +24,14 @@ struct Doc6<'a> {
     runs: &'a [(u32, u32, &'a [u8])],
     /// For a fast-saved file: (length, offset) per piece, in CP order.
     pieces: Option<&'a [(u32, u32)]>,
+    /// Each piece's Prm (0 when absent or shorter than `pieces`).
+    prms: &'a [u16],
+    /// The Clx's Prc grpprls, which a Prm1 indexes.
+    prcs: &'a [&'a [u8]],
+    /// The FIB's character set word at 0x14.
+    chse: u16,
+    /// The main text's length in characters, when it isn't the stored bytes' (16-bit text).
+    ccp: Option<u32>,
 }
 
 fn put16(v: &mut [u8], at: usize, x: u16) {
@@ -38,9 +46,12 @@ fn put32(v: &mut [u8], at: usize, x: u32) {
 fn word_stream(d: &Doc6) -> Vec<u8> {
     let mut w = vec![0u8; TEXT_AT as usize];
     w.extend_from_slice(d.text);
-    let ccp = match d.pieces {
-        Some(p) => p.iter().map(|(len, _)| len).sum(),
-        None => d.text.len() as u32,
+    let ccp = match (d.ccp, d.pieces) {
+        (Some(ccp), _) => ccp,
+        (None, pieces) => match pieces {
+            Some(p) => p.iter().map(|(len, _)| len).sum(),
+            None => d.text.len() as u32,
+        },
     };
     let mut pairs: Vec<(usize, u32, u32)> = Vec::new();
     if let (Some(first), Some(last)) = (d.runs.first(), d.runs.last()) {
@@ -96,12 +107,18 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
             cp += len;
             plc.extend_from_slice(&cp.to_le_bytes());
         }
-        for (_, off) in pieces {
+        for (i, (_, off)) in pieces.iter().enumerate() {
             plc.extend_from_slice(&[0, 0]);
             plc.extend_from_slice(&(TEXT_AT + off).to_le_bytes());
-            plc.extend_from_slice(&[0, 0]);
+            plc.extend_from_slice(&d.prms.get(i).copied().unwrap_or(0).to_le_bytes());
         }
-        let mut clx = vec![0x02u8];
+        let mut clx = Vec::new();
+        for g in d.prcs {
+            clx.push(0x01);
+            clx.extend_from_slice(&(g.len() as u16).to_le_bytes());
+            clx.extend_from_slice(g);
+        }
+        clx.push(0x02);
         clx.extend_from_slice(&(plc.len() as u32).to_le_bytes());
         clx.extend_from_slice(&plc);
         pairs.push((33, w.len() as u32, clx.len() as u32));
@@ -112,6 +129,7 @@ fn word_stream(d: &Doc6) -> Vec<u8> {
     put16(&mut w, 0x06, 0x0409);
     put16(&mut w, 0x0A, d.flags | if d.pieces.is_some() { 0x0004 } else { 0 });
     put16(&mut w, 0x0C, 0x0065);
+    put16(&mut w, 0x14, d.chse);
     put32(&mut w, 0x18, TEXT_AT);
     put32(&mut w, 0x1C, TEXT_AT + d.text.len() as u32);
     let len = w.len() as u32;
@@ -246,11 +264,70 @@ fn a_bin_table_naming_one_page_many_times_reads_it_once() {
     assert_eq!(body_texts(&doc), ["Д".repeat(50)]);
 }
 
+/// `s` as UTF-16LE bytes.
+fn utf16(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+}
+
 #[test]
-fn a_file_marked_with_extended_characters_is_refused() {
-    // Word 97's fExtChar bit: no Word 6.0/95 file seen sets it, so its text form is unknown.
-    let d = Doc6 { flags: 0x1000, text: b"Hello\r", ..Default::default() };
-    assert!(matches!(read(&word6_file(&d)), Err(DocbinError::NotWord(_))));
+fn a_file_with_extended_characters_holds_utf16_text() {
+    // fExtChar (0x1000): Word reads the text as 16-bit units.
+    let text = utf16("Да ok\r");
+    let d = Doc6 { flags: 0x1000, text: &text, ccp: Some(6), ..Default::default() };
+    assert_eq!(texts(&d), ["Да ok"]);
+}
+
+#[test]
+fn utf16_text_stops_at_the_end_of_its_bytes() {
+    // Word reads no more 16-bit characters than the text's byte range (0x18..0x1C) holds, even
+    // when the character count says more.
+    let text = utf16("Hi\r");
+    let d = Doc6 { flags: 0x1000, text: &text, ccp: Some(50), ..Default::default() };
+    assert_eq!(texts(&d), ["Hi"]);
+}
+
+#[test]
+fn fast_saved_utf16_pieces_are_at_plain_byte_offsets() {
+    let text = utf16("World\rHello\r");
+    let d = Doc6 { flags: 0x1000, text: &text, pieces: Some(&[(6, 12), (6, 0)]), ..Default::default() };
+    assert_eq!(texts(&d), ["Hello", "World"]);
+}
+
+#[test]
+fn a_macintosh_document_reads_as_mac_roman() {
+    // FIB 0x14 = 0x0100: byte 0x8E is "é" (Mac Roman), not "Ž" (Windows-1252), even in a run whose
+    // font is Cyrillic.
+    let runs: &[(u32, u32, &[u8])] = &[(0, 2, &[0x5D, 0x01, 0x00]), (2, 3, &[])];
+    let d = Doc6 { chse: 0x0100, text: b"H\x8E\r", fonts: FONTS, runs, ..Default::default() };
+    assert_eq!(texts(&d), ["Hé"]);
+}
+
+#[test]
+fn a_symbol_document_maps_characters_to_private_use() {
+    // FIB 0x14 = 0x0002: every character from the space up is U+F000 + byte; marks stay marks.
+    let d = Doc6 { chse: 0x0002, text: b"Hi\x8E\rA\r", ..Default::default() };
+    assert_eq!(texts(&d), ["\u{F048}\u{F069}\u{F08E}", "\u{F041}"]);
+}
+
+#[test]
+fn another_character_set_leaves_only_ascii_readable() {
+    let d = Doc6 { chse: 0x0001, text: b"H\x8Ei\r", ..Default::default() };
+    assert_eq!(texts(&d), ["H\u{FFFD}i"]);
+}
+
+#[test]
+fn a_font_in_a_pieces_prm_chooses_its_code_page() {
+    // As Word 95 fast-saves a font change: piece 0 ("\xC4\xE0") has Prm1 -> Prc 0 = sprm 0x5D font 1
+    // (Cyrillic), while its character run names no font. Piece 1 keeps the run's font 0.
+    let text = b"\xC4\xE0\xC4\xE0\r";
+    let d = Doc6 { text, fonts: FONTS, pieces: Some(&[(2, 0), (3, 2)]), prms: &[0x0001], prcs: &[&[0x5D, 0x01, 0x00]], ..Default::default() };
+    assert_eq!(texts(&d), ["ДаÄà"]);
+}
+
+#[test]
+fn a_prm_index_past_the_prcs_is_ignored() {
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts: FONTS, pieces: Some(&[(3, 0)]), prms: &[0x0011], prcs: &[&[0x5D, 0x01, 0x00]], ..Default::default() };
+    assert_eq!(texts(&d), ["Äà"]);
 }
 
 #[test]
