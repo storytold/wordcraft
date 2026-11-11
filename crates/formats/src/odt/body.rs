@@ -1259,6 +1259,7 @@ impl Body<'_> {
                 if self.frame.is_none() && self.note.is_none() && self.del.is_none() && !self.in_tc {
                     self.group = Some(OpenGroup {
                         anchor: get(a, "text:anchor-type").map(String::from),
+                        page: get(a, "text:anchor-page-number").map(String::from),
                         style: get(a, "draw:style-name").map(String::from),
                         members: Vec::new(),
                     });
@@ -1300,11 +1301,13 @@ impl Body<'_> {
             }
             "table-column" => {
                 let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
+                let share = self.styles.column_share(get(a, "table:style-name")).unwrap_or(0.0);
                 let cells = get(a, "table:default-cell-style-name").and_then(|s| self.styles.cell_background(s));
                 let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
                 if let Some(t) = self.tables.last_mut() {
                     let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
                     t.widths.extend(std::iter::repeat_n(w, n.min(room)));
+                    t.shares.extend(std::iter::repeat_n(share, n.min(room)));
                     t.column_backgrounds.extend(std::iter::repeat_n(cells, n.min(room)));
                 }
             }
@@ -1402,6 +1405,10 @@ impl Body<'_> {
         // LibreOffice's tables keep their columns' widths, whatever their content (and however
         // far past the margins): Word's fixed layout.
         let space = get(a, "table:style-name").map(|s| self.styles.table_space(s)).unwrap_or_default();
+        // What the shares divide: an aligned table's stated width, however wide, as LibreOffice
+        // keeps it; else its part of the text width.
+        let room = width.filter(|_| align.is_some() && rel.is_none()).or_else(|| width_pct.map(|p| self.sec.text_width() * p / 100.0));
+        let contained = !self.tables.is_empty() || self.containers.len() > 1 || self.sec.columns.count > 1;
         let extra =
             model::TableExtra { align, width: None, width_pct, heights: Vec::new(), keep_rows: Vec::new(), fixed: true, space, header_rows: 0 };
         let background = get(a, "table:style-name").and_then(|s| self.styles.table_background(s));
@@ -1410,6 +1417,9 @@ impl Body<'_> {
             row: Vec::new(),
             hcover: 0,
             widths: Vec::new(),
+            shares: Vec::new(),
+            room,
+            contained,
             column_backgrounds: Vec::new(),
             extra,
             background,
