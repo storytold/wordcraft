@@ -229,7 +229,16 @@ fn with_pictures(paras: &[(&str, Option<&[u8]>)]) -> Document {
     for (i, (text, bytes)) in paras.iter().enumerate() {
         if let Some(bytes) = bytes {
             let media = d.add_media(bytes.to_vec(), "png");
-            let img = InlineObject::Image { media, w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], fx: Default::default(), ole: None };
+            let img = InlineObject::Image {
+                media,
+                w: 10.0,
+                h: 10.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            };
             d.para_mut(StoryRef::Body, &Pos::body(i, 0).path).unwrap().insert_object(text.len(), img, &CharProps::default()).unwrap();
         }
     }
@@ -400,7 +409,7 @@ fn comment_threads(d: &Document) -> Vec<(String, Option<String>)> {
     let mut out: Vec<(String, Option<String>)> = d
         .comments
         .values()
-        .map(|c| (text(c), c.parent.map(|p| text(d.comments.get(&p).unwrap_or_else(|| panic!("a reply names parent {p}, which is gone")))))
+        .map(|c| (text(c), c.parent.map(|p| text(d.comments.get(&p).unwrap_or_else(|| panic!("a reply names parent {p}, which is gone"))))))
         .collect();
     out.sort();
     out
@@ -444,10 +453,7 @@ fn compare_drops_a_reply_the_revised_thread_also_has() {
     r.run("review.reply", &json!({"id": 0, "text": "Fixed in v2"})).unwrap();
     let s = compare_files("dupreply", &o.doc, &r.doc);
     let root = Some("root note".to_string());
-    assert_eq!(
-        comment_threads(&s.doc),
-        [("Fixed in v2".to_string(), root.clone()), ("Thanks".to_string(), root), ("root note".to_string(), None)]
-    );
+    assert_eq!(comment_threads(&s.doc), [("Fixed in v2".to_string(), root.clone()), ("Thanks".to_string(), root), ("root note".to_string(), None)]);
 }
 
 #[test]
@@ -680,7 +686,16 @@ fn compare_relinks_what_text_box_stories_refer_to() {
         s.run("caret.set", &json!({"pos": Pos::body(0, "Box here.".len())})).unwrap();
         let id = s.run("insert.textBox", &json!({"text": "Inside "})).unwrap()["story"].as_u64().unwrap() as u32;
         let media = s.doc.add_media(bytes.to_vec(), "png");
-        let img = InlineObject::Image { media, w: 10.0, h: 10.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], fx: Default::default(), ole: None };
+        let img = InlineObject::Image {
+            media,
+            w: 10.0,
+            h: 10.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         let p = s.doc.para_mut(StoryRef::Part(id), &Pos::body(0, 0).path).unwrap();
         let at = p.len();
         p.insert_object(at, img, &CharProps::default()).unwrap();
