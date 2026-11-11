@@ -298,7 +298,7 @@ pub(super) fn drop_cap(s: &mut Session, v: &Value) -> CmdResult {
         p.drop_cap_margin = (!none && margin).then_some(true);
         let d = if own && !distance_given { p.drop_cap_distance.unwrap_or(0.0) } else { distance };
         p.drop_cap_distance = (!none && d > 0.0).then_some(d);
-        if !(own && !font_given) {
+        if !own || font_given {
             p.drop_cap_font = font.clone().filter(|_| !none);
         }
     })
