@@ -378,6 +378,16 @@ pub(crate) fn page_footer_visible(s: &mut Session, v: &serde_json::Value) -> Cmd
         Some(serde_json::Value::Bool(b)) => Some(*b),
         Some(_) => return Err(CmdError::Params("visible must be true or false".into())),
     };
+    let toggle = match v.get("toggle") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => return Err(CmdError::Params("toggle must be true or false".into())),
+    };
+    if explicit.is_some() == toggle {
+        return Err(CmdError::Params(
+            if toggle { "give either visible or toggle: true, not both" } else { "give visible (true or false), or toggle: true to flip the footer" }.into(),
+        ));
+    }
     let layout = s.layout();
     let given = v.get("page").is_some_and(|x| !x.is_null());
     let whole = v.get("page").is_some_and(|x| x.as_u64().is_some() || x.as_f64().is_some_and(|f| f.is_finite() && f >= 0.0 && f.fract() == 0.0));

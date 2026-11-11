@@ -82,16 +82,44 @@ fn hiding_twice_adds_no_section_breaks_and_showing_restores_the_footer() {
 }
 
 #[test]
-fn toggle_without_visible() {
+fn toggle_flips_the_footer_only_when_asked_for() {
     let mut s = book(4);
-    s.run("layout.pageFooterVisible", &json!({"page": 2})).unwrap();
+    s.run("layout.pageFooterVisible", &json!({"page": 2, "toggle": true})).unwrap();
     assert_eq!(shown(&mut s), only(2, 4));
-    s.run("layout.pageFooterVisible", &json!({"page": 2})).unwrap();
+    s.run("layout.pageFooterVisible", &json!({"page": 2, "toggle": true})).unwrap();
     assert_eq!(shown(&mut s), vec![true; 4]);
     // The caret's page when none is given.
     s.run("select.text", &json!({"text": "Page 3 second"})).unwrap();
-    s.run("layout.pageFooterVisible", &json!({})).unwrap();
+    s.run("layout.pageFooterVisible", &json!({"toggle": true})).unwrap();
     assert_eq!(shown(&mut s), only(3, 4));
+}
+
+#[test]
+fn without_visible_or_toggle_nothing_is_guessed() {
+    let mut s = book(3);
+    let before = s.doc.clone();
+    let cases = [
+        json!({"page": 2}),
+        json!({}),
+        json!({"page": 2, "visible": null}),
+        json!({"page": 2, "toggle": false}),
+        json!({"page": 2, "visible": true, "toggle": true}),
+        json!({"page": 2, "visible": false, "toggle": true}),
+        json!({"page": 2, "toggle": "true"}),
+        json!({"page": 2, "toggle": 1}),
+    ];
+    for args in cases {
+        let e = s.run("layout.pageFooterVisible", &args).unwrap_err();
+        assert!(matches!(e, CmdError::Params(_)), "{args}: {e:?}");
+        assert_eq!(s.doc, before, "{args}");
+    }
+    // An explicit value is idempotent: the same call twice ends in the same state.
+    hide(&mut s, 2).unwrap();
+    assert_eq!(hide(&mut s, 2).unwrap()["changed"], false);
+    assert_eq!(shown(&mut s), only(2, 3));
+    // toggle: false next to an explicit visible is just the explicit call.
+    s.run("layout.pageFooterVisible", &json!({"page": 2, "visible": true, "toggle": false})).unwrap();
+    assert_eq!(shown(&mut s), vec![true; 3]);
 }
 
 #[test]
