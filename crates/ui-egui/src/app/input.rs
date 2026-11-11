@@ -69,6 +69,12 @@ impl WordApp {
         self.last_scaled_scroll_events = raw.events.clone();
     }
 
+    /// Clears recorded scroll replay tracking when the UI pass consumes the frame's input.
+    pub(crate) fn clear_raw_scroll_replay(&mut self) {
+        self.raw_scroll_events_scaled = 0;
+        self.last_scaled_scroll_events.clear();
+    }
+
     /// Whether this pass's input came from the control channel (`ui.click`, `ui.key`, `ui.drag`,
     /// `ui.text`…, which MCP's `click`, `key` and `type` tools send). Decisions that are only the
     /// user's ignore it: letting agent messages through again, and answering an agent's question

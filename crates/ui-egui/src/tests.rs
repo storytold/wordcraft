@@ -8277,3 +8277,48 @@ fn touchpad_point_scrolling_is_scaled_once_across_hidden_logic_ticks() {
         assert_eq!(delta.y, expected_fresh, "fresh input is scaled once");
     }
 }
+
+/// Issue #6146 / PR #6167 review: replay tracking must be cleared when a warm-up UI pass
+/// consumes the input (which returns before `flush_shot_and_synthetic`), so a fresh event
+/// on the next frame whose delta happens to equal the previous scaled delta is not falsely
+/// treated as a replay.
+#[test]
+fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |y: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // Ensure the app is in the warm-up phase (fonts_frames < 2).
+    a.fonts_frames = 0;
+
+    // 1. First frame: incoming Point delta is -1.0. At Normal speed on Wayland, it scales to -4.0.
+    let mut raw1 = egui::RawInput { events: vec![wheel_event(-1.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw1);
+    let factor = a.ui.touchpad_scroll_speed.touchpad_factor();
+    let scaled_1 = -1.0 * factor;
+    assert_eq!(raw1.events[0], wheel_event(scaled_1));
+
+    // 2. Warm-up UI pass runs: window_ui returns early because fonts_frames < 2.
+    // This UI pass consumes raw1, so replay tracking must be cleared.
+    ctx.run_ui(raw1, |ui| {
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(a.fonts_frames, 1, "first warm-up frame executed");
+
+    // 3. Second frame: fresh incoming event happens to have delta equal to scaled_1 (-4.0).
+    // Because the previous frame's input was consumed by the UI, this is fresh input,
+    // NOT a replay, so it must be scaled by factor (e.g. -4.0 * 4.0 = -16.0).
+    let mut raw2 = egui::RawInput { events: vec![wheel_event(scaled_1)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw2);
+    let expected_2 = scaled_1 * factor;
+    if let egui::Event::MouseWheel { delta, .. } = &raw2.events[0] {
+        assert_eq!(delta.y, expected_2, "fresh event matching previous scaled delta must be scaled, not skipped as replay");
+    }
+}

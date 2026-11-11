@@ -8,8 +8,6 @@ impl WordApp {
         // a layout anyone will see. The shot's `issued` flag makes repeated final passes harmless.
         if !ctx.will_discard() {
             control::issue_screenshots(self, ctx);
-            self.raw_scroll_events_scaled = 0;
-            self.last_scaled_scroll_events.clear();
         }
         // The raw input was consumed by this host frame's passes; only a final UI pass proves
         // the step is done. A discarded pass keeps the queue for the next UI frame.

@@ -422,6 +422,7 @@ impl WordApp {
     /// Lay out the windows: on the desktop each open document's in its own native window
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        self.clear_raw_scroll_replay();
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
