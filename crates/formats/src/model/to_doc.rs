@@ -281,6 +281,18 @@ impl<'a> Builder<'a> {
 
     /// `cp` as a run may keep it: without its link and font once the runs' copies of them are
     /// over budget.
+    /// A run's properties with its tracked insertion, deletion and formatting change.
+    fn tracked_props(&mut self, f: &Fmt) -> CharProps {
+        let mut cp = self.budget(char_props(f));
+        cp.ins = f.ins.as_ref().map(|m| self.revision(RevisionKind::Insert, m));
+        cp.del = f.del.as_ref().map(|m| self.revision(RevisionKind::Delete, m));
+        if let Some(c) = &f.fmt_change {
+            let old = self.budget(char_props(&c.old));
+            cp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
+        }
+        cp
+    }
+
     fn budget(&mut self, mut cp: CharProps) -> CharProps {
         let n = cp.link.as_ref().map_or(0, String::len).saturating_add(cp.font.as_ref().map_or(0, String::len));
         match self.run_strings.checked_add(n).filter(|&t| t <= MAX_RUN_STRINGS) {
@@ -550,13 +562,7 @@ impl<'a> Builder<'a> {
             match i {
                 Inline::Text(t, f) => {
                     let t = clean_text(t);
-                    let mut cp = self.budget(char_props(f));
-                    cp.ins = f.ins.as_ref().map(|m| self.revision(RevisionKind::Insert, m));
-                    cp.del = f.del.as_ref().map(|m| self.revision(RevisionKind::Delete, m));
-                    if let Some(c) = &f.fmt_change {
-                        let old = self.budget(char_props(&c.old));
-                        cp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
-                    }
+                    let mut cp = self.tracked_props(f);
                     if p.kind == Kind::Code {
                         // Code's font comes from its style, before a change as after it.
                         if cp.font.as_deref() == Some(MONO_FONT) {
@@ -630,7 +636,8 @@ impl<'a> Builder<'a> {
                     }
                 }
                 Inline::Field { instr, result, fmt, locked } => {
-                    let cp = self.budget(char_props(fmt));
+                    // A field inserted or deleted with tracked changes keeps them (RTF `\chpgn`).
+                    let cp = self.tracked_props(fmt);
                     let (instr, result) = (clean_text(instr), clean_text(result));
                     if instr.trim().is_empty() {
                         append(&mut out, &result, &cp, None);

@@ -13126,3 +13126,27 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
 }
+
+/// #6222: an RTF footer's `PAGE` field shows each page's number, not the number Word last
+/// stored in its result.
+#[test]
+fn an_rtf_footer_page_field_numbers_each_page() {
+    let rtf = br"{\rtf1\ansi\sectd{\footerr \pard Pag. {\field{\*\fldinst { PAGE }}{\fldrslt {2}}}\par}\pard One\page Two\par}";
+    let mut s = Session::new(wordcraft_formats::rtf::import(rtf).unwrap());
+    let l = s.layout();
+    // What each page's footer fields show (`shown` holds the text drawn in place of fields).
+    let shown: Vec<String> = l
+        .pages
+        .iter()
+        .map(|p| {
+            p.footer
+                .iter()
+                .filter_map(|it| match it {
+                    wordcraft_layout::Placed::Lines { para, .. } => Some(para.shown.iter().map(|(_, t, _)| t.as_str()).collect::<String>()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .collect();
+    assert_eq!(shown, ["1", "2"]);
+}
