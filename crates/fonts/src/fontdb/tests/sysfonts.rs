@@ -745,10 +745,34 @@ fn catalog_postscript_names() {
 fn yu_mincho_aliases_resolve_before_fallback_candidates() {
     let dir = font_dir("yu-mincho-alias");
     std::fs::write(dir.join("YuMincho-Regular.ttf"), named_face("SourceSans3-Regular.ttf", "YuMincho")).unwrap();
+    // Add a PostScript-only family name (absent from `families()`) after many missing candidates.
+    let mut ps_bytes = std::fs::read(dir.join("Sub/Sysfont-Bold.TTF")).unwrap();
+    for (from, to) in [
+        (b"SourceSans3".to_vec(), b"SysfontSans".to_vec()),
+        ("SourceSans3".encode_utf16().flat_map(u16::to_be_bytes).collect(), "SysfontSans".encode_utf16().flat_map(u16::to_be_bytes).collect()),
+    ] {
+        let mut offset = 0;
+        while let Some(at) = ps_bytes[offset..].windows(from.len()).position(|w| w == from) {
+            ps_bytes[offset + at..offset + at + to.len()].copy_from_slice(&to);
+            offset += at + to.len();
+        }
+    }
+    std::fs::write(dir.join("Sub/Sysfont-Bold.TTF"), ps_bytes).unwrap();
     let db = FontDb::with_font_dirs(vec![dir.clone()]);
     for req in ["Yu Mincho", "游明朝", "游明朝体", "游明朝; Source Serif 4", "Yu Mincho; Arial"] {
         let (fam, sub) = crate::word::resolve_family(&db, req);
         assert_eq!((fam.as_str(), sub), ("YuMincho", false), "for {req}");
     }
+    // When no Light face is installed, a Light request falls back to installed YuMincho as a substitute.
+    for req in ["Yu Mincho Light", "游明朝 Light"] {
+        let (fam, sub) = crate::word::resolve_family(&db, req);
+        assert_eq!((fam.as_str(), sub), ("YuMincho", true), "for {req}");
+    }
+    // Alias probes do not consume the direct candidate probe budget for later PostScript names.
+    let mut list: Vec<String> = vec!["Yu Mincho Light".into()];
+    list.extend((0..30).map(|i| format!("MissingFont{i}")));
+    list.push("SysfontSans-Bold".into());
+    let (fam, sub) = crate::word::resolve_family(&db, &list.join("; "));
+    assert_eq!((fam.as_str(), sub), ("SysfontSans-Bold", false));
     let _ = std::fs::remove_dir_all(dir);
 }
