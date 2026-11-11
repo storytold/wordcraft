@@ -1227,10 +1227,13 @@ fn the_text_pointer_stays_off_the_grey_around_the_page() {
     let ctrl = egui::Modifiers::COMMAND;
     h.event(egui::Event::PointerMoved(beside));
     h.step();
+    h.event(egui::Event::ModifiersChanged(ctrl));
     h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: ctrl });
     h.step();
+    assert!(h.state().canvas.unit_drag.is_some(), "the Ctrl press starts a unit selection");
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow during a unit selection that began in the grey area");
     h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: ctrl });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
     h.step();
 }
 
