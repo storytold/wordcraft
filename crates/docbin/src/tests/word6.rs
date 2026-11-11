@@ -197,6 +197,14 @@ fn the_font_sprm_is_found_after_other_sprms() {
 }
 
 #[test]
+fn the_last_font_sprm_of_a_run_chooses_its_code_page() {
+    // Font 0, then font 1 (Cyrillic): the later sprm is the one the formatting applies.
+    let runs: &[(u32, u32, &[u8])] = &[(0, 2, &[0x5D, 0x00, 0x00, 0x5D, 0x01, 0x00]), (2, 3, &[])];
+    let d = Doc6 { text: b"\xC4\xE0\r", fonts: FONTS, runs, ..Default::default() };
+    assert_eq!(texts(&d), ["Да"]);
+}
+
+#[test]
 fn an_unknown_sprm_leaves_font_0() {
     // 0x99 has no known operand length, so the rest can't be framed: font 0 (Windows-1252).
     let text = b"\xC4\xE0\r";

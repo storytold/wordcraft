@@ -243,9 +243,11 @@ fn code_page_runs(word: &[u8], fc: u32, lcb: u32, charsets: &[u8]) -> Vec<CodePa
     out
 }
 
-/// The font a CHPX grpprl names (sprm 0x5D), if any. Parsing stops at an opcode whose operand
-/// length is not known, since the rest of the grpprl can't be framed.
+/// The font a CHPX grpprl names (sprm 0x5D), if any: the last one, as a later sprm overrides an
+/// earlier one when the formatting is applied. Parsing stops at an opcode whose operand length
+/// is not known, since the rest of the grpprl can't be framed; a font found before it stands.
 fn font(grpprl: &[u8]) -> Option<u16> {
+    let mut found = None;
     let mut i = 0usize;
     while let Some(&op) = grpprl.get(i) {
         let len = match op {
@@ -255,16 +257,21 @@ fn font(grpprl: &[u8]) -> Option<u16> {
             0x55..=0x5C | 0x5E | 0x62 | 0x68 | 0x75 => 1,
             0x50 | 0x5D | 0x60 | 0x61 | 0x63 => 2,
             // Its operand starts with its own length.
-            0x44 => 1 + usize::from(*grpprl.get(i + 1)?),
-            _ => return None,
+            0x44 => match grpprl.get(i + 1) {
+                Some(&n) => 1 + usize::from(n),
+                None => break,
+            },
+            _ => break,
         };
-        let operand = grpprl.get(i + 1..i + 1 + len)?;
-        if op == 0x5D {
-            return Some(u16::from_le_bytes([*operand.first()?, *operand.get(1)?]));
+        let Some(operand) = grpprl.get(i + 1..i + 1 + len) else { break };
+        if op == 0x5D
+            && let [a, b] = operand
+        {
+            found = Some(u16::from_le_bytes([*a, *b]));
         }
         i += 1 + len;
     }
-    None
+    found
 }
 
 #[cfg(test)]
