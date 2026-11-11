@@ -103,6 +103,15 @@ pub fn needs_password(err: &str) -> bool {
     err.contains(wordcraft_docx::PASSWORD_REQUIRED)
 }
 
+/// What `file.save` says when it refuses to write over the document's own file because another
+/// program changed it since it was read (#5623): a front end puts its bar up on this error.
+pub const CHANGED_ON_DISK: &str = "the file was changed on disk by another program since it was read";
+
+/// Does this save error mean the document's file changed on disk since it was read (#5623)?
+pub fn refused_for_disk_change(err: &str) -> bool {
+    err.contains(CHANGED_ON_DISK)
+}
+
 /// Does this open error mean the password given was wrong?
 pub fn wrong_password(err: &str) -> bool {
     err.contains(wordcraft_docx::WRONG_PASSWORD)
@@ -474,6 +483,35 @@ pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts:
     }
 }
 
+/// What a document's file looked like when it was read or last written: enough to tell, with one
+/// `stat` call, that another program has changed it since ([`crate::Session::changed_on_disk`],
+/// #5623). A write that keeps the size and lands within the file system's time resolution goes
+/// unnoticed; the next one is seen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiskStamp {
+    /// When the file was last changed, as the file system reports it (`None` when it doesn't).
+    pub modified: Option<std::time::SystemTime>,
+    /// Its size in bytes.
+    pub len: u64,
+}
+
+/// The file at `path` as it is now: `None` when there is no regular file there (deleted, a
+/// folder, no permission), so a document whose file is gone is left alone.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn disk_stamp(path: &std::path::Path) -> Option<DiskStamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() {
+        return None;
+    }
+    Some(DiskStamp { modified: meta.modified().ok(), len: meta.len() })
+}
+
+/// The web has no files to watch.
+#[cfg(target_arch = "wasm32")]
+pub fn disk_stamp(_path: &std::path::Path) -> Option<DiskStamp> {
+    None
+}
+
 pub fn open_path(path: &std::path::Path) -> Result<Document, String> {
     open_path_with(path, None).map(|(doc, _)| doc)
 }
@@ -839,20 +877,22 @@ pub fn open_path_in(path: &std::path::Path, password: Option<&str>, _region: &wo
     open_path_with(path, password)
 }
 
-pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
+pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<usize, String> {
     save_path_with(path, doc, None, &ExportOptions::default())
 }
 
-/// [`save_path`], encrypted with `password` as [`save_bytes_with`] does.
+/// [`save_path`], encrypted with `password` as [`save_bytes_with`] does. Returns how many bytes
+/// were written: what the file's size is right after the write, for a stamp of it (#5623).
 #[cfg(not(target_arch = "wasm32"))]
-pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(), String> {
+pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<usize, String> {
     crate::file_access::check_write(&path.to_string_lossy())?;
     let bytes = save_bytes_with(&path.to_string_lossy(), doc, password, opts)?;
-    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(bytes.len())
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
+pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<usize, String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 

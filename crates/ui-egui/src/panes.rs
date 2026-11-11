@@ -27,9 +27,12 @@ mod state;
 #[cfg(test)]
 pub(crate) use comments::comment_draft;
 use comments::comments;
+#[cfg(test)]
+pub(crate) use comments::draft_reply;
 pub(crate) use comments::{
     COMMENT_ROWS, CommentDrafts, comment_editor, commit_comment, commit_reply, flush_comment_drafts, has_comment_drafts, reply_editor,
 };
+pub(crate) use comments::{discard_comment_drafts, discard_parked_comment_drafts, flush_parked_comment_drafts};
 use host::Content;
 #[cfg(test)]
 pub(crate) use host::apply;

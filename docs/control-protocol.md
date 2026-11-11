@@ -136,6 +136,15 @@ window); in the browser, the one the window shows. Commands work on it unless to
   the front. With `{"window": key}` it selects that window directly and brings it to the front.
 - `file.closeDocument {"id"?, "force"?}` closes a document; its window closes with it unless it
   is the last window.
+- `file.reload {"id"?, "force"?}` reads a document's file again, for one another program changed
+  while it was open; unsaved changes need `force`. The document keeps its id, its window, its
+  zoom and scroll, its undo history and versions and, where the new content still has the
+  place, its caret; the content as it was is one more undo step, so `edit.undo` brings it back.
+  The app does this by itself for a document without unsaved changes whose file changes (every
+  open document is watched, not only the active one), and a bar under the ribbon asks (Reload /
+  Keep mine) for one with unsaved changes; `file.info` says whether the file has changed
+  (`changedOnDisk`). `file.save` refuses to write over a file that changed since it was read
+  unless it says `"overwrite": true`, and the app's AutoSave waits for the bar's answer.
 - `engine.execute`, `document.inspect` and `ui.render` take `doc`, the id of the document to work
   on, next to their other params. The command runs on that document and the active window stays
   active. A dialog or page the command opens (Save As, Print) opens in that document's window,

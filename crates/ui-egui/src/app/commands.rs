@@ -125,6 +125,9 @@ impl WordApp {
         {
             return Err(e.into());
         }
+        // A reload from disk (#5623) writes a comment or reply still being typed into the content
+        // as it was first, which the reload keeps one Undo away ([`WordApp::drafts_before_reload`]).
+        let reload_target = self.drafts_before_reload(id, &params);
         if id == "file.autosave" {
             return self.set_autosave(&params);
         }
@@ -210,6 +213,11 @@ impl WordApp {
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
         };
+        if let Some(target) = reload_target
+            && r.is_ok()
+        {
+            self.drafts_after_reload(target);
+        }
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;
             // The body (or the whole document) was replaced under the same id — setText, a
@@ -321,7 +329,22 @@ impl WordApp {
         // Opening a file, or a new document from a template, reads a file that may be protected.
         let retry = matches!(id, "file.open" | "file.newFromTemplate").then(|| params.clone());
         let retry_path = retry.clone();
+        // A Save of the document's own file refused because another program changed it (#5623):
+        // with unsaved work the bar goes up, so the answer (Reload / Keep mine) is at hand with
+        // the reason on the status line; a document with nothing to lose is read again now.
+        let own_file_save = id == "file.save"
+            && params.get("path").and_then(Value::as_str).is_none_or(|p| Some(std::path::Path::new(p)) == self.session.path.as_deref());
         let r = self.execute(id, params);
+        if own_file_save
+            && let Err(e) = &r
+            && wordcraft_engine::io::refused_for_disk_change(e)
+        {
+            if self.document_unsaved() || panes::has_comment_drafts(self) {
+                self.notice_disk_change(self.session.document_id(), crate::disk_change::DiskNotice::Unsaved);
+            } else {
+                self.check_disk_change();
+            }
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
@@ -368,11 +391,14 @@ impl WordApp {
         // the view follows it. Saving, exporting, printing, the document's properties and File ›
         // Options move neither the caret nor the text, so the view stays where the user is
         // reading (#3864); AutoSave runs its save on the session and never gets here.
+        // A reload from disk (#5623) keeps the view too: the caret stays where it was, and the
+        // person may be reading elsewhere.
         let file_keeps_view = matches!(
             id,
             "file.save"
                 | "file.saveAs"
                 | "file.saveTemplate"
+                | "file.reload"
                 | "file.exportPdf"
                 | "file.exportPng"
                 | "file.printPdf"
@@ -1128,7 +1154,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being
-/// typed is written before them (#1348).
+/// typed is written before them (#1348). A reload from disk flushes them in [`WordApp::execute`],
+/// where the control channel's reloads pass too (#5623).
 fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
     matches!(
         id,

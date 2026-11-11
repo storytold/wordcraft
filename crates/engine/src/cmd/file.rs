@@ -71,6 +71,7 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
                 crate::io::rename_file(path, &destination).map_err(CmdError::Failed)?;
             }
             s.path = Some(destination);
+            s.stamp_disk();
             s.relayout();
         }
     } else {
@@ -94,7 +95,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path"?: string, "overwrite"?: bool (write over the document's own file although another program changed it since it was read: without it that save is an error, and file.reload reads the file again), "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
         CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
@@ -147,6 +148,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .key("Mod+W / Mod+F4")
         .params(r#"{"force"?: bool (desktop app's control channel and MCP bridge only: without it a document with unsaved changes is an error and stays open; with it the changes are discarded. Headless sessions never ask; file.closeDocument closes a document there)}"#)
         .pure(),
+        CommandSpec::new("file.reload", "Reload from Disk", "File", reload)
+            .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays as it is)} → {"reloaded": true, "id", "path", "paragraphs", "words", "encrypted"}; reads the document's file again, for one another program changed (file.info says: "changedOnDisk"); the document keeps its id, zoom, scroll, caret, undo history and versions, and the content as it was is an undo step, so edit.undo brings it back"#)
+            .pure(),
         CommandSpec::new("file.closeDocument", "Close Document", "Agents", close_document)
             .params(r#"{"id"?: n (an open document, see view.switchWindows; default the active one), "force"?: bool (discard unsaved changes; without it a document with unsaved changes is an error and stays open)} → {"closed": id, "active": id, "documents": [{"id", "title", "path", "dirty", "active"}]}; closing the last document leaves a new blank one"#)
             .pure(),
@@ -256,6 +260,10 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
+    // The file as it is before it is read (#5623): a write that lands while it is being read then
+    // still differs from the stamp, and the next look reloads it. Bytes handed in with the path
+    // only name the document: there is no file of ours to watch.
+    let stamp = if p::str(v, "data").is_none() { crate::io::disk_stamp(std::path::Path::new(path)) } else { None };
     // An empty file opens as a new blank document that saves back to it (#1384).
     let (doc, encrypted) = read_document(s, path, v)?;
     match s.used_because() {
@@ -269,6 +277,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
+    s.disk = stamp;
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);
@@ -325,6 +334,55 @@ pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// File › Reload from Disk: read the document's file again and show what it holds now, for a
+/// file another program (an editor, a script, `git`, an agent) changed while it was open (#5623).
+/// The desktop app runs it by itself for a document without unsaved changes whose file changed,
+/// and offers it for one with them. The document keeps its id, its view and, where the new
+/// content still has the place, its caret, and its undo history, with the content as it was as
+/// one more step ([`Session::reload_document`]). A file that is not encrypted any more drops the
+/// document's password.
+fn reload(s: &mut Session, v: &Value) -> CmdResult {
+    let id = match v.get("id").filter(|x| !x.is_null()) {
+        None => s.document_id(),
+        Some(x) => x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?,
+    };
+    if !s.is_open(id) {
+        return Err(CmdError::Params(format!("no open document has id {id}")));
+    }
+    let force = p::bool(v, "force") == Some(true);
+    s.with_document(id, |s| reload_active(s, force))?
+}
+
+/// [`reload`] for the active document.
+fn reload_active(s: &mut Session, force: bool) -> CmdResult {
+    let Some(path) = s.path.clone() else {
+        return Err(CmdError::Failed("the document has no file to reload".into()));
+    };
+    if s.dirty && !force {
+        return Err(CmdError::Failed("the document has unsaved changes: save it first, or pass \"force\": true to discard them".into()));
+    }
+    // A document opened with a password reads its file with it again.
+    let password = s.password.as_ref().map(|pw| pw.as_str().to_string());
+    // The file as it is before it is read, as `file.open` takes it: a write that lands during the
+    // read is still a change afterwards.
+    let stamp = crate::io::disk_stamp(&path);
+    let (doc, encrypted) = read_document(s, &path.to_string_lossy(), &json!({"password": password}))?;
+    // The password follows the file: one that is no longer encrypted (another program replaced
+    // it, or `file.encrypt` was never saved) is not saved encrypted by surprise.
+    if !encrypted {
+        s.password = None;
+    }
+    s.reload_document(doc, stamp);
+    Ok(json!({
+        "reloaded": true,
+        "id": s.document_id(),
+        "path": path.to_string_lossy(),
+        "paragraphs": s.doc.paragraph_count(),
+        "words": s.doc.word_count(),
+        "encrypted": encrypted,
+    }))
+}
+
 /// Close a document with no window to ask about it (agents, headless sessions).
 fn close_document(s: &mut Session, v: &Value) -> CmdResult {
     let id = match v.get("id").filter(|x| !x.is_null()) {
@@ -373,6 +431,14 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
+    // A file another program changed since it was read is never written over without being
+    // asked (#5623): the desktop app's bar asks (Reload / Keep mine), and AutoSave waits.
+    if s.path.as_deref() == Some(path.as_path()) && p::bool(v, "overwrite") != Some(true) && s.changed_on_disk() {
+        return Err(CmdError::Failed(format!(
+            "{}: file.reload reads it again, or pass \"overwrite\": true to write the document over it",
+            crate::io::CHANGED_ON_DISK
+        )));
+    }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
@@ -407,10 +473,13 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);
-    if let Err(e) = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
-    }
+    let written = match crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
+        Ok(written) => written,
+        Err(e) => {
+            (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+            return Err(CmdError::Failed(e));
+        }
+    };
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
@@ -418,6 +487,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     if own_file || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
         s.dirty = false;
+        s.stamp_disk_written(written);
         s.relayout();
     }
     Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
@@ -599,6 +669,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
     Ok(json!({
         "path": s.path.as_ref().map(|p| p.to_string_lossy().to_string()),
         "dirty": s.dirty,
+        "changedOnDisk": s.changed_on_disk(),
         "pages": l.pages.len(),
         "words": s.doc.word_count(),
         "paragraphs": s.doc.paragraph_count(),

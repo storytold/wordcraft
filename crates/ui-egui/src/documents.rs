@@ -177,6 +177,18 @@ impl WordApp {
         self.parked.get(&id).is_some_and(|p| !p.comment_drafts.is_empty())
     }
 
+    /// Parked document `id`'s comment drafts, taken out (none for the shown document, or one
+    /// that isn't parked); [`WordApp::put_parked_comment_drafts`] puts what is left back.
+    pub(crate) fn take_parked_comment_drafts(&mut self, id: u64) -> Option<panes::CommentDrafts> {
+        self.parked.get_mut(&id).map(|p| std::mem::take(&mut p.comment_drafts))
+    }
+
+    pub(crate) fn put_parked_comment_drafts(&mut self, id: u64, drafts: panes::CommentDrafts) {
+        if let Some(p) = self.parked.get_mut(&id) {
+            p.comment_drafts = drafts;
+        }
+    }
+
     /// The open documents with work that would be lost on quitting: the shown one first, then
     /// the others in the order they were opened. Unsaved changes, a save the browser hasn't
     /// confirmed, or comment text not yet written to the document. The Start screen's
