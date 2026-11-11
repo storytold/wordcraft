@@ -1028,6 +1028,46 @@ fn compare_records_table_property_changes() {
     assert!(t.props.fmt_change.is_none());
 }
 
+/// A matched table whose `tblLayout` and top cell margin change (fixed → autofit; top margin
+/// 0 → 100 dxa): the live `w:tblPr` carries the revised values and the emitted `w:tblPrChange`
+/// holds the base ones, so Accept keeps revised and Reject restores base.
+#[test]
+fn compare_table_layout_and_margins_keep_live_revised_and_record_base() {
+    let original = || {
+        table_doc(|t| {
+            t.props.fixed = true;
+            t.props.cell_margins = Some([0.0, 108.0, 0.0, 108.0]);
+        })
+    };
+    let revised = || {
+        table_doc(|t| {
+            t.props.fixed = false;
+            t.props.cell_margins = Some([5.0, 108.0, 0.0, 108.0]);
+        })
+    };
+    let (mut s, r) = compare_saved("tbllayout", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(!t.props.fixed, "live tblPr is autofit (revised)");
+    assert_eq!(t.props.cell_margins.map(|m| m[0]), Some(5.0), "live tblPr carries the revised top margin");
+    let ch = t.props.fmt_change.as_ref().expect("a table property change yields w:tblPrChange");
+    assert!(ch.old.fixed, "the record holds the base fixed layout");
+    assert_eq!(ch.old.cell_margins.map(|m| m[0]), Some(0.0), "the record holds the base top margin");
+
+    let (mut s, _) = compare_saved("tbllayout", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(!t.props.fixed, "accept keeps the revised autofit layout");
+    assert_eq!(t.props.cell_margins.map(|m| m[0]), Some(5.0), "accept keeps the revised top margin");
+    assert!(t.props.fmt_change.is_none());
+
+    let (mut s, _) = compare_saved("tbllayout", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert!(t.props.fixed, "reject restores the base fixed layout");
+    assert_eq!(t.props.cell_margins.map(|m| m[0]), Some(0.0), "reject restores the base top margin");
+}
+
 /// A final-section margin/page-size-only difference: exactly one change, the revised section's
 /// properties win with `w:sectPrChange`, and Reject restores the original's.
 #[test]
@@ -1521,4 +1561,278 @@ fn compare_records_a_matching_rows_property_even_when_another_row_mismatches() {
     assert_eq!(t.rows[1].cells.len(), 3, "the mismatched row is kept as the revised clone");
     assert!(t.rows[0].cells[0].props.fmt_change.is_some(), "the first row's matching cell change is still recorded");
     assert!(t.rows[1].cells.iter().all(|c| c.props.fmt_change.is_none()), "the mismatched row's cells are not compared");
+}
+
+// ============================================================================================
+// Property-change records: live properties carry the REVISED document's and the record's stored
+// prior properties carry the BASE document's. A record whose stored prior equals the live
+// properties would be vacuous (it attests a change the document does not carry), so every family
+// the Recorder emits gets a discriminating test: a change is recorded, its `old` is the base,
+// the live value is the revised, and Accept/Reject keep/restore the right side.
+// ============================================================================================
+
+/// A run formatting change (`w:rPrChange`): the live run is bold (revised) and the record's stored
+/// original is the base (not bold). Accept keeps bold, Reject restores plain.
+#[test]
+fn compare_run_change_keeps_live_revised_and_record_base() {
+    let original = || Document::from_text("Same words.");
+    let revised = || {
+        let mut d = Document::from_text("Same words.");
+        d.format_range(&d.start_of(StoryRef::Body), &d.end_of(StoryRef::Body), &|c| c.bold = Some(true)).unwrap();
+        d
+    };
+    let (mut s, r) = compare_saved("runfmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let p = s.doc.body[0].as_para().unwrap();
+    let run = p.runs.iter().find(|run| run.props.fmt_change.is_some()).expect("a run formatting change yields w:rPrChange");
+    assert_eq!(run.props.bold, Some(true), "live run is bold (revised)");
+    let ch = run.props.fmt_change.as_ref().expect("the run carries w:rPrChange");
+    assert_ne!(ch.old.bold, Some(true), "the record does not merely repeat the live (revised) formatting");
+    assert_eq!(ch.old.bold, None, "the record holds the base run formatting (not bold)");
+
+    let (mut s, _) = compare_saved("runfmt", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.runs.iter().any(|run| run.props.bold == Some(true) && run.props.fmt_change.is_none()), "accept keeps the revised bold run");
+
+    let (mut s, _) = compare_saved("runfmt", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.runs.iter().all(|run| run.props.bold != Some(true)), "reject restores the base plain run");
+}
+
+/// A paragraph-mark formatting change (`w:rPrChange` on `w:pPr/w:rPr`): the live mark is bold
+/// (revised) and the record's stored original is the base (not bold).
+#[test]
+fn compare_mark_change_keeps_live_revised_and_record_base() {
+    let original = || Document::from_text("Same words.");
+    let revised = || {
+        let mut d = Document::from_text("Same words.");
+        d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.bold = Some(true);
+        d
+    };
+    let (mut s, r) = compare_saved("markfmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.mark.bold, Some(true), "live paragraph mark is bold (revised)");
+    let ch = p.mark.fmt_change.as_ref().expect("a paragraph-mark formatting change yields w:rPrChange");
+    assert_eq!(ch.old.bold, None, "the record holds the base mark formatting (not bold)");
+
+    let (mut s, _) = compare_saved("markfmt", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.body[0].as_para().unwrap().mark.bold, Some(true), "accept keeps the revised mark");
+
+    let (mut s, _) = compare_saved("markfmt", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.body[0].as_para().unwrap().mark.bold, None, "reject restores the base mark");
+}
+
+/// A paragraph property change (`w:pPrChange`): the live paragraph is centred (revised) and the
+/// record's stored original is the base alignment (unset).
+#[test]
+fn compare_para_change_keeps_live_revised_and_record_base() {
+    use wordcraft_doc::props::Align;
+    let original = || Document::from_text("Same words.");
+    let revised = || {
+        let mut d = Document::from_text("Same words.");
+        d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.align = Some(Align::Center);
+        d
+    };
+    let (mut s, r) = compare_saved("parafmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(p.props.align, Some(Align::Center), "live paragraph is centred (revised)");
+    let ch = p.props.fmt_change.as_ref().expect("a paragraph property change yields w:pPrChange");
+    assert_eq!(ch.old.align, None, "the record holds the base alignment");
+
+    let (mut s, _) = compare_saved("parafmt", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.align, Some(Align::Center));
+
+    let (mut s, _) = compare_saved("parafmt", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.align, None, "reject restores the base alignment");
+}
+
+/// A row property change (`w:trPrChange`): the live row height is the revised one and the record's
+/// stored original is the base (no height set).
+#[test]
+fn compare_row_change_keeps_live_revised_and_record_base() {
+    use wordcraft_doc::props::HeightRule;
+    let original = || table_doc(|_| {});
+    let revised = || {
+        table_doc(|t| {
+            t.rows[0].props.height = Some(30.0);
+            t.rows[0].props.height_rule = HeightRule::AtLeast;
+        })
+    };
+    let (mut s, r) = compare_saved("rowfmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].props.height, Some(30.0), "live row height is revised");
+    let ch = t.rows[0].props.fmt_change.as_ref().expect("a row property change yields w:trPrChange");
+    assert_eq!(ch.old.height, None, "the record holds the base row height");
+
+    let (mut s, _) = compare_saved("rowfmt", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].props.height, Some(30.0));
+
+    let (mut s, _) = compare_saved("rowfmt", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].props.height, None, "reject restores the base row height");
+}
+
+/// A cell property change (`w:tcPrChange`): the live cell shading is the revised one and the
+/// record's stored original is the base (no shading).
+#[test]
+fn compare_cell_change_keeps_live_revised_and_record_base() {
+    use wordcraft_doc::props::Rgb;
+    let original = || table_doc(|_| {});
+    let revised = || table_doc(|t| t.rows[0].cells[0].props.shading = Some(Rgb(0xFF, 0, 0)));
+    let (mut s, r) = compare_saved("cellfmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].cells[0].props.shading, Some(Rgb(0xFF, 0, 0)), "live cell shading is revised");
+    let ch = t.rows[0].cells[0].props.fmt_change.as_ref().expect("a cell property change yields w:tcPrChange");
+    assert_eq!(ch.old.shading, None, "the record holds the base cell shading");
+
+    let (mut s, _) = compare_saved("cellfmt", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].cells[0].props.shading, Some(Rgb(0xFF, 0, 0)));
+
+    let (mut s, _) = compare_saved("cellfmt", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].cells[0].props.shading, None, "reject restores the base cell shading");
+}
+
+/// A table style/alignment change (`w:tblPrChange`), the sibling of the tblLayout/margins case:
+/// live table props are the revised ones, the record's stored original is the base.
+#[test]
+fn compare_table_change_keeps_live_revised_and_record_base() {
+    use wordcraft_doc::props::Align;
+    let original = || table_doc(|_| {});
+    let revised = || {
+        table_doc(|t| {
+            t.props.style = Some("TableGrid".into());
+            t.props.align = Some(Align::Center);
+        })
+    };
+    let (mut s, r) = compare_saved("tblfmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.style.as_deref(), Some("TableGrid"), "live table style is revised");
+    assert_eq!(t.props.align, Some(Align::Center), "live table alignment is revised");
+    let ch = t.props.fmt_change.as_ref().expect("a table property change yields w:tblPrChange");
+    assert_eq!(ch.old.style, None, "the record holds the base table style");
+    assert_eq!(ch.old.align, None, "the record holds the base table alignment");
+
+    let (mut s, _) = compare_saved("tblfmt", original(), &revised(), json!({}));
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.style.as_deref(), Some("TableGrid"));
+
+    let (mut s, _) = compare_saved("tblfmt", original(), &revised(), json!({}));
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.style, None, "reject restores the base table style");
+    assert_eq!(t.props.align, None, "reject restores the base table alignment");
+}
+
+/// The final section's property change (`w:sectPrChange`): live section props are the revised ones,
+/// the record's stored original is the base (default margin/page), and Accept/Reject agree.
+#[test]
+fn compare_final_section_change_keeps_live_revised_and_record_base() {
+    let original = || Document::from_text("Same text.");
+    let revised = || {
+        let mut d = Document::from_text("Same text.");
+        d.last_section.margin_left = 144.0;
+        d
+    };
+    let (s, r) = compare_saved("sectfmt", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    assert_eq!(s.doc.last_section.margin_left, 144.0, "live final section carries the revised margin");
+    let ch = s.doc.last_section.fmt_change.as_ref().expect("a final-section change yields w:sectPrChange");
+    assert_eq!(ch.old.margin_left, 72.0, "the record holds the base final-section margin");
+}
+
+/// A paragraph-embedded section change (`w:sectPrChange` inside `w:pPr`): live section props are
+/// the revised ones, the record's stored original is the base.
+#[test]
+fn compare_paragraph_section_change_keeps_live_revised_and_record_base() {
+    let doc = |margin: f32| {
+        let mut d = Document::from_text("A\nB");
+        let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        p.section = Some(Box::new(wordcraft_doc::SectionProps { margin_left: margin, ..Default::default() }));
+        p.touch();
+        d
+    };
+    let (s, r) = compare_saved("parasectfmt", doc(72.0), &doc(144.0), json!({}));
+    assert_eq!(r["changes"], 1, "{r}");
+    let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let sec = p.section.as_deref().expect("the paragraph keeps its embedded section");
+    assert_eq!(sec.margin_left, 144.0, "live embedded section carries the revised margin");
+    let ch = sec.fmt_change.as_ref().expect("a paragraph-section change yields w:sectPrChange");
+    assert_eq!(ch.old.margin_left, 72.0, "the record holds the base embedded-section margin");
+}
+
+/// Hostile input: the REVISED table already carries another author's `w:tblPrChange` on a property
+/// the comparison does not change. The pre-existing record must survive untouched (neither dropped
+/// nor re-stamped), and the comparison records nothing new.
+#[test]
+fn compare_keeps_a_prior_authors_record_the_compare_does_not_touch() {
+    use wordcraft_doc::props::{PropChange, TableProps};
+    let original = || table_doc(|_| {});
+    let revised = || {
+        let mut d = table_doc(|t| {
+            t.props.fmt_change = PropChange::boxed(0, TableProps { style: Some("PriorStyle".into()), ..Default::default() });
+        });
+        d.revisions.push(wordcraft_doc::Revision {
+            kind: RevisionKind::Format,
+            author: "Prior Author".into(),
+            date: "2020-01-01T00:00:00Z".into(),
+            move_name: None,
+        });
+        d
+    };
+    let (s, r) = compare_saved("hostileprior", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 0, "an already-tracked change the compare does not alter is not a new change: {r}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    let ch = t.props.fmt_change.as_ref().expect("the revised table's prior w:tblPrChange survives the compare");
+    assert_eq!(ch.old.style.as_deref(), Some("PriorStyle"), "the prior record's stored original is untouched (not re-stamped)");
+    assert!(t.props.style.is_none(), "the live props are the revised ones");
+}
+
+/// Hostile input: the revised table carries another author's `w:tblPrChange` while a DIFFERENT
+/// property (a cell's shading) is the real difference. The prior record survives untouched and the
+/// compare's own new `w:tcPrChange` is non-vacuous: its stored original is the BASE, the live cell
+/// is the revised shading.
+#[test]
+fn compare_new_change_beside_a_prior_authors_record_stays_non_vacuous() {
+    use wordcraft_doc::props::{PropChange, Rgb, TableProps};
+    let original = || table_doc(|_| {});
+    let revised = || {
+        let mut d = table_doc(|t| {
+            t.props.fmt_change = PropChange::boxed(0, TableProps { style: Some("PriorStyle".into()), ..Default::default() });
+            t.rows[0].cells[1].props.shading = Some(Rgb(0, 128, 0));
+        });
+        d.revisions.push(wordcraft_doc::Revision {
+            kind: RevisionKind::Format,
+            author: "Prior Author".into(),
+            date: "2020-01-01T00:00:00Z".into(),
+            move_name: None,
+        });
+        d
+    };
+    let (s, r) = compare_saved("hostilenew", original(), &revised(), json!({}));
+    assert_eq!(r["changes"], 1, "the cell shading is the one new change: {r}");
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    let prior = t.props.fmt_change.as_ref().expect("the revised table's prior w:tblPrChange survives");
+    assert_eq!(prior.old.style.as_deref(), Some("PriorStyle"), "the prior record is not re-stamped");
+    let ch = t.rows[0].cells[1].props.fmt_change.as_ref().expect("the new cell shading yields w:tcPrChange");
+    assert_eq!(ch.old.shading, None, "the new record holds the BASE shading, not the live revised one");
+    assert_eq!(t.rows[0].cells[1].props.shading, Some(Rgb(0, 128, 0)), "the live cell carries the revised shading");
 }
