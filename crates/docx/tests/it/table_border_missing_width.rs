@@ -1,7 +1,7 @@
 //! A table or cell border without `w:sz` (as pandoc writes its table header rule). Word for Mac
-//! reads it as `w:sz="0"`: a hairline that takes no room. Read as ½ pt and saved as `w:sz="4"`,
-//! it pushed every row below the header ½ pt down in Word. A paragraph border without `w:sz`
-//! keeps the ½ pt default.
+//! reads it as `w:sz="0"`: it takes no room. Read as ½ pt and saved as `w:sz="4"`, it pushed every
+//! row below the header ½ pt down in Word. A paragraph border without `w:sz` still reads as ½ pt
+//! here, although Word treats it as width 0 too; moving paragraph borders is separate work.
 
 use std::io::{Read, Write};
 

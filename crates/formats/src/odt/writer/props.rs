@@ -336,7 +336,7 @@ pub(in crate::odt) fn border_attrs(b: Option<Borders>) -> String {
 
 /// An ODF border value (ODF 1.3 §20.183) for `b`; `none` for no line.
 pub(in crate::odt) fn odf_border(b: Option<Border>) -> String {
-    let Some(b) = b.filter(|b| b.is_visible() && b.width.is_finite()) else { return "none".into() };
+    let Some(b) = b.filter(|b| b.is_drawn()) else { return "none".into() };
     let style = match b.style {
         BorderStyle::Double | BorderStyle::Triple => "double",
         BorderStyle::Dotted => "dotted",

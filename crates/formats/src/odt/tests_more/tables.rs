@@ -191,3 +191,19 @@ fn what_a_covered_cell_holds_stays_out_of_the_document() {
     let Block::Table(t) = &*d.body[0] else { panic!() };
     assert_eq!(t.rows[0].cells[0].props.span, 2);
 }
+
+#[test]
+fn a_width_zero_cell_border_is_saved_as_a_hairline() {
+    // A DOCX table border with w:sz="0" or no w:sz is width 0: Word draws it as a hairline that
+    // takes no room. Saved as ODT it stays a line, the thinnest ODF allows, not "none".
+    let mut d = table_doc(LO_TABLE, ["A1", "B1", "A2", "B2"]);
+    let hair = Border { style: BorderStyle::Single, width: 0.0, color: Some(Rgb(0, 0, 0)), space: 0.0 };
+    for b in d.body.iter_mut() {
+        if let Block::Table(t) = std::sync::Arc::make_mut(b) {
+            let c = &mut t.rows[0].cells[0].props;
+            c.borders = Some(Borders { bottom: Some(hair), ..c.borders.unwrap_or_default() });
+        }
+    }
+    let out = crate::odt::tests::content_of(&crate::odt::tests::export_model(&d).unwrap());
+    assert!(out.contains(r#"fo:border-bottom="0.05pt solid #000000""#), "{out}");
+}

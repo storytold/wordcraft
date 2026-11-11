@@ -327,7 +327,7 @@ impl Writer {
     fn cell_borders(&mut self, borders: Option<&wordcraft_doc::props::Borders>, borderless: bool, out: &mut String) {
         if let Some(b) = borders {
             for (side, opt) in [('t', &b.top), ('l', &b.left), ('b', &b.bottom), ('r', &b.right)] {
-                if let Some(border) = opt.filter(|x| x.is_visible()) {
+                if let Some(border) = opt.filter(|x| x.is_drawn()) {
                     self.write_border("clbrdr", side, border, out);
                 }
             }

@@ -536,8 +536,9 @@ impl PropCtx {
     }
 
     /// `w:tblBorders`, `w:tcBorders`. A table or cell border without `w:sz` is width 0, as
-    /// `w:sz="0"`: measured in Word for Mac, it draws a hairline and takes no room, where reading
-    /// it as ½ pt (and saving `w:sz="4"`) made every row below a pandoc table header ½ pt lower.
+    /// `w:sz="0"`: measured in Word for Mac, the two give the same output (no room taken, and not
+    /// ⅛ pt, which does take room), where reading it as ½ pt (and saving `w:sz="4"`) made every
+    /// row below a pandoc table header ½ pt lower.
     pub fn table_borders(&self, e: &El) -> Borders {
         self.borders_or(e, 0.0)
     }

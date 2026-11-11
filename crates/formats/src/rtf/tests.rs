@@ -1760,3 +1760,20 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+
+#[test]
+fn a_width_zero_cell_border_exports_as_the_thinnest_line() {
+    // A DOCX cell border with w:sz="0" or no w:sz is width 0, which Word draws as a hairline. RTF
+    // keeps the line at one twip rather than dropping it.
+    let mut d = import(br"{\rtf1\ansi\trowd\clbrdrb\brdrs\cellx2000\pard\intbl a\cell\row}").unwrap();
+    for b in d.body.iter_mut() {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b)
+            && let Some(bd) = t.rows[0].cells[0].props.borders.as_mut()
+            && let Some(bottom) = bd.bottom.as_mut()
+        {
+            bottom.width = 0.0;
+        }
+    }
+    let exported = export(&d);
+    assert!(exported.contains(r"\clbrdrb\brdrs\brdrw1"), "{exported}");
+}
