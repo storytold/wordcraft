@@ -125,14 +125,9 @@ impl WordApp {
         {
             return Err(e.into());
         }
-        // A reload from disk (#5623) replaces the shown document's content, from the bar or
-        // from an agent: a comment or reply still being typed is written into the content as it
-        // was first (#1348), which the reload keeps one Undo away. A parked document's reload
-        // leaves the shown one's drafts alone.
-        let reloads_shown = id == "file.reload" && self.reload_targets_shown(&params);
-        if reloads_shown {
-            let _ = panes::flush_comment_drafts(self);
-        }
+        // A reload from disk (#5623) writes a comment or reply still being typed into the content
+        // as it was first, which the reload keeps one Undo away ([`WordApp::drafts_before_reload`]).
+        let reload_target = self.drafts_before_reload(id, &params);
         if id == "file.autosave" {
             return self.set_autosave(&params);
         }
@@ -218,10 +213,10 @@ impl WordApp {
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
         };
-        // Reloaded: what is left of the drafts (one the document refused) went with the content
-        // as it was; none waits for the new content, where a comment number may be another one.
-        if reloads_shown && r.is_ok() {
-            panes::discard_comment_drafts(self);
+        if let Some(target) = reload_target
+            && r.is_ok()
+        {
+            self.drafts_after_reload(target);
         }
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;

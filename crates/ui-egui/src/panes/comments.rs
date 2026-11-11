@@ -113,6 +113,51 @@ pub(crate) fn discard_comment_drafts(app: &mut WordApp) {
     d.replies.clear();
 }
 
+/// [`flush_comment_drafts`] for parked document `id` (#5623): before an agent reloads it, its
+/// drafts are written into the content as it was, which the reload keeps one Undo away. Refused
+/// drafts stay parked, and the first refusal is returned.
+pub(crate) fn flush_parked_comment_drafts(app: &mut WordApp, id: u64) -> Result<(), String> {
+    let Some(drafts) = app.take_parked_comment_drafts(id) else { return Ok(()) };
+    let mut left = CommentDrafts { document: drafts.document, ..Default::default() };
+    let mut first = Ok(());
+    for (comment, text) in drafts.edits {
+        let r = app.session.with_document(id, |s| match s.doc.comments.get(&comment).map(|c| c.part) {
+            Some(part) if text != s.doc.plain_text(StoryRef::Part(part)) => {
+                s.run("review.editComment", &json!({"id": comment, "text": text})).map(|_| ()).map_err(|e| e.to_string())
+            }
+            _ => Ok(()),
+        });
+        if let Err(e) = r.map_err(|e| e.to_string()).and_then(|r| r) {
+            left.edits.insert(comment, text);
+            first = first.and(Err(e));
+        }
+    }
+    for (comment, text) in drafts.replies {
+        let r = app.session.with_document(id, |s| {
+            if text.trim().is_empty() || !s.doc.comments.contains_key(&comment) {
+                return Ok(());
+            }
+            let root = match s.doc.comments.get(&comment).and_then(|c| c.parent) {
+                Some(p) if s.doc.comments.contains_key(&p) => p,
+                _ => comment,
+            };
+            s.run("review.reply", &json!({"id": root, "text": text.trim_end()})).map(|_| ()).map_err(|e| e.to_string())
+        });
+        if let Err(e) = r.map_err(|e| e.to_string()).and_then(|r| r) {
+            left.replies.insert(comment, text);
+            first = first.and(Err(e));
+        }
+    }
+    app.put_parked_comment_drafts(id, left);
+    first
+}
+
+/// Drop parked document `id`'s drafts after its reload (#5623): what is left (a draft the
+/// document refused) went with the content as it was, and none waits for the new content.
+pub(crate) fn discard_parked_comment_drafts(app: &mut WordApp, id: u64) {
+    let _ = app.take_parked_comment_drafts(id);
+}
+
 /// Tests: a reply typed under comment `id` and not written yet.
 #[cfg(test)]
 pub(crate) fn draft_reply(app: &mut WordApp, id: u32, text: &str) {

@@ -145,10 +145,33 @@ impl WordApp {
         self.session.stamp_disk();
     }
 
-    /// Whether a `file.reload` with these parameters reads the shown document again: the one
-    /// its `id` names, the shown one by default.
-    pub(crate) fn reload_targets_shown(&self, params: &serde_json::Value) -> bool {
-        params.get("id").and_then(serde_json::Value::as_u64).is_none_or(|id| id == self.session.document_id())
+    /// Before `file.reload` (#5623), from the bar or from an agent: a comment or reply still
+    /// being typed is written into the content as it was (#1348), which the reload keeps one
+    /// Undo away: the shown document's drafts, or the parked ones of the document the reload
+    /// names. Returns that document's id, for [`WordApp::drafts_after_reload`]; `None` for any
+    /// other command.
+    pub(crate) fn drafts_before_reload(&mut self, id: &str, params: &serde_json::Value) -> Option<u64> {
+        if id != "file.reload" {
+            return None;
+        }
+        let target = params.get("id").and_then(serde_json::Value::as_u64).unwrap_or(self.session.document_id());
+        let _ = if target == self.session.document_id() {
+            crate::panes::flush_comment_drafts(self)
+        } else {
+            crate::panes::flush_parked_comment_drafts(self, target)
+        };
+        Some(target)
+    }
+
+    /// After a reload of document `target`: what is left of its drafts (one the document refused)
+    /// went with the content as it was; none waits for the new content, where a comment number
+    /// may be another one.
+    pub(crate) fn drafts_after_reload(&mut self, target: u64) {
+        if target == self.session.document_id() {
+            crate::panes::discard_comment_drafts(self);
+        } else {
+            crate::panes::discard_parked_comment_drafts(self, target);
+        }
     }
 
     /// The bar's notice for the document on screen, if any.
@@ -508,5 +531,40 @@ mod tests {
         assert_eq!(app.disk_notice(), Some(&DiskNotice::Unsaved), "unsaved work: the bar asks");
         assert_eq!(text(&app), "Xalpha beta", "nothing was lost");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// An agent's reload of a parked document (#5623) writes that document's own drafts into its
+    /// content first, where the reload keeps them one Undo away: a reload without `force` then
+    /// sees unsaved work, and none waits to be applied to the new content when the document is
+    /// shown again.
+    #[test]
+    fn an_agents_reload_of_a_parked_document_handles_its_own_drafts() {
+        let (mut app, a_path) = app_with_file("parked-agent", "alpha");
+        let a = app.session.document_id();
+        // Open flushes drafts (#1348): the second document opens first, and the draft is typed
+        // after switching back.
+        let b_path = a_path.with_file_name("other.txt");
+        std::fs::write(&b_path, "bravo").unwrap();
+        app.run("file.open", json!({"path": b_path.to_string_lossy()})).unwrap();
+        let b = app.session.document_id();
+        app.run("view.switchWindows", json!({"id": a})).unwrap();
+        app.run("select.all", json!({})).unwrap();
+        let comment = app.run("review.newComment", json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        app.run("file.save", json!({})).unwrap();
+        crate::panes::draft_reply(&mut app, comment, "typing a reply");
+        app.run("view.switchWindows", json!({"id": b})).unwrap();
+        assert!(app.document_has_comment_drafts(a), "the draft is parked with its document");
+        std::fs::write(&a_path, "alpha changed").unwrap();
+        assert!(app.execute("file.reload", json!({"id": a})).is_err(), "the reply written in is unsaved work");
+        assert!(!app.document_has_comment_drafts(a), "the draft is in the document now");
+        app.execute("file.reload", json!({"id": a, "force": true})).unwrap();
+        assert!(!app.document_has_comment_drafts(a));
+        app.run("view.switchWindows", json!({"id": a})).unwrap();
+        assert_eq!(text(&app), "alpha changed");
+        assert!(!crate::panes::has_comment_drafts(&app), "nothing waits for the new content");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(text(&app), "alpha");
+        assert!(app.session.doc.comments.values().any(|c| c.parent.is_some()), "with the reply in it");
+        let _ = std::fs::remove_dir_all(a_path.parent().unwrap());
     }
 }
