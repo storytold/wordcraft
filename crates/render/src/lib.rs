@@ -981,11 +981,11 @@ fn contains_mask_ink(items: &[Draw]) -> bool {
 }
 
 fn draw_ink(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
-    let (Draw::Ink { pts, color: c, width: raw_width, alpha } | Draw::NativeInk { pts, color: c, width: raw_width, alpha }) = it else { return };
+    let (Draw::Ink { pts, color: c, alpha, .. } | Draw::NativeInk { pts, color: c, alpha, .. }) = it else { return };
     let Some(width) = it.ink_width() else { return };
     let Some(path) = ink_path(pts) else { return };
     let bounds = path.bounding_box();
-    if !bounds.inflate(*raw_width as f64, *raw_width as f64).overlaps(*fr.visible) {
+    if !bounds.inflate(f64::from(width), f64::from(width)).overlaps(*fr.visible) {
         return;
     }
     ctx.set_transform(fr.view);
