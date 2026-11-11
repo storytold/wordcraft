@@ -166,7 +166,8 @@ fn embedded_formula_object_reads_its_mathml() {
         .flat_map(|p| &p.inlines)
         .filter_map(|i| if let Inline::Equation { linear, display } = i { Some((linear.clone(), *display)) } else { None })
         .collect();
-    assert_eq!(eqs, vec![("E=mc^2".to_string(), true)]);
+    // The base is `mc` (`<msup><mi>mc</mi>…`), so its linear form groups it, as Word writes it (#6228).
+    assert_eq!(eqs, vec![("E=〖mc〗^2".to_string(), true)]);
 }
 
 #[test]

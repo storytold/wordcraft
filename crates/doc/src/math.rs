@@ -551,13 +551,19 @@ fn lin_operand(a: &[MNode], s: &mut String, depth: usize) {
 /// `(a^b)^c` would gain a visible delimiter (#6075). A base that is itself one invisible delimiter
 /// (LaTeX `\left.a\right.`) gets an outer pair too, so the inner one reads back as that delimiter.
 /// So does an operator (`⊗`, `×`, `<`…): a script after one reads as a pre-script, so `⊗_i` would
-/// come back as `⊗` and a pre-script, where `〖⊗〗_i` keeps it the base.
+/// come back as `⊗` and a pre-script, where `〖⊗〗_i` keeps it the base. And so does a run of several
+/// letters: the parser attaches a script to the last character before it (`mc^2` is `m`, `c²`), so
+/// `mc` is written `〖mc〗^2`, as Word linearizes it (#6228). A number (`10^3`, as Word writes it) and
+/// an upright function name (`sin^2`, read whole as a name) stay bare.
 fn lin_base(a: &[MNode], s: &mut String, depth: usize) {
     let mut inner = String::new();
     lin_arg(a, &mut inner, depth);
     let invisible = matches!(a, [MNode::Delim { beg: None, end: None, elems, .. }] if elems.len() == 1);
     let operator = matches!(a, [MNode::Run(r)] if r.text.chars().all(crate::math_linear::is_boundary));
-    if simple_operand(a) && !inner.is_empty() && !invisible && !operator {
+    let number = |t: &str| t.chars().all(|c| c.is_ascii_digit() || c == '.');
+    let name = |r: &MRun| r.sty == Some(MSty::Plain) && crate::math_linear::FUNCTION_NAMES.contains(&r.text.as_str());
+    let letters = matches!(a, [MNode::Run(r)] if r.text.chars().nth(1).is_some() && !number(&r.text) && !name(r));
+    if simple_operand(a) && !inner.is_empty() && !invisible && !operator && !letters {
         s.push_str(&inner);
     } else {
         s.push('〖');
