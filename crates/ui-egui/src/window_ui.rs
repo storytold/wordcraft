@@ -37,6 +37,8 @@ pub(crate) struct WindowUi {
     pub(crate) sent_title: String,
     pub(crate) sent_full_screen: bool,
     pub(crate) seen_full_screen: Option<bool>,
+    /// Whether this window has the app's frame rather than winit's ([`WordApp::app_frame_shown`]).
+    pub(crate) app_frame_shown: Option<bool>,
     pub(crate) escape_free: bool,
     pub(crate) status_counts: (u64, crate::StatusCounts),
     /// Per window, as each window shows its own layout: one shared list would be read again
@@ -110,6 +112,7 @@ impl WindowUi {
             sent_title: String::new(),
             sent_full_screen: false,
             seen_full_screen: None,
+            app_frame_shown: None,
             escape_free: false,
             status_counts: NOT_COUNTED,
             missing_fonts: Default::default(),
@@ -170,6 +173,8 @@ impl WordApp {
             control_rx: _,
             updates_rt: _,
             packs_rt: _,
+            // The desktop's button layout; each window's frame is per window.
+            window_controls: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
             capture_epoch: _,
@@ -237,6 +242,7 @@ impl WordApp {
             sent_title,
             sent_full_screen,
             seen_full_screen,
+            app_frame_shown,
             escape_free,
             status_counts,
             missing_fonts,
@@ -287,6 +293,7 @@ impl WordApp {
             dark_page: _,
             check_spelling: _,
             caret_animation: _,
+            system_title_bar: _,
             keyboard: _,
             ribbon: _,
             caption_labels: _,
@@ -341,6 +348,7 @@ impl WordApp {
             sent_title,
             sent_full_screen,
             seen_full_screen,
+            app_frame_shown,
             escape_free,
             status_counts,
             missing_fonts,

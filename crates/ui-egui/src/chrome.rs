@@ -5,7 +5,7 @@ use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
-use crate::{StatusCount, StatusCounts, WordApp, icons};
+use crate::{StatusCount, StatusCounts, WordApp, icons, window_controls};
 
 /// Why the caret's language isn't spell-checked (dictionary unreadable or missing), if it isn't.
 pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::PathBuf, String)>, missing: Option<&str>) -> Option<String> {
@@ -321,7 +321,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             // Drag the window by the title bar (integrated title bar on macOS).
             let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
             }
             // Elsewhere the system's own title bar above this one moves the window.
             if mac {
@@ -336,9 +336,17 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let rtl = crate::rtl::on();
             let mut qat_end = if rtl { full.max.x } else { full.min.x };
             let mut right_start = if rtl { full.min.x } else { full.max.x };
+            // GNOME on Wayland: the title bar is the header bar, with the window buttons at its
+            // ends (`window_controls`), in the desktop's order; hidden in full screen. `left` is the
+            // reading start and `right` its end, so right to left they swap sides, as in GTK.
+            let controls = app.shown_window_controls(ui.ctx()).unwrap_or_else(window_controls::Layout::none);
             crate::rtl::root(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
+                    if !controls.left.is_empty() {
+                        ui.scope(|ui| window_controls::buttons(ui, &controls.left));
+                        ui.add_space(window_controls::SIDE_GAP);
+                    }
                     // AutoSave switch: greyed out, with the reason as its tooltip, when AutoSave can't
                     // cover the document (#196, #176); clicking it then offers Save As where that helps.
                     let block = app.autosave_block();
@@ -384,6 +392,17 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     qat_end = if rtl { ui.min_rect().min.x } else { ui.min_rect().max.x };
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
+                        if !controls.right.is_empty() {
+                            // Laid out in reading order inside the far-side run, which fills from
+                            // the window's edge, so they read in the desktop's order.
+                            let size = vec2(window_controls::width(&controls.right), window_controls::BUTTON);
+                            let layout =
+                                if rtl { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+                            ui.allocate_ui_with_layout(size, layout, |ui| {
+                                window_controls::buttons(ui, &controls.right);
+                            });
+                            ui.add_space(window_controls::SIDE_GAP);
+                        }
                         // Account / community.
                         let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                         ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
