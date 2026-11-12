@@ -2629,6 +2629,28 @@ fn turned_text_uses_min_height() {
 }
 
 #[test]
+fn turned_text_wraps_to_merged_rows_height() {
+    use wordcraft_doc::props::{HeightRule, VMerge};
+    crate::test_fonts();
+    let mut d = turned_table(TextDirection::Down, &"word ".repeat(15), None);
+    if let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) {
+        t.rows.push(t.rows[0].clone());
+        t.rows[1].cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("", Default::default()))];
+        t.rows[0].cells[1].props.vmerge = VMerge::Restart;
+        t.rows[1].cells[1].props.vmerge = VMerge::Continue;
+        for row in &mut t.rows {
+            row.props.height = Some(40.0);
+            row.props.height_rule = HeightRule::AtLeast;
+        }
+    }
+    let l = lay(&d);
+    let it = turned_lines(&l);
+    let lines = if let Placed::Lines { l0, l1, .. } = it { l1 - l0 } else { 0 };
+    let b = it.turned_bounds().unwrap();
+    assert!(lines > 1 && b.h > 40.0 && b.h < 85.0, "wraps to both rows' 80pt, not one row's 40pt: {lines} lines, {b:?}");
+}
+
+#[test]
 fn hostile_turned_cells_never_panic() {
     crate::test_fonts();
     // Empty, huge and nested turned cells, in exact rows too small for anything.
