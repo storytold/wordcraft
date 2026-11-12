@@ -617,7 +617,8 @@ mod ui_tests {
         use egui_kittest::kittest::Queryable;
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(5);
-        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
+        let labels: Vec<String> = h.query_all_by(|n| n.label().is_some()).map(|n| format!("{:?}", n.label())).take(100).collect();
+        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group: {labels:?}");
         let full = h.state().session.view.full_screen;
         click_shown(&h, "Full Screen");
         h.run_steps(3);
