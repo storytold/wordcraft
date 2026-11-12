@@ -456,7 +456,7 @@ mod ui_tests {
     use super::*;
     use crate::WordApp;
     use egui::accesskit::Role;
-    use egui_kittest::kittest::{By, NodeT, Queryable};
+    use egui_kittest::kittest::{By, Queryable};
     use serde_json::json;
 
     fn harness(width: f32, height: f32, ppp: f32) -> egui_kittest::Harness<'static, WordApp> {
