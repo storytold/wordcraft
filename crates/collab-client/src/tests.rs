@@ -2,6 +2,7 @@
 
 use serde_json::json;
 
+use wordcraft_collab::DedupWindow;
 use wordcraft_collab::room::{Role, Room};
 use wordcraft_collab::wire::{Applied, CabinetCommit, ClientMsg, HistoryAction, OpId, OpKind, Reject, RejectCode, ServerMsg, Target, Version};
 use wordcraft_collab_doc::DocModel;
@@ -11,6 +12,10 @@ use crate::{Client, Event, State, session_client_id};
 
 fn applied(op_id: OpId, version: Version, epoch: u64) -> ServerMsg {
     ServerMsg::Applied { applied: Applied { op_id, version, epoch, delta: None, nodes: None, conflict: false, history: None } }
+}
+
+fn welcome(version: Version, resync: bool) -> ServerMsg {
+    ServerMsg::Welcome { session_id: "s".into(), role: "editor".into(), version, epoch: 0, participants: Vec::new(), resync }
 }
 
 /// Two windows on the same document must not share an op id space: with one id
@@ -435,4 +440,189 @@ fn seed_frames_split_the_document_and_mark_exactly_one_last_chunk() {
 
     // An empty document still sends its last frame: the server waits for it.
     assert!(matches!(crate::seed_frames(b"").as_slice(), [ClientMsg::Seed { bytes, last: true }] if bytes.is_empty()));
+}
+
+/// A server restored from an older snapshot answers a welcome whose version is
+/// **below** the base this replica had. The base follows the head and the
+/// queue built above it is reported instead of resent: the old
+/// `version.max(...)` left the base above the head, so every operation after
+/// the restore was refused `Stale` (review 5853542478; ADR WC-0008).
+#[test]
+fn a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops() {
+    let mut client = Client::new("alice");
+    let _ = client.on(welcome(7, false));
+    let first = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+    let second = client.op(OpKind::Primitive, Target::new("body", 1, 1), json!({"op": "insert_text", "text": "b"}));
+
+    match client.on(welcome(3, true)) {
+        Event::Welcome { version, dropped, .. } => {
+            assert_eq!(version, 3);
+            assert_eq!(dropped, vec![first.op_id.clone(), second.op_id.clone()], "the app is told which edits the restore took");
+        }
+        other => panic!("expected a welcome, got {other:?}"),
+    }
+    assert_eq!(client.version(), 3, "the base is the room's head, not a maximum");
+    assert!(client.pending().is_empty());
+    assert!(client.unconfirmed().is_empty(), "a restore must not replay an edit the document no longer has");
+    assert_eq!(client.state(), State::Resyncing, "the snapshot that follows replaces the document");
+}
+
+/// The acceptance of the rule: after a restore the client's next operation
+/// lands. Resending the queued one with the base it was built on is exactly
+/// what the room refuses `Stale`, and that refusal is the loop this removes.
+#[test]
+fn a_restored_room_does_not_refuse_the_next_operation_stale() {
+    let mut room: Room<DocModel> = Room::new(DocModel::new(Document::new()));
+    let plan = room.join(None, false);
+    let node = plan.nodes.first().expect("a body node").id;
+    let mut client = Client::new("alice");
+    let _ = client.on(welcome(plan.version, false));
+    let first = client.op(OpKind::Primitive, Target::new("body", node, 0), json!({"op": "insert_text", "text": "Hello"}));
+    let applied = room.submit("alice", Role::Editor, first).expect("insert");
+    let _ = client.on(ServerMsg::Applied { applied });
+
+    // The edit that was in flight when the room went down.
+    let in_flight = client.op(OpKind::Primitive, Target::new("body", node, 5), json!({"op": "insert_text", "text": "!"}));
+
+    // The room comes back from a snapshot taken before either edit.
+    let mut restored: Room<DocModel> = Room::restore(DocModel::new(Document::new()), 0, 0, DedupWindow::default());
+    let restored_plan = restored.join(None, false);
+    assert_eq!(restored_plan.version, 0);
+    match client.on(welcome(restored.version(), true)) {
+        Event::Welcome { version: 0, dropped, .. } => assert_eq!(dropped, vec![in_flight.op_id.clone()]),
+        other => panic!("expected a welcome, got {other:?}"),
+    }
+    assert_eq!(client.version(), 0, "the base is the restored head");
+
+    // What the old client did on reconnect: resend the queued operation with
+    // the base it was built on.
+    let refused = restored.submit("alice", Role::Editor, in_flight).expect_err("base above the head");
+    assert_eq!(refused.code, RejectCode::Stale, "the refusal the restore used to produce");
+
+    // The new client has nothing to resend, and what it sends now is accepted.
+    assert!(client.unconfirmed().is_empty());
+    let next = client.op(OpKind::Primitive, Target::new("body", node, 0), json!({"op": "insert_text", "text": "Hello"}));
+    let applied = restored.submit("alice", Role::Editor, next).expect("the new base is the head");
+    assert_eq!(applied.version, 1);
+    let _ = client.on(ServerMsg::Applied { applied });
+    assert_eq!(client.version(), restored.version(), "the replica is back on the room's head");
+}
+
+/// A restore takes the `opId` window with it: answers at or below the head
+/// stay deduplicated, the ones above it describe state the room no longer has,
+/// and `seq` keeps counting so no id is ever reused for a different edit.
+#[test]
+fn a_restore_keeps_the_dedup_window_below_the_head_and_the_id_counter() {
+    let mut client = Client::new("alice");
+    let _ = client.on(welcome(0, false));
+    let kept = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+    let _ = client.on(applied(kept.op_id.clone(), 1, 0));
+    let lost = client.op(OpKind::Primitive, Target::new("body", 1, 1), json!({"op": "insert_text", "text": "b"}));
+    let _ = client.on(applied(lost.op_id.clone(), 2, 0));
+    assert_eq!(client.history_depth(), (2, 0));
+
+    let _ = client.on(welcome(1, true));
+    assert!(client.was_confirmed(&kept.op_id), "an answer the restored room still holds stays deduplicated");
+    assert!(!client.was_confirmed(&lost.op_id), "an answer above the head is not in the window the snapshot ships");
+    assert_eq!(client.history_depth(), (1, 0), "the step that is gone from the room leaves the stack");
+
+    let next = client.op(OpKind::Primitive, Target::new("body", 1, 1), json!({"op": "insert_text", "text": "c"}));
+    assert_eq!(next.op_id, OpId::new("alice", 3), "the counter never rewinds: an id names one edit for the session");
+    assert_eq!(next.base_version, 1);
+}
+
+/// The snapshot carries the room's state, so the base follows it downwards
+/// too; the queue it replaces is reconciled the same way, and the welcome that
+/// announced the restore is where the drop is reported.
+#[test]
+fn a_snapshot_below_the_base_lowers_it_and_clears_the_queue() {
+    let mut client = Client::new("alice");
+    let _ = client.on(welcome(9, false));
+    let op = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+
+    let event = client.on(ServerMsg::Snapshot { version: 4, bytes: b"{}".to_vec(), last: true });
+    assert!(matches!(event, Event::Snapshot { version: 4, last: true, .. }));
+    assert_eq!(client.version(), 4, "the snapshot is the document's version");
+    assert!(client.pending().is_empty(), "the queue was built on a document that is gone");
+    assert_eq!(client.state(), State::Joined);
+    assert!(client.unconfirmed().is_empty());
+    assert!(!client.was_confirmed(&op.op_id));
+}
+
+/// A rollback the server does not follow with a snapshot cannot be joined: the
+/// client asks for the document instead of reporting a base the room cannot
+/// address.
+#[test]
+fn a_rollback_without_a_snapshot_asks_for_one() {
+    let mut client = Client::new("alice");
+    let _ = client.on(welcome(5, false));
+    let _ = client.op(OpKind::Primitive, Target::new("body", 1, 0), json!({"op": "insert_text", "text": "a"}));
+
+    match client.on(welcome(2, false)) {
+        Event::Resync { reason } => assert!(reason.contains("below"), "{reason}"),
+        other => panic!("expected a resync, got {other:?}"),
+    }
+    assert_eq!(client.version(), 2);
+    assert!(client.pending().is_empty());
+    assert_eq!(client.state(), State::Resyncing);
+}
+
+/// Two replicas and a room restored to an older snapshot: each lowers its base
+/// to the head, the answers they exchange land without a gap, and both end on
+/// the room's head with an empty queue.
+#[test]
+fn two_clients_converge_after_the_room_is_restored() {
+    let mut room: Room<DocModel> = Room::new(DocModel::new(Document::new()));
+    let plan = room.join(None, false);
+    let node = plan.nodes.first().expect("a body node").id;
+    let mut alice = Client::new("alice");
+    let mut bob = Client::new("bob");
+    let _ = alice.on(welcome(0, false));
+    let _ = bob.on(welcome(0, false));
+
+    let first = alice.op(OpKind::Primitive, Target::new("body", node, 0), json!({"op": "insert_text", "text": "A"}));
+    let applied = room.submit("alice", Role::Editor, first).expect("insert");
+    // The state the snapshot was taken at: after Alice's first edit.
+    let at_version_one = DocModel::new(room.model().document().clone());
+    let _ = alice.on(ServerMsg::Applied { applied: applied.clone() });
+    let _ = bob.on(ServerMsg::Applied { applied });
+
+    let second = bob.op(OpKind::Primitive, Target::new("body", node, 1), json!({"op": "insert_text", "text": "B"}));
+    let applied = room.submit("bob", Role::Editor, second).expect("insert");
+    let _ = alice.on(ServerMsg::Applied { applied: applied.clone() });
+    let _ = bob.on(ServerMsg::Applied { applied });
+    let third = alice.op(OpKind::Primitive, Target::new("body", node, 2), json!({"op": "insert_text", "text": "C"}));
+    let applied = room.submit("alice", Role::Editor, third).expect("insert");
+    let _ = alice.on(ServerMsg::Applied { applied: applied.clone() });
+    let _ = bob.on(ServerMsg::Applied { applied });
+    assert_eq!((alice.version(), bob.version()), (3, 3));
+
+    // The room comes back from the snapshot taken at version 1.
+    let mut restored: Room<DocModel> = Room::restore(at_version_one, 1, 0, DedupWindow::default());
+    let plan = restored.join(None, false);
+    assert_eq!(plan.version, 1);
+    for client in [&mut alice, &mut bob] {
+        match client.on(welcome(plan.version, true)) {
+            Event::Welcome { version: 1, dropped, .. } => assert!(dropped.is_empty(), "nothing was in flight"),
+            other => panic!("expected a welcome, got {other:?}"),
+        }
+        assert_eq!(client.version(), 1);
+    }
+
+    // Alice writes from the restored head, Bob receives the answer, then writes
+    // himself: no `Stale`, no gap, and both end on the room's head.
+    let from_alice = alice.op(OpKind::Primitive, Target::new("body", node, 1), json!({"op": "insert_text", "text": "D"}));
+    let applied = restored.submit("alice", Role::Editor, from_alice).expect("the lowered base is the head");
+    assert_eq!(applied.version, 2);
+    assert!(matches!(alice.on(ServerMsg::Applied { applied: applied.clone() }), Event::Applied { .. }));
+    assert!(matches!(bob.on(ServerMsg::Applied { applied: applied.clone() }), Event::Applied { .. }));
+    let from_bob = bob.op(OpKind::Primitive, Target::new("body", node, 2), json!({"op": "insert_text", "text": "E"}));
+    let applied = restored.submit("bob", Role::Editor, from_bob).expect("bob is on the head too");
+    assert_eq!(applied.version, 3);
+    assert!(matches!(bob.on(ServerMsg::Applied { applied: applied.clone() }), Event::Applied { .. }));
+    assert!(matches!(alice.on(ServerMsg::Applied { applied }), Event::Applied { .. }));
+
+    assert_eq!(restored.version(), 3);
+    assert_eq!((alice.version(), bob.version()), (3, 3), "both replicas end on the room's head");
+    assert!(alice.pending().is_empty() && bob.pending().is_empty());
 }

@@ -90,6 +90,12 @@ pub enum Event {
         resync: bool,
         role: String,
         participants: Vec<Participant>,
+        /// Operations taken off the queue because the room's head is **below**
+        /// this replica's base: a server restored from an older snapshot
+        /// (ADR WC-0008). Empty in the ordinary case. Each id names an edit the
+        /// app must show as not replayed; none of them is resent, because the
+        /// document they were built on is gone.
+        dropped: Vec<OpId>,
     },
     Applied {
         applied: Applied,
@@ -294,10 +300,17 @@ impl Client {
     pub fn on(&mut self, msg: ServerMsg) -> Event {
         match msg {
             ServerMsg::Welcome { version, epoch, resync, role, participants, .. } => {
-                self.version = self.version.max(version);
+                let dropped = self.adopt_head(version);
                 self.epoch = epoch;
+                if !dropped.is_empty() && !resync {
+                    // The head is below this document and no snapshot follows:
+                    // joining it would leave a base the room cannot address.
+                    // Ask for the document instead of pretending to be in sync.
+                    self.state = State::Resyncing;
+                    return Event::Resync { reason: format!("the room is at version {version}, below this document's base") };
+                }
                 self.state = if resync { State::Resyncing } else { State::Joined };
-                Event::Welcome { version, epoch, resync, role, participants }
+                Event::Welcome { version, epoch, resync, role, participants, dropped }
             }
             ServerMsg::Tail { entries } => {
                 for applied in entries {
@@ -344,7 +357,13 @@ impl Client {
             ServerMsg::Left { client_id } => Event::Left { client_id },
             ServerMsg::Snapshot { version, bytes, last } => {
                 if last {
-                    self.version = self.version.max(version);
+                    // A snapshot **is** the room's state at `version`, so the
+                    // base follows it even downwards; a queue built above it is
+                    // reconciled exactly as on the welcome that announced the
+                    // restore (ADR WC-0008). A rollback is always announced by
+                    // that welcome, so the drop is reported there.
+                    let _ = self.adopt_head(version);
+                    self.version = version;
                     self.state = State::Joined;
                 }
                 Event::Snapshot { version, bytes, last }
@@ -371,6 +390,46 @@ impl Client {
     /// Mark the session closed; pending operations stay for a reconnect.
     pub fn close(&mut self) {
         self.state = State::Closed;
+    }
+
+    /// Adopt the room's head as this replica's base (ADR WC-0008).
+    ///
+    /// The ordinary case only moves the base forward. When the head is
+    /// **below** the base — a server restored from an older snapshot — the
+    /// document that follows the frame is the room's, so the base becomes the
+    /// head, and the queue is reconciled with it instead of being replayed
+    /// against a state it was not built on. Every pending operation is dropped
+    /// and returned, because the document each of them was computed on no
+    /// longer exists: their author applied them optimistically, the snapshot
+    /// replaces that copy, and the author's own answer is skipped as a
+    /// duplicate of an edit that is no longer there. Resending them would
+    /// either be refused `Stale` (a base above the head, the refusal that used
+    /// to freeze this client) or land on the room while the author's document
+    /// has already lost their text.
+    ///
+    /// What is **not** touched is the identity of this session: `seq` keeps
+    /// counting and the `confirmed` window keeps every answer at or below the
+    /// head, so an operation the restored room still remembers is still
+    /// deduplicated by its `(client_id, seq)` id and no id is ever reused for a
+    /// different edit. Confirmations above the head describe state the room no
+    /// longer has — the window that ships with a snapshot is cut to its version
+    /// — so they are pruned, together with the history steps they named.
+    fn adopt_head(&mut self, head: Version) -> Vec<OpId> {
+        if head >= self.version {
+            self.version = head;
+            return Vec::new();
+        }
+        let dropped: Vec<OpId> = self.pending.iter().map(|pending| pending.op.op_id.clone()).collect();
+        self.pending.clear();
+        for op_id in &dropped {
+            self.history_pending.remove(op_id);
+        }
+        self.confirmed.retain(|_, version| *version <= head);
+        let confirmed = &self.confirmed;
+        self.steps.retain(|(op_id, _, _)| confirmed.contains_key(op_id));
+        self.undone.retain(|(op_id, _, _)| confirmed.contains_key(op_id));
+        self.version = head;
+        dropped
     }
 
     fn confirm(&mut self, applied: &Applied) {
