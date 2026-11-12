@@ -1,7 +1,10 @@
 use super::face::{FALLBACK_FAMILY, FontFace};
 #[cfg(not(target_arch = "wasm32"))]
 use super::fallback_data::{CoverageIndex, IndexedFile, SYS_MISSES_MAX, SYSTEM_FALLBACKS, coverage_ranges, ranges_hold, read_fallback_file};
-use super::fallback_data::{FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order};
+use super::fallback_data::{
+    FALLBACK_CACHE_MAX, RTL_FALLBACKS, RUN_FALLBACK_CACHE_CHARS, RUN_FALLBACK_CACHE_MAX, arabic_block, fallback_order, is_serif_family,
+    rtl_fallback_rank,
+};
 use super::{Arc, FontDb};
 #[cfg(not(target_arch = "wasm32"))]
 use super::{HashMap, Ordering};
@@ -110,16 +113,17 @@ impl FontDb {
     /// The best loaded face covering `c`, and the number of loaded faces it was chosen from.
     fn loaded_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
         let faces = self.read_faces();
+        let prefer_serif = faces.iter().find(|f| f.id == exclude).is_some_and(|f| is_serif_family(&f.family));
         let mut order: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.id != exclude).collect();
         // Right-to-left letters prefer a font made for the script, so a word isn't split across
         // fonts (that breaks Arabic joining). Emoji prefer a colour emoji font.
         let rank = |f: &FontFace| {
             if crate::is_rtl(c) || arabic_block(c) {
-                RTL_FALLBACKS.iter().position(|n| f.family.eq_ignore_ascii_case(n)).unwrap_or(RTL_FALLBACKS.len())
+                rtl_fallback_rank(&f.family, prefer_serif)
             } else if crate::is_emoji(c) {
-                crate::fallback_rank(c, &f.family)
+                (crate::fallback_rank(c, &f.family), 0)
             } else {
-                0
+                (0, 0)
             }
         };
         // Complex scripts (Myanmar, Khmer, Indic…): a font with OpenType layout tables, preferring
