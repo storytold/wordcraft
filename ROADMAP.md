@@ -911,6 +911,9 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | trivial | Charts: a one-series chart with a point coloured on its own lists its categories in the legend, as Word does, not the series (#5978) |
+| 2026-11-07 | trivial | Charts: line, scatter and radar points take their own `c:dPt` line and marker colours, so varied charts Word saved keep their colours (#5960) |
+| 2026-11-07 | trivial | Charts: a one-series bar, line, scatter or radar chart (not a filled radar) varies colours by point as Word does, when `c:varyColors` is on or absent (not `val="0"`), unless the series has its own colour; the legend lists the categories whenever the chart varies, also when a series colour keeps the points one colour (#5955) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |

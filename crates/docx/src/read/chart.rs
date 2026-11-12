@@ -170,6 +170,10 @@ struct Chart {
     /// Radar: points carry markers (`c:radarStyle` = `marker`).
     radar_marks: bool,
     vary: bool,
+    /// The legend lists the categories, not the series: pie and doughnut charts, a chart that
+    /// varies colours by point, and one that could (one series, not area or filled radar) with a
+    /// point coloured on its own, as Word does (#5978).
+    point_legend: bool,
     /// Number of categories (scatter: points per series at most).
     n: usize,
     cats: Vec<String>,
