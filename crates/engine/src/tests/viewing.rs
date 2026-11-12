@@ -254,3 +254,65 @@ fn viewing_does_not_restore_drawing_state_from_a_window_snapshot() {
         }
     }
 }
+
+/// Entering Viewing cannot leave the Markdown editor or its timed writes active.
+#[test]
+fn viewing_requires_leaving_markdown_source_without_losing_pending_text() {
+    for pending in [false, true] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
+        s.path = Some("viewing-regression.md".into());
+        s.run("view.markdownSource", &json!({"value": true})).unwrap();
+        if pending {
+            s.run("view.markdownSourceText", &json!({"text": "Changed source"})).unwrap();
+        }
+        let text = s.md_source.as_ref().unwrap().text.clone();
+        let before = s.doc.clone();
+        let revision = s.rev();
+        let depth = s.undo_depth();
+        for params in [json!({"value": true}), json!({})] {
+            assert!(matches!(s.run("view.viewing", &params), Err(crate::CmdError::Disabled(_))));
+            assert!(!s.view.viewing);
+            assert_eq!(s.md_source.as_ref().unwrap().text, text);
+            assert!(s.doc.same_content(&before));
+            assert_eq!((s.rev(), s.undo_depth()), (revision, depth));
+        }
+        s.run("view.markdownSource", &json!({"value": false})).unwrap();
+        s.run("view.viewing", &json!({"value": true})).unwrap();
+        assert!(s.view.viewing);
+    }
+}
+
+/// A state created before the entry guard cannot apply Markdown through a command or the UI timer.
+#[test]
+fn viewing_guards_pending_markdown_before_preprocessing_and_resets_ime_outcomes() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Original"));
+    s.path = Some("viewing-regression.md".into());
+    s.run("view.markdownSource", &json!({"value": true})).unwrap();
+    s.run("view.markdownSourceText", &json!({"text": "Changed source"})).unwrap();
+    // Reproduce the old mode combination without passing through the new entry refusal.
+    s.view.viewing = true;
+    let before = s.doc.clone();
+    let revision = s.rev();
+    let depth = s.undo_depth();
+    for (id, params) in [("file.versions", json!({"restore": 0})), ("text.insert", json!({"text": "Blocked"}))] {
+        s.set_ime_edit_outcome(crate::ImeEditOutcome { classified: true, content_changed: true, ..Default::default() });
+        assert!(matches!(s.run(id, &params), Err(crate::CmdError::Disabled(_))));
+        assert_eq!(s.ime_edit_outcome(), crate::ImeEditOutcome::default());
+        assert!(s.doc.same_content(&before));
+        assert_eq!((s.rev(), s.undo_depth()), (revision, depth));
+    }
+    for id in ["edit.copy", "file.versions"] {
+        s.run(id, &json!({})).unwrap();
+        assert!(s.doc.same_content(&before));
+        assert_eq!((s.rev(), s.undo_depth()), (revision, depth));
+    }
+    crate::cmd::md_source::apply(&mut s);
+    assert!(s.doc.same_content(&before));
+    assert_eq!((s.rev(), s.undo_depth()), (revision, depth));
+    assert!(s.md_source.as_ref().unwrap().is_pending());
+    assert_eq!(s.md_source.as_ref().unwrap().text, "Changed source");
+    s.run("view.viewing", &json!({"value": false})).unwrap();
+    s.run("view.markdownSource", &json!({"value": false})).unwrap();
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Changed source"));
+    assert_eq!(s.undo_depth(), depth + 1);
+}

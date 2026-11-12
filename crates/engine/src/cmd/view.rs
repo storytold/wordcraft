@@ -24,6 +24,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some(Value::Bool(value)) => *value,
                 Some(_) => return Err(CmdError::Params("`value` must be true or false".into())),
             };
+            // Source typing and its automatic apply must finish before the document becomes view-only.
+            if value && s.md_source.is_some() {
+                return Err(CmdError::Disabled("leave Markdown Source first".into()));
+            }
             s.view.viewing = value;
             if value {
                 s.close_typing();

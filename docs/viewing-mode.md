@@ -6,8 +6,11 @@ Choose Editing or Reviewing from the same menu to resume the corresponding mode.
 If document protection refuses the requested tracking change, Viewing stays on.
 A failed switch between Editing and Reviewing also keeps the previous mode.
 
+Leave Markdown Source before entering Viewing. Pending source text is kept when entry is refused.
+
 Viewing keeps the current page layout. Navigation, zoom, selection, copying,
-search, printing and exporting copies remain available. Document edits, comments,
+search, printing and exporting copies remain available. Selected pictures, shapes and text boxes
+keep their selection outline without editing handles. Document edits, comments,
 formatting, history changes, encryption changes, macros that write and Zotero
 writes are refused by the session, including commands sent through automation.
 The navigation caret remains visible, but the canvas does not request IME text input

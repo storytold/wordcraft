@@ -1954,8 +1954,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ime_geometry = Some((cr, cr));
             }
         }
+        crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         if !app.session.view.viewing {
-            crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
             crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
             crate::table_pen::paint(app, &painter, &t, &layout, &rects, geo.scale);
             crate::table_resize::paint(app, &painter, &t, &layout, &rects, geo.scale);

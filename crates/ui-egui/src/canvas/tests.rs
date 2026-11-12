@@ -5590,3 +5590,82 @@ fn viewing_keeps_a_visible_navigation_caret_without_requesting_ime() {
     h.run_steps(3);
     assert!(h.output().platform_output.ime.is_some(), "Editing restores the input method geometry");
 }
+
+/// Viewing keeps the selected object's real canvas frame visible without resize or rotation handles.
+#[test]
+fn viewing_keeps_object_selection_outlines_without_editing_handles() {
+    for kind in ["picture", "shape", "textBox"] {
+        for viewing in [true, false] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), Default::default());
+            match kind {
+                "picture" => {
+                    let mut png = Vec::new();
+                    let image = image::RgbaImage::from_pixel(40, 20, image::Rgba([200, 30, 30, 255]));
+                    image::DynamicImage::ImageRgba8(image).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+                    app.run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 100})).unwrap();
+                }
+                "shape" => {
+                    app.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 60})).unwrap();
+                }
+                _ => {
+                    app.run("insert.textBox", json!({"text": "Boxed words"})).unwrap();
+                }
+            }
+            let object = app.session.layout().find_object(0, |_| true).unwrap();
+            let pos = object.pos();
+            app.run(
+                "select.range",
+                json!({"anchor": pos, "focus": wordcraft_doc::Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() }}),
+            )
+            .unwrap();
+            app.run("view.viewing", json!({"value": viewing})).unwrap();
+            let before = app.session.doc.clone();
+            let depth = app.session.undo_depth();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(8);
+            let layout = h.state_mut().session.layout();
+            let (object, _) = crate::objects::active(h.state(), &layout).unwrap();
+            let frame = crate::frame::to_screen(h.state().canvas.page_rects[object.page], h.state().canvas.scale, object.rect);
+            let accent = crate::theme::Tokens::get(&h.ctx).accent;
+            assert!(
+                h.output().shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.rect == frame && rect.stroke.color == accent
+                )),
+                "{kind}, Viewing={viewing}: selected object has an outline"
+            );
+            let handles = h
+                .output()
+                .shapes
+                .iter()
+                .filter(|shape| {
+                    matches!(&shape.shape,
+                        egui::Shape::Circle(circle) if (circle.radius - 4.5).abs() < 0.01
+                            && circle.stroke.color == accent && frame.expand(6.0).contains(circle.center)
+                    )
+                })
+                .count();
+            assert_eq!(handles > 0, !viewing, "{kind}: handles only in Editing");
+            if viewing {
+                let from = frame.left_top();
+                let to = from + egui::vec2(30.0, 30.0);
+                h.event(egui::Event::PointerMoved(from));
+                h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                h.run_steps(1);
+                h.event(egui::Event::PointerMoved(to));
+                h.run_steps(2);
+                assert!(h.state().canvas.obj_drag.is_none());
+                h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                h.run_steps(2);
+            }
+            assert!(h.state().session.doc.same_content(&before));
+            assert_eq!(h.state().session.undo_depth(), depth);
+        }
+    }
+}
