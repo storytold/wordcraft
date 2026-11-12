@@ -269,12 +269,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
 /// The cursor over a crop handle (or while dragging one).
 pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<egui::CursorIcon> {
     if let Some(d) = &app.canvas.crop_drag {
-        return Some(d.handle.cursor());
+        return Some(d.handle.cursor(0.0));
     }
     let (page, rect) = laid_out(app, layout)?;
     let f = screen(pages, scale, page, rect)?;
     match frame::handle_at(f, 0.0, at) {
-        Some(h) => Some(h.cursor()),
+        Some(h) => Some(h.cursor(0.0)),
         None if f.contains(at) => Some(egui::CursorIcon::Default),
         None => None,
     }

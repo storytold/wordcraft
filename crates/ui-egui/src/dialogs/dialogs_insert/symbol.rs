@@ -303,18 +303,6 @@ fn symbol_cell(app: &mut WordApp, ui: &mut Ui, font: &str, c: char, selected: bo
     resp
 }
 
-/// The Symbols and Special Characters tabs.
-fn symbol_tabs(ui: &mut Ui, f: &mut SymbolForm) {
-    ui.horizontal(|ui| {
-        for (i, l) in ["Symbols", "Special Characters"].into_iter().enumerate() {
-            if ui.selectable_label(f.tab == i as u8, tl!(l)).clicked() {
-                f.tab = i as u8;
-            }
-        }
-    });
-    ui.separator();
-}
-
 pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> bool {
     let t = Tokens::get(ui.ctx());
     ui.set_width(GRID_COLS as f32 * CELL + 24.0);
@@ -322,7 +310,11 @@ pub(super) fn symbol_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SymbolForm) -> b
         // A bullet is one character in a font: the Special Characters tab has nothing for it.
         f.tab = 0;
     } else {
-        symbol_tabs(ui, f);
+        let names = [tl!("Symbols").to_string(), tl!("Special Characters").to_string()];
+        if let Some(k) = crate::widgets::dialog_tabs(ui, &names, f.tab as usize) {
+            f.tab = k as u8;
+        }
+        ui.add_space(6.0);
     }
     let mut insert: Option<(Value, String, String)> = None;
     if f.tab == 1 {
