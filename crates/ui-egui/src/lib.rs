@@ -54,6 +54,7 @@ pub mod keys;
 pub mod keytips;
 pub(crate) mod language_packs;
 mod local_time;
+pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -624,6 +625,8 @@ pub struct WordApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// Only a successfully published copy may reuse this window's private fragment.
+    pub clipboard_published: bool,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
