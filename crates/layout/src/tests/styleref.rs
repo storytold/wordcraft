@@ -207,7 +207,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
     crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 1""#]);
     let mut c = LayoutCache::new();
-    let index = |c: &LayoutCache| c.styleref.as_ref().map(|(_, _, _, ix)| ix.clone()).unwrap();
+    let index = |c: &LayoutCache| c.styleref.as_ref().map(|(_, _, _, _, ix)| ix.clone()).unwrap();
     let pages =
         |d: &Document, c: &mut LayoutCache| layout(d, c, &LayoutOptions::default()).pages.iter().map(|p| shown(&p.header)).collect::<Vec<_>>();
     let before = pages(&d, &mut c);

@@ -43,10 +43,10 @@ pub struct LayoutCache {
     pub(crate) env: u64,
     pub(crate) used: HashSet<Key>,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
-    /// (shared, so an edited block is a different pointer), `env` (styles and numbering) and the
-    /// body's hidden deletions. Kept while they are unchanged, so headers using STYLEREF don't
-    /// rebuild it on every pass.
-    pub(crate) styleref: Option<(Blocks, u64, HideDeleted, Arc<styleref::StyleIndex>)>,
+    /// (shared, so an edited block is a different pointer), `env` (styles and numbering), the
+    /// body's hidden deletions and which revisions are moves ([`moves_key`]). Kept while they are
+    /// unchanged, so headers using STYLEREF don't rebuild it on every pass.
+    pub(crate) styleref: Option<(Blocks, u64, HideDeleted, u64, Arc<styleref::StyleIndex>)>,
     pub hits: u64,
     pub misses: u64,
 }
@@ -71,18 +71,34 @@ impl LayoutCache {
     /// The STYLEREF style index for `doc` without the body deletions `hide` leaves out, rebuilt
     /// only when the body, the styles or `hide` changed.
     pub(crate) fn style_index(&mut self, doc: &Document, hide: HideDeleted) -> Arc<styleref::StyleIndex> {
-        if let Some((body, env, h, ix)) = &self.styleref
+        let moves = moves_key(doc, hide);
+        if let Some((body, env, h, m, ix)) = &self.styleref
             && *env == self.env
             && *h == hide
+            && *m == moves
             && body.len() == doc.body.len()
             && body.iter().zip(doc.body.iter()).all(|(a, b)| Arc::ptr_eq(a, b))
         {
             return ix.clone();
         }
         let ix = Arc::new(styleref::StyleIndex::build(doc, hide));
-        self.styleref = Some((doc.body.to_vec(), self.env, hide, ix.clone()));
+        self.styleref = Some((doc.body.to_vec(), self.env, hide, moves, ix.clone()));
         ix
     }
+}
+
+/// Which revisions are moves, when `hide` leaves out the deletions of one kind and not the
+/// other (else 0): a tracked paste can make a deletion the source of a move without touching
+/// the body's blocks (its destination is in a text box, say), and the text left out changes.
+fn moves_key(doc: &Document, hide: HideDeleted) -> u64 {
+    if hide.plain == hide.moved_from {
+        return 0;
+    }
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    for r in &doc.revisions {
+        r.move_name.is_some().hash(&mut h);
+    }
+    h.finish()
 }
 
 pub(crate) fn hash_of<T: Hash>(t: &T) -> u64 {

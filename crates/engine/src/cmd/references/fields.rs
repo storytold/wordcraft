@@ -292,7 +292,11 @@ pub fn output_fields(doc: &wordcraft_doc::Document, hide: wordcraft_layout::Hide
 }
 
 /// [`output_fields`], with `ref_error` for a `REF` to a missing bookmark.
-pub(crate) fn output_fields_with(doc: &wordcraft_doc::Document, ref_error: &str, hide: wordcraft_layout::HideDeleted) -> Option<wordcraft_doc::Document> {
+pub(crate) fn output_fields_with(
+    doc: &wordcraft_doc::Document,
+    ref_error: &str,
+    hide: wordcraft_layout::HideDeleted,
+) -> Option<wordcraft_doc::Document> {
     // Numbers first, then the fields that read them: a STYLEREF to a heading holding a SEQ field,
     // and a REF to a bookmarked caption, show the new number.
     let seq = changed(doc, seq_results(doc));
