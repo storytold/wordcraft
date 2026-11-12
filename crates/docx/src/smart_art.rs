@@ -523,7 +523,11 @@ fn venn(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         s.fill = Paint::None;
         s.line = Paint::Accent(spec.colors.accent(j), None);
         s.line_w = 1.5;
-        out.push(s.item(spec, i));
+        // The circle is the item's shape (a click anywhere on it picks the item, and it is what's
+        // outlined); its text is drawn by the text box below.
+        let mut s = s.item(spec, i);
+        s.item = Some(i);
+        out.push(s);
     }
     for (j, &i) in tops.iter().enumerate() {
         let (x, y, deg) = place(j);
@@ -1325,5 +1329,19 @@ mod tests {
         for (w, h) in [(0.0, 0.0), (f32::NAN, 10.0), (f32::INFINITY, -5.0)] {
             assert_eq!(smart_art_item_at(&g, w, h, 1.0, 1.0), None);
         }
+    }
+
+    #[test]
+    fn a_venn_circle_is_its_items_shape() {
+        // Review: only the small text box over each circle held its item.
+        let mut g = SmartArtSpec::sample(SmartArtLayout::Venn);
+        for i in 0..g.items.len() {
+            let b = smart_art_item_box(&g, 432.0, 252.0, i).unwrap();
+            assert_eq!(b[2], b[3], "item {i} is outlined by its circle: {b:?}");
+        }
+        g.items.truncate(1);
+        let [x, y, w, h] = smart_art_item_box(&g, 432.0, 252.0, 0).unwrap();
+        // Inside the circle, above its text.
+        assert_eq!(smart_art_item_at(&g, 432.0, 252.0, x + w / 2.0, y + h * 0.05), Some(0));
     }
 }
