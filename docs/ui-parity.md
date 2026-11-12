@@ -8,7 +8,7 @@ Recovery discovery no longer interrupts an explicitly created or opened document
 
 ## Ribbon card at 1024 × 768
 
-Measured on 2026-11-10 against Word's reference screenshots (`winword-tab-*.png`, `word-1024.png`) at a 1024 × 768 client on a 125 % display, which is 819 × 614 logical points. Word's card has three bands: the tab strip, the command row and an **unconditional** group-label row at the card's bottom, with each label centred under its group and the group separators running through the label row. Labels are present at every measured width (480–1938 px); a narrow window scrolls groups and keeps them.
+Measured on 2026-11-10 against Word for Windows 16.0.20527's reference screenshots (`winword-tab-*.png`, `word-1024.png`) at a 1024 × 768 client on a 125 % display, which is 819 × 614 logical points. Word's card has three bands: the tab strip, the command row and an **unconditional** group-label row at the card's bottom, with each label centred under its group and the group separators running through the label row. Labels are present at every measured width (480–1938 px); a narrow window scrolls groups and keeps them.
 
 WordCraft draws the same card: `CONTENT_H` (66 pt) plus `LABEL_H` (18 pt) in `crates/ui-egui/src/widgets/buttons.rs`, the panel at `CONTENT_H + LABEL_H + 10 pt` with 4-pt margins in `crates/ui-egui/src/ribbon.rs`, the centred title and through-band divider in `crates/ui-egui/src/widgets/groups.rs`. `ribbon_fit` has the two levels Word was measured with: a section keeps its natural rows (FULL) while the card has room, and the first section that doesn't fit — and every section after it — is one row (COMPACT): an icon, the section's name and a chevron opening the whole section, with the label band still below it. At 1024 × 768 (819 × 614 pt) Home keeps Clipboard's three rows and Font's three rows, and Paragraph, Styles, Editing, Voice and Editor are one row each; at 1200 × 768 (960 pt) Paragraph gains its rows too. From 1520 pt of client width (`ribbon_fit::WIDE_MIN`, Word's 1900 px) Home's Font and Paragraph draw their wide form: the same controls in two rows (Font: font name/size/size steps, then the character styles with colour and highlight; Paragraph: lists and indents, then alignment, spacing, shading and borders). `ribbon_fit::plan`, `home_sections_are_natural_then_one_row_at_1024_and_wider` and `home_wide_form_starts_at_1520_pt` hold this. Group content that outgrows `CONTENT_H` is caught by `widgets::TALL_GROUPS` and the label-band test (`group_labels_sit_in_the_cards_label_band_at_1024`).
 
@@ -135,7 +135,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Measured section rows
 
-Office 16.0.20527, 125% DPI, unmaximised window; widths are outer px. Each entry is the section's
+Word for Windows 16.0.20527, 125% DPI, unmaximised window; widths are outer px. Each entry is the section's
 control-row count (1, 2 or 3; a 5 is a menu with nested rows) at the width where it changes.
 
 | Tab | Section | Rows by width |

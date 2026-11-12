@@ -391,6 +391,17 @@ mod tests {
         assert_eq!(rows_in("Home", "Font", 2000.0, 3), 2, "the Home wide form");
     }
 
+    /// The ribbon sections and the parity doc name the same reference: Word for Windows
+    /// 16.0.20527 at 125 % DPI. A version/platform relabel in either place must land in both.
+    #[test]
+    fn measured_rows_name_the_same_reference_as_the_parity_doc() {
+        let doc =
+            std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/ui-parity.md")).expect("docs/ui-parity.md");
+        for needle in ["Word for Windows 16.0.20527", "125%"] {
+            assert!(doc.contains(needle), "docs/ui-parity.md no longer names the ribbon reference ({needle})");
+        }
+    }
+
     #[test]
     fn unmeasured_widths_take_no_room() {
         let gs = [g("A", 0.0, None), g("B", 0.0, None)];
