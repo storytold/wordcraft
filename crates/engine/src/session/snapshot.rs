@@ -7,6 +7,8 @@ impl Session {
     pub fn set_document(&mut self, doc: Document) {
         self.autocap = None;
         let replaced = self.document_id;
+        self.md_source = None;
+        self.md_file = Default::default();
         self.document_id = next_document_id();
         if let Some(at) = self.order.iter_mut().find(|d| **d == replaced) {
             *at = self.document_id;
@@ -110,6 +112,8 @@ impl Session {
             // The word being typed, like `column`: valid only while `sel` is where typing left it.
             typing: _,
             originals: _,
+            md_source: _,
+            md_file: _,
             picture_looks: _,
             last_command: _,
             recording: _,
@@ -253,7 +257,9 @@ impl Session {
     /// Restrict Editing refuses outright. `None` when it can run (or doesn't exist).
     pub fn why_disabled(&self, id: &str) -> Option<&'static str> {
         let spec = self.registry.get(id)?;
-        (spec.enabled)(self).or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
+        (spec.enabled)(self)
+            .or_else(|| crate::cmd::md_source::refusal(self, id, spec.mutates))
+            .or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
     }
 
     /// Put the revision back to `rev` after a command that changed nothing or failed. What the
