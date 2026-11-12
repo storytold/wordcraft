@@ -1157,6 +1157,58 @@ fn header_story_becomes_part() {
     assert!(part.blocks.iter().any(|b| b.as_para().is_some_and(|p| p.text.contains("Header text"))));
 }
 
+/// The odd header's blocks for a one-section document whose header story is `story`, with
+/// `papx_entries` over the whole stream (the header story starts at CP 5, after `body\r`):
+/// paragraph texts, a table as `<table>`; `None` when the slot has no part.
+fn odd_header_blocks(story: &'static str, papx_entries: Vec<(u32, u16, Vec<u8>)>) -> Option<Vec<String>> {
+    let spec = StructSpec {
+        text: "body\r",
+        header_stories: vec![story],
+        sections: vec![(5, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries,
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let id = doc.last_section.headers.default?;
+    let part = doc.parts.get(&id).expect("part");
+    Some(part.blocks.iter().map(|b| b.as_para().map_or_else(|| "<table>".to_string(), |p| p.text.clone())).collect())
+}
+
+/// #5922: [MS-DOC] 2.3.3 ends every non-empty header story with a guard paragraph mark that
+/// is not part of its contents. Read as a paragraph, it put an empty line under every header
+/// and pushed the first body line down when the header reached past the top margin.
+#[test]
+fn header_story_guard_mark_is_not_a_paragraph() {
+    let plain = || vec![(0, 0, Vec::new())];
+    // One line typed into the header: content "Header\r" + guard.
+    assert_eq!(odd_header_blocks("Header\r\r", plain()), Some(vec!["Header".to_string()]));
+    // Enter pressed after it: the empty paragraph is content and stays, only the guard goes.
+    assert_eq!(odd_header_blocks("Header\r\r\r", plain()), Some(vec!["Header".to_string(), String::new()]));
+    // An empty header (one empty content paragraph + guard) is still a header of its own.
+    assert_eq!(odd_header_blocks("\r\r", plain()), Some(vec![String::new()]));
+    // A story that is only a mark (no guard) keeps its paragraph and its part.
+    assert_eq!(odd_header_blocks("\r", plain()), Some(vec![String::new()]));
+    // A story without a guard keeps its last paragraph.
+    assert_eq!(odd_header_blocks("Header\r", plain()), Some(vec!["Header".to_string()]));
+}
+
+/// #5922: a mark right after a table row in a header story is kept: it is the paragraph that
+/// closes the table, not a guard to drop.
+#[test]
+fn header_story_mark_after_a_table_row_is_kept() {
+    let in_tbl = grpprl(&[(0x2416, &[0x01])]);
+    let ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01])]), t_def_table(&[0, 2880])].concat();
+    // Stream: "body\r" (CPs 0-4), then the header story "a\x07" (5-6), row end "\x07" (7), "\r" (8).
+    let papx = vec![(0, 0, Vec::new()), (5, 0, in_tbl), (7, 0, ttp), (8, 0, Vec::new())];
+    assert_eq!(odd_header_blocks("a\u{7}\u{7}\r", papx), Some(vec!["<table>".to_string(), String::new()]));
+}
+
 /// A `sprmTDefTable` Prl for `edges` twip boundaries and TC80s of 20 bytes per column,
 /// built per the spec (cb counts the bytes after it, plus one).
 fn t_def_table(edges: &[i16]) -> Vec<u8> {
