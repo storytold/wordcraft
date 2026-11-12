@@ -54,7 +54,7 @@ pub mod wordart;
 
 use serde_json::{Value, json};
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Pos, Revision, RevisionKind, StoryRef};
+use wordcraft_doc::{Pos, RevisionKind, StoryRef};
 
 use crate::{CmdError, CmdResult, Registry, Session};
 
@@ -198,21 +198,7 @@ pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
 
 /// A revision record for the current author.
 pub fn new_revision(s: &mut Session, kind: RevisionKind) -> u32 {
-    let date = now_iso();
-    // Never one end of a move, nor the deletion a cut may still turn into one.
-    let held = s.pending_move.as_ref().map(|m| m.rev);
-    if let Some((i, _)) = s
-        .doc
-        .revisions
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(i, r)| r.kind == kind && r.author == s.author && r.date == date && r.move_name.is_none() && held != Some(*i as u32))
-    {
-        return i as u32;
-    }
-    s.doc.revisions.push(Revision { kind, author: s.author.clone(), date, move_name: None });
-    (s.doc.revisions.len() - 1) as u32
+    s.edit_revision(kind)
 }
 
 /// Whether the paragraph at `path` is followed by another paragraph in the same container (so

@@ -53,6 +53,23 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        let outer = self.revision_depth == 0;
+        if outer {
+            self.begin_revision_command(id);
+        }
+        self.revision_depth = self.revision_depth.saturating_add(1);
+        let result = self.run_command(id, params);
+        self.revision_depth = self.revision_depth.saturating_sub(1);
+        if result.is_err() {
+            self.revision_group = None;
+        }
+        if outer {
+            self.finish_revision_command(result.is_ok());
+        }
+        result
+    }
+
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         // The document the command starts in, and the first id a document it opens can have.
         let home = self.document_id;
         let mark = document_id_mark();

@@ -187,11 +187,15 @@ fn title(path: Option<&FsPath>, file_name: Option<&str>, doc: &Document, untitle
 impl Session {
     /// Swap the active document's state with `d`'s: `d` then holds the document that was active.
     fn swap_doc(&mut self, d: &mut DocState) {
+        self.revision_group = None;
         use std::mem::swap;
         // Every field is listed, so a new one doesn't build until someone decides whether each
         // open document has its own (then it goes in `DocState` and is swapped below) or the
         // session shares it.
         let Session {
+            // An editing transaction ends on a document switch; it is not swapped back.
+            revision_group: _,
+            revision_depth: _,
             // Per document.
             doc: _,
             sel: _,
