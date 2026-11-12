@@ -604,7 +604,6 @@ mod ui_tests {
     /// the compact drop-down shows Full Screen inside the window, and it still toggles.
     #[test]
     fn compact_window_keeps_full_screen_reachable() {
-        use egui_kittest::kittest::{By, NodeT, Queryable};
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
         app.run("ui.tab", json!({"tab": "View"})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 700.0)).build_ui_state(
