@@ -210,9 +210,13 @@ pub(super) fn validate_must_understand(root: &El) -> Result<(), crate::DocxError
                 return Err(crate::DocxError::Xml(format!("unsupported namespace in mc:MustUnderstand: {prefix}")));
             }
             if e.name == "mc:AlternateContent" {
-                let branch =
-                    children_of_choice(e).ok_or_else(|| crate::DocxError::Xml("mc:AlternateContent has no supported choice or fallback".into()))?;
-                walk(branch, ignored, processed, depth + 1)?;
+                // ECMA-376 Part 3 §9.4: no selected branch contributes no content. The
+                // wrapper's MustUnderstand was still checked above; unselected branches are inert.
+                if let Some(branch) = children_of_choice(e) {
+                    walk(branch, ignored, processed, depth + 1)?;
+                } else if e.child("mc:Choice").is_none() {
+                    return Err(crate::DocxError::Xml("mc:AlternateContent has no Choice".into()));
+                }
             } else {
                 for child in &e.kids {
                     if let Node::El(child) = child {

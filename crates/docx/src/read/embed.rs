@@ -198,6 +198,9 @@ impl Reader<'_> {
             }
         }
         let xml = standalone_xml(el)?;
+        if opaque_values_need_source(el, false, 0) {
+            self.required_source.set(true);
+        }
         Some(Arc::new(Embedded { xml, refs }))
     }
 
@@ -264,6 +267,30 @@ impl Reader<'_> {
         self.embedded.parts.insert(part.to_string(), crate::package::EmbeddedPart { content_type, rels: Vec::new() });
         true
     }
+}
+
+/// Canonical names do not preserve namespace scope used only by opaque QName values.
+/// As with raw control properties, replay the source rather than guessing those bindings.
+fn opaque_values_need_source(el: &El, opaque: bool, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    let opaque = opaque || el.name.split_once(':').is_none_or(|(prefix, _)| !crate::xml::mc_understood(prefix));
+    el.attrs.iter().any(|(name, _)| {
+        if name.starts_with('?')
+            || name == "xmlns"
+            || name.starts_with("xmlns:")
+            || name.starts_with("mc:")
+            // EmbeddedRef explicitly retains and rewrites these IDs; they are not QNames.
+            || is_rel_attr(&el.name, name)
+        {
+            return false;
+        }
+        opaque || name == "xsi:type" || name.split_once(':').is_some_and(|(prefix, _)| !crate::xml::mc_understood(prefix))
+    }) || el.kids.iter().any(|node| match node {
+        crate::xml::Node::El(child) => opaque_values_need_source(child, opaque, depth + 1),
+        crate::xml::Node::Text(text) => opaque && !text.trim().is_empty(),
+    })
 }
 
 /// The relationship ids `e` uses (attributes in the relationships namespace, VML's `o:relid`,
