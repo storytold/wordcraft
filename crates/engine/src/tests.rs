@@ -1263,6 +1263,42 @@ fn a_comment_pasted_into_another_document_comes_when_its_end_does() {
     assert_eq!(p.text.replace(wordcraft_doc::para::OBJ, "|"), "ha|| be");
 }
 
+#[test]
+fn a_column_copy_pasted_into_another_document_brings_its_comments() {
+    // Review of #6096: a block (column) copy carries the comments in its rows too.
+    let mut s = column_doc();
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 3}, "focus": {"block": 1, "off": 4}}));
+    run(&mut s, "review.newComment", json!({"text": "In the column"}));
+    let a = serde_json::to_value(Pos::body(0, 2)).unwrap();
+    let f = serde_json::to_value(Pos::body(2, 5)).unwrap();
+    let r = run(&mut s, "select.column", json!({"anchor": a, "focus": f}));
+    let o = wordcraft_doc::para::OBJ;
+    assert_eq!(r["rows"], json!(["cde", format!("c{o}d{o}e"), "cde"]));
+    run(&mut s, "edit.copy", json!({}));
+
+    run(&mut s, "file.new", json!({}));
+    run(&mut s, "document.setText", json!({"text": "Mine"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.newComment", json!({"text": "Own note"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({}));
+    assert_eq!(text(&s), "Minecde\ncde\ncde");
+    // The second row's anchors point at the comment that came, not at the document's own.
+    let Some(wordcraft_doc::Block::Para(p)) = s.doc.body.get(1).map(|b| &**b) else { panic!("no second row") };
+    let anchors: Vec<String> = p
+        .objects
+        .iter()
+        .filter_map(|o| match o {
+            wordcraft_doc::para::InlineObject::CommentStart { id } | wordcraft_doc::para::InlineObject::CommentEnd { id } => {
+                s.doc.comments.get(id).map(|c| s.doc.plain_text(StoryRef::Part(c.part)))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(anchors, ["In the column", "In the column"]);
+    assert_eq!(s.doc.comments.len(), 2);
+}
+
 /// Equations in the paragraphs of a session's body, as linear text.
 fn equations(s: &Session) -> Vec<String> {
     let mut out = Vec::new();

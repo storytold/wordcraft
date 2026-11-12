@@ -263,6 +263,81 @@ fn text_box_pasted_into_another_document_brings_its_text() {
     assert_eq!(dst2.plain_text(StoryRef::Part(n2)), "From the source");
 }
 
+/// A comment saying `text` on `a..b` of the paragraph at `at` (offsets before its anchors go in).
+fn comment(d: &mut Document, at: &Pos, a: usize, b: usize, text: &str) -> u32 {
+    let id = d.comments.keys().next_back().map_or(0, |k| k + 1);
+    let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
+    d.comments.insert(id, crate::Comment { part, ..Default::default() });
+    d.insert_object(&Pos { off: b, ..at.clone() }, InlineObject::CommentEnd { id }, &CharProps::default()).unwrap();
+    d.insert_object(&Pos { off: a, ..at.clone() }, InlineObject::CommentStart { id }, &CharProps::default()).unwrap();
+    id
+}
+
+/// The text of each comment anchored in the paragraph at `at`, in anchor order.
+fn anchored(d: &Document, at: &Pos) -> Vec<String> {
+    let p = d.para_at(at).unwrap();
+    let text = |id: &u32| d.comments.get(id).map(|c| d.plain_text(StoryRef::Part(c.part))).unwrap_or_else(|| format!("none {id}"));
+    p.objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::CommentStart { id } => Some(format!("start {}", text(id))),
+            InlineObject::CommentEnd { id } => Some(format!("end {}", text(id))),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn comment_in_a_text_box_pasted_into_another_document_comes_along() {
+    // Review of #6096: the box's new story keeps its anchors, pointing at the comment the paste
+    // brings, never at the target's own comment of the same id.
+    let mut src = doc(&["x"]);
+    let id = text_box(&mut src, &Pos::body(0, 1), "In the box");
+    let inside = Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+    comment(&mut src, &inside, 3, 6, "On the box");
+    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3));
+    for (f, what) in [(f, "a copy"), (src.body_fragment(), "the whole body")] {
+        let mut dst = doc(&["target"]);
+        comment(&mut dst, &Pos::body(0, 0), 0, 6, "Own");
+        dst.insert_fragment(&Pos::body(0, 8), &f).unwrap();
+        let [Some(new)] = boxes_in(&dst, &Path::top(0))[..] else { panic!("{what}") };
+        let story = Pos { story: StoryRef::Part(new), path: Path::top(0), off: 0 };
+        assert_eq!(anchored(&dst, &story), ["start On the box", "end On the box"], "{what}");
+        assert_eq!(anchored(&dst, &Pos::body(0, 0)), ["start Own", "end Own"], "{what}");
+        assert_eq!(dst.comments.len(), 2, "{what}");
+    }
+    // The source is left as it was.
+    assert_eq!(anchored(&src, &inside), ["start On the box", "end On the box"]);
+}
+
+#[test]
+fn whole_body_pasted_into_another_document_brings_its_comments() {
+    // Review of #6096: Insert > Text from File's fragment carries the body's comments too.
+    let mut src = doc(&["Alpha beta"]);
+    comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
+    let mut dst = doc(&["t"]);
+    comment(&mut dst, &Pos::body(0, 0), 0, 1, "Own");
+    dst.insert_fragment(&Pos::body(0, 7), &src.body_fragment()).unwrap();
+    assert_eq!(anchored(&dst, &Pos::body(0, 0)), ["start Own", "end Own", "start Theirs", "end Theirs"]);
+}
+
+#[test]
+fn paste_at_a_bad_offset_adds_no_comments() {
+    // Review of #6096: the offset is checked before the comments come, not after.
+    let mut src = doc(&["Alpha beta"]);
+    comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
+    text_box(&mut src, &Pos::body(0, 0), "Boxed");
+    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 19));
+    assert_eq!((f.comments.len(), f.parts.len()), (1, 1));
+    let mut dst = doc(&["\u{e9}t"]);
+    let parts = dst.parts.len();
+    for off in [1, 99] {
+        assert!(matches!(dst.insert_fragment(&Pos::body(0, off), &f), Err(DocError::BadOffset(_))), "{off}");
+        assert!(dst.comments.is_empty(), "{off}");
+        assert_eq!(dst.parts.len(), parts, "{off}");
+    }
+}
+
 #[test]
 fn text_box_in_a_copied_table_gets_its_own_story() {
     let mut d = doc(&["before", "after"]);

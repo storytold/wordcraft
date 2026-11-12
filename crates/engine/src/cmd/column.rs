@@ -213,12 +213,15 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
 fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
     let mut blocks = Vec::new();
     let mut parts = std::collections::BTreeMap::new();
+    let mut comments = std::collections::BTreeMap::new();
     let mut rows = Vec::new();
     for (a, b) in segs {
         let (a, b) = (s.doc.clamp(a), s.doc.clamp(b));
         let frag = if a.path == b.path && a.story == b.story && a != b { s.doc.copy_range(&a, &b) } else { Fragment::default() };
         // Text boxes in a row keep their stories (keyed by this document's part ids).
         parts.extend(frag.parts);
+        // So do the comments anchored in it, for a paste into another document.
+        comments.extend(frag.comments);
         let mut para = frag
             .blocks
             .into_iter()
@@ -232,7 +235,7 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
         blocks.push(Block::Para(para));
     }
     s.clipboard_text = rows.join("\n");
-    s.clipboard = Some(Fragment { blocks, parts, ..Default::default() });
+    s.clipboard = Some(Fragment { blocks, parts, comments });
     Ok(super::edit::copy_result(s))
 }
 
