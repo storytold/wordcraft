@@ -1,15 +1,18 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, Pos, Series};
+use super::model::{Axis, BubbleOpts, Grouping, Kind, Pos, Series};
 use super::plot::label;
 use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
 
 impl Chart {
+    /// The chart of a `c:chartSpace`, read from the cached data of the plot area's first
+    /// supported chart type. `None` when there's no such type or it has no series (the caller then
+    /// draws a placeholder, or nothing).
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
         let chart = space.child("c:chart")?;
         let plot = chart.child("c:plotArea")?;
         let ty = plot.els().find(|e| Kind::of(&e.name).is_some())?;
         let kind = Kind::of(&ty.name)?;
-        let scatter = kind == Kind::Scatter;
+        let scatter = kind.xy();
         let date1904 = space.child("c:date1904").is_some_and(|d| d.attr("val").is_none_or(truthy));
         let mut series = read_series(ty, scatter, theme);
         if series.is_empty() {
@@ -80,6 +83,7 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            bubble: (kind == Kind::Bubble).then(|| bubble_opts(ty)),
         })
     }
 
@@ -130,10 +134,26 @@ pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb]) -> Vec<Series> 
     let mut series = Vec::new();
     for ser in ty.children("c:ser").take(MAX_SERIES) {
         let s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
-        budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        budget = budget.saturating_sub(s.values.len().max(s.xs.len()).max(s.sizes.len()));
         series.push(s);
     }
     series
+}
+
+/// A `c:bubbleChart`'s `c:bubbleScale`, `c:sizeRepresents` and `c:showNegBubbles`.
+fn bubble_opts(ty: &El) -> BubbleOpts {
+    // ISO/IEC 29500-4:2016 also allows the scale as a percent ("150%"); ECMA-376 a bare number.
+    let scale = ty
+        .child("c:bubbleScale")
+        .and_then(|b| b.attr("val"))
+        .and_then(|v| int(v.trim().trim_end_matches('%')))
+        .map_or(100.0, |v| v.clamp(0, 300) as f64);
+    BubbleOpts {
+        scale,
+        by_width: ty.child("c:sizeRepresents").and_then(|s| s.attr("val")).map(str::trim) == Some("w"),
+        // CT_Boolean: an element without `val` is true.
+        negative: ty.child("c:showNegBubbles").is_some_and(|n| n.attr("val").is_none_or(truthy)),
+    }
 }
 
 /// Values as their share of each category's total (100% stacked charts).
@@ -200,6 +220,9 @@ pub(super) fn text_size(space: &El) -> f32 {
 }
 
 impl Series {
+    /// One `c:ser`: its name, colours, line, values (`c:val`; for scatter and bubble charts
+    /// `c:yVal`, `c:xVal` and `c:bubbleSize`), point colours and outlines from `c:dPt`, and whether
+    /// it shows data labels. At most `cap` points.
     fn parse(ser: &El, scatter: bool, theme: &[Rgb], cap: usize) -> Series {
         let name = ser.child("c:tx").and_then(|t| t.find("c:v")).map(|v| label(v.text().trim())).unwrap_or_default();
         let idx = ser.child("c:idx").and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<u32>().ok()).and_then(|v| usize::try_from(v).ok());
@@ -214,16 +237,26 @@ impl Series {
         if scatter && xs.is_empty() {
             xs = (1..=values.len()).map(|i| Some(i as f64)).collect();
         }
+        // Only bubble series have `c:bubbleSize`.
+        let (sizes, _) = if scatter { numbers(ser.child("c:bubbleSize"), cap) } else { (Vec::new(), None) };
         let mut points = vec![None; values.len()];
+        // A visible line's colour (`fill_colour` is `None` for `a:noFill`).
+        let outline = ln.and_then(|l| fill_colour(l, theme));
+        let mut outlines = vec![outline; values.len()];
         for dpt in ser.children("c:dPt") {
             let i = dpt.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok());
-            let c = dpt.child("c:spPr").and_then(|p| fill_colour(p, theme));
+            let sp = dpt.child("c:spPr");
+            let c = sp.and_then(|p| fill_colour(p, theme));
             if let Some(slot) = i.and_then(|i| points.get_mut(i)) {
                 *slot = c;
             }
+            // The point's own `a:ln`, even `a:noFill`, replaces the series line.
+            if let (Some(l), Some(slot)) = (sp.and_then(|p| p.child("a:ln")), i.and_then(|i| outlines.get_mut(i))) {
+                *slot = fill_colour(l, theme);
+            }
         }
         let labels = show_values(ser.child("c:dLbls"));
-        Series { name, idx, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
+        Series { name, idx, color, line_w, line, values, xs, sizes, points, outlines, fmt, x_fmt, labels, raw: Vec::new() }
     }
 }
 

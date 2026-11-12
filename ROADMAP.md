@@ -911,6 +911,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | trivial | Charts: bubble charts are drawn instead of a placeholder, sized as Word sizes them and kept inside the plot area: automatic axes leave room for them, a fixed axis end cuts them (#5941) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
