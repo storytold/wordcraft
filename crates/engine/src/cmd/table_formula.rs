@@ -165,10 +165,9 @@ fn picture_of(switch: &str) -> Option<String> {
 
 /// The text of `value` under a numeric picture, as Word's `\#` pictures read (ECMA-376 Part 1,
 /// §17.16.4.2): `0` is a digit that always shows, `#` one that shows when it has a value, `x` (beside
-/// the number's other items) one that drops the digits on its left, or in the decimals one the
-/// result is rounded at, `,`
-/// groups thousands, `.` marks the decimals, `%` multiplies by 100, text in single quotes shows
-/// without them, and anything else shows as it is. Sections split by `;` give the positive, negative
+/// the number's other items, or not part of a word) one that drops the digits on its left, or in
+/// the decimals one the result is rounded at, `,` groups thousands, `.` marks the decimals, `%`
+/// multiplies by 100, text in single quotes shows without them, and anything else shows as it is. Sections split by `;` give the positive, negative
 /// and zero forms. In the first section a `-` before the number shows a minus for a negative result
 /// and a space otherwise, and a `+` a plus, a minus, or a space for zero; without either, a negative
 /// result there takes a `-` in front.
@@ -185,9 +184,12 @@ pub fn format_picture(value: f64, picture: &str) -> String {
     let items = picture_items(section);
     const NUMBER: [char; 5] = ['#', '0', 'x', ',', '.'];
     let unquoted = |i: usize, set: &[char]| matches!(items.get(i), Some(&(c, false)) if set.contains(&c));
-    // An `x` is a placeholder beside the number's other items, and a letter in text such as `Tax`.
+    // An `x` is a placeholder beside the number's other items or on its own (`x`, `$x`), and a
+    // letter in a word such as `Tax`.
     let beside_number = |i: usize| unquoted(i + 1, &NUMBER) || i.checked_sub(1).is_some_and(|j| unquoted(j, &NUMBER));
-    let placeholder = |i: usize| unquoted(i, &['#', '0']) || (unquoted(i, &['x']) && beside_number(i));
+    let letter = |i: usize| matches!(items.get(i), Some(&(c, false)) if c.is_alphabetic());
+    let in_word = |i: usize| letter(i + 1) || i.checked_sub(1).is_some_and(letter);
+    let placeholder = |i: usize| unquoted(i, &['#', '0']) || (unquoted(i, &['x']) && (beside_number(i) || !in_word(i)));
     let starts = |i: usize| placeholder(i) || (unquoted(i, &['.']) && placeholder(i + 1));
     let Some(start) = (0..items.len()).find(|&i| starts(i)) else { return items.iter().map(|&(c, _)| c).collect() };
     let len = items.iter().skip(start).take_while(|&&(c, quoted)| !quoted && NUMBER.contains(&c)).count();
@@ -206,7 +208,9 @@ pub fn format_picture(value: f64, picture: &str) -> String {
         Some(at) => f.get(..=at).unwrap_or(f),
         None => f,
     });
-    let min_int = int_pic.matches('0').count().min(MAX_PICTURE);
+    // The `0`s on the left of an `x` stand where digits are dropped: they don't pad.
+    let kept_int_pic = int_pic.find('x').map_or(int_pic, |at| int_pic.get(at..).unwrap_or_default());
+    let min_int = kept_int_pic.matches('0').count().min(MAX_PICTURE);
     let max_frac = frac_pic.map_or(0, |f| f.matches(['0', '#', 'x']).count()).min(15);
     let min_frac = frac_pic.map_or(0, |f| f.matches('0').count()).min(max_frac);
     let scale = 10f64.powi(max_frac as i32);
@@ -1126,6 +1130,12 @@ mod tests {
         assert_eq!(format_picture(0.75, ".x"), ".8", "3/4");
         assert_eq!(format_picture(1_234_567.0, "x,##0"), "4,567");
         assert_eq!(format_picture(5.0, "Tax $0.00"), "Tax $5.00", "an x in a word is text");
+        assert_eq!(format_picture(1234.0, "x"), "4", "an x on its own is a placeholder");
+        assert_eq!(format_picture(1234.0, "$x"), "$4");
+        assert_eq!(format_picture(1234.0, "000x"), "4", "zeros on the left of x don't pad what it drops");
+        assert_eq!(format_picture(5.0, "000x"), "5");
+        assert_eq!(format_picture(5.0, "x00"), "05", "zeros on the right of x still pad");
+        assert_eq!(format_picture(1234.0, "Max"), "Max", "an x ending a word is text");
     }
 
     #[test]
