@@ -394,6 +394,38 @@ fn level_tile_labels_get_room_for_every_number() {
     assert_eq!((bullet.left(), bullet.width()), (9.0, 18.0), "a bullet keeps its place and size");
 }
 
+/// #2876 review: a level with no label (a "none" level with no text) draws its text line from
+/// its own text indent, so each level still starts further in than the one above.
+#[test]
+fn level_tiles_without_a_label_start_the_text_at_its_indent() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("One")), crate::Services::default());
+    app.run("para.numbering", json!({})).unwrap();
+    for a in &mut std::sync::Arc::make_mut(&mut app.session.doc.numbering).abstracts {
+        for l in &mut a.levels {
+            (l.format, l.text) = (wordcraft_doc::section::NumFormat::None, String::new());
+        }
+    }
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(260.0, 400.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::home::list_level_tiles(ui, app), app);
+    h.run_steps(2);
+    // The grey text lines, top tile first.
+    let mut bars: Vec<egui::Rect> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.rect.height() < 5.0 && r.rect.width() > 10.0 => Some(r.rect),
+            _ => None,
+        })
+        .collect();
+    bars.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    assert_eq!(bars.len(), 9, "a text line per level");
+    for (k, pair) in bars.windows(2).enumerate() {
+        assert!(pair[1].left() > pair[0].left(), "Level {} starts further in than Level {}: {bars:?}", k + 2, k + 1);
+    }
+}
+
 /// The Language menu's built-in short list, as `language_checks` takes it.
 fn short() -> Vec<(String, String)> {
     PROOFING_LANGUAGES.iter().map(|(t, n)| ((*t).to_string(), (*n).to_string())).collect()

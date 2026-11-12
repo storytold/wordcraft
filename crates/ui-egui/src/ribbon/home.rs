@@ -85,7 +85,8 @@ pub(super) fn list_level_tiles(ui: &mut Ui, app: &mut WordApp) {
         let x_of = |v: f32| left + (v * scale).clamp(0.0, tile.width() - 40.0);
         let y = tile.center().y;
         let x = x_of(at);
-        let mut text_x = left;
+        // A level with no label still starts its text at its own indent.
+        let mut text_x = x_of(text_at);
         if let Some(label) = label {
             let r = label_rect(&label, align, x, tile);
             crate::previews::glyph(app, ui, r, &label, &chr, page);
