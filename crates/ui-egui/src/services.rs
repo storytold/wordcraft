@@ -1,5 +1,5 @@
 use super::state::DefaultApp;
-use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing};
+use super::{FileDialogAnswer, FileDialogRequest, WordApp, async_saves, paste_picture, printing, system_clipboard};
 
 /// Platform services injected by the host (file dialogs, file I/O).
 #[derive(Default)]
@@ -21,6 +21,10 @@ pub struct Services {
     /// sender counts as cancelled. An `Err` says no system dialog could be shown, and the app shows
     /// its built-in file browser instead (#576). The app shows one dialog at a time ([`file_dialogs`]).
     pub file_dialog: Option<Box<dyn Fn(FileDialogRequest) -> std::sync::mpsc::Receiver<FileDialogAnswer>>>,
+    /// Desktop: stop waiting for the system file dialog the host is showing, if it can (a portal
+    /// that never answers). The app calls it when it gives the dialog up (File › Open › Browse in
+    /// WordCraft…), so the host closes the request and answers as cancelled.
+    pub cancel_file_dialog: Option<Box<dyn Fn()>>,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
@@ -73,6 +77,10 @@ pub struct Services {
     /// pasted equation from (#1297). `true` when the text and HTML are there; otherwise the copy's
     /// text goes through egui as usual.
     pub set_clipboard_rich: Option<Box<dyn Fn(&str, &str, &str, &str) -> bool>>,
+    /// Desktop: publish one picture's pixels, HTML and text together without clearing formats.
+    pub set_clipboard_image: Option<Box<dyn Fn(&system_clipboard::CopyImage, &str, &str) -> bool>>,
+    /// Whether the clipboard still contains this process's last copy.
+    pub clipboard_is_own: Option<Box<dyn Fn() -> bool>>,
     /// Desktop: the RTF on the system clipboard, where the platform offers it (#687).
     pub clipboard_rtf: Option<Box<dyn Fn() -> Option<String>>>,
     /// Desktop: the names of the formats on the system clipboard (MIME types, Windows format
