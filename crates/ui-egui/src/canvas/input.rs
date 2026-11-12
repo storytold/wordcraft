@@ -379,9 +379,19 @@ fn pointer_story(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32,
         (None, Some(s)) if is_note(s) => s,
         (None, Some(s)) if is_box(s) && !in_hf => s,
         (None, Some(StoryRef::Body)) if is_note(story) => StoryRef::Body,
+        (None, None) if is_note(story) && above_note(layout, page, x, y, story) => StoryRef::Body,
         _ if is_box(story) => host,
         _ => story,
     }
+}
+
+/// Whether (x, y) on `page`, on no story's text, lies above the text of `note` on that page and
+/// there is body text there: blank space beside or below the body text, which is the body's, as the
+/// notes sit below the body. Blank space beside or between the note's own lines stays the note's.
+fn above_note(layout: &DocLayout, page: usize, x: f32, y: f32, note: StoryRef) -> bool {
+    // The note's topmost line on the page: the one nearest the page's top-left corner.
+    let note_top = layout.hit(page, 0.0, 0.0, note).and_then(|pos| layout.caret_on(&pos, page)).filter(|c| c.page == page).map(|c| c.top);
+    note_top.is_none_or(|top| y < top - 2.0) && layout.hit(page, x, y, StoryRef::Body).is_some()
 }
 
 fn handle_completed_click(app: &mut WordApp, pointer: &PagePointer<'_>) -> bool {

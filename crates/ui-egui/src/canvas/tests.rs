@@ -1249,7 +1249,7 @@ fn double_and_triple_click_select_in_a_note() {
             };
             let start = Pos::new(note, wordcraft_doc::Path::top(0), 0);
             let bravo = h.state().session.doc.para_at(&start).and_then(|p| p.text.find("bravo")).expect("the note's word") + 2;
-            let c = h.state_mut().session.layout().caret(&Pos { off: bravo, ..start }).expect("caret in the note");
+            let c = h.state_mut().session.layout().caret(&Pos { off: bravo, ..start.clone() }).expect("caret in the note");
             let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("note on screen");
             let case = format!("{command}, from the body: {from_body}");
             clicks(&mut h, at, 2);
@@ -1258,6 +1258,19 @@ fn double_and_triple_click_select_in_a_note() {
             clicks(&mut h, at, 3);
             assert_eq!(h.state().session.sel.focus.story, note, "{case}: the triple-click stays in the note");
             assert!(h.state().session.selected_text().contains("Alpha bravo charlie"), "{case}: the paragraph is selected");
+            // With the caret in a footnote, a double-click on the page's blank space between the
+            // body text and the footnote (on no story's text) is the body's: the caret leaves
+            // the note, as it did before the note kept its double-clicks.
+            if command == "references.footnote" {
+                let end = h.state_mut().session.layout().caret(&Pos::body(0, "Body text".len())).expect("caret in the body");
+                let top = h.state_mut().session.layout().caret(&start).expect("caret in the note").top;
+                let y = (end.top + end.height + top) / 2.0;
+                assert!(top - (end.top + end.height) > 100.0, "the footnote stands well below the body text");
+                assert_eq!(h.state_mut().session.layout().story_at(end.page, end.x, y), None, "{case}: on no story's text");
+                let blank = page_to_screen(h.state_mut(), end.page, end.x, y).expect("blank space on screen");
+                clicks(&mut h, blank, 2);
+                assert_eq!(h.state().session.sel.focus.story, StoryRef::Body, "{case}: the double-click on blank body space leaves the note");
+            }
         }
     }
 }
