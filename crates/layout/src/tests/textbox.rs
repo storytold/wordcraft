@@ -57,6 +57,7 @@ fn frame_of(l: &DocLayout, id: u32) -> Rect {
 
 #[test]
 fn align_text_and_text_direction_place_the_text_in_the_box() {
+    crate::test_fonts();
     let at = |body: TextBody| {
         let mut d = Document::from_text("x");
         let id = text_box(&mut d, 0, "Hi", 144.0, 144.0, body);
@@ -87,6 +88,7 @@ fn align_text_and_text_direction_place_the_text_in_the_box() {
 
 #[test]
 fn linked_boxes_continue_the_text() {
+    crate::test_fonts();
     let mut d = Document::from_text("one\ntwo");
     let text = "Words that run on well past the first little box. ".repeat(6);
     let a = text_box(&mut d, 0, &text, 144.0, 48.0, TextBody::default());
@@ -125,6 +127,7 @@ fn linked_boxes_continue_the_text() {
 
 #[test]
 fn hostile_link_chains_stay_bounded() {
+    crate::test_fonts();
     // Boxes linking in a circle show their own text; a box linking to itself too.
     let mut d = Document::from_text("one\ntwo\nthree");
     let a = text_box(&mut d, 0, "A", 72.0, 36.0, TextBody::default());
@@ -142,6 +145,7 @@ fn hostile_link_chains_stay_bounded() {
 
 #[test]
 fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
+    crate::test_fonts();
     // #743: a cover page's two-line box with no margins (`lIns="0"`…) is just tall enough for
     // its text; with Word's default margins its second line would be cut.
     let two = |h: f32, body: TextBody| {
@@ -322,6 +326,20 @@ fn floating_box_that_resizes_to_fit_takes_its_texts_height() {
     assert!(grown.h > 15.0 && grown.h < 30.0, "one line and the margins: {grown:?}");
     let shrunk = rect(true, 300.0);
     assert!((shrunk.h - grown.h).abs() < 0.5, "{shrunk:?} {grown:?}");
+}
+
+/// #4250: on a later page of its paragraph, a floating box that resizes to fit its text takes its
+/// text's height too.
+#[test]
+fn a_floating_box_on_a_later_page_of_its_paragraph_fits_its_text() {
+    let mut d = Document::from_text(&"The quick brown fox jumps over the lazy dog. ".repeat(400));
+    let float = wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, ..Default::default() };
+    let id = text_box_with(&mut d, 0, "Inside", 144.0, 1.0, TextBody { auto_fit: true, ..Default::default() }, float);
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "pages {}", l.pages.len());
+    let hit = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    assert!(hit.page > 0, "drawn on the page of its anchor");
+    assert!(hit.rect.h > 15.0 && hit.rect.h < 30.0, "one line and the margins: {:?}", hit.rect);
 }
 
 #[test]

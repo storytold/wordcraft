@@ -62,6 +62,7 @@ struct Card {
 fn root(doc: &Document, id: u32) -> u32 {
     let mut cur = id;
     for _ in 0..MAX_PARENT_CHAIN {
+        crate::work::steps(1);
         match doc.comments.get(&cur).and_then(|c| c.parent) {
             Some(p) if p != cur && doc.comments.contains_key(&p) => cur = p,
             _ => break,
@@ -79,6 +80,7 @@ pub fn anchors(doc: &Document) -> Vec<(u32, Pos)> {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
         for (off, object) in p.objects_with_offsets() {
             let InlineObject::CommentStart { id } = object else { continue };
+            crate::work::steps(1);
             if !doc.comments.contains_key(id) || root(doc, *id) != *id || !seen.insert(*id) {
                 continue;
             }

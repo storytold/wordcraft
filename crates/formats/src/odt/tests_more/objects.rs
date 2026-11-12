@@ -167,3 +167,116 @@ fn an_object_in_a_header_is_kept_too() {
     assert!(z.file_names().any(|n| n.ends_with("/content.xml") && n.starts_with("Object M")), "{:?}", z.file_names().collect::<Vec<_>>());
     assert!(entry(&saved, "styles.xml").contains("<draw:object xlink:href=\"./Object M"));
 }
+
+/// A frame's stated size goes before fitting a column: on either side alone the other follows the
+/// picture's proportions, and only past what a document holds does it shrink, in proportion.
+#[test]
+fn a_picture_keeps_the_size_its_frame_states_on_either_side() {
+    let png = |w: u32, h: u32| {
+        let mut out = std::io::Cursor::new(Vec::new());
+        image::RgbImage::new(w, h).write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let size = |w: Option<f32>, h: Option<f32>| {
+        let img = crate::odt::body::drawing::picture(png(200, 100), w, h, "").unwrap();
+        (img.w, img.h)
+    };
+    let near = |got: (f32, f32), want: (f32, f32)| assert!((got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01, "{got:?}, not {want:?}");
+    // Both, one or the other, past a column's 468 pt.
+    near(size(Some(600.0), Some(100.0)), (600.0, 100.0));
+    near(size(Some(600.0), None), (600.0, 300.0));
+    near(size(None, Some(400.0)), (800.0, 400.0));
+    // Past what a document holds: in proportion, whichever side is stated.
+    near(size(Some(2000.0), Some(1000.0)), (1584.0, 792.0));
+    near(size(Some(2000.0), None), (1584.0, 792.0));
+    near(size(None, Some(1000.0)), (1584.0, 792.0));
+    near(size(Some(f32::MAX), None), (1584.0, 792.0));
+    // None stated, or nothing a size could be: its own, fitted to a column.
+    near(size(None, None), (150.0, 75.0));
+    for junk in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -5.0] {
+        near(size(Some(junk), Some(junk)), (150.0, 75.0));
+    }
+    let wide = crate::odt::body::drawing::picture(png(1000, 500), None, None, "").unwrap();
+    near((wide.w, wide.h), (468.0, 234.0));
+}
+
+/// A replacement picture may come before its object. It is kept whatever it is, though WordCraft
+/// can't show it, and a save from the model writes it back.
+#[test]
+fn a_replacement_picture_before_its_object_is_kept() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>Sheet <draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="3in" svg:height="1in"><draw:image xlink:href="./ObjectReplacements/Object 1" xlink:type="simple"/><draw:object xlink:href="./Object 1" xlink:type="simple"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = zip_of(&[
+        ("META-INF/manifest.xml", MANIFEST.as_bytes()),
+        ("content.xml", content.as_bytes()),
+        ("Object 1/content.xml", SHEET.as_bytes()),
+        ("Object 1/styles.xml", b"<office:document-styles/>"),
+        ("ObjectReplacements/Object 1", METAFILE),
+    ]);
+    let replacement = |bytes: &[u8]| {
+        let flow = parse(bytes).unwrap();
+        paras(&flow)
+            .into_iter()
+            .flat_map(|p| &p.inlines)
+            .find_map(|i| if let Inline::Image(img) = i { img.object.clone() } else { None })
+            .and_then(|o| o.replacement.clone())
+    };
+    assert_eq!(replacement(&bytes).as_deref().map(Vec::as_slice), Some(METAFILE));
+    let saved = crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap();
+    assert_eq!(replacement(&saved).as_deref().map(Vec::as_slice), Some(METAFILE), "written from the model");
+}
+
+/// A readable picture after an unreadable replacement is what WordCraft shows, wherever the object
+/// comes between them, and a save from the model keeps both.
+#[test]
+fn a_readable_picture_after_an_unreadable_replacement_is_shown() {
+    let mut png = std::io::Cursor::new(Vec::new());
+    image::RgbImage::new(4, 4).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    let png = png.into_inner();
+    let object = r#"<draw:object xlink:href="./Object 1"/>"#;
+    let unread = r#"<draw:image xlink:href="./ObjectReplacements/Object 1"/>"#;
+    let readable = r#"<draw:image xlink:href="./Pictures/a.png"/>"#;
+    for frame in [format!("{unread}{object}{readable}"), format!("{object}{unread}{readable}")] {
+        let content = format!(
+            r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>Sheet <draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="3in" svg:height="1in">{frame}</draw:frame></text:p></office:text></office:body></office:document-content>"#
+        );
+        let bytes = zip_of(&[
+            ("META-INF/manifest.xml", MANIFEST.as_bytes()),
+            ("content.xml", content.as_bytes()),
+            ("Object 1/content.xml", SHEET.as_bytes()),
+            ("Object 1/styles.xml", b"<office:document-styles/>"),
+            ("ObjectReplacements/Object 1", METAFILE),
+            ("Pictures/a.png", &png),
+        ]);
+        let check = |bytes: &[u8], what: &str| {
+            let flow = parse(bytes).unwrap();
+            let img = paras(&flow)
+                .into_iter()
+                .flat_map(|p| &p.inlines)
+                .find_map(|i| if let Inline::Image(img) = i { Some(img.clone()) } else { None })
+                .unwrap();
+            assert_eq!(img.data.as_slice(), png.as_slice(), "{what}: shows the picture it can read");
+            assert_eq!(img.object.unwrap().replacement.as_deref().map(Vec::as_slice), Some(METAFILE), "{what}: keeps the replacement");
+        };
+        check(&bytes, "read");
+        check(&crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap(), "written from the model");
+    }
+}
+
+/// With only an unreadable replacement, the placeholder drawn for it isn't written as a picture.
+#[test]
+fn the_placeholder_for_an_object_is_not_saved_as_its_picture() {
+    let content = format!(
+        r#"<office:document-content {NS_T} {NS_D}><office:body><office:text><text:p>Sheet <draw:frame draw:name="Object1" text:anchor-type="as-char" svg:width="3in" svg:height="1in"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="./ObjectReplacements/Object 1"/></draw:frame></text:p></office:text></office:body></office:document-content>"#
+    );
+    let bytes = zip_of(&[
+        ("META-INF/manifest.xml", MANIFEST.as_bytes()),
+        ("content.xml", content.as_bytes()),
+        ("Object 1/content.xml", SHEET.as_bytes()),
+        ("Object 1/styles.xml", b"<office:document-styles/>"),
+        ("ObjectReplacements/Object 1", METAFILE),
+    ]);
+    let saved = crate::odt::tests::export_model(&import(&bytes).unwrap()).unwrap();
+    assert_eq!(entry(&saved, "content.xml").matches("<draw:image ").count(), 1);
+}

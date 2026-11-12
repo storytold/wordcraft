@@ -322,17 +322,20 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
             let rel = matches!(wordcraft_doc::math::math_class(c), wordcraft_doc::math::MClass::Rel);
             if !style.nor && (c == ' ' || c == '\t' || rel) {
                 let mut changed = false;
-                let corrected = me::autocorrect(&mut math.nodes, &pos);
-                if let Some(p) = corrected.clone() {
+                if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
                     pos = p;
                     changed = true;
                 }
-                // A space that finishes a `\name` only replaces it, as in Word: `\sqrt ` gives `√`
-                // to type the radicand after, not an empty radical (#4255).
-                if (c != ' ' || corrected.is_none())
-                    && let Some(p) = me::build_up(&mut math.nodes, &pos, latex)
-                {
-                    pos = p;
+                // As in Word, a Space that finishes a `\name` only replaces it. `\int` + Space leaves
+                // ∫ waiting for its limits: `_a^b` and then Space, or Space alone, builds the
+                // operator (#4917). `\sqrt` + Space gives √ to type the radicand after, not an empty
+                // radical (#4255).
+                let waits = changed && c == ' ';
+                // Only an operator this build-up makes takes the caret: one already there (from
+                // the gallery, say) keeps it after it.
+                let built_before = me::nary_node_before(&math.nodes, &pos);
+                if !waits && let Some(p) = me::build_up(&mut math.nodes, &pos, latex) {
+                    pos = if built_before { p } else { me::into_empty_operand(&math.nodes, &p) };
                     changed = true;
                 }
                 if changed {
@@ -342,10 +345,10 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                     continue;
                 }
             } else if !style.nor && !latex && !c.is_alphanumeric() {
-                // Any other character that can't be part of a name ends it too: `\sqrt(` gives
-                // `√(`, and the `\` of a next name finishes the one before (`\alpha\beta`). Left
-                // as `\sqrt`, the backslash also stopped build-up (#4255). LaTeX input keeps its
-                // control words for its own parser (`\sqrt{2}`).
+                // Word corrects `\name` on any character that can't continue it (`\int_`,
+                // `\alpha+`), keeps that character and builds nothing up yet. LaTeX input keeps
+                // its commands (`\sqrt{`). The `\` of a next name finishes the one before
+                // (`\alpha\beta`, #4255).
                 if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
                     pos = p;
                     transformed = true;

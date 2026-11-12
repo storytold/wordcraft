@@ -1,3 +1,4 @@
+use super::numbers::{body_bookmark_paths, para_numbers, ref_number};
 use super::properties::{
     bookmark_ends_in_its_paragraph, bookmark_text, bookmark_text_at, count_text, date_picture, doc_property, doc_property_arg, new_property_value,
     set_summary_property, summary_property, text_result,
@@ -101,7 +102,9 @@ struct SeqCount {
 
 /// The fresh results of the unlocked SEQ fields in the body and in the text boxes anchored there
 /// ([`update_seq`]). A text box's fields count where the box is anchored, before the fields after
-/// the anchor in its paragraph and after those before it (measured in Word for Windows).
+/// the anchor in its paragraph and after those before it (measured in Word for Windows). A locked
+/// SEQ keeps its result but still counts, `\r` included; a SEQ in a tracked deletion keeps its
+/// result and doesn't count, with markup shown or not (measured in Word for Windows, exporting).
 fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
     let mut count = SeqCount::default();
     for path in doc.para_paths(StoryRef::Body) {
@@ -119,7 +122,11 @@ fn seq_results(doc: &wordcraft_doc::Document) -> Vec<FieldResult> {
 
 /// Number the SEQ fields of paragraph `p` (at `path` in `story`) and of the text boxes anchored in it.
 fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Paragraph, count: &mut SeqCount) {
-    for (k, o) in p.objects.iter().enumerate() {
+    // The runs come in order and the objects by offset, so one cursor walks the deleted ranges.
+    let mut deleted = p.deleted_ranges().into_iter().peekable();
+    for (k, (off, o)) in p.objects_with_offsets().enumerate() {
+        while deleted.next_if(|r| r.end <= off).is_some() {}
+        let in_deletion = deleted.peek().is_some_and(|r| r.contains(&off));
         for id in o.text_boxes() {
             if count.boxes.insert(id) {
                 let part = StoryRef::Part(id);
@@ -130,9 +137,9 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
                 }
             }
         }
-        let InlineObject::Field { instr, locked: false, .. } = o else { continue };
+        let InlineObject::Field { instr, locked, .. } = o else { continue };
         let f = FieldCode::parse(instr);
-        if f.name != "SEQ" {
+        if f.name != "SEQ" || in_deletion {
             continue;
         }
         let Some(id) = f.args.first() else { continue };
@@ -147,6 +154,9 @@ fn count_seq(doc: &wordcraft_doc::Document, story: StoryRef, path: &Path, p: &Pa
             n.0 = r;
         } else if !f.has('c') {
             n.0 = n.0.saturating_add(1);
+        }
+        if *locked {
+            continue;
         }
         let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or_default();
         let r = if f.has('h') { String::new() } else { wordcraft_layout::fields::field_number(instr, fmt, n.0) };
@@ -335,6 +345,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // The document properties as the fields read and set them (`SUBJECT "New subject"`): a field
     // after one that sets a property shows the new value.
     let mut core = s.doc.core.clone();
+    // Build each body lookup once, only when a supported numeric REF needs it.
+    let mut numbers = None;
+    let mut bookmark_paths = None;
     let paths: Vec<(StoryRef, Path)> = stories.into_iter().flat_map(|st| s.doc.para_paths(st).into_iter().map(move |p| (st, p))).collect();
     // SET <name> "<text>" (ECMA-376 §17.16.5.58): the values it gives, which REF <name> shows; a
     // REF before the SET shows the last value set, as Word's bookmark does after an update.
@@ -365,8 +378,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
-                    let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                    updates.push((k, text_result(instr, crate::cmd::insert::format_date(&pic))));
+                    let lang = field_lang(&s.doc, p, k);
+                    let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
+                    updates.push((k, text_result(instr, crate::cmd::insert::format_date_in(&pic, lang.as_deref()))));
                 }
                 "REF" | "PAGEREF" => {
                     let f = FieldCode::parse(instr);
@@ -374,6 +388,14 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     let r = if name == "REF" {
                         if has_switch(instr, 'p') {
                             None
+                        } else if let Some(sw) = ['w', 'r', 'n'].into_iter().find(|c| has_switch(instr, *c)) {
+                            if has_switch(instr, 'd') || has_switch(instr, 't') {
+                                continue; // Preserve cached results for unsupported delimiter/text switches.
+                            }
+                            let numbers = numbers.get_or_insert_with(|| para_numbers(&s.doc));
+                            let from = (story == StoryRef::Body).then_some(&path);
+                            let paths = bookmark_paths.get_or_insert_with(|| body_bookmark_paths(&s.doc));
+                            paths.get(target).and_then(|tp| ref_number(numbers, tp, from, sw))
                         } else {
                             bookmark_text(&s.doc, target).or_else(|| {
                                 let key = target.to_lowercase();
@@ -484,8 +506,9 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
                     continue;
                 }
                 // Word's default picture when the code carries no `\@` switch.
-                let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                updates.push((k, text_result(instr, crate::cmd::insert::format_date(&pic))));
+                let lang = field_lang(doc, p, k);
+                let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
+                updates.push((k, text_result(instr, crate::cmd::insert::format_date_in(&pic, lang.as_deref()))));
             }
             if updates.is_empty() {
                 continue;
@@ -501,6 +524,16 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
     }
 }
 
+/// Resolve a field object's language through the paragraph and document defaults.
+fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
+    let off = p.object_offsets().get(k).copied()?;
+    doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
+}
+
+/// Word's default date or time picture when a field instruction carries no `\@` picture switch.
+fn default_picture(name: &str, lang: Option<&str>) -> String {
+    if name == "TIME" { "h:mm am/pm".into() } else { crate::cmd::insert::default_date_picture(lang).into() }
+}
 /// Most names SET fields give values.
 const MAX_SET: usize = 10_000;
 
