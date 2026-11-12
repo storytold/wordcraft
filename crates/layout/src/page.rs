@@ -63,6 +63,10 @@ pub(crate) struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
+    /// Per page: the items of its floating objects that are not behind the text (indices counted
+    /// after the items behind it), drawn over all of its text once it is laid out
+    /// ([`PageBuilder::raise_front`]).
+    pub(crate) front: Vec<Vec<std::ops::Range<usize>>>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -292,11 +296,30 @@ impl PageBuilder<'_> {
         }
         self.pages.pop();
         self.behind.pop();
+        self.front.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
         self.page_items_start = self.pages.last().map_or(0, |p| p.items.len());
         true
+    }
+    /// Draw each page's floating objects that are not behind the text over all of its text, in
+    /// their own order: Word draws them on top, and the shading, borders and lines of the
+    /// paragraphs and tables after their anchor would otherwise cover them (#5534). Once all
+    /// pages are laid out, so going back to a [`Snap`] still finds the items where they went.
+    pub(crate) fn raise_front(&mut self) {
+        for ((pg, ranges), behind) in self.pages.iter_mut().zip(&mut self.front).zip(&self.behind) {
+            if ranges.is_empty() {
+                continue;
+            }
+            let mut raised = vec![false; pg.items.len()];
+            for r in ranges.drain(..) {
+                let (start, end) = (r.start.saturating_add(*behind), r.end.saturating_add(*behind));
+                raised.get_mut(start..end.min(pg.items.len())).into_iter().flatten().for_each(|f| *f = true);
+            }
+            let (top, under): (Vec<_>, Vec<_>) = std::mem::take(&mut pg.items).into_iter().zip(raised).partition(|(_, up)| *up);
+            pg.items = under.into_iter().chain(top).map(|(it, _)| it).collect();
+        }
     }
     /// Finish the current page: the lines between its columns, its vertical alignment and its
     /// footnotes, placed with the section state in effect (margins, gutter, separators).
@@ -334,6 +357,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.front.push(Vec::new());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;

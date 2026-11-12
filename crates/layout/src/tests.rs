@@ -12303,6 +12303,35 @@ fn a_paragraph_left_out_whole_takes_no_room() {
     assert!((three_top(&d, &plain, 2) - without).abs() < 0.01);
 }
 
+/// #5534: a picture floating beside or in front of the text is drawn over the paragraphs after its
+/// anchor, their shading included, as Word draws it. It was drawn with its anchor, and each shaded
+/// paragraph below painted a white band across it: the picture showed in strips. One behind the
+/// text stays under the shading.
+#[test]
+fn a_floating_object_is_drawn_over_the_shading_of_the_paragraphs_below_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    crate::test_fonts();
+    for (wrap, over) in [(Wrap::Square, true), (Wrap::InFrontOfText, true), (Wrap::BehindText, false)] {
+        let mut d = Document::from_text("Anchor\n\n\n\n\n\nAfter");
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(6, 0), &|p| p.shading = Some(wordcraft_doc::Rgb(0xFF, 0xFF, 0xFF))).unwrap();
+        let f = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 100.0, y: 4.0, ..Default::default() };
+        d.insert_object(&Pos::body(0, 0), rect_shape(144.0, 100.0, f), &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let (shape, rect) =
+            items.iter().enumerate().find_map(|(k, i)| if let Placed::Shape { rect, .. } = i { Some((k, *rect)) } else { None }).unwrap();
+        let fills: Vec<(usize, Rect)> =
+            items.iter().enumerate().filter_map(|(k, i)| if let Placed::Fill { rect, .. } = i { Some((k, *rect)) } else { None }).collect();
+        let covering: Vec<usize> = fills.iter().filter(|(_, r)| r.y > rect.y && r.y < rect.bottom()).map(|(k, _)| *k).collect();
+        assert!(covering.len() >= 3, "{wrap:?}: the shaded paragraphs below reach across the picture: {fills:?} {rect:?}");
+        if over {
+            assert!(covering.iter().all(|k| *k < shape), "{wrap:?}: shading drawn over the picture: fills {covering:?}, picture {shape}");
+        } else {
+            assert!(covering.iter().all(|k| *k > shape), "{wrap:?}: the picture behind the text is under the shading");
+        }
+    }
+}
+
 /// Gap #5 review: a paragraph left out whole draws no shading and no borders (they would be
 /// lines across the page at its zero height).
 #[test]

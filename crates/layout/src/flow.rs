@@ -570,9 +570,10 @@ impl<'a> Flow<'a> {
             },
         );
         self.late.drew();
+        let raised = items.len()..items.len() + front.len();
         items.extend(front);
         items.extend(line_numbers(ctx, pb, &self.pl, (l0, l1), y));
-        add_items(pb, behind, items);
+        add_items(pb, behind, items, raised);
         if let (Some(f), Some(l)) = (self.pl.lines.get(l0), self.pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
             pb.content_bottom = pb.content_bottom.max(pb.y);
@@ -810,10 +811,17 @@ fn line_numbers(ctx: &mut Ctx, pb: &mut PageBuilder, pl: &ParaLayout, (l0, l1): 
     items
 }
 
-/// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end.
-fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>) {
+/// Add a piece's items to the last page: those `behind` the text at the front, the rest at the end,
+/// the `raised` ones among them (its floating objects) to be drawn over the page's text.
+fn add_items(pb: &mut PageBuilder, behind: Vec<Placed>, items: Vec<Placed>, raised: std::ops::Range<usize>) {
     let n_behind = behind.len();
     if let Some(pg) = pb.pages.last_mut() {
+        let at = pg.items.len().saturating_sub(pb.behind.last().copied().unwrap_or(0));
+        if !raised.is_empty()
+            && let Some(f) = pb.front.last_mut()
+        {
+            f.push(at.saturating_add(raised.start)..at.saturating_add(raised.end));
+        }
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
