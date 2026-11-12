@@ -6,6 +6,7 @@ use super::chars::{
 use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
+use wordcraft_fonts::ShapeContext;
 
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
@@ -226,6 +227,19 @@ impl<'a> Builder<'a> {
 
     /// `dir`: the bidi levels `text` is shaped by (see [`Dir`]).
     pub(super) fn shape_with(&mut self, text: &str, base: usize, rc: &Arc<ResolvedChar>, kind_override: Option<ClKind>, dir: Dir<'_>) {
+        self.shape_around(text, base, rc, kind_override, dir, ShapeContext::default());
+    }
+
+    /// `around`: the text shown beside `text`, which its first and last letters may join.
+    pub(super) fn shape_around(
+        &mut self,
+        text: &str,
+        base: usize,
+        rc: &Arc<ResolvedChar>,
+        kind_override: Option<ClKind>,
+        dir: Dir<'_>,
+        around: ShapeContext<'_>,
+    ) {
         if text.is_empty() {
             return;
         }
@@ -374,10 +388,15 @@ impl<'a> Builder<'a> {
             let from = usize::from(rc.kerned());
             let to = if ligatures.is_some() { all.len() } else { 1 };
             let features: &[wordcraft_fonts::Feature] = all.get(from..to).unwrap_or_default();
+            // Letters join across a change of font or direction inside the run too.
+            let around = ShapeContext {
+                before: if a == 0 { around.before } else { text.get(..a).unwrap_or("") },
+                after: if b == text.len() { around.after } else { text.get(b..).unwrap_or("") },
+            };
             let shaped = if use_levels {
-                wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
+                wordcraft_fonts::shape_run_in(&st.face, shape_text, features, map, key.rtl, around)
             } else {
-                wordcraft_fonts::shape(&st.face, shape_text, features, map)
+                wordcraft_fonts::shape_in(&st.face, shape_text, features, map, around)
             };
             let k = st.size / st.face.upem.max(1.0) as f32;
             let hscale = rc.scale / 100.0;

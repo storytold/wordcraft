@@ -212,6 +212,32 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
     }
 }
 
+/// Builds the tracked paragraph-property change for a command that also changes the paragraph's
+/// text. The ordinary after-command recorder deliberately compares only paragraphs with identical
+/// text, so mixed text/paragraph-format transformations use this before assigning their props.
+/// Made once per command, before it creates revisions: it keeps the revisions as they were then
+/// (all `Recorder::own` needs), instead of copying the list for every paragraph.
+pub(crate) struct ParaPropTracker {
+    before: Vec<Revision>,
+}
+
+impl ParaPropTracker {
+    pub(crate) fn new(s: &Session) -> Self {
+        let tracking = s.doc.settings.track_changes && s.prefs.markup.track_formatting;
+        ParaPropTracker { before: if tracking { s.doc.revisions.clone() } else { Vec::new() } }
+    }
+
+    pub(crate) fn changed(&self, s: &mut Session, before: &ParaProps, after: &ParaProps) -> Option<Box<PropChange<ParaProps>>> {
+        if !s.doc.settings.track_changes || !s.prefs.markup.track_formatting {
+            return after.fmt_change.clone();
+        }
+        let mut r = Recorder { author: s.author.clone(), date: super::now_iso(), before: &self.before, revisions: &mut s.doc.revisions, rid: None };
+        r.change(before, after, ParaProps::formatting, |p| &p.fmt_change)
+            .map(|Replacement(change)| change)
+            .unwrap_or_else(|| after.fmt_change.clone())
+    }
+}
+
 /// Record the paragraph formatting a command changed on the paragraph at `path` whose text it also
 /// changed, which [`record`] doesn't compare: `before` is the paragraph's properties before the
 /// command. As in [`record`], the author's own earlier change keeps the formatting before it and

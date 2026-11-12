@@ -72,6 +72,9 @@ pub struct ObjectHit {
     pub wrap: Wrap,
     /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
     pub origin: Point,
+    /// A member of a Drawing Canvas, by its index in the canvas, when the hit is that member
+    /// (its frame inside the canvas at `pos`) rather than the canvas. Layout gives `None`.
+    pub member: Option<usize>,
 }
 
 /// Object positions in one layout, retaining each page occurrence for page-hinted lookups.
@@ -149,6 +152,7 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
             text_box: *text_box,
             wrap: *wrap,
             origin: *origin,
+            member: None,
         }),
         _ => None,
     })
@@ -324,11 +328,11 @@ fn between(a: &Path, b: &Path, l: &Path) -> bool {
 }
 
 /// The position in turned text (a table cell's text direction) of `story` under page point
-/// (x, y), if there is turned text there.
-fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
+/// (x, y), if there is turned text there in a paragraph `skip` doesn't leave out.
+fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path) -> bool) -> Option<Pos> {
     items_of(page, story).find_map(|it| {
         let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
-        if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
+        if *s != story || skip(path) || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
             return None;
         }
         let (u, v) = crate::unturn_point(*turn, *ox, *oy, x, y);
@@ -402,22 +406,29 @@ impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
         let p = self.pages.get(page)?;
-        if let Some(pos) = turned_hit(p, story, x, y) {
-            return Some(pos);
-        }
         // Like Word, a click outside a floating table doesn't land in its cells while there's
         // other text on the page: below one, it goes to the text beside or after it (#2038).
         let floats = if story == StoryRef::Body { float_table_areas(p) } else { Vec::new() };
         let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
+        // Turned cell text takes a click up to 2pt outside it, so outside a floating table too.
+        if let Some(pos) = turned_hit(p, story, x, y, &away) {
+            return Some(pos);
+        }
         let lines = page_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
-        let off = best.para.off_at_x(best.li, x - best.x);
-        Some(Pos { story: best.story, path: best.path.clone(), off })
+        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
+            return Some(at(best));
+        }
+        // Only a floating table's upright cells are left: other turned text first, then turned
+        // text under the point (the table's too), then the nearest of those cells.
+        nearest_turned(p, story, x, y, &away)
+            .or_else(|| turned_hit(p, story, x, y, &|_: &Path| false))
+            .or_else(|| lines.iter().min_by(nearest).map(at))
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not

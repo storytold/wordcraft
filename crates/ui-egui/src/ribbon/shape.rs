@@ -1,5 +1,5 @@
 use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
-use super::common::{mi, stack};
+use super::common::{mi, size_field, stack};
 use super::language::mi_check;
 use super::{Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
@@ -134,18 +134,12 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Size", None, app, |ui, app| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
+        // As Picture Format › Size, each side on its own.
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 for (label, key, v0) in [("W:", "width", w0), ("H:", "height", h0)] {
-                    ui.label(egui::RichText::new(tl!(label)).small());
-                    let mut v = v0;
-                    // `picture.size`'s own range; a size outside it (a thin line) is shown as it
-                    // is (clamped, egui would report a change and resize the shape unasked).
-                    let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(1.0..=4000.0).clamp_existing_to_range(false).suffix(" pt"));
-                    if r.changed() && v != v0 {
-                        if r.dragged() && !r.drag_started() {
-                            app.session.join_next_undo();
-                        }
+                    let hint = tl!("Type a size in any unit, such as 3 cm or 300 px.");
+                    if let Some(v) = size_field(ui, app, label, v0, egui::Id::unique(("shape_size_field", key)), hint) {
                         let _ = app.run("picture.size", json!({key: v, "lockAspect": false}));
                     }
                 }

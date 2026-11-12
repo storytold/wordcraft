@@ -214,6 +214,7 @@ fn read_aloud_belongs_to_its_document() {
     assert_eq!(s.read_aloud.document, Some(b));
 }
 
+/// Tests that `view.switchWindows` lists open documents, activates by document ID, and requests switching by window ID.
 #[test]
 fn switch_windows_lists_and_activates() {
     let mut s = s();
@@ -228,9 +229,22 @@ fn switch_windows_lists_and_activates() {
     assert!(list[0].get("path").is_some() && list[0].get("dirty").is_some());
     run(&mut s, "view.switchWindows", json!({"id": a}));
     assert_eq!(s.document_id(), a);
+    s.ui_requests.clear();
+    run(&mut s, "view.switchWindows", json!({"window": 1}));
+    assert_eq!(s.ui_requests, vec![json!({"windows": "switchWindow", "window": 1})]);
+    s.windows.available = true;
+    s.windows.current = Some(1);
+    s.windows.others = vec![crate::cmd::view::OtherWindow { id: 2, title: "Second".into() }];
+    s.ui_requests.clear();
+    run(&mut s, "view.switchWindows", json!({"window": 2}));
+    assert_eq!(s.ui_requests, vec![json!({"windows": "switchWindow", "window": 2})]);
+    assert!(s.run("view.switchWindows", &json!({"window": 3})).is_err(), "unknown window key fails when windows are available");
     for bad in [json!({"id": 0}), json!({"id": u64::MAX}), json!({"id": -5}), json!({"id": "1"}), json!({"id": 1e300}), json!({"id": {}})] {
         assert!(s.run("view.switchWindows", &bad).is_err(), "{bad}");
         assert_eq!(s.document_id(), a);
+    }
+    for bad in [json!({"window": "1"}), json!({"window": -1}), json!({"window": {}})] {
+        assert!(s.run("view.switchWindows", &bad).is_err(), "{bad}");
     }
     let junk = [json!(null), json!([]), json!({"id": null}), json!({"text": 5})];
     for id in ["view.switchWindows", "file.closeDocument", "file.new"] {
@@ -345,4 +359,52 @@ fn input_method_joins_stay_with_their_window() {
     run(&mut s, "edit.undo", json!({}));
     assert_eq!(text(&s).trim(), "Hello", "B's typing is its own undo step");
     drop(a);
+}
+
+/// Check spelling as you type is one setting for the app, not one per open document (#5740):
+/// turned off (File › Options › Proofing, or Review's command) with one document active, it is off
+/// in the others too, and switching to another document doesn't turn it back on, so what is saved
+/// for the next run is what was chosen, whichever document is active then.
+#[test]
+fn check_spelling_is_one_setting_for_every_open_document() {
+    let mut s = s();
+    let a = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    let b = s.document_id();
+    run(&mut s, "file.new", json!({}));
+    let c = s.document_id();
+    assert!(s.view.proofing);
+    s.activate(a).unwrap();
+    run(&mut s, "file.options", json!({"checkSpelling": false}));
+    for id in [b, c, a] {
+        s.activate(id).unwrap();
+        assert!(!s.view.proofing, "off in document {id}");
+        assert!(!s.prefs.check_spelling);
+    }
+    run(&mut s, "review.proofing", json!({"value": true}));
+    for id in [b, c] {
+        s.activate(id).unwrap();
+        assert!(s.view.proofing, "back on in document {id}");
+    }
+    // A document opened now starts with the setting as it is.
+    run(&mut s, "review.proofing", json!({"value": false}));
+    run(&mut s, "file.new", json!({}));
+    assert!(!s.view.proofing);
+}
+
+/// A window's view put back after Check spelling as you type changed in another window takes the
+/// setting as it is now, not as it was when the window's view was taken (#5740): every view made
+/// active follows the saved preference.
+#[test]
+fn a_window_view_put_back_follows_the_spelling_setting() {
+    let mut s = s();
+    assert!(s.view.proofing);
+    let held = s.take_view();
+    run(&mut s, "file.options", json!({"checkSpelling": false}));
+    s.put_view(held);
+    assert!(!s.view.proofing, "the view taken with spelling on comes back with it off");
+    let held = s.take_view();
+    run(&mut s, "review.proofing", json!({"value": true}));
+    s.put_view(held);
+    assert!(s.view.proofing);
 }

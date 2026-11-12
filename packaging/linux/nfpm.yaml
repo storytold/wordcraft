@@ -24,7 +24,9 @@ description: |-
 
 # The binaries link only glibc and libgcc_s directly. Windowing (X11/Wayland, xkbcommon) and the
 # GPU (Vulkan, EGL/GL) are loaded at runtime, so they are dependencies/recommendations here
-# rather than ELF NEEDED entries.
+# rather than ELF NEEDED entries. Read Aloud speaks through espeak-ng (or Speech Dispatcher), a
+# program it starts, so that is a recommendation too. Without the X11 libraries the app stays on
+# native Wayland rather than starting through XWayland (see `uses_x11` in main.rs).
 overrides:
   deb:
     depends:
@@ -36,11 +38,13 @@ overrides:
       - libwayland-client0
       - libx11-6
       - libx11-xcb1
+      - libxkbcommon-x11-0
       - libxcursor1
       - libxi6
       - libxrandr2
       - mesa-vulkan-drivers
       - xdg-desktop-portal
+      - espeak-ng | speech-dispatcher
   rpm:
     # Library sonames rather than package names, so the same requirements resolve on Fedora/RHEL
     # and openSUSE (which has no libxkbcommon, vulkan-loader or libglvnd-egl package).
@@ -53,11 +57,14 @@ overrides:
     recommends:
       - libwayland-client
       - libX11
+      - libX11-xcb
+      - libxkbcommon-x11
       - libXcursor
       - libXi
       - libXrandr
       - mesa-vulkan-drivers
       - xdg-desktop-portal
+      - espeak-ng
 
 contents:
   - src: ${STAGE}/usr/bin/wordcraft

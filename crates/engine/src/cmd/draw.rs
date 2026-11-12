@@ -26,6 +26,9 @@ use super::ink_shape::{ArrowParts, InkShape, arrow_parts, pair_parts, recognise}
 use super::pos_json;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+mod page_objects;
+use page_objects::PageObjects;
+
 /// What dragging on the page does (Draw tab).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -325,12 +328,13 @@ impl PlacedInk {
 /// turn and geometry on the page.
 pub fn ink_on(s: &Session, layout: &DocLayout, page: usize) -> Vec<PlacedInk> {
     let Some(pg) = layout.pages.get(page) else { return Vec::new() };
+    let mut objects = PageObjects::new(&s.doc);
     pg.items
         .iter()
         .filter_map(|it| match it {
             Placed::Object { rect, spin, story, path, off, .. } => {
                 let pos = Pos { story: *story, path: path.clone(), off: *off };
-                match s.doc.para_at(&pos).and_then(|p| p.object_at(*off)) {
+                match objects.get(&pos) {
                     Some(InlineObject::Shape { freeform: Some(f), stroke_width, stroke, .. }) if f.is_ink() => {
                         Some(PlacedInk { pos, rect: *rect, spin: *spin, freeform: f.clone(), color: *stroke, width: *stroke_width })
                     }
@@ -577,10 +581,11 @@ fn lasso(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("a lasso loop needs at least three points".into()));
     }
     let mut items = Vec::new();
+    let mut objects = PageObjects::new(&s.doc);
     for it in &pg.items {
         let Placed::Object { rect, spin, story, path, off, .. } = it else { continue };
         let pos = Pos { story: *story, path: path.clone(), off: *off };
-        let Some(obj) = s.doc.para_at(&pos).and_then(|p| p.object_at(*off)) else { continue };
+        let Some(obj) = objects.get(&pos) else { continue };
         let picked = match obj.ink() {
             Some(_) if s.view.hide_ink => false,
             Some(f) => {
@@ -771,13 +776,14 @@ fn near(a: Rect, b: Rect) -> bool {
 fn arrow_pieces(s: &Session, layout: &DocLayout, page: usize, keep: impl Fn(&Pos, &Rect) -> bool) -> Vec<ArrowPiece> {
     let Some(pg) = layout.pages.get(page) else { return Vec::new() };
     let mut out = Vec::new();
+    let mut objects = PageObjects::new(&s.doc);
     for it in &pg.items {
         let Placed::Object { rect, spin, story, path, off, .. } = it else { continue };
         let pos = Pos { story: *story, path: path.clone(), off: *off };
         if !spin.is_identity() || !keep(&pos, rect) {
             continue;
         }
-        let Some(InlineObject::Shape { kind, freeform: Some(f), float, .. }) = s.doc.para_at(&pos).and_then(|p| p.object_at(*off)) else { continue };
+        let Some(InlineObject::Shape { kind, freeform: Some(f), float, .. }) = objects.get(&pos) else { continue };
         let Some(fp) = f.paths.first().filter(|_| f.paths.len() == 1) else { continue };
         let pen = matches!(f.ink, Some(InkTool::Pen | InkTool::Pencil)) && !s.view.hide_ink;
         let shape = f.ink.is_none() && *kind == ShapeKind::Freeform && matches!((fp.pts.len(), fp.closed), (2, false) | (3, true));
