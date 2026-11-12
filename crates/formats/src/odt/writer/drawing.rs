@@ -114,7 +114,8 @@ pub(in crate::odt) fn placement(place: Place<'_>, w: f32, h: f32) -> (String, St
     match place {
         Place::Text(Some(f)) if f.wrap != wordcraft_doc::para::Wrap::Inline => {
             let (a, props, xy) = crate::odt::frames::frame_of(f, w, h);
-            (anchor(a), props, xy)
+            let page = if a == "page" && f.page > 0 { format!(" text:anchor-page-number=\"{}\"", f.page) } else { String::new() };
+            (format!("{}{page}", anchor(a)), props, xy)
         }
         Place::Text(f) => {
             let turn = f.filter(|f| crate::odt::frames::turned(f)).map(|f| crate::odt::frames::transform_attr(0.0, 0.0, w, h, f.rot));

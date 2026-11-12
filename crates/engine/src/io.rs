@@ -66,6 +66,10 @@ pub struct ExportOptions {
     pub word2003: bool,
     /// How digits look in PDFs and page images (the Numeral setting, `System` resolved).
     pub numeral: wordcraft_layout::NumeralMode,
+    /// A PDF or page image is written only if nothing in it is silently missing (a character no
+    /// face can draw, a picture that is missing or can't be decoded); else the save fails with
+    /// `strict: …` (#6005). Ignored for other formats.
+    pub strict: bool,
 }
 
 /// A document password: wiped from memory when dropped, never printed (`Debug` shows `***`).
@@ -847,8 +851,22 @@ pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&
     safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Saves a document to `path` with optional password and export options on web targets.
 #[cfg(target_arch = "wasm32")]
 pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
+    Err(format!("{}: files are saved through the browser on the web", path.display()))
+}
+
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`].
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_text_path(path: &std::path::Path, text: &str) -> Result<(), String> {
+    crate::file_access::check_write(&path.to_string_lossy())?;
+    safe_save::write(path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Write `text` to `path` as it is (a Markdown file's own text), as safely as [`save_path_with`].
+#[cfg(target_arch = "wasm32")]
+pub fn save_text_path(path: &std::path::Path, _text: &str) -> Result<(), String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 

@@ -29,9 +29,9 @@ impl Default for Runtime {
     fn default() -> Self {
         Self {
             #[cfg(not(target_arch = "wasm32"))]
-            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            updater: Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
-            result_dialog: CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")),
+            result_dialog: CheckResultDialog::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate),
             #[cfg(not(target_arch = "wasm32"))]
             startup_check: false,
             #[cfg(not(target_arch = "wasm32"))]
@@ -43,6 +43,13 @@ impl Default for Runtime {
             status_message: None,
         }
     }
+}
+
+/// The update prompt's and the result window's words in the interface language: craft-update
+/// passes its English text and the values of its `{name}` placeholders each time it draws.
+#[cfg(not(target_arch = "wasm32"))]
+fn translate(text: &str, args: &[(&str, &str)]) -> String {
+    crate::i18n::fmt(crate::i18n::t(text), args)
 }
 
 impl WordApp {
@@ -59,7 +66,15 @@ impl WordApp {
     pub fn disable_self_update(&mut self) {
         let rt = &mut self.updates_rt;
         rt.startup_check = false;
-        rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_source(refused_check());
+        rt.updater = Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION")).with_translator(translate).with_source(refused_check());
+    }
+
+    /// Starts the helper of an update that is ready, so that it installs once the process has
+    /// ended. Call it once the exit is certain, before a path that ends the process without
+    /// dropping the app. Later calls do nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn start_pending_update(&mut self) {
+        self.updates_rt.updater.start_pending_update();
     }
 }
 
@@ -107,15 +122,23 @@ pub(crate) fn tick(app: &mut WordApp, ctx: &egui::Context) {
 pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
+        // An update starts, and a ready one asks the app to close, only while no work is unsaved.
         let clean = !(app.session.dirty || app.save_unconfirmed() || app.printing.busy() || crate::panes::has_comment_drafts(app));
         match app.updates_rt.updater.show_if(ctx, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
-            Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            // The whole app quits, every window included, and first asks about each document with
+            // unsaved changes.
+            Action::Close => {
+                let _ = app.ask_before_quit();
+            }
             Action::None => {}
         }
         // The dialog answers Help ▸ Check for Updates; a found update leaves the status idle and the prompt above takes over.
+        // It also reports what the last update came to, which the check at start leaves as the status.
         let rt = &mut app.updates_rt;
+        if !matches!(rt.updater.status(), Status::Idle) {
+            rt.manual_window_open = true;
+        }
         if rt.manual_window_open {
             match rt.result_dialog.show(ctx, rt.updater.status()) {
                 CheckResultResponse::None => {}
@@ -124,6 +147,13 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
                     rt.updater.dismiss_status();
                 }
                 CheckResultResponse::CheckAgain => rt.updater.check_now(ctx),
+                // The window closes, and the next frame's `show_if` asks the app to quit once the
+                // shown document has no unsaved work.
+                CheckResultResponse::RestartToUpdate => {
+                    rt.updater.restart_to_update();
+                    rt.manual_window_open = false;
+                    rt.updater.dismiss_status();
+                }
             }
             // An update was found: the prompt replaces the dialog.
             if matches!(rt.updater.status(), Status::Idle) {
@@ -177,5 +207,80 @@ mod tests {
         let status = app.updates_rt.updater.status();
         assert!(matches!(status, Status::Failed(why) if why.contains("another program's AppImage")), "{status:?}");
         assert!(!app.updates_rt.updater.prompt_open(), "no update offered");
+    }
+
+    /// Help ▸ Check for Updates runs while the ribbon draws, after the frame's `tick`: the result
+    /// window shows the check from the next frame on.
+    #[test]
+    fn a_check_asked_for_while_drawing_opens_the_result_window() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let pins = std::env::temp_dir().join(format!("wordcraft-no-pins-{}.toml", std::process::id()));
+        app.updates_rt.updater = craft_update::updater::Updater::new(&crate::UPDATE_APP, env!("CARGO_PKG_VERSION"))
+            .with_source(std::sync::Arc::new(|| Err("offline".into())))
+            .with_pins_path(pins);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::tick(&mut app, ui.ctx());
+            super::check(&mut app);
+            super::show(&mut app, ui.ctx());
+        });
+        out.textures_delta.clear();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::tick(&mut app, ui.ctx());
+            super::show(&mut app, ui.ctx());
+        });
+        out.textures_delta.clear();
+        let status = app.updates_rt.updater.status();
+        assert!(matches!(status, Status::Checking | Status::Failed(_)), "{status:?}");
+        assert!(app.updates_rt.manual_window_open, "the result window shows the check ({status:?})");
+    }
+
+    /// The first start after an update reports what it came to without a menu click: the check at
+    /// start reads the record, the result window opens, and Esc closes it and clears the status.
+    #[test]
+    fn the_last_update_opens_the_result_window_until_it_is_closed() {
+        let version = env!("CARGO_PKG_VERSION");
+        // The files craft-update writes for an installed update and for a failed one.
+        let cases: [(&str, &str, fn(&Status) -> bool); 2] = [
+            ("data/self-update-done.txt", version, |s| matches!(s, Status::Updated(v) if v == env!("CARGO_PKG_VERSION"))),
+            ("data/logs/self-update-error.txt", "disk full", |s| matches!(s, Status::InstallFailed(why) if why == "disk full")),
+        ];
+        for (n, (file, text, expected)) in cases.into_iter().enumerate() {
+            let root = std::env::temp_dir().join(format!("wordcraft-last-update-{n}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let record = root.join(file);
+            std::fs::create_dir_all(record.parent().unwrap()).unwrap();
+            std::fs::write(&record, text).unwrap();
+            let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            app.updates_rt.updater = craft_update::updater::Updater::new(&crate::UPDATE_APP, version)
+                .with_source(std::sync::Arc::new(|| Ok(None)))
+                .with_paths(craft_update::Paths::under(&root))
+                .with_pins_path(root.join("no-pins.toml"));
+            app.set_startup_update_check(true);
+            let ctx = egui::Context::default();
+            let frame = |app: &mut crate::WordApp, events: Vec<egui::Event>| {
+                let input = egui::RawInput { events, ..Default::default() };
+                let mut out = ctx.run_ui(input, |ui| {
+                    super::tick(app, ui.ctx());
+                    super::show(app, ui.ctx());
+                });
+                out.textures_delta.clear();
+            };
+            frame(&mut app, Vec::new());
+            let status = app.updates_rt.updater.status();
+            assert!(expected(status), "{file}: {status:?}");
+            assert!(app.updates_rt.manual_window_open, "{file}: the result window opens by itself");
+            assert!(!record.exists(), "{file}: the record is read once");
+            frame(&mut app, Vec::new());
+            assert!(app.updates_rt.manual_window_open, "{file}: the window stays open");
+            let escape =
+                egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+            frame(&mut app, vec![escape]);
+            assert!(!app.updates_rt.manual_window_open, "{file}: Esc closes the window");
+            assert_eq!(app.updates_rt.updater.status(), &Status::Idle, "{file}: closing clears the status");
+            frame(&mut app, Vec::new());
+            assert!(!app.updates_rt.manual_window_open, "{file}: the window stays closed");
+            let _ = std::fs::remove_dir_all(&root);
+        }
     }
 }

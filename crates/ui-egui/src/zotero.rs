@@ -283,7 +283,7 @@ mod tests {
     use serde_json::{Value, json};
     use wordcraft_doc::{Document, StoryRef};
     use wordcraft_engine::Session;
-    use wordcraft_zotero::wire;
+    use wordcraft_zotero::{Command, wire};
 
     use crate::{Services, WordApp};
 
