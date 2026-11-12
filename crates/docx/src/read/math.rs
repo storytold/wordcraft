@@ -103,7 +103,8 @@ fn arg(e: &El, depth: usize) -> Arg {
 
 /// A math object whose control character is a tracked deletion (`w:del` in its `m:ctrlPr`,
 /// ECMA-376 §22.1.2.23): Word marks a deleted fraction, script… this way, and it leaves the
-/// equation once the deletion is accepted, as deleted runs do.
+/// equation once the deletion is accepted, as deleted runs do: arguments and all, also those
+/// not marked deleted themselves (an object can't stay without its control character).
 fn deleted_object(k: &El) -> bool {
     k.els().any(|p| p.name.starts_with("m:") && p.name.ends_with("Pr") && p.child("m:ctrlPr").is_some_and(|c| c.child("w:del").is_some()))
 }
@@ -515,6 +516,21 @@ mod tests {
         assert_eq!((r.text.as_str(), r.sty, r.size), ("sin", Some(MSty::Plain), Some(14.0)));
         let MNode::Rad { e, .. } = &m.nodes[1] else { panic!("{:#?}", m.nodes) };
         assert_eq!(e, &vec![MNode::Run(MRun::new("y"))]);
+    }
+
+    /// Review of #6137: a deleted control character takes its whole object away, arguments and
+    /// all, even arguments with no deletion of their own. Observed in Word: a fraction and a
+    /// superscript marked so, their arguments not, show nothing in No Markup and are gone after
+    /// Accept All; the deletion's range is the arguments' text.
+    #[test]
+    fn a_deleted_control_leaves_out_its_undeleted_arguments_too() {
+        let ctrl = r#"<m:ctrlPr><w:del w:id="1" w:author="a"><w:rPr/></w:del></m:ctrlPr>"#;
+        let e = omath(&format!(
+            r#"<m:r><m:t>a</m:t></m:r><m:f><m:fPr>{ctrl}</m:fPr><m:num><m:r><m:t>b</m:t></m:r></m:num><m:den><m:r><m:t>c</m:t></m:r></m:den></m:f><m:sSup><m:sSupPr>{ctrl}</m:sSupPr><m:e><m:r><m:t>x</m:t></m:r></m:e><m:sup><m:r><m:t>2</m:t></m:r></m:sup></m:sSup><m:r><m:t>d</m:t></m:r>"#
+        ));
+        let m = read_omath(&e, MathJc::CenterGroup);
+        // Word shows `ad`, as the runs either side join here.
+        assert_eq!(m.nodes, vec![MNode::Run(MRun::new("ad"))]);
     }
 
     /// Hostile nesting through the wrappers is bounded (no stack overflow, no panic).
