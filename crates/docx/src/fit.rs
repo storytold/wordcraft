@@ -18,6 +18,11 @@ pub(crate) const NS: &str = "urn:wordcraft:fit";
 /// Marker attribute the parser keeps (namespace declarations are stripped from `El`).
 const KIND: &str = "wordcraft-fit-v1";
 
+/// Whether `target` (a relationship target) names our part.
+pub(crate) fn is_part(target: &str) -> bool {
+    target.trim_start_matches('/').eq_ignore_ascii_case(PART) || target.to_ascii_lowercase().ends_with(&format!("/{PART}"))
+}
+
 /// Whether `root` is our store (and not a user's custom XML part with a coincidental name).
 pub(crate) fn is_state(root: &El) -> bool {
     root.local() == ROOT && root.attr("kind") == Some(KIND)

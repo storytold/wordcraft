@@ -120,6 +120,9 @@ impl Reader<'_> {
                 if ![&rel.kind, &rel.target].iter().all(|s| manifest_field_ok(s)) {
                     continue;
                 }
+                if crate::fit::is_part(&rel.target) {
+                    continue;
+                }
                 let root = self.xml(&rel.target).ok().flatten();
                 if root.as_ref().is_some_and(crate::fit::is_state) {
                     continue;
@@ -146,7 +149,7 @@ impl Reader<'_> {
     /// Read the Fit One Page budget from our custom XML store, if the file has one.
     pub(super) fn read_fit_state(&mut self, document: &Rels) {
         for rel in document.list.iter().filter(|r| !r.external && rel_is(&r.kind, rt::CUSTOM_XML)).take(MAX_EMBEDDED_RELS) {
-            if !manifest_field_ok(&rel.target) {
+            if !manifest_field_ok(&rel.target) || !crate::fit::is_part(&rel.target) {
                 continue;
             }
             let Some(root) = self.xml(&rel.target).ok().flatten() else { continue };
