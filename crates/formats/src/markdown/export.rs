@@ -317,9 +317,9 @@ pub(super) fn table_md(t: &FTable, out: &mut Vec<String>) {
 
 /// Markdown text of a document.
 pub fn export(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_numbered(doc);
     let mut out: Vec<String> = Vec::new();
-    write_blocks(&flow.blocks, &mut out);
+    write_blocks_labelled(&flow.blocks, &mut out, Some(&mut model::DocLabels::new(doc)));
     let mut s = out.join("\n");
     while s.ends_with("\n\n") {
         s.pop();
@@ -328,6 +328,26 @@ pub fn export(doc: &Document) -> String {
         s.push('\n');
     }
     s
+}
+
+/// Count the list paragraphs in `t`'s cells with `labels`, row by row and cell by cell, nested
+/// tables included, as the layout and the plain-text export walk them (#5745).
+fn count_cell_labels(t: &FTable, labels: &mut model::DocLabels<'_>, depth: usize) {
+    if depth > model::MAX_DEPTH {
+        return;
+    }
+    for c in t.rows.iter().flatten() {
+        for b in &c.blocks {
+            match b {
+                FBlock::Para(p) => {
+                    if let Some(li) = p.list {
+                        let _ = labels.label(li);
+                    }
+                }
+                FBlock::Table(inner) => count_cell_labels(inner, labels, depth + 1),
+            }
+        }
+    }
 }
 
 /// A heading's text on one line, with a trailing run of '#' escaped so a reader does not take it
@@ -342,7 +362,14 @@ fn heading_text(body: &str) -> String {
     s
 }
 
+#[cfg(test)]
 pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
+    write_blocks_labelled(blocks, out, None);
+}
+
+/// [`write_blocks`], with `labels` counting the document's list labels: a numbered heading
+/// stays a heading and carries the label its page shows (`# 1 Alpha`, `## 1.1 Detail`, #5745).
+fn write_blocks_labelled(blocks: &[FBlock], out: &mut Vec<String>, mut labels: Option<&mut model::DocLabels<'_>>) {
     let mut i = 0;
     let mut counters = [0u32; 9];
     let mut prev_list = false;
@@ -350,6 +377,12 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     while let Some(b) = blocks.get(i) {
         match b {
             FBlock::Table(t) => {
+                // The page counts the list paragraphs in the cells, so a numbered heading after the
+                // table keeps the page's number (#5745).
+                if let Some(l) = labels.as_deref_mut() {
+                    l.reset_fallback();
+                    count_cell_labels(t, l, 0);
+                }
                 table_md(t, out);
                 out.push(String::new());
                 prev_list = false;
@@ -376,7 +409,28 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
             }
             FBlock::Para(p) => {
                 let body = inlines_md(&p.inlines);
+                // Every list item counts, so lists the headings share stay in step with the page.
+                let shown = match (p.list, labels.as_deref_mut()) {
+                    (Some(li), Some(l)) => Some(l.label(li).filter(|_| li.ordered)),
+                    _ => None,
+                };
                 match p.list {
+                    Some(_)
+                        if let (Some(label), Kind::Heading(n)) = (&shown, p.kind)
+                            && labels.is_some() =>
+                    {
+                        prev_list = false;
+                        let hashes = "#".repeat(n.clamp(1, 6) as usize);
+                        // The label is the page's text, not Markdown (`*%1*` is no emphasis), and a
+                        // label ending in '#' over an empty heading is no closing sequence.
+                        let text = match label {
+                            Some(label) if !label.is_empty() && body.is_empty() => heading_text(&escape(label)),
+                            Some(label) if !label.is_empty() => heading_text(&format!("{} {body}", escape(label))),
+                            _ => heading_text(&body),
+                        };
+                        out.push(format!("{hashes} {text}"));
+                        out.push(String::new());
+                    }
                     Some(li) => {
                         let lv = li.level.min(8) as usize;
                         if !prev_list || (lv == 0 && prev_top_ordered != li.ordered) {
@@ -414,7 +468,9 @@ pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                         // A list going into or out of a block quote is a new block: without the
                         // blank line, an unquoted item would be read back into the quote.
                         let quoted = |k: Kind| k == Kind::Quote;
-                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if q.list.is_some() && quoted(q.kind) == quoted(p.kind));
+                        // A numbered heading after it is written as a heading, not an item.
+                        let item = |q: &model::Para| q.list.is_some() && !(labels.is_some() && matches!(q.kind, Kind::Heading(_)));
+                        let next_is_list = matches!(blocks.get(i + 1), Some(FBlock::Para(q)) if item(q) && quoted(q.kind) == quoted(p.kind));
                         if !next_is_list {
                             out.push(String::new());
                         }

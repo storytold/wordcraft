@@ -476,6 +476,9 @@ pub struct FlowOpts {
     /// Lists with their identity and labels ([`ListInfo::list`], [`ListInfo::label`]; otherwise
     /// consecutive items form one list in the default look of its kind).
     pub lists: bool,
+    /// Without [`FlowOpts::lists`], list items still name their list ([`ListInfo::list`]), so a
+    /// text export can count their labels with the document's numbering (`DocLabels`, #5745).
+    pub numbered: bool,
 }
 
 /// Base text size (points) a phonetic guide falls back to when the source states none: the

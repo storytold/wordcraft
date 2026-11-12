@@ -452,6 +452,131 @@ mod tests {
         assert_eq!(numbered(&mut b), want);
     }
 
+    /// Each line's label in the plain-text export: what comes before the first tab after the
+    /// level's indent, or `None` for a line without one.
+    fn txt_labels(s: &Session) -> Vec<Option<String>> {
+        let txt = String::from_utf8(wordcraft_formats::txt::export(&s.doc)).unwrap();
+        txt.split("\r\n").map(|l| l.trim_start_matches('\t').split_once('\t').map(|(a, _)| a.to_string())).collect()
+    }
+
+    /// Every label the pages show, table cells included (their lines are placed on the page as
+    /// any paragraph's), in reading order.
+    fn all_labels(s: &mut Session) -> Vec<String> {
+        let l = s.layout();
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|i| if let Placed::Lines { para, l0: 0, .. } = i { para.label.as_ref().map(|lb| lb.text.clone()) } else { None })
+            .collect()
+    }
+
+    fn md_lines(s: &Session) -> Vec<String> {
+        wordcraft_formats::markdown::export(&s.doc).lines().filter(|l| !l.is_empty()).map(str::to_string).collect()
+    }
+
+    /// #5745: the plain-text and Markdown exports label numbered headings as the page does
+    /// (`1`, `1.1`, `2`, not `1.`, `a.`), and Markdown keeps them headings with their number.
+    #[test]
+    fn text_exports_label_numbered_headings_as_the_page_does() {
+        let mut s = headings("Heading1");
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!(page, [Some("1".to_string()), Some("1.1".to_string()), Some("2".to_string())]);
+        assert_eq!(txt_labels(&s), page, "txt labels = the page's");
+        assert_eq!(md_lines(&s), ["# 1 One", "## 1.1 Two", "# 2 Three"]);
+    }
+
+    /// #5745: a bulleted list between two numbered headings doesn't restart their count in the
+    /// exports, and Markdown ends the bulleted list before the next heading.
+    #[test]
+    fn a_bulleted_list_between_numbered_headings_does_not_restart_them_in_the_exports() {
+        let mut s = Session::new(Document::new());
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        for c in [
+            json!(["text.insert", {"text": "Alpha"}]),
+            json!(["text.newParagraph", {}]),
+            json!(["para.style", {"style": "Normal"}]),
+            json!(["para.bullets", {}]),
+            json!(["text.insert", {"text": "item"}]),
+            json!(["text.newParagraph", {}]),
+            json!(["para.bullets", {"off": true}]),
+            json!(["para.style", {"style": "Heading 1"}]),
+            json!(["text.insert", {"text": "Beta"}]),
+        ] {
+            s.run(c[0].as_str().unwrap(), &c[1]).unwrap();
+        }
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!((page[0].as_deref(), page[2].as_deref()), (Some("1"), Some("2")), "{page:?}");
+        let txt = txt_labels(&s);
+        assert_eq!((txt[0].as_deref(), txt[1].as_deref(), txt[2].as_deref()), (Some("1"), Some("•"), Some("2")), "{txt:?}");
+        let md = wordcraft_formats::markdown::export(&s.doc);
+        assert!(md.contains("# 1 Alpha\n\n- "), "{md}");
+        assert!(md.contains("\n\n# 2 Beta"), "a blank line ends the list before the heading: {md}");
+    }
+
+    /// #5745 (review): a numbered heading inside a table cell counts, on the page and in both
+    /// exports, so the heading after the table keeps the page's number (`1.2`, not `1.1`).
+    #[test]
+    fn a_numbered_heading_after_a_table_with_one_in_a_cell_keeps_the_pages_number() {
+        let mut s = Session::new(Document::new());
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        s.run("para.style", &json!({"style": "Heading 1"})).unwrap();
+        s.run("text.insert", &json!({"text": "Intro"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("para.style", &json!({"style": "Normal"})).unwrap();
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        s.run("para.style", &json!({"style": "Heading 2"})).unwrap();
+        s.run("text.insert", &json!({"text": "Scope"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("para.style", &json!({"style": "Heading 2"})).unwrap();
+        s.run("text.insert", &json!({"text": "Terms"})).unwrap();
+        let page = all_labels(&mut s);
+        assert_eq!(page, ["1", "1.1", "1.2"], "the page: Intro, Scope in the cell, Terms");
+        let txt = String::from_utf8(wordcraft_formats::txt::export(&s.doc)).unwrap();
+        assert!(txt.contains("1.2\tTerms"), "{txt:?}");
+        let md = md_lines(&s);
+        assert_eq!(md.first().map(String::as_str), Some("# 1 Intro"), "{md:?}");
+        assert_eq!(md.last().map(String::as_str), Some("## 1.2 Terms"), "{md:?}");
+    }
+
+    /// A heading's number is text, not Markdown: a level whose text is `*%1*` exports as `\*1\*`,
+    /// not as emphasis.
+    #[test]
+    fn markdown_escapes_a_numbered_headings_label() {
+        let mut s = headings("Heading1");
+        let levels = json!([
+            {"format": "decimal", "text": "*%1*", "style": "Heading1"},
+            {"format": "decimal", "text": "[%1.%2]", "style": "Heading2"},
+        ]);
+        s.run("list.define", &json!({"levels": levels})).unwrap();
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!(page, [Some("*1*".to_string()), Some("[1.1]".to_string()), Some("*2*".to_string())], "the page's labels");
+        assert_eq!(md_lines(&s), [r"# \*1\* One", r"## \[1.1\] Two", r"# \*2\* Three"]);
+        // The plain-text export keeps the label as it is.
+        assert_eq!(txt_labels(&s), page);
+    }
+
+    /// The plain-text export's labels are the page's for an ordinary numbered list too, a
+    /// paragraph outside it in between included.
+    #[test]
+    fn text_export_labels_a_numbered_list_as_the_page_does() {
+        let mut s = Session::new(Document::new());
+        // A new paragraph takes the list of the one it splits from: only "a", "plain" and "c"
+        // switch numbering.
+        for (i, (t, toggle)) in [("a", Some(true)), ("b", None), ("plain", Some(false)), ("c", Some(true))].iter().enumerate() {
+            if i > 0 {
+                s.run("text.newParagraph", &json!({})).unwrap();
+            }
+            s.run("text.insert", &json!({"text": t})).unwrap();
+            if let Some(on) = toggle {
+                s.run("para.numbering", &if *on { json!({}) } else { json!({"off": true}) }).unwrap();
+            }
+        }
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!(page.iter().filter(|l| l.is_some()).count(), 3, "{page:?}");
+        assert_eq!(txt_labels(&s), page);
+    }
+
     /// #5757: a list numbered in Thai digits shows them on the page, with the level's text around
     /// them (`๑.`, `(๒)`), and keeps its format through a save to .docx and back.
     #[test]

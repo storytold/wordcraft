@@ -8,7 +8,7 @@ use wordcraft_doc::Document;
 
 pub use wordcraft_doc::encoding::cp1252;
 
-use crate::model::{FBlock, ListCounter, from_doc};
+use crate::model::{DocLabels, FBlock, from_doc_numbered};
 
 fn utf16(b: &[u8], le: bool) -> String {
     let units: Vec<u16> = b.as_chunks::<2>().0.iter().map(|c| if le { u16::from_le_bytes(*c) } else { u16::from_be_bytes(*c) }).collect();
@@ -122,7 +122,7 @@ pub fn import_on(bytes: &[u8], page: &wordcraft_doc::SectionProps) -> Document {
     doc
 }
 
-fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter, depth: usize) {
+fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut DocLabels<'_>, depth: usize) {
     for b in blocks {
         match b {
             FBlock::Para(p) => {
@@ -130,16 +130,19 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
                 match p.list {
                     Some(li) => {
                         line.push_str(&"\t".repeat(li.level as usize));
-                        line.push_str(&lists.label(li));
-                        line.push('\t');
+                        // The label the page shows (#5745); a level that shows none has none here.
+                        if let Some(label) = lists.label(li) {
+                            line.push_str(&label);
+                            line.push('\t');
+                        }
                     }
-                    None => lists.reset(),
+                    None => lists.reset_fallback(),
                 }
                 line.push_str(&p.shown_text().replace('\n', "\r\n").replace(['\u{000C}', '\u{000E}'], ""));
                 out.push(line);
             }
             FBlock::Table(t) => {
-                lists.reset();
+                lists.reset_fallback();
                 for row in &t.rows {
                     let cells: Vec<String> = row
                         .iter()
@@ -148,7 +151,9 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
                                 return String::new();
                             }
                             let mut v = Vec::new();
-                            blocks_text(&c.blocks, &mut v, &mut ListCounter::default(), depth + 1);
+                            // Cell paragraphs count on with the document's lists, in order, as
+                            // the page counts them.
+                            blocks_text(&c.blocks, &mut v, lists, depth + 1);
                             v.join(" ")
                         })
                         .collect();
@@ -161,8 +166,8 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
 
 /// UTF-8 text, CRLF line ends.
 pub fn export(doc: &Document) -> Vec<u8> {
-    let flow = from_doc(doc);
+    let flow = from_doc_numbered(doc);
     let mut lines = Vec::new();
-    blocks_text(&flow.blocks, &mut lines, &mut ListCounter::default(), 0);
+    blocks_text(&flow.blocks, &mut lines, &mut DocLabels::new(doc), 0);
     lines.join("\r\n").into_bytes()
 }
