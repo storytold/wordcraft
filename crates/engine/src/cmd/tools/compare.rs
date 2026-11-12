@@ -119,15 +119,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                             changes += 1;
                         }
                         if let Some(x) = b {
-                            out.push(Arc::new(mark_block(
-                                x,
-                                &|c| {
-                                    c.ins = Some(ins);
-                                    c.del = None;
-                                    c.fmt_change = None;
-                                },
-                                0,
-                            )));
+                            out.push(Arc::new(mark_inserted_block(x, ins, 0)));
                             changes += 1;
                         }
                         i += 1;
@@ -270,7 +262,13 @@ fn build_same_para(
                 sb.fmt_change = sa.fmt_change.clone();
             }
         }
-        if revisions.len() > before || new_fmt.get() || p != *pb {
+        if revisions.len() > before
+            || new_fmt.get()
+            || p.runs.iter().any(|r| r.props.fmt_change.as_ref().is_some_and(|c| c.rev == fmt))
+            || p.mark.fmt_change.as_ref().is_some_and(|c| c.rev == fmt)
+            || p.props.fmt_change.as_ref().is_some_and(|c| c.rev == fmt)
+            || p.section.as_deref().and_then(|s| s.fmt_change.as_ref()).is_some_and(|c| c.rev == fmt)
+        {
             changed = true;
         }
     }
@@ -298,15 +296,7 @@ fn emit_run_pairs(
                             changes += 1;
                         }
                         if let Some(x) = new_slice.get(v) {
-                            out.push(Arc::new(mark_block(
-                                x,
-                                &|c| {
-                                    c.ins = Some(ctx.ins);
-                                    c.del = None;
-                                    c.fmt_change = None;
-                                },
-                                0,
-                            )));
+                            out.push(Arc::new(mark_inserted_block(x, ctx.ins, 0)));
                             changes += 1;
                         }
                     } else {
@@ -323,15 +313,7 @@ fn emit_run_pairs(
             }
             RunPair::Ins(v) => {
                 if let Some(x) = new_slice.get(v) {
-                    out.push(Arc::new(mark_block(
-                        x,
-                        &|c| {
-                            c.ins = Some(ctx.ins);
-                            c.del = None;
-                            c.fmt_change = None;
-                        },
-                        0,
-                    )));
+                    out.push(Arc::new(mark_inserted_block(x, ctx.ins, 0)));
                     changes += 1;
                 }
             }
@@ -367,6 +349,39 @@ fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
             if depth < 16 {
                 for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
                     c.blocks = c.blocks.iter().map(|x| Arc::new(mark_block(x, f, depth + 1))).collect();
+                }
+            }
+            Block::Table(t)
+        }
+    }
+}
+
+/// Returns a copy of `b` with all text runs and paragraph marks marked as inserted under `ins`,
+/// clearing foreign revision metadata including paragraph-level and section formatting changes.
+fn mark_inserted_block(b: &Block, ins: u32, depth: usize) -> Block {
+    match b {
+        Block::Para(p) => {
+            let mut p = p.clone();
+            let len = p.len();
+            let _ = p.format(0, len, &|c| {
+                c.ins = Some(ins);
+                c.del = None;
+                c.fmt_change = None;
+            });
+            p.mark.ins = Some(ins);
+            p.mark.del = None;
+            p.mark.fmt_change = None;
+            p.props.fmt_change = None;
+            if let Some(sec) = p.section.as_deref_mut() {
+                sec.fmt_change = None;
+            }
+            Block::Para(p)
+        }
+        Block::Table(t) => {
+            let mut t = t.clone();
+            if depth < 16 {
+                for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    c.blocks = c.blocks.iter().map(|x| Arc::new(mark_inserted_block(x, ins, depth + 1))).collect();
                 }
             }
             Block::Table(t)
@@ -1100,8 +1115,16 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     let mut builder = WordBuilder::new(characters);
     let mut objects = p.objects.iter();
+    let mut runs = p.run_ranges();
+    let mut run = runs.next();
     for (off, c) in p.text.char_indices() {
-        let props = p.props_of_char(off);
+        while matches!(&run, Some((r, _)) if off >= r.end) {
+            run = runs.next();
+        }
+        let props = match &run {
+            Some((r, props)) if off >= r.start => *props,
+            _ => &p.mark,
+        };
         if c != OBJ {
             builder.push_char(c, props);
             continue;

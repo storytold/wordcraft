@@ -1787,3 +1787,69 @@ fn compare_tracks_run_formatting_changes_across_case_differences() {
     let rej_run = p_rej.run_ranges().find(|(r, _)| p_rej.text[r.clone()].contains("title")).unwrap();
     assert_eq!(rej_run.1.bold, Some(true), "rejectAll must restore the original bold formatting");
 }
+
+/// #5861: Verifies that an unchanged paragraph retaining pre-existing tracked revision metadata
+/// from the original document does not falsely increment the comparison changes count.
+#[test]
+fn compare_preserved_revision_metadata_does_not_count_as_new_change() {
+    let mut orig = Document::from_text("Unchanged paragraph.\nAnchor paragraph.");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Original Author".to_string(),
+        date: "2026-01-01T00:00:00Z".to_string(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 9, &|c| c.ins = Some(0));
+    }
+
+    let rev = Document::from_text("Unchanged paragraph.\nAnchor paragraph.");
+    let path = std::env::temp_dir().join(format!("wc-compare-pres-meta-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    let res = s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(res["changes"], 0, "comparison of identical text/formatting must report 0 changes despite preserved metadata");
+    let p = s.doc.body[0].as_para().unwrap();
+    let ins_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("Unchanged")).unwrap();
+    assert_eq!(ins_run.1.ins, Some(0), "pre-existing original insertion marker must still be preserved");
+}
+
+/// #5861: Verifies that inserted paragraphs clear foreign paragraph and section fmt_change
+/// metadata inherited from the revised document's revision table.
+#[test]
+fn compare_inserted_paragraph_clears_foreign_paragraph_and_section_fmt_change() {
+    let orig = Document::from_text("Anchor paragraph.");
+
+    let mut rev = Document::from_text("Inserted paragraph with formatting.\nAnchor paragraph.");
+    rev.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Foreign Author".to_string(),
+        date: "2026-01-01T00:00:00Z".to_string(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(42, wordcraft_doc::ParaProps::default());
+        let sec = wordcraft_doc::SectionProps {
+            fmt_change: wordcraft_doc::props::PropChange::boxed(42, wordcraft_doc::SectionProps::default()),
+            ..Default::default()
+        };
+        p.section = Some(Box::new(sec));
+    }
+    let path = std::env::temp_dir().join(format!("wc-compare-ins-foreign-fmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.text, "Inserted paragraph with formatting.");
+    assert_eq!(p.props.fmt_change, None, "foreign paragraph fmt_change must be cleared on inserted paragraphs");
+    if let Some(sec) = &p.section {
+        assert_eq!(sec.fmt_change, None, "foreign section fmt_change must be cleared on inserted paragraphs");
+    }
+    assert!(p.mark.ins.is_some(), "inserted paragraph mark must have comparison insertion marker");
+}
