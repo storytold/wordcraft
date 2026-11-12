@@ -765,9 +765,9 @@ mod tests {
         s.run("table.eraser", &json!({"page": 0, "x": a.right() + 0.5, "y": a.y + a.h / 2.0})).unwrap();
         let t = first_table(&s);
         assert_eq!(shape(&t), shape(&start), "no merge");
-        for r in 0..2 {
-            let right = t.rows[r].cells[0].props.borders.and_then(|b| b.right);
-            let left = t.rows[r].cells[1].props.borders.and_then(|b| b.left);
+        for (r, row) in t.rows[..2].iter().enumerate() {
+            let right = row.cells[0].props.borders.and_then(|b| b.right);
+            let left = row.cells[1].props.borders.and_then(|b| b.left);
             assert!(right.is_some_and(|b| !b.is_visible()) && left.is_some_and(|b| !b.is_visible()), "row {r}");
         }
         assert!(t.rows[2].cells[0].props.borders.is_none(), "rows outside the edge are untouched");
