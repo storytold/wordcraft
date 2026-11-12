@@ -408,7 +408,7 @@ fn handle_primary_press(
             app.canvas.multi_drag = Some(m);
             app.session.page_hint = page;
             app.canvas.dragging = true;
-            return;
+            return true;
         }
         if clicks == 1 && (!app.session.sel.is_collapsed() || app.session.selection_pieces().is_some()) {
             let (sel, column) = (app.session.sel.clone(), app.session.column.clone());
@@ -416,7 +416,7 @@ fn handle_primary_press(
             app.canvas.column_drag = None;
             app.session.page_hint = page;
             app.canvas.dragging = true;
-            return;
+            return true;
         }
     }
     // Alt+drag selects a column (block) of text.

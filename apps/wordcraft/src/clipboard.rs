@@ -1035,6 +1035,7 @@ mod tests {
     }
 }
 
+#[cfg(test)]
 mod cf_html_tests {
     use super::wrap_cf_html;
 
