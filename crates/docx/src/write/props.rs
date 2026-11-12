@@ -55,6 +55,7 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     toggle(w, "w:noProof", c.no_proof);
     toggle(w, "w:snapToGrid", c.snap_to_grid);
     toggle(w, "w:vanish", c.hidden);
+    toggle(w, "w:specVanish", c.spec_vanish);
     toggle(w, "w:webHidden", c.web_hidden);
     match c.color {
         Some(TextColor::Auto) => w.val("w:color", "auto"),
