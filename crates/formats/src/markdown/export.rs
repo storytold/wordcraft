@@ -330,6 +330,26 @@ pub fn export(doc: &Document) -> String {
     s
 }
 
+/// Count the list paragraphs in `t`'s cells with `labels`, row by row and cell by cell, nested
+/// tables included, as the layout and the plain-text export walk them (#5745).
+fn count_cell_labels(t: &FTable, labels: &mut model::DocLabels<'_>, depth: usize) {
+    if depth > model::MAX_DEPTH {
+        return;
+    }
+    for c in t.rows.iter().flatten() {
+        for b in &c.blocks {
+            match b {
+                FBlock::Para(p) => {
+                    if let Some(li) = p.list {
+                        let _ = labels.label(li);
+                    }
+                }
+                FBlock::Table(inner) => count_cell_labels(inner, labels, depth + 1),
+            }
+        }
+    }
+}
+
 /// A heading's text on one line, with a trailing run of '#' escaped so a reader does not take it
 /// for the optional closing sequence (`## Item #` reads back as "Item").
 fn heading_text(body: &str) -> String {
@@ -357,6 +377,12 @@ fn write_blocks_labelled(blocks: &[FBlock], out: &mut Vec<String>, mut labels: O
     while let Some(b) = blocks.get(i) {
         match b {
             FBlock::Table(t) => {
+                // The page counts the list paragraphs in the cells, so a numbered heading after the
+                // table keeps the page's number (#5745).
+                if let Some(l) = labels.as_deref_mut() {
+                    l.reset_fallback();
+                    count_cell_labels(t, l, 0);
+                }
                 table_md(t, out);
                 out.push(String::new());
                 prev_list = false;
@@ -395,10 +421,10 @@ fn write_blocks_labelled(blocks: &[FBlock], out: &mut Vec<String>, mut labels: O
                     {
                         prev_list = false;
                         let hashes = "#".repeat(n.clamp(1, 6) as usize);
-                        let text = body.replace("\\\n", " ");
+                        let text = heading_text(&body);
                         out.push(match label {
-                            Some(label) => format!("{hashes} {label} {text}"),
-                            None => format!("{hashes} {text}"),
+                            Some(label) if !label.is_empty() => format!("{hashes} {label} {text}"),
+                            _ => format!("{hashes} {text}"),
                         });
                         out.push(String::new());
                     }

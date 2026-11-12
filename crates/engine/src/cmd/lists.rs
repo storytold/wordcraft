@@ -459,6 +459,17 @@ mod tests {
         txt.split("\r\n").map(|l| l.trim_start_matches('\t').split_once('\t').map(|(a, _)| a.to_string())).collect()
     }
 
+    /// Every label the pages show, table cells included (their lines are placed on the page as
+    /// any paragraph's), in reading order.
+    fn all_labels(s: &mut Session) -> Vec<String> {
+        let l = s.layout();
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|i| if let Placed::Lines { para, l0: 0, .. } = i { para.label.as_ref().map(|lb| lb.text.clone()) } else { None })
+            .collect()
+    }
+
     fn md_lines(s: &Session) -> Vec<String> {
         wordcraft_formats::markdown::export(&s.doc).lines().filter(|l| !l.is_empty()).map(str::to_string).collect()
     }
@@ -501,6 +512,31 @@ mod tests {
         let md = wordcraft_formats::markdown::export(&s.doc);
         assert!(md.contains("# 1 Alpha\n\n- "), "{md}");
         assert!(md.contains("\n\n# 2 Beta"), "a blank line ends the list before the heading: {md}");
+    }
+
+    /// #5745 (review): a numbered heading inside a table cell counts, on the page and in both
+    /// exports, so the heading after the table keeps the page's number (`1.2`, not `1.1`).
+    #[test]
+    fn a_numbered_heading_after_a_table_with_one_in_a_cell_keeps_the_pages_number() {
+        let mut s = Session::new(Document::new());
+        s.run("list.multilevelPreset", &json!({"preset": "headings"})).unwrap();
+        s.run("para.style", &json!({"style": "Heading 1"})).unwrap();
+        s.run("text.insert", &json!({"text": "Intro"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("para.style", &json!({"style": "Normal"})).unwrap();
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        s.run("para.style", &json!({"style": "Heading 2"})).unwrap();
+        s.run("text.insert", &json!({"text": "Scope"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("para.style", &json!({"style": "Heading 2"})).unwrap();
+        s.run("text.insert", &json!({"text": "Terms"})).unwrap();
+        let page = all_labels(&mut s);
+        assert_eq!(page, ["1", "1.1", "1.2"], "the page: Intro, Scope in the cell, Terms");
+        let txt = String::from_utf8(wordcraft_formats::txt::export(&s.doc)).unwrap();
+        assert!(txt.contains("1.2\tTerms"), "{txt:?}");
+        let md = md_lines(&s);
+        assert_eq!(md.first().map(String::as_str), Some("# 1 Intro"), "{md:?}");
+        assert_eq!(md.last().map(String::as_str), Some("## 1.2 Terms"), "{md:?}");
     }
 
     /// The plain-text export's labels are the page's for an ordinary numbered list too, a
