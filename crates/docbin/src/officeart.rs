@@ -341,6 +341,19 @@ pub(crate) struct Props {
     pub(crate) wrap_dist: [Option<u32>; 4],
     /// `wzDescription`: the alternative text.
     pub(crate) alt: String,
+    /// `gtextUNICODE`: a WordArt shape's text ([MS-ODRAW] §2.3.22, geometry text), lines split by CR LF.
+    pub(crate) gtext: String,
+    /// `gtextFont`: the font of the WordArt text (§2.3.22).
+    pub(crate) gtext_font: String,
+}
+
+/// Most UTF-16 units read from a complex string property.
+const MAX_STRING_UNITS: usize = 4096;
+
+/// A complex property's UTF-16LE string, up to its first NUL.
+fn wide_string(data: &[u8]) -> String {
+    let units: Vec<u16> = data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|u| *u != 0).take(MAX_STRING_UNITS).collect();
+    String::from_utf16_lossy(&units)
 }
 
 impl Props {
@@ -356,13 +369,14 @@ impl Props {
             if opid & 0x8000 != 0 {
                 let start = complex_at;
                 complex_at = complex_at.saturating_add(op as usize);
-                if pid == 0x0381 {
-                    let end = complex_at.min(body.len());
-                    if let Some(data) = body.get(start..end) {
-                        let units: Vec<u16> =
-                            data.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).take_while(|u| *u != 0).take(4096).collect();
-                        self.alt = String::from_utf16_lossy(&units);
-                    }
+                let slot = match pid {
+                    0x0381 => &mut self.alt,
+                    0x00C0 => &mut self.gtext,
+                    0x00C5 => &mut self.gtext_font,
+                    _ => continue,
+                };
+                if let Some(data) = body.get(start..complex_at.min(body.len())) {
+                    *slot = wide_string(data);
                 }
                 continue;
             }
