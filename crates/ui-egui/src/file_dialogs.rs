@@ -40,7 +40,7 @@ const MAX_FONTS_PER_PICK: usize = 2000;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const DOCUMENTS: &[&str] =
-    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
+    &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "fodt", "rtf", "txt", "md", "html", "htm", "mht", "mhtml", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
 /// Picture, recipient lists for Select Recipients › Use an Existing List…, documents otherwise.
@@ -120,12 +120,12 @@ impl WordApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn file_browser_open(&self) -> bool {
+    pub(crate) fn file_browser_open(&self) -> bool {
         self.file_browser.open.is_some()
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn file_browser_open(&self) -> bool {
+    pub(crate) fn file_browser_open(&self) -> bool {
         false
     }
 

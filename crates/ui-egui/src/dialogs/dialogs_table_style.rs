@@ -469,32 +469,39 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         .collect();
     let base_name = styles.iter().find(|(i, _)| i == based_on).map(|(_, n)| n.clone()).unwrap_or_else(|| based_on.clone());
     let mut rebased = false;
-    crate::rtl::grid(ui, egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)), |ui| {
-        let name_label = ui.label(tl!("Name:"));
-        ui.text_edit_singleline(name).labelled_by(name_label.id);
-        ui.end_row();
-        let base_label = ui.label(tl!("Style based on:"));
-        let base = craft_ui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
-            for (sid, sname) in &styles {
-                if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
-                    *based_on = sid.clone();
-                    rebased = true;
-                }
-            }
+    crate::rtl::Table::new("tstyle").columns(2).spacing(vec2(10.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let name_label = r.cell(|ui| ui.label(tl!("Name:")));
+            r.cell(|ui| ui.text_edit_singleline(name).labelled_by(name_label.id));
         });
-        base.response.labelled_by(base_label.id);
-        ui.end_row();
-        let region_label = ui.label(tl!("Apply formatting to:"));
-        let part = craft_ui::ComboBox::from_id_salt("tstyle_region")
-            .width(200.0)
-            .selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l)))
-            .show_ui(ui, |ui| {
-                for (i, (_, n)) in PARTS.iter().enumerate() {
-                    ui.selectable_value(region, i, tl!(*n));
-                }
+        t.row(|r| {
+            let base_label = r.cell(|ui| ui.label(tl!("Style based on:")));
+            r.cell(|ui| {
+                let base = craft_ui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
+                    for (sid, sname) in &styles {
+                        if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
+                            *based_on = sid.clone();
+                            rebased = true;
+                        }
+                    }
+                });
+                base.response.labelled_by(base_label.id);
             });
-        part.response.labelled_by(region_label.id);
-        ui.end_row();
+        });
+        t.row(|r| {
+            let region_label = r.cell(|ui| ui.label(tl!("Apply formatting to:")));
+            r.cell(|ui| {
+                let part = craft_ui::ComboBox::from_id_salt("tstyle_region")
+                    .width(200.0)
+                    .selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l)))
+                    .show_ui(ui, |ui| {
+                        for (i, (_, n)) in PARTS.iter().enumerate() {
+                            ui.selectable_value(region, i, tl!(*n));
+                        }
+                    });
+                part.response.labelled_by(region_label.id);
+            });
+        });
     });
     // A new style shows its new base's formatting; a modified one keeps its own.
     if rebased && id.is_none() {

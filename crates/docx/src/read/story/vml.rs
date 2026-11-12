@@ -134,7 +134,10 @@ impl Reader<'_> {
             let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
-            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], ole: None });
+            // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
+            let frac = |k: &str| img.attr(k).and_then(crate::units::vml_number);
+            let fx = wordcraft_doc::picfx::PicFx::from_vml(frac("gain").unwrap_or(1.0), frac("blacklevel").unwrap_or(0.0));
+            return Some(InlineObject::Image { media, w, h, alt, float, crop: [0.0; 4], fx, ole: None });
         }
         // The shapetype the shape is drawn from (its `type`, ECMA-376 Part 4 VML), when written in
         // the same picture: what the shape leaves out, it takes from there.
@@ -221,6 +224,15 @@ impl Reader<'_> {
         {
             let id = self.read_textbox(sc, t, rels);
             if let Some(part) = self.doc.parts.get_mut(&id) {
+                // Text direction (#5193), as Word reads it: `mso-layout-flow-alt:bottom-to-top` is
+                // `vert270` whatever `layout-flow` says; otherwise `layout-flow:vertical…` (also
+                // `vertical-ideographic`, our `eaVert`) is `vert`, and anything else horizontal.
+                let tb_style = tb.attr("style").unwrap_or("");
+                if vml_style(tb_style, "mso-layout-flow-alt").is_some_and(|v| v.eq_ignore_ascii_case("bottom-to-top")) {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert270;
+                } else if vml_style(tb_style, "layout-flow").is_some_and(|v| v.to_ascii_lowercase().starts_with("vertical")) {
+                    part.body.vert = wordcraft_doc::props::TextVert::Vert;
+                }
                 // Internal margins `inset="l,t,r,b"` (ECMA-376 Part 4 §19.1.2.22), each one left
                 // out keeping Word's default; a bare number is in EMUs, VML's base unit.
                 // `o:insetmode="auto"` leaves them to the application.

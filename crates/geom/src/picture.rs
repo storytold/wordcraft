@@ -51,6 +51,8 @@ pub struct Probe<'a> {
     pub width: u32,
     pub height: u32,
     peak: u64,
+    /// Whether a PNG has transparency, read from its chunk headers; `None` for other formats.
+    png_alpha: Option<bool>,
 }
 
 /// TIFF compressions decoded within the caller's limits: none, CCITT Group 4, LZW, Deflate (both
@@ -72,9 +74,48 @@ pub fn probe(bytes: &[u8]) -> Result<Probe<'_>, Refusal> {
         }
         _ => return Err(Refusal::NotAPicture),
     };
+    if format == ImageFormat::Png {
+        let (width, height, native, alpha) = png_chunks(bytes).ok_or_else(|| Refusal::Broken("its PNG header can't be read".into()))?;
+        let (width, height, peak) = sized(width, height, native, 0)?;
+        return Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak, png_alpha: Some(alpha) });
+    }
     let decoder = image::ImageReader::with_format(Cursor::new(bytes), format).into_decoder().map_err(broken)?;
     let (width, height, peak) = measure(&decoder, held)?;
-    Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak })
+    Ok(Probe { bytes: Cow::Borrowed(bytes), dib: false, format, width, height, peak, png_alpha: None })
+}
+
+/// A PNG's width, height, the bytes a pixel its decoder gives (samples under 8 bits widened to 8,
+/// a palette to RGB, `tRNS` to an alpha channel) and whether it has transparency, from `IHDR` and
+/// the chunk headers before the image data. The decoder's own header read inflates an ICC profile
+/// (`iCCP`) up to its 512 MiB default limit, for a picture that may only be measured.
+fn png_chunks(bytes: &[u8]) -> Option<(u32, u32, u64, bool)> {
+    let be = |at: usize| bytes.get(at..at.checked_add(4)?).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_be_bytes);
+    // The 8-byte signature, then IHDR: length, type, width, height, bit depth, colour type.
+    if bytes.get(12..16) != Some(b"IHDR".as_slice()) {
+        return None;
+    }
+    let (width, height) = (be(16)?, be(20)?);
+    let (depth, color) = (*bytes.get(24)?, *bytes.get(25)?);
+    let mut trns = false;
+    let mut at = 8usize;
+    loop {
+        let len = usize::try_from(be(at)?).ok()?;
+        match bytes.get(at.checked_add(4)?..at.checked_add(8)?)? {
+            b"IDAT" => break,
+            b"IEND" => return None,
+            b"tRNS" => trns = true,
+            _ => {}
+        }
+        at = at.checked_add(12)?.checked_add(len)?;
+    }
+    let (channels, alpha) = match color {
+        0 => (1 + u64::from(trns), trns),
+        2 | 3 => (3 + u64::from(trns), trns),
+        4 => (2, true),
+        6 => (4, true),
+        _ => return None,
+    };
+    Some((width, height, channels * if depth == 16 { 2 } else { 1 }, alpha))
 }
 
 /// Read a DIB's header: a BMP without its 14-byte file header, as the Windows clipboard holds
@@ -86,16 +127,20 @@ pub fn probe_dib(dib: Vec<u8>) -> Result<Probe<'static>, Refusal> {
         let decoder = image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(dib.as_slice())).map_err(broken)?;
         measure(&decoder, 0)?
     };
-    Ok(Probe { bytes: Cow::Owned(dib), dib: true, format: ImageFormat::Bmp, width, height, peak })
+    Ok(Probe { bytes: Cow::Owned(dib), dib: true, format: ImageFormat::Bmp, width, height, peak, png_alpha: None })
 }
 
 /// A decoder's size and the peak bytes of decoding it, `held` bytes kept beside its output.
 fn measure(decoder: &impl ImageDecoder, held: u64) -> Result<(u32, u32, u64), Refusal> {
     let (width, height) = decoder.dimensions();
+    sized(width, height, u64::from(decoder.color_type().bytes_per_pixel()), held)
+}
+
+/// A `width` × `height` picture of `native` bytes a pixel, with its peak (see [`peak_bytes`]).
+fn sized(width: u32, height: u32, native: u64, held: u64) -> Result<(u32, u32, u64), Refusal> {
     if width == 0 || height == 0 {
         return Err(Refusal::Broken("it has no pixels".into()));
     }
-    let native = u64::from(decoder.color_type().bytes_per_pixel());
     let peak = peak_bytes(width, height, native, held).ok_or(Refusal::TooLarge { width, height })?;
     Ok((width, height, peak))
 }
@@ -104,6 +149,18 @@ impl Probe<'_> {
     /// Bytes decoding takes at its peak.
     pub fn peak_bytes(&self) -> u64 {
         self.peak
+    }
+
+    /// Whether the picture has transparency, from its header: a PNG's from its chunk headers
+    /// (an ICC profile isn't inflated to say), another format's from its decoder.
+    pub fn has_alpha(&self) -> bool {
+        if let Some(alpha) = self.png_alpha {
+            return alpha;
+        }
+        if self.dib {
+            return image::codecs::bmp::BmpDecoder::new_without_file_header(Cursor::new(&*self.bytes)).is_ok_and(|d| d.color_type().has_alpha());
+        }
+        image::ImageReader::with_format(Cursor::new(&*self.bytes), self.format).into_decoder().is_ok_and(|d| d.color_type().has_alpha())
     }
 
     /// Whether decoding fits `budget` bytes.
@@ -303,6 +360,39 @@ mod tests {
             }
         }
         !c
+    }
+
+    /// `png` with a chunk of `kind` holding `data` placed after IHDR.
+    fn with_chunk(png: &[u8], kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut chunk = (data.len() as u32).to_be_bytes().to_vec();
+        chunk.extend_from_slice(kind);
+        chunk.extend_from_slice(data);
+        let crc = crc32(&chunk[4..]);
+        chunk.extend_from_slice(&crc.to_be_bytes());
+        let mut out = png.get(..33).unwrap().to_vec();
+        out.extend(chunk);
+        out.extend_from_slice(&png[33..]);
+        out
+    }
+
+    #[test]
+    fn a_png_is_measured_from_its_chunk_headers() {
+        // An ICC profile isn't inflated to measure a picture: one whose deflate stream is junk
+        // (the decoder refused it while reading the header) still measures, and isn't decoded.
+        let rgb = encode(image::RgbImage::new(4, 2), ImageFormat::Png);
+        let icc = with_chunk(&rgb, b"iCCP", b"p\0\0\xFF\xFF\xFF\xFF");
+        let p = probe(&icc).unwrap();
+        assert_eq!((p.width, p.height, p.peak_bytes()), (4, 2, 4 * 2 * 8));
+        assert!(!p.has_alpha());
+        assert_eq!(probe(&rgb).unwrap().peak_bytes(), p.peak_bytes(), "as the decoder measures it");
+        // Transparency: an alpha channel, or tRNS before the image data.
+        assert!(probe(&encode(image::GrayAlphaImage::new(2, 2), ImageFormat::Png)).unwrap().has_alpha());
+        let trns = with_chunk(&rgb, b"tRNS", &[0, 0, 0, 0, 0, 0]);
+        let p = probe(&trns).unwrap();
+        assert!(p.has_alpha());
+        assert_eq!(p.decode(1 << 20).map(|i| i.color().has_alpha()), Ok(true), "the decoder agrees");
+        // No image data: broken.
+        assert!(probe(&rgb[..33]).is_err());
     }
 
     #[test]

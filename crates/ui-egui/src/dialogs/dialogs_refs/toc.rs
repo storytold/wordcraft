@@ -145,14 +145,19 @@ pub(super) fn toc_options_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, wa
     // A solid scroll bar takes its own room beside the list instead of floating over the level boxes.
     ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
     egui::ScrollArea::vertical().max_height(180.0).show(ui, |ui| {
-        crate::rtl::grid(ui, egui::Grid::new("toc_styles").num_columns(2).spacing(vec2(10.0, 3.0)), |ui| {
+        crate::rtl::Table::new("toc_styles").columns(2).spacing(vec2(10.0, 3.0)).show(ui, |t| {
             for (name, level) in f.style_levels.iter_mut() {
                 // Built-in styles read in the interface language; the document keeps the English name.
                 let shown = app.session.doc.styles.styles.iter().find(|st| st.name == *name).map_or_else(|| name.clone(), crate::i18n::style_name);
-                let style_label = ui.label(shown);
-                ui.add(egui::DragValue::new(level).range(0..=9).custom_formatter(|v, _| if v < 0.5 { String::new() } else { format!("{v:.0}") }))
-                    .labelled_by(style_label.id);
-                ui.end_row();
+                t.row(|r| {
+                    let style_label = r.cell(|ui| ui.label(shown));
+                    r.cell(|ui| {
+                        ui.add(
+                            egui::DragValue::new(level).range(0..=9).custom_formatter(|v, _| if v < 0.5 { String::new() } else { format!("{v:.0}") }),
+                        )
+                        .labelled_by(style_label.id)
+                    });
+                });
             }
         });
     });

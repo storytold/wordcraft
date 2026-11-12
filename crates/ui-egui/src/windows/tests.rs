@@ -21,6 +21,8 @@ thread_local! {
     static UPLOADS: RefCell<usize> = const { RefCell::new(0) };
     /// Each viewport's last input-method output.
     static IME: RefCell<HashMap<ViewportId, Option<egui::output::IMEOutput>>> = RefCell::new(HashMap::new());
+    /// Viewport builders passed to immediate viewports, by viewport id.
+    static BUILDERS: RefCell<HashMap<ViewportId, egui::ViewportBuilder>> = RefCell::new(HashMap::new());
 }
 
 fn input(id: ViewportId) -> RawInput {
@@ -49,10 +51,12 @@ fn backend() -> egui::Context {
     EVENTS.with(|e| e.borrow_mut().clear());
     COMMANDS.with(|c| c.borrow_mut().clear());
     UPLOADS.with(|u| *u.borrow_mut() = 0);
+    BUILDERS.with(|b| b.borrow_mut().clear());
     let ctx = egui::Context::default();
     ctx.set_embed_viewports(false);
     egui::Context::set_immediate_viewport_renderer(|ctx, viewport| {
         let id = viewport.ids.this;
+        BUILDERS.with(|b| b.borrow_mut().insert(id, viewport.builder.clone()));
         let mut raw = input(id);
         raw.viewports.entry(id).or_default().parent = Some(viewport.ids.parent);
         let mut cb = viewport.viewport_ui_cb;
@@ -533,6 +537,42 @@ fn closing_one_of_two_windows_on_a_document_asks_nothing() {
     assert!(a.quit_requested, "one prompt for the document");
 }
 
+/// #3274: a programmatic `file.close` on a document shown in two windows closes the window
+/// alone, as the window's own close does: the document and its work stay open, so nothing is
+/// lost and the control channel must not refuse it as unsaved work it would never lose.
+#[test]
+fn a_programmatic_close_of_one_of_two_windows_on_a_document_is_accepted() {
+    let ctx = backend();
+    let mut a = app("Kept");
+    let doc = a.session.document_id();
+    frames(&ctx, &mut a, 2);
+    a.run("view.newWindow", json!({})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 2);
+    assert!(a.session.dirty, "the document has unsaved work");
+
+    // The control channel's refusal: it must not stand in the way of a close that keeps the
+    // document open.
+    let refused = crate::control::close_refused(&a, "file.close", &json!({}));
+    assert!(refused.is_none(), "closing a window alone loses nothing: {refused:?}");
+
+    // And the command itself runs, closing the window and leaving the document and its work.
+    let r = crate::control::handle(&mut a, &ctx, &crate::control::ControlRequest::new("engine.execute", json!({"command": "file.close"})).0);
+    let r = match r {
+        crate::control::Outcome::Done(v) => v,
+        _ => json!({"ok": false, "error": "not a reply"}),
+    };
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(a.window_count(), 1, "the window closed");
+    assert_eq!(a.session.document_id(), doc, "the document stays open");
+    assert!(a.session.dirty, "its work stays");
+    assert_eq!(text(&a), "Kept");
+
+    // The last window closes the document, so the same command is refused for its unsaved work.
+    let refused = crate::control::close_refused(&a, "file.close", &json!({}));
+    assert!(refused.is_some(), "closing the document would lose the work: {refused:?}");
+}
+
 /// Two windows, the second (focused) on an untouched blank document: an app whose host
 /// answers file dialogs only when the test does, plus the dialog's answer channel.
 fn blank_beside_a_document() -> (egui::Context, WordApp, Shown, u64) {
@@ -593,4 +633,68 @@ fn every_open_replaces_an_untouched_blank_document_in_its_window() {
         assert_eq!(text(&a), "Second", "{how}: it shows the opened file");
     }
     std::fs::remove_dir_all(second.parent().unwrap()).ok();
+}
+
+/// Opening a second document when another is already open constrains the new window's requested
+/// dimensions so that it fits within the active monitor's bounds, even on displays with high
+/// DPI scaling (such as 2560x1440 at 200% scale = 1280x720 pt) where the unconstrained default
+/// size (1440x920 pt) would extend past the right edge (#5871).
+#[test]
+fn newly_opened_window_does_not_exceed_screen_width() {
+    let doc1 = docx_on_disk("doc1", "Doc One");
+    let doc2 = docx_on_disk("doc2", "Doc Two");
+    let ctx = backend();
+
+    // Simulate 2560x1440 at 200% scale (1280x720 pt).
+    let screen = egui::vec2(1280.0, 720.0);
+    let frame_decorations = egui::vec2(16.0, 39.0);
+    INFOS.with(|i| {
+        let mut infos = i.borrow_mut();
+        let root = infos.entry(ViewportId::ROOT).or_default();
+        root.monitor_size = Some(screen);
+        root.inner_rect = Some(egui::Rect::from_min_size(egui::pos2(48.0, 48.0), egui::vec2(1168.0, 585.0)));
+        root.outer_rect = Some(egui::Rect::from_min_size(egui::pos2(40.0, 17.0), egui::vec2(1184.0, 624.0)));
+    });
+
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    frames(&ctx, &mut a, 2);
+
+    // Open first document in the primary window.
+    a.run("file.open", json!({"path": doc1.to_string_lossy()})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 1);
+
+    // Open second document, creating a second window while the first is active.
+    a.run("file.open", json!({"path": doc2.to_string_lossy()})).unwrap();
+    frames(&ctx, &mut a, 3);
+    assert_eq!(a.window_count(), 2);
+
+    // Find the immediate viewport created for the new window.
+    let child_builder = BUILDERS.with(|b| {
+        b.borrow()
+            .iter()
+            .find(|(id, _)| **id != ViewportId::ROOT)
+            .map(|(_, builder)| builder.clone())
+            .expect("child window viewport builder was recorded")
+    });
+
+    let inner_size = child_builder.inner_size.expect("child window has an inner size requested");
+    assert!(inner_size.x <= 1168.0, "new window width ({}) must not exceed available width on 1280pt monitor (1168pt)", inner_size.x);
+    assert!(
+        inner_size.x + frame_decorations.x <= screen.x,
+        "new window outer width ({} + {}) must fit within screen width ({})",
+        inner_size.x,
+        frame_decorations.x,
+        screen.x
+    );
+    assert!(
+        inner_size.y + frame_decorations.y <= screen.y,
+        "new window outer height ({} + {}) must fit within screen height ({})",
+        inner_size.y,
+        frame_decorations.y,
+        screen.y
+    );
+
+    std::fs::remove_dir_all(doc1.parent().unwrap()).ok();
+    std::fs::remove_dir_all(doc2.parent().unwrap()).ok();
 }

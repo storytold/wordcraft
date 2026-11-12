@@ -41,6 +41,7 @@ impl Reader<'_> {
             }
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
+            float.bare_turn = !anchored && float.rot != 0.0 && float.effect == [0.0; 4];
             let (px, py) = float.spin_pad(w, h);
             for (e, p) in float.effect.iter_mut().zip([px, py, px, py]) {
                 if *e != 0.0 {
@@ -106,7 +107,11 @@ impl Reader<'_> {
         self.set_shape_id(&mut obj, c.child("wp:docPr").and_then(|p| p.attr("id")));
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
+        // Shadow or glow room the file didn't record: saving records it (and the turn's room).
+        let fx_room = matches!(&obj, InlineObject::Shape { effects, .. } if effects.extent() != [0.0; 4]);
         if let Some(f) = obj.float_mut() {
+            // None recorded: Word keeps an inline one's line to the frame (see `Float::bare_turn`).
+            f.bare_turn = !anchored && !fx_room && f.rot != 0.0 && f.effect == [0.0; 4];
             let (px, py) = f.spin_pad(w, h);
             for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
                 // Zero adds no effects room when rotation contracts this axis.
@@ -118,9 +123,33 @@ impl Reader<'_> {
         Some(obj)
     }
 
+    /// The hyperlink Word keeps on a drawing itself: its `wp:docPr`'s `a:hlinkClick` (ECMA-376
+    /// Part 1 §20.4.2.5, §21.1.2.3.5) naming an external hyperlink relationship. Word stores a
+    /// picture's link there rather than in a `w:hyperlink` around its run (#5267). Its `#name`
+    /// part, when the address has one, stays part of the address.
+    pub(super) fn drawing_link(d: &El, rels: &Rels) -> Option<String> {
+        let frame = d.child("wp:inline").or_else(|| d.child("wp:anchor"))?;
+        let id = frame.child("wp:docPr")?.child("a:hlinkClick")?.attr("r:id")?;
+        let rel = rels.by_id(id).filter(|r| r.external && crate::package::rel_is(&r.kind, rt::HYPERLINK))?;
+        Some(rel.target.trim().to_string()).filter(|u| !u.is_empty())
+    }
+
+    /// Native ink or an Office 2016 chart kept with its fallback (`mc:AlternateContent`), and the
+    /// [`Self::drawing_link`] of the choice it was read from, else of its fallback: another
+    /// choice's link is not this object's.
+    pub(super) fn read_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<(InlineObject, Option<String>)> {
+        let (object, choice) = match self.read_ink_alternate(sc, ac, rels) {
+            Some(o) => (o, children_of_choice(ac).filter(|e| e.name == "mc:Choice")),
+            None => (self.read_chartex_alternate(sc, ac, rels)?, chartex_choice(ac)),
+        };
+        let link =
+            [choice, ac.child("mc:Fallback")].into_iter().flatten().filter_map(|e| e.child("w:drawing")).find_map(|d| Self::drawing_link(d, rels));
+        Some((object, link))
+    }
+
     /// Keep the selected native-ink branch and its picture fallback as one object. Reading only
     /// the fallback flattens the ink; reading only the choice loses its preview on the next save.
-    pub(super) fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
+    fn read_ink_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
         let choice = children_of_choice(ac).filter(|e| e.name == "mc:Choice")?;
         let drawing = choice.child("w:drawing")?;
         if drawing.find("a:graphicData")?.attr("uri") != Some(INK_URI) {
@@ -149,10 +178,8 @@ impl Reader<'_> {
     /// An Office 2016 chart (`cx:chart`: waterfall, sunburst, box & whisker…) drawn from its
     /// fallback picture, keeping both branches so saving writes the chart back rather than only
     /// the picture. `None` (read the fallback alone) when it can't be kept whole.
-    pub(super) fn read_chartex_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
-        let choice = ac
-            .children("mc:Choice")
-            .find(|c| c.child("w:drawing").and_then(|d| d.find("a:graphicData")).and_then(|g| g.attr("uri")) == Some(CHARTEX_URI))?;
+    fn read_chartex_alternate(&mut self, sc: &mut StoryCtx, ac: &El, rels: &Rels) -> Option<InlineObject> {
+        let choice = chartex_choice(ac)?;
         // A requirement in a namespace we can't name couldn't be written back.
         let requires = choice.attr("Requires").unwrap_or("");
         if requires.split_whitespace().next().is_none() || requires.split_whitespace().any(|p| p == "?") {
@@ -263,7 +290,7 @@ impl Reader<'_> {
                 }
             }
         }
-        Some(InlineObject::Image { media, w, h, alt, float, crop, ole: None })
+        Some(InlineObject::Image { media, w, h, alt, float, crop, fx: crate::units::blip_fx(blip), ole: None })
     }
 
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
@@ -561,6 +588,11 @@ impl Reader<'_> {
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }
+}
+
+/// The `mc:Choice` holding an Office 2016 chart (`cx:chart`) in an `mc:AlternateContent`.
+fn chartex_choice(ac: &El) -> Option<&El> {
+    ac.children("mc:Choice").find(|c| c.child("w:drawing").and_then(|d| d.find("a:graphicData")).and_then(|g| g.attr("uri")) == Some(CHARTEX_URI))
 }
 
 /// The alternative text of a `wp:docPr`, `pic:cNvPr` or `wps:cNvPr` (ECMA-376

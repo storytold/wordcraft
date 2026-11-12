@@ -44,12 +44,15 @@ getrandom = { workspace = true }
 # Language packs (CP4.3): downloaded, verified and unpacked by the suite's font store.
 craft-font-store = { workspace = true }
 craft-font-catalog = { workspace = true }
+# The local time zone's offset for Insert ▸ Date & Time and date fields (#1707); the web asks the browser's Date.
+chrono = { workspace = true, features = ["clock"] }
 
 [target.'cfg(unix)'.dependencies]
 # O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
 libc = { workspace = true }
 
 [dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }

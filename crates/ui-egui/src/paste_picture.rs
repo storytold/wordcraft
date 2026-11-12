@@ -147,8 +147,14 @@ pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
             }
             let mut r = Err(String::new());
             for path in files {
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                r = if size > MAX_FILE_BYTES {
+                // A clipboard path can name a pipe or device that reports no length and never ends.
+                let md = std::fs::metadata(&path).ok();
+                let size = md.as_ref().map_or(0, |m| m.len());
+                r = if md.as_ref().is_some_and(|m| !m.is_file()) {
+                    let e = format!("{} is not a regular file", path.display());
+                    app.status(e.clone());
+                    Err(e)
+                } else if size > MAX_FILE_BYTES {
                     let e = format!("{} is larger than 200 MB", path.display());
                     app.status(e.clone());
                     Err(e)

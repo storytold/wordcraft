@@ -1,10 +1,10 @@
 use super::exporter::Exporter;
 use super::metadata::metadata;
 use super::options::{PdfError, PdfOptions};
-use super::paint::{clamp_side, ok};
+use super::paint::{clamp_side, ok, rect_path};
 use super::{
-    DocLayout, Document, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Size, Transform, WriteError, Writer, krilla,
-    layout, write,
+    DocLayout, Document, FillRule, HashMap, HashSet, KrillaError, LayoutCache, LayoutOptions, Page, PageSettings, Rect, Size, Transform, WriteError,
+    Writer, imposition, krilla, layout, write,
 };
 
 /// Lay out `doc` and write it as PDF. Without markup the layout is the final text: tracked
@@ -23,7 +23,11 @@ pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Resu
     write::guard(|| export_layout_inner(doc, lay, opts))
 }
 
+/// Validate selected pages and retry embedding failures with outlined fonts.
 fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    let mut adjusted = opts.clone();
+    adjusted.tagged &= adjusted.sheet_copies <= 1;
+    let opts = &adjusted;
     let pages: Vec<usize> = match &opts.pages {
         Some(v) => {
             if let Some(bad) = v.iter().find(|p| **p >= lay.pages.len()) {
@@ -60,7 +64,28 @@ enum Attempt {
     BadFont(u32, String),
 }
 
+/// Serialize physical sheet sides while mapping link and outline destinations onto their cells.
 fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
+    let one_copy = opts.imposition.sheets(lay, pages, opts.paper)?;
+    let copies = opts.sheet_copies.clamp(1, 999) as usize;
+    if (opts.imposition != imposition::Imposition::Single || copies > 1) && one_copy.len().checked_mul(copies).is_none_or(|n| n > 5000) {
+        return Err(PdfError::Write("the print job exceeds 5000 sheet sides".into()));
+    }
+    let sheets: Vec<_> = if opts.sheet_collate {
+        (0..copies).flat_map(|_| one_copy.iter()).collect()
+    } else if matches!(opts.imposition, imposition::Imposition::Booklet { .. }) {
+        // A booklet's front/back pair must remain one physical sheet even without collation.
+        one_copy.chunks(2).flat_map(|pair| (0..copies).flat_map(move |_| pair.iter())).collect()
+    } else {
+        one_copy.iter().flat_map(|s| std::iter::repeat_n(s, copies)).collect()
+    };
+    let mut destinations = HashMap::new();
+    for (output, sheet) in sheets.iter().enumerate() {
+        for slot in &sheet.slots {
+            let page = lay.pages.get(slot.page).ok_or(PdfError::BadPage(slot.page.saturating_add(1)))?;
+            destinations.entry(slot.page).or_insert((output, Fit::in_slot(page, *slot)));
+        }
+    }
     let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging: opts.tagged, ..Default::default() };
     let language = doc.styles.default_chr.lang.clone().filter(|l| !l.is_empty() && l.is_ascii());
     let mut writer = Writer::new_with_language(settings, metadata(doc, opts), language);
@@ -70,7 +95,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         doc,
         lay,
         opts,
-        out_index: pages.iter().enumerate().map(|(o, p)| (*p, o)).collect(),
+        out_index: destinations,
         fonts: HashMap::new(),
         font_error: None,
         outlined,
@@ -85,29 +110,32 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
     if let Some(o) = ex.outline(pages) {
         pdf.set_outline(o);
     }
-    for &pi in pages {
-        let Some(page) = lay.pages.get(pi) else { return Err(PdfError::BadPage(pi.saturating_add(1))) };
-        let fit = Fit::of(page, opts.paper);
-        let size = Size::from_wh(clamp_side(fit.paper_w), clamp_side(fit.paper_h)).ok_or(PdfError::NoPages)?;
+    for sheet in sheets {
+        let size = Size::from_wh(clamp_side(sheet.width), clamp_side(sheet.height)).ok_or(PdfError::NoPages)?;
         let mut kp = pdf.start_page_with(PageSettings::new(size));
-        let mut s = kp.surface();
-        ex.links.clear();
-        // A page with a markup area is scaled down to fit its paper with the area beside it; a
-        // print on other paper is scaled to it and centred.
-        let scaled = fit.k != 1.0 || fit.dx != 0.0 || fit.dy != 0.0;
-        if scaled {
-            s.push_transform(&Transform::from_row(fit.k, 0.0, 0.0, fit.k, fit.dx, fit.dy));
-        }
-        // `page_w` is the document page's width: the page colour and watermark stay off the markup area.
-        ex.page(&mut s, page, clamp_side(fit.page_w), clamp_side(page.h));
-        if scaled {
-            s.pop();
-        }
-        s.finish();
-        if opts.links {
-            for a in ex.annotations(fit) {
-                kp.add_annotation(a);
+        let mut annotations = Vec::new();
+        let mut surface = kp.surface();
+        for slot in &sheet.slots {
+            let page = lay.pages.get(slot.page).ok_or(PdfError::BadPage(slot.page.saturating_add(1)))?;
+            let fit = Fit::in_slot(page, *slot);
+            ex.links.clear();
+            let clip = rect_path(&Rect::new(slot.x, slot.y, slot.width, slot.height));
+            if let Some(clip) = &clip {
+                surface.push_clip_path(clip, &FillRule::NonZero);
             }
+            surface.push_transform(&Transform::from_row(fit.k, 0.0, 0.0, fit.k, fit.dx, fit.dy));
+            ex.page(&mut surface, page, clamp_side(fit.page_w), clamp_side(page.h));
+            surface.pop();
+            if clip.is_some() {
+                surface.pop();
+            }
+            if opts.links {
+                annotations.extend(ex.annotations(fit));
+            }
+        }
+        surface.finish();
+        for annotation in annotations {
+            kp.add_annotation(annotation);
         }
         kp.finish();
     }
@@ -150,6 +178,26 @@ pub(crate) struct Fit {
 }
 
 impl Fit {
+    /// The physical output page dimensions, shared with the imposition planner.
+    pub(crate) fn paper_size(self) -> (f32, f32) {
+        (self.paper_w, self.paper_h)
+    }
+
+    /// Fit the complete logical page (including markup) within one fixed sheet cell.
+    fn in_slot(page: &Page, slot: imposition::Slot) -> Self {
+        let own = Self::of(page, None);
+        let k = (slot.width / page.w).min(slot.height / page.h);
+        Self {
+            paper_w: slot.width,
+            paper_h: slot.height,
+            page_w: own.page_w,
+            k,
+            dx: slot.x + (slot.width - page.w * k) / 2.0,
+            dy: slot.y + (slot.height - page.h * k) / 2.0,
+        }
+    }
+
+    /// Map one document page and its markup area onto its requested paper.
     pub(crate) fn of(page: &Page, paper: Option<(f32, f32)>) -> Fit {
         let paper_w = page.w - page.markup;
         let own = if page.markup > 0.0 && ok(page.markup) && ok(page.w) && paper_w > 1.0 {
@@ -166,5 +214,25 @@ impl Fit {
     /// A layout point on the PDF page.
     pub(crate) fn point(self, x: f32, y: f32) -> (f32, f32) {
         (x * self.k + self.dx, y * self.k + self.dy)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// N-up fits the whole markup page once, with the same centering as the physical-sheet preview.
+    #[test]
+    fn imposed_markup_pages_fit_the_slot_without_double_scaling() {
+        let page = wordcraft_layout::Page { w: 732.0, h: 792.0, markup: 120.0, ..Default::default() };
+        for (width, height, scale) in [(1000.0, 396.0, 0.5), (183.0, 1000.0, 0.25)] {
+            let slot = imposition::Slot { page: 0, x: 17.0, y: 23.0, width, height };
+            let fit = Fit::in_slot(&page, slot);
+            assert!((fit.k - scale).abs() < 0.00001);
+            assert!((fit.dx - (17.0 + (width - 732.0 * scale) / 2.0)).abs() < 0.00001);
+            assert!((fit.dy - (23.0 + (height - 792.0 * scale) / 2.0)).abs() < 0.00001);
+            assert_eq!(fit.page_w, 612.0, "the unscaled document width excludes the balloon area");
+            assert_eq!((fit.paper_w, fit.paper_h), (width, height));
+        }
     }
 }

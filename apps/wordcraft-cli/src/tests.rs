@@ -76,6 +76,22 @@ fn unknown_options_are_rejected_before_file_access() {
 }
 
 #[test]
+fn convert_rejects_malformed_format_options_before_file_access() {
+    for (options, error) in [
+        (vec!["--format"], "convert: --format requires a value"),
+        (vec!["--format", "--markup"], "convert: --format requires a value"),
+        (vec!["--format", "flatopc", "--format", "wordml2003"], "convert: duplicate --format option"),
+    ] {
+        let mut argv = args(&["convert", "missing.docx", "out.xml"]);
+        argv.extend(args(&options));
+        assert_eq!(run(&argv), Err(error.into()), "{options:?}");
+    }
+    // A valid single value reaches file access, rather than a format-option error.
+    let error = run(&args(&["convert", "missing.docx", "out.xml", "--format", "flatopc"])).unwrap_err().to_string();
+    assert!(error.starts_with("missing.docx:"), "{error}");
+}
+
+#[test]
 fn help_or_h_after_a_subcommand_asks_for_the_usage() {
     for cmd in SUBCOMMANDS {
         assert!(wants_help(cmd, &args(&["in.docx", "--help"])), "{cmd}");
@@ -195,6 +211,10 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     let ok = |raw: Vec<OsString>| text_args(&raw).unwrap().1;
     assert_eq!(ok(vec!["zotero".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["render".into(), latin1(), "out.png".into(), "--page".into(), "2".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["render".into(), "--page".into(), "2".into(), latin1(), "out.png".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["convert".into(), "--format".into(), "flatopc".into(), latin1(), "out.xml".into()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["info".into(), "--password".into(), "secret".into(), latin1()]), Some(PathBuf::from(latin1())));
+    assert_eq!(ok(vec!["zotero".into(), "--port".into(), "23119".into(), "refresh".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["run".into(), "--print".into(), "--file".into(), latin1()]), Some(PathBuf::from(latin1())));
     assert_eq!(ok(vec!["info".into(), "in.docx".into()]), None);
     // Every command that opens a file reaches the open with it (no such file here), so
@@ -212,6 +232,7 @@ fn only_the_opened_file_may_be_other_than_unicode() {
     for (raw, n) in [
         (vec!["zotero".into(), latin1(), "in.docx".into()], 2),
         (vec!["render".into(), "in.docx".into(), latin1()], 3),
+        (vec!["render".into(), "--page".into(), latin1(), "in.docx".into(), "out.png".into()], 3),
         (vec!["run".into(), "--save".into(), latin1()], 3),
         (vec!["commands".into(), latin1()], 2),
     ] {

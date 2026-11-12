@@ -55,6 +55,8 @@ impl Reader<'_> {
             .children("w:font")
             .filter(|f| f.child("w:family").and_then(|v| v.attr("w:val")) == Some("roman"))
             .filter_map(|f| f.attr("w:name"))
+            .flat_map(|n| n.split(';'))
+            .map(str::trim)
             .filter(|n| !n.is_empty() && n.len() <= MAX_FONT_NAME)
             .take(MAX_TABLE_FONTS)
             .map(str::to_string)

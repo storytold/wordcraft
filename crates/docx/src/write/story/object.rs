@@ -220,13 +220,18 @@ impl Writer<'_> {
                 w.open("mc:Choice", &[("Requires", requires)]);
             }
             let docpr = self.next_docpr();
+            let link = Self::drawing_link(props, rels);
             let name = match graphic.kind {
                 wordcraft_doc::graphic::GraphicKind::Chart => format!("Chart {docpr}"),
                 wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
                 wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
             };
             let z = self.z;
-            self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, native.unwrap_or(&root));
+            self.graphic_frame(
+                w,
+                DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt, link: link.as_deref() },
+                native.unwrap_or(&root),
+            );
             if let Some(fallback) = fallback {
                 w.close("mc:Choice");
                 match picture {
@@ -234,7 +239,11 @@ impl Writer<'_> {
                         // Both branches are one object: same id and stacking order.
                         self.z = z;
                         w.open("mc:Fallback", &[]);
-                        self.graphic_frame(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt }, picture);
+                        self.graphic_frame(
+                            w,
+                            DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt, link: link.as_deref() },
+                            picture,
+                        );
                         w.close("mc:Fallback");
                     }
                     None => w.raw(&fallback.to_xml()),
@@ -249,7 +258,7 @@ impl Writer<'_> {
     fn write_image(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, _depth: usize) {
         let InlineObject::Image { media, w: iw, h: ih, alt, float, ole, .. } = o else { return };
         // An OLE object read from a file: the object itself, at its current size.
-        if let Some(src) = ole.as_deref()
+        if let Some(src) = ole.as_deref().filter(|e| !e.is_odf_object())
             && let Some(obj) = self.embedded_xml(src, rels, Some((*iw, *ih, float, alt.as_str())))
         {
             self.rev_open(w, props);
@@ -266,8 +275,9 @@ impl Writer<'_> {
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
+        let link = Self::drawing_link(props, rels);
         let name = format!("Picture {docpr}");
-        self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt });
+        self.drawing_open(w, DrawingInfo { float, size: (*iw, *ih), docpr: &docpr, name: &name, alt, link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
@@ -355,6 +365,7 @@ impl Writer<'_> {
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.shape_docpr(extra.id);
+        let link = Self::drawing_link(props, rels);
         // Ink is told apart by its name (and its pen), which reading looks for.
         let name = shape_name(*kind, freeform.as_deref(), &docpr);
         // The effect extent leaves room for the shadow and glow.
@@ -369,7 +380,7 @@ impl Writer<'_> {
                 .map(std::sync::Arc::new);
         }
         let float = &float;
-        self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text() });
+        self.drawing_open(w, DrawingInfo { float, size: (*sw, *sh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
@@ -389,8 +400,9 @@ impl Writer<'_> {
         self.rpr(w, props);
         w.open("w:drawing", &[]);
         let docpr = self.next_docpr();
+        let link = Self::drawing_link(props, rels);
         let name = format!("{} {docpr}", if canvas.is_some() { "Canvas" } else { "Group" });
-        self.drawing_open(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt: o.alt_text() });
+        self.drawing_open(w, DrawingInfo { float, size: (*gw, *gh), docpr: &docpr, name: &name, alt: o.alt_text(), link: link.as_deref() });
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.open("a:graphic", &[]);
         let outer = match canvas {

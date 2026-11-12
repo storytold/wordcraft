@@ -1,4 +1,4 @@
-use super::{NumeralMode, WriteError};
+use super::{NumeralMode, WriteError, imposition};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum PdfError {
@@ -19,6 +19,12 @@ impl From<WriteError> for PdfError {
 /// Export options.
 #[derive(Clone, Debug)]
 pub struct PdfOptions {
+    /// Physical sheet layout used only by printing.
+    pub imposition: imposition::Imposition,
+    /// Repeat complete sheet plans (padding never spills into another copy).
+    pub sheet_copies: u32,
+    /// Collate physical sheet sides when repeating a print job.
+    pub sheet_collate: bool,
     /// Pages to export (0-based layout page indexes, in output order); `None` = all.
     pub pages: Option<Vec<usize>>,
     /// Title / author overrides (default: the document properties).
@@ -47,8 +53,12 @@ pub struct PdfOptions {
 }
 
 impl Default for PdfOptions {
+    /// Keep ordinary document export unchanged unless a print layout is requested.
     fn default() -> Self {
         PdfOptions {
+            imposition: Default::default(),
+            sheet_copies: 1,
+            sheet_collate: true,
             pages: None,
             title: None,
             author: None,

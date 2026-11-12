@@ -98,8 +98,8 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     Ok(s)
 }
 
-/// The commands that open a file, and which of their arguments not starting with `--` it is (as
-/// `pos` counts). `run` opens the value of `--file`.
+/// The commands that open a file, and which positional argument it is, excluding option values.
+/// `run` opens the value of `--file`.
 const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0), ("inspect", 0), ("render", 0), ("zotero", 1)];
 
 /// The arguments as text. Only the file the command opens may have a name that isn't valid Unicode,
@@ -108,8 +108,14 @@ const OPENS_FILE: &[(&str, usize)] = &[("convert", 0), ("info", 0), ("text", 0),
 fn text_args<S: AsRef<OsStr>>(raw: &[S]) -> Result<(Vec<String>, Option<PathBuf>), String> {
     let args: Vec<String> = raw.iter().map(|a| a.as_ref().to_string_lossy().into_owned()).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("");
+    let specs = match cmd {
+        "convert" => CONVERT_OPTIONS,
+        "render" => RENDER_OPTIONS,
+        "zotero" => ZOTERO_OPTIONS,
+        _ => PASSWORD_OPTIONS,
+    };
     let file_at = match OPENS_FILE.iter().find(|(c, _)| *c == cmd) {
-        Some((_, n)) => args.iter().enumerate().skip(1).filter(|(_, a)| !a.starts_with("--")).nth(*n).map(|(i, _)| i),
+        Some((_, n)) => positional_indices(args.get(1..).unwrap_or_default(), specs).get(*n).map(|i| i + 1),
         None if cmd == "run" => args.iter().position(|a| a == "--file").map(|i| i + 1),
         None => None,
     };
@@ -145,8 +151,13 @@ fn password_from(args: &[String]) -> Result<Option<String>, String> {
 }
 
 /// The positional arguments, skipping every option's value so an option value is never read as a
-/// path. Mirrors [`validate_options`], which has already checked the options are known.
+/// path. Uses the same option specifications as [`validate_options`].
 fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> {
+    positional_indices(args, specs).into_iter().filter_map(|i| args.get(i)).collect()
+}
+
+/// Keep the original indices too, so [`text_args`] can open a positional path by its native name.
+fn positional_indices(args: &[String], specs: &[OptionSpec]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut i = 0;
     while let Some(arg) = args.get(i) {
@@ -156,7 +167,7 @@ fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> 
             i += 2;
         } else {
             if !arg.starts_with("--") {
-                out.push(arg);
+                out.push(i);
             }
             i += 1;
         }
@@ -430,7 +441,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         "convert" => {
             validate_options("convert", &rest, CONVERT_OPTIONS)?;
             // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
-            let format = arg_value(&rest, "--format");
+            let format = match find_option_arg(&rest, "--format") {
+                OptionArg::Absent => None,
+                OptionArg::Duplicate => return Err("convert: duplicate --format option".into()),
+                OptionArg::MissingValue => return Err("convert: --format requires a value".into()),
+                OptionArg::Value(value) => Some(value),
+            };
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
