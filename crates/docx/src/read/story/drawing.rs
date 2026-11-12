@@ -36,7 +36,7 @@ impl Reader<'_> {
             let content = gd.child("w14:contentPart")?;
             let part = crate::read::part_of(rels, content.attr("r:id")?, INK_REL)?;
             let pkg = self.pkg;
-            if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&part) != Some("application/inkml+xml") {
+            if !self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).is_inkml(&part) {
                 return None;
             }
             if !self.inspect_ink_compatibility(&part) {
@@ -278,7 +278,7 @@ impl Reader<'_> {
     fn ink_content_graphic(&mut self, content: &El, rels: &Rels) -> Option<Arc<Graphic>> {
         let part = crate::read::part_of(rels, content.attr("r:id")?, INK_REL)?;
         let pkg = self.pkg;
-        if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&part) != Some("application/inkml+xml") {
+        if !self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).is_inkml(&part) {
             return None;
         }
         if !self.inspect_ink_compatibility(&part) {

@@ -445,6 +445,11 @@ impl ContentTypes {
         ct
     }
 
+    /// InkML discovery uses case-insensitive MIME identity, without changing preserved spelling.
+    pub fn is_inkml(&self, part: &str) -> bool {
+        self.of(part).is_some_and(|content_type| content_type.eq_ignore_ascii_case("application/inkml+xml"))
+    }
+
     /// Content type of `part` (a package path without the leading `/`).
     pub fn of(&self, part: &str) -> Option<&str> {
         let part = part.trim_start_matches('/').to_ascii_lowercase();

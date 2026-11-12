@@ -106,14 +106,61 @@ pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<(bool, bool), crate::D
             _ => return Err(crate::DocxError::Xml("cannot inspect the declared InkML encoding".into())),
         }
     }
-    // Entity replacement text can construct compatibility names with character references.
-    // Do not rely on the general DOCX XML parser to reject or expand declarations.
-    if contains_ascii(text.as_bytes(), b"<!ENTITY") {
-        return Err(crate::DocxError::Xml("InkML entity declarations cannot be inspected safely".into()));
+    Ok((compatibility_name(text.as_bytes()), declaration_hints(&text)?))
+}
+
+/// Ignore declaration examples in opaque XML events, but never expand a real DTD or entity.
+fn declaration_hints(text: &str) -> Result<bool, crate::DocxError> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(text);
+    // Malformed ink can still use its picture. Only the compatibility exclusion must fail closed.
+    reader.config_mut().check_end_names = false;
+    reader.config_mut().allow_unmatched_ends = true;
+    let mut require_source = false;
+    loop {
+        let start = usize::try_from(reader.buffer_position()).unwrap_or(0);
+        let suspicious = match reader.read_event() {
+            Ok(Event::Comment(_) | Event::CData(_) | Event::PI(_)) => false,
+            Ok(Event::DocType(dtd)) => {
+                // External subsets can contribute unseen markup. An unchanged package replay is
+                // required even without visible MC; entity replacement text is always refused.
+                require_source = true;
+                doctype_has_entities(dtd.as_ref())
+            }
+            Ok(Event::Eof) => return Ok(require_source),
+            Ok(event) => contains_ascii(event.as_ref(), b"<!ENTITY"),
+            Err(_) => {
+                // An incomplete token cannot prove that a later marker is only comment/CDATA.
+                let rest = text.as_bytes().get(start..).unwrap_or(text.as_bytes());
+                if !contains_ascii(rest, b"<!ENTITY") {
+                    return Ok(require_source || contains_ascii(rest, b"<!DOCTYPE"));
+                }
+                true
+            }
+        };
+        if suspicious {
+            return Err(crate::DocxError::Xml("InkML entity declarations cannot be inspected safely".into()));
+        }
     }
-    // A DTD may contribute markup from an external subset even when no directive is visible in
-    // these bytes. Never interpret it or drop it: only an unchanged source-package replay is safe.
-    Ok((compatibility_name(text.as_bytes()), contains_ascii(text.as_bytes(), b"<!DOCTYPE")))
+}
+
+/// A DocType event includes its internal subset; skip comments and quoted DTD literals there.
+fn doctype_has_entities(mut bytes: &[u8]) -> bool {
+    while let Some((&first, rest)) = bytes.split_first() {
+        if bytes.starts_with(b"<!--") {
+            let Some(end) = bytes.windows(3).position(|window| window == b"-->") else { return true };
+            bytes = bytes.get(end + 3..).unwrap_or_default();
+        } else if matches!(first, b'\'' | b'"') {
+            let Some(end) = rest.iter().position(|b| *b == first) else { return true };
+            bytes = rest.get(end + 1..).unwrap_or_default();
+        } else if bytes.get(..8).is_some_and(|head| head.eq_ignore_ascii_case(b"<!ENTITY")) {
+            return true;
+        } else {
+            bytes = rest;
+        }
+    }
+    false
 }
 
 fn compatibility_name(bytes: &[u8]) -> bool {

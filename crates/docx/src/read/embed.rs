@@ -126,7 +126,7 @@ impl Reader<'_> {
                 // Native ink shares the custom XML relationship type, but its part belongs to the
                 // drawing that refers to it: kept with it, or dropped with it (no orphan part).
                 let pkg = self.pkg;
-                if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&rel.target) == Some("application/inkml+xml") {
+                if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).is_inkml(&rel.target) {
                     continue;
                 }
                 if self.keep_part_tree(&rel.target) {

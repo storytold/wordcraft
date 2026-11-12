@@ -442,7 +442,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         // bibliography: its dedicated decoder handles XML versions and malformed fallbacks while
         // retaining the original bytes. Potential MC directives still require the strict DOCX
         // compatibility check, including fatal propagation through nested documents.
-        if r.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(path) == Some("application/inkml+xml") {
+        if r.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).is_inkml(path) {
             r.inspect_ink_compatibility(path);
             continue;
         }

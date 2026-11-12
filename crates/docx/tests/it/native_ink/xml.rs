@@ -1,7 +1,7 @@
 use super::*;
 
 /// Replaces the package's InkML part while preserving all other DOCX entries.
-fn replace_xml(bytes: &[u8], ink: &[u8]) -> Vec<u8> {
+pub(super) fn replace_xml(bytes: &[u8], ink: &[u8]) -> Vec<u8> {
     let mut files = unzip(bytes);
     files.insert("word/ink/ink1.xml".into(), ink.to_vec());
     let entries: Vec<_> = files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
@@ -9,7 +9,7 @@ fn replace_xml(bytes: &[u8], ink: &[u8]) -> Vec<u8> {
 }
 
 /// Encodes XML as BOM-marked UTF-16 in the requested byte order.
-fn utf16(text: &str, little: bool) -> Vec<u8> {
+pub(super) fn utf16(text: &str, little: bool) -> Vec<u8> {
     let mut bytes = if little { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
     for unit in text.encode_utf16() {
         bytes.extend(if little { unit.to_le_bytes() } else { unit.to_be_bytes() });

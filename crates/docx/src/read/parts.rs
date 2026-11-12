@@ -11,7 +11,7 @@ impl Reader<'_> {
         let pkg = self.pkg;
         let content_types = ContentTypes::read(pkg);
         for path in pkg.part_names() {
-            if content_types.of(path) == Some("application/inkml+xml") && !self.inspect_ink_compatibility(path) {
+            if content_types.is_inkml(path) && !self.inspect_ink_compatibility(path) {
                 let error = self.mc_error.borrow_mut().take().unwrap_or_else(|| DocxError::Xml("cannot inspect InkML compatibility".into()));
                 return Err(ReadFailure::fatal(error));
             }

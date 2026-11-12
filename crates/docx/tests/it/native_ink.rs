@@ -3,6 +3,8 @@
 use super::*;
 use wordcraft_doc::graphic::{Graphic, GraphicItem, PathSeg};
 
+#[path = "native_ink/adversarial.rs"]
+mod adversarial;
 #[path = "native_ink/xml.rs"]
 mod xml;
 

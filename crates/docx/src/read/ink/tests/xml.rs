@@ -209,6 +209,35 @@ fn dtd_dependencies_and_rebased_fragment_references_retain_fallback() {
     assert!(ink(&referenced.replace("xml:base=\"https://example.invalid/other.xml\"", "xml:base=\"\"")).is_some());
 }
 
+/// Compatibility hints skip opaque XML events, but undecidable declaration markers fail closed.
+#[test]
+fn compatibility_hints_distinguish_examples_from_declarations() {
+    use super::super::compatibility_hints;
+
+    for xml in [
+        r#"<ink><!-- <!ENTITY x 'y'> <!DOCTYPE ink> --></ink>"#,
+        r#"<ink><annotation><![CDATA[<!ENTITY x 'y'> <!DOCTYPE ink>]]></annotation></ink>"#,
+        r#"<?example <!ENTITY x 'y'> <!DOCTYPE ink> ?><ink/>"#,
+    ] {
+        assert_eq!(compatibility_hints(xml.as_bytes()).unwrap(), (false, false));
+    }
+    for xml in
+        [r#"<!DOCTYPE ink [<!-- <!ENTITY x 'y'> -->]><ink/>"#, r#"<!DOCTYPE ink SYSTEM '<!ENTITY-example'><ink/>"#, r#"<!DOCTYPE ink []><ink/>"#]
+    {
+        assert_eq!(compatibility_hints(xml.as_bytes()).unwrap(), (false, true));
+    }
+    for xml in [
+        r#"<!DOCTYPE ink [<!-- harmless --> <!ENTITY x 'y'>]><ink/>"#,
+        r#"<!DOCTYPE ink [<!ENTITY % x SYSTEM 'example.dtd'> %x;]><ink/>"#,
+        r#"<ink><!ENTITY x 'y'></ink>"#,
+        r#"<!broken><!-- <!ENTITY x 'y'> -->"#,
+        r#"<ink><!-- unclosed <!ENTITY x 'y'>"#,
+    ] {
+        assert!(compatibility_hints(xml.as_bytes()).is_err(), "{xml}");
+    }
+    assert!(compatibility_hints(b"\xff\x00<!ENTITY x 'y'>").is_err());
+}
+
 /// Attribute counts and exact shared work budgets are enforced before accepting a preview.
 #[test]
 fn parser_attributes_and_shared_work_are_bounded_before_tree_construction() {
