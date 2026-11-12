@@ -176,7 +176,7 @@ fn underline_at(u: &Underline, now: f64) -> (f32, f32) {
 }
 
 pub(super) fn slide_underline(ui: &egui::Ui, tab: &str, target: egui::Rect, color: egui::Color32, now: f64, animate: bool) {
-    let id = egui::Id::unique("tab_underline");
+    let id = egui::Id::unique(("tab_underline", ui.ctx().viewport_id()));
     let prev: Option<Underline> = ui.ctx().data(|d| d.get_temp(id));
     let snap = Underline { tab: tab.to_owned(), from: (target.center().x, target.width()), to: (target.center().x, target.width()), start: now };
     let next = match prev {
@@ -201,7 +201,7 @@ struct TabChange {
 }
 
 pub(super) fn tab_content_entry(ctx: &egui::Context, tab: &str, index: usize, now: f64, animate: bool) -> (f32, f32) {
-    let id = egui::Id::unique("ribbon_tab_change");
+    let id = egui::Id::unique(("ribbon_tab_change", ctx.viewport_id()));
     let prev: Option<TabChange> = ctx.data(|d| d.get_temp(id));
     let next = match prev {
         Some(p) if p.tab != tab => TabChange {
@@ -232,7 +232,8 @@ pub(super) fn tab_content_entry(ctx: &egui::Context, tab: &str, index: usize, no
 
 /// Track contextual tabs between frames and return those still animating out.
 pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)], now: f64, animate: bool) -> Vec<(String, usize, f64)> {
-    let (shown_id, leaving_id) = (egui::Id::unique("contextual_tabs_shown"), egui::Id::unique("contextual_tabs_leaving"));
+    let viewport = ctx.viewport_id();
+    let (shown_id, leaving_id) = (egui::Id::unique(("contextual_tabs_shown", viewport)), egui::Id::unique(("contextual_tabs_leaving", viewport)));
     let prev: Option<Vec<(String, usize)>> = ctx.data(|d| d.get_temp(shown_id));
     let mut leaving: Vec<(String, usize, f64)> = ctx.data(|d| d.get_temp(leaving_id)).unwrap_or_default();
     leaving.retain(|(n, _, start)| animate && now - start < TAB_ENTRY_SECS && !shown.iter().any(|(s, _)| s == n));
@@ -246,7 +247,7 @@ pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)],
         .collect();
     if let Some(prev) = prev {
         for (tab, _) in shown_with_ghosts.iter().filter(|(t, _)| !prev.iter().any(|(p, _)| p == t)) {
-            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("contextual_tab_entry", *tab)), now));
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(("contextual_tab_entry", viewport, *tab)), now));
         }
         for (tab, at) in prev.iter().filter(|(p, _)| animate && !shown_with_ghosts.iter().any(|(s, _)| s == p)) {
             if !leaving.iter().any(|(n, _, _)| n == tab) {
@@ -263,7 +264,7 @@ pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)],
 
 /// Return a newly shown contextual tab's progress, requesting frames until it settles.
 pub(super) fn tab_entry(ctx: &egui::Context, tab: &str, now: f64, animate: bool) -> f32 {
-    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::unique(("contextual_tab_entry", tab))));
+    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::unique(("contextual_tab_entry", ctx.viewport_id(), tab))));
     let Some(start) = start.filter(|_| animate) else { return 1.0 };
     let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
     if p < 1.0 {
@@ -441,6 +442,47 @@ mod transition_tests {
             slide_underline(ui, "Draw", egui::Rect::from_min_size(egui::pos2(215.0, 10.0), egui::vec2(50.0, 3.0)), egui::Color32::WHITE, 2.1, true);
         });
         assert!(!frame.shapes.is_empty());
+    }
+
+    /// #6348: two windows on different ribbon tabs (File > Blank document opens a second window
+    /// on Home) each keep their own motion state. Sharing it made each window see the other's
+    /// tab as a tab change on every frame: the content never settled (it stayed dimmed) and the
+    /// underline kept sliding towards the other window's tab.
+    #[test]
+    fn windows_on_different_tabs_do_not_disturb_each_other() {
+        let ctx = egui::Context::default();
+        let windows = [(egui::ViewportId::ROOT, "Insert", 2, 140.0_f32), (egui::ViewportId::from_hash_of("second"), "Home", 1, 40.0)];
+        let mut last = Vec::new();
+        for step in 0..60 {
+            let now = 1.0 + f64::from(step) / 60.0;
+            last.clear();
+            for (viewport, tab, index, x) in windows {
+                let mut raw = egui::RawInput { viewport_id: viewport, time: Some(now), ..Default::default() };
+                raw.viewports.insert(viewport, egui::ViewportInfo::default());
+                let mut motion = (0.0, 0.0);
+                let out = ctx.run_ui(raw, |ui| {
+                    motion = tab_content_entry(ui.ctx(), tab, index, now, true);
+                    slide_underline(
+                        ui,
+                        tab,
+                        egui::Rect::from_min_size(egui::pos2(x - 25.0, 10.0), egui::vec2(50.0, 3.0)),
+                        egui::Color32::WHITE,
+                        now,
+                        true,
+                    );
+                });
+                let drawn = out.shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) => Some(r.rect.center().x),
+                    _ => None,
+                });
+                out.drop_without_applying_deltas();
+                last.push((motion, drawn));
+            }
+        }
+        for ((_, _, _, x), (motion, drawn)) in windows.iter().zip(&last) {
+            assert_eq!(*motion, (1.0, 0.0), "the content has settled");
+            assert_eq!(*drawn, Some(*x), "the underline rests under its own window's tab");
+        }
     }
 
     #[test]
