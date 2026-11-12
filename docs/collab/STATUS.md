@@ -7,9 +7,10 @@
 - Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
 - The delivered head of PR #5834 is the documentation tip of the branch — the
   commit that carries this page, one fast-forward away for the owner. The code
-  head **of that tip** is `347947ef` (§5.41, `crates/collab-client` only); the
+  head **of that tip** is `d7a4cf05` (§5.42, the two hosts and the panel), above
+  `347947ef` (§5.41, `crates/collab-client` only); the
   code head of the *delivered* tip `d55d7c94` was `a32524b5`, and every code
-  fact on this page is about `a32524b5` unless it names §5.41. When the
+  fact on this page is about `a32524b5` unless it names §5.41 or §5.42. When the
   delivery was checked the tip that the fork and the PR answered was `d55d7c94`
   ("docs(collab): sync STATUS to the delivered head b4b5f50b and the PR's
   state"; `docs/collab/STATUS.md` only, +106/−64), one documentation commit
@@ -36,7 +37,8 @@
   base) when this page was updated, and the branch was not rebased again. The
   eight findings of `5853542478` are answered in `af6c311b`, each with the test
   or ADR §5.35 names; the ninth, the
-  snapshot rollback in the review body, is confirmed and open (§4). The nine
+  snapshot rollback in the review body, is closed in §5.41, and §5.42 renders
+  the queue it takes at the author's panel. The nine
   findings of `5855379673` are answered in `65037c7b` and `a32524b5` and
   triaged in §5.37; the whole branch is in the fork and in the PR. It was
   pushed on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`), at
@@ -378,8 +380,8 @@ missing, and where the next session should start.
 |---|---|---|
 | Two or more clients edit one `.docx` | done | `two_clients_edit_through_the_server`, delta convergence tests |
 | Cursors, selections, participants visible | done | participants panel, remote carets + selection shading |
-| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 10 (the token renewal that replaced the client) is closed in §5.34 — a repeated `session` for the live connection renews its credentials in place, so the unconfirmed edit and the participant list survive (`a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`; ADR `0007-token-renewal-keeps-the-connection.md`); 9 (per-document connections) remains open, named in §4. The last finding of `5853542478` — a client whose base stayed above a restored room's head — is closed in §5.41: the base follows the head and the queue built above it is dropped and reported, not replayed (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`, `two_clients_converge_after_the_room_is_restored`; ADR `0008-restore-lowers-the-base.md`) |
-| Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot; a room restored from an older snapshot is a case of its own (§5.41): the base is lowered to the head and the queue built above it is dropped with the ids reported, so the next operation lands instead of being refused `Stale` (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`) |
+| Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 10 (the token renewal that replaced the client) is closed in §5.34 — a repeated `session` for the live connection renews its credentials in place, so the unconfirmed edit and the participant list survive (`a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`; ADR `0007-token-renewal-keeps-the-connection.md`); 9 (per-document connections) remains open, named in §4. The last finding of `5853542478` — a client whose base stayed above a restored room's head — is closed in §5.41: the base follows the head and the queue built above it is dropped and reported, not replayed (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`, `two_clients_converge_after_the_room_is_restored`; ADR `0008-restore-lowers-the-base.md`), and the author sees the cost since §5.42: the panel names the room's head, the count and the ids of the dropped operations, and the session reads `Resyncing` until the snapshot lands (`a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`) |
+| Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot; a room restored from an older snapshot is a case of its own (§5.41): the base is lowered to the head and the queue built above it is dropped with the ids reported, so the next operation lands instead of being refused `Stale` (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`); the panel shows that queue at its author and the session leaves `InSync` until the snapshot lands (§5.42, `a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`, `a_welcome_below_the_base_without_a_snapshot_shows_the_reason`) |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
 | Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
@@ -638,10 +640,11 @@ Results at this writing:
   with them. Re-planning them onto the new head is refused on purpose: a
   positional edit would land on text its offsets were not computed for, and its
   author skips its own delta, so a replayed operation would be invisible in the
-  document the snapshot just replaced. The panel does not render `dropped` yet:
-  the desktop and web sessions ignore the field (`Event::Welcome` is destructured
-  with `..`), so the information exists at the client boundary and the wording
-  belongs to the panel pass (§5.41, "what is left").
+  document the snapshot just replaced. The panel renders it since `d7a4cf05`
+  (§5.42): both hosts keep a `Restore` notice (head, count, `OpId`s), the
+  participants panel draws it for the rest of the session, and the session
+  reads `Resyncing` until the snapshot lands, so the author can name the edits
+  the restore cost instead of finding the document silently different.
 - A first join that races another one on a document nothing is stored for builds
   the room twice and keeps one; the loser's copy is dropped. Correct, but wasted
   work on a large document (§5.35, finding 1).
@@ -4101,26 +4104,103 @@ other twenty pass; the patch was reverted afterwards and the tree is clean.
 | `cargo check -j 8 -p wordcraft-collab-web --target wasm32-unknown-unknown` | clean |
 
 The two host crates are in the gate because `Event` is the type they consume: the
-new field is additive, both destructure `Event::Welcome` with `..`, and no line
-outside `crates/collab-client` changed.
+new field is additive, both destructured `Event::Welcome` with `..` at this
+commit (§5.42 made them read the field), and no line outside
+`crates/collab-client` changed.
 
 **What is left.**
 
-1. **The push.** `347947ef` and the commit that carries this page are local; the
-   envoy role does not push, so the owner's fast-forward publishes them and the
-   fork branch, the PR head and the runs follow (§5.40's pattern).
+1. **The push.** `347947ef`, `d7a4cf05` and the commit that carries this page
+   are local; the envoy role does not push, so the owner's fast-forward
+   publishes them and the fork branch, the PR head and the runs follow (§5.40's
+   pattern).
 2. **The panel wording.** The desktop session and the web session ignore
    `dropped` today, so a writer whose in-flight edits a restore took sees the
    document change and no message. One arm in each host (`collab-app`,
    `collab-web`) can put the count into `last_error` and pause the session until
    the snapshot lands, the way ADR WC-0006's divergence does; the wording and
    the two host tests belong to that pass. It is not done here because this run
-   was scoped to `crates/collab-client`.
+   was scoped to `crates/collab-client`. **Closed in `d7a4cf05` (§5.42):** both
+   hosts consume `dropped` and the panel draws the head, the count and the ids;
+   the session reads `Resyncing` until the snapshot lands and keeps the notice
+   after it.
 3. **The undo history after a restore.** Steps confirmed above the restored head
    leave the stacks (they name versions the room no longer has); steps at or
    below it stay, but the room's own undo stacks are in memory and do not survive
    a restart, so an undo of such a step is refused `undoConflict`. The refusal is
    explicit (ADR-0010), the persistence of the stacks is not in this change.
+
+### 5.42 The panel shows the queue a restore took (run 2026-11-12)
+
+**What was left (§5.41, item 2).** `Event::Welcome` has carried
+`dropped: Vec<OpId>` since `347947ef`, but both hosts destructured it with
+`..`: the desktop session (`crates/collab-app/src/lib.rs`) and the web session
+(`crates/collab-web/src/lib.rs`) threw the field away. A writer whose
+in-flight edits a restore took saw the document change, the session read
+`InSync` again as soon as the snapshot landed, and nothing said which edits
+were gone. The information existed at the client boundary and stopped there.
+
+**The change** (`d7a4cf05`, four files: `crates/collab-app/src/lib.rs` +90,
+`crates/collab-app/src/tests.rs` +36, `crates/collab-web/src/lib.rs` +130,
+`crates/ui-egui/src/collab.rs` +36):
+
+1. `Restore` (in `collab-app`, so both hosts share it) holds the head the
+   welcome answered with and the `OpId`s that left the queue.
+   `Restore::from_welcome` returns `None` for the ordinary handshake, so an
+   empty `dropped` changes nothing.
+2. `WelcomeState::after_welcome` is the one place both hosts decide the
+   visible status: a room that took the queue leaves `Status::Resyncing` (the
+   document those edits were in is about to be replaced by the snapshot), and a
+   session already paused by ADR WC-0006 stays `Diverged` — the stronger reason
+   wins, and a restore is not the snapshot that repairs a lost local edit.
+3. Both hosts now assign the room's head to `state.version` instead of
+   `max(...)`, as `adopt_head` does in the client (ADR WC-0008). Keeping the
+   higher number would plan the next operation on a document the room no longer
+   has — the `Stale` loop §5.41 closed at the client would have survived one
+   layer up, in the app's own base.
+4. The notice outlives the snapshot: `Collab::restore()` keeps it for the rest
+   of the session, so the status returning to `InSync` does not erase the cost.
+   The participants panel draws a warning line — the room's version, the count
+   and the ids — built with the interface catalogs (`i18n::tn` for one/many,
+   `i18n::fmt` for the placeholders, English as the key), so translators can
+   word it without touching the state machine.
+5. Nothing about permissions changed: `can_write`/`can_commit` still compare
+   the status with `InSync`, and a viewer gains no new path.
+
+The `Event::Resync` branch (`resync: false` with a head below the base, the
+client's defensive answer) already set `Resyncing` and put the client's reason
+in `last_error`; it now has a test that drives a real welcome through the web
+session and reads the reason back.
+
+**The tests.**
+
+| Test | What it holds |
+|---|---|
+| `a_welcome_without_dropped_operations_reports_nothing` (`collab-app`) | empty `dropped`: status `InSync`, no notice |
+| `a_welcome_with_dropped_operations_names_them_and_leaves_in_sync` (`collab-app`) | head and ids kept, status `Resyncing` |
+| `a_restore_does_not_clear_a_paused_session` (`collab-app`) | ADR WC-0006's `Diverged` survives a restore |
+| `a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync` (`collab-web`) | a real welcome `3` → two queued ops → welcome `1`: status `Resyncing`, base `1`, `can_write` false, notice `[c1:1, c1:2]`; the snapshot at `1` restores `InSync` and the notice stays |
+| `a_welcome_without_dropped_operations_reports_nothing` (`collab-web`) | the ordinary handshake through `on_text`: no notice, no `last_error` |
+| `a_welcome_below_the_base_without_a_snapshot_shows_the_reason` (`collab-web`) | the `Resync` branch: status `Resyncing`, the reason in `last_error`, no welcome notice |
+| `a_restore_line_names_the_head_the_count_and_the_operations` (`ui-egui`) | the panel line names version `3`, `2 unconfirmed edits were dropped` and `c1:1, c1:2`; one edit reads singular |
+
+They fail without the fix: with `WelcomeState` returning no notice and
+`InSync` (the old host behaviour), the two `collab-app` tests that expect a
+notice and the `collab-web` restore test fail; the tree was restored afterwards.
+
+**The gate on `d7a4cf05`** (build host `agents`, 2026-11-12):
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | clean |
+| `cargo clippy -j 8 -p wordcraft-collab-client -p wordcraft-collab-app -p wordcraft-collab-web -p wordcraft-collab-ws -p wordcraft-ui-egui --all-targets -- -D warnings` | clean |
+| `cargo test -j 8 -p wordcraft-collab-client -p wordcraft-collab-engine -p wordcraft-collab-app -p wordcraft-collab-web` | 26 / 0 / 0, 58 / 0 / 0, 47 / 0 / 0, 14 / 0 / 0 |
+| `cargo test -j 8 -p wordcraft-ui-egui --lib a_restore_line` | 1 passed, 1195 filtered out |
+| `cargo check -j 8 -p wordcraft-collab-web --target wasm32-unknown-unknown` | clean |
+| `cargo check -j 8 -p wordcraft-ui-egui --target wasm32-unknown-unknown` | clean (two pre-existing `unused_variables` warnings in `theme.rs`, untouched) |
+
+**What is left.** The push is the owner's (§5.41, item 1); the undo history
+after a restore is still open (§5.41, item 3).
 
 ## 6. Where things live
 
