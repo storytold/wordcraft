@@ -5294,3 +5294,32 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// Editing a header in a document of several sections tags it with its section, and with
+/// "Same as Previous" while it is the previous section's too; a one-section document keeps
+/// the plain tag.
+#[test]
+fn header_tags_name_the_section_and_the_link() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One")), crate::Services::default());
+    app.ui.language = "en".into();
+    app.run("insert.footer", json!({"text": "Footer text"})).unwrap();
+    app.run("insert.closeHeader", json!({})).unwrap();
+    let tags = |app: &mut WordApp, page: usize, footer: bool| {
+        let layout = app.session.layout();
+        hf_tags(&app.session.doc, &layout.pages[page], footer)
+    };
+    assert_eq!(tags(&mut app, 0, true), ("Footer".to_string(), None), "one section: a plain tag");
+    app.run("caret.docEnd", json!({})).unwrap();
+    app.run("layout.break", json!({"kind": "nextPage"})).unwrap();
+    assert_eq!(app.session.layout().pages.len(), 2, "a next-page section break starts a page");
+    assert_eq!(tags(&mut app, 0, true), ("Footer – Section 1".to_string(), None));
+    assert_eq!(tags(&mut app, 1, true), ("Footer – Section 2".to_string(), Some("Same as Previous".to_string())));
+    assert_eq!(tags(&mut app, 1, false), ("Header – Section 2".to_string(), Some("Same as Previous".to_string())));
+    // Section 2 gets a footer of its own: no longer the same as section 1's.
+    let own = app.session.doc.add_part(wordcraft_doc::PartKind::Footer, vec![]);
+    app.session.doc.last_section.footers.default = Some(own);
+    assert_eq!(tags(&mut app, 1, true), ("Footer – Section 2".to_string(), None));
+    // Different first page: the section's first page has its own kind of footer.
+    app.run("layout.differentFirstPage", json!({"value": true})).unwrap();
+    assert_eq!(tags(&mut app, 1, true).0, "First Page Footer – Section 2");
+}

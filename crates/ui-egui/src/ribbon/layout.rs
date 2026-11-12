@@ -48,6 +48,49 @@ pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
     mi(ui, app, "More Columns…", "ui.dialog", json!({"name": "columns"}));
 }
 
+/// Layout › Breaks: the page breaks, then the section breaks, each group under a heading and
+/// each break with a picture and a line on what it does to the text after it.
+pub(super) fn breaks_items(ui: &mut Ui, app: &mut WordApp) {
+    const WIDTH: f32 = 330.0;
+    let groups: [(&str, &[(&str, &str, &str, &str)]); 2] = [
+        (
+            "Page Breaks",
+            &[
+                ("pageBreak", "Page", "page", "Ends the page here: the text that follows starts on the next page."),
+                ("break.column", "Column", "column", "Ends the column here: the text that follows starts at the top of the next column."),
+                (
+                    "break.textWrapping",
+                    "Text Wrapping",
+                    "textWrapping",
+                    "Moves the text that follows below the pictures and objects it flows around, as for a caption.",
+                ),
+            ],
+        ),
+        (
+            "Section Breaks",
+            &[
+                ("section.nextPage", "Next Page", "nextPage", "Starts a new section on the next page."),
+                ("section.continuous", "Continuous", "continuous", "Starts a new section on the same page."),
+                ("section.evenPage", "Even Page", "evenPage", "Starts a new section on the next even-numbered page."),
+                ("section.oddPage", "Odd Page", "oddPage", "Starts a new section on the next odd-numbered page."),
+            ],
+        ),
+    ];
+    // A menu offers its items all the room it can take; the descriptions wrap at this width instead.
+    ui.set_max_width(WIDTH);
+    let enabled = crate::widgets::enabled(app, "layout.break");
+    for (heading, items) in groups {
+        crate::widgets::menu_heading(ui, tl!(heading), WIDTH);
+        for &(icon, label, kind, description) in items {
+            let resp = ui.add_enabled_ui(enabled, |ui| crate::widgets::described_menu_item(ui, icon, tl!(label), tl!(description), WIDTH)).inner;
+            if resp.clicked() {
+                crate::widgets::run_from_ribbon(app, "layout.break", json!({"kind": kind}));
+                ui.close();
+            }
+        }
+    }
+}
+
 pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("layout.pageSetup"), app, |ui, app| {
         // Text Direction works on what the caret is in: table cells, a text box, else the section.
@@ -77,17 +120,7 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("size", Some("Size"), "Size", true, "layout.size"), size_menu);
         menu_button(ui, app, crate::widgets::MenuButtonOptions::new("columns", Some("Columns"), "Columns", true, "layout.columns"), columns_items);
         stack(ui, |ui| {
-            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("breaks", Some("Breaks"), "Breaks", false, "layout.break"), |ui, app| {
-                ui.label(egui::RichText::new(tl!("Page Breaks")).strong());
-                mi(ui, app, "Page", "layout.break", json!({"kind": "page"}));
-                mi(ui, app, "Column", "layout.break", json!({"kind": "column"}));
-                mi(ui, app, "Text Wrapping", "layout.break", json!({"kind": "textWrapping"}));
-                ui.label(egui::RichText::new(tl!("Section Breaks")).strong());
-                mi(ui, app, "Next Page", "layout.break", json!({"kind": "nextPage"}));
-                mi(ui, app, "Continuous", "layout.break", json!({"kind": "continuous"}));
-                mi(ui, app, "Even Page", "layout.break", json!({"kind": "evenPage"}));
-                mi(ui, app, "Odd Page", "layout.break", json!({"kind": "oddPage"}));
-            });
+            menu_button(ui, app, crate::widgets::MenuButtonOptions::new("breaks", Some("Breaks"), "Breaks", false, "layout.break"), breaks_items);
             menu_button(
                 ui,
                 app,

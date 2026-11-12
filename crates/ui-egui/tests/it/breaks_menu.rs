@@ -60,3 +60,30 @@ fn section_break_from_the_menu_splits_sections() {
     let after = h.state_mut().session.doc.sections().len();
     assert!(after > before, "the menu section break added a section (was {before}, now {after})");
 }
+
+/// The menu's group headings are labels, not items; each break has a description.
+#[test]
+fn headings_are_not_items_and_breaks_are_described() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = layout_tab();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Breaks").click();
+    for _ in 0..3 {
+        h.step();
+    }
+    for heading in ["Page Breaks", "Section Breaks"] {
+        let buttons = h
+            .query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button))
+            .filter(|n| n.accesskit_node().label().as_deref().map(str::trim) == Some(heading))
+            .count();
+        assert_eq!(buttons, 0, "{heading} is a heading, not something to click");
+        assert!(h.query_by_label(heading).is_some(), "{heading} is shown");
+    }
+    for item in ["Page", "Column", "Text Wrapping", "Next Page", "Continuous", "Even Page", "Odd Page"] {
+        let node = h
+            .query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::Button))
+            .find(|n| n.accesskit_node().label().as_deref().map(str::trim) == Some(item))
+            .unwrap_or_else(|| panic!("the {item} item is in the Breaks menu"));
+        let description = node.accesskit_node().description().map(|d| d.to_string()).unwrap_or_default();
+        assert!(description.len() > 10, "{item} says what it does: {description:?}");
+    }
+}

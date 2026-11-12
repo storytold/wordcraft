@@ -81,6 +81,7 @@ pub use floats::{is_floating, shape_figure_alt};
 use floats::{left_out_objects, wrap_area};
 #[cfg(test)]
 use headers::MAX_HEADER_ITEMS;
+pub use headers::hf_same_as_previous;
 #[cfg(test)]
 use headers::placed_cost;
 use headers::placed_cost_by;

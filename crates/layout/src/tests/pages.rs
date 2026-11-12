@@ -206,6 +206,33 @@ fn a_linked_tall_header_pushes_the_next_sections_body_down() {
     assert_eq!(l.pages[0].body.y, l.pages[1].body.y, "same header, same body top");
 }
 
+/// The header and footer tags say "Same as Previous" for a part the section inherits, or names
+/// as the section before it does; not for a part of its own, nor in the first section.
+#[test]
+fn same_as_previous_follows_what_each_section_names() {
+    use wordcraft_doc::section::HeaderSet;
+    let mut d = Document::from_text("One\nTwo\nThree");
+    let shared = d.add_part(PartKind::Header, paras("Shared", 1));
+    let own = d.add_part(PartKind::Header, paras("Own", 1));
+    let first_page = d.add_part(PartKind::Header, paras("First page", 1));
+    let set = |default, first| HeaderSet { default, first, even: None };
+    let base = d.last_section.clone();
+    // Section 1 names the shared header; section 2 names it too (as a new section break
+    // copies it); section 3 names one of its own and a first-page header.
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(SectionProps { headers: set(Some(shared), None), ..base.clone() }));
+    d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().section = Some(Box::new(SectionProps { headers: set(Some(shared), None), ..base.clone() }));
+    d.last_section = SectionProps { headers: set(Some(own), Some(first_page)), ..base };
+    let same = |s, slot| hf_same_as_previous(&d, s, false, slot);
+    assert!(!same(0, HfSlot::Default), "the first section has nothing before it");
+    assert!(same(1, HfSlot::Default), "the same part as section 1");
+    assert!(same(1, HfSlot::First), "left out: linked to the previous section");
+    assert!(!same(2, HfSlot::Default), "a header of its own");
+    assert!(!same(2, HfSlot::First), "a first-page header of its own");
+    assert!(same(2, HfSlot::Even), "left out: linked");
+    assert!(same(1, HfSlot::Default) && hf_same_as_previous(&d, 1, true, HfSlot::Default), "no footers anywhere: linked");
+    assert!(!same(3, HfSlot::Default), "no such section");
+}
+
 #[test]
 fn long_endnotes_continue_on_new_pages() {
     crate::test_fonts();
