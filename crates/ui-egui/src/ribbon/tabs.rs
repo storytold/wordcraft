@@ -264,7 +264,9 @@ pub(super) fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)],
 
 /// Return a newly shown contextual tab's progress, requesting frames until it settles.
 pub(super) fn tab_entry(ctx: &egui::Context, tab: &str, now: f64, animate: bool) -> f32 {
-    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::unique(("contextual_tab_entry", ctx.viewport_id(), tab))));
+    // Read the viewport before the data closure: it takes the context lock the closure holds.
+    let id = egui::Id::unique(("contextual_tab_entry", ctx.viewport_id(), tab));
+    let start: Option<f64> = ctx.data(|d| d.get_temp(id));
     let Some(start) = start.filter(|_| animate) else { return 1.0 };
     let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
     if p < 1.0 {
