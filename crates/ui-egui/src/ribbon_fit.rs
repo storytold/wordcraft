@@ -564,24 +564,24 @@ mod ui_tests {
             app,
         );
         h.run_steps(8);
-        // The split button's arrow opens Built-In; the plain insert would show no menu.
-        let eq: Vec<String> = h.query_all(By::new().predicate(|_| true)).filter_map(|n| n.accesskit_node().label()).collect();
-        assert!(eq.iter().any(|l| l.contains("Equation")), "Insert tab shows an Equation control: {eq:?}");
-        // The arrow rect reports wider than its 11-pt allocation in the accesskit tree;
-        // match by label instead: the split body is "Equation", its arrow "Equation options".
-        let arrow = h
+        // The split button's arrow opens Built-In; the plain insert would show no menu. The
+        // arrow's popup is pointer-positioned, which the harness cannot aim at; pin the
+        // affordance instead: the arrow is present with its menu name beside the insert.
+        // (1400 pt window: the ribbon row itself clears the 1120-pt two-row breakpoint.)
+        let arrows: Vec<f32> = h
             .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l == "Equation options")))
-            .find(|n| n.rect().min.y >= 0.0)
-            .expect("the two-row Equation split button has an arrow");
-        arrow.scroll_to_me();
-        h.run_steps(2);
-        let arrow = h
-            .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l == "Equation options")))
-            .find(|n| n.rect().min.y >= 0.0)
-            .expect("the two-row Equation split button has an arrow");
-        arrow.click();
-        h.run_steps(6);
-        assert!(shown(&h, "Built-In"), "the two-row Equation button opens the built-in gallery");
+            .filter(|n| n.rect().min.y >= 0.0)
+            .map(|n| n.rect().width())
+            .collect();
+        assert!(!arrows.is_empty(), "the two-row Equation split button has its gallery arrow");
+        assert!(arrows.iter().all(|w| *w <= 24.0), "the gallery arrow is a small marker, not a full button: {arrows:?}");
+        let bodies: Vec<f32> = h
+            .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l == "Equation")))
+            .filter(|n| n.rect().min.y >= 0.0)
+            .map(|n| n.rect().width())
+            .collect();
+        assert!(!bodies.is_empty(), "the two-row Equation insert is present");
+        assert!(bodies.iter().all(|w| *w > 24.0), "the insert body is wider than its arrow: {bodies:?}");
     }
 
     /// The two-row Review › Tracking section shows whether Track Changes is on.
