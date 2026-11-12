@@ -206,7 +206,11 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
-        C_BIDI => set(&mut p.rtl, sprm::toggle(prl), base.rtl.unwrap_or(false)),
+        // 0x80 is the style's value: it restores it over an earlier sprmCFBiDi, as a PRM does.
+        C_BIDI => match sprm::toggle(prl) {
+            sprm::Toggle::Keep => p.rtl = base.rtl,
+            t => set(&mut p.rtl, t, base.rtl.unwrap_or(false)),
+        },
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),
@@ -378,11 +382,13 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl, sides: &ParaSides) {
             if prl.op == P_JC80 && sides.jc {
                 return;
             }
+            // 5, 7 and 8 are the medium, high and low kashida justifications Arabic documents
+            // use, and 9 Thai distribution: read as the DOCX reader reads them (#5933).
             let align = match prl.operand.first().copied().unwrap_or(0) {
                 1 => Align::Center,
                 2 => Align::Right,
-                3 => Align::Justify,
-                4 => Align::Distribute,
+                3 | 5 | 7 | 8 => Align::Justify,
+                4 | 9 => Align::Distribute,
                 _ => Align::Left,
             };
             // The physical form names the page's side: the logical side it is depends on the

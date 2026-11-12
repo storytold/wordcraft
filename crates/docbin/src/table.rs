@@ -22,7 +22,7 @@ const P_ITAP: u16 = 0x6649;
 // the page), sprmTJc logical (start or end).
 const T_JC_90: u16 = 0x5400;
 const T_JC: u16 = 0x548A;
-// Right-to-left table: either sprm set to true ([MS-DOC] sprmTFBiDi, sprmTFBiDi90).
+// Right-to-left table: the last of either sprm ([MS-DOC] sprmTFBiDi, sprmTFBiDi90).
 const T_BIDI: u16 = 0x560B;
 const T_BIDI_90: u16 = 0x5664;
 const T_DXA_LEFT: u16 = 0x9601;
@@ -169,7 +169,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             }
             T_JC => jc = Some(jc_align(&prl)),
             T_JC_90 => jc90 = Some(jc_align(&prl)),
-            T_BIDI | T_BIDI_90 => r.bidi |= u16_of(&prl).is_some_and(|v| v != 0),
+            // Either sprm sets the direction; a later one overrides an earlier one, false too.
+            T_BIDI | T_BIDI_90 => r.bidi = u16_of(&prl).map_or(r.bidi, |v| v != 0),
             T_DXA_LEFT => dxa_left = s16(&prl),
             T_DXA_GAP_HALF => gap_half = s16(&prl),
             T_TABLE_BORDERS_80 => r.borders = table_borders(prl.operand),

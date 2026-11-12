@@ -2655,6 +2655,58 @@ fn a_logical_table_justification_wins_over_the_physical_one() {
 }
 
 #[test]
+fn a_later_table_direction_sprm_overrides_an_earlier_one() {
+    // sprmTFBiDi and sprmTFBiDi90 set the same property: the last one wins, false included.
+    let row = |prls: &[(u16, &[u8])]| crate::table::decode(&grpprl(prls)).bidi;
+    let (on, off) = (1u16.to_le_bytes(), 0u16.to_le_bytes());
+    assert!(!row(&[(0x5664, &on), (0x560B, &off)]), "an explicit false after a true");
+    assert!(!row(&[(0x560B, &on), (0x5664, &off)]));
+    assert!(row(&[(0x560B, &off), (0x5664, &on)]));
+    assert!(row(&[(0x5664, &on)]));
+}
+
+#[test]
+fn kashida_justification_is_justified() {
+    // Arabic Word documents justify with kashida: sprmPJc 8 (low), 5 (medium), 7 (high), after
+    // the physical sprmPJc80 = 3. They are justified, not start-aligned, as the DOCX reader
+    // reads lowKashida/mediumKashida/highKashida; 9 (Thai distribution) is distributed.
+    use wordcraft_doc::props::Align;
+    let spec = RichSpec {
+        text: "low\rmed\rhigh\rthai\r",
+        styles: vec![(1, 0x0FFF, "Normal", grpprl(&[(0x2441, &[0x01])]), Vec::new())],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (3, 0, grpprl(&[(0x2403, &[0x03]), (0x2461, &[0x08])])),
+            (7, 0, grpprl(&[(0x2403, &[0x03]), (0x2461, &[0x05])])),
+            (12, 0, grpprl(&[(0x2403, &[0x03]), (0x2461, &[0x07])])),
+            (17, 0, grpprl(&[(0x2461, &[0x09])])),
+        ],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let align = |t: &str| doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == t).expect("paragraph").props.align;
+    assert_eq!(align("low"), Some(Align::Justify));
+    assert_eq!(align("med"), Some(Align::Justify));
+    assert_eq!(align("high"), Some(Align::Justify));
+    assert_eq!(align("thai"), Some(Align::Distribute));
+}
+
+#[test]
+fn a_kept_run_direction_is_the_styles() {
+    // ToggleOperand 0x80 is the style's value: a PRM's sprmCFBiDi = 0x80 after the CHPX's
+    // sprmCFBiDi = 0 makes a run of a right-to-left style right to left again.
+    use wordcraft_doc::props::CharProps;
+    let base = CharProps { rtl: Some(true), ..CharProps::default() };
+    let mut p = base.clone();
+    for g in [grpprl(&[(0x085A, &[0x00])]), grpprl(&[(0x085A, &[0x80])])] {
+        for prl in crate::sprm::iter(&g) {
+            crate::fmt::apply_char(&mut p, &prl, &base, &[]);
+        }
+    }
+    assert_eq!(p.rtl, Some(true));
+}
+
+#[test]
 fn physical_paragraph_indents_and_alignment_turn_with_the_direction() {
     // [MS-DOC] §2.6.2: sprmPDxaLeft80/Right80 and sprmPJc80 are physical, sprmPDxaLeft/Right
     // and sprmPJc logical. Normal reads right to left (sprmPFBiDi in the style), as in an Arabic
