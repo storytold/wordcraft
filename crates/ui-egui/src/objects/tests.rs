@@ -483,6 +483,66 @@ fn clicking_nudging_and_dragging_a_shape_keep_the_view() {
     assert_eq!(h.state().canvas.scroll_offset, view, "the drop kept the view");
 }
 
+/// #4929 review: a header's shape repeats on every page. Selecting it on another page than the one
+/// being edited, by a click or a Shift+click, puts the selection there: its handles are drawn on
+/// the clicked page, not on the page the header was opened on (the view no longer scrolls to it).
+#[test]
+fn selecting_a_header_shape_on_another_page_puts_its_handles_there() {
+    use egui::{Event, Modifiers, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("insert.header", json!({"text": "Head"})).unwrap();
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 30})).unwrap();
+    let shape = wordcraft_engine::cmd::objects::object_selection(&a.session).map(|(p, _)| p).expect("the new shape is selected");
+    a.run("insert.closeHeader", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(400)})).unwrap();
+    a.run("view.zoom", json!({"value": 40})).unwrap();
+    a.run("insert.editHeader", json!({"page": 0})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let header = h.state().session.sel.focus.story;
+    assert!(matches!(header, wordcraft_doc::StoryRef::Part(_)) && shape.story == header, "editing the header, which holds the shape");
+    let on = |h: &mut egui_kittest::Harness<'_, WordApp>, page: usize| {
+        let at = h.state_mut().session.layout().object(&shape, page).filter(|o| o.page == page).expect("the header's shape on the page").rect;
+        crate::canvas::page_to_screen(h.state_mut(), page, at.x + at.w / 2.0, at.y + at.h / 2.0).expect("on screen")
+    };
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2, modifiers: Modifiers| {
+        h.event(Event::ModifiersChanged(modifiers));
+        h.event(Event::PointerMoved(at));
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers });
+        h.step();
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        for _ in 0..40 {
+            h.step();
+        }
+    };
+    let handles_on = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let layout = h.state_mut().session.layout();
+        active(h.state(), &layout).map(|(o, _)| o.page)
+    };
+    let second = on(&mut h, 1);
+    click(&mut h, second, Modifiers::NONE);
+    assert_eq!(selected(h.state()).map(|(p, _)| p), Some(shape.clone()), "the click selected the shape");
+    assert_eq!(handles_on(&mut h), Some(1), "the handles are on the clicked page");
+    let first = on(&mut h, 0);
+    click(&mut h, first, Modifiers::NONE);
+    assert_eq!(handles_on(&mut h), Some(0));
+    click(&mut h, second, Modifiers::SHIFT);
+    assert_eq!(selected(h.state()).map(|(p, _)| p), Some(shape), "the same shape stays selected");
+    assert_eq!(handles_on(&mut h), Some(1), "a Shift+click puts them on its page too");
+}
+
 /// A floating rectangle shape, `w` × `h`.
 fn floating_rect(w: f32, h: f32) -> InlineObject {
     InlineObject::Shape {

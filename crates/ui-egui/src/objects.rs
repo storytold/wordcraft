@@ -405,6 +405,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     let shift_only = ui.input(|i| i.modifiers.shift && !i.modifiers.command);
     if pressed && adding && grab == Grab::Move && selected(app).is_some() && (shift_only || !again) {
         let _ = app.run_keep_view("select.addObject", json!({"pos": object.pos()}));
+        // The selected object again, on another page (a header's): its handles go there.
+        if selected(app).is_some_and(|(p, _)| p == object.pos()) {
+            app.session.page_hint = object.page;
+        }
         return true;
     }
     if pressed && grab == Grab::Move && object.behind() && behind_draggable(app, &object) {
@@ -433,6 +437,8 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         // The view stays: the selection's caret is the object's anchor, which can be far from
         // the object (#4929). So do every command the pointer sends an object.
         let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
+        // A header's object is on every page: the selection is the one clicked (its handles go there).
+        app.session.page_hint = object.page;
         let (min, picture) = match selected(app) {
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,
