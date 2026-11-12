@@ -50,12 +50,14 @@ fn scale_size(size: f32, delta_pt: f32) -> f32 {
 
 /// Scale a spacing value (e.g. `space_before`, `space_after`) by `space_factor`.
 ///
-/// Rounds to half-points while capping at the original nonnegative spacing value so reduction never increases spacing.
+/// Caps the result at the original nonnegative spacing value and rounds down to hundredths (with a
+/// tiny epsilon for floating-point noise), so a trial never removes more spacing than its factor
+/// permits and never increases spacing.
 #[inline]
 fn scale_spacing(val: f32, space_factor: f32) -> f32 {
     let non_neg = val.max(0.0);
     let scaled = (non_neg * space_factor).clamp(0.0, 1584.0);
-    ((scaled * 2.0).round() / 2.0).min(non_neg)
+    ((scaled * 100.0 + 1e-4).floor() / 100.0).min(non_neg)
 }
 
 /// Scale fixed line spacing in points respecting the safe readability floor and rounding upward to half-points.
@@ -484,12 +486,22 @@ mod tests {
         fit_document_typography(&mut doc, 0.5, 0.9);
 
         let p_after = doc.body[0].as_para().unwrap();
-        // 18.0 * 0.9 = 16.2 -> round to 0.5 pt = 16.0
-        assert_eq!(p_after.props.space_before, Some(16.0));
-        // 12.0 * 0.9 = 10.8 -> round to 0.5 pt = 11.0
-        assert_eq!(p_after.props.space_after, Some(11.0));
+        // 18.0 * 0.9 = 16.2, capped at the requested reduction
+        assert_eq!(p_after.props.space_before, Some(16.2));
+        // 12.0 * 0.9 = 10.8, capped at the requested reduction
+        assert_eq!(p_after.props.space_after, Some(10.8));
         // 1.15 * 0.9 = 1.035 -> clamped to safe line spacing floor (1.15 * 0.94 = 1.081) -> ceil hundredth 1.09
         assert_eq!(p_after.props.line_spacing, Some(LineSpacing::Multiple(1.09)));
+    }
+
+    #[test]
+    fn spacing_scaling_never_exceeds_requested_compression() {
+        // 0.26 * 0.94 = 0.2444 pt: it must not round down to zero and remove all spacing.
+        let tiny = scale_spacing(0.26, 0.94);
+        assert!(tiny > 0.0 && tiny <= 0.26, "tiny spacing must shrink without vanishing: {tiny}");
+        // 18.0 * 0.9 = 16.2 pt: the reduction stays at the requested 1.8 pt.
+        assert_eq!(scale_spacing(18.0, 0.9), 16.2);
+        assert_eq!(scale_spacing(0.0, 0.9), 0.0);
     }
 
     #[test]
@@ -675,11 +687,10 @@ mod tests {
 
     #[test]
     fn test_scale_spacing_never_increases_value() {
-        // Spacing 0.3 pt scaled by 0.94 yields 0.282 pt.
-        // Rounding to half-points would yield 0.5 pt, but capping at 0.3 pt ensures no increase.
-        assert_eq!(scale_spacing(0.3, 0.94), 0.3);
-        // Regular spacing: 12.0 pt * 0.94 = 11.28 pt -> rounds to 11.5 pt <= 12.0 pt.
-        assert_eq!(scale_spacing(12.0, 0.94), 11.5);
+        // Spacing 0.3 pt scaled by 0.94 yields 0.282 pt, rounded down to 0.28 and never above 0.3 pt.
+        assert_eq!(scale_spacing(0.3, 0.94), 0.28);
+        // 12.0 pt * 0.94 = 11.28 pt, capped at the requested reduction.
+        assert_eq!(scale_spacing(12.0, 0.94), 11.28);
         // Zero spacing remains zero.
         assert_eq!(scale_spacing(0.0, 0.94), 0.0);
     }

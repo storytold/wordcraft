@@ -38,6 +38,25 @@ fn fit_one_page_fails_on_hard_page_break() {
 }
 
 #[test]
+fn fit_one_page_refuses_page_break_before_before_search() {
+    let mut s = create_multiline_doc(27);
+    assert_eq!(s.layout().pages.len(), 2);
+    if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(&mut s.doc.body[1]) {
+        p.props.page_break_before = Some(true);
+    }
+    s.touch();
+    s.relayout();
+    assert_eq!(s.layout().pages.len(), 2);
+    let before = s.doc.clone();
+
+    let res = s.run("layout.fitOnePage", &json!({}));
+    assert!(res.is_err());
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("explicit page or section breaks"), "page_break_before must be reported as an explicit break: {err}");
+    assert_eq!(s.doc, before, "document must not change on refusal");
+}
+
+#[test]
 fn fit_one_page_fails_on_next_page_section_break() {
     let mut s = Session::new(Document::from_text("First section body text"));
     s.run("layout.break", &json!({"kind": "nextPage"})).unwrap();

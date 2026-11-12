@@ -7,10 +7,10 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use wordcraft_doc::Document;
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::shrink::fit_document_typography;
-use wordcraft_layout::{LayoutCache, LayoutOptions, Placed, ViewMode};
+use wordcraft_doc::{Document, ParaProps, StoryRef};
+use wordcraft_layout::{LayoutCache, LayoutOptions, Page, Placed, ViewMode};
 
 use crate::cmd::sel_result;
 use crate::{CmdError, CmdResult, Session, p};
@@ -133,6 +133,29 @@ fn min_blocks_font_size(
     min_sz
 }
 
+/// Returns true when these blocks contain an explicit page break or a resolved `page_break_before`,
+/// including inside table cells (and nested tables).
+fn blocks_have_explicit_breaks(doc: &Document, blocks: &[Arc<wordcraft_doc::Block>], table_para: Option<&ParaProps>) -> bool {
+    for b in blocks {
+        if let Some(p) = b.as_para() {
+            if p.text.contains(wordcraft_doc::para::PAGE_BREAK) || doc.styles.resolve_para_in(&p.props, table_para).page_break_before {
+                return true;
+            }
+        } else if let Some(tbl) = b.as_table() {
+            let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+            let cell_para = style.as_ref().map(|st| &st.para);
+            for row in &tbl.rows {
+                for cell in &row.cells {
+                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Returns true if the document contains explicit page or section breaks that
 /// physically force content onto additional pages.
 fn has_explicit_breaks(doc: &Document) -> bool {
@@ -144,26 +167,7 @@ fn has_explicit_breaks(doc: &Document) -> bool {
             }
         }
     }
-    for b in &doc.body {
-        if let Some(p) = b.as_para()
-            && p.text.contains(wordcraft_doc::para::PAGE_BREAK)
-        {
-            return true;
-        } else if let Some(tbl) = b.as_table() {
-            for row in &tbl.rows {
-                for cell in &row.cells {
-                    for cb in &cell.blocks {
-                        if let Some(p) = cb.as_para()
-                            && p.text.contains(wordcraft_doc::para::PAGE_BREAK)
-                        {
-                            return true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    false
+    blocks_have_explicit_breaks(doc, &doc.body, None)
 }
 
 /// True when `item` is a line-number decoration: a `DECOR_STORY` line with no block path.
@@ -202,6 +206,59 @@ fn union_height(spans: &[(f32, f32)]) -> f32 {
         total += end - start;
     }
     total
+}
+
+/// The story an item belongs to, when it carries one.
+fn item_story(item: &Placed) -> Option<&StoryRef> {
+    match item {
+        Placed::Lines { story, .. }
+        | Placed::Cell { story, .. }
+        | Placed::Image { story, .. }
+        | Placed::Graphic { story, .. }
+        | Placed::Object { story, .. } => Some(story),
+        Placed::Shape { object, .. } => object.as_ref().map(|pos| &pos.story),
+        Placed::Fill { .. } | Placed::Rule { .. } | Placed::Clip { .. } => None,
+    }
+}
+
+/// Body line count and occupied body height on the final page, for the pre-flight volume limit.
+///
+/// Line-number decorations sit outside the body column and note content sits at the page's foot, so
+/// neither counts as body spill. The remaining items contribute the union of their vertical spans:
+/// a tall image or an image-only table cell counts at its real height, and side-by-side cells
+/// count once.
+fn final_page_volume(doc: &Document, page: &Page) -> (usize, f32) {
+    let mut last_page_lines = 0usize;
+    let mut body_spans: Vec<(f32, f32)> = Vec::new();
+    let mut note_spans: Vec<(f32, f32)> = Vec::new();
+    for item in &page.items {
+        if is_line_number_decoration(item) {
+            continue;
+        }
+        let is_note_separator = matches!(item, Placed::Lines { story, .. } if *story == wordcraft_layout::DECOR_STORY);
+        let is_note = item_story(item).is_some_and(|story| is_footnote_story(doc, story));
+        if is_note || is_note_separator {
+            note_spans.push(item.vertical_span());
+            continue;
+        }
+        if let Placed::Lines { l0, l1, .. } = item {
+            last_page_lines = last_page_lines.saturating_add(l1.saturating_sub(*l0));
+        }
+        if !matches!(item, Placed::Fill { .. } | Placed::Rule { .. } | Placed::Clip { .. }) {
+            body_spans.push(item.vertical_span());
+        }
+    }
+    let body_spill_h = union_height(&body_spans);
+    let note_h = union_height(&note_spans);
+    let body_area_h = (page.body.h - note_h).max(0.0);
+    let fill_ratio = if body_area_h > 0.0 {
+        body_spill_h / body_area_h
+    } else if body_spill_h > 0.0 {
+        1.0
+    } else {
+        0.0
+    };
+    (last_page_lines, fill_ratio)
 }
 
 /// Calculates the minimum effective body font size in points across the document body and editable text boxes.
@@ -515,52 +572,15 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Failed("The document already fits on one page.".into()));
     }
 
-    // 4. Pre-flight check on final page content volume
-    //
-    // Line-number decorations sit outside the body column, and note separators belong to the
-    // notes at the page's foot: neither is body overflow. Footnotes can be condensed too, so
-    // their occupied height (the union of their items, side-by-side table cells counted once)
-    // reduces the body area available on the page rather than counting as spilled body text.
-    let last_page = &initial_layout.pages[p0 - 1];
-    let mut last_page_lines = 0usize;
-    let mut body_min_y = f32::INFINITY;
-    let mut body_max_y: f32 = 0.0;
-    let mut note_spans: Vec<(f32, f32)> = Vec::new();
-    for item in &last_page.items {
-        if is_line_number_decoration(item) {
-            continue;
-        }
-        let is_note_separator = matches!(item, Placed::Lines { story, .. } if *story == wordcraft_layout::DECOR_STORY);
-        let is_note = matches!(
-            item,
-            Placed::Lines { story, .. }
-                | Placed::Cell { story, .. }
-                | Placed::Image { story, .. }
-                | Placed::Graphic { story, .. }
-                | Placed::Object { story, .. }
-                if is_footnote_story(&s.doc, story)
-        );
-        if is_note || is_note_separator {
-            note_spans.push(item.vertical_span());
-            continue;
-        }
-        if let Placed::Lines { l0, l1, y, para, .. } = item {
-            last_page_lines = last_page_lines.saturating_add(l1.saturating_sub(*l0));
-            let h: f32 = para.lines.get(*l0..*l1).map(|slice| slice.iter().map(|l| l.height).sum()).unwrap_or(0.0);
-            body_min_y = body_min_y.min(*y);
-            body_max_y = body_max_y.max(y + h);
-        }
+    // Explicit breaks force pages regardless of typography; refuse before any trial can appear to
+    // succeed by moving text around them.
+    if has_explicit_breaks(&s.doc) {
+        return Err(CmdError::Failed("Unable to fit document to one page: explicit page or section breaks prevent page reduction.".into()));
     }
-    let body_spill_h = if body_max_y > body_min_y { body_max_y - body_min_y } else { 0.0 };
-    let note_h = union_height(&note_spans);
-    let body_area_h = (last_page.body.h - note_h).max(0.0);
-    let fill_ratio = if body_area_h > 0.0 {
-        body_spill_h / body_area_h
-    } else if body_spill_h > 0.0 {
-        1.0
-    } else {
-        0.0
-    };
+
+    // 4. Pre-flight check on final page content volume
+    let last_page = &initial_layout.pages[p0 - 1];
+    let (last_page_lines, fill_ratio) = final_page_volume(&s.doc, last_page);
     if last_page_lines > 12 || fill_ratio > 0.30 {
         return Err(CmdError::Failed(
             "Unable to fit document to one page: content on the final page exceeds limits for aesthetic page reduction.".into(),
@@ -636,9 +656,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
             sel_result(s)
         }
         _ => {
-            if has_explicit_breaks(&s.doc) {
-                Err(CmdError::Failed("Unable to fit document to one page: explicit page or section breaks prevent page reduction.".into()))
-            } else if min_body_font_size(&s.doc, hide_deleted, shown_hidden) <= MIN_COMFORTABLE_BODY_FONT_SIZE {
+            if min_body_font_size(&s.doc, hide_deleted, shown_hidden) <= MIN_COMFORTABLE_BODY_FONT_SIZE {
                 Err(CmdError::Failed("Unable to shrink document further without reducing text beyond readability limits.".into()))
             } else {
                 Err(CmdError::Failed("Unable to fit document to one page: no permitted typography adjustment could remove a page.".into()))
@@ -667,5 +685,58 @@ mod tests {
         assert_eq!(union_height(&[(0.0, 20.0), (5.0, 20.0), (20.0, 30.0)]), 30.0);
         // Malformed input (reversed, NaN, infinite) is ignored rather than poisoning the total.
         assert_eq!(union_height(&[(10.0, 5.0), (f32::NAN, 1.0), (0.0, f32::INFINITY), (2.0, 4.0)]), 2.0);
+    }
+
+    #[test]
+    fn final_page_volume_counts_non_text_body_items() {
+        let page = Page {
+            body: wordcraft_geom::Rect::new(0.0, 0.0, 500.0, 700.0),
+            items: vec![Placed::Cell {
+                rect: wordcraft_geom::Rect::new(0.0, 0.0, 500.0, 300.0),
+                covered: false,
+                table: wordcraft_doc::Path::top(0),
+                row: 0,
+                cell: 0,
+                story: StoryRef::Body,
+                clip: false,
+            }],
+            ..Default::default()
+        };
+        let (lines, ratio) = final_page_volume(&Document::new(), &page);
+        assert_eq!(lines, 0);
+        assert!(ratio > 0.30, "a 300 pt image-only cell on a 700 pt body must count: {ratio}");
+    }
+
+    #[test]
+    fn explicit_breaks_include_resolved_page_break_before_and_nested_tables() {
+        let mut doc = Document::new();
+        doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("body", Default::default()))];
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            p.props.page_break_before = Some(true);
+        }
+        assert!(has_explicit_breaks(&doc), "a direct page_break_before is an explicit break");
+
+        let mut doc = Document::new();
+        doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("body", Default::default()))];
+        let style = wordcraft_doc::Style {
+            id: "BreakBefore".into(),
+            name: "Break Before".into(),
+            kind: wordcraft_doc::StyleKind::Paragraph,
+            para: ParaProps { page_break_before: Some(true), ..Default::default() },
+            ..Default::default()
+        };
+        Arc::make_mut(&mut doc.styles).upsert(style);
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            p.props.style = Some("BreakBefore".into());
+        }
+        assert!(has_explicit_breaks(&doc), "a style-inherited page_break_before is an explicit break");
+
+        let mut doc = Document::new();
+        let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
+        let mut cell_p = wordcraft_doc::Paragraph::with_text("cell", Default::default());
+        cell_p.props.page_break_before = Some(true);
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell_p)];
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Table(table))];
+        assert!(has_explicit_breaks(&doc), "a page_break_before inside a table cell is an explicit break");
     }
 }

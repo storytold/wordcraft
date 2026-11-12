@@ -119,7 +119,9 @@ pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
                 },
             );
         });
-        big(ui, app, "fitOnePage", "Fit\nOne Page", "layout.fitOnePage", json!({}), false);
+        let fit_resp = big(ui, app, "fitOnePage", "Fit\nOne Page", "layout.fitOnePage", json!({}), false);
+        let fit_label = tl!("Fit\nOne Page").replace('\n', " ");
+        fit_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, fit_label.clone()));
     });
     group(ui, "Paragraph", Some("para.dialog"), app, |ui, app| {
         let rp = app.session.doc.para_at(&app.session.sel.focus).map(|_| wordcraft_engine::cmd::para::selection_para(&app.session));
