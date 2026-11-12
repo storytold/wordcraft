@@ -254,7 +254,7 @@ fn controls(tab: &str) -> Vec<Control> {
             m("WordArt", "insert.wordArt"),
             m("Drop Cap", "insert.dropCap"),
             c("Signature Line", "insert.signatureLine"),
-            c("Date & Time", "insert.dateTime"),
+            d("Date & Time", "dateTime"),
             c("Object", "insert.object"),
             c("Equation", "insert.equation"),
             m("Symbol", "insert.symbol"),

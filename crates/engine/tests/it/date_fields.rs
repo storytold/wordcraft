@@ -186,3 +186,36 @@ fn binary_doc_opened_by_extension_refreshes_date_fields() {
         assert_eq!(got, expected, "{name}: DATE field stale after opening");
     }
 }
+
+/// Regression from a synthetic Word document: a visible Brazilian long date is
+/// stored in a TIME field and pt-BR is present only in docDefaults, not in field runs.
+#[test]
+fn a_word_time_field_inherits_pt_br_from_document_defaults() {
+    const PICTURE: &str = "d' de 'MMMM' de 'yyyy";
+    const CODE: &str = r#"TIME \@ "d' de 'MMMM' de 'yyyy""#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let doc_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let styles = r#"<?xml version="1.0" encoding="UTF-8"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:docDefaults><w:rPrDefault><w:rPr><w:lang w:val="pt-BR"/></w:rPr></w:rPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style></w:styles>"#;
+    let doc = format!(
+        r#"<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Cidade, </w:t></w:r>{}</w:p><w:p><w:r><w:t>Cidade, </w:t></w:r>{}</w:p></w:body></w:document>"#,
+        field(CODE, "22 de setembro de 2026", false),
+        field(CODE, "22 de setembro de 2026", false)
+    );
+    let source = zip(&[("_rels/.rels", rels), ("word/document.xml", &doc), ("word/_rels/document.xml.rels", doc_rels), ("word/styles.xml", styles)]);
+    let original = wordcraft_engine::io::open_bytes("pt-br-word.docx", &source).unwrap();
+    let expected = wordcraft_engine::cmd::insert::format_date_in(PICTURE, Some("pt-BR"));
+    let assert_correct = |document: &wordcraft_doc::Document| {
+        let got = fields(document);
+        assert_eq!(got.len(), 2, "both original fields survive");
+        for (code, result) in got {
+            assert_eq!(code, CODE, "field instruction remains editable");
+            assert_eq!(result, expected, "quoted Portuguese words and month names");
+            assert!(!result.contains("October") && !result.contains('\''));
+            assert_eq!(result.matches(" de ").count(), 2);
+        }
+    };
+    assert_correct(&original);
+    let written = wordcraft_docx::write(&original).unwrap();
+    let reopened = wordcraft_engine::io::open_bytes("reopened.docx", &written).unwrap();
+    assert_correct(&reopened);
+}
