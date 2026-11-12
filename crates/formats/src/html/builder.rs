@@ -1124,6 +1124,11 @@ impl<'r> Builder<'r> {
         // explicit child inheritance (`background: inherit`), and table cell shading, while
         // character shading `fmt.background` is kept `None`.
         let block_background = if kind != ElKind::Inline { fmt.background.take() } else { None };
+        if !self.page && matches!(name, "body" | "html") && block_background.is_some() {
+            // A pasted fragment drops the root background; its foreground was chosen for that
+            // background, so drop it too rather than painting light text on the page default.
+            fmt.color = None;
+        }
         ElementStyle { fmt, block_background, align, preserve, page_break, page_break_after }
     }
 

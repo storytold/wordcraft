@@ -201,7 +201,7 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
     let outline_level = p.outline_level.or_else(|| style.as_ref().and_then(|_| doc.styles.resolve_para(p).outline_level));
     let x = wordcraft_doc::props::ParaProps {
         tabs,
-        shading: p.shading,
+        shading: doc.styles.resolve_para(p).shading,
         style,
         contextual_spacing: p.contextual_spacing,
         bidi: p.bidi.filter(|b| *b),

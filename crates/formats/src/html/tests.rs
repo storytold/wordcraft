@@ -867,6 +867,56 @@ fn paragraph_shading_survives_an_html_round_trip() {
     assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x2a, 0x2a, 0x2a)));
 }
 
+/// Verify that paragraph shading inside a single-paragraph table cell survives an HTML round trip (#6157).
+#[test]
+fn table_cell_paragraph_shading_survives_an_html_round_trip() {
+    let html = r#"<table><tr><td><p style="background-color:#123456">text</p></td></tr></table>"#;
+    let doc = import(html);
+    let out = crate::html::export(&doc);
+    assert!(out.contains("background-color:#123456"), "paragraph shading is exported: {out}");
+
+    let back = import(&out);
+    let table = back
+        .body
+        .iter()
+        .find_map(|b| match &**b {
+            wordcraft_doc::Block::Table(t) => Some(t),
+            _ => None,
+        })
+        .expect("expected table");
+    let cell = &table.rows[0].cells[0];
+    assert_eq!(cell.props.shading, None, "paragraph shading must not become cell shading");
+    let wordcraft_doc::Block::Para(p) = &*cell.blocks[0] else { panic!("expected Para") };
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)));
+}
+
+/// Verify that consecutive code paragraphs with different backgrounds export their own `<pre>`.
+#[test]
+fn consecutive_code_blocks_keep_their_own_shading() {
+    let html = r#"<pre style="background-color:#111111">a</pre><pre style="background-color:#222222">b</pre>"#;
+    let out = crate::html::export(&import(html));
+    assert!(out.contains("<pre style=\"background-color:#111111\"><code>a</code></pre>"), "{out}");
+    assert!(out.contains("<pre style=\"background-color:#222222\"><code>b</code></pre>"), "{out}");
+}
+
+/// Verify that paragraph shading inherited from a paragraph style is exported (#6157).
+#[test]
+fn paragraph_shading_from_a_style_survives_html_export() {
+    let mut doc = Document::new();
+    std::sync::Arc::make_mut(&mut doc.styles).styles.push(wordcraft_doc::Style {
+        id: "Shaded".into(),
+        name: "Shaded".into(),
+        para: wordcraft_doc::props::ParaProps { shading: Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut p = wordcraft_doc::Paragraph::with_text("text", wordcraft_doc::CharProps::default());
+    p.props.style = Some("Shaded".into());
+    doc.body = vec![wordcraft_doc::para_block(p)];
+
+    let out = crate::html::export(&doc);
+    assert!(out.contains("background-color:#123456"), "style shading is exported: {out}");
+}
+
 /// Verify that CSS-escaped quote characters in background shorthand URLs remain part of the URL
 /// content and do not cause the shorthand declaration to be rejected.
 #[test]
@@ -1407,10 +1457,16 @@ fn root_background_preserved_on_page_import_only() {
     let page_doc = crate::html::import_page(html, &|_| None);
     let wordcraft_doc::Block::Para(p_page) = &*page_doc.body[0] else { panic!("expected Para") };
     assert_eq!(p_page.props.shading, Some(wordcraft_doc::Rgb(0x11, 0x11, 0x11)), "page import must preserve body background on paragraphs");
+    assert_eq!(
+        p_page.runs[0].props.color,
+        Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0xff, 0xff, 0xff))),
+        "page import keeps the root foreground with its background"
+    );
 
     let frag_doc = import(html);
     let wordcraft_doc::Block::Para(p_frag) = &*frag_doc.body[0] else { panic!("expected Para") };
     assert_eq!(p_frag.props.shading, None, "fragment paste must not turn body background into paragraph shading");
+    assert_eq!(p_frag.runs[0].props.color, None, "fragment paste drops the root foreground with its background");
 }
 
 /// Verify that an inline child with `background: inherit` does not receive character shading from a pasted body background (#6157).

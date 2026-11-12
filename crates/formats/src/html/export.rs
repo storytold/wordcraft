@@ -243,7 +243,11 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
                 css.push(format!("background-color:#{}", s.hex()));
             }
             let single = match c.blocks.as_slice() {
-                [FBlock::Para(p)] if p.kind == Kind::Normal && p.list.is_none() && !p.page_break => Some(p),
+                [FBlock::Para(p)]
+                    if p.kind == Kind::Normal && p.list.is_none() && !p.page_break && p.extra.as_ref().and_then(|x| x.shading).is_none() =>
+                {
+                    Some(p)
+                }
                 _ => None,
             };
             if let Some(a) = single.and_then(|p| align_css(p.align)) {
@@ -313,11 +317,13 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 out.push('\n');
             }
             FBlock::Para(p) if p.kind == Kind::Code => {
-                // Consecutive code paragraphs share one `<pre>`; its shading comes from the first.
-                out.push_str(&format!("<pre{}><code>", para_attrs(p)));
+                // One `<pre>` per run of code paragraphs whose attributes match: they share the
+                // `<pre>`'s shading, so a different background starts a new block.
+                let attrs = para_attrs(p);
+                out.push_str(&format!("<pre{attrs}><code>"));
                 let mut first = true;
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
-                    if q.kind != Kind::Code || q.list.is_some() {
+                    if q.kind != Kind::Code || q.list.is_some() || para_attrs(q) != attrs {
                         break;
                     }
                     if !first {
