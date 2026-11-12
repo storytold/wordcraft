@@ -19,6 +19,7 @@ mod nested_cant_split;
 mod numeral;
 mod pages;
 mod styleref;
+mod styleref_errors;
 mod table_contact;
 mod textbox;
 mod vertical;

@@ -30,7 +30,7 @@ fn body_styleref_finds_the_heading_before_it() {
     s.run("insert.field", &json!({"instr": "STYLEREF \"Heading 1\" \\p"})).unwrap();
     s.run("insert.field", &json!({"instr": "STYLEREF \"No Such Style\""})).unwrap();
     let results: Vec<String> = fields(&s).into_iter().map(|f| f.1).collect();
-    assert_eq!(results, ["below", wordcraft_layout::styleref::NO_TEXT, "Chapter One", "above"]);
+    assert_eq!(results, ["below", wordcraft_layout::styleref::not_defined("No Such Style").as_str(), "Chapter One", "above"]);
 }
 
 /// #775: a template's running header `STYLEREF "heading 1"` (a complex field, opened from

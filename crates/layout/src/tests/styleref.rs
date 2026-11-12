@@ -73,9 +73,9 @@ fn search_from_the_bottom_with_l() {
 fn a_missing_style_or_no_paragraph_of_it_is_an_error() {
     crate::test_fonts();
     let d = doc(CHAPTERS, &[r#"STYLEREF "No Such Style""#, r#"STYLEREF "Heading 3""#, "STYLEREF 12"]);
-    let err = styleref::NO_TEXT;
-    assert_eq!(headers(&d)[0], [err, err, err]);
-    assert_eq!(err, "Error: no paragraph in this style.");
+    let no_text = styleref::NO_TEXT;
+    assert_eq!(headers(&d)[0], [styleref::not_defined("No Such Style").as_str(), no_text, styleref::not_defined("12").as_str()]);
+    assert_eq!(no_text, "Error! No text of specified style in document.");
 }
 
 #[test]
