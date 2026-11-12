@@ -484,8 +484,10 @@ fn press_member(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f3
     }
     let pos = object.pos();
     let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
-    let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
-    if app.run("select.member", json!({"index": index})).is_err() {
+    // As for any other object, the view stays (#4929); a click in a text box member's text above
+    // still scrolls to its caret.
+    let _ = app.run_keep_view("select.range", json!({"anchor": pos, "focus": end}));
+    if app.run_keep_view("select.member", json!({"index": index})).is_err() {
         return true;
     }
     let Some(o) = hit_object(app, &object) else { return true };
