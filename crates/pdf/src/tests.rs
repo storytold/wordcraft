@@ -6,6 +6,8 @@ use wordcraft_doc::props::NumRef;
 use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Watermark, para_block};
 
 use crate::*;
+use wordcraft_layout::LayoutOptions;
+use wordcraft_layout::display::DisplayOptions;
 
 /// Verify preset lines and connectors emit the requested PDF line-cap operator.
 #[test]
@@ -1190,6 +1192,8 @@ fn decorative_pictures_are_artifacts_not_figures() {
     let cases = [
         ("inline", Float::default()),
         ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        // Turned with no room kept for it: drawn cut at its line (a clip), still tagged.
+        ("bare turned inline", Float { rot: 45.0, bare_turn: true, ..Default::default() }),
         ("floating", floating.clone()),
         ("rotated floating", Float { rot: 30.0, ..floating }),
     ];
@@ -1200,6 +1204,43 @@ fn decorative_pictures_are_artifacts_not_figures() {
         assert!(!raw.contains("/Alt("), "{name}: a decorative picture has no Figure and no alt text");
         assert!(raw.contains("1 0 0 rg"), "{name}: the decorative picture is still drawn");
     }
+}
+
+/// A row of exact height cuts its cell's lines (one clip around them): text and a picture in
+/// it are tagged as they are in a row that fits, the text as the paragraph's, the picture as a
+/// Figure with its alt text.
+#[test]
+fn a_clipped_cell_tags_its_text_and_picture() {
+    let raw = |exact: bool| {
+        let mut d = Document::new();
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let mut p = Paragraph::with_text("Cell text ", CharProps::default());
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: "A red square".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            fx: Default::default(),
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+        let mut t = Table::new(1, 1, 300.0);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        if exact {
+            t.rows[0].props.height = Some(30.0);
+            t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+        }
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Below", CharProps::default()))];
+        String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+    };
+    let (fits, cut) = (raw(false), raw(true));
+    assert!(cut.contains("/Alt(A red square)"), "the picture in the cut cell is a Figure with its alt text");
+    // The same marked content either way: the cut cell's text is not dropped as an artifact.
+    assert_eq!(cut.matches("/MCID").count(), fits.matches("/MCID").count());
+    assert_eq!(cut.matches("/S/P").count(), fits.matches("/S/P").count());
 }
 
 /// In a rotated group, each picture is tagged on its own: the decorative one is an artifact, the
@@ -2861,4 +2902,101 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, 7.5), (2, 3.0, 4.0), (3, 6.0, 7.5)]), Some(7.5));
     assert_eq!(baseline(&[(1, 0.0, 9.0), (2, 3.0, 4.0)]), Some(4.0));
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
+}
+
+#[test]
+fn the_author_is_left_out_when_personal_information_is_removed() {
+    let mut d = Document::from_text("Private");
+    d.core.creator = "Ada Writer".into();
+    let opts = PdfOptions { tagged: false, compress: false, ..Default::default() };
+    let raw = |d: &Document| String::from_utf8_lossy(&export(d, &opts).unwrap()).to_string();
+    assert!(raw(&d).contains("Ada Writer"));
+    d.settings.remove_personal_info = true;
+    assert!(!raw(&d).contains("Ada Writer"), "the creator stays out of the PDF");
+}
+
+/// A page with text and three pictures that don't draw: garbage, a PNG cut off in its data and a
+/// metafile that is only its header. The export is the same bytes as before strict export
+/// existed (#6005): each is a grey box, and the rest of the page is untouched.
+#[test]
+fn undecodable_pictures_keep_their_grey_box_bytes() {
+    let mut whole = png();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let mut p = Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    let text = String::from_utf8_lossy(&a);
+    assert!(text.contains("0.8157 0.8157 0.8157") || text.contains(".81"), "the grey box is drawn: {}", text.len());
+    // FNV-1a of the file, recorded from the export before the shared decode check existed.
+    let h = a.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x1edbbffab353d744, "{h:#x}");
+}
+
+/// A page with a chart label and an equation, exported without compression. Chart and equation
+/// runs carry the text each glyph shows since strict export (#6005); this pins the PDF they
+/// produce, ToUnicode maps included, to what they were before.
+#[test]
+fn chart_and_equation_text_keep_their_pdf_bytes() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    let mut d = Document::from_text("Body text");
+    d.core.created = "2024-01-02T03:04:05Z".into();
+    let items = vec![GraphicItem::Text {
+        rect: [0.0, 100.0, 216.0, 20.0],
+        text: "Revenue 2024".into(),
+        size: 10.0,
+        color: wordcraft_doc::props::Rgb::BLACK,
+        bold: false,
+        align: TextAlign::Center,
+        font: None,
+    }];
+    let graphic = Graphic { kind: GraphicKind::Chart, items, ..Default::default() };
+    let obj = InlineObject::Graphic { w: 216.0, h: 144.0, alt: String::new(), float: Default::default(), graphic: Arc::new(graphic) };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), obj, &CharProps::default()).unwrap();
+    let linear = "x^2+1/2";
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(linear), ..Default::default() };
+    let n = d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().len();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .insert_object(n, InlineObject::Equation { linear: linear.into(), display: false, math }, &CharProps::default())
+        .unwrap();
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let a = export(&d, &opts).unwrap();
+    assert_eq!(a, export(&d, &opts).unwrap(), "the export must be deterministic for the golden hash to mean anything");
+    // What the ToUnicode maps say each glyph shows, across all fonts: the text of the body, the
+    // chart label and the equation (a mathematical italic x is one character beyond the BMP).
+    // Recorded on the code before strict export: the maps are the same. (The whole file's hash
+    // is not pinned: it follows the fonts the host resolves, which differ between runs.)
+    let text = String::from_utf8_lossy(&a).into_owned();
+    let mut shown = std::collections::BTreeSet::new();
+    for block in text.split("beginbfchar").skip(1) {
+        for line in block.split("endbfchar").next().unwrap_or("").lines() {
+            let Some((_, to)) = line.trim().split_once("> <") else { continue };
+            let units: Vec<u16> =
+                to.trim_end_matches('>').as_bytes().chunks(4).filter_map(|c| u16::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect();
+            shown.insert(String::from_utf16_lossy(&units));
+        }
+    }
+    let expected: std::collections::BTreeSet<String> =
+        ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
+    assert_eq!(shown, expected);
 }

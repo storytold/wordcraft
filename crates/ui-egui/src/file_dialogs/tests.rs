@@ -252,6 +252,27 @@ fn answer_all(shown: &Shown, picked: &[&str]) {
     tx.send(Ok(picked.iter().map(|p| p.to_string()).collect())).unwrap();
 }
 
+/// Giving the system dialog up (File › Open › Browse in WordCraft…) tells the host to cancel its
+/// waiting request, so a portal that stopped answering cannot keep Save As stuck.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn giving_up_a_file_dialog_cancels_the_host_request() {
+    let cancelled = Rc::new(std::cell::Cell::new(false));
+    let flag = cancelled.clone();
+    let services = Services { cancel_file_dialog: Some(Box::new(move || flag.set(true))), ..Default::default() };
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+    let (tx, rx) = channel();
+    a.file_dialog = Some(PendingDialog {
+        rx,
+        req: FileDialogRequest::Save { name: "Document1.docx".into(), dir: None },
+        after: AfterPick::Export { ext: "pdf".into() },
+    });
+    a.give_up_file_dialog();
+    assert!(cancelled.get(), "the host is told to stop waiting");
+    assert!(a.file_dialog.is_none(), "the pending dialog is taken as cancelled");
+    drop(tx);
+}
+
 fn typed(a: &mut WordApp) {
     a.run("text.insert", json!({"text": UNSAVED})).unwrap();
     assert!(a.session.dirty);
@@ -315,7 +336,8 @@ fn save_as_answer_arriving_later_is_saved() {
     typed(&mut a);
     a.save_as_dialog();
     assert!(a.file_dialog_open());
-    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into(), dir: None });
+    // A new document is offered its first words as its name, as in Word (#5793).
+    assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{UNSAVED}.docx"), dir: None });
     let ctx = egui::Context::default();
     let frame = |a: &mut WordApp| ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
     frame(&mut a);
