@@ -108,6 +108,57 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     resp
 }
 
+/// The heading over a group of menu items (Breaks › Page Breaks): a shaded band across the
+/// menu, at least `min_w` wide. It is a label, not an item: nothing to click or select.
+pub fn menu_heading(ui: &mut Ui, text: &str, min_w: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let galley = ui.painter().layout_no_wrap(text.to_string(), crate::theme::semibold(12.0), t.text);
+    let pad = ui.spacing().button_padding;
+    let w = (galley.size().x + 2.0 * pad.x).max(min_w).max(ui.available_width());
+    let (r, resp) = ui.allocate_exact_size(vec2(w, galley.size().y + 2.0 * pad.y + 2.0), Sense::hover());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, true, text));
+    ui.painter().rect_filled(r, 0.0, t.border.gamma_multiply(0.45));
+    let x = crate::rtl::lead_left(crate::rtl::on(), r, pad.x, galley.size().x);
+    ui.painter().galley(pos2(x, r.center().y - galley.size().y / 2.0), galley, t.text);
+    resp
+}
+
+/// A menu item with a large `icon`, a bold `title` and, under it, a `description` of what it
+/// does, wrapped at `width` (the item fills the menu when it is wider). The item is named by
+/// its title; assistive technology reads the description as its description.
+pub fn described_menu_item(ui: &mut Ui, icon: &str, title: &str, description: &str, width: f32) -> Response {
+    const ICON: f32 = 30.0;
+    const GAP: f32 = 10.0;
+    let t = Tokens::get(ui.ctx());
+    let pad = ui.spacing().button_padding;
+    let w = width.max(ui.available_width());
+    // The text wraps at `width`, so a long description doesn't widen the menu; the item still
+    // fills the menu when other items make it wider.
+    let text_w = (width - 2.0 * pad.x - ICON - GAP).max(40.0);
+    let title_g = ui.painter().layout(title.to_string(), crate::theme::semibold(12.5), Color32::PLACEHOLDER, text_w);
+    let desc_g = ui.painter().layout(description.to_string(), regular(11.5), Color32::PLACEHOLDER, text_w);
+    let text_h = title_g.size().y + 2.0 + desc_g.size().y;
+    let (r, resp) = ui.allocate_exact_size(vec2(w, text_h.max(ICON) + 2.0 * pad.y + 4.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), title));
+    ui.ctx().accesskit_node_builder(resp.id, |n| n.set_description(description));
+    let st = drawn_state(ui, &resp, false);
+    ui.painter().rect_filled(r, ui.visuals().widgets.inactive.corner_radius, st.fill);
+    let enabled = ui.is_enabled();
+    let (line, accent) = if enabled { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
+    let (title_c, desc_c) = if enabled { (st.text, t.text_dim) } else { (t.text_disabled, t.text_disabled) };
+    let rtl = crate::rtl::on();
+    let top = r.min.y + pad.y + 2.0;
+    let icon_x = crate::rtl::lead_x(rtl, r, pad.x + ICON / 2.0);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(icon_x, top + ICON / 2.0), vec2(ICON, ICON)), icon, line, accent);
+    let inset = pad.x + ICON + GAP;
+    let title_x = crate::rtl::lead_left(rtl, r, inset, title_g.size().x);
+    let desc_x = crate::rtl::lead_left(rtl, r, inset, desc_g.size().x);
+    let title_h = title_g.size().y;
+    ui.painter().galley(pos2(title_x, top), title_g, title_c);
+    ui.painter().galley(pos2(desc_x, top + title_h + 2.0), desc_g, desc_c);
+    resp
+}
+
 /// A strip of dialog tabs. The active tab joins the page below it.
 /// Returns the index of the tab the user clicked.
 pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<usize> {

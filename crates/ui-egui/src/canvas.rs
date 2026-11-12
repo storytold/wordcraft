@@ -1170,11 +1170,17 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
             if page.header_story == Some(id) || page.footer_story == Some(id) {
                 let hy = visual_sr.min.y + sect_body.y * page_scale - 4.0;
                 let fy = visual_sr.min.y + sect_body.bottom() * page_scale + 4.0;
-                for (y, label) in [(hy, "Header"), (fy, "Footer")] {
+                for (y, footer) in [(hy, false), (fy, true)] {
                     dashed(&painter, pos2(visual_sr.min.x, y), pos2(visual_sr.max.x, y), Stroke::new(1.0, t.accent));
-                    let tr = Rect::from_min_size(pos2(visual_sr.min.x + 2.0, if label == "Header" { y } else { y - 18.0 }), vec2(52.0, 18.0));
-                    painter.rect_filled(tr, 2.0, t.checked);
-                    painter.text(tr.center(), egui::Align2::CENTER_CENTER, tl!(label), regular(11.0), t.accent_text);
+                    let (label, same) = hf_tags(&app.session.doc, page, footer);
+                    let top = if footer { y - 18.0 } else { y };
+                    for (text, at_end) in std::iter::once((label, false)).chain(same.map(|s| (s, true))) {
+                        let w = painter.layout_no_wrap(text.clone(), regular(11.0), t.accent_text).size().x + 12.0;
+                        let x = if at_end { visual_sr.max.x - 2.0 - w } else { visual_sr.min.x + 2.0 };
+                        let tr = Rect::from_min_size(pos2(x, top), vec2(w, 18.0));
+                        painter.rect_filled(tr, 2.0, t.checked);
+                        painter.text(tr.center(), egui::Align2::CENTER_CENTER, text, regular(11.0), t.accent_text);
+                    }
                 }
             }
         }
@@ -1192,6 +1198,30 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         }
     }
     PagePaintOutput { rects, visible_tile_keys, rendered }
+}
+
+/// The tags on `page`'s header (or, `footer`, footer) line while it is edited: which header it
+/// is (first page, even or odd page, or the section's one) and, in a document of several
+/// sections, which section's; and "Same as Previous" when it is the previous section's too.
+pub(crate) fn hf_tags(doc: &wordcraft_doc::Document, page: &Page, footer: bool) -> (String, Option<String>) {
+    use wordcraft_layout::HfSlot;
+    let odd_even = doc.settings.even_odd_headers;
+    let kind = match (page.hf_slot, footer) {
+        (HfSlot::First, false) => tl!("First Page Header"),
+        (HfSlot::First, true) => tl!("First Page Footer"),
+        (HfSlot::Even, false) => tl!("Even Page Header"),
+        (HfSlot::Even, true) => tl!("Even Page Footer"),
+        (HfSlot::Default, false) if odd_even => tl!("Odd Page Header"),
+        (HfSlot::Default, true) if odd_even => tl!("Odd Page Footer"),
+        (HfSlot::Default, false) => tl!("Header"),
+        (HfSlot::Default, true) => tl!("Footer"),
+    };
+    if doc.sections().len() < 2 {
+        return (kind.to_string(), None);
+    }
+    let label = crate::i18n::fmt(tl!("{kind} – Section {n}"), &[("kind", kind), ("n", &(page.section + 1).to_string())]);
+    let same = wordcraft_layout::hf_same_as_previous(doc, page.section, footer, page.hf_slot).then(|| tl!("Same as Previous").to_string());
+    (label, same)
 }
 
 fn paint_read_aloud_highlight(

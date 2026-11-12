@@ -716,6 +716,38 @@ fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
             pen.page(4.0, 11.5, 16.0, 18.5);
             pen.line_c(&[(2.0, 10.0), (18.0, 10.0)], a);
         }
+        // Layout › Breaks: what each break does to the text after it.
+        "break.column" => {
+            pen.lines(2.5, 8.5, &[4.0, 7.0, 10.0]);
+            pen.lines(11.5, 17.5, &[4.0, 7.0, 10.0, 13.0, 16.0]);
+            pen.line_c(&[(8.5, 13.0), (10.0, 13.0), (10.0, 2.5), (11.5, 2.5)], a);
+            pen.fill(&[(11.0, 1.0), (13.0, 2.5), (11.0, 4.0)], a);
+        }
+        "break.textWrapping" => {
+            pen.frect(2.5, 3.0, 8.5, 9.0, a);
+            pen.lines(10.5, 17.5, &[4.0, 8.0]);
+            pen.line_c(&[(17.5, 8.0), (17.5, 11.0), (4.0, 11.0), (4.0, 13.0)], a);
+            pen.fill(&[(2.5, 12.5), (5.5, 12.5), (4.0, 14.5)], a);
+            pen.lines(2.5, 17.5, &[16.0, 18.5]);
+        }
+        "section.nextPage" | "section.evenPage" | "section.oddPage" => {
+            pen.page(4.0, 1.0, 16.0, 7.5);
+            pen.page(4.0, 12.5, 16.0, 19.0);
+            pen.line_c(&[(2.0, 9.2), (18.0, 9.2)], a);
+            pen.line_c(&[(2.0, 10.8), (18.0, 10.8)], a);
+            match name {
+                "section.evenPage" => pen.text(9.0, 16.0, 6.0, "2", a, true),
+                "section.oddPage" => pen.text(9.0, 16.0, 6.0, "3", a, true),
+                _ => pen.lines(6.0, 13.0, &[15.5, 17.5]),
+            }
+        }
+        "section.continuous" => {
+            pen.page(4.0, 1.0, 16.0, 19.0);
+            pen.lines(6.0, 12.0, &[4.0, 6.5]);
+            pen.line_c(&[(2.0, 9.2), (18.0, 9.2)], a);
+            pen.line_c(&[(2.0, 10.8), (18.0, 10.8)], a);
+            pen.lines(6.0, 14.0, &[13.5, 16.0]);
+        }
         "lineNumbers" => {
             for (i, y) in [4.0, 8.0, 12.0, 16.0].iter().enumerate() {
                 pen.text(4.0, *y, 5.0, &(i + 1).to_string(), a, true);

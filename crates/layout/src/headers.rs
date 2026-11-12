@@ -106,6 +106,26 @@ impl Linked {
     }
 }
 
+/// Whether section `section`'s header (or, `footer`, footer) for `slot` is the same as the
+/// previous section's: the section leaves it out and inherits it (Link to Previous), or names
+/// the very part the previous section shows there, so editing it edits both. Never for the
+/// first section, nor for a section the document doesn't have.
+pub fn hf_same_as_previous(doc: &Document, section: usize, footer: bool, slot: HfSlot) -> bool {
+    let Some(prev_index) = section.checked_sub(1) else { return false };
+    let sections = doc.sections();
+    let linked = Linked::new(&sections, if footer { |s: &SectionProps| s.footers } else { |s: &SectionProps| s.headers });
+    let Some(own) = linked.own.get(section).copied() else { return false };
+    let pick = |s: HeaderSet| match slot {
+        HfSlot::Default => s.default,
+        HfSlot::First => s.first,
+        HfSlot::Even => s.even,
+    };
+    match pick(own) {
+        None => true,
+        Some(id) => pick(linked.set(prev_index)) == Some(id),
+    }
+}
+
 /// Header rows are re-placed on every page a table spills onto, so a table is O(header items ×
 /// pages) placed items — and an exact-height header row keeps all its overflowing text without
 /// growing, so a few KB of document could otherwise fill memory. Once this many items (a row
