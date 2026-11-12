@@ -41,7 +41,8 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
         return None;
     }
     let o = params.as_object_mut()?;
-    if app.services.clipboard_is_own.is_some() {
+    // A caller that captured ownership already (Paste Special's dialog) keeps that value.
+    if app.services.clipboard_is_own.is_some() && !o.contains_key("privateClipboard") {
         let own = app.clipboard_published && app.services.clipboard_is_own.as_ref().is_some_and(|f| f());
         o.insert("privateClipboard".into(), Value::Bool(own));
     }
@@ -451,6 +452,24 @@ mod tests {
         a.run("edit.paste", params).unwrap();
 
         assert!(!a.session.doc.media.is_empty());
+    }
+
+    /// Paste Special captures ownership when it opens; `fill` must keep that captured value
+    /// when the dialog submits, even if the clipboard changed meanwhile. Callers that pass no
+    /// flag still get it read from the clipboard ownership service.
+    #[test]
+    fn fill_keeps_a_callers_private_clipboard_flag() {
+        let services = Services { clipboard_is_own: Some(Box::new(|| true)), ..Default::default() };
+        let mut a = app(services);
+        a.clipboard_published = true;
+
+        let mut params = json!({"privateClipboard": false, "text": "Bold"});
+        fill(&mut a, "edit.pasteSpecial", &mut params);
+        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(false)), "the captured flag wins");
+
+        let mut params = json!({});
+        fill(&mut a, "edit.paste", &mut params);
+        assert_eq!(params.get("privateClipboard"), Some(&Value::Bool(true)), "without a flag fill reads ownership");
     }
 
     #[test]
