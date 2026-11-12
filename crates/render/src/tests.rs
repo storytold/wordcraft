@@ -1487,3 +1487,28 @@ fn paths_far_past_every_canvas_are_not_flattened() {
     assert!(!path_extent_ok(Affine::scale(1e12), &line(10.0)));
     assert!(!path_extent_ok(Affine::IDENTITY, &line(f64::NAN)));
 }
+
+#[test]
+fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
+    for zoom in [0.5, 0.6, 0.75] {
+        for ppp in [1.0, 1.25] {
+            let k = zoom * ppp * 96.0 / 72.0;
+            let view = Affine::new([k, 0.0, 0.0, k, 37.3, 12.9]);
+            let mut widths = Vec::new();
+            for i in 0..20 {
+                let pos = 10.0 + f64::from(i) * 17.37;
+                let (w_h, (_, oy)) = snap_rule(view, (5.0, pos, 400.0, pos), 0.5).unwrap();
+                let (w_v, (ox, _)) = snap_rule(view, (pos, 5.0, pos, 400.0), 0.5).unwrap();
+                widths.push(w_h);
+                widths.push(w_v);
+                for (w, centre) in [(w_h, (pos + oy) * k + 12.9), (w_v, (pos + ox) * k + 37.3)] {
+                    let edge = centre - w / 2.0;
+                    assert!((edge - edge.round()).abs() < 1e-9, "zoom {zoom} ppp {ppp}: edge {edge} is off the pixel grid");
+                }
+            }
+            assert!(widths.iter().all(|w| *w == widths[0] && *w >= 1.0 && w.fract() == 0.0), "zoom {zoom} ppp {ppp}: {widths:?}");
+        }
+    }
+    assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
+    assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
+}
