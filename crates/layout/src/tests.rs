@@ -1965,6 +1965,25 @@ fn a_none_format_label_shows_its_text_and_tabs_to_the_indent() {
 }
 
 #[test]
+fn a_list_number_is_never_kerned() {
+    // Word draws "11)" at the width of its unkerned digits even with Kerning for fonts on (measured
+    // in Word for Windows, Times New Roman 12 pt: 16 pt where the kerned "11)" of the text is
+    // 15.55 pt), so the number passes a hanging indent the kerned one would fit in.
+    let width = |kern: f32| {
+        let mut d = Document::from_text("text");
+        let mut levels = wordcraft_doc::numbering::levels_for(wordcraft_doc::ListKind::Numbered);
+        levels[0].text = "AVAVAV To Wo %1.".into();
+        let id = Arc::make_mut(&mut d.numbering).try_add_levels(None, levels).unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 4), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        Arc::make_mut(&mut d.styles).default_chr.kern = Some(kern);
+        let l = lay(&d);
+        let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.clone()) } else { None }).unwrap();
+        para.label.as_ref().unwrap().width
+    };
+    assert!((width(1.0) - width(0.0)).abs() < 0.01, "kerned {} vs unkerned {}", width(1.0), width(0.0));
+}
+
+#[test]
 fn break_only_list_has_no_label() {
     crate::test_fonts();
     use wordcraft_doc::ListKind;
