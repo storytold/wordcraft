@@ -1247,14 +1247,17 @@ fn compare_style_reuses_a_shared_list_for_a_revised_only_style() {
 #[test]
 fn compare_style_import_allocates_free_ids_past_saturation() {
     let mut original = Document::from_text("Item");
-    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
-    Arc::make_mut(&mut original.numbering).abstracts.push(wordcraft_doc::numbering::AbstractNum { id: u32::MAX, ..Default::default() });
-    Arc::make_mut(&mut original.numbering).nums.push(wordcraft_doc::numbering::Num {
-        id: u32::MAX,
-        abstract_id: num,
-        start_overrides: Vec::new(),
-        level_overrides: Vec::new(),
-    });
+    let num = 1;
+    {
+        let numbering = Arc::make_mut(&mut original.numbering);
+        numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id: 0, ..Default::default() });
+        numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id: u32::MAX, ..Default::default() });
+        // List 1 and the maximum list both name abstract 1, which this document does not define:
+        // its ID must still be reserved when an imported definition is allocated.
+        for id in [num, u32::MAX] {
+            numbering.nums.push(wordcraft_doc::numbering::Num { id, abstract_id: 1, start_overrides: Vec::new(), level_overrides: Vec::new() });
+        }
+    }
     if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
         h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
     }
@@ -1290,7 +1293,9 @@ fn compare_style_import_allocates_free_ids_past_saturation() {
     assert_eq!(s.doc.numbering.nums.iter().filter(|n| n.id == imported).count(), 1, "the imported instance ID is unique");
     let aid = s.doc.numbering.num(imported).expect("imported list exists").abstract_id;
     assert_ne!(aid, u32::MAX, "the imported abstract must not reuse the occupied maximum ID");
+    assert_ne!(aid, 1, "the imported abstract must not reuse an ID an existing list references");
     assert_eq!(s.doc.numbering.abstracts.iter().filter(|a| a.id == aid).count(), 1, "the imported abstract ID is unique");
+    assert!(s.doc.numbering.abstract_of(num).is_none(), "the original list still has no definition of its own");
     assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_levels));
 
     let _ = std::fs::remove_file(orig_path);

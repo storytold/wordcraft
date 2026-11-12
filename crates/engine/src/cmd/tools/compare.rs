@@ -275,7 +275,11 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
 /// definition it points at, with their overrides. Numbering IDs are document-local, so equal
 /// numbers alone don't make equal lists.
 fn same_numbering(a: &Document, b: &Document, id: u32) -> bool {
-    a.numbering.num(id) == b.numbering.num(id) && a.numbering.abstract_of(id) == b.numbering.abstract_of(id)
+    let (Some(a_abs), Some(b_abs)) = (a.numbering.abstract_of(id), b.numbering.abstract_of(id)) else {
+        // Two missing abstracts are not a shared list: nothing would define its formatting.
+        return false;
+    };
+    a.numbering.num(id) == b.numbering.num(id) && a_abs == b_abs
 }
 
 /// Import any numbering definition referenced by `num_ref` from `revised` into `doc` and remap
@@ -311,9 +315,9 @@ fn remap_style_numbering(
     let aid = match mapped_aid {
         Some(aid) => aid,
         None => {
-            let Some(new_aid) =
-                wordcraft_doc::free_id(doc.numbering.abstracts.iter().map(|a| a.id).max(), doc.numbering.abstracts.iter().map(|a| a.id), 0)
-            else {
+            // A list can reference an abstract it does not define; that ID is still taken.
+            let used = || doc.numbering.abstracts.iter().map(|a| a.id).chain(doc.numbering.nums.iter().map(|n| n.abstract_id));
+            let Some(new_aid) = wordcraft_doc::free_id(used().max(), used(), 0) else {
                 // Every abstract-list identifier is in use: the list cannot be imported safely.
                 *num_ref = None;
                 return;
