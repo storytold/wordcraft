@@ -772,6 +772,10 @@ impl Document {
         if a.path.parent() == b.path.parent() {
             // Same container: trim the ends, drop the blocks between, join.
             let (ia, ib) = (a.path.last(), b.path.last());
+            // Removing an already-empty paragraph must not impose its style or mark formatting
+            // on the following content. Test before trimming: deleting actual heading text is
+            // still an ordinary merge that keeps the first paragraph's properties.
+            let empty_start = self.para(a.story, &a.path).is_some_and(Paragraph::is_empty);
             // Kept markers of the paragraphs in between move to the join.
             let mut moved: Vec<(InlineObject, CharProps)> = Vec::new();
             // `kept` is sorted: one walk of each paragraph's objects and runs (#3614).
@@ -819,15 +823,18 @@ impl Document {
             if ib < bl.len() && ia < ib {
                 bl.drain(ia + 1..=ib);
             }
-            tail.props = ParaProps::default();
             // The deleted marks include `a`'s, so a section break there goes too: the joined
             // paragraph ends where `b`'s mark did, and its text takes the following section's
             // setup, as in Word (#2127).
             let sect = tail.section.take();
             let pa = self.para_mut(a.story, &a.path)?;
-            let keep_props = pa.props.clone();
+            let keep_props = if empty_start { tail.props.clone() } else { pa.props.clone() };
+            let keep_mark = empty_start.then(|| tail.mark.clone());
             pa.append(tail);
             pa.props = keep_props;
+            if let Some(mark) = keep_mark {
+                pa.mark = mark;
+            }
             let before = std::mem::replace(&mut pa.section, sect);
             if a.story == crate::StoryRef::Body && a.path.0.len() == 1 {
                 // Nearest first, as "link to previous" resolved them before the delete.

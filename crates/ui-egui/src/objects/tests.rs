@@ -500,7 +500,7 @@ fn alt_pressed_during_a_drag_unsnaps_and_keeps_keytips_off() {
     assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off, "Alt during a drag isn't a keytip tap");
 }
 
-/// #2233, #2234: dragging an In Line with Text picture into another paragraph shows a dashed
+/// #2233, #2234: dragging an In Line with Text picture into another paragraph shows a bold
 /// insertion cursor at the text under the pointer (no alignment guides), and the drop puts the
 /// picture there, still inline and selected. Dropped back where it was, nothing changes.
 #[test]
@@ -551,6 +551,13 @@ fn an_inline_picture_drags_to_the_insertion_cursor_and_stays_inline() {
     let d = h.state().canvas.obj_drag.as_ref().expect("dragging");
     assert_eq!(d.drop_at.as_ref().map(|(p, _)| p.clone()), Some(target.clone()), "the insertion cursor is at the text under the pointer");
     assert!(d.guides.is_empty(), "an inline object doesn't snap to guides");
+    // #4195: solid and twice the caret's width, so it can be seen, as in Word.
+    let (top, bottom) = (at(&mut h, c.x, c.top), at(&mut h, c.x, c.top + c.height));
+    let bold = h.output().shapes.iter().any(|s| {
+        matches!(&s.shape, egui::Shape::LineSegment { points: [a, b], stroke }
+            if a.distance(top) < 0.5 && b.distance(bottom) < 0.5 && stroke.width == 3.0)
+    });
+    assert!(bold, "a bold insertion cursor from the line's top to its bottom");
     button(&h, end, false);
     steps(&mut h, 3);
     assert!(h.state().canvas.obj_drag.is_none());
@@ -1009,4 +1016,91 @@ fn dragging_a_large_picture_renders_a_preview_within_the_gpu_texture_limit() {
     let preview = drag.preview.as_ref().expect("large picture preview is generated");
     let [width, height] = preview.size();
     assert!(width <= max_side && height <= max_side, "preview is {width}×{height}, texture limit is {max_side}");
+}
+
+/// #2637: inside a Drawing Canvas the mouse works on the members, as in Word. A click on a
+/// shape picks that shape (the canvas stays the selection in the text) and shows its frame;
+/// dragging it moves it inside the canvas; a click in a text box member's text puts the
+/// caret there. Before, the canvas took every click, as one static object.
+#[test]
+fn clicking_and_dragging_inside_a_canvas_works_on_its_members() {
+    use egui::{Event, PointerButton};
+    use wordcraft_engine::cmd::canvas::selected_member;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("insert.canvas", json!({"width": 400, "height": 300})).unwrap();
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 40})).unwrap();
+    a.run("canvas.member", json!({"index": 0, "x": 40, "y": 30})).unwrap();
+    a.run("insert.textBox", json!({"text": "Label"})).unwrap();
+    a.run("select.objects", json!({"index": 0})).unwrap();
+    a.run("canvas.member", json!({"index": 1, "x": 200, "y": 100, "width": 150, "height": 80})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let frame = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).expect("the canvas is laid out").rect;
+    let at = |h: &mut egui_kittest::Harness<'_, WordApp>, x: f32, y: f32| {
+        crate::canvas::page_to_screen(h.state_mut(), 0, frame.x + x, frame.y + y).unwrap()
+    };
+    let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+    let members =
+        |h: &egui_kittest::Harness<'_, WordApp>| match h.state().session.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.objects.first()) {
+            Some(InlineObject::Group { children, .. }) => children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(),
+            o => panic!("{o:?}"),
+        };
+
+    // A click on the rectangle picks it.
+    let on_rect = at(&mut h, 90.0, 50.0);
+    h.event(Event::PointerMoved(on_rect));
+    h.event(button(on_rect, true));
+    h.step();
+    h.event(button(on_rect, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    assert_eq!(selected_member(&h.state().session).map(|(_, i, _)| i), Some(0), "the rectangle is picked, not the whole canvas");
+    let shown = {
+        let app = h.state_mut();
+        let layout = app.session.layout();
+        active(app, &layout).map(|(o, _)| (o.member, o.rect))
+    };
+    assert_eq!(shown, Some((Some(0), wordcraft_geom::Rect::new(frame.x + 40.0, frame.y + 30.0, 100.0, 40.0))), "its frame is the one shown");
+
+    // Dragged 50 pt right and 20 pt down, it moves inside the canvas; the canvas stays put.
+    let to = at(&mut h, 140.0, 70.0);
+    h.event(Event::PointerMoved(on_rect));
+    h.event(button(on_rect, true));
+    h.step();
+    for p in [on_rect + egui::vec2(0.0, 30.0), to + egui::vec2(0.0, 30.0), to] {
+        h.event(Event::PointerMoved(p));
+        h.step();
+    }
+    h.event(button(to, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    let moved = members(&h);
+    let near = |(x, y): (f32, f32), (ex, ey): (f32, f32)| (x - ex).abs() < 0.01 && (y - ey).abs() < 0.01;
+    assert!(near(moved[0], (90.0, 50.0)) && near(moved[1], (200.0, 100.0)), "{moved:?}");
+    assert_eq!(h.state_mut().session.layout().object(&Pos::body(0, 0), 0).map(|o| o.rect), Some(frame));
+
+    // A click in the text box's text puts the caret in it.
+    let in_box = at(&mut h, 275.0, 140.0);
+    h.event(Event::PointerMoved(in_box));
+    h.event(button(in_box, true));
+    h.step();
+    h.event(button(in_box, false));
+    for _ in 0..3 {
+        h.step();
+    }
+    let story = h.state().session.sel.focus.story;
+    let is_box = matches!(story, StoryRef::Part(id) if h.state().session.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox));
+    assert!(is_box, "the caret is in the text box's text: {story:?}");
 }

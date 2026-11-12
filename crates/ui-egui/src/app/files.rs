@@ -298,12 +298,16 @@ impl WordApp {
     }
 
     /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
-    /// otherwise .docx.
+    /// otherwise .docx. A document never saved and without a title of its own is named after its
+    /// first words, as Word suggests them (#5793), instead of `Document1`.
     pub(crate) fn default_save_name(&self) -> String {
         let ext = self.session.path.as_ref().and_then(|p| p.extension()).map(|e| e.to_string_lossy().to_string());
+        let unnamed = self.session.path.is_none() && self.session.file_name.is_none() && self.session.doc.core.title.trim().is_empty();
+        let first = || self.session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).find_map(|t| suggested_stem(&t));
+        let stem = unnamed.then(first).flatten().unwrap_or_else(|| self.title_stem());
         match ext {
-            Some(e) if wordcraft_engine::io::is_word_package(&e) => format!("{}.{e}", self.title_stem()),
-            _ => format!("{}.docx", self.title_stem()),
+            Some(e) if wordcraft_engine::io::is_word_package(&e) => format!("{stem}.{e}"),
+            _ => format!("{stem}.docx"),
         }
     }
 
@@ -462,4 +466,34 @@ impl WordApp {
             }
         }
     }
+}
+
+/// The most characters a name taken from the text keeps ([`suggested_stem`]).
+const SUGGESTED_MAX: usize = 50;
+
+/// A file name from a paragraph's text (#5793): up to its first sentence or clause end
+/// (`.`, `!`, `?`, `;`, `:` and their full-width forms) or line break, without the characters a
+/// file name can't hold (`\ / : * ? " < > |` and controls), white space collapsed, at most
+/// [`SUGGESTED_MAX`] characters cut at a word's end, and no dot or space at either end (Windows
+/// drops them). `None` when nothing is left, so the next paragraph, or `Document1`, is used.
+pub(crate) fn suggested_stem(text: &str) -> Option<String> {
+    let end = |c: char| matches!(c, '.' | '!' | '?' | ';' | ':' | '\n' | '\r' | '\u{0B}' | '\u{2029}' | '。' | '！' | '？' | '；' | '：');
+    let head = text.split(end).next().unwrap_or("");
+    let kept: String = head.chars().map(|c| if c.is_control() || matches!(c, '\\' | '/' | '*' | '"' | '<' | '>' | '|') { ' ' } else { c }).collect();
+    let mut words = String::new();
+    for w in kept.split_whitespace() {
+        let next = if words.is_empty() { w.chars().count() } else { words.chars().count() + 1 + w.chars().count() };
+        if next > SUGGESTED_MAX {
+            if words.is_empty() {
+                words = w.chars().take(SUGGESTED_MAX).collect();
+            }
+            break;
+        }
+        if !words.is_empty() {
+            words.push(' ');
+        }
+        words.push_str(w);
+    }
+    let words = words.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
+    (!words.is_empty()).then_some(words)
 }

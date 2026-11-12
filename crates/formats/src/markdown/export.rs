@@ -330,6 +330,18 @@ pub fn export(doc: &Document) -> String {
     s
 }
 
+/// A heading's text on one line, with a trailing run of '#' escaped so a reader does not take it
+/// for the optional closing sequence (`## Item #` reads back as "Item").
+fn heading_text(body: &str) -> String {
+    let mut s = body.replace("\\\n", " ");
+    let t = s.trim_end();
+    let core = t.trim_end_matches('#');
+    if core.len() != t.len() && (core.is_empty() || core.ends_with([' ', '\t'])) {
+        s.insert(core.len(), '\\');
+    }
+    s
+}
+
 #[cfg(test)]
 pub(super) fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
     write_blocks_labelled(blocks, out, None);
@@ -437,8 +449,8 @@ fn write_blocks_labelled(blocks: &[FBlock], out: &mut Vec<String>, mut labels: O
                     None => {
                         prev_list = false;
                         let line = match p.kind {
-                            Kind::Heading(n) => format!("{} {}", "#".repeat(n.clamp(1, 6) as usize), body.replace("\\\n", " ")),
-                            Kind::Title => format!("# {}", body.replace("\\\n", " ")),
+                            Kind::Heading(n) => format!("{} {}", "#".repeat(n.clamp(1, 6) as usize), heading_text(&body)),
+                            Kind::Title => format!("# {}", heading_text(&body)),
                             Kind::Rule => "---".to_string(),
                             Kind::Quote => {
                                 let b = escape_lines(body);

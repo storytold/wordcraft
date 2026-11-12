@@ -159,7 +159,7 @@ fn layout_table_block(input: TableBlockContext<'_, '_, '_>) -> bool {
     let layout = table::layout_table(ctx, story, t, path, width, depth + 1);
     let (tx, ty) = match t.props.float {
         Some(float) => {
-            let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
+            let legacy = (ctx.doc.settings.compat_mode < 15).then(|| table::first_cell_left_margin(ctx, t));
             let (rect, area) = box_float_table_rect(frame, width, *y, &layout, &float, legacy, float_tables);
             exclusions.push((area, false, None, WrapText::BothSides, true));
             float_tables.push(area);
@@ -332,7 +332,14 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                 prev_end = push_para(&mut items, (story, &path), &pl, (0, pl.lines.len()), (0.0, y + lead), width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
+                    let at = ObjFrame {
+                        page: frame,
+                        col: (0.0, width),
+                        para_y: para_top,
+                        table_chr: table.map(|t| &t.chr),
+                        pinned: Some(&pinned),
+                        late: None,
+                    };
                     let (back, front) = place_objects(
                         ctx,
                         &ObjectPlacement {
@@ -359,8 +366,12 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     items.splice(at..at, back);
                     items.extend(front);
                 }
-                // Automatic space after: none after the last paragraph of a cell or box.
-                let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
+                // Automatic space after: none after the last paragraph of a cell or box. Nor
+                // contextual spacing after a cell's last paragraph in the default style (or an
+                // undefined one, formatted as Normal): the end-of-cell mark is a Normal paragraph.
+                let last = i + 1 == blocks.len();
+                let normal = || pl.rp.style == "Normal" || ctx.doc.styles.get(&pl.rp.style).is_none();
+                let after = if last && (pl.rp.after_auto || (in_cell && ctxl && normal())) { 0.0 } else { pl.rp.space_after };
                 y += edges.top + pl.height + edges.bottom + after;
                 prev_after = after;
                 prev_after_auto = pl.rp.after_auto;
@@ -457,14 +468,15 @@ pub(crate) struct BoxLayout {
 
 /// Where floating table `tl` goes in a box `width` wide whose next paragraph starts at `y`, and
 /// the area text keeps clear of. Positions relative to the page or its margins need the box's
-/// `frame`; without one (a table cell) they're relative to the box.
+/// `frame`; without one (a table cell) they're relative to the box. `legacy` is the first cell's
+/// left margin before Word 2013 layout, `None` in it.
 fn box_float_table_rect(
     frame: Option<PageFrame>,
     width: f32,
     y: f32,
     tl: &table::TableLayout,
     f: &TableFloat,
-    legacy: f32,
+    legacy: Option<f32>,
     float_tables: &[Rect],
 ) -> (Rect, Rect) {
     let h = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
@@ -500,18 +512,19 @@ fn box_float_table_rect(
     };
     // Nor is there an area to align in: the table starts where the text is.
     let v_align = if frame.is_none() && matches!(f.v_rel, Anchor::Page | Anchor::Margin) { None } else { f.v_align };
-    let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy } else { 0.0 };
-    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy, h_area.0, float_tables);
+    let x = align_in(h_area, f.x, w, PageFrame::h_align(frame.as_ref(), f.h_align)) - if f.h_align.is_none() { legacy.unwrap_or(0.0) } else { 0.0 };
+    let r = clear_of_float_tables(Rect::new(x, align_in(v_area, y_off, h, v_align), w, h), f, legacy.is_none(), h_area.0, float_tables);
     let [dl, dt, dr, db] = f.dist_from_text();
     (r, r.inset(-dl, -dt, -dr, -db))
 }
 
 /// Floating table `f` at `r`, moved below the floating tables in its way when it may not
-/// overlap them. In Word 2013+ layout one placed by an offset keeps its distance from the text's
-/// left edge (`text_left`).
-pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, legacy: f32, text_left: f32, others: &[Rect]) -> Rect {
+/// overlap them. In Word 2013+ layout (`modern`) one placed by an offset keeps its distance from
+/// the text's left edge (`text_left`); before it, it keeps its own left edge, also when its first
+/// cell has no left margin.
+pub(crate) fn clear_of_float_tables(mut r: Rect, f: &TableFloat, modern: bool, text_left: f32, others: &[Rect]) -> Rect {
     let [dl, dt, dr, db] = f.dist_from_text();
-    let keeps_text_distance = legacy == 0.0 && f.h_align.is_none() && f.x >= 0.0 && matches!(f.h_rel, Anchor::Margin | Anchor::Column);
+    let keeps_text_distance = modern && f.h_align.is_none() && f.x >= 0.0 && matches!(f.h_rel, Anchor::Margin | Anchor::Column);
     for _ in 0..64 {
         let area = r.inset(-dl, -dt, -dr, -db);
         let Some(below) = others.iter().filter(|o| !f.overlap && o.intersects(&area)).map(|o| o.bottom()).reduce(f32::max) else { break };

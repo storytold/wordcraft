@@ -34,10 +34,14 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{block_behind, buttons, cancel_key_pressed, color_menu, forget_nudge, ok_cancel_responses, release_keyboard};
+pub(crate) use chrome::{
+    block_behind, buttons, cancel_key_pressed, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
+};
+pub(crate) use dispatch::search_results;
+pub(crate) use find::swallow_shortcut_text;
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
-use find::{command_matches, goto_page, swallow_shortcut_text};
+use find::{command_matches, goto_page};
 #[cfg(test)]
 use font::{apply_font, preview_size};
 use font::{east_asian_char, font_props};
@@ -414,10 +418,12 @@ pub enum Dialog {
         #[serde(skip)]
         basis: Box<CellMarginsForm>,
     },
-    /// Opening a password-protected document (#55): the password, then `file.open` with
-    /// `params` again. The password is never serialised or printed.
+    /// Opening a password-protected document (#55): the password, then the command that asked
+    /// for it (`then`: `file.open`, or `file.newFromTemplate` for a protected template, #3433)
+    /// with `params` again. The password is never serialised or printed.
     Password {
         name: String,
+        then: String,
         #[serde(skip)]
         params: Value,
         #[serde(skip)]
@@ -575,6 +581,10 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        // Search opens in the title bar's box when the window shows it (#5398).
+        if name == "commands" && crate::chrome::open_title_search(app) {
+            return None;
+        }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
         }

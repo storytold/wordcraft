@@ -14,6 +14,106 @@ fn object_area(s: &mut Session) -> wordcraft_layout::hit::ObjectHit {
     s.layout().find_object(0, |o| o.text_box.is_none()).unwrap()
 }
 
+/// #4250: a shape dragged into the middle of a page that only continues a long paragraph
+/// stays there, as in Word: anchored at the line beside it, it's drawn on that page, not
+/// thrown back to the page the paragraph starts on. One undo step puts it back.
+#[test]
+fn a_shape_dropped_on_a_page_a_paragraph_continues_onto_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    assert!(s.layout().pages.len() > 2);
+    let before = (object_area(&mut s), s.undo_depth());
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!(o.page, 1, "on the page it was dropped on: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 275.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+    s.run("edit.undo", &json!({})).unwrap();
+    let back = object_area(&mut s);
+    assert_eq!((back.page, back.rect), (before.0.page, before.0.rect));
+}
+
+/// #4250: and dragged back onto the page the paragraph starts on, it stays there: its anchor
+/// goes back to the paragraph's start rather than staying on the later page's line.
+#[test]
+fn a_shape_dragged_back_to_the_page_its_paragraph_starts_on_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "The quick brown fox jumps over the lazy dog. ".repeat(400)})).unwrap();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 275, "width": 100, "height": 50})).unwrap();
+    let before = (object_area(&mut s), s.undo_depth());
+    assert!(before.0.page == 1 && before.0.off > 0, "anchored on page 2's line: {:?}", before.0);
+    s.run("arrange.bounds", &json!({"page": 0, "x": 120, "y": 300})).unwrap();
+    let o = object_area(&mut s);
+    assert_eq!((o.page, o.off), (0, 0), "on the page it was dropped on, anchored at the paragraph's start: {o:?}");
+    assert!((o.rect.x - 120.0).abs() < 0.5 && (o.rect.y - 300.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+    assert_eq!(s.undo_depth(), before.1 + 1);
+}
+
+/// #4262: dropped beside the first line after a page break inside a paragraph, a shape stays
+/// on the page it was dropped on, anchored in that line.
+#[test]
+fn a_shape_dropped_just_after_a_page_break_in_a_paragraph_stays_there() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let text = "The quick brown fox jumps over the lazy dog. ";
+    s.run("text.insert", &json!({"text": text.repeat(20)})).unwrap();
+    s.run("insert.pageBreak", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": text.repeat(40)})).unwrap();
+    assert_eq!(s.doc.body.len(), 1, "one paragraph");
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 0, "x": 100, "y": 250, "width": 100, "height": 50})).unwrap();
+    s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 80})).unwrap();
+    let o = object_area(&mut s);
+    let after_break = text.len() * 20 + wordcraft_doc::para::PAGE_BREAK.len_utf8();
+    assert_eq!((o.page, o.off), (1, after_break), "on the page it was dropped on, anchored right after the break: {o:?}");
+    assert!((o.rect.x - 100.0).abs() < 0.5 && (o.rect.y - 80.0).abs() < 0.5, "where it was dropped: {:?}", o.rect);
+}
+
+/// Leaf #107: wrapping can leave the anchor alone to the left and put the text on the right
+/// of the same physical row. A drop after the break must still stay on the destination page.
+#[test]
+fn a_picture_with_wrap_spacing_dropped_after_a_leading_break_stays_there() {
+    for gap in [0.0, 6.0, 12.0] {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Source\nDestination"));
+        s.run("caret.set", &json!({"pos": Pos::body(1, 0)})).unwrap();
+        s.run("layout.break", &json!({"kind": "page"})).unwrap();
+        s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+        let data = super::super::insert::base64_encode(&png(20, 10));
+        s.run("insert.picture", &json!({"data": data, "width": 120})).unwrap();
+        s.run("arrange.wrap", &json!({"wrap": "square"})).unwrap();
+        super::select::with_float(&mut s, |f| {
+            f.dist = gap;
+            f.dist_top = gap;
+            f.dist_bottom = gap;
+        })
+        .unwrap();
+        let before = serde_json::to_value(&s.doc.body).unwrap();
+        let depth = s.undo_depth();
+        s.run("arrange.bounds", &json!({"page": 1, "x": 100, "y": 110})).unwrap();
+        let hit = object_area(&mut s);
+        assert_eq!(hit.page, 1, "gap={gap}: {hit:?}");
+        assert!((hit.rect.x - 100.0).abs() < 0.5 && (hit.rect.y - 110.0).abs() < 0.5, "gap={gap}: {:?}", hit.rect);
+        assert_eq!(s.undo_depth(), depth + 1);
+        let after = serde_json::to_value(&s.doc.body).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), before);
+        s.run("edit.redo", &json!({})).unwrap();
+        assert_eq!(serde_json::to_value(&s.doc.body).unwrap(), after);
+        let mut copy = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        let saved = object_area(&mut copy);
+        assert_eq!(saved.page, 1, "DOCX gap={gap}: {saved:?}");
+        assert!((saved.rect.x - hit.rect.x).abs() < 0.5 && (saved.rect.y - hit.rect.y).abs() < 0.5, "saved at the drop position");
+    }
+}
+
 /// What a click and a handle or body drag do in the editor (#142, #82): hit-test the object,
 /// select it, then resize and move it with `arrange.bounds`.
 fn click_resize_and_drag(insert: &str, params: Value) {
@@ -969,6 +1069,66 @@ fn picture_size_past_the_limit_keeps_the_proportions() {
         let (w, h) = size(&s);
         assert!((1.0..=4000.0).contains(&w) && (1.0..=4000.0).contains(&h), "{v}: {w}×{h}");
     }
+}
+
+/// A side the call leaves as it was keeps its size, even outside 1–4000 pt: a straight line's 0
+/// stays 0 when only its length is typed. Sides set in proportion (the original, or a size whose
+/// sides both have a length) fit the limits together; any other side the call sets, on its own.
+#[test]
+fn picture_size_keeps_the_side_it_leaves() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "straightConnector", "width": 100.0, "height": 0.0})).unwrap();
+    let size = |s: &Session| obj_size(&selected(s).unwrap().1);
+    // A side a scale sets on its own: 0 has no length to scale.
+    let scaled = |x: f32, k: f32| if x == 0.0 { 0.0 } else { (x * k).clamp(1.0, 4000.0) };
+    // Sizes with both sides follow each other: they fit 1–4000 pt by the one factor nearest 1, worked out by hand
+    // for the calls `width` locked, `height` locked, `scale` 50 and `scale` 200 with a width (in that order).
+    let states = [
+        ((100.0, 0.0), None),
+        ((0.0, 100.0), None),
+        ((5000.0, 0.0), None),
+        ((0.0, 5000.0), None),
+        ((100.0, 0.5), Some([(200.0, 1.0), (4000.0, 20.0), (200.0, 1.0), (200.0, 1.0)])),
+        ((5000.0, 50.0), Some([(200.0, 2.0), (4000.0, 40.0), (2500.0, 25.0), (200.0, 2.0)])),
+        ((100.0, 50.0), Some([(200.0, 100.0), (400.0, 200.0), (50.0, 25.0), (200.0, 100.0)])),
+    ];
+    for ((w0, h0), together) in states {
+        let follow = |i: usize, alone: (f32, f32)| together.map_or(alone, |t: [(f32, f32); 4]| t[i]);
+        let cases = [
+            (json!({"width": 200.0, "lockAspect": false}), (200.0, h0)),
+            (json!({"height": 200.0, "lockAspect": false}), (w0, 200.0)),
+            (json!({"width": 200.0}), follow(0, (200.0, h0))),
+            (json!({"height": 200.0}), follow(1, (w0, 200.0))),
+            (json!({"scale": 50}), follow(2, (scaled(w0, 0.5), scaled(h0, 0.5)))),
+            (json!({"scale": 200, "width": 200.0}), follow(3, (200.0, scaled(h0, 2.0)))),
+            (json!({"scale": 100}), (w0, h0)),
+            (json!({}), (w0, h0)),
+            // The Size dialog: both sides sent, the height as it was.
+            (json!({"width": 200.0, "height": h0, "lockAspect": false}), (200.0, h0)),
+            (json!({"width": 200.0, "height": 300.0}), (200.0, 300.0)),
+        ];
+        for (v, (ew, eh)) in cases {
+            with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+            s.run("picture.size", &v).unwrap();
+            let (w, h) = size(&s);
+            assert!((w - ew).abs() < 1e-3 && (h - eh).abs() < 1e-3, "{w0}×{h0} {v}: {w}×{h}, not {ew}×{eh}");
+        }
+    }
+    // Both sides of a picture's original size fit together, whatever size it had, even when the
+    // height comes out as it was: 4050×1012.5 pt is 4000×1000, not 4000×1012.5.
+    let data = super::super::insert::base64_encode(&png(400, 100));
+    s.run("insert.picture", &json!({"data": data})).unwrap();
+    for (w0, h0) in [(3000.0, 1012.5), (4050.0, 0.0), (100.0, 100.0)] {
+        with_obj(&mut s, |o| o.set_size(w0, h0)).unwrap();
+        s.run("picture.size", &json!({"original": true, "scale": 1350})).unwrap();
+        let (w, h) = size(&s);
+        assert!((w - 4000.0).abs() < 0.01 && (h - 1000.0).abs() < 0.01, "{w0}×{h0}: {w}×{h}");
+    }
+    // A height the original sets is set, though it is the one the picture had: 300×75 pt at
+    // 5400 % is 16200×4050, so with a width of 200 the height fits to 4000.
+    with_obj(&mut s, |o| o.set_size(100.0, 4050.0)).unwrap();
+    s.run("picture.size", &json!({"original": true, "scale": 5400, "width": 200.0, "lockAspect": false})).unwrap();
+    assert_eq!(size(&s), (200.0, 4000.0));
 }
 
 /// A crop handle drop: `picture.crop` with the new size is one edit, one undo step.

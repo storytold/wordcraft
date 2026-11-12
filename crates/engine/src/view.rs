@@ -161,6 +161,17 @@ fn default_read_zoom() -> f32 {
     1.0
 }
 
+impl ViewState {
+    /// Take the app-wide settings a view keeps a copy of from the saved preferences: Read Mode's
+    /// page colour and Check spelling as you type (#5740). A view made active goes through this
+    /// (a document switched to, opened or made, a window's view put back), so a change made while
+    /// another view was active holds in this one too.
+    pub(crate) fn follow_prefs(&mut self, prefs: &crate::prefs::Prefs) {
+        self.read_page_color = prefs.read_page_color;
+        self.proofing = prefs.check_spelling;
+    }
+}
+
 impl Default for ViewState {
     fn default() -> Self {
         ViewState {

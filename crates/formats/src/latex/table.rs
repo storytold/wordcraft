@@ -104,7 +104,9 @@ pub(super) fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
     for r in rows {
         let mut cells = Vec::new();
         let mut g = 0usize;
-        for cell_toks in r {
+        // A document row keeps MAX_COLS cells; the rest would only widen `covering`, which is
+        // walked once per row.
+        for cell_toks in r.into_iter().take(wordcraft_doc::table::MAX_COLS) {
             let mut cell = Cell::default();
             let mut content = trim_cell(cell_toks);
             // `\multicolumn{n}{spec}{content}`, `\multirow{n}{width}{content}`. Each wrapper

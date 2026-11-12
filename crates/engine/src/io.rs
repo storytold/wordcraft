@@ -66,6 +66,10 @@ pub struct ExportOptions {
     pub word2003: bool,
     /// How digits look in PDFs and page images (the Numeral setting, `System` resolved).
     pub numeral: wordcraft_layout::NumeralMode,
+    /// A PDF or page image is written only if nothing in it is silently missing (a character no
+    /// face can draw, a picture that is missing or can't be decoded); else the save fails with
+    /// `strict: …` (#6005). Ignored for other formats.
+    pub strict: bool,
 }
 
 /// A document password: wiped from memory when dropped, never printed (`Debug` shows `***`).
@@ -771,8 +775,8 @@ pub fn list_dir(path: &std::path::Path, max: usize) -> Result<(Vec<DirEntry>, bo
 #[cfg(not(target_arch = "wasm32"))]
 pub fn package_title(path: &std::path::Path, max_file: u64, max_part: u64) -> Option<String> {
     crate::file_access::check_read(&path.to_string_lossy()).ok()?;
-    let file = std::fs::File::open(path).ok()?;
-    if file.metadata().ok()?.len() > max_file {
+    let (file, meta) = open_regular_file(path).ok()?;
+    if meta.len() > max_file {
         return None;
     }
     wordcraft_docx::package_title(std::io::BufReader::new(file), max_part)

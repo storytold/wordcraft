@@ -205,6 +205,81 @@ fn object_without_mathml_falls_back_to_its_replacement_image() {
     assert!(imgs[0].data.as_slice() == png.as_slice());
 }
 
+/// A picture of `w` by `h` pixels, as a PNG.
+fn png_of(w: u32, h: u32) -> Vec<u8> {
+    let mut png = Cursor::new(Vec::new());
+    image::RgbImage::new(w, h).write_to(&mut png, image::ImageFormat::Png).unwrap();
+    png.into_inner()
+}
+
+#[test]
+fn a_picture_stated_on_one_side_keeps_its_own_proportions() {
+    // A hundred times as tall as wide: only the cap on a page's size may shrink it, in proportion.
+    let frame = r#"<draw:frame text:anchor-type="as-char" svg:width="500pt"><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("Pictures/a.png", &png_of(10, 1000))]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!((img.w - 15.84).abs() < 0.01 && (img.h - 1584.0).abs() < 0.01, "{} {}", img.w, img.h);
+}
+
+#[test]
+fn an_objects_picture_with_no_stated_size_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let frame =
+        r#"<draw:frame text:anchor-type="as-char"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Object 1/content.xml", b"<office:spreadsheet/>"),
+        ("Pictures/a.png", &png_of(1000, 500)),
+    ]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!(img.object.is_some(), "still the object");
+    assert!((img.w - 306.14).abs() < 0.5 && (img.h - 153.07).abs() < 0.5, "{} {}", img.w, img.h);
+}
+
+#[test]
+fn a_frame_stating_a_size_of_nothing_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let frame = r#"<draw:frame text:anchor-type="as-char" svg:width="0pt"><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+    let content = format!(
+        r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &png_of(1000, 500))]);
+    let flow = parse(&pkg).unwrap();
+    let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+    assert!((img.w - 306.14).abs() < 0.5 && (img.h - 153.07).abs() < 0.5, "{} {}", img.w, img.h);
+}
+
+#[test]
+fn a_picture_in_line_raised_or_turned_with_no_size_is_fitted_to_the_text() {
+    let styles = format!(
+        r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm"><style:page-layout-properties fo:page-width="14.8cm" fo:page-height="21cm" fo:margin-left="2cm" fo:margin-right="2cm" fo:margin-top="2cm" fo:margin-bottom="2cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm"/></office:master-styles></office:document-styles>"#
+    );
+    let auto = r#"<office:automatic-styles><style:style style:name="fr1" style:family="graphic"><style:graphic-properties style:vertical-pos="middle" style:vertical-rel="char"/></style:style></office:automatic-styles>"#;
+    for attrs in [r#" draw:style-name="fr1""#, r#" draw:transform="rotate (0.5) translate (0cm 0cm)""#] {
+        let frame = format!(r#"<draw:frame text:anchor-type="as-char"{attrs}><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#);
+        let content = format!(
+            r#"<office:document-content {NS_T}>{auto}<office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/a.png", &png_of(1000, 500))]);
+        let flow = parse(&pkg).unwrap();
+        let img = paras(&flow).into_iter().flat_map(|p| &p.inlines).find_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).unwrap();
+        assert!(img.w <= 306.5, "{attrs}: {} {}", img.w, img.h);
+    }
+}
+
 pub(super) const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
 
 /// A package with `content.xml` and, when given, `styles.xml`.
@@ -1214,6 +1289,36 @@ fn meta_creation_date_timezones_and_fallbacks() {
     assert_eq!(m2.author, "Solo Creator");
 }
 
+#[test]
+fn a_later_default_style_without_a_font_keeps_the_default_font() {
+    // #4501 follow-up: styles read twice (styles.xml, then content.xml) must not wipe the font.
+    let mut styles = styles::Styles::default();
+    let with_font = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let without = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties fo:font-size="12pt"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    styles.read(with_font.as_bytes(), false);
+    styles.read(without.as_bytes(), false);
+    assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
+}
+
+#[test]
+fn a_later_monospaced_default_style_keeps_the_proportional_default_font() {
+    // #4501 follow-up: a monospaced default font is rejected and must not wipe the earlier one.
+    let mut styles = styles::Styles::default();
+    let with_font = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="DejaVu Serif"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    let mono = format!(
+        r#"<office:document-styles {NS_T}><office:styles><style:default-style style:family="paragraph"><style:text-properties style:font-name="Courier New"/></style:default-style></office:styles></office:document-styles>"#
+    );
+    styles.read(with_font.as_bytes(), false);
+    styles.read(mono.as_bytes(), false);
+    assert_eq!(styles.doc_font().as_deref(), Some("DejaVu Serif"));
+}
+
 /// The `content.xml` of a package.
 pub(super) fn content_of(bytes: &[u8]) -> String {
     let mut z = archive(bytes);
@@ -1269,7 +1374,7 @@ fn the_default_styles_font_size_is_the_documents() {
     let s = entry(&crate::odt::tests::export_model(&d).unwrap(), "styles.xml");
     assert!(
         s.contains(r#"<style:text-properties fo:font-family="'Liberation Serif'" fo:font-size="11pt""#)
-            || s.contains(r#"fo:font-size="11pt" style:letter-kerning"#),
+            || s.contains(r#"fo:font-size="11pt" style:font-size-asian="11pt""#),
         "{s}"
     );
     let back = import(&crate::odt::tests::export_model(&d).unwrap()).unwrap();
