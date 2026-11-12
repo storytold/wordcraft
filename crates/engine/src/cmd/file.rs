@@ -316,6 +316,8 @@ pub(crate) fn new_from_template(s: &mut Session, v: &Value) -> CmdResult {
     let path = p::req_str(v, "path")?;
     let (mut doc, _) = read_document(s, path, v)?;
     doc.settings.attached_template = Some(path.to_string());
+    // A new document: not created when the template was. Saving stamps its creation date.
+    doc.core.created.clear();
     if p::bool(v, "replaceBlank") == Some(true) && s.used_because().is_none() {
         s.set_document(doc);
     } else {

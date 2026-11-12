@@ -504,7 +504,16 @@ fn createdate_keeps_the_creation_date_on_update() {
     s.run("insert.field", &json!({"instr": "CREATEDATE"})).unwrap();
     s.run("references.updateFields", &json!({})).unwrap();
     let results: Vec<String> = fields(&s).into_iter().map(|f| f.1).collect();
-    assert_eq!(results, ["2019-05", "5/5/2019"]);
+    // 12:00 UTC is 5 May from UTC-12 to UTC+11:59, the next day east of that.
+    let unix = 1_557_057_600;
+    let (_, _, day, _, _) = crate::cmd::local_civil(unix, crate::cmd::local_offset_secs(unix));
+    assert_eq!(results, ["2019-05".to_string(), format!("5/{day}/2019")]);
+    assert!(day == 5 || day == 6, "{day}");
+    // A date without a time is that calendar day in every time zone.
+    s.doc.core.created = "2019-06-07".into();
+    s.run("references.updateFields", &json!({})).unwrap();
+    let results: Vec<String> = fields(&s).into_iter().map(|f| f.1).collect();
+    assert_eq!(results, ["2019-06", "6/7/2019"]);
 }
 
 /// A creation date that can't be read leaves the field's result as it was; a document that has
@@ -515,7 +524,12 @@ fn createdate_without_a_readable_creation_date() {
     s.doc.core.created = "sometime in May".into();
     s.run("insert.field", &json!({"instr": r#"CREATEDATE \@ "yyyy-MM""#, "result": "2019-05"})).unwrap();
     assert_eq!(fields(&s)[0].1, "2019-05");
+    // A file opened without a creation date keeps the result too.
     s.doc.core.created.clear();
+    s.path = Some(std::env::temp_dir().join("opened.docx"));
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert_eq!(fields(&s)[0].1, "2019-05");
+    s.path = None;
     s.run("references.updateFields", &json!({})).unwrap();
     assert_eq!(fields(&s)[0].1, crate::cmd::insert::format_date("yyyy-MM"));
 }
