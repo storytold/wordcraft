@@ -217,13 +217,7 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
     let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
     let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
-        if let Some(pg) = pb.page() {
-            for it in &row.items {
-                let mut it = it.clone();
-                it.translate(x, y);
-                pg.items.push(it);
-            }
-        }
+        pb.place_row(row, x, y);
         pb.y += row.height;
         pb.content_bottom = pb.content_bottom.max(pb.y);
     };
@@ -369,16 +363,12 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pb.advance(block, body_top);
             continue;
         }
+        let mut y = r.y;
+        for row in &tl.rows {
+            pb.place_row(row, r.x, y);
+            y += row.height;
+        }
         if let Some(pg) = pb.page() {
-            let mut y = r.y;
-            for row in &tl.rows {
-                for it in &row.items {
-                    let mut it = it.clone();
-                    it.translate(r.x, y);
-                    pg.items.push(it);
-                }
-                y += row.height;
-            }
             pg.float_tables.push(Path::top(block));
         }
         let area = r.inset(-dl, -dt, -dr, -db);

@@ -3,6 +3,7 @@ use super::ctx::{Ctx, with_pin};
 use super::floats::{EarlyFloats, WrapArea};
 use super::notes::{NOTE_SEP, NOTE_SEP_W, NoteBox, NoteSeps, v_span};
 use super::placed::Placed;
+use super::table::RowLayout;
 use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, StoryRef};
 
 #[derive(Clone)]
@@ -63,6 +64,8 @@ pub(crate) struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     pub(crate) behind: Vec<usize>,
+    /// The current page's cell behind-text runs with their z, placed as it finishes.
+    pub(crate) cell_behind: Vec<(u32, Vec<Placed>)>,
     /// The bottom of the tallest column on the current page before the current one.
     pub(crate) max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -302,11 +305,45 @@ impl PageBuilder<'_> {
     /// footnotes, placed with the section state in effect (margins, gutter, separators).
     /// `new_page` starts with this; after it has run, `new_page` finds nothing left to finish.
     pub(crate) fn finish_page(&mut self) {
+        self.place_cell_behind();
         self.close_column_lines();
         self.apply_valign();
         // The page is aligned once: finishing it again before it is left moves nothing twice.
         self.page_valign = wordcraft_doc::section::PageVAlign::Top;
         self.flush_notes();
+    }
+    /// Put a table row's items on the current page at (x, y), holding back its behind-text runs.
+    pub(crate) fn place_row(&mut self, row: &RowLayout, x: f32, y: f32) {
+        let Some(pg) = self.pages.last_mut() else { return };
+        let mut runs = row.behind.iter().peekable();
+        for (i, it) in row.items.iter().enumerate() {
+            let mut it = it.clone();
+            it.translate(x, y);
+            while runs.next_if(|(_, r)| r.end <= i).is_some() {}
+            let Some((z, r)) = runs.peek().filter(|(_, r)| r.contains(&i)) else {
+                pg.items.push(it);
+                continue;
+            };
+            if i == r.start {
+                self.cell_behind.push((*z, Vec::new()));
+            }
+            if let Some((_, run)) = self.cell_behind.last_mut() {
+                run.push(it);
+            }
+        }
+    }
+    /// Word paints a page's cell behind-text objects in one layer by z: lowest first, at the front.
+    pub(crate) fn place_cell_behind(&mut self) {
+        let mut runs = std::mem::take(&mut self.cell_behind);
+        runs.sort_by_key(|(z, _)| *z);
+        let items: Vec<Placed> = runs.into_iter().flat_map(|(_, run)| run).collect();
+        let n = items.len();
+        if let Some(pg) = self.pages.last_mut() {
+            pg.items.splice(0..0, items);
+        }
+        if let Some(b) = self.behind.last_mut() {
+            *b += n;
+        }
     }
     pub(crate) fn new_page(&mut self, first_block: usize, body_top: f32) {
         self.finish_page();

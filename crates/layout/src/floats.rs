@@ -700,8 +700,9 @@ pub(crate) struct ObjectPlacement<'a> {
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
-/// worked out from `at`. Returns what goes behind the text, and what goes in front.
-pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>) {
+/// worked out from `at`. Returns what goes behind the text, what goes in front, and each
+/// object's run of the behind items in order: its z and item count.
+pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed>, Vec<Placed>, Vec<(u32, usize)>) {
     let ObjectPlacement { story, path, p, pl, lines: (l0, l1), origin: (x, y), at, floats, depth } = *req;
     // Each object's items (behind the text, in front), with its stacking order: drawn lowest
     // first once all are placed, as Word stacks floating objects by `relativeHeight`, not by
@@ -710,7 +711,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
     // The highest order so far: an object without one (inserted here) stacks above the objects
     // before it, as the writer gives it the next order up on save.
     let mut z_top = 0u32;
-    let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
+    let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new(), Vec::new()) };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
     let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
     // The paragraph's first piece draws its floating objects, whichever of its lines holds the
@@ -829,12 +830,13 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
     }
     // Stable: equal orders (none given) keep the paragraph's order.
     stack.sort_by_key(|(z, _, _)| *z);
+    let groups = stack.iter().filter(|(_, b, _)| !b.is_empty()).map(|(z, b, _)| (*z, b.len())).collect();
     let (mut behind, mut front) = (Vec::new(), Vec::new());
     for (_, b, f) in stack {
         behind.extend(b);
         front.extend(f);
     }
-    (behind, front)
+    (behind, front, groups)
 }
 
 /// The wrap areas for a paragraph laid out against `rel` (relative to its top) whose lines from the

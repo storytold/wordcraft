@@ -4618,6 +4618,7 @@ fn split_row_rejects_a_hostile_cut() {
         items: vec![line(0.0), line(150.0)],
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0), align: None }],
+        behind: Vec::new(),
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -8240,6 +8241,47 @@ fn a_behind_or_in_front_of_text_picture_in_a_cell_leaves_the_row_alone() {
     }
 }
 
+/// Word draws a page's behind-text objects in one layer by z, whatever cell holds them: a
+/// signature box in an earlier row, above a stamp in a later one, covers the stamp. WordCraft
+/// drew each cell's in row order, so the stamp covered the signature.
+#[test]
+fn behind_text_objects_in_cells_paint_by_z() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut t = Table::new(2, 1, 468.0);
+    for (row, (h, z)) in [(50.0, 9), (60.0, 1)].into_iter().enumerate() {
+        let mut cp = wordcraft_doc::Paragraph::with_text("Cell", Default::default());
+        let float = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, z, ..Default::default() };
+        cp.insert_object(0, rect_shape(100.0, h, float), &Default::default()).unwrap();
+        t.rows[row].cells[0].blocks = vec![wordcraft_doc::para_block(cp)];
+    }
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let shape = |h: f32| items.iter().position(|it| matches!(it, Placed::Shape { rect, .. } if (rect.h - h).abs() < 0.01)).unwrap();
+    let text = items.iter().position(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if path.0.len() == 4)).unwrap();
+    assert!(shape(60.0) < shape(50.0), "the higher z draws last");
+    assert!(shape(50.0) < text, "both stay behind the cells' text");
+}
+
+/// An exact-height row clips its own text, not a behind-text box's: Word shows the box's text
+/// below the row.
+#[test]
+fn an_exact_row_keeps_a_behind_text_box() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut t = Table::new(1, 1, 468.0);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Cell", Default::default()))];
+    t.rows[0].props.height = Some(30.0);
+    t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::Exact;
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let float = Float { wrap: Wrap::BehindText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 40.0, ..Default::default() };
+    let cell = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+    let id = text_box_at(&mut d, &cell, "Below the row", 120.0, 30.0, float);
+    let l = lay(&d);
+    assert!(l.pages[0].items.iter().any(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)), "the box keeps its text");
+}
+
 #[test]
 fn autofit_sizes_columns_by_their_content() {
     crate::test_fonts();
@@ -8800,6 +8842,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None, align: None }],
+        behind: Vec::new(),
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -12460,6 +12503,7 @@ fn split_cell_moves_image_frame() {
             edge: 0.0,
             items: vec![kept, image, frame],
             cells: vec![CellPart { top, items: 0..3, end: Some(170.0), align: None }],
+            behind: Vec::new(),
         };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);

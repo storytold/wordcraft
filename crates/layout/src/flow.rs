@@ -555,7 +555,7 @@ impl<'a> Flow<'a> {
             pinned: None,
             late: Some(&self.late),
         };
-        let (behind, front) = place_objects(
+        let (behind, front, _) = place_objects(
             ctx,
             &ObjectPlacement {
                 story: StoryRef::Body,
@@ -930,7 +930,7 @@ pub(crate) fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragr
         pinned: None,
         late: None,
     };
-    let (behind, front) = place_objects(
+    let (behind, front, _) = place_objects(
         ctx,
         &ObjectPlacement {
             story: StoryRef::Body,
