@@ -470,6 +470,59 @@ fn compare_style_carried_forward_fmt_change_no_extra_count() {
     let _ = std::fs::remove_file(rev_path);
 }
 
+/// #5841: a style change the same author already made keeps the formatting from before their first
+/// change, so rejecting the comparison restores that rather than the original's current formatting.
+#[test]
+fn compare_style_same_author_keeps_the_first_old_value() {
+    let mut original = Document::from_text("Same text");
+    original.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Reviewer".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.chr.size = Some(20.0);
+        h.chr.fmt_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::props::CharProps { size: Some(16.0), ..Default::default() });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-own-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Same text");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.chr.size = Some(18.0);
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-own-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(r["changes"], 1);
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(h1.chr.size, Some(18.0));
+    let ch = h1.chr.fmt_change.as_deref().expect("Heading1 change recorded");
+    assert_eq!(ch.old.size, Some(16.0), "keeps the value before the author's first change");
+    assert_eq!(ch.rev, 0, "reuses the author's existing revision");
+    assert_eq!(s.doc.revisions[ch.rev as usize].author, "Reviewer");
+
+    let mut rejected = Session::new(s.doc.clone());
+    rejected.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(rejected.doc.styles.get("Heading1").unwrap().chr.size, Some(16.0));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
 /// #5841: comparing against plain text input skips style synchronization to keep customized styles intact.
 #[test]
 fn compare_text_preserves_customized_styles() {

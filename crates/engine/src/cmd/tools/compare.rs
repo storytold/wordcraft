@@ -173,6 +173,8 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         let mut num_map = std::collections::BTreeMap::new();
         let mut abs_map = std::collections::BTreeMap::new();
         if opts.formatting {
+            // The author's existing changes must stay recognizable while the loop appends new ones.
+            let revisions_before = s.doc.revisions.clone();
             let mut result_styles = (*s.doc.styles).clone();
             for new_st in &revised.styles.styles {
                 if let Some(target) = result_styles.styles.iter_mut().find(|st| st.id == new_st.id) {
@@ -189,7 +191,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                     }
                     let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character && old_st.para.formatting() != updated.para.formatting())
                         || (updated.kind != wordcraft_doc::StyleKind::Numbering && old_st.chr.formatting() != updated.chr.formatting());
-                    let _ = crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &mut s.doc.revisions, &author, &date);
+                    let _ = crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &revisions_before, &mut s.doc.revisions, &author, &date);
                     if fmt_differs {
                         changes += 1;
                     }

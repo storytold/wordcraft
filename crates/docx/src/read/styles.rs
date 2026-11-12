@@ -256,8 +256,15 @@ impl Reader<'_> {
                 // borders the table borders.
                 if let Some(p) = ppr {
                     st.para.overlay(&p);
+                    // The region applies whether or not the style's own change is rejected.
+                    if let Some(ch) = st.para.fmt_change.as_mut() {
+                        ch.old.overlay(&p);
+                    }
                 }
                 st.chr.overlay(&f.chr);
+                if let Some(ch) = st.chr.fmt_change.as_mut() {
+                    ch.old.overlay(&f.chr);
+                }
                 if f.fill.is_some() {
                     t.fill = f.fill;
                 }

@@ -1142,11 +1142,23 @@ impl Document {
                 if st.based_on.is_none() && st.kind != crate::styles::StyleKind::Character {
                     let mut chr = src.styles.default_chr.clone();
                     chr.overlay(&st.chr);
+                    // Rejecting a tracked change restores the old values under this document's
+                    // defaults; give them the source defaults too, as the live values have.
+                    if let Some(c) = chr.fmt_change.as_mut() {
+                        let mut old = src.styles.default_chr.clone();
+                        old.overlay(&c.old);
+                        c.old = old;
+                    }
                     st.chr = chr;
                     let mut para = para_defaults.clone();
                     para.overlay(&st.para);
                     para.fmt_change = st.para.fmt_change;
                     para.num_change = st.para.num_change;
+                    if let Some(c) = para.fmt_change.as_mut() {
+                        let mut old = para_defaults.clone();
+                        old.overlay(&c.old);
+                        c.old = old;
+                    }
                     st.para = para;
                 }
             }

@@ -243,15 +243,18 @@ pub(crate) fn compare_formatting(old: &Paragraph, new: &mut Paragraph, revisions
 ///
 /// Paragraph properties are skipped for [`wordcraft_doc::StyleKind::Character`] styles,
 /// and character properties are skipped for [`wordcraft_doc::StyleKind::Numbering`] styles.
-/// Returns `true` only when at least one formatting change revision was recorded on `new`.
+/// `before` is the document's revisions before the comparison, so a change the author already
+/// made keeps the formatting from before their first change. Returns `true` only when at least
+/// one formatting change revision was recorded on `new`.
 pub(crate) fn compare_style(
     old: &wordcraft_doc::Style,
     new: &mut wordcraft_doc::Style,
+    before: &[Revision],
     revisions: &mut Vec<Revision>,
     author: &str,
     date: &str,
 ) -> bool {
-    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before: &[], revisions, rid: None };
+    let mut r = Recorder { author: author.to_string(), date: date.to_string(), before, revisions, rid: None };
     let mut changed = false;
     if new.kind != wordcraft_doc::StyleKind::Character
         && let Some(Replacement(want)) = r.change(&old.para, &new.para, ParaProps::formatting, |p| &p.fmt_change)

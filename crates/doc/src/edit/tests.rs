@@ -974,3 +974,49 @@ fn adopted_style_out_of_range_revisions_are_dropped() {
     assert!(adopted.para.fmt_change.is_none(), "out-of-range para revision must be dropped");
     assert!(adopted.chr.fmt_change.is_none(), "out-of-range chr revision must be dropped");
 }
+
+#[test]
+fn adopted_style_rejection_baseline_gets_source_defaults() {
+    use crate::props::{Align, CharProps, ParaProps, PropChange};
+    use crate::styles::{Style, StyleKind};
+    use crate::{Revision, RevisionKind};
+
+    let mut ours = doc(&["ours"]);
+    ours.revisions.push(Revision { author: "Alice".into(), kind: RevisionKind::Format, date: "2026-01-01T00:00:00Z".into(), move_name: None });
+
+    let mut theirs = doc(&["theirs"]);
+    {
+        let styles = Arc::make_mut(&mut theirs.styles);
+        styles.default_chr.font = Some("Source Serif".into());
+        styles.default_chr.size = Some(15.0);
+        styles.default_para.space_after = Some(11.0);
+    }
+    theirs.revisions.push(Revision { author: "Bob".into(), kind: RevisionKind::Format, date: "2026-02-02T00:00:00Z".into(), move_name: None });
+    Arc::make_mut(&mut theirs.styles).upsert(Style {
+        id: "ImportedQuote".into(),
+        name: "Imported Quote".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps {
+            align: Some(Align::Right),
+            fmt_change: PropChange::boxed(0, ParaProps { align: Some(Align::Left), ..Default::default() }),
+            ..Default::default()
+        },
+        chr: CharProps {
+            bold: Some(true),
+            fmt_change: PropChange::boxed(0, CharProps { italic: Some(true), ..Default::default() }),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    ours.adopt_with(theirs, true);
+
+    let st = ours.styles.get("ImportedQuote").expect("adopted style exists");
+    let chr = st.chr.fmt_change.as_ref().expect("chr change kept").old.clone();
+    assert_eq!(chr.font.as_deref(), Some("Source Serif"), "old run properties keep the source defaults");
+    assert_eq!(chr.size, Some(15.0));
+    assert_eq!(chr.italic, Some(true), "old values keep their own formatting");
+    let para = st.para.fmt_change.as_ref().expect("para change kept").old.clone();
+    assert_eq!(para.space_after, Some(11.0), "old paragraph properties keep the source defaults");
+    assert_eq!(para.align, Some(Align::Left));
+}
