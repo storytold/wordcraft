@@ -333,6 +333,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     r.read_glossary(&rels);
     r.keep_custom_xml(&root_rels, &rels);
+    r.read_fit_state(&rels);
     r.keep_unmodelled(&root, &root_rels, &rels);
     if !r.embedded.parts.is_empty() {
         let manifest = r.embedded.to_bytes();

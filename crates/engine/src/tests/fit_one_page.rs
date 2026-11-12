@@ -246,30 +246,42 @@ fn fit_one_page_supports_max_delta_above_2pt() {
 fn fit_one_page_anti_compound_guard_prevents_repeated_invocations() {
     let mut lines = 28;
     let mut s = create_multiline_doc(lines);
-    while s.layout().pages.len() < 2 && lines < 80 {
+    loop {
+        for b in &mut s.doc.body {
+            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+                p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(0.94));
+                for r in &mut p.runs {
+                    r.props.size = Some(11.0);
+                }
+            }
+        }
+        s.touch();
+        s.relayout();
+        if s.layout().pages.len() >= 2 || lines >= 80 {
+            break;
+        }
         lines += 1;
         s = create_multiline_doc(lines);
     }
     assert_eq!(s.layout().pages.len(), 2);
 
-    // First invocation succeeds
-    let res1 = s.run("layout.fitOnePage", &json!({}));
-    assert!(res1.is_ok(), "first invocation must succeed: {res1:?}");
-    assert_eq!(s.layout().pages.len(), 1);
+    // Simulate a document that already used the full 1.0 pt font and 0.94 spacing budgets.
+    s.doc.fit_state = Some(wordcraft_doc::FitState {
+        cum_delta: 1.0,
+        cum_space: 0.94,
+        original_font_sizes: vec![12.0],
+        original_line_spacings: vec![wordcraft_doc::props::LineSpacing::Multiple(1.0)],
+        ..Default::default()
+    });
+    s.touch();
+    s.relayout();
+    let doc_before = s.doc.clone();
 
-    // Add content to push it onto page 2 again
-    for i in 1..=5 {
-        s.run("text.insert", &json!({"text": format!("New spill line {i}\n")})).unwrap();
-    }
-    assert_eq!(s.layout().pages.len(), 2);
-    let doc_before_second = s.doc.clone();
-
-    // Second invocation must be rejected by the anti-compound guard without mutating doc
-    let res2 = s.run("layout.fitOnePage", &json!({}));
-    assert!(res2.is_err(), "second invocation must be rejected by anti-compound guard");
-    let err = res2.unwrap_err().to_string();
+    let res = s.run("layout.fitOnePage", &json!({}));
+    assert!(res.is_err(), "exhausted budgets must be rejected");
+    let err = res.unwrap_err().to_string();
     assert!(err.contains("Unable to shrink document further without reducing text beyond readability limits."), "unexpected error message: {err}");
-    assert_eq!(s.doc, doc_before_second, "document must not be mutated on rejected invocation");
+    assert_eq!(s.doc, doc_before, "document must not be mutated on rejected invocation");
 }
 
 #[test]

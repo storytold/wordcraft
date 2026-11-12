@@ -120,7 +120,11 @@ impl Reader<'_> {
                 if ![&rel.kind, &rel.target].iter().all(|s| manifest_field_ok(s)) {
                     continue;
                 }
-                if !self.doc.sources.is_empty() && self.xml(&rel.target).ok().flatten().is_some_and(|r| r.local() == "Sources") {
+                let root = self.xml(&rel.target).ok().flatten();
+                if root.as_ref().is_some_and(crate::fit::is_state) {
+                    continue;
+                }
+                if !self.doc.sources.is_empty() && root.as_ref().is_some_and(|r| r.local() == "Sources") {
                     continue;
                 }
                 // Native ink shares the custom XML relationship type, but its part belongs to the
@@ -136,6 +140,20 @@ impl Reader<'_> {
         }
         if !roots.is_empty() {
             self.doc.passthrough.insert(CUSTOM_XML_ROOTS.into(), Arc::new(roots.into_bytes()));
+        }
+    }
+
+    /// Read the Fit One Page budget from our custom XML store, if the file has one.
+    pub(super) fn read_fit_state(&mut self, document: &Rels) {
+        for rel in document.list.iter().filter(|r| !r.external && rel_is(&r.kind, rt::CUSTOM_XML)).take(MAX_EMBEDDED_RELS) {
+            if !manifest_field_ok(&rel.target) {
+                continue;
+            }
+            let Some(root) = self.xml(&rel.target).ok().flatten() else { continue };
+            if let Some(fit) = crate::fit::read(&root) {
+                self.doc.fit_state = Some(fit);
+                break;
+            }
         }
     }
 

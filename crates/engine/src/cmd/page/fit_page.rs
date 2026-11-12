@@ -380,7 +380,7 @@ fn collect_blocks_font_sizes(doc: &Document, blocks: &[Arc<wordcraft_doc::Block>
     }
 }
 
-/// Collects unique effective body font sizes across the document body and editable parts.
+/// Collects every effective body font size across the document body and editable parts, with duplicates.
 fn collect_body_font_sizes(doc: &Document) -> Vec<f32> {
     let mut sizes = Vec::new();
     collect_blocks_font_sizes(doc, &doc.body, None, &mut sizes);
@@ -393,7 +393,6 @@ fn collect_body_font_sizes(doc: &Document) -> Vec<f32> {
         }
     }
     sizes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    sizes.dedup_by(|a, b| (*a - *b).abs() < 1e-4);
     sizes
 }
 
@@ -420,7 +419,7 @@ fn collect_blocks_line_spacings(
     }
 }
 
-/// Collects unique effective line spacings across body paragraphs and editable parts.
+/// Collects every effective line spacing across body paragraphs and editable parts, with duplicates.
 fn collect_body_line_spacings(doc: &Document) -> Vec<wordcraft_doc::props::LineSpacing> {
     let mut spacings = Vec::new();
     collect_blocks_line_spacings(doc, &doc.body, None, &mut spacings);
@@ -443,33 +442,71 @@ fn collect_body_line_spacings(doc: &Document) -> Vec<wordcraft_doc::props::LineS
         (wordcraft_doc::props::LineSpacing::AtLeast(_), _) => std::cmp::Ordering::Less,
         (_, wordcraft_doc::props::LineSpacing::AtLeast(_)) => std::cmp::Ordering::Greater,
     });
-    spacings.dedup_by(|a, b| match (a, b) {
-        (wordcraft_doc::props::LineSpacing::Multiple(x), wordcraft_doc::props::LineSpacing::Multiple(y))
-        | (wordcraft_doc::props::LineSpacing::AtLeast(x), wordcraft_doc::props::LineSpacing::AtLeast(y))
-        | (wordcraft_doc::props::LineSpacing::Exactly(x), wordcraft_doc::props::LineSpacing::Exactly(y)) => (*x - *y).abs() < 1e-4,
-        _ => false,
-    });
+    spacings
+}
+
+/// Collects all effective paragraph spacing values across a slice of blocks, preserving table context.
+fn collect_blocks_paragraph_spacings(
+    doc: &Document,
+    blocks: &[Arc<wordcraft_doc::Block>],
+    table_para: Option<&wordcraft_doc::ParaProps>,
+    out: &mut Vec<f32>,
+) {
+    for b in blocks {
+        if let Some(p) = b.as_para() {
+            let resolved = doc.styles.resolve_para_in(&p.props, table_para);
+            out.push(resolved.space_before);
+            out.push(resolved.space_after);
+        } else if let Some(tbl) = b.as_table() {
+            let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
+            let cell_para = style.as_ref().map(|st| &st.para);
+            for row in &tbl.rows {
+                for cell in &row.cells {
+                    collect_blocks_paragraph_spacings(doc, &cell.blocks, cell_para, out);
+                }
+            }
+        }
+    }
+}
+
+/// Collects every effective paragraph spacing value across body paragraphs and editable parts.
+fn collect_body_paragraph_spacings(doc: &Document) -> Vec<f32> {
+    let mut spacings = Vec::new();
+    collect_blocks_paragraph_spacings(doc, &doc.body, None, &mut spacings);
+    let hf_boxes = wordcraft_doc::shrink::header_footer_text_boxes(doc);
+    for (id, part) in &doc.parts {
+        if !matches!(part.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer | wordcraft_doc::PartKind::Comment)
+            && !hf_boxes.contains(id)
+        {
+            collect_blocks_paragraph_spacings(doc, &part.blocks, None, &mut spacings);
+        }
+    }
+    spacings.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     spacings
 }
 
 /// Checks whether previously reduced text from an earlier fit is still present in the document.
 ///
 /// Compares each current value against the original values recorded before the first fit, within
-/// the cumulative reduction that fit applied. This avoids matching a body size against an unrelated
-/// heading size: restoring every size to its original therefore resets the budget.
+/// the cumulative reduction that fit applied. An exact match with the original multiset means every
+/// size was restored, even when one original value sits inside another value's reduction interval.
+#[cfg(test)]
 fn has_previously_reduced_text(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
-    let font_reduced_present = fit.cum_delta > 0.0 && font_reduction_present(doc, fit);
-    let space_reduced_present = fit.cum_space < 1.0 - 1e-4 && spacing_reduction_present(doc, fit);
+    (fit.cum_delta > 0.0 && font_reduction_present(doc, fit)) || (fit.cum_space < 1.0 - 1e-4 && spacing_reduction_present(doc, fit))
+}
 
-    if fit.cum_delta > 0.0 && fit.cum_space < 1.0 - 1e-4 {
-        font_reduced_present || space_reduced_present
-    } else if fit.cum_delta > 0.0 {
-        font_reduced_present
-    } else if fit.cum_space < 1.0 - 1e-4 {
-        space_reduced_present
-    } else {
-        false
-    }
+fn same_sizes(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4)
+}
+
+fn same_spacings(a: &[wordcraft_doc::props::LineSpacing], b: &[wordcraft_doc::props::LineSpacing]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| match (x, y) {
+            (wordcraft_doc::props::LineSpacing::Multiple(c), wordcraft_doc::props::LineSpacing::Multiple(o))
+            | (wordcraft_doc::props::LineSpacing::AtLeast(c), wordcraft_doc::props::LineSpacing::AtLeast(o))
+            | (wordcraft_doc::props::LineSpacing::Exactly(c), wordcraft_doc::props::LineSpacing::Exactly(o)) => (c - o).abs() < 1e-4,
+            _ => false,
+        })
 }
 
 fn font_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
@@ -477,6 +514,9 @@ fn font_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState)
         return false;
     }
     let current_sizes = collect_body_font_sizes(doc);
+    if same_sizes(&current_sizes, &fit.original_font_sizes) {
+        return false;
+    }
     current_sizes.iter().any(|&cur| {
         fit.original_font_sizes.iter().any(|&orig| {
             let floor = orig - fit.cum_delta - 1e-4;
@@ -485,11 +525,14 @@ fn font_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState)
     })
 }
 
-fn spacing_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
+fn line_spacing_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
     if fit.original_line_spacings.is_empty() {
         return false;
     }
     let current_spacings = collect_body_line_spacings(doc);
+    if same_spacings(&current_spacings, &fit.original_line_spacings) {
+        return false;
+    }
     current_spacings.iter().any(|cur| {
         fit.original_line_spacings.iter().any(|orig| match (cur, orig) {
             (wordcraft_doc::props::LineSpacing::Multiple(c), wordcraft_doc::props::LineSpacing::Multiple(o))
@@ -503,6 +546,49 @@ fn spacing_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitSta
     })
 }
 
+fn paragraph_spacing_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
+    if fit.original_paragraph_spacings.is_empty() {
+        return false;
+    }
+    let current_spacings = collect_body_paragraph_spacings(doc);
+    if same_sizes(&current_spacings, &fit.original_paragraph_spacings) {
+        return false;
+    }
+    current_spacings.iter().any(|&cur| {
+        fit.original_paragraph_spacings.iter().any(|&orig| {
+            let floor = orig * fit.cum_space - 1e-4;
+            cur >= floor && cur < orig - 1e-4
+        })
+    })
+}
+
+fn spacing_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
+    line_spacing_reduction_present(doc, fit) || paragraph_spacing_reduction_present(doc, fit)
+}
+
+/// The reduction budget still active in `doc`, with font and spacing resolved independently.
+#[derive(Clone, Copy, Debug)]
+struct ActiveBudget {
+    delta: f32,
+    space: f32,
+    font_active: bool,
+    spacing_active: bool,
+}
+
+fn active_budget(doc: &Document) -> ActiveBudget {
+    let Some(fit) = doc.fit_state.as_ref() else {
+        return ActiveBudget { delta: 0.0, space: 1.0, font_active: false, spacing_active: false };
+    };
+    let font_active = fit.cum_delta > 0.0 && font_reduction_present(doc, fit);
+    let spacing_active = fit.cum_space < 1.0 - 1e-4 && spacing_reduction_present(doc, fit);
+    ActiveBudget {
+        delta: if font_active { fit.cum_delta } else { 0.0 },
+        space: if spacing_active { fit.cum_space } else { 1.0 },
+        font_active,
+        spacing_active,
+    }
+}
+
 /// Records the cumulative Fit One Page reduction state into the document's internal fit tracking.
 fn set_cumulative_shrink_state(
     doc: &mut Document,
@@ -510,16 +596,20 @@ fn set_cumulative_shrink_state(
     space: f32,
     original_font_sizes: Vec<f32>,
     original_line_spacings: Vec<wordcraft_doc::props::LineSpacing>,
+    original_paragraph_spacings: Vec<f32>,
 ) {
     let sizes = collect_body_font_sizes(doc);
     let spacings = collect_body_line_spacings(doc);
+    let paragraph_spacings = collect_body_paragraph_spacings(doc);
     doc.fit_state = Some(wordcraft_doc::FitState {
         cum_delta: delta,
         cum_space: space,
         reduced_font_sizes: sizes,
         reduced_line_spacings: spacings,
+        reduced_paragraph_spacings: paragraph_spacings,
         original_font_sizes,
         original_line_spacings,
+        original_paragraph_spacings,
     });
 }
 
@@ -622,10 +712,15 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
         ));
     }
 
-    // 1. Anti-compound guard: refuse if cumulative reduction already reached 1.0 pt or spacing factor <= 0.94
-    let prior_fit = s.doc.fit_state.clone().filter(|fit| has_previously_reduced_text(&s.doc, fit));
-    let (cum_delta, cum_space) = prior_fit.as_ref().map_or((0.0, 1.0), |fit| (fit.cum_delta, fit.cum_space));
-    if cum_delta >= 1.0 - 1e-4 || cum_space <= 0.94 + 1e-4 {
+    // 1. Anti-compound guard: each component has its own budget, so a restored font or spacing
+    //    budget is not blocked by the other component's remaining reduction.
+    let prior_fit = s.doc.fit_state.clone();
+    let budget = active_budget(&s.doc);
+    let (cum_delta, cum_space) = (budget.delta, budget.space);
+    let (font_active, spacing_active) = (budget.font_active, budget.spacing_active);
+    let font_exhausted = cum_delta >= 1.0 - 1e-4;
+    let spacing_exhausted = cum_space <= 0.94 + 1e-4;
+    if font_exhausted && spacing_exhausted {
         return Err(CmdError::Failed("Unable to shrink document further without reducing text beyond readability limits.".into()));
     }
 
@@ -634,6 +729,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
     let shown_hidden = print_opts.show_hidden;
     let pre_font_sizes = collect_body_font_sizes(&s.doc);
     let pre_line_spacings = collect_body_line_spacings(&s.doc);
+    let pre_paragraph_spacings = collect_body_paragraph_spacings(&s.doc);
 
     // 3. Initial page count evaluation
     let mut initial_cache = LayoutCache::new();
@@ -678,14 +774,32 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
         if delta > max_delta {
             continue;
         }
+        // A component whose budget is exhausted is skipped, leaving the other component usable.
+        if font_exhausted && delta > 0.0 {
+            continue;
+        }
+        if spacing_exhausted && alpha < 1.0 - 1e-4 && delta <= 0.0 {
+            continue;
+        }
         // Anti-compound budget across runs: cap cumulative font reduction at 1.0 pt
         if cum_delta > 0.0 && cum_delta + delta > 1.0 + 1e-4 {
             continue;
         }
-        // Anti-compound budget across runs: cap cumulative line spacing compression at 0.94 floor
-        let cand_line_space = alpha.max(0.94);
-        let prior_line_space = cum_space.max(0.94);
-        if cum_space < 1.0 - 1e-4 && prior_line_space * cand_line_space < 0.94 - 1e-4 {
+        // Anti-compound budget across runs: cap cumulative line spacing compression at 0.94 floor.
+        // If spacing has no room left, a font candidate still runs without spacing compression.
+        let mut alpha = if spacing_exhausted { 1.0 } else { alpha };
+        if alpha < 1.0 - 1e-4 && cum_space < 1.0 - 1e-4 {
+            let cand_line_space = alpha.max(0.94);
+            let prior_line_space = cum_space.max(0.94);
+            if prior_line_space * cand_line_space < 0.94 - 1e-4 {
+                if delta > 0.0 {
+                    alpha = 1.0;
+                } else {
+                    continue;
+                }
+            }
+        }
+        if delta <= 0.0 && alpha >= 1.0 - 1e-4 {
             continue;
         }
         // Anti-compound guard: refuse font reduction if body font is already at or below the readability floor,
@@ -716,11 +830,29 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
     // 8. Success commit or clean rollback
     match (successful_doc, applied_step) {
         (Some(mut new_doc), Some((d, a))) => {
-            let original_font_sizes =
-                prior_fit.as_ref().map(|fit| fit.original_font_sizes.clone()).filter(|sizes| !sizes.is_empty()).unwrap_or(pre_font_sizes);
-            let original_line_spacings =
-                prior_fit.as_ref().map(|fit| fit.original_line_spacings.clone()).filter(|spacings| !spacings.is_empty()).unwrap_or(pre_line_spacings);
-            set_cumulative_shrink_state(&mut new_doc, cum_delta + d, cum_space * a, original_font_sizes, original_line_spacings);
+            let prior_original_fonts =
+                || prior_fit.as_ref().filter(|_| font_active).map(|fit| fit.original_font_sizes.clone()).filter(|sizes| !sizes.is_empty());
+            let prior_original_lines = || {
+                prior_fit.as_ref().filter(|_| spacing_active).map(|fit| fit.original_line_spacings.clone()).filter(|spacings| !spacings.is_empty())
+            };
+            let prior_original_paragraphs = || {
+                prior_fit
+                    .as_ref()
+                    .filter(|_| spacing_active)
+                    .map(|fit| fit.original_paragraph_spacings.clone())
+                    .filter(|spacings| !spacings.is_empty())
+            };
+            let original_font_sizes = prior_original_fonts().unwrap_or(pre_font_sizes);
+            let original_line_spacings = prior_original_lines().unwrap_or(pre_line_spacings);
+            let original_paragraph_spacings = prior_original_paragraphs().unwrap_or(pre_paragraph_spacings);
+            set_cumulative_shrink_state(
+                &mut new_doc,
+                cum_delta + d,
+                cum_space * a,
+                original_font_sizes,
+                original_line_spacings,
+                original_paragraph_spacings,
+            );
             s.doc = new_doc;
             s.clamp_selection();
             let page_word = if final_pages == 1 { "page" } else { "pages" };
@@ -874,8 +1006,9 @@ mod tests {
         }
         let originals = collect_body_font_sizes(&doc);
         let originals_spacings = collect_body_line_spacings(&doc);
+        let originals_paragraphs = collect_body_paragraph_spacings(&doc);
         wordcraft_doc::shrink::fit_document_typography(&mut doc, 1.0, 1.0);
-        set_cumulative_shrink_state(&mut doc, 1.0, 1.0, originals, originals_spacings);
+        set_cumulative_shrink_state(&mut doc, 1.0, 1.0, originals, originals_spacings, originals_paragraphs);
 
         assert!(has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
         // Restoring only the heading leaves the body reduced.
@@ -903,14 +1036,19 @@ mod tests {
         let mut doc = Document::from_text("Alpha\nBeta");
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
         }
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[1]) {
             p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
         }
         let originals = collect_body_font_sizes(&doc);
         let originals_spacings = collect_body_line_spacings(&doc);
+        let originals_paragraphs = collect_body_paragraph_spacings(&doc);
         wordcraft_doc::shrink::fit_document_typography(&mut doc, 0.0, 0.9);
-        set_cumulative_shrink_state(&mut doc, 0.0, 0.9, originals, originals_spacings);
+        set_cumulative_shrink_state(&mut doc, 0.0, 0.9, originals, originals_spacings, originals_paragraphs);
 
         assert!(has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
         // Restoring the 2.0 spacing but leaving the 1.0 one reduced keeps the budget.
@@ -923,6 +1061,124 @@ mod tests {
             p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
         }
         assert!(!has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn provenance_resets_when_neighbouring_sizes_are_restored() {
+        let mut doc = Document::from_text("Alpha\nBeta");
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            for r in &mut p.runs {
+                r.props.size = Some(12.0);
+            }
+        }
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[1]) {
+            for r in &mut p.runs {
+                r.props.size = Some(11.0);
+            }
+        }
+        let originals = collect_body_font_sizes(&doc);
+        let originals_spacings = collect_body_line_spacings(&doc);
+        let originals_paragraphs = collect_body_paragraph_spacings(&doc);
+        wordcraft_doc::shrink::fit_document_typography(&mut doc, 1.0, 1.0);
+        set_cumulative_shrink_state(&mut doc, 1.0, 1.0, originals, originals_spacings, originals_paragraphs);
+        assert!(font_reduction_present(&doc, doc.fit_state.as_ref().unwrap()));
+
+        // Restoring 12 pt and 11 pt makes 11 pt look like another size's reduction interval; the
+        // exact original multiset must clear the budget.
+        for (i, size) in [(0, 12.0), (1, 11.0)] {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[i]) {
+                for r in &mut p.runs {
+                    r.props.size = Some(size);
+                }
+            }
+        }
+        assert!(!font_reduction_present(&doc, doc.fit_state.as_ref().unwrap()));
+        assert_eq!(active_budget(&doc).delta, 0.0);
+    }
+
+    #[test]
+    fn paragraph_spacing_keeps_the_budget_when_line_spacing_rounds_back() {
+        use wordcraft_doc::props::LineSpacing;
+
+        let mut doc = Document::from_text("Alpha\nBeta");
+        for p in doc.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(p) {
+                p.props.line_spacing = Some(LineSpacing::Exactly(8.0));
+                p.props.space_before = Some(20.0);
+                p.props.space_after = Some(0.0);
+            }
+        }
+        let originals = collect_body_font_sizes(&doc);
+        let originals_spacings = collect_body_line_spacings(&doc);
+        let originals_paragraphs = collect_body_paragraph_spacings(&doc);
+        wordcraft_doc::shrink::fit_document_typography(&mut doc, 0.0, 0.94);
+        set_cumulative_shrink_state(&mut doc, 0.0, 0.94, originals, originals_spacings, originals_paragraphs);
+
+        // Exactly(8.0) rounds back to 8.0, but 20 pt paragraph spacing becomes 18.8 pt.
+        assert!(!line_spacing_reduction_present(&doc, doc.fit_state.as_ref().unwrap()));
+        assert!(paragraph_spacing_reduction_present(&doc, doc.fit_state.as_ref().unwrap()));
+        assert!(spacing_reduction_present(&doc, doc.fit_state.as_ref().unwrap()));
+
+        for p in doc.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(p) {
+                p.props.space_before = Some(20.0);
+            }
+        }
+        assert!(!spacing_reduction_present(&doc, doc.fit_state.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn font_and_spacing_budgets_reset_independently() {
+        use wordcraft_doc::props::LineSpacing;
+
+        let mut doc = Document::from_text("Alpha\nBeta");
+        for p in doc.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(p) {
+                p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+                p.props.space_before = Some(10.0);
+                p.props.space_after = Some(0.0);
+                for r in &mut p.runs {
+                    r.props.size = Some(12.0);
+                }
+            }
+        }
+        let originals = collect_body_font_sizes(&doc);
+        let originals_spacings = collect_body_line_spacings(&doc);
+        let originals_paragraphs = collect_body_paragraph_spacings(&doc);
+        wordcraft_doc::shrink::fit_document_typography(&mut doc, 1.0, 0.9);
+        set_cumulative_shrink_state(&mut doc, 1.0, 0.9, originals, originals_spacings, originals_paragraphs);
+
+        let both = active_budget(&doc);
+        assert_eq!(both.delta, 1.0);
+        assert!((both.space - 0.9).abs() < 1e-4);
+        assert!(both.font_active && both.spacing_active);
+
+        // Restore only the spacing: its budget resets while the font budget remains.
+        for p in doc.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(p) {
+                p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+                p.props.space_before = Some(10.0);
+                p.props.space_after = Some(0.0);
+            }
+        }
+        let spacing_restored = active_budget(&doc);
+        assert_eq!(spacing_restored.delta, 1.0);
+        assert_eq!(spacing_restored.space, 1.0);
+        assert!(spacing_restored.font_active);
+        assert!(!spacing_restored.spacing_active);
+
+        // Restoring the fonts too clears the other budget.
+        for p in doc.body.iter_mut() {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(p) {
+                for r in &mut p.runs {
+                    r.props.size = Some(12.0);
+                }
+            }
+        }
+        let restored = active_budget(&doc);
+        assert_eq!(restored.delta, 0.0);
+        assert_eq!(restored.space, 1.0);
+        assert!(!restored.font_active && !restored.spacing_active);
     }
 
     #[test]
