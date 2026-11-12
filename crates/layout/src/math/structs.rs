@@ -186,7 +186,7 @@ impl Ctx {
         let mut gap = if st.display { self.k(C::RadicalDisplayStyleVerticalGap, st) } else { self.k(C::RadicalVerticalGap, st) };
         let target = b.a + b.d + gap + t;
         let gid = self.face.glyph_for('√');
-        let g = self.stretch_v(gid, target, size).unwrap_or_else(|| {
+        let g = self.stretch_v(gid, '√', target, size).unwrap_or_else(|| {
             let mut g = self.glyphs(self.face, "√", size, 0, self.color, (false, false));
             g.glyph = None;
             g
@@ -245,9 +245,9 @@ impl Ctx {
         let ink = glyph_bounds(&self.face, gid).map(|(x0, _, x1, _)| (x1 - x0) * size / self.upem).unwrap_or(0.0);
         let narrow = gid != 0 && b.w <= ink * 1.2;
         let mut acc = if wide_accent(chr) && gid != 0 && !narrow {
-            self.stretch_h(gid, b.w, size).unwrap_or_else(|| self.glyph_id(gid, size, color))
+            self.stretch_h(gid, chr, b.w, size).unwrap_or_else(|| self.glyph_id(gid, chr, size, color))
         } else if gid != 0 {
-            self.glyph_id(gid, size, color)
+            self.glyph_id(gid, chr, size, color)
         } else {
             self.char_glyphs(chr, size, 0)
         };

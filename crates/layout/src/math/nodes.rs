@@ -250,7 +250,7 @@ impl Ctx {
                     let s = if st.display { size * 1.4 } else { size };
                     self.char_glyphs(*chr, s, 0)
                 } else if *grow && target > 0.0 && self.t.is_some() {
-                    self.stretch_v(base_gid, target, size).unwrap_or_else(|| self.glyph_id(base_gid, size, self.color))
+                    self.stretch_v(base_gid, *chr, target, size).unwrap_or_else(|| self.glyph_id(base_gid, *chr, size, self.color))
                 } else if target > 0.0 && self.t.is_some() {
                     // Word sets display operators about 1.2 em tall: the size variant nearest that.
                     let want = target.min(size * 1.2) * self.upem / size;
@@ -264,9 +264,9 @@ impl Ctx {
                     // A font without a variant near that size: scale the nearest one.
                     let f = if adv > 0.0 { (want / adv).clamp(0.6, 1.5) } else { 1.0 };
                     let f = if (0.9..=1.1).contains(&f) { 1.0 } else { f };
-                    self.glyph_id(g, size * f, self.color)
+                    self.glyph_id(g, *chr, size * f, self.color)
                 } else {
-                    self.glyph_id(base_gid, size, self.color)
+                    self.glyph_id(base_gid, *chr, size, self.color)
                 };
                 // Centre the operator on the math axis.
                 let dy = self.axis(st) - (op.a - op.d) / 2.0;
@@ -448,7 +448,7 @@ impl Ctx {
                 let b = self.sub(0, e, st, d);
                 let size = self.size(st);
                 let gid = self.face.glyph_for(*chr);
-                let g = self.stretch_h(gid, b.w, size).unwrap_or_else(|| self.char_glyphs(*chr, size, 0));
+                let g = self.stretch_h(gid, *chr, b.w, size).unwrap_or_else(|| self.char_glyphs(*chr, size, 0));
                 let w = b.w.max(g.w);
                 let (ba, bd, bw) = (b.a, b.d, b.w);
                 let (ga, gd, gw) = (g.a, g.d, g.w);

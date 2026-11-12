@@ -3000,3 +3000,26 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
     assert_eq!(shown, expected);
 }
+
+/// Stretched math glyphs (an OpenType `MATH` size variant or assembly: a radical over a tall
+/// base, a variant over a fraction, big delimiters, a display n-ary operator) have no character map entry: the run carries
+/// the character it draws, so the PDF's text keeps `√`, `(`, `)` and `∑` whichever variant the
+/// math font picks (DejaVu Math TeX Gyre and STIX Two Math both draw these as size variants).
+#[test]
+fn stretched_math_glyphs_keep_their_characters_in_pdf_text() {
+    let linear = "∑_(i=1)^n▒√((a/b)/(c/d))+√(a/b)+((a/b)/(c/d))";
+    let mut d = Document::from_text("");
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(linear), ..Default::default() };
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0))
+        .unwrap()
+        .insert_object(0, InlineObject::Equation { linear: linear.into(), display: true, math }, &CharProps::default())
+        .unwrap();
+    let pdf = export(&d, &PdfOptions::default()).unwrap();
+    // As PDFium and poppler read it: an assembly's parts share one ActualText span.
+    let glyphs = stream_glyphs(&pdf);
+    let text: String = glyphs.iter().filter_map(|g| g.0.as_deref()).collect();
+    for c in ['√', '∑', '(', ')'] {
+        assert!(text.contains(c), "{c:?} missing from the PDF text {text:?}");
+    }
+    assert_eq!(text.matches('√').count(), 2, "both radical signs, once each, in {text:?}");
+}

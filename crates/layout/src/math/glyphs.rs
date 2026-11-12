@@ -129,8 +129,9 @@ impl Ctx {
         self.glyphs(face, &c.to_string(), size, level, self.color, (false, false))
     }
 
-    /// A single glyph by id (size variants, assembly parts).
-    pub(super) fn glyph_id(&self, gid: u32, size: f32, color: Rgb) -> Bx {
+    /// A single glyph by id (a size variant) drawing `c`. Variants have no character map entry,
+    /// so the run carries `c` as its text for PDF text extraction.
+    pub(super) fn glyph_id(&self, gid: u32, c: char, size: f32, color: Rgb) -> Bx {
         let face = self.face;
         let k = size / face.upem.max(1.0) as f32;
         let mut b = Bx { w: face.advance(gid) as f32 * k, ..Default::default() };
@@ -148,8 +149,8 @@ impl Ctx {
             synth_bold: false,
             synth_italic: false,
             glyphs: vec![(gid, 0.0, 0.0)],
-            text: String::new(),
-            ranges: Vec::new(),
+            text: c.to_string(),
+            ranges: std::iter::once(0..c.len_utf8()).collect(),
         });
         b
     }
@@ -166,29 +167,30 @@ impl Ctx {
         b
     }
 
-    /// A vertical size variant or assembly of `gid` at least `target` tall (`None` without a
-    /// `MATH` table or construction for the glyph).
-    pub(super) fn stretch_v(&self, gid: u32, target: f32, size: f32) -> Option<Bx> {
+    /// A vertical size variant or assembly of `gid` (the glyph for `c`) at least `target` tall
+    /// (`None` without a `MATH` table or construction for the glyph).
+    pub(super) fn stretch_v(&self, gid: u32, c: char, target: f32, size: f32) -> Option<Bx> {
         let t = self.t.as_ref()?;
         let con = t.vert.get(&gid)?;
-        self.stretch(con, t, target, size, true)
+        self.stretch(con, t, c, target, size, true)
     }
 
-    pub(super) fn stretch_h(&self, gid: u32, target: f32, size: f32) -> Option<Bx> {
+    pub(super) fn stretch_h(&self, gid: u32, c: char, target: f32, size: f32) -> Option<Bx> {
         let t = self.t.as_ref()?;
         let con = t.horiz.get(&gid)?;
-        self.stretch(con, t, target, size, false)
+        self.stretch(con, t, c, target, size, false)
     }
 
-    fn stretch(&self, con: &Construction, t: &MathTable, target: f32, size: f32, vertical: bool) -> Option<Bx> {
+    /// The variant or assembly of `con` for `target`, its run's text `c` whichever glyphs draw it.
+    fn stretch(&self, con: &Construction, t: &MathTable, c: char, target: f32, size: f32, vertical: bool) -> Option<Bx> {
         let k = size / self.upem;
         let target_fu = target / k;
         // The first variant big enough.
         if let Some((g, _)) = con.variants.iter().find(|(_, adv)| *adv >= target_fu - 1.0) {
-            return Some(self.glyph_id(*g, size, self.color));
+            return Some(self.glyph_id(*g, c, size, self.color));
         }
         if con.parts.is_empty() {
-            return con.variants.last().map(|(g, _)| self.glyph_id(*g, size, self.color));
+            return con.variants.last().map(|(g, _)| self.glyph_id(*g, c, size, self.color));
         }
         // Assembly: repeat extenders until the parts span the target.
         let o = t.min_connector_overlap;
@@ -245,6 +247,8 @@ impl Ctx {
         } else {
             b.w = pos * k;
         }
+        // The parts together draw the one character: every part shares its text.
+        let ranges = vec![0..c.len_utf8(); glyphs.len()];
         b.items.push(MItem::Glyphs {
             face: self.face,
             size,
@@ -252,8 +256,8 @@ impl Ctx {
             synth_bold: false,
             synth_italic: false,
             glyphs,
-            text: String::new(),
-            ranges: Vec::new(),
+            text: c.to_string(),
+            ranges,
         });
         Some(b)
     }
@@ -274,7 +278,7 @@ impl Ctx {
             return glyph;
         }
         let gid = self.face.glyph_for(c);
-        let Some(big) = (if gid != 0 { self.stretch_v(gid, target, size) } else { None }) else { return glyph };
+        let Some(big) = (if gid != 0 { self.stretch_v(gid, c, target, size) } else { None }) else { return glyph };
         let dy = if exact { (a - d) / 2.0 - (big.a - big.d) / 2.0 } else { axis - (big.a - big.d) / 2.0 };
         let mut out = Bx { w: big.w, ..Default::default() };
         out.put(big, 0.0, dy);
