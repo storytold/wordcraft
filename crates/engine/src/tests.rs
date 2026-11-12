@@ -5633,6 +5633,38 @@ fn saving_a_text_file_over_itself_saves_the_document() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #6131: File › Export to DOCX, ODT or RTF writes a copy (`copy: true`). It made the copy the
+/// document's file and cleared its unsaved changes, so the next Save went to the copy and the
+/// original kept its old text. The copy has the edits; the document keeps its file, its changes
+/// and its save stamps.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn exporting_a_copy_keeps_the_documents_file() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-engine-export-copy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let body = |p: &std::path::Path| crate::io::open_path(p).unwrap().plain_text(wordcraft_doc::StoryRef::Body);
+    for ext in ["docx", "odt", "rtf"] {
+        let original = dir.join(format!("a-{ext}.docx"));
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        run(&mut s, "text.insert", json!({"text": "first"}));
+        run(&mut s, "file.save", json!({"path": original.to_string_lossy()}));
+        run(&mut s, "text.insert", json!({"text": " edited"}));
+        let stamps = (s.doc.core.revision, s.doc.core.modified.clone());
+        let copy = dir.join(format!("copy.{ext}"));
+        let r = run(&mut s, "file.saveAs", json!({"path": copy.to_string_lossy(), "copy": true}));
+        assert_eq!(r["saved"], true, "{ext}");
+        assert_eq!(body(&copy), "first edited", "{ext}: the copy has the edits");
+        assert_eq!(s.path.as_deref(), Some(original.as_path()), "{ext}: the document keeps its file");
+        assert!(s.dirty, "{ext}: the document keeps its unsaved changes");
+        assert_eq!((s.doc.core.revision, s.doc.core.modified.clone()), stamps, "{ext}: the document's save stamps are untouched");
+        run(&mut s, "file.save", json!({}));
+        assert_eq!(body(&original), "first edited", "{ext}: Save still writes the original");
+        assert!(!s.dirty);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A save that fails to write (no permission, disk full, a bad path) leaves the document's own
 /// save stamps untouched: `stamp_save` runs before the fallible write, so a prior version of this
 /// left `modified`/`created`/`last_modified_by`/`revision`/`zoom` changed for a save that never

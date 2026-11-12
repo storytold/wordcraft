@@ -94,9 +94,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport), "copy"?: bool (write a copy, as File › Export does: the document keeps its own file, unsaved changes and save stamps; not with `password`)}"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "strict"?: bool (as file.save), "copy"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -373,6 +373,12 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
+    // A copy (File › Export, #6131) is written and nothing else: the document keeps its own file,
+    // its unsaved changes and its save stamps, so the next Save still goes to the original.
+    let as_copy = p::bool(v, "copy") == Some(true);
+    if as_copy && v.get("password").is_some_and(|pw| !pw.is_null()) {
+        return Err(CmdError::Params("`password` changes the document's own saves, so it can't come with `copy` (use file.encrypt)".into()));
+    }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
@@ -407,11 +413,15 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);
-    if let Err(e) = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
-    }
+    let written = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts);
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
+    if written.is_err() || as_copy {
+        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+    }
+    written.map_err(CmdError::Failed)?;
+    if as_copy {
+        return Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted, "copy": true}));
+    }
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
     let own_file = s.path.as_deref() == Some(path.as_path());

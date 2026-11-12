@@ -142,16 +142,26 @@ impl WordApp {
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
+            // `copy` (File › Export, #6131) writes a copy: the document keeps its unsaved changes,
+            // its name and its save stamps, as for a PDF.
+            let as_copy = params.get("copy").and_then(Value::as_bool) == Some(true);
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
                 && let Some(pw) = params.get("password").filter(|v| !v.is_null())
             {
+                if as_copy {
+                    return Err("`password` changes the document's own saves, so it can't come with `copy` (use file.encrypt)".into());
+                }
                 if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
                     return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
                 }
                 self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
             }
             // A save is a save, download or not: advance the revision and modified stamp (#262).
+            // A copy carries fresh stamps too, but the document's own are put back after.
+            let doc = &self.session.doc;
+            let before_stamp =
+                (doc.settings.zoom, doc.core.last_modified_by.clone(), doc.core.created.clone(), doc.core.modified.clone(), doc.core.revision);
             if matches!(id, "file.save" | "file.saveAs") {
                 self.session.stamp_save();
             }
@@ -159,7 +169,12 @@ impl WordApp {
             let password =
                 if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
-            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
+            let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts);
+            if as_copy {
+                let core = &mut self.session.doc.core;
+                (self.session.doc.settings.zoom, core.last_modified_by, core.created, core.modified, core.revision) = before_stamp;
+            }
+            let bytes = bytes?;
             // A ticket left over from an earlier call isn't this save's.
             let saves = self.services.async_saves.clone();
             if let Some(saves) = &saves {
@@ -167,7 +182,7 @@ impl WordApp {
             }
             // An export is a copy, and so is a save in a format that doesn't keep everything (a
             // page image, plain text): the document itself still has unsaved changes.
-            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+            let marked_saved = matches!(id, "file.save" | "file.saveAs") && !as_copy && keeps_everything(&name);
             // Save As tells the host page the document is now this file, which it only is when the
             // save marks it saved. A Save under a name the page never sent (an untitled document,
             // an imported .doc saved as .docx) is a new file too, never an overwrite.
