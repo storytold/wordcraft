@@ -537,7 +537,7 @@ fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
     let break_only =
         b.clusters.iter().any(|c| c.kind == ClKind::PageBreak) && b.clusters.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker));
     let (text, lvl) = cx.env.label.as_ref().filter(|_| !break_only)?;
-    let rc = cx.res.char(&p.mark.clone().overlaid(&lvl.chr));
+    let rc = label_char(&cx.res.char(&p.mark.clone().overlaid(&lvl.chr)), &lvl.chr);
     // A bullet no installed font can draw would come from whatever icon font has its
     // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
     // default bullet instead.
@@ -574,6 +574,22 @@ fn list_label(cx: &Cx, b: &mut Builder, mark_style: u32) -> Option<Label> {
         x += c.adv;
     }
     Some(Label { text: shown(text), ascent, style, glyphs, runs, x: 0.0, width: x })
+}
+
+/// A list number's resolved formatting: the paragraph mark's (direct, style, character style)
+/// with the level's laid over it, except that its underline and shading come from the level
+/// alone and it is never small caps, as Word draws it.
+fn label_char(rc: &Arc<ResolvedChar>, level: &CharProps) -> Arc<ResolvedChar> {
+    let underline = level.underline.unwrap_or(wordcraft_doc::props::Underline::None);
+    if rc.underline == underline && rc.underline_color == level.underline_color && rc.shading == level.shading && !rc.small_caps {
+        return rc.clone();
+    }
+    let mut r = ResolvedChar::clone(rc);
+    r.underline = underline;
+    r.underline_color = level.underline_color;
+    r.shading = level.shading;
+    r.small_caps = false;
+    Arc::new(r)
 }
 
 /// A label's clusters (in visual order) and the glyphs they index, shaped and taken back out of
