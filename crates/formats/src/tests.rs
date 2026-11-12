@@ -38,8 +38,8 @@ fn sample() -> Document {
     p.insert_text(n, ".", &CharProps::default()).unwrap();
     blocks.push(para_block(p));
     blocks.push(para_block(Paragraph::with_text("Second Level", CharProps::default()).styled("Heading2")));
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     for (t, nm, lvl) in [("first bullet", bul, 0u8), ("second bullet", bul, 0), ("nested bullet", bul, 1)] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
         q.props.numbering = Some(wordcraft_doc::props::NumRef { num: nm, level: lvl });
@@ -65,7 +65,16 @@ fn sample() -> Document {
     let n = ip.len();
     ip.insert_object(
         n,
-        InlineObject::Image { media: key, w: 60.0, h: 30.0, alt: "tiny".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 60.0,
+            h: 30.0,
+            alt: "tiny".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -166,8 +175,8 @@ fn check_round_trip(ext: &str, rich: bool) {
 /// Two bullets directly followed by two numbered items.
 fn bullets_then_numbers() -> Document {
     let mut d = Document::new();
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let mut blocks = Vec::new();
     for (t, nm) in [("dot one", bul), ("dot two", bul), ("num one", num), ("num two", num)] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
@@ -198,14 +207,17 @@ fn numbered_list_after_bullets_keeps_its_kind() {
 fn markdown_list_items_that_start_like_blocks_keep_their_text() {
     for text in ["---", "--", "1. Intro", "# Agenda", "ordinary item"] {
         let mut d = Document::new();
-        let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
         let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
         p.props.numbering = Some(wordcraft_doc::props::NumRef { num: bul, level: 0 });
         d.body = vec![para_block(p)];
         let bytes = export("md", &d).unwrap().unwrap();
         let blocks = flat(&import("md", &bytes).unwrap().unwrap());
         let [FBlock::Para(p)] = blocks.as_slice() else { panic!("{text}: {}", String::from_utf8_lossy(&bytes)) };
-        assert_eq!((p.text().as_str(), p.kind, p.list), (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1 })));
+        assert_eq!(
+            (p.text().as_str(), p.kind, p.list),
+            (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }))
+        );
     }
 }
 
@@ -365,7 +377,7 @@ fn txt_export_writes_symbol_font_text_as_unicode() {
 #[test]
 fn txt_export_keeps_list_labels() {
     let mut d = Document::new();
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
     let mut p = Paragraph::with_text("alpha", CharProps::default());
     p.props.numbering = Some(wordcraft_doc::props::NumRef { num: bul, level: 0 });
     d.body = vec![para_block(p), para_block(Paragraph::with_text("plain", CharProps::default()))];
@@ -685,7 +697,7 @@ fn decorative_picture_exports_with_empty_alt_text() {
         let mut d = Document::new();
         let media = d.add_media(png(), "png");
         let float = Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() };
-        let pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "Blue bar".into(), float, crop: [0.0; 4], ole: None };
+        let pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "Blue bar".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
         let mut p = Paragraph::with_text("Logo: ", CharProps::default());
         let n = p.len();
         p.insert_object(n, pic, &CharProps::default()).unwrap();
@@ -867,6 +879,142 @@ fn exported_links_keep_only_safe_targets() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// RTF footnotes, endnotes and comments (#1053)
+
+/// The note and comment texts of `d` as `(kind, text)` strings, and the references in the body.
+fn rtf_notes(d: &Document) -> (Vec<String>, Vec<String>) {
+    use wordcraft_doc::PartKind;
+    let story = |bl: &wordcraft_doc::Blocks| {
+        bl.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p.plain_text().trim().to_string()) } else { None }).collect::<Vec<_>>().join("|")
+    };
+    let notes = d
+        .parts
+        .values()
+        .filter(|p| matches!(p.kind, PartKind::Footnote | PartKind::Endnote))
+        .map(|p| format!("{:?}:{}", p.kind, story(&p.blocks)))
+        .collect();
+    let comments = d.comments.values().filter_map(|c| d.parts.get(&c.part)).map(|p| story(&p.blocks)).collect();
+    (notes, comments)
+}
+
+#[test]
+fn rtf_footnote_and_endnote_round_trip() {
+    use wordcraft_doc::para::NoteKind;
+    let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}
+\pard Alpha{\super\chftn}{\footnote \pard\plain {\super\chftn} First {\b note}\par} beta 
+gamma{\super\chftn}{\footnote\ftnalt \pard\plain {\super\chftn} The end\par\pard second line\par} delta.\par}";
+    let d = import("rtf", rtf).unwrap().unwrap();
+    let body = d.body.iter().find_map(|b| b.as_para()).unwrap();
+    let refs: Vec<NoteKind> =
+        body.objects.iter().filter_map(|o| if let InlineObject::NoteRef { kind, .. } = o { Some(*kind) } else { None }).collect();
+    assert_eq!(refs, [NoteKind::Footnote, NoteKind::Endnote]);
+    assert_eq!(body.plain_text().trim(), "Alpha beta gamma delta.");
+    let (notes, _) = rtf_notes(&d);
+    assert_eq!(notes, ["Footnote:First note", "Endnote:The end|second line"]);
+    // The note's own number sits at the start of its text, and its first words are bold.
+    let foot = d.parts.values().find(|p| p.kind == wordcraft_doc::PartKind::Footnote).unwrap();
+    let fp = foot.blocks.iter().find_map(|b| b.as_para()).unwrap();
+    assert!(matches!(fp.objects.first(), Some(InlineObject::NoteRef { kind: NoteKind::Footnote, .. })));
+    // Out and in again keeps both.
+    let out = String::from_utf8(export("rtf", &d).unwrap().unwrap()).unwrap();
+    assert!(out.contains("\\footnote") && out.contains("\\footnote\\ftnalt") && out.contains("\\chftn"), "{out}");
+    let d2 = import("rtf", out.as_bytes()).unwrap().unwrap();
+    assert_eq!(rtf_notes(&d2).0, notes);
+    let body2 = d2.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert_eq!(body2.objects.len(), 2);
+    assert_eq!(body2.plain_text().trim(), "Alpha beta gamma delta.");
+    // The flow reader (no document) still just skips them.
+    let flow = crate::rtf::parse(rtf).unwrap();
+    assert!(matches!(&flow.blocks[0], FBlock::Para(p) if p.text().trim() == "Alpha beta gamma delta."));
+}
+
+#[test]
+fn rtf_comment_round_trip_with_author_and_date() {
+    let rtf = br"{\rtf1\ansi
+\pard Before {\*\atrfstart 7}commented words{\*\atrfend 7}{\*\atnid AK}{\*\atnauthor Ada Kline}\chatn{\*\annotation{\*\atnref 7}{\*\atndate \yr2026\mo3\dy9\hr14\min5}\pard\plain Please \b check\b0  this.\par} after.\par
+\pard Second {\*\atrfstart 8}one{\*\atrfend 8}{\*\atnid BX}{\*\atnauthor Bo}\chatn{\*\annotation{\*\atnref 8}\pard\plain Fine.\par}\par}";
+    let d = import("rtf", rtf).unwrap().unwrap();
+    assert_eq!(d.comments.len(), 2);
+    let c = d.comments.values().next().unwrap();
+    assert_eq!((c.author.as_str(), c.initials.as_str(), c.date.as_str()), ("Ada Kline", "AK", "2026-03-09T14:05:00Z"));
+    assert_eq!(rtf_notes(&d).1, ["Please check this.", "Fine."]);
+    let p = d.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert_eq!(p.plain_text().trim(), "Before commented words after.");
+    // The range wraps exactly the commented words.
+    let (s, e) = (p.object_offsets()[0], p.object_offsets()[1]);
+    assert!(matches!(p.object_at(s), Some(InlineObject::CommentStart { .. })) && matches!(p.object_at(e), Some(InlineObject::CommentEnd { .. })));
+    assert_eq!(p.text.get(s + 3..e), Some("commented words"));
+    let out = String::from_utf8(export("rtf", &d).unwrap().unwrap()).unwrap();
+    assert!(out.contains("\\atrfstart") && out.contains("\\atnauthor Ada Kline") && out.contains("\\annotation"), "{out}");
+    let d2 = import("rtf", out.as_bytes()).unwrap().unwrap();
+    assert_eq!(d2.comments.len(), 2);
+    let (a, b) = (d.comments.values().next().unwrap(), d2.comments.values().next().unwrap());
+    assert_eq!((&a.author, &a.initials, &a.date), (&b.author, &b.initials, &b.date));
+    assert_eq!(rtf_notes(&d2).1, ["Please check this.", "Fine."]);
+    let p2 = d2.body.iter().find_map(|b| b.as_para()).unwrap();
+    assert_eq!(p2.objects.len(), 2);
+}
+
+#[test]
+fn rtf_hostile_notes_and_comments_do_not_panic() {
+    // Truncated everywhere, unbalanced groups, forged markers, huge ids, nesting.
+    let good = br"{\rtf1\ansi Hi{\super\chftn}{\footnote\ftnalt \pard\plain {\super\chftn} Note \u8364? text\par} {\*\atrfstart 1}x{\*\atrfend 1}{\*\atnid A}{\*\atnauthor Z}{\*\annotation{\*\atnref 1}{\*\atndate 123456789}\pard c\par}\par}";
+    for n in 0..good.len() {
+        let _ = import("rtf", &good[..n]);
+    }
+    let junk: [&[u8]; 6] = [
+        br"{\rtf1 \u63472?\u63473?\u63472?N0\u63473? {\footnote x}{\footnote {\footnote deep}}}",
+        br"{\rtf1 {\*\atrfstart 99999999999}{\*\atrfend -5}{\*\annotation{\*\atnref 99999999999}x}{\*\annotation}}",
+        br"{\rtf1 {\footnote{\annotation{\footnote{\*\annotation{\*\atrfstart 1}",
+        br"{\rtf1 {\*\atndate \yr99999\mo-4\dy0\hr77\min999}{\*\annotation y}{\*\atndate 4294967295}{\*\annotation z}}",
+        b"{\\rtf1 {\\footnote \\trowd\\cellx100\\pard\\intbl a\\cell\\row}}",
+        b"{\\rtf1 {\\annotation \\chatn\\chftn\\atnparent 3}{\\header {\\footnote q}}}",
+    ];
+    for j in junk {
+        let d = import("rtf", j).unwrap().unwrap();
+        // Whatever came in, a second trip through RTF is fine too.
+        let out = export("rtf", &d).unwrap().unwrap();
+        assert!(import("rtf", &out).unwrap().is_ok());
+    }
+    // Many notes: bounded.
+    let mut many = String::from("{\\rtf1 ");
+    for _ in 0..6000 {
+        many.push_str("{\\footnote x}");
+    }
+    many.push('}');
+    let d = import("rtf", many.as_bytes()).unwrap().unwrap();
+    assert!(d.parts.len() <= 5000);
+    // Private-use marker characters in ordinary text stay text.
+    let d = import("rtf", "{\\rtf1 a\u{F8F0}N0\u{F8F1}b}".as_bytes()).unwrap().unwrap();
+    assert!(d.parts.is_empty());
+}
+
+#[test]
+fn rtf_notes_comments_tracked_changes_and_sections_work_together() {
+    // Two sections; the second holds a footnote, a comment and a tracked insertion, and has its
+    // own footer. A `\sect` inside the footnote's text must not end a section.
+    let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Arial;}}{\*\revtbl {Unknown;}{Alice;}}
+\sectd{\footerr \pard Foot one\par}\pard First section.\par \sect
+\sectd\lndscpsxn{\footerr \pard Foot two\par}\pard Second{\super\chftn}{\footnote \pard\plain {\super\chftn} Note text\sect\par} {\*\atrfstart 3}section{\*\atrfend 3}{\*\atnid AB}{\*\atnauthor Ann}\chatn{\*\annotation{\*\atnref 3}{\*\atndate 1000}\pard Remark\par}{\revised\revauth1\revdttm-1480361314  added}.\par}";
+    let d = import("rtf", rtf).unwrap().unwrap();
+    assert_eq!(d.sections().len(), 2);
+    let check = |d: &Document| {
+        let (notes, comments) = rtf_notes(d);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("Note text"), "{notes:?}");
+        assert_eq!(comments.len(), 1, "{comments:?}");
+        assert!(comments[0].contains("Remark"), "{comments:?}");
+        let ins = d.body.iter().filter_map(|b| b.as_para()).any(|p| p.plain_text().contains("added"));
+        assert!(ins);
+    };
+    check(&d);
+    let out = String::from_utf8(export("rtf", &d).unwrap().unwrap()).unwrap();
+    assert!(out.contains("\\revised") && out.contains("\\footnote") && out.contains("\\atrfstart"), "{out}");
+    let d2 = import("rtf", out.as_bytes()).unwrap().unwrap();
+    check(&d2);
+}
+
 /// A link target with any whitespace (a no-break or ideographic space too) is written in `<…>`,
 /// so the reader, which ends a bare destination at the first whitespace, reads it back whole.
 #[test]
@@ -888,7 +1036,16 @@ fn hidden_drawings_are_left_out_of_exports() {
     let key = d.add_media(vec![0x89, b'P', b'N', b'G'], "png");
     for hidden in [false, true] {
         let float = wordcraft_doc::para::Float { hidden, ..Default::default() };
-        let image = wordcraft_doc::InlineObject::Image { media: key.clone(), w: 10.0, h: 10.0, alt: "Logo".into(), float, crop: [0.0; 4], ole: None };
+        let image = wordcraft_doc::InlineObject::Image {
+            media: key.clone(),
+            w: 10.0,
+            h: 10.0,
+            alt: "Logo".into(),
+            float,
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
         d.insert_object(&wordcraft_doc::Pos::body(0, 0), image, &Default::default()).unwrap();
     }
     // Two pictures, one hidden: one comes out.
@@ -1010,4 +1167,12 @@ fn html_title_outside_head_is_metadata_not_body() {
         assert_eq!(para_texts(&d), vec!["b".to_string()], "{html}");
         assert_eq!(d.core.title, "T", "{html}");
     }
+}
+
+#[test]
+fn latex_export_keeps_repeated_spaces() {
+    let tex = String::from_utf8(crate::export("tex", &Document::from_text("a  b   c")).unwrap().unwrap()).unwrap();
+    assert!(!tex.contains("  "), "{tex}");
+    let d = crate::import("tex", tex.as_bytes()).unwrap().unwrap();
+    assert_eq!(para_texts(&d), vec!["a  b   c".to_string()]);
 }

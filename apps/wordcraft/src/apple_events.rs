@@ -36,14 +36,15 @@ impl AppleEvents {
 
 /// Open the documents and act on the quit requests that arrived since the last frame. A document
 /// opens like File › Open: beside the open ones, in place of an untouched blank one, or, when it
-/// is already open, by showing it. Quitting closes the window, which asks about every document
+/// is already open, by showing it; a Word template starts a new document based on it, as Word's
+/// default verb for one does (#3433). Quitting closes the window, which asks about every document
 /// with unsaved changes.
 pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
     for e in inbox.drain() {
         match e {
             Event::Open(paths) => {
                 for p in paths.iter().filter_map(|p| p.to_str()) {
-                    match app.open_file(p, None) {
+                    match app.open_from_platform(p, None) {
                         // Leave Backstage, as opening from the Open dialog does.
                         Ok(_) => app.ui.backstage = false,
                         Err(e) => {
