@@ -6,8 +6,8 @@
 //! with a richer clipboard) may pass `html`, `rtf` or a `picture` too. Text that is itself RTF or
 //! HTML source can also be pasted as that format. Paste keeps the source formatting of another
 //! program's HTML or RTF; Merge Formatting keeps only its emphasis (#687).
+//! Plain text has no formatting to keep, so Paste inserts it as Keep Text Only does.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use serde_json::{Value, json};
@@ -105,7 +105,9 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
                 req[k] = json!(t);
             }
         }
-        s.ui_requests.push(req);
+        // Only the newest dialog request matters; older ones would pin their payloads.
+        s.ui_requests.retain(|r| r["open"] != "pasteSpecial");
+        s.push_ui_request(req);
         return Ok(json!({"formats": formats_json(&ids)}));
     };
     let fmt = match fmt.to_ascii_lowercase().as_str() {
@@ -136,13 +138,78 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(r);
         }
         "formatted" => s.clipboard.clone().ok_or_else(|| CmdError::Failed("the clipboard is empty".into()))?,
-        "html" => adopt(s, wordcraft_formats::html::import(html_fragment(&src))),
+        "html" => adopt(s, import_html(&src)),
         _ => adopt(s, wordcraft_formats::rtf::import(src.as_bytes()).map_err(|e| CmdError::Failed(format!("bad RTF: {e}")))?),
     };
     insert(s, frag)?;
     let mut r = sel_result(s)?;
     r["pastedAs"] = json!(fmt);
     Ok(r)
+}
+
+/// Indent each side of a pasted `<blockquote>` whose page gives it no margins, points.
+const BLOCKQUOTE_INDENT: f32 = 36.0;
+
+/// Another program's HTML clipboard payload as a document. A `<blockquote>` there is how
+/// LibreOffice (and many web pages) write a paragraph indented on both sides, not a quotation
+/// (#1270): it pastes as a Normal paragraph indented by the page's `blockquote` margins, else half
+/// an inch each side, rather than in the (centred, italic) Quote style. Opening an .html file keeps
+/// `<blockquote>` as Quote, so HTML round-trips.
+fn import_html(html: &str) -> Document {
+    let mut doc = wordcraft_formats::html::import(html_fragment(html));
+    let (left, right) = blockquote_margins(html);
+    for b in &mut doc.body {
+        each_para(Arc::make_mut(b), 0, &mut |p| {
+            if p.props.style.as_deref() == Some("Quote") {
+                p.props.style = None;
+                p.props.indent_left.get_or_insert(left);
+                p.props.indent_right.get_or_insert(right);
+                p.touch();
+            }
+        });
+    }
+    doc
+}
+
+/// The left and right margins (points) the payload's `<style>` sheets give `blockquote` — LibreOffice
+/// writes `blockquote { margin-left: 1cm; margin-right: 1cm }` — else [`BLOCKQUOTE_INDENT`].
+fn blockquote_margins(html: &str) -> (f32, f32) {
+    let len = |v: &str| wordcraft_formats::html::css_len_pt(v).map(|x| x.clamp(0.0, 1584.0));
+    let (mut left, mut right) = (BLOCKQUOTE_INDENT, BLOCKQUOTE_INDENT);
+    let lower = html.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(at) = rest.find("<style") {
+        let tag = rest.get(at..).unwrap_or("");
+        let sheet = tag.find('>').and_then(|j| tag.get(j + 1..)).unwrap_or("");
+        let end = sheet.find("</style").unwrap_or(sheet.len());
+        for rule in sheet.get(..end).unwrap_or("").split('}') {
+            let Some((sel, decls)) = rule.split_once('{') else { continue };
+            if !sel.split(',').any(|s| s.trim().trim_start_matches("<!--").trim() == "blockquote") {
+                continue;
+            }
+            for d in decls.split(';') {
+                let Some((name, v)) = d.split_once(':') else { continue };
+                match name.trim() {
+                    "margin-left" => left = len(v).unwrap_or(left),
+                    "margin-right" => right = len(v).unwrap_or(right),
+                    "margin" => {
+                        let vals: Vec<&str> = v.split_whitespace().take(4).collect();
+                        let (r, l) = match vals.as_slice() {
+                            [a] => (*a, *a),
+                            [_, h] | [_, h, _] => (*h, *h),
+                            [_, r, _, l] => (*r, *l),
+                            _ => continue,
+                        };
+                        right = len(r).unwrap_or(right);
+                        left = len(l).unwrap_or(left);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        rest = sheet.get(end..).unwrap_or("");
+    }
+    (left, right)
 }
 
 /// The HTML itself from a Windows "HTML Format" (CF_HTML) clipboard payload — a `Version:` header
@@ -178,7 +245,7 @@ fn has_content(d: &Document) -> bool {
 /// [`MAX_PASTE_BYTES`], or it holds nothing to paste (the caller pastes the text then).
 pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
     let fits = |k: &str| p::str(v, k).filter(|t| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES);
-    let doc = fits("html").map(|html| wordcraft_formats::html::import(html_fragment(html)));
+    let doc = fits("html").map(import_html);
     let doc = match doc.filter(has_content) {
         Some(d) => d,
         None => {
@@ -189,23 +256,49 @@ pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
     Some(adopt(s, doc))
 }
 
+/// What a Paste brings in.
+pub enum Pasted {
+    /// WordCraft's own copy, or another program's HTML or RTF: it keeps the formatting it carries.
+    Fragment(Fragment),
+    /// The system clipboard's text, lines separated by `\n`.
+    Text(String),
+}
+
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
 /// another program's formatted copy (HTML, RTF), else the system clipboard's text.
-pub fn paste_fragment(s: &mut Session, v: &Value) -> Result<Fragment, CmdError> {
+pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
-        return Ok(f.clone());
+        return Ok(Pasted::Fragment(f.clone()));
     }
     if let Some(f) = rich_fragment(s, v) {
-        return Ok(f);
+        return Ok(Pasted::Fragment(f));
     }
     match text {
-        Some(t) if !t.is_empty() => Ok(Fragment::from_text(&t)),
+        Some(t) if !t.is_empty() => Ok(Pasted::Text(t)),
         _ => Err(CmdError::Failed("the clipboard is empty".into())),
     }
+}
+
+/// [`paste_content`] as a fragment. Text becomes paragraphs with no formatting of their own.
+pub fn paste_fragment(s: &mut Session, v: &Value) -> Result<Fragment, CmdError> {
+    Ok(match paste_content(s, v)? {
+        Pasted::Fragment(f) => f,
+        Pasted::Text(t) => Fragment::from_text(&t),
+    })
+}
+
+/// Paste plain text the way Keep Text Only does, which is what Word does with text that carries
+/// no formatting: the text takes the formatting before the caret, and each line after the first
+/// starts a paragraph formatted like the one the text lands in (direction, style, alignment,
+/// indents, list). Empty lines become empty paragraphs.
+pub fn insert_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    // Only our own cut, pasted straight after it, becomes a move (see `insert`).
+    s.pending_move = None;
+    super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))
 }
 
 /// Merge Formatting (#687): the pasted text takes the formatting where it lands — the paragraph's
@@ -307,35 +400,6 @@ pub(crate) fn each_para(b: &mut Block, depth: usize, f: &mut dyn FnMut(&mut Para
     }
 }
 
-/// Point a tracked formatting change at its renumbered revision (dropped when it has none).
-fn remap_change<T>(c: &mut Option<Box<wordcraft_doc::props::PropChange<T>>>, rev: &dyn Fn(&mut Option<u32>)) {
-    let mut r = c.as_ref().map(|c| c.rev);
-    rev(&mut r);
-    match (r, c.as_mut()) {
-        (Some(v), Some(x)) => x.rev = v,
-        _ => *c = None,
-    }
-}
-
-/// [`remap_change`] for the table, row and cell formatting changes in `b` (bounded depth).
-fn remap_table_changes(b: &mut Block, depth: usize, rev: &dyn Fn(&mut Option<u32>)) {
-    if depth > MAX_DEPTH {
-        return;
-    }
-    if let Block::Table(t) = b {
-        remap_change(&mut t.props.fmt_change, rev);
-        for row in &mut t.rows {
-            remap_change(&mut row.props.fmt_change, rev);
-            for cell in &mut row.cells {
-                remap_change(&mut cell.props.fmt_change, rev);
-                for cb in &mut cell.blocks {
-                    remap_table_changes(Arc::make_mut(cb), depth + 1, rev);
-                }
-            }
-        }
-    }
-}
-
 /// Section breaks brought in from another document keep their page, but their header and
 /// footer ids are that document's: clear them (and the different first page that went with
 /// them) so the sections link to the previous section's headers and footers, as in Word.
@@ -354,81 +418,12 @@ pub(crate) fn unlink_sections(blocks: &mut [Block]) {
 /// Turn an imported document into a fragment of the session's document: bring over the media,
 /// lists and styles it refers to (renumbered so they can't collide with ours).
 fn adopt(s: &mut Session, src: Document) -> Fragment {
-    let mut media = BTreeMap::new();
-    for (key, data) in &src.media {
-        let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
-        media.insert(key.clone(), s.doc.add_media(data.to_vec(), ext));
-    }
-    let next_abs = s.doc.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
-    let mut abs_map = BTreeMap::new();
-    for (i, a) in src.numbering.abstracts.iter().enumerate() {
-        let id = next_abs.saturating_add(i as u32);
-        abs_map.insert(a.id, id);
-        s.doc.numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id, ..a.clone() });
-    }
-    let next_num = s.doc.numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
-    let mut num_map = BTreeMap::new();
-    for (i, n) in src.numbering.nums.iter().enumerate() {
-        let id = next_num.saturating_add(i as u32);
-        num_map.insert(n.id, id);
-        let abstract_id = abs_map.get(&n.abstract_id).copied().unwrap_or(n.abstract_id);
-        s.doc.numbering.nums.push(wordcraft_doc::numbering::Num { id, abstract_id, ..n.clone() });
-    }
-    for st in &src.styles.styles {
-        if s.doc.styles.get(&st.id).is_none() {
-            s.doc.styles.upsert(st.clone());
-        }
-    }
-    // Tracked changes the source carries (RTF revisions) point at its own revisions: add them
-    // after ours and renumber.
-    let rev_base = u32::try_from(s.doc.revisions.len()).unwrap_or(u32::MAX);
-    let src_revs = src.revisions.len();
-    s.doc.revisions.extend(src.revisions.iter().cloned());
-    let rev = |i: &mut Option<u32>| {
-        *i = i.filter(|v| (*v as usize) < src_revs).and_then(|v| rev_base.checked_add(v));
-    };
-    let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
+    let mut frag = s.doc.adopt(src);
     // Pasted pictures fit our text width, like Insert › Pictures (layout keeps their size).
     let max_w = crate::io::text_width(&s.doc);
-    for b in &mut blocks {
+    for b in &mut frag.blocks {
         crate::io::fit_block_pictures(b, max_w);
     }
-    for b in &mut blocks {
-        each_para(b, 0, &mut |p| {
-            if let Some(n) = p.props.numbering.as_mut()
-                && n.num != 0
-            {
-                n.num = num_map.get(&n.num).copied().unwrap_or(0);
-            }
-            for r in &mut p.runs {
-                rev(&mut r.props.ins);
-                rev(&mut r.props.del);
-                remap_change(&mut r.props.fmt_change, &rev);
-            }
-            rev(&mut p.mark.ins);
-            rev(&mut p.mark.del);
-            remap_change(&mut p.mark.fmt_change, &rev);
-            remap_change(&mut p.props.fmt_change, &rev);
-            let mut n = p.props.num_change.as_ref().map(|c| c.rev);
-            rev(&mut n);
-            match (n, p.props.num_change.as_mut()) {
-                (Some(v), Some(c)) => c.rev = v,
-                _ => p.props.num_change = None,
-            }
-            for o in &mut p.objects {
-                if let wordcraft_doc::InlineObject::Image { media: key, .. } = o
-                    && let Some(k) = media.get(key.as_str())
-                {
-                    *key = k.clone();
-                }
-            }
-        });
-    }
-    for b in &mut blocks {
-        remap_table_changes(b, 0, &rev);
-    }
-    unlink_sections(&mut blocks);
-    // Text box stories the imported shapes show; pasting gives each a new story of its own.
-    let parts = src.parts.into_iter().filter(|(_, p)| p.kind == wordcraft_doc::PartKind::TextBox).collect();
-    Fragment { blocks, parts }
+    unlink_sections(&mut frag.blocks);
+    frag
 }

@@ -21,6 +21,7 @@ const OWNED: &[&str] = &[
     "w:attachedTemplate",
     "w:linkStyles",
     "w:trackRevisions",
+    "w:doNotTrackMoves",
     "w:documentProtection",
     "w:defaultTabStop",
     "w:autoHyphenation",
@@ -152,11 +153,26 @@ struct Child {
     end: usize,
 }
 
+/// Byte index of the `>` that ends the tag at the start of `s`, skipping quoted attribute values.
+fn tag_end(s: &str) -> Option<usize> {
+    let mut quote = None;
+    for (i, c) in s.char_indices() {
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '\'') => quote = Some(c),
+            (None, '>') => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// The root start tag's span end and the root's direct children, or `None` for anything the
 /// scanner doesn't expect (CDATA, DOCTYPE, a different root).
 fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     let open = xml.find(&format!("<{root}"))?;
-    let open_end = open + xml.get(open..)?.find('>')? + 1;
+    let open_end = open + tag_end(xml.get(open..)?)? + 1;
     if xml.get(open_end - 2..open_end)? == "/>" {
         return None;
     }
@@ -181,7 +197,7 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
             i = at + tail.find("?>")? + 2;
             continue;
         }
-        let gt = at + tail.find('>')? + 1;
+        let gt = at + tag_end(tail)? + 1;
         let tag = xml.get(at..gt)?;
         if tag.starts_with("</") {
             depth = depth.checked_sub(1)?;
@@ -222,9 +238,15 @@ fn merge_compat(orig: &str, generated: &str) -> Option<String> {
     match (mode(orig), mode(generated)) {
         (Some((a, b)), Some((c, d))) => Some(format!("{}{}{}", orig.get(..a)?, generated.get(c..d)?, orig.get(b..)?)),
         (None, Some((c, d))) => {
-            // No mode in the original: add the generated one before `</w:compat>`.
-            let close = orig.rfind("</w:compat>")?;
-            Some(format!("{}{}{}", orig.get(..close)?, generated.get(c..d)?, orig.get(close..)?))
+            // No mode in the original: add the generated one before `</w:compat>`, or expand a self-closing `<w:compat/>`.
+            if let Some(close) = orig.rfind("</w:compat>") {
+                Some(format!("{}{}{}", orig.get(..close)?, generated.get(c..d)?, orig.get(close..)?))
+            } else if let Some(slash) = orig.rfind("/>") {
+                let open = orig.get(..slash)?.trim_end();
+                Some(format!("{open}>{}</w:compat>", generated.get(c..d)?))
+            } else {
+                None
+            }
         }
         _ => Some(orig.to_string()),
     }
@@ -337,11 +359,31 @@ mod tests {
     }
 
     #[test]
+    fn a_gt_inside_an_attribute_value_does_not_hide_the_kept_settings() {
+        for v in [r#"w:val="x>y""#, "w:val='x>y'"] {
+            let orig = format!(
+                r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:docVar w:name="a" {v}/><w:docVar w:name="b" {v}></w:docVar></w:settings>"#
+            );
+            assert!(has_unowned(orig.as_bytes()), "{v}");
+            let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+            assert!(out.contains(r#"w:name="a""#) && out.contains(r#"w:name="b""#), "{v}");
+        }
+    }
+
+    #[test]
     fn a_compat_block_without_a_mode_gets_the_generated_one() {
         let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat><w:useFELayout/></w:compat></w:settings>"#;
         let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
         assert!(out.contains("<w:useFELayout/>") && out.contains("compatibilityMode"), "{out}");
         assert!(has_unowned(orig.as_bytes()));
         assert!(!has_unowned(GEN.as_bytes()));
+    }
+
+    #[test]
+    fn a_self_closing_compat_block_gets_the_generated_mode() {
+        let orig = r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r"><w:compat/><w:rsids><w:rsidRoot w:val="00112233"/></w:rsids></w:settings>"#;
+        let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
+        assert!(out.contains("<w:compat><w:compatSetting") && out.contains("</w:compat>"), "{out}");
+        assert!(out.contains("<w:rsidRoot w:val=\"00112233\"/>"), "{out}");
     }
 }
