@@ -326,9 +326,11 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
                     pos = p;
                     changed = true;
                 }
-                // As in Word, `\int` + Space leaves ∫ waiting for its limits: `_a^b` and then
-                // Space, or Space alone, builds the operator (#4917).
-                let waits = changed && c == ' ' && me::nary_before(&math.nodes, &pos);
+                // As in Word, a Space that finishes a `\name` only replaces it. `\int` + Space leaves
+                // ∫ waiting for its limits: `_a^b` and then Space, or Space alone, builds the
+                // operator (#4917). `\sqrt` + Space gives √ to type the radicand after, not an empty
+                // radical (#4255).
+                let waits = changed && c == ' ';
                 // Only an operator this build-up makes takes the caret: one already there (from
                 // the gallery, say) keeps it after it.
                 let built_before = me::nary_node_before(&math.nodes, &pos);
@@ -345,7 +347,8 @@ fn type_text(s: &mut Session, v: &Value) -> CmdResult {
             } else if !style.nor && !latex && !c.is_alphanumeric() {
                 // Word corrects `\name` on any character that can't continue it (`\int_`,
                 // `\alpha+`), keeps that character and builds nothing up yet. LaTeX input keeps
-                // its commands (`\sqrt{`).
+                // its commands (`\sqrt{`). The `\` of a next name finishes the one before
+                // (`\alpha\beta`, #4255).
                 if let Some(p) = me::autocorrect(&mut math.nodes, &pos) {
                     pos = p;
                     transformed = true;
