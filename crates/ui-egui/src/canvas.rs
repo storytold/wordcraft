@@ -1822,6 +1822,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
+        crate::dialogs_smart_art::follow_selection(app);
         crate::dialogs_smart_art::paint_item(app, &painter, &t, &layout, &rects, geo.scale);
         crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);

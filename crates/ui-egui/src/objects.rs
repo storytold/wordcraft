@@ -431,8 +431,11 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         let pos = object.pos();
         let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
         let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
-        // A click on a SmartArt shape picks its item: typing then goes into it.
-        crate::dialogs_smart_art::pick_item(app, layout, pages, scale, at);
+        // A click on a SmartArt shape picks its item: typing then goes into it. A press on a
+        // resize or rotate handle isn't on a shape, and keeps the item.
+        if grab == Grab::Move {
+            crate::dialogs_smart_art::pick_item(app, layout, pages, scale, at);
+        }
         let (min, picture) = match selected(app) {
             Some((_, o)) => (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. })),
             None => return true,

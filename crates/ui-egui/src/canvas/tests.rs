@@ -5362,3 +5362,77 @@ fn clicking_a_smart_art_shape_types_into_its_item() {
     click(&mut h, corner);
     assert_eq!(h.state().smart_art_item, None);
 }
+
+/// A SmartArt window for the picked-item tests: `graphics` hierarchy graphics, the last selected.
+fn smart_art_window(graphics: usize) -> H {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    for k in 0..graphics {
+        a.run("caret.set", json!({"pos": Pos::body(0, k * wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+        a.run("insert.smartArt", json!({"layout": "hierarchy"})).unwrap();
+    }
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    h
+}
+
+/// A press and release at `at`, then past the double-click time.
+fn smart_art_click(h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2) {
+    use egui::{Event, PointerButton};
+    h.event(Event::PointerMoved(at));
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    for _ in 0..40 {
+        h.step();
+    }
+}
+
+/// Clicks item 3's shape of the selected graphic; returns the graphic's frame on its page.
+fn pick_smart_art_item_3(h: &mut egui_kittest::Harness<'_, WordApp>) -> (usize, wordcraft_geom::Rect) {
+    let layout = h.state_mut().session.layout();
+    let (hit, _) = crate::objects::active(h.state(), &layout).expect("a graphic is selected");
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).unwrap();
+    let [bx, by, bw, bh] = wordcraft_engine::cmd::smart_art::item_box(&g, hit.rect.w, hit.rect.h, 3).unwrap();
+    let at = page_to_screen(h.state_mut(), hit.page, hit.rect.x + bx + bw / 2.0, hit.rect.y + by + bh / 2.0).expect("on screen");
+    smart_art_click(h, at);
+    assert_eq!(h.state().smart_art_item, Some(3), "the clicked shape's item is picked");
+    (hit.page, hit.rect)
+}
+
+/// Review: a press on a resize handle starts a resize and keeps the picked item; it isn't a click
+/// on the graphic's background.
+#[test]
+fn a_smart_art_resize_handle_keeps_the_picked_item() {
+    let mut h = smart_art_window(1);
+    let (page, r) = pick_smart_art_item_3(&mut h);
+    let corner = page_to_screen(h.state_mut(), page, r.x + r.w, r.y + r.h).expect("on screen");
+    smart_art_click(&mut h, corner);
+    assert_eq!(h.state().smart_art_item, Some(3), "the handle press kept the picked item");
+}
+
+/// Review: an item picked in one graphic is forgotten when another graphic is selected directly
+/// (not by a click on it), so typing and Backspace never edit that index of the other graphic.
+#[test]
+fn selecting_another_smart_art_graphic_forgets_the_picked_item() {
+    let mut h = smart_art_window(2);
+    pick_smart_art_item_3(&mut h);
+    let first = Pos::body(0, 0);
+    let end = Pos::body(0, wordcraft_doc::para::OBJ.len_utf8());
+    h.state_mut().run("select.range", json!({"anchor": first, "focus": end})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(wordcraft_engine::cmd::smart_art::selected_smart_art(&h.state().session).is_some(), "the first graphic is selected");
+    assert_eq!(h.state().smart_art_item, None, "the other graphic's item is forgotten");
+    assert_eq!(h.state().smart_art_typing, None);
+}

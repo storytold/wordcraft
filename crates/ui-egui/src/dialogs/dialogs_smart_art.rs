@@ -354,9 +354,22 @@ fn item_under(app: &WordApp, layout: &wordcraft_layout::DocLayout, pages: &[Rect
     wordcraft_engine::cmd::smart_art::item_at_point(&g, hit.rect.w, hit.rect.h, u * hit.rect.w, v * hit.rect.h)
 }
 
+/// The picked item belongs to one graphic: when another is selected (from the keyboard, the
+/// Selection Pane, an undo), it is forgotten, so typing, Backspace and the outline never use its
+/// index in the other graphic.
+pub fn follow_selection(app: &mut WordApp) {
+    let owner = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).and(crate::objects::selected(app)).map(|(p, _)| p);
+    if owner != app.smart_art_owner {
+        app.smart_art_item = None;
+        app.smart_art_typing = None;
+        app.smart_art_owner = owner;
+    }
+}
+
 /// A click on the selected SmartArt graphic picks the item whose shape is under the pointer (none
 /// on its background), as clicking a shape in Word does: typing then goes into that item.
 pub fn pick_item(app: &mut WordApp, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, at: egui::Pos2) {
+    follow_selection(app);
     if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_none() {
         return;
     }
@@ -391,6 +404,7 @@ pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
     if !m.is_none() || !matches!(key, egui::Key::Backspace | egui::Key::Escape) {
         return false;
     }
+    follow_selection(app);
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return false };
     let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()) else { return false };
     if key == egui::Key::Escape {
@@ -438,6 +452,7 @@ pub(crate) enum SmartArtTypeResult {
 /// Appends typing to the selected SmartArt item, joining an active typing undo, and returns
 /// whether the input was unhandled, consumed without a change, or changed an item.
 pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
+    follow_selection(app);
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
         return SmartArtTypeResult::NotHandled;
     };
@@ -701,6 +716,8 @@ mod tests {
             let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).unwrap();
             app.run("smartArt.items", items_with(&g, 3, t)).unwrap();
         };
+        // As a frame does: the picked item is the selected graphic's.
+        follow_selection(&mut app);
         app.smart_art_item = Some(3);
         // "Việt" with the ệ's two marks apart, then a family emoji (a ZWJ sequence).
         set(&mut app, "Vie\u{302}\u{323}t\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}");

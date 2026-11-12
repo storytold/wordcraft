@@ -754,6 +754,8 @@ pub struct WordApp {
     /// [`WordApp::logic`] only fires while a row is focused, not from the canvas).
     pub smart_art_row_focused: bool,
     pub(crate) smart_art_typing: Option<usize>,
+    /// The graphic (its anchor) that `smart_art_item` and `smart_art_typing` belong to.
+    pub(crate) smart_art_owner: Option<wordcraft_doc::Pos>,
     /// The tab shown before Outline view brought up the Outlining tab (restored when it closes).
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
