@@ -455,4 +455,60 @@ mod tests {
         let plain = r#"<text:p x:xinstr="1" style:vertical-align="middle" text:display="hidden">Added instructions<w:instrument/></text:p>"#;
         assert!(!field_markup(plain));
     }
+
+    /// The engine's test binary run again in a child process with only
+    /// [`host_opt_in_in_a_child_process`] and [`ALLOW_ENV`] set to `value`: the variable belongs to
+    /// the process, so setting it here would race the other tests. Panics unless the child ran
+    /// that one test and it passed.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn run_child_with_opt_in(value: &str) {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["active_fields::tests::host_opt_in_in_a_child_process", "--exact", "--ignored", "--test-threads=1"])
+            .env(ALLOW_ENV, value)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{ALLOW_ENV}={value}: {stdout}{}", String::from_utf8_lossy(&out.stderr));
+        assert!(stdout.contains("1 passed"), "{ALLOW_ENV}={value}: the child ran no test: {stdout}");
+    }
+
+    /// The host's opt-in: with `WORDCRAFT_ALLOW_ACTIVE_FIELDS=1` automation can insert an active
+    /// field, paste one in and open bytes holding one; any other value still refuses all three.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn the_host_can_allow_them_for_automation() {
+        for value in ["1", "0", "true"] {
+            run_child_with_opt_in(value);
+        }
+    }
+
+    /// Run only by [`the_host_can_allow_them_for_automation`], in a child process whose
+    /// environment sets [`ALLOW_ENV`]; it checks nothing without that variable.
+    #[test]
+    #[ignore = "run by the_host_can_allow_them_for_automation with WORDCRAFT_ALLOW_ACTIVE_FIELDS set"]
+    fn host_opt_in_in_a_child_process() {
+        let Some(value) = std::env::var_os(ALLOW_ENV) else { return };
+        let allowed = value == "1";
+        let expect = |r: &Result<serde_json::Value, CmdError>, what: &str| {
+            assert_eq!(r.is_ok(), allowed, "{what} with {ALLOW_ENV}={value:?}: {r:?}");
+            if !allowed {
+                assert!(refused(r), "{what}: {r:?}");
+            }
+        };
+
+        let mut s = session();
+        expect(&from_automation(|| s.run("insert.field", &json!({"instr": DDE}))), "insert.field");
+        assert_eq!(codes(&s).len(), usize::from(allowed));
+
+        let mut s = with_active_field_copied();
+        s.run("file.new", &json!({})).unwrap();
+        expect(&from_automation(|| s.run("edit.paste", &json!({}))), "edit.paste");
+        assert_eq!(codes(&s).len(), usize::from(allowed));
+
+        let bytes = crate::io::save_bytes("a.xml", &with_active_field_copied().doc).unwrap();
+        let data = crate::cmd::insert::base64_encode(&bytes);
+        let mut s = session();
+        expect(&from_automation(|| s.run("file.open", &json!({"path": "a.xml", "data": data}))), "file.open with data");
+        assert_eq!(codes(&s).len(), usize::from(allowed));
+    }
 }
