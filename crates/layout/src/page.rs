@@ -200,6 +200,7 @@ impl PageBuilder<'_> {
             self.carry.extend(rest.by_ref());
             break;
         }
+        let mut on_top = Vec::new();
         if let Some(pg) = self.pages.last_mut() {
             match if cont { &self.seps.cont } else { &self.seps.sep } {
                 Some((items, _)) => pg.items.extend(items.iter().cloned().map(|mut it| {
@@ -217,6 +218,11 @@ impl PageBuilder<'_> {
                     it.translate(x, ny);
                     pg.items.push(it);
                 }
+                // In Front of Text goes over the notes after it too (#1993).
+                on_top.extend(n.on_top.into_iter().map(|mut it| {
+                    it.translate(x, ny);
+                    it
+                }));
             }
             if let (Some(ny), Some((items, _))) = (notice_y, &self.seps.notice) {
                 pg.items.extend(items.iter().cloned().map(|mut it| {
@@ -225,6 +231,10 @@ impl PageBuilder<'_> {
                 }));
             }
         }
+        // The page is aligned before its notes are placed: where they go in its items doesn't
+        // move them.
+        let at = self.pages.last().map_or(0, |pg| pg.items.len());
+        self.push_on_top(at, on_top);
     }
     /// A top-level block starts here (see `block_marks`).
     pub(crate) fn mark_block(&mut self) {

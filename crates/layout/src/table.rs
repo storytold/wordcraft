@@ -641,13 +641,12 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                         natural_length(&probe).clamp(4.0, TURNED_MAX)
                     }
                 };
-                let BoxLayout { mut items, height, floats_bottom, on_top, .. } =
+                // Its In Front of Text objects turn with it when the row is done.
+                let BoxLayout { items, height, floats_bottom, on_top, .. } =
                     layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
-                // Turned text keeps its In Front of Text objects in the cell: they turn with it.
-                items.extend(on_top.into_iter().map(|t| t.item));
                 let across = height.max(floats_bottom);
                 turned = Some(Turned { turn, len, across, snap, region, ci, top: margins[0] + band_t });
-                (items, Vec::new(), len)
+                (items, on_top, len)
             } else {
                 let BoxLayout { mut items, mut height, floats_bottom, last_top, mut on_top, .. } = layout_box(
                     ctx,
@@ -823,6 +822,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             };
             let end = (c.vmerge != VMerge::Continue && c.turned.is_none()).then_some(c.end + dy);
             let mut cell_items = c.items;
+            let mut cell_top = c.on_top;
             if let Some(tn) = c.turned {
                 dy = 0.0;
                 let m = c.margins;
@@ -839,9 +839,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     let now = (std::mem::replace(&mut ctx.counters, tn.snap.0), std::mem::replace(&mut ctx.eq_count, tn.snap.1));
                     let b = layout_box(ctx, BoxInput::cell(story, &cell.blocks, &cpath, len, text, depth));
                     across = b.height.max(b.floats_bottom);
-                    // Its In Front of Text objects turn with it, as in the first layout.
-                    cell_items = b.items;
-                    cell_items.extend(b.on_top.into_iter().map(|t| t.item));
+                    (cell_items, cell_top) = (b.items, b.on_top);
                     (ctx.counters, ctx.eq_count) = now;
                 }
                 // Lines stack across the cell from its start edge (right for top-to-bottom text,
@@ -859,13 +857,22 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 for it in &mut cell_items {
                     it.turn(tn.turn, ox, oy);
                 }
+                // Its In Front of Text objects turn with it and stay on top of the page (#1993).
+                // Turned text moves on as a whole when the row splits (`split_row_with`): they go
+                // with its top.
+                let top = cell_items.iter().filter_map(Placed::turned_bounds).map(|r| r.y).fold(f32::MAX, f32::min);
+                let anchor = if top < f32::MAX { top } else { tn.top };
+                for t in &mut cell_top {
+                    t.item.turn(tn.turn, ox, oy);
+                    t.anchor = anchor;
+                }
             }
             let content = items.len();
             for mut it in cell_items {
                 it.translate(0.0, dy);
                 items.push(it);
             }
-            for mut t in c.on_top {
+            for mut t in cell_top {
                 t.translate(0.0, dy);
                 on_top.push(OnTop { cell: ci, ..t });
             }

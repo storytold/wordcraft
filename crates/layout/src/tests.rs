@@ -6516,6 +6516,59 @@ fn in_front_of_text_is_drawn_over_the_footnotes() {
     assert!(note < shape, "the note {note} is drawn before the shape {shape}");
 }
 
+/// #1993 review: one anchored in a footnote goes over the notes after it on the page too.
+#[test]
+fn in_front_of_text_in_a_footnote_is_drawn_over_the_later_notes() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Anchor paragraph with two notes");
+    let second = footnote(&mut d, &Pos::body(0, 20), "The second note, under the picture.");
+    let first = footnote(&mut d, &Pos::body(0, 6), "The first note holds the picture.");
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    d.insert_object(&Pos { story: StoryRef::Part(first), path: Path::top(0), off: 0 }, rect_shape(300.0, 40.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    let items = &l.pages[0].items;
+    let note = |id: u32| items.iter().position(|i| matches!(i, Placed::Lines { story: StoryRef::Part(p), .. } if *p == id)).unwrap();
+    assert!(note(first) < note(second), "the notes in order");
+    let shape = items.iter().position(|i| matches!(i, Placed::Shape { .. })).unwrap();
+    assert!(note(second) < shape, "the second note {} is drawn before the shape {shape}", note(second));
+    let r = shapes(items)[0];
+    assert!(r.bottom() > 600.0, "the shape is still at its note, at the bottom of the page: {r:?}");
+}
+
+/// #1993 review: one in a turned cell turns with it and still goes over the text after the table.
+#[test]
+fn in_front_of_text_in_a_turned_cell_is_drawn_over_the_text_after_the_table() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for grows in [false, true] {
+        let mut d = turned_table(TextDirection::Down, "Turned", None);
+        let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        d.insert_object(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 }, rect_shape(20.0, 20.0, f), &Default::default())
+            .unwrap();
+        if grows {
+            // Another cell makes the row taller: the turned text is laid out again.
+            let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) else { panic!("table") };
+            t.rows[0].cells[0].blocks =
+                (0..12).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("plain", Default::default()))).collect();
+        }
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let (lines, shape) = lines_and_shape(items);
+        assert!(lines.iter().all(|&k| k < shape), "grows {grows}: drawn after every line of the page {lines:?} {shape}");
+        let cell = items
+            .iter()
+            .find_map(|i| match i {
+                Placed::Cell { table, cell: 1, rect, .. } if *table == Path::top(1) => Some(*rect),
+                _ => None,
+            })
+            .unwrap();
+        let r = shapes(items)[0];
+        assert!(
+            r.x >= cell.x - 0.5 && r.right() <= cell.right() + 0.5 && r.y >= cell.y - 0.5,
+            "grows {grows}: turned into its cell: {r:?} in {cell:?}"
+        );
+    }
+}
+
 /// #1993: turned cell text laid out again for a taller row keeps its In Front of Text objects.
 #[test]
 fn in_front_of_text_in_a_turned_cell_stays_when_the_row_grows() {

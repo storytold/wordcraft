@@ -722,8 +722,9 @@ fn notes_on_line(ctx: &mut Ctx, pb: &PageBuilder, l: &para::Line, notes: &[(usiz
             && let Some(part) = ctx.doc.parts.get(id).filter(|p| p.kind == wordcraft_doc::PartKind::Footnote)
         {
             let blocks = part.blocks.clone();
-            let BoxLayout { items, height: h, .. } = layout_box(ctx, BoxInput::other(StoryRef::Part(*id), &blocks, pb.sect.text_width(), 0, None));
-            out.push(NoteBox { id: *id, items, h, cont: false });
+            let BoxLayout { items, on_top, height: h, .. } = layout_box(ctx, BoxInput::note(StoryRef::Part(*id), &blocks, pb.sect.text_width()));
+            let on_top = on_top.into_iter().map(|t| t.item).collect();
+            out.push(NoteBox { id: *id, items, on_top, h, cont: false });
         }
     }
     out

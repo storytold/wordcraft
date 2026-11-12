@@ -432,6 +432,7 @@ fn finish_pages(pb: PageBuilder, doc: &Document, sections: &[(usize, &SectionPro
         let top = pb.top;
         pb.new_page(last_block, top);
         pb.flush_notes();
+        pb.lift_on_top();
     }
     pb.carry.clear();
     let mut pages = pb.pages;

@@ -14,6 +14,9 @@ use super::{
 /// Cell identity is independent of optional table-style formatting.
 pub(crate) enum BoxContext<'a> {
     Other,
+    /// A footnote: as `Other`, but its In Front of Text objects stay apart, for the page to draw
+    /// over the notes after it too (#1993).
+    Note,
     /// Outer cell edges relative to its text origin (not including wrap distances).
     Cell {
         text: Option<&'a para::CellText>,
@@ -37,6 +40,11 @@ pub(crate) struct BoxInput<'a> {
 impl<'a> BoxInput<'a> {
     pub(crate) fn other(story: StoryRef, blocks: &'a Blocks, width: f32, depth: usize, frame: Option<PageFrame<'a>>) -> Self {
         Self { story, blocks, prefix: &[], width, context: BoxContext::Other, depth, frame }
+    }
+
+    /// A footnote's text (see [`BoxContext::Note`]).
+    pub(crate) fn note(story: StoryRef, blocks: &'a Blocks, width: f32) -> Self {
+        Self { context: BoxContext::Note, ..Self::other(story, blocks, width, 0, None) }
     }
 
     pub(crate) fn cell(story: StoryRef, blocks: &'a Blocks, prefix: &'a [u32], width: f32, cell: Option<&'a para::CellText>, depth: usize) -> Self {
@@ -206,8 +214,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     // inline (restored for the story around this box when it's done).
     let outer_hide = std::mem::replace(&mut ctx.hide_deleted, ctx.opts.hides_deleted(story));
     let empty_cell = para::CellText::default();
+    let keeps_on_top = !matches!(context, BoxContext::Other);
     let (in_cell, table, cell_edges) = match context {
-        BoxContext::Other => (false, None, None),
+        BoxContext::Other | BoxContext::Note => (false, None, None),
         BoxContext::Cell { text, left, right, clamp } => (true, Some(text.unwrap_or(&empty_cell)), clamp.then_some((left, right))),
     };
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
@@ -417,8 +426,9 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(float_objects_bottom, f32::max);
     ctx.hide_deleted = outer_hide;
     // In Front of Text goes over all of the box's text. A cell's goes further, over the rest of
-    // the page (the rows and paragraphs after its table), so the table carries it up (#1993).
-    if !in_cell {
+    // the page (the rows and paragraphs after its table), so the table carries it up (#1993); a
+    // footnote's over the notes after it, so the page lifts it.
+    if !keeps_on_top {
         items.extend(on_top.drain(..).map(|t| t.item));
     }
     BoxLayout { items, on_top, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
@@ -476,8 +486,8 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 pub(crate) struct BoxLayout {
     pub(crate) items: Vec<Placed>,
-    /// A table cell's In Front of Text objects, for its table to draw over the rest of the page
-    /// (#1993). Empty for other boxes, whose `items` end with them.
+    /// A table cell's or footnote's In Front of Text objects, for its table or page to draw over
+    /// the rest of the page (#1993). Empty for other boxes, whose `items` end with them.
     pub(crate) on_top: Vec<OnTop>,
     pub(crate) table_areas: Vec<Rect>,
     pub(crate) page_table_wraps: Vec<WrapArea>,
