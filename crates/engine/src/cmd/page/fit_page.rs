@@ -458,33 +458,13 @@ fn collect_body_line_spacings(doc: &Document) -> Vec<wordcraft_doc::props::LineS
 }
 
 /// Checks whether previously reduced text from an earlier fit is still present in the document.
+///
+/// Compares each current value against the original values recorded before the first fit, within
+/// the cumulative reduction that fit applied. This avoids matching a body size against an unrelated
+/// heading size: restoring every size to its original therefore resets the budget.
 fn has_previously_reduced_text(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
-    let mut font_reduced_present = false;
-    if fit.cum_delta > 0.0 {
-        let current_sizes = collect_body_font_sizes(doc);
-        for &cur in &current_sizes {
-            if fit.reduced_font_sizes.iter().any(|&red| cur <= red + 1e-4) {
-                font_reduced_present = true;
-                break;
-            }
-        }
-    }
-
-    let mut space_reduced_present = false;
-    if fit.cum_space < 1.0 - 1e-4 {
-        let current_spacings = collect_body_line_spacings(doc);
-        for cur in &current_spacings {
-            if fit.reduced_line_spacings.iter().any(|red| match (cur, red) {
-                (wordcraft_doc::props::LineSpacing::Multiple(c), wordcraft_doc::props::LineSpacing::Multiple(r))
-                | (wordcraft_doc::props::LineSpacing::AtLeast(c), wordcraft_doc::props::LineSpacing::AtLeast(r))
-                | (wordcraft_doc::props::LineSpacing::Exactly(c), wordcraft_doc::props::LineSpacing::Exactly(r)) => *c <= *r + 1e-4,
-                _ => false,
-            }) {
-                space_reduced_present = true;
-                break;
-            }
-        }
-    }
+    let font_reduced_present = fit.cum_delta > 0.0 && font_reduction_present(doc, fit);
+    let space_reduced_present = fit.cum_space < 1.0 - 1e-4 && spacing_reduction_present(doc, fit);
 
     if fit.cum_delta > 0.0 && fit.cum_space < 1.0 - 1e-4 {
         font_reduced_present || space_reduced_present
@@ -497,24 +477,55 @@ fn has_previously_reduced_text(doc: &Document, fit: &wordcraft_doc::shrink::FitS
     }
 }
 
-/// Reads the cumulative Fit One Page reduction state from the document's internal fit tracking.
-///
-/// Preserves the reduction budget when reopening a fitted document where `doc.fit_state` was serialized,
-/// while maintaining the full budget for documents with no prior reductions.
-fn cumulative_shrink_state(doc: &Document) -> (f32, f32) {
-    if let Some(fit) = &doc.fit_state
-        && has_previously_reduced_text(doc, fit)
-    {
-        return (fit.cum_delta, fit.cum_space);
+fn font_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
+    if fit.original_font_sizes.is_empty() {
+        return false;
     }
-    (0.0, 1.0)
+    let current_sizes = collect_body_font_sizes(doc);
+    current_sizes.iter().any(|&cur| {
+        fit.original_font_sizes.iter().any(|&orig| {
+            let floor = orig - fit.cum_delta - 1e-4;
+            cur >= floor && cur < orig - 1e-4
+        })
+    })
+}
+
+fn spacing_reduction_present(doc: &Document, fit: &wordcraft_doc::shrink::FitState) -> bool {
+    if fit.original_line_spacings.is_empty() {
+        return false;
+    }
+    let current_spacings = collect_body_line_spacings(doc);
+    current_spacings.iter().any(|cur| {
+        fit.original_line_spacings.iter().any(|orig| match (cur, orig) {
+            (wordcraft_doc::props::LineSpacing::Multiple(c), wordcraft_doc::props::LineSpacing::Multiple(o))
+            | (wordcraft_doc::props::LineSpacing::AtLeast(c), wordcraft_doc::props::LineSpacing::AtLeast(o))
+            | (wordcraft_doc::props::LineSpacing::Exactly(c), wordcraft_doc::props::LineSpacing::Exactly(o)) => {
+                let floor = o * fit.cum_space - 1e-4;
+                *c >= floor && *c < *o - 1e-4
+            }
+            _ => false,
+        })
+    })
 }
 
 /// Records the cumulative Fit One Page reduction state into the document's internal fit tracking.
-fn set_cumulative_shrink_state(doc: &mut Document, delta: f32, space: f32) {
+fn set_cumulative_shrink_state(
+    doc: &mut Document,
+    delta: f32,
+    space: f32,
+    original_font_sizes: Vec<f32>,
+    original_line_spacings: Vec<wordcraft_doc::props::LineSpacing>,
+) {
     let sizes = collect_body_font_sizes(doc);
     let spacings = collect_body_line_spacings(doc);
-    doc.fit_state = Some(wordcraft_doc::FitState { cum_delta: delta, cum_space: space, reduced_font_sizes: sizes, reduced_line_spacings: spacings });
+    doc.fit_state = Some(wordcraft_doc::FitState {
+        cum_delta: delta,
+        cum_space: space,
+        reduced_font_sizes: sizes,
+        reduced_line_spacings: spacings,
+        original_font_sizes,
+        original_line_spacings,
+    });
 }
 
 /// Generates candidate font-reduction delta and line-spacing alpha pairs respecting parameter bounds.
@@ -580,6 +591,26 @@ fn generate_candidate_steps(max_delta: f32, step_pt_opt: Option<f32>, adjust_spa
     candidates
 }
 
+/// The Print options Fit One Page uses: the session's pagination-affecting visibility and numeral
+/// settings, with proofing disabled because it does not change pagination.
+fn fit_layout_options(s: &Session) -> LayoutOptions {
+    let (fn_name, fn_path) = s.resolved_filenames();
+    LayoutOptions {
+        view: ViewMode::Print,
+        field_codes: s.view.field_codes,
+        show_hidden: s.view.marks || s.prefs.marks.hidden,
+        hide_deleted: !s.view.show_markup,
+        hide_marked: s.prefs.markup.hidden_deletions(),
+        deletions_in_balloons: s.revisions_in_balloons(),
+        proofing: false,
+        proof: wordcraft_layout::ProofOptions { grammar: false, spelling: Default::default() },
+        numeral: s.view.numeral.resolve(crate::locale::system_locale()),
+        filename: Some(Arc::from(fn_name.as_str())),
+        filepath: Some(Arc::from(fn_path.as_str())),
+        ..LayoutOptions::default()
+    }
+}
+
 /// Executes the `layout.fitOnePage` command.
 ///
 /// Condenses the document by one page if feasible, preserving typographical
@@ -597,26 +628,18 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
     }
 
     // 1. Anti-compound guard: refuse if cumulative reduction already reached 1.0 pt or spacing factor <= 0.94
-    let (cum_delta, cum_space) = cumulative_shrink_state(&s.doc);
+    let prior_fit = s.doc.fit_state.clone().filter(|fit| has_previously_reduced_text(&s.doc, fit));
+    let (cum_delta, cum_space) = prior_fit.as_ref().map_or((0.0, 1.0), |fit| (fit.cum_delta, fit.cum_space));
     if cum_delta >= 1.0 - 1e-4 || cum_space <= 0.94 + 1e-4 {
         return Err(CmdError::Failed("Unable to shrink document further without reducing text beyond readability limits.".into()));
     }
 
     // 2. Build equivalent Print layout options
-    let shown_hidden = s.view.marks || s.prefs.marks.hidden;
-    let hide_deleted = !s.view.show_markup;
-    let (fn_name, fn_path) = s.resolved_filenames();
-    let print_opts = LayoutOptions {
-        view: ViewMode::Print,
-        field_codes: s.view.field_codes,
-        show_hidden: shown_hidden,
-        hide_deleted,
-        proofing: false,
-        proof: wordcraft_layout::ProofOptions { grammar: false, spelling: Default::default() },
-        filename: Some(Arc::from(fn_name.as_str())),
-        filepath: Some(Arc::from(fn_path.as_str())),
-        ..LayoutOptions::default()
-    };
+    let print_opts = fit_layout_options(s);
+    let shown_hidden = print_opts.show_hidden;
+    let hide_deleted = print_opts.hide_deleted;
+    let pre_font_sizes = collect_body_font_sizes(&s.doc);
+    let pre_line_spacings = collect_body_line_spacings(&s.doc);
 
     // 3. Initial page count evaluation
     let mut initial_cache = LayoutCache::new();
@@ -699,7 +722,11 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
     // 8. Success commit or clean rollback
     match (successful_doc, applied_step) {
         (Some(mut new_doc), Some((d, a))) => {
-            set_cumulative_shrink_state(&mut new_doc, cum_delta + d, cum_space * a);
+            let original_font_sizes =
+                prior_fit.as_ref().map(|fit| fit.original_font_sizes.clone()).filter(|sizes| !sizes.is_empty()).unwrap_or(pre_font_sizes);
+            let original_line_spacings =
+                prior_fit.as_ref().map(|fit| fit.original_line_spacings.clone()).filter(|spacings| !spacings.is_empty()).unwrap_or(pre_line_spacings);
+            set_cumulative_shrink_state(&mut new_doc, cum_delta + d, cum_space * a, original_font_sizes, original_line_spacings);
             s.doc = new_doc;
             s.clamp_selection();
             let page_word = if final_pages == 1 { "page" } else { "pages" };
@@ -838,5 +865,91 @@ mod tests {
 
         assert!(!has_explicit_breaks(&doc, false, false), "a first-row hidden override must hide the break");
         assert!(has_explicit_breaks(&doc, false, true), "the hidden break counts when hidden marks are shown");
+    }
+
+    #[test]
+    fn provenance_resets_when_body_and_heading_are_restored() {
+        let mut doc = Document::from_text("Alpha\nBeta\nGamma\nDelta");
+        for (i, b) in doc.body.iter_mut().enumerate() {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b) {
+                let size = if i == 0 { 24.0 } else { 12.0 };
+                for r in &mut p.runs {
+                    r.props.size = Some(size);
+                }
+            }
+        }
+        let originals = collect_body_font_sizes(&doc);
+        let originals_spacings = collect_body_line_spacings(&doc);
+        wordcraft_doc::shrink::fit_document_typography(&mut doc, 1.0, 1.0);
+        set_cumulative_shrink_state(&mut doc, 1.0, 1.0, originals, originals_spacings);
+
+        assert!(has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+        // Restoring only the heading leaves the body reduced.
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            for r in &mut p.runs {
+                r.props.size = Some(24.0);
+            }
+        }
+        assert!(has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+        // Restoring the body too leaves no reduced text.
+        for b in doc.body.iter_mut().skip(1) {
+            if let wordcraft_doc::Block::Para(p) = Arc::make_mut(b) {
+                for r in &mut p.runs {
+                    r.props.size = Some(12.0);
+                }
+            }
+        }
+        assert!(!has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn provenance_resets_when_mixed_line_spacings_are_restored() {
+        use wordcraft_doc::props::LineSpacing;
+
+        let mut doc = Document::from_text("Alpha\nBeta");
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        }
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[1]) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        }
+        let originals = collect_body_font_sizes(&doc);
+        let originals_spacings = collect_body_line_spacings(&doc);
+        wordcraft_doc::shrink::fit_document_typography(&mut doc, 0.0, 0.9);
+        set_cumulative_shrink_state(&mut doc, 0.0, 0.9, originals, originals_spacings);
+
+        assert!(has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+        // Restoring the 2.0 spacing but leaving the 1.0 one reduced keeps the budget.
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[1]) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        }
+        assert!(has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+        // Restoring both resets it.
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        }
+        assert!(!has_previously_reduced_text(&doc, doc.fit_state.as_ref().unwrap()));
+    }
+
+    #[test]
+    fn fit_layout_options_match_session_visibility_and_numeral() {
+        let mut s = Session::new(Document::from_text("Alpha\nBeta"));
+        s.view.mode = ViewMode::Print;
+        s.view.show_markup = true;
+        s.prefs.markup.balloons = wordcraft_layout::display::BalloonMode::Revisions;
+        s.prefs.markup.insertions_deletions = true;
+        s.view.numeral = wordcraft_layout::NumeralMode::Hindi;
+        s.view.proofing = false;
+        s.prefs.mark_grammar = false;
+
+        let opts = fit_layout_options(&s);
+        assert_eq!(opts.hide_deleted, !s.view.show_markup);
+        assert_eq!(opts.hide_marked, s.prefs.markup.hidden_deletions());
+        assert_eq!(opts.deletions_in_balloons, s.revisions_in_balloons());
+        assert_eq!(opts.numeral, s.view.numeral.resolve(crate::locale::system_locale()));
+
+        let mut cache = LayoutCache::new();
+        let fitted = wordcraft_layout::layout(&s.doc, &mut cache, &opts);
+        assert_eq!(fitted.pages.len(), s.layout().pages.len());
     }
 }

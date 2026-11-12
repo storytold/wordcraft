@@ -35,6 +35,12 @@ pub struct FitState {
     pub reduced_font_sizes: Vec<f32>,
     /// Unique effective line spacing values present immediately after the reduction was applied.
     pub reduced_line_spacings: Vec<LineSpacing>,
+    /// Unique effective body font sizes before the first Fit One Page reduction was applied.
+    #[serde(default)]
+    pub original_font_sizes: Vec<f32>,
+    /// Unique effective line spacing values before the first Fit One Page reduction was applied.
+    #[serde(default)]
+    pub original_line_spacings: Vec<LineSpacing>,
 }
 
 /// Scale a font size down by `delta_pt`.
