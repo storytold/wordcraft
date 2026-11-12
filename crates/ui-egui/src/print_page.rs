@@ -141,11 +141,13 @@ fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     l
 }
 
-/// How the preview draws a page: tracked changes marked as the print job marks them.
+/// How the preview draws a page: tracked changes marked as the print job marks them, headers and
+/// footers at full strength (the preview is the printed page, not the editing view).
 fn preview_options(app: &WordApp) -> wordcraft_render::RenderOptions {
     let mut opts = wordcraft_render::RenderOptions::default();
     opts.display.markup = app.session.prefs.print_markup;
     opts.display.revisions = app.session.prefs.markup.clone();
+    opts.display.dim_header = false;
     opts
 }
 
@@ -540,6 +542,8 @@ mod tests {
         app.run("review.trackChanges", json!({"value": true})).unwrap();
         app.run("select.all", json!({})).unwrap();
         app.run("text.insert", json!({"text": "Kept"})).unwrap();
+        // The preview is the printed page: headers and footers draw at full strength (#6267).
+        assert!(!preview_options(&app).display.dim_header);
         let pages = |app: &crate::WordApp| (layout_of(app, &ctx).pages.len(), app.session.print_pdf(&json!({})).unwrap().1.chosen);
         app.run("file.printMarkup", json!({"value": true})).unwrap();
         let (marked, job) = pages(&app);
