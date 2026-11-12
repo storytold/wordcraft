@@ -133,61 +133,123 @@ fn func_name(name: &[MNode], o: &mut String, depth: usize) {
     }
 }
 
+fn fraction(kind: FracKind, num: &[MNode], den: &[MNode], o: &mut String, depth: usize) {
+    match kind {
+        FracKind::Bar | FracKind::NoBar => {
+            o.push_str(if kind == FracKind::NoBar { "<mfrac linethickness=\"0\">" } else { "<mfrac>" });
+            group(num, o, depth);
+            group(den, o, depth);
+            o.push_str("</mfrac>");
+        }
+        FracKind::Skewed | FracKind::Linear => {
+            o.push_str("<mrow>");
+            group(num, o, depth);
+            mo(if kind == FracKind::Skewed { '⁄' } else { '/' }, "", o);
+            group(den, o, depth);
+            o.push_str("</mrow>");
+        }
+    }
+}
+
+fn script(kind: ScriptKind, base: &[MNode], sub: &[MNode], sup: &[MNode], o: &mut String, depth: usize) {
+    match kind {
+        ScriptKind::Sup => {
+            o.push_str("<msup>");
+            group(base, o, depth);
+            group(sup, o, depth);
+            o.push_str("</msup>");
+        }
+        ScriptKind::Sub => {
+            o.push_str("<msub>");
+            group(base, o, depth);
+            group(sub, o, depth);
+            o.push_str("</msub>");
+        }
+        ScriptKind::SubSup => {
+            o.push_str("<msubsup>");
+            group(base, o, depth);
+            group(sub, o, depth);
+            group(sup, o, depth);
+            o.push_str("</msubsup>");
+        }
+        ScriptKind::Pre => {
+            o.push_str("<mmultiscripts>");
+            group(base, o, depth);
+            o.push_str("<mprescripts/>");
+            if sub.is_empty() {
+                o.push_str("<none/>");
+            } else {
+                group(sub, o, depth);
+            }
+            if sup.is_empty() {
+                o.push_str("<none/>");
+            } else {
+                group(sup, o, depth);
+            }
+            o.push_str("</mmultiscripts>");
+        }
+    }
+}
+
+fn write_nary(n: &MNode, o: &mut String, depth: usize) {
+    let MNode::Nary { chr, lim_loc, sub_hide, sup_hide, sub, sup, e, .. } = n else { return };
+    let under_over = match lim_loc {
+        Some(l) => *l == LimLoc::UndOvr,
+        None => !is_integral(*chr),
+    };
+    let has_sub = !*sub_hide && !sub.is_empty();
+    let has_sup = !*sup_hide && !sup.is_empty();
+    let tag = match (under_over, has_sub, has_sup) {
+        (_, false, false) => "",
+        (true, true, true) => "munderover",
+        (true, true, false) => "munder",
+        (true, false, true) => "mover",
+        (false, true, true) => "msubsup",
+        (false, true, false) => "msub",
+        (false, false, true) => "msup",
+    };
+    o.push_str("<mrow>");
+    if !tag.is_empty() {
+        o.push_str(&format!("<{tag}>"));
+    }
+    mo(*chr, " largeop=\"true\" movablelimits=\"false\"", o);
+    if has_sub {
+        group(sub, o, depth);
+    }
+    if has_sup {
+        group(sup, o, depth);
+    }
+    if !tag.is_empty() {
+        o.push_str(&format!("</{tag}>"));
+    }
+    group(e, o, depth);
+    o.push_str("</mrow>");
+}
+
+fn delimiters(n: &MNode, o: &mut String, depth: usize) {
+    let MNode::Delim { beg, end, sep, grow, elems, .. } = n else { return };
+    let stretchy = if *grow { "" } else { " stretchy=\"false\"" };
+    o.push_str("<mrow>");
+    if let Some(begin) = beg {
+        mo(*begin, &format!(" fence=\"true\" form=\"prefix\"{stretchy}"), o);
+    }
+    for (i, element) in elems.iter().enumerate() {
+        if i > 0 {
+            mo(sep.unwrap_or('|'), &format!(" separator=\"true\"{stretchy}"), o);
+        }
+        group(element, o, depth);
+    }
+    if let Some(close) = end {
+        mo(*close, &format!(" fence=\"true\" form=\"postfix\"{stretchy}"), o);
+    }
+    o.push_str("</mrow>");
+}
+
 fn node(n: &MNode, o: &mut String, depth: usize, eq_arr: bool) {
     match n {
         MNode::Run(r) => run(r, o, eq_arr),
-        MNode::Frac { kind, num, den } => match kind {
-            FracKind::Bar | FracKind::NoBar => {
-                o.push_str(if *kind == FracKind::NoBar { "<mfrac linethickness=\"0\">" } else { "<mfrac>" });
-                group(num, o, depth);
-                group(den, o, depth);
-                o.push_str("</mfrac>");
-            }
-            FracKind::Skewed | FracKind::Linear => {
-                o.push_str("<mrow>");
-                group(num, o, depth);
-                mo(if *kind == FracKind::Skewed { '⁄' } else { '/' }, "", o);
-                group(den, o, depth);
-                o.push_str("</mrow>");
-            }
-        },
-        MNode::Script { kind, base, sub, sup } => match kind {
-            ScriptKind::Sup => {
-                o.push_str("<msup>");
-                group(base, o, depth);
-                group(sup, o, depth);
-                o.push_str("</msup>");
-            }
-            ScriptKind::Sub => {
-                o.push_str("<msub>");
-                group(base, o, depth);
-                group(sub, o, depth);
-                o.push_str("</msub>");
-            }
-            ScriptKind::SubSup => {
-                o.push_str("<msubsup>");
-                group(base, o, depth);
-                group(sub, o, depth);
-                group(sup, o, depth);
-                o.push_str("</msubsup>");
-            }
-            ScriptKind::Pre => {
-                o.push_str("<mmultiscripts>");
-                group(base, o, depth);
-                o.push_str("<mprescripts/>");
-                if sub.is_empty() {
-                    o.push_str("<none/>");
-                } else {
-                    group(sub, o, depth);
-                }
-                if sup.is_empty() {
-                    o.push_str("<none/>");
-                } else {
-                    group(sup, o, depth);
-                }
-                o.push_str("</mmultiscripts>");
-            }
-        },
+        MNode::Frac { kind, num, den } => fraction(*kind, num, den, o, depth),
+        MNode::Script { kind, base, sub, sup } => script(*kind, base, sub, sup, o, depth),
         MNode::Rad { deg, deg_hide, e } => {
             if *deg_hide || deg.is_empty() {
                 o.push_str("<msqrt>");
@@ -200,56 +262,8 @@ fn node(n: &MNode, o: &mut String, depth: usize, eq_arr: bool) {
                 o.push_str("</mroot>");
             }
         }
-        MNode::Nary { chr, lim_loc, sub_hide, sup_hide, sub, sup, e, .. } => {
-            let under_over = match lim_loc {
-                Some(l) => *l == LimLoc::UndOvr,
-                None => !is_integral(*chr),
-            };
-            let has_sub = !*sub_hide && !sub.is_empty();
-            let has_sup = !*sup_hide && !sup.is_empty();
-            let tag = match (under_over, has_sub, has_sup) {
-                (_, false, false) => "",
-                (true, true, true) => "munderover",
-                (true, true, false) => "munder",
-                (true, false, true) => "mover",
-                (false, true, true) => "msubsup",
-                (false, true, false) => "msub",
-                (false, false, true) => "msup",
-            };
-            o.push_str("<mrow>");
-            if !tag.is_empty() {
-                o.push_str(&format!("<{tag}>"));
-            }
-            mo(*chr, " largeop=\"true\" movablelimits=\"false\"", o);
-            if has_sub {
-                group(sub, o, depth);
-            }
-            if has_sup {
-                group(sup, o, depth);
-            }
-            if !tag.is_empty() {
-                o.push_str(&format!("</{tag}>"));
-            }
-            group(e, o, depth);
-            o.push_str("</mrow>");
-        }
-        MNode::Delim { beg, end, sep, grow, elems, .. } => {
-            let stretchy = if *grow { "" } else { " stretchy=\"false\"" };
-            o.push_str("<mrow>");
-            if let Some(b) = beg {
-                mo(*b, &format!(" fence=\"true\" form=\"prefix\"{stretchy}"), o);
-            }
-            for (i, e) in elems.iter().enumerate() {
-                if i > 0 {
-                    mo(sep.unwrap_or('|'), &format!(" separator=\"true\"{stretchy}"), o);
-                }
-                group(e, o, depth);
-            }
-            if let Some(c) = end {
-                mo(*c, &format!(" fence=\"true\" form=\"postfix\"{stretchy}"), o);
-            }
-            o.push_str("</mrow>");
-        }
+        MNode::Nary { .. } => write_nary(n, o, depth),
+        MNode::Delim { .. } => delimiters(n, o, depth),
         MNode::Func { name, e } => {
             o.push_str("<mrow>");
             func_name(name, o, depth);

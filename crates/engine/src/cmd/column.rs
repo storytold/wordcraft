@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Paragraph, Pos};
+use wordcraft_layout::hit::ColumnSelection;
 
 use super::{parse_pos, pos_json};
 use crate::{CmdError, CmdResult, ColumnBlock, CommandSpec, Selection, Session, p};
@@ -96,7 +97,7 @@ fn make(s: &mut Session, a: Pos, b: Pos, xa: f32, xb: f32) {
     let (xa, xb) = (if xa.is_finite() { xa } else { 0.0 }, if xb.is_finite() { xb } else { 0.0 });
     let (left, right) = (xa.min(xb), xa.max(xb));
     let l = s.layout();
-    let segments = l.column_segments(&s.doc, &a, &b, left, right, s.page_hint, MAX_LINES);
+    let segments = l.column_segments(&s.doc, ColumnSelection { start: &a, end: &b, left, right, page_hint: s.page_hint, max_lines: MAX_LINES });
     s.sel = Selection { anchor: a, focus: b };
     s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None });
     s.pending = None;
@@ -179,6 +180,8 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         // Whole cells: table commands take the rectangle between the corners, and Tab moves on
         // from it without clearing it, as in Word.
         _ if cells && (id.starts_with("table.") || matches!(id, "text.tab" | "text.backTab")) => run(s, v),
+        // Copy and Cut of whole cells take a table of them (#1744).
+        "edit.copy" | "edit.cut" if cells => run(s, v),
         "edit.copy" => copy(s, &segs),
         "edit.cut" => {
             let r = copy(s, &segs)?;

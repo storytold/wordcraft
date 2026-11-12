@@ -63,7 +63,14 @@ fn story_fields(doc: &Document, story: StoryRef, note_index: u32) -> Vec<ZField>
         .collect()
 }
 
+/// Most fields [`list`] hands Zotero (no real document comes near it).
+pub const MAX_FIELDS: usize = 100_000;
+/// Most bytes of field codes [`list`] hands Zotero, all fields together.
+pub const MAX_CODE_BYTES: usize = 64 * 1024 * 1024;
+
 /// Every Zotero field in document order: the body's, with each note's fields at its reference.
+/// A note the body references more than once (a crafted file) is listed at its first reference
+/// only. Past [`MAX_FIELDS`] fields or [`MAX_CODE_BYTES`] of codes the rest are left out.
 pub fn list(doc: &Document) -> Vec<ZField> {
     enum Ev {
         Field(ZField),
@@ -71,10 +78,12 @@ pub fn list(doc: &Document) -> Vec<ZField> {
     }
     let mut evs: Vec<(Pos, Ev)> = story_fields(doc, StoryRef::Body, 0).into_iter().map(|f| (f.start.clone(), Ev::Field(f))).collect();
     let (mut foot, mut end) = (0u32, 0u32);
+    let mut seen = std::collections::HashSet::new();
     for path in doc.para_paths(StoryRef::Body) {
         let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
-        for off in p.object_offsets() {
-            if let Some(InlineObject::NoteRef { kind, id, custom }) = p.object_at(off) {
+        // The k-th object marker holds the k-th object.
+        for (off, obj) in p.object_offsets().into_iter().zip(&p.objects) {
+            if let InlineObject::NoteRef { kind, id, custom } = obj {
                 let n = match kind {
                     NoteKind::Footnote => &mut foot,
                     NoteKind::Endnote => &mut end,
@@ -82,16 +91,31 @@ pub fn list(doc: &Document) -> Vec<ZField> {
                 if custom.is_empty() {
                     *n = n.saturating_add(1);
                 }
-                evs.push((Pos::new(StoryRef::Body, path.clone(), off), Ev::Note(*id, (*n).max(1))));
+                if seen.insert(*id) {
+                    evs.push((Pos::new(StoryRef::Body, path.clone(), off), Ev::Note(*id, (*n).max(1))));
+                }
             }
         }
     }
     evs.sort_by(|a, b| a.0.cmp(&b.0));
     let mut out = Vec::new();
+    let mut bytes = 0usize;
+    let mut take = |f: ZField, out: &mut Vec<ZField>| {
+        bytes = bytes.saturating_add(f.code.len());
+        let fits = out.len() < MAX_FIELDS && bytes <= MAX_CODE_BYTES;
+        if fits {
+            out.push(f);
+        }
+        fits
+    };
     for (_, ev) in evs {
-        match ev {
-            Ev::Field(f) => out.push(f),
-            Ev::Note(id, n) => out.extend(story_fields(doc, StoryRef::Part(id), n)),
+        let fits = match ev {
+            Ev::Field(f) => take(f, &mut out),
+            Ev::Note(id, n) => story_fields(doc, StoryRef::Part(id), n).into_iter().all(|f| take(f, &mut out)),
+        };
+        if !fits {
+            log::warn!("Zotero: the document has more citation fields than WordCraft hands Zotero; the rest are left out");
+            break;
         }
     }
     out

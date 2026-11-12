@@ -140,8 +140,9 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
     let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    let rtl = crate::rtl::on();
+    let body = |ui: &mut Ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_width(170.0);
             for id in PANES {
                 let label = tl!(pane_label(id));
@@ -155,7 +156,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 }
                 let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
                 // Long translations stay inside the row; WidgetInfo above keeps the full name.
-                ui.painter().with_clip_rect(r).text(egui::pos2(r.min.x + 12.0, r.center().y), egui::Align2::LEFT_CENTER, label, font, t.text);
+                ui.painter().with_clip_rect(r).text(
+                    egui::pos2(crate::rtl::lead_x(rtl, r, 12.0), r.center().y),
+                    crate::rtl::lead_center(rtl),
+                    label,
+                    font,
+                    t.text,
+                );
                 if resp.clicked() {
                     app.ui.options_pane = id.to_string();
                 }
@@ -165,7 +172,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
         let (line, _) = ui.allocate_exact_size(vec2(1.0, 420.0), egui::Sense::hover());
         ui.painter().rect_filled(line, 0.0, t.border);
         ui.add_space(20.0);
-        ui.vertical(|ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.set_max_width(640.0);
             match current.as_str() {
                 "display" => display(app, ui),
@@ -178,7 +185,13 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 _ => general(app, ui),
             }
         });
-    });
+    };
+    // Right to left the pane list is on the right and the settings fill in from it.
+    if rtl {
+        ui.with_layout(crate::rtl::row_layout(ui, egui::Align::Min), body)
+    } else {
+        crate::rtl::horizontal_top(ui, body)
+    };
 }
 
 fn section(ui: &mut Ui, title: &str) {
@@ -212,6 +225,21 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface");
     theme_picker(app, ui);
     interface_size_picker(app, ui);
+    ui.horizontal(|ui| {
+        use wordcraft_engine::cmd::view::PaperColor;
+        let label = ui.label(tl!("Screen paper color:"));
+        let selected = app.session.prefs.paper_color;
+        let combo = craft_ui::ComboBox::from_id_salt("screen_paper_color").selected_text(tl!(selected.label())).width(220.0).show_ui(ui, |ui| {
+            for color in PaperColor::ALL {
+                if ui.selectable_label(selected == color, tl!(color.label())).clicked() {
+                    let _ = app.run("view.paperColor", json!({"value": color}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id).on_hover_text(tl!(
+            "Screen only. Document backgrounds, printing and exports keep their colours. Dark page and explicit Read Mode colours take precedence."
+        ));
+    });
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
     let mut dark_page = app.session.view.dark_mode;
     if ui
@@ -237,27 +265,38 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Personalize");
-    egui::Grid::new("options_user").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        let user_label = ui.label(tl!("User name:"));
-        let mut n = app.session.author.clone();
-        let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
-        if ui.add_enabled(!protected, egui::TextEdit::singleline(&mut n).desired_width(260.0)).labelled_by(user_label.id).changed() && !protected {
-            app.session.author = n;
-        }
-        ui.end_row();
-        let initials_label = ui.label(tl!("Initials:"));
-        let mut i = app.session.initials.clone();
-        let hint = app.session.user_initials();
-        if ui
-            .add(
-                egui::TextEdit::singleline(&mut i).desired_width(80.0).char_limit(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).hint_text(hint),
-            )
-            .labelled_by(initials_label.id)
-            .changed()
-        {
-            set(app, json!({"initials": i}));
-        }
-        ui.end_row();
+    crate::rtl::Table::new("options_user").columns(2).spacing(vec2(8.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let user_label = r.cell(|ui| ui.label(tl!("User name:")));
+            r.cell(|ui| {
+                let mut n = app.session.author.clone();
+                let protected = wordcraft_engine::cmd::protect::enforced(&app.session.doc);
+                if ui.add_enabled(!protected, egui::TextEdit::singleline(&mut n).desired_width(260.0)).labelled_by(user_label.id).changed()
+                    && !protected
+                {
+                    app.session.author = n;
+                }
+            });
+        });
+        t.row(|r| {
+            let initials_label = r.cell(|ui| ui.label(tl!("Initials:")));
+            r.cell(|ui| {
+                let mut i = app.session.initials.clone();
+                let hint = app.session.user_initials();
+                if ui
+                    .add(
+                        egui::TextEdit::singleline(&mut i)
+                            .desired_width(80.0)
+                            .char_limit(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS)
+                            .hint_text(hint),
+                    )
+                    .labelled_by(initials_label.id)
+                    .changed()
+                {
+                    set(app, json!({"initials": i}));
+                }
+            });
+        });
     });
     note(ui, "New comments and tracked changes are recorded under this name and these initials.");
 }
@@ -289,6 +328,9 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     }
     numeral_picker(app, ui);
     ui.add_space(8.0);
+    section(ui, "Status bar");
+    status_count_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
     ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));
@@ -313,15 +355,13 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
-    ui.add_space(8.0);
-    section(ui, "Dictionaries");
-    dictionaries(app, ui);
 }
 
 /// Where the spelling dictionaries come from (#1063): a folder searched before the system's
-/// usual places, saved with the settings, and the dictionary each language found. An app started
-/// from Finder or the Dock doesn't see `WORDCRAFT_DICTIONARIES`, so this is how it finds a
-/// dictionary kept in a folder of the user's own.
+/// usual places, saved with the settings. An app started from Finder or the Dock doesn't see
+/// `WORDCRAFT_DICTIONARIES`, so this is how it finds a dictionary kept in a folder of the user's
+/// own. Each language's status ("Your own dictionary") is in Your languages above, and the file
+/// each language found is under Dictionary files.
 fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     let saved = app.session.prefs.dictionaries_folder.clone().unwrap_or_default();
     let id = egui::Id::unique("options_dictionaries_folder");
@@ -349,6 +389,15 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.data_mut(|d| d.insert_temp(id, folder));
     note(ui, "Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.");
+    note(ui, "An installed Language pack is used after this folder.");
+    ui.add_space(6.0);
+    ui.label(RichText::new(tl!("Dictionary files")).strong());
+    dictionary_files(ui);
+}
+
+/// The dictionary each language found (#1063): its file, "no dictionary found", or why the file
+/// couldn't be read, looked up again after the folder changes.
+fn dictionary_files(ui: &mut Ui) {
     // The dictionary each language found, looked up again after the folder changes.
     let found_id = egui::Id::unique("options_dictionaries_found");
     let generation = wordcraft_engine::proof::dictionary_generation();
@@ -369,10 +418,11 @@ fn dictionaries(app: &mut WordApp, ui: &mut Ui) {
     };
     for (language, file, error) in found {
         let line = match (file, error) {
-            (Some(f), Some(e)) => {
-                crate::i18n::fmt(tl!("{language}: {file} (unreadable: {reason})"), &[("language", &language), ("file", &f), ("reason", &e)])
-            }
-            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &f)]),
+            (Some(f), Some(e)) => crate::i18n::fmt(
+                tl!("{language}: {file} (unreadable: {reason})"),
+                &[("language", &language), ("file", &crate::i18n::isolate_path(&f)), ("reason", &e)],
+            ),
+            (Some(f), None) => crate::i18n::fmt(tl!("{language}: {file}"), &[("language", &language), ("file", &crate::i18n::isolate_path(&f))]),
             (None, _) => crate::i18n::fmt(tl!("{language}: no dictionary found"), &[("language", &language)]),
         };
         ui.add(egui::Label::new(RichText::new(line).small()).truncate());
@@ -396,7 +446,14 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Es419 => tl!("Spanish (Latin America)"),
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
         // English uses its bundled word list; Bulgarian and German have no dictionary yet.
-        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => "",
+        ProofLang::En
+        | ProofLang::EnGb
+        | ProofLang::EnCa
+        | ProofLang::EnAu
+        | ProofLang::Bg
+        | ProofLang::De
+        | ProofLang::Pack(_)
+        | ProofLang::Other => "",
     }
 }
 
@@ -442,7 +499,7 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
     // The browser can't write to the user's files, so AutoSave can't be turned on there (#176).
     let browser = app.autosave_block() == Some(crate::AutoSaveBlock::Browser);
     let mut autosave = app.autosave && !browser;
-    let r = ui.add_enabled(!browser, egui::Checkbox::new(&mut autosave, tl!("AutoSave documents you have saved in WordCraft")));
+    let r = ui.add_enabled_ui(!browser, |ui| ui.checkbox(&mut autosave, tl!("AutoSave documents you have saved in WordCraft"))).inner;
     if browser {
         r.on_disabled_hover_text(crate::AutoSaveBlock::Browser.reason());
     } else if r.changed() {
@@ -486,6 +543,12 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
             .unwrap_or_else(|| crate::i18n::fmt(tl!("Spelling and grammar are checked in {language}."), &[("language", &lang)]))
     };
     ui.label(RichText::new(text).small().weak());
+    ui.add_space(8.0);
+    crate::language_packs::your_languages_section(app, ui);
+    ui.add_space(8.0);
+    section(ui, "Dictionaries");
+    dictionaries(app, ui);
+    crate::language_packs::add_language_window(app, &ui.ctx().clone());
 }
 
 /// Draws Accessibility options: the animation setting and Read Aloud speed and skip-citations.
@@ -528,51 +591,61 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(8.0);
     section(ui, "Display");
-    egui::Grid::new("options_display").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
-        let recent_label = ui.label(tl!("Recent documents to show:"));
-        let mut n = app.ui.recent_shown();
-        if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).labelled_by(recent_label.id).changed() {
-            app.ui.recent_count = n;
-        }
-        ui.end_row();
-        let units_label = ui.label(tl!("Measurement units:"));
-        // The user's choice, else the region's (#838): Automatic follows the region.
-        let units = app.session.units();
-        let auto = app.session.prefs.units.is_none();
-        let name = UNITS.iter().find(|(u, _)| *u == units).map_or("Inches", |(_, n)| n);
-        let shown = if auto { format!("{} ({})", tl!("Automatic"), tl!(name)) } else { tl!(name).to_string() };
-        let combo = egui::ComboBox::from_id_salt("options_units").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-            if ui.selectable_label(auto, tl!("Automatic")).clicked() {
-                set(app, json!({"units": "auto"}));
-            }
-            for (u, label) in UNITS {
-                if ui.selectable_label(!auto && units == u, tl!(label)).clicked() {
-                    set(app, json!({"units": u}));
+    crate::rtl::Table::new("options_display").columns(2).spacing(vec2(8.0, 6.0)).show(ui, |t| {
+        t.row(|r| {
+            let recent_label = r.cell(|ui| ui.label(tl!("Recent documents to show:")));
+            r.cell(|ui| {
+                let mut n = app.ui.recent_shown();
+                if ui.add(egui::DragValue::new(&mut n).range(0..=crate::MAX_RECENT).speed(0.2)).labelled_by(recent_label.id).changed() {
+                    app.ui.recent_count = n;
                 }
-            }
+            });
         });
-        combo.response.labelled_by(units_label.id);
-        ui.end_row();
+        t.row(|r| {
+            let units_label = r.cell(|ui| ui.label(tl!("Measurement units:")));
+            r.cell(|ui| {
+                // The user's choice, else the region's (#838): Automatic follows the region.
+                let units = app.session.units();
+                let auto = app.session.prefs.units.is_none();
+                let name = UNITS.iter().find(|(u, _)| *u == units).map_or("Inches", |(_, n)| n);
+                let shown = if auto { format!("{} ({})", tl!("Automatic"), tl!(name)) } else { tl!(name).to_string() };
+                let combo = craft_ui::ComboBox::from_id_salt("options_units").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(auto, tl!("Automatic")).clicked() {
+                        set(app, json!({"units": "auto"}));
+                    }
+                    for (u, label) in UNITS {
+                        if ui.selectable_label(!auto && units == u, tl!(label)).clicked() {
+                            set(app, json!({"units": u}));
+                        }
+                    }
+                });
+                combo.response.labelled_by(units_label.id);
+            });
+        });
         // The region new documents, units and the decimal separator follow; Automatic is the
         // system's (#838).
-        let region_label = ui.label(tl!("Region:"));
-        let chosen = app.session.prefs.region.clone();
-        let system = &app.session.system_region;
-        let system_tag = if system.territory.is_empty() { system.language.clone() } else { format!("{}-{}", system.language, system.territory) };
-        let automatic = crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
-        let shown = chosen.clone().unwrap_or_else(|| automatic.clone());
-        let combo = egui::ComboBox::from_id_salt("options_region").selected_text(shown).width(200.0).show_ui(ui, |ui| {
-            if ui.selectable_label(chosen.is_none(), automatic.as_str()).clicked() {
-                set(app, json!({"region": "auto"}));
-            }
-            for tag in REGIONS {
-                if ui.selectable_label(chosen.as_deref() == Some(tag), tag).clicked() {
-                    set(app, json!({"region": tag}));
-                }
-            }
+        t.row(|r| {
+            let region_label = r.cell(|ui| ui.label(tl!("Region:")));
+            r.cell(|ui| {
+                let chosen = app.session.prefs.region.clone();
+                let system = &app.session.system_region;
+                let system_tag =
+                    if system.territory.is_empty() { system.language.clone() } else { format!("{}-{}", system.language, system.territory) };
+                let automatic = crate::i18n::fmt(tl!("Automatic ({region})"), &[("region", system_tag.as_str())]);
+                let shown = chosen.clone().unwrap_or_else(|| automatic.clone());
+                let combo = craft_ui::ComboBox::from_id_salt("options_region").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+                    if ui.selectable_label(chosen.is_none(), automatic.as_str()).clicked() {
+                        set(app, json!({"region": "auto"}));
+                    }
+                    for tag in REGIONS {
+                        if ui.selectable_label(chosen.as_deref() == Some(tag), tag).clicked() {
+                            set(app, json!({"region": tag}));
+                        }
+                    }
+                });
+                combo.response.labelled_by(region_label.id);
+            });
         });
-        combo.response.labelled_by(region_label.id);
-        ui.end_row();
     });
     let mut keytips = app.ui.keytips_enabled;
     if ui.checkbox(&mut keytips, tl!("Show KeyTips (Alt or F10)")).changed() {
@@ -589,6 +662,11 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
         .changed()
     {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
+    }
+    if cfg!(all(unix, not(target_os = "macos"))) {
+        ui.add_space(8.0);
+        section(ui, "Linux display server");
+        display_server_picker(app, ui);
     }
     // The web app has no folders to name.
     if !cfg!(target_arch = "wasm32") {
@@ -652,7 +730,7 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::Appearance;
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface theme:"));
-        let combo = egui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("interface_theme").selected_text(tl!(app.ui.theme.label())).width(220.0).show_ui(ui, |ui| {
             for a in Appearance::ALL {
                 if ui.selectable_label(app.ui.theme == a, tl!(a.label())).clicked() {
                     let _ = app.run("ui.theme", json!({"value": a.code()}));
@@ -663,17 +741,39 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What the status bar's live count shows (#2797): words (as Word's status bar counts), characters
+/// with spaces, or characters without spaces. Right-clicking the count in the status bar offers
+/// the same choices.
+fn status_count_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::StatusCount;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Status bar count:"));
+        let combo = craft_ui::ComboBox::from_id_salt("status_count").selected_text(tl!(app.ui.status_count.label())).width(220.0).show_ui(ui, |ui| {
+            for c in StatusCount::ALL {
+                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "You can also right-click the count in the status bar to change it.");
+}
+
 /// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it
 /// draws at, or an absolute size, so "100%" means one screen pixel per point.
 fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::InterfaceSize;
     let size = app.ui.interface_size;
     let native = ui.ctx().native_pixels_per_point().unwrap_or(1.0);
-    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())]);
+    // The template keeps the percent sign outside its placeholder, so `fmt` isolates the number
+    // without it and a right-to-left line draws "(%200)": the sign goes inside the isolate.
+    let auto = crate::i18n::fmt(tl!("Auto ({percent}%)"), &[("percent", &InterfaceSize::AUTO.drawn_percent(native).to_string())])
+        .replace("\u{2069}%", "%\u{2069}");
     let selected = size.percent().map_or_else(|| auto.clone(), |pct| format!("{pct}%"));
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface size:"));
-        let combo = egui::ComboBox::from_id_salt("interface_size").selected_text(selected).width(220.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("interface_size").selected_text(selected).width(220.0).show_ui(ui, |ui| {
             if ui.selectable_label(size.is_auto(), auto).clicked() {
                 let _ = app.run("ui.interfaceSize", json!({"value": "auto"}));
             }
@@ -700,13 +800,14 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::theme::Animations;
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Animation effects:"));
-        let combo = egui::ComboBox::from_id_salt("animation_effects").selected_text(tl!(app.ui.animations.label())).width(220.0).show_ui(ui, |ui| {
-            for a in Animations::ALL {
-                if ui.selectable_label(app.ui.animations == a, tl!(a.label())).clicked() {
-                    let _ = app.run("ui.animations", json!({"value": a.code()}));
+        let combo =
+            craft_ui::ComboBox::from_id_salt("animation_effects").selected_text(tl!(app.ui.animations.label())).width(220.0).show_ui(ui, |ui| {
+                for a in Animations::ALL {
+                    if ui.selectable_label(app.ui.animations == a, tl!(a.label())).clicked() {
+                        let _ = app.run("ui.animations", json!({"value": a.code()}));
+                    }
                 }
-            }
-        });
+            });
         combo.response.labelled_by(label.id);
     });
     note(ui, "Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.");
@@ -720,17 +821,37 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Linux display server (#2184): Automatic, Wayland or X11 (XWayland). The desktop app reads it
+/// before the window opens, so a change applies at the next launch.
+fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::DisplayServer;
+    let name = |d: DisplayServer| if d == DisplayServer::Auto { tl!(d.label()) } else { d.label() };
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Display server:"));
+        let combo = craft_ui::ComboBox::from_id_salt("display_server").selected_text(name(app.ui.display_server)).width(220.0).show_ui(ui, |ui| {
+            for d in DisplayServer::ALL {
+                if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
+                    let _ = app.run("ui.displayServer", json!({"value": d.code()}));
+                }
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    note(ui, "Applies the next time WordCraft starts.");
+}
+
 /// Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
     // The language names are in their own scripts: fonts for them load from the next frame.
     app.want_system_cjk = true;
+    app.want_system_arabic = true;
     let system = crate::i18n::system_lang();
     let auto_label = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", system.name())]);
     let current = if app.ui.language == AUTO { auto_label.clone() } else { Lang::from_pref(&app.ui.language).name().to_string() };
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Interface language:"));
-        let combo = egui::ComboBox::from_id_salt("interface_language").selected_text(current).width(220.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("interface_language").selected_text(current).width(220.0).show_ui(ui, |ui| {
             if ui.selectable_label(app.ui.language == AUTO, auto_label.as_str()).clicked() {
                 let _ = app.run("ui.language", json!({"value": AUTO}));
             }
@@ -841,7 +962,7 @@ fn numeral_picker(app: &mut WordApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         let label = ui.label(tl!("Numerals:"));
         let mut sel = app.session.view.numeral;
-        let combo = egui::ComboBox::from_id_salt("numerals").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
+        let combo = craft_ui::ComboBox::from_id_salt("numerals").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
             for m in [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context, NumeralMode::System] {
                 ui.selectable_value(&mut sel, m, tl!(m.label()));
             }
@@ -854,486 +975,4 @@ fn numeral_picker(app: &mut WordApp, ui: &mut Ui) {
 }
 
 #[cfg(test)]
-mod tests {
-    use egui_kittest::kittest::{NodeT, Queryable};
-    use serde_json::json;
-    use wordcraft_geom::Unit;
-
-    use super::{decimal, length, parse_length, unit};
-
-    use crate::theme::Appearance;
-    use crate::{Services, UiState, WordApp};
-
-    #[test]
-    fn unknown_settings_keys_load_in_linear_time() {
-        let mut map = serde_json::Map::new();
-        for i in 0..20_000 {
-            map.insert(format!("unknownKey{i}"), json!(i));
-        }
-        map.insert("miniToolbar".into(), json!(false));
-        let bytes = serde_json::to_vec(&serde_json::Value::Object(map)).unwrap();
-        let state = UiState::from_json(&bytes).unwrap();
-        assert!(!state.mini_toolbar);
-    }
-
-    fn app() -> WordApp {
-        WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
-    }
-
-    fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, WordApp> {
-        let mut a = app();
-        a.run("ui.language", json!({"value": language})).unwrap();
-        a.run("ui.interfaceSize", json!({"percent": percent})).unwrap();
-        a.run("file.options", json!({"pane": "general"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_pixels_per_point(2.0).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        h
-    }
-
-    /// File › Options must not offer a way around the protected document's author check.
-    #[test]
-    fn user_name_field_disables_when_protection_starts() {
-        let mut h = nav_harness("en", 100);
-        let user_name = || egui_kittest::kittest::By::new().role(egui::accesskit::Role::TextInput).value("WordCraft User");
-        assert!(!h.get(user_name()).accesskit_node().is_disabled());
-        h.state_mut().run("review.restrict", json!({"mode": "readOnly"})).unwrap();
-        h.run_steps(4);
-        assert!(h.get(user_name()).accesskit_node().is_disabled());
-    }
-
-    /// #1266: check the actual painted text and renderer clip, including the bold selected
-    /// label. AccessKit must still expose the full name and the row must keep its fixed size.
-    #[test]
-    fn options_nav_labels_stay_inside_their_rows() {
-        if !crate::i18n::catalogs_embedded() {
-            return;
-        }
-        for language in ["en", "ru"] {
-            for percent in [100, 125, 150] {
-                let mut h = nav_harness(language, percent);
-                // An interface size is absolute (#822): `percent` points per 100 screen pixels,
-                // whatever the display's own scale (2.0 here).
-                assert_eq!(h.ctx.pixels_per_point(), f32::from(percent) / 100.0);
-                for selected in ["general", "accessibility"] {
-                    h.state_mut().run("file.options", json!({"pane": selected})).unwrap();
-                    h.run_steps(4);
-                    for id in wordcraft_engine::cmd::options::PANES {
-                        let label = crate::i18n::tr(crate::i18n::Lang::from_pref(language), super::pane_label(id));
-                        let node =
-                            h.query_all_by_label(label).find(|n| n.accesskit_node().toggled().is_some()).expect("pane has its full accessible name");
-                        assert_eq!(
-                            node.accesskit_node().toggled(),
-                            Some(if id == selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
-                        );
-                        let row = node.rect();
-                        assert_eq!(row.size(), egui::vec2(170.0, 30.0));
-                        let (clip, text) = h
-                            .output()
-                            .shapes
-                            .iter()
-                            .find_map(|s| match &s.shape {
-                                egui::Shape::Text(text) if text.galley.text() == label && row.contains(text.pos) => Some((s.clip_rect, text)),
-                                _ => None,
-                            })
-                            .expect("navigation label is painted");
-                        let bounds = text.visual_bounding_rect();
-                        assert!(row.contains_rect(bounds.intersect(clip)), "{language} {percent}% {selected}: {label} paints outside {row:?}");
-                        if language == "en" && ["general", "display", "save"].contains(&id) {
-                            assert!(clip.contains_rect(bounds), "short labels must remain fully visible");
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Clipping only the painter must leave the entire row clickable, its hover/selection
-    /// backgrounds intact, and the selected pane's settings visible at every interface size.
-    #[test]
-    fn options_nav_rows_keep_hover_and_selection() {
-        if !crate::i18n::catalogs_embedded() {
-            return;
-        }
-        for language in ["en", "ru"] {
-            for percent in [100, 125, 150] {
-                let mut h = nav_harness(language, percent);
-                for (id, setting) in
-                    [("display", "Spaces"), ("save", "Save documents"), ("accessibility", "Visual effects"), ("general", "Interface")]
-                {
-                    let lang = crate::i18n::Lang::from_pref(language);
-                    let row = h
-                        .query_all_by_label(crate::i18n::tr(lang, super::pane_label(id)))
-                        .find(|n| n.accesskit_node().toggled().is_some())
-                        .expect("pane has its full accessible name")
-                        .rect();
-                    // Both ends of the row, including its empty left inset, stay clickable.
-                    for x in [row.left() + 2.0, row.right() - 2.0] {
-                        h.state_mut().run("file.options", json!({"pane": "agents"})).unwrap();
-                        h.hover_at(egui::pos2(x, row.center().y));
-                        h.run_steps(4);
-                        let t = crate::theme::Tokens::get(&h.ctx);
-                        let background = |h: &egui_kittest::Harness<'_, WordApp>, color| {
-                            h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.rect == row && r.fill == color))
-                        };
-                        assert!(background(&h, t.hover), "{language} {percent}%: hover covers the row");
-                        for pressed in [true, false] {
-                            h.input_mut().events.push(egui::Event::PointerButton {
-                                pos: egui::pos2(x, row.center().y),
-                                button: egui::PointerButton::Primary,
-                                pressed,
-                                modifiers: Default::default(),
-                            });
-                            h.run_steps(1);
-                        }
-                        h.run_steps(4);
-                        assert_eq!(h.state().ui.options_pane, id);
-                        assert!(background(&h, t.checked), "{language} {percent}%: selection covers the row");
-                        assert!(h.query_by_label(crate::i18n::tr(lang, setting)).is_some(), "{id} settings are shown");
-                    }
-                }
-            }
-        }
-    }
-
-    /// File › Options settings come back after a restart, and a `ui.json` with a wrong value in
-    /// one setting keeps every other setting (#485).
-    #[test]
-    fn options_survive_a_restart_and_junk_in_ui_json() {
-        let mut a = app();
-        a.run(
-            "file.options",
-            json!({"initials": "VK", "units": "centimeters", "typingReplacesSelection": false, "marks": {"tabs": true}, "ignoreNumbers": false, "addWords": ["zqxoptionsword"]}),
-        )
-        .unwrap();
-        a.ui.recent_count = 30;
-        a.ui.print_backgrounds = true;
-        let saved = serde_json::to_vec(&a.prefs()).unwrap();
-        let mut b = app();
-        b.apply_prefs(UiState::from_json(&saved).unwrap());
-        assert_eq!(b.session.prefs, a.session.prefs);
-        assert_eq!(b.session.prefs.units, Some(Unit::Centimeters));
-        assert_eq!(b.session.initials, "VK");
-        assert_eq!((b.ui.recent_count, b.ui.print_backgrounds), (30, true));
-        assert!(wordcraft_engine::proof::user_dictionary().contains(&"zqxoptionsword".to_string()));
-
-        let junk = br#"{"theme": "dark", "recentCount": "lots", "printBackgrounds": 7, "optionsPane": ["x"], "dark": true,
-            "editing": {"measurementUnits": "furlongs", "typingReplacesSelection": false, "marks": {"tabs": "yes", "spaces": true}}}"#;
-        let ui = UiState::from_json(junk).unwrap();
-        assert_eq!(ui.theme, Appearance::Dark);
-        assert_eq!((ui.recent_count, ui.print_backgrounds, ui.options_pane.as_str()), (12, false, "general"));
-        assert_eq!(ui.legacy_dark, Some(true));
-        assert_eq!(ui.editing.units, None);
-        assert!(!ui.editing.typing_replaces_selection);
-        assert!(ui.editing.marks.spaces && !ui.editing.marks.tabs);
-        assert!(UiState::from_json(b"[1, 2]").is_none() && UiState::from_json(b"not json").is_none());
-    }
-
-    /// The dictionaries folder (#1063) is saved with the settings and searched again after a
-    /// restart, before any document is checked.
-    #[test]
-    fn the_dictionaries_folder_survives_a_restart() {
-        let dir = std::env::temp_dir().join(format!("wc-ui-dictionaries-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut a = app();
-        a.run("file.options", json!({"dictionariesFolder": dir.to_string_lossy()})).unwrap();
-        let saved = serde_json::to_vec(&a.prefs()).unwrap();
-        wordcraft_engine::proof::hunspell::set_dictionary_dir(None);
-        let mut b = app();
-        b.apply_prefs(UiState::from_json(&saved).unwrap());
-        assert_eq!(b.session.prefs.dictionaries_folder.as_deref(), Some(dir.to_string_lossy().as_ref()));
-        assert_eq!(wordcraft_engine::proof::hunspell::search_dirs(None).first(), Some(&dir), "searched first");
-    }
-
-    /// #1792: Check spelling as you type is saved with the other proofing choices, so after a
-    /// restart the box comes back the way the user left it.
-    #[test]
-    fn check_spelling_survives_a_restart() {
-        let mut a = app();
-        a.run("file.options", json!({"checkSpelling": false})).unwrap();
-        assert!(!a.session.view.proofing, "off right away");
-        let saved = serde_json::to_value(a.prefs()).unwrap();
-        assert_eq!(saved["editing"]["checkSpelling"], false, "saved in ui.json");
-        let mut b = app();
-        b.apply_prefs(UiState::from_json(&serde_json::to_vec(&saved).unwrap()).unwrap());
-        assert!(!b.session.view.proofing, "spelling stays off after a restart");
-    }
-
-    /// Settings saved before #838 kept the unit under `editing.units` (default inches): a unit
-    /// the user chose carries over to `measurementUnits`; inches, junk or a newer value don't.
-    #[test]
-    fn a_unit_chosen_before_regions_survives_the_rename() {
-        let editing = |json: &str| UiState::from_json(format!(r#"{{"editing": {json}}}"#).as_bytes()).unwrap().editing.units;
-        assert_eq!(editing(r#"{"units": "centimeters"}"#), Some(Unit::Centimeters));
-        assert_eq!(editing(r#"{"units": "picas", "overtype": true}"#), Some(Unit::Picas));
-        assert_eq!(editing(r#"{"units": "inches"}"#), None);
-        assert_eq!(editing(r#"{"units": "furlongs"}"#), None);
-        assert_eq!(editing(r#"{"units": 7}"#), None);
-        assert_eq!(editing(r#"{"units": "millimeters", "measurementUnits": "points"}"#), Some(Unit::Points));
-        assert_eq!(editing(r#"{"units": "millimeters", "measurementUnits": null}"#), None);
-        assert_eq!(editing("{}"), None);
-        let mut a = app();
-        a.apply_prefs(UiState::from_json(br#"{"editing": {"units": "millimeters"}}"#).unwrap());
-        assert_eq!(a.session.units(), Unit::Millimeters);
-        // Saved again, it's under the new key.
-        let saved = serde_json::to_value(a.prefs()).unwrap();
-        assert_eq!(saved["editing"]["measurementUnits"], "millimeters");
-    }
-
-    /// `file.options` opens the page at a pane; the pane list switches panes, and their
-    /// checkboxes change the settings (#485).
-    #[test]
-    fn options_panes_open_and_change_settings() {
-        let mut a = app();
-        a.run("file.options", json!({"pane": "display"})).unwrap();
-        assert!(a.ui.backstage);
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        h.get_by_label("Spaces").click();
-        h.run_steps(2);
-        assert!(h.state().session.prefs.marks.spaces, "Display › Spaces");
-        h.get_by_label("Proofing").click();
-        h.run_steps(4);
-        assert_eq!(h.state().ui.options_pane, "proofing");
-        h.get_by_label("Ignore words in capitals").click();
-        h.run_steps(2);
-        assert!(!h.state().session.prefs.ignore_uppercase);
-        // The AutoCorrect Options dialog opens from this pane.
-        assert!(h.state().dialog.is_none());
-        h.get_by_label("AutoCorrect Options").click();
-        h.run_steps(3);
-        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
-        h.state_mut().dialog = None;
-        h.run_steps(2);
-        // #1063: the dictionaries folder and the dictionary each language found.
-        assert!(h.query_by_label("Dictionaries folder:").is_some());
-        assert!(h.query_by_label_contains("Polish: ").is_some(), "the Polish dictionary's line");
-        h.get_by_label("Advanced").click();
-        h.run_steps(4);
-        h.get_by_label("Typing replaces selected text").click();
-        h.run_steps(2);
-        assert!(!h.state().session.prefs.typing_replaces_selection);
-        assert!(h.query_by_label("Measurement units:").is_some());
-    }
-
-    /// File › Options › Save › Privacy (#1062): the checkboxes are the document's
-    /// `file.privacyOptions` settings, and an undoable change like any other.
-    #[test]
-    fn save_privacy_checkboxes_set_the_privacy_options() {
-        let mut a = app();
-        a.run("file.options", json!({"pane": "save"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        assert!(h.query_by_label("Privacy for this document").is_some(), "the section is there");
-        h.get_by_label("Remove my name from comments, changes and file properties when saving").click();
-        h.run_steps(4);
-        assert!(h.state().session.doc.settings.remove_personal_info);
-        assert!(!h.state().session.doc.settings.remove_date_time);
-        h.get_by_label("Leave out the date and time of comments and tracked changes when saving").click();
-        h.run_steps(4);
-        let privacy = h.state_mut().session.run("file.privacy", &json!({})).unwrap();
-        assert_eq!(privacy, json!({"removePersonalInfo": true, "removeDateTime": true}));
-        h.get_by_label("Remove my name from comments, changes and file properties when saving").click();
-        h.run_steps(4);
-        assert!(!h.state().session.doc.settings.remove_personal_info, "and off again");
-    }
-
-    /// File › Options › Accessibility › Animation effects: Use system setting (the default), On
-    /// or Off, with a line saying what the system's own setting is while it is followed.
-    #[test]
-    fn animation_effects_is_an_accessibility_option() {
-        use crate::theme::Animations;
-        let services = Services { animations_enabled: Some(Box::new(|| Some(false))), ..Default::default() };
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
-        a.run("file.options", json!({"pane": "accessibility"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        assert_eq!(h.state().ui.animations, Animations::System);
-        assert!(h.query_by_label("Animation effects:").is_some());
-        assert!(h.query_by_label("Your system has animation effects turned off.").is_some());
-        assert!(!h.state().animations_on());
-        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Animation effects:").click();
-        h.run_steps(4);
-        h.get_by_label("On").click();
-        h.run_steps(4);
-        assert_eq!(h.state().ui.animations, Animations::On);
-        assert!(h.state().animations_on());
-        assert!(h.query_by_label("Your system has animation effects turned off.").is_none(), "only said while the system is followed");
-    }
-
-    /// File › Options › General › Start-up (#766): the checkbox is the `ui.startScreen` setting.
-    #[test]
-    fn general_start_up_turns_the_start_screen_off_and_on() {
-        let mut a = app();
-        a.run("file.options", json!({"pane": "general"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        assert!(h.query_by_label("Start-up").is_some(), "the section is there");
-        h.get_by_label("Show the Start screen when WordCraft starts").click();
-        h.run_steps(4);
-        assert!(!h.state().ui.start_screen, "the checkbox turns it off");
-        h.get_by_label("Show the Start screen when WordCraft starts").click();
-        h.run_steps(4);
-        assert!(h.state().ui.start_screen, "and on again");
-    }
-
-    /// File › Options › Advanced › Editing: the alignment guides checkbox is the
-    /// `ui.alignmentGuides` setting.
-    #[test]
-    fn advanced_alignment_guides_checkbox_turns_snapping_off_and_on() {
-        let mut a = app();
-        a.run("file.options", json!({"pane": "advanced"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        let label = "Show alignment guides when moving pictures and shapes";
-        h.get_by_label(label).click();
-        h.run_steps(4);
-        assert!(!h.state().ui.alignment_guides, "the checkbox turns them off");
-        h.get_by_label(label).click();
-        h.run_steps(4);
-        assert!(h.state().ui.alignment_guides, "and on again");
-    }
-
-    /// File › Options › Advanced › Animation: the checkbox is the `ui.caretAnimation` setting,
-    /// and the section is translated.
-    #[test]
-    fn advanced_animation_turns_the_caret_animation_off_and_on() {
-        let mut a = app();
-        a.run("file.options", json!({"pane": "advanced"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(4);
-        assert!(h.query_by_label("Animation").is_some(), "the section is there");
-        h.get_by_label("Animate the caret (it glides and fades)").click();
-        h.run_steps(4);
-        assert!(!h.state().ui.caret_animation, "the checkbox turns it off");
-        h.get_by_label("Animate the caret (it glides and fades)").click();
-        h.run_steps(4);
-        assert!(h.state().ui.caret_animation, "and on again");
-        if !crate::i18n::catalogs_embedded() {
-            return;
-        }
-        h.state_mut().run("ui.language", json!({"value": "es"})).unwrap();
-        h.run_steps(4);
-        assert!(h.query_by_label("Animación").is_some() && h.query_by_label("Animation").is_none());
-    }
-
-    /// #838: in a Polish region the Page Setup margins read `2,54 cm` (the region's unit and
-    /// decimal comma), a typed `3,5` or `1 in` is understood, and the Options page shows the
-    /// region's unit until the user picks another.
-    #[test]
-    fn length_fields_follow_the_region() {
-        let mut a = app();
-        a.run("file.options", json!({"region": "pl-PL"})).unwrap();
-        a.run("file.new", json!({})).unwrap();
-        assert_eq!(wordcraft_geom::paper_name(a.session.doc.last_section.page_w, a.session.doc.last_section.page_h), Some("A4"));
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(2);
-        // The dialog reads the unit when it opens, after a frame has picked up the region.
-        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
-        h.run_steps(4);
-        assert_eq!((unit(), decimal()), (Unit::Centimeters, ','));
-        assert_eq!(length(72.0), "2,54 cm");
-        assert_eq!(h.query_all_by_value("2,54 cm").count(), 4, "four margins in centimetres with a decimal comma");
-
-        h.state_mut().run("file.options", json!({"units": "inches"})).unwrap();
-        h.run_steps(4);
-        assert_eq!(length(108.0), "1,5\"", "the user's unit, still the region's decimal comma");
-        h.state_mut().run("file.options", json!({"units": "auto", "region": "en-US"})).unwrap();
-        h.run_steps(4);
-        assert_eq!(length(72.0), "1\"");
-    }
-
-    /// #1734: a Russian interface shows centimetres as `см`, as Word does, and a length field
-    /// takes the unit typed either way.
-    #[test]
-    fn length_units_follow_the_interface_language() {
-        if !crate::i18n::catalogs_embedded() {
-            return;
-        }
-        let mut a = app();
-        a.run("ui.language", json!({"value": "ru"})).unwrap();
-        a.run("file.options", json!({"region": "ru-RU"})).unwrap();
-        a.run("file.new", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        h.run_steps(2);
-        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
-        h.run_steps(4);
-        assert_eq!((unit(), decimal()), (Unit::Centimeters, ','));
-        assert_eq!(length(72.0), "2,54 см");
-        assert_eq!(h.query_all_by_value("2,54 см").count(), 4, "four margins in centimetres, named in Russian");
-        assert_eq!(h.query_all_by_value("2,54 cm").count(), 0);
-        assert_eq!(parse_length("3 см", Unit::Centimeters), Some(3.0));
-        assert_eq!(parse_length("3cm", Unit::Centimeters), Some(3.0));
-        assert_eq!(parse_length("10 мм", Unit::Centimeters).map(|v| (v * 100.0).round() / 100.0), Some(1.0));
-        assert_eq!(parse_length("72 пт", Unit::Centimeters).map(|v| (v * 100.0).round() / 100.0), Some(2.54));
-
-        h.state_mut().run("file.options", json!({"units": "millimeters"})).unwrap();
-        h.run_steps(4);
-        assert_eq!(length(72.0), "25,4 мм");
-        h.state_mut().run("ui.language", json!({"value": "en"})).unwrap();
-        h.run_steps(4);
-        assert_eq!(length(72.0), "25,4 mm", "English keeps the English names");
-    }
-}
+mod tests;

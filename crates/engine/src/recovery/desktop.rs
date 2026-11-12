@@ -1,5 +1,4 @@
 use super::RecoveryInfo;
-use crate::Session;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -373,34 +372,123 @@ impl<W: Write> Write for Limited<W> {
     }
 }
 enum Job {
-    Save(Box<Snapshot>),
+    /// Write `document`'s copy.
+    Save(Box<Snapshot>, u64),
     Scan,
-    Load(String, (u64, u64)),
-    Discard(String),
+    Load(String, Request),
+    /// Delete a record: an open document's copy it no longer needs, a closed document's, or one
+    /// from an earlier run that the user discarded (`None`).
+    Discard(String, Option<u64>),
 }
 enum Outcome {
     Done,
     Discarded(String),
-    Loaded(Box<Snapshot>, (u64, u64)),
+    Loaded(Box<Snapshot>, Request),
 }
-struct Event {
+pub(crate) struct Event {
     documents: Vec<RecoveryInfo>,
     outcome: Result<Outcome, String>,
     /// The failure would repeat for the same document; see [`SaveError`].
     permanent: bool,
+    /// The open document a failed save or discard was for.
+    document: Option<u64>,
+    /// The record a failed discard was for.
+    discard: Option<String>,
 }
+/// Who asked for a restore, and whether the copy replaces that document (an untouched blank
+/// one) or opens as another document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Request {
+    pub document: u64,
+    pub revision: u64,
+    pub replace: bool,
+}
+/// One open document's recovery state: the record its copy is kept in, the revision that copy
+/// holds, and when the next copy may be written. Each open document has its own, parked with it.
+#[derive(Clone, Debug)]
+pub(crate) struct Slot {
+    pub id: Option<String>,
+    pub revision: Option<u64>,
+    pub due: Instant,
+    /// A failed discard of this document's copy is tried again from then on.
+    pub retry: Option<Instant>,
+}
+impl Default for Slot {
+    fn default() -> Self {
+        Self { id: None, revision: None, due: Instant::now() + INTERVAL, retry: None }
+    }
+}
+impl Slot {
+    /// The document now keeps its copy in record `id`, which holds `revision`.
+    pub fn adopt(&mut self, id: String, revision: u64) {
+        self.id = Some(id);
+        self.revision = Some(revision);
+        self.due = Instant::now() + INTERVAL;
+        self.retry = None;
+    }
+}
+/// A worker report, for the session to apply to its documents.
+pub(crate) enum Applied {
+    Nothing,
+    /// Record `id` is gone: no document keeps its copy there any more.
+    Discarded(String),
+    /// A restored copy, to open.
+    Loaded(Box<Snapshot>, Request),
+    /// Writing or discarding `document`'s copy failed.
+    Failed {
+        document: u64,
+        discard: bool,
+        permanent: bool,
+    },
+}
+impl Slot {
+    /// Take in a report about this document's copy.
+    pub fn apply(&mut self, applied: &Applied) {
+        match applied {
+            Applied::Discarded(id) if self.id.as_deref() == Some(id) => {
+                self.id = None;
+                self.retry = None;
+            }
+            Applied::Failed { discard, permanent, .. } => {
+                let now = Instant::now();
+                if *discard {
+                    self.retry = Some(now + INTERVAL);
+                } else if !permanent {
+                    // A transient failure (a lock, an I/O error) is retried at the next
+                    // interval; one the snapshot itself causes waits for the next edit.
+                    self.revision = None;
+                }
+                self.due = now + INTERVAL;
+            }
+            _ => {}
+        }
+    }
+}
+/// What [`Recovery::tick`] reads from an open document, and the document's [`Slot`].
+pub(crate) struct DocRecovery<'a> {
+    pub id: u64,
+    /// Dirty and without a password: the document should have a current copy.
+    pub wants_copy: bool,
+    pub rev: u64,
+    pub doc: &'a Document,
+    pub path: Option<&'a Path>,
+    pub slot: &'a mut Slot,
+}
+/// The process's recovery worker: one thread and one store for every open document, so records
+/// are locked once per process and the list of copies is the same whichever document is shown.
 pub(crate) struct Recovery {
     tx: mpsc::SyncSender<Job>,
     rx: mpsc::Receiver<Event>,
+    /// Every record the store found or wrote, this process's own included.
     pub documents: Vec<RecoveryInfo>,
     pub ready: bool,
     pub busy: bool,
     pub error: Option<String>,
-    document: Option<u64>,
-    id: Option<String>,
-    revision: Option<u64>,
-    due: Instant,
     alive: bool,
+    /// Records of closed documents waiting to be deleted, and whether that is queued.
+    closed: Vec<(String, bool)>,
+    /// A loaded copy that replaces its (untouched blank) document once that document is active.
+    pub held: Option<(Box<Snapshot>, Request)>,
 }
 impl Recovery {
     pub fn start(root: PathBuf, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
@@ -412,47 +500,47 @@ impl Recovery {
                 let mut store = match Store::new(root) {
                     Ok(s) => s,
                     Err(e) => {
-                        let _ = events.send(Event { documents: Vec::new(), outcome: Err(e), permanent: false });
+                        let _ = events.send(Event { documents: Vec::new(), outcome: Err(e), permanent: false, document: None, discard: None });
                         wake();
                         return;
                     }
                 };
                 let initial = store.scan().map(|_| Outcome::Done);
-                if events.send(Event { documents: store.inventory(), outcome: initial, permanent: false }).is_err() {
+                if events.send(Event { documents: store.inventory(), outcome: initial, permanent: false, document: None, discard: None }).is_err() {
                     return;
                 }
                 wake();
                 while let Ok(job) = jobs.recv() {
                     let mut permanent = false;
+                    let (mut document, mut discard) = (None, None);
                     let result = match job {
-                        Job::Save(s) => store.save(*s).map(|_| Outcome::Done).map_err(|e| {
-                            permanent = e.permanent;
-                            e.message
-                        }),
+                        Job::Save(s, d) => {
+                            document = Some(d);
+                            store.save(*s).map(|_| Outcome::Done).map_err(|e| {
+                                permanent = e.permanent;
+                                e.message
+                            })
+                        }
                         Job::Scan => store.scan().map(|_| Outcome::Done),
-                        Job::Load(id, expected) => store.load(&id).map(|s| Outcome::Loaded(Box::new(s), expected)),
-                        Job::Discard(id) => store.discard(&id).map(|_| Outcome::Discarded(id)),
+                        Job::Load(id, request) => store.load(&id).map(|s| Outcome::Loaded(Box::new(s), request)),
+                        Job::Discard(id, d) => {
+                            document = d;
+                            let r = store.discard(&id).map(|_| Outcome::Discarded(id.clone()));
+                            discard = Some(id);
+                            r
+                        }
                     };
-                    if events.send(Event { documents: store.inventory(), outcome: result, permanent }).is_err() {
+                    if result.is_ok() {
+                        (document, discard) = (None, None);
+                    }
+                    if events.send(Event { documents: store.inventory(), outcome: result, permanent, document, discard }).is_err() {
                         break;
                     }
                     wake();
                 }
             })
             .map_err(|e| e.to_string())?;
-        Ok(Self {
-            tx,
-            rx,
-            documents: Vec::new(),
-            ready: false,
-            busy: true,
-            error: None,
-            document: None,
-            id: None,
-            revision: None,
-            due: Instant::now() + INTERVAL,
-            alive: true,
-        })
+        Ok(Self { tx, rx, documents: Vec::new(), ready: false, busy: true, error: None, alive: true, closed: Vec::new(), held: None })
     }
     fn queue(&mut self, job: Job) -> Result<(), String> {
         if !self.alive {
@@ -466,33 +554,23 @@ impl Recovery {
         self.error = None;
         Ok(())
     }
-    pub fn poll(&mut self) -> Option<(Snapshot, (u64, u64))> {
-        match self.rx.try_recv() {
+    /// The worker's answer to the job under way: waits for it when `block`, else only takes one
+    /// that has arrived.
+    pub fn receive(&mut self, block: bool) -> Option<Event> {
+        let e = if block {
+            if !self.busy {
+                return None;
+            }
+            self.rx.recv().map_err(|_| mpsc::TryRecvError::Disconnected)
+        } else {
+            self.rx.try_recv()
+        };
+        match e {
             Ok(e) => {
                 self.busy = false;
                 self.ready = true;
-                self.documents = e.documents;
-                let event_permanent = e.permanent;
-                match e.outcome {
-                    Ok(Outcome::Done) => None,
-                    Ok(Outcome::Discarded(id)) => {
-                        if self.id.as_deref() == Some(&id) {
-                            self.id = None;
-                        }
-                        None
-                    }
-                    Ok(Outcome::Loaded(s, expected)) => Some((*s, expected)),
-                    Err(e) => {
-                        self.error = Some(e);
-                        // A transient failure (a lock, an I/O error) is retried at the next
-                        // interval; one the snapshot itself causes waits for the next edit.
-                        if !event_permanent {
-                            self.revision = None;
-                        }
-                        self.due = Instant::now() + INTERVAL;
-                        None
-                    }
-                }
+                self.documents.clone_from(&e.documents);
+                Some(e)
             }
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
@@ -505,584 +583,139 @@ impl Recovery {
             }
         }
     }
-    pub fn adopt(&mut self, id: String, document: u64, revision: u64) {
-        self.id = Some(id);
-        self.document = Some(document);
-        self.revision = Some(revision);
-        self.due = Instant::now() + INTERVAL;
+    /// Run `job` now and wait for its answer.
+    fn run_now(&mut self, job: Job) -> Result<Event, String> {
+        self.queue(job)?;
+        self.receive(true).ok_or_else(|| "recovery worker is unavailable".to_string())
     }
-    pub fn tick(&mut self, s: &Session, now: Instant) -> Result<(), String> {
-        if self.document != Some(s.document_id()) {
-            self.document = Some(s.document_id());
-            self.id = None;
-            self.revision = None;
+    /// Discard record `id` now (the worker must be idle) and wait for it.
+    pub fn discard_now(&mut self, id: &str, document: Option<u64>) -> Result<Event, String> {
+        self.run_now(Job::Discard(id.into(), document))
+    }
+    /// A closed document's record: deleted at the next chance, and not listed meanwhile.
+    pub fn close(&mut self, id: String) {
+        if !self.closed.iter().any(|(c, _)| *c == id) {
+            self.closed.push((id, false));
         }
+    }
+    /// Records the open documents of this process don't hold any more but haven't deleted yet.
+    pub fn closing(&self) -> impl Iterator<Item = &str> {
+        self.closed.iter().map(|(id, _)| id.as_str())
+    }
+    /// Closed documents' records not yet queued for deletion.
+    pub fn take_closed(&mut self) -> Vec<String> {
+        self.closed
+            .iter_mut()
+            .filter(|(_, queued)| !*queued)
+            .map(|(id, queued)| {
+                *queued = true;
+                id.clone()
+            })
+            .collect()
+    }
+    /// Take in what the worker reported: the record lists here, and what the session applies
+    /// to its documents.
+    pub fn apply(&mut self, e: Event) -> Applied {
+        match e.outcome {
+            Ok(Outcome::Done) => Applied::Nothing,
+            Ok(Outcome::Discarded(id)) => {
+                self.closed.retain(|(c, _)| *c != id);
+                Applied::Discarded(id)
+            }
+            Ok(Outcome::Loaded(s, request)) => Applied::Loaded(s, request),
+            Err(message) => {
+                self.error = Some(message);
+                if let Some(id) = &e.discard {
+                    // A closed document's copy that can't be deleted stays listed, for the user
+                    // to restore or discard.
+                    self.closed.retain(|(c, _)| c != id);
+                }
+                match e.document {
+                    Some(document) => Applied::Failed { document, discard: e.discard.is_some(), permanent: e.permanent },
+                    None => Applied::Nothing,
+                }
+            }
+        }
+    }
+    /// Queue at most one job: a closed document's discard first, then, document by document in
+    /// the order given, a discard of a copy its document no longer needs (saved, closed without
+    /// saving, password-protected) or a new copy of a dirty document whose interval has passed.
+    pub fn tick<'a>(&mut self, docs: impl Iterator<Item = DocRecovery<'a>>, now: Instant) -> Result<(), String> {
         if self.busy || !self.ready || !self.alive {
             return Ok(());
         }
-        if !s.dirty || s.password.is_some() {
-            if let Some(id) = self.id.clone() {
-                self.queue(Job::Discard(id))?;
+        if let Some(at) = self.closed.iter().position(|(_, queued)| !queued) {
+            let id = self.closed.get(at).map(|(id, _)| id.clone()).ok_or("recovery record list changed")?;
+            self.queue(Job::Discard(id, None))?;
+            if let Some(c) = self.closed.get_mut(at) {
+                c.1 = true;
             }
             return Ok(());
         }
-        if self.revision == Some(s.rev()) || now < self.due {
+        for d in docs {
+            if !d.wants_copy {
+                if let Some(id) = d.slot.id.clone()
+                    && d.slot.retry.is_none_or(|t| now >= t)
+                {
+                    return self.queue(Job::Discard(id, Some(d.id)));
+                }
+                continue;
+            }
+            if d.slot.revision == Some(d.rev) || now < d.slot.due {
+                continue;
+            }
+            let id = match &d.slot.id {
+                Some(id) => id.clone(),
+                None => new_id()?,
+            };
+            let name = d.path.and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled draft".into());
+            let info = RecoveryInfo { id: id.clone(), name, saved_at: crate::cmd::now_iso() };
+            self.queue(Job::Save(Box::new(Snapshot { version: 1, info, generation: 0, document: d.doc.clone() }), d.id))?;
+            d.slot.id = Some(id);
+            d.slot.revision = Some(d.rev);
+            d.slot.due = now + INTERVAL;
             return Ok(());
         }
-        let id = match &self.id {
-            Some(id) => id.clone(),
-            None => new_id()?,
-        };
-        let name = s.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "Untitled draft".into());
-        let info = RecoveryInfo { id: id.clone(), name, saved_at: crate::cmd::now_iso() };
-        self.queue(Job::Save(Box::new(Snapshot { version: 1, info, generation: 0, document: s.doc.clone() })))?;
-        self.id = Some(id);
-        self.revision = Some(s.rev());
-        self.due = now + INTERVAL;
         Ok(())
     }
-    pub fn document_is(&self, document: u64) -> bool {
-        self.document == Some(document)
-    }
-    pub fn wait(&self, document: u64, revision: u64) -> Option<Duration> {
-        if !self.alive || !self.ready || self.busy || (self.document == Some(document) && self.revision == Some(revision)) {
+    /// How long until [`tick`](Self::tick) has work, for a host that repaints only on demand.
+    pub fn wait<'a>(&self, docs: impl Iterator<Item = (bool, u64, &'a Slot)>) -> Option<Duration> {
+        if !self.alive || !self.ready || self.busy {
             return None;
         }
-        Some(self.due.saturating_duration_since(Instant::now()).max(Duration::from_millis(100)))
+        let now = Instant::now();
+        let min = Duration::from_millis(100);
+        if self.closed.iter().any(|(_, queued)| !queued) || self.held.as_ref().is_some_and(|(_, r)| !r.replace) {
+            return Some(min);
+        }
+        docs.filter_map(|(wants_copy, rev, slot)| match (wants_copy, &slot.id) {
+            (false, Some(_)) => Some(slot.retry.map_or(min, |t| t.saturating_duration_since(now))),
+            (false, None) => None,
+            (true, _) if slot.revision == Some(rev) => None,
+            (true, _) => Some(slot.due.saturating_duration_since(now)),
+        })
+        .min()
+        .map(|d| d.max(min))
     }
-    pub fn restore(&mut self, id: &str, expected: (u64, u64)) -> Result<(), String> {
+    pub fn restore(&mut self, id: &str, request: Request) -> Result<(), String> {
         if !self.documents.iter().any(|d| d.id == id) {
             return Err("no such recovery copy".into());
         }
-        self.queue(Job::Load(id.into(), expected))
+        if self.held.is_some() {
+            return Err("another restored copy is waiting for its document".into());
+        }
+        self.queue(Job::Load(id.into(), request))
     }
-    pub fn discard(&mut self, id: &str, current: (u64, u64)) -> Result<(), String> {
+    pub fn discard(&mut self, id: &str) -> Result<(), String> {
         if !self.documents.iter().any(|d| d.id == id) {
             return Err("no such recovery copy".into());
         }
-        self.queue(Job::Discard(id.into()))?;
-        if self.id.as_deref() == Some(id) {
-            self.revision = Some(current.1);
-        }
-        Ok(())
+        self.queue(Job::Discard(id.into(), None))
     }
     pub fn refresh(&mut self) -> Result<(), String> {
         self.queue(Job::Scan)
     }
-    pub fn purge(&mut self) -> Result<(), String> {
-        let Some(id) = self.id.clone() else { return Ok(()) };
-        if self.busy {
-            let e = self.rx.recv().map_err(|e| e.to_string())?;
-            self.documents = e.documents;
-            self.busy = false;
-            self.ready = true;
-            if matches!(e.outcome, Ok(Outcome::Loaded(..))) {
-                return Err("finish recovery before protecting this document".into());
-            }
-        }
-        self.queue(Job::Discard(id))?;
-        let e = self.rx.recv().map_err(|e| e.to_string())?;
-        self.busy = false;
-        self.documents = e.documents;
-        e.outcome?;
-        self.id = None;
-        self.revision = None;
-        Ok(())
-    }
-    /// Waits out any job already in flight (an autosave queued just before shutdown, say), then,
-    /// if the document turns out to need no recovery copy kept (not dirty, or password-protected
-    /// — [`tick`](Self::tick)'s own condition), discards it and waits for that too. Desktop hosts
-    /// call this before the process exits, the same as the print spooler's own pending-job wait
-    /// (`finish_pending_jobs`): otherwise a save that lands right before close can race the
-    /// process exiting before the now-redundant recovery copy is actually removed, so the *next*
-    /// launch wrongly offers to recover a document that was in fact saved cleanly.
-    pub fn finish(&mut self, s: &Session) -> Result<(), String> {
-        let mut error = None;
-        if self.busy {
-            let e = self.rx.recv().map_err(|e| e.to_string())?;
-            self.documents = e.documents;
-            self.busy = false;
-            self.ready = true;
-            // An in-flight job failing (e.g. a stray autosave) doesn't mean the document itself
-            // wasn't saved cleanly by an explicit Save — still try the discard below, so one
-            // doesn't keep the other from doing its job; log it once there's nothing further to do.
-            if let Err(e) = e.outcome {
-                error = Some(e);
-            }
-        }
-        // Same guard `tick` uses: a document switch with no regular tick in between to notice and
-        // reset `self.id` must not let the *new* document's clean state discard the *previous*
-        // document's still-live recovery copy under a stale identity.
-        if self.document == Some(s.document_id())
-            && let Some(id) = self.id.clone()
-            && (!s.dirty || s.password.is_some())
-        {
-            self.queue(Job::Discard(id))?;
-            let e = self.rx.recv().map_err(|e| e.to_string())?;
-            self.busy = false;
-            self.documents = e.documents;
-            match e.outcome {
-                Ok(_) => {
-                    self.id = None;
-                    self.revision = None;
-                }
-                Err(e) => error = Some(e),
-            }
-        }
-        match error {
-            Some(e) => Err(e),
-            None => Ok(()),
-        }
-    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use wordcraft_doc::StoryRef;
-
-    struct Temp(PathBuf);
-    impl Temp {
-        fn new() -> Self {
-            let path = std::env::temp_dir().join(format!("wordcraft-recovery-test-{}", new_id().unwrap()));
-            private_dir(&path).unwrap();
-            Self(path)
-        }
-    }
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
-    /// A store reopened on `root` whose scan reports an unreadable record. The record's lock can be
-    /// briefly held by a process another test is starting (a forked child holds the descriptor
-    /// until it execs), and a record that can't be locked is skipped, not reported: so try again
-    /// for up to a second rather than read a skipped record as a clean scan.
-    fn reopen_reporting_unreadable(root: &std::path::Path) -> Store {
-        for _ in 0..50 {
-            let mut store = Store::new(root.to_path_buf()).unwrap();
-            if store.scan().is_err() {
-                return store;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        panic!("the scan never reported the unreadable record");
-    }
-    /// `store.load(id)`, tried again for up to a second while the record can't be locked: a process
-    /// another test is starting holds the lock for a moment (see [`reopen_reporting_unreadable`]).
-    fn load_retrying(store: &mut Store, id: &str) -> Snapshot {
-        let mut last = String::new();
-        for _ in 0..50 {
-            match store.load(id) {
-                Ok(snapshot) => return snapshot,
-                Err(e) => last = e,
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        panic!("the record never loaded: {last}");
-    }
-    fn snapshot(id: &str, text: &str) -> Snapshot {
-        Snapshot {
-            version: 1,
-            info: RecoveryInfo { id: id.into(), name: "Synthetic draft".into(), saved_at: crate::cmd::now_iso() },
-            generation: 0,
-            document: Document::from_text(text),
-        }
-    }
-    fn settle(s: &mut Session) {
-        let end = Instant::now() + Duration::from_secs(5);
-        loop {
-            s.recovery_tick();
-            if s.recovery_ready() && !s.recovery_busy() {
-                break;
-            }
-            assert!(Instant::now() < end, "recovery did not finish");
-            std::thread::sleep(Duration::from_millis(2));
-        }
-    }
-    fn session(root: &Path) -> Session {
-        let mut s = Session::new(Document::new());
-        s.enable_recovery(root.to_owned(), Arc::new(|| {})).unwrap();
-        settle(&mut s);
-        s
-    }
-    fn save_now(s: &mut Session) {
-        s.recovery.as_mut().unwrap().due = Instant::now();
-        s.recovery_tick();
-        settle(s);
-    }
-
-    /// #3140: a save that lands right before the app closes can race the process exiting before
-    /// the now-redundant recovery copy is actually removed, so the next launch wrongly offers to
-    /// recover a document that was in fact saved cleanly. `finish_recovery` (desktop hosts call it
-    /// on exit, the same as they wait for pending print jobs) must discard it synchronously
-    /// instead, with no regular tick in between — simulating closing right after Save, not after
-    /// however long it'd take the next normal autosave tick to notice and clean up.
-    #[test]
-    fn finish_recovery_discards_its_own_copy_for_a_document_saved_right_before_exit() {
-        let profile = Temp::new();
-        let mut s = session(&profile.0);
-        s.run("document.setText", &json!({"text": "About to be saved"})).unwrap();
-        save_now(&mut s);
-        assert_eq!(s.recovery_documents().len(), 1, "a recovery copy exists for the dirty document");
-        // A real Save does this, then the app can close on the very next frame, with no regular
-        // recovery_tick() in between to notice `!s.dirty` and queue the discard itself.
-        s.dirty = false;
-        assert_eq!(
-            s.recovery_documents().len(),
-            1,
-            "confirms the race: setting dirty=false alone (what Save does) doesn't discard anything by itself"
-        );
-        s.finish_recovery();
-        assert!(s.recovery_documents().is_empty(), "finish_recovery should have discarded the now-redundant copy before returning");
-    }
-
-    /// `tick` resets `self.id` the moment the session's document no longer matches what it last
-    /// saw (so it never discards under a stale identity); `finish_recovery` must guard the same
-    /// way. Switching documents and exiting immediately, with no regular tick in between to reset
-    /// that identity, must not let the *new* (clean, blank) document's state discard the
-    /// *previous* document's still-live recovery copy.
-    #[test]
-    fn finish_recovery_does_not_discard_a_previous_document_s_copy_after_switching() {
-        let profile = Temp::new();
-        let mut s = session(&profile.0);
-        s.run("document.setText", &json!({"text": "The document the user is still working on"})).unwrap();
-        save_now(&mut s);
-        assert_eq!(s.recovery_documents().len(), 1, "a recovery copy exists for the dirty document");
-        s.set_document(Document::new()); // e.g. File > New, with no tick() in between
-        assert!(!s.dirty, "a freshly switched-to document starts clean");
-        s.finish_recovery();
-        assert_eq!(s.recovery_documents().len(), 1, "switching to a new, unrelated document must not discard the previous one's recovery copy");
-    }
-
-    #[test]
-    fn recovery_commands_only_address_known_profile_records() {
-        use crate::file_access::{AutomationRoots, confine};
-        let profile = Temp::new();
-        let files = Temp::new();
-        let original = files.0.join("original.txt");
-        fs::write(&original, b"External synthetic original").unwrap();
-        let roots = AutomationRoots::new(Some(&files.0), Some(&files.0)).unwrap().unwrap();
-        let mut s = session(&profile.0);
-        s.run("document.setText", &json!({"text": "Recoverable synthetic draft"})).unwrap();
-        save_now(&mut s);
-        let id = s.recovery_documents()[0].id.clone();
-        confine(Some(&roots), || {
-            // A command cannot use a file path or choose a different storage folder.
-            for bad in [original.to_string_lossy().into_owned(), "../original.txt".into()] {
-                for action in ["restore", "discard"] {
-                    let err = s.run("file.recover", &json!({action: bad, "root": files.0})).unwrap_err();
-                    assert!(err.to_string().contains("no such recovery copy"), "{err}");
-                }
-            }
-            assert_eq!(s.recovery_documents().len(), 1);
-            s.run("file.recover", &json!({"restore": id})).unwrap();
-            settle(&mut s);
-            assert!(s.path.is_none());
-            assert!(s.dirty);
-            assert_eq!(s.doc.plain_text(StoryRef::Body), "Recoverable synthetic draft");
-            s.run("file.recover", &json!({"discard": id})).unwrap();
-            settle(&mut s);
-            assert!(s.recovery_documents().is_empty());
-        });
-        assert_eq!(fs::read(&original).unwrap(), b"External synthetic original");
-        assert_eq!(fs::read_dir(&files.0).unwrap().count(), 1);
-    }
-
-    #[test]
-    fn failed_write_keeps_last_valid_generation_and_discovery_falls_back() {
-        let t = Temp::new();
-        let id = new_id().unwrap();
-        let mut store = Store::new(t.0.clone()).unwrap();
-        store.save(snapshot(&id, "First valid copy")).unwrap();
-        let first = store.entries[&id].path.clone();
-        let bytes = fs::read(&first).unwrap();
-        // Simulate a final rename failure without relying on permissions (root can bypass them).
-        let obstruction = t.0.join(&id).join("snapshot-00000000000000000002.json");
-        fs::create_dir(&obstruction).unwrap();
-        assert!(store.save(snapshot(&id, "Failed copy")).is_err());
-        assert_eq!(fs::read(&first).unwrap(), bytes);
-        fs::remove_dir(obstruction).unwrap();
-        store.save(snapshot(&id, "Second valid copy")).unwrap();
-        let second = store.entries[&id].path.clone();
-        fs::write(second, b"{truncated").unwrap();
-        drop(store);
-        let mut reopened = reopen_reporting_unreadable(&t.0);
-        assert_eq!(load_retrying(&mut reopened, &id).document.plain_text(StoryRef::Body), "First valid copy");
-        // Never reuse the corrupt generation's name or prune the valid fallback.
-        reopened.save(snapshot(&id, "Third valid copy")).unwrap();
-        assert_eq!(fs::read(first).unwrap(), bytes);
-        assert_eq!(Store::files(&t.0.join(&id)).unwrap().len(), 2);
-    }
-
-    #[test]
-    fn size_limit_and_lossy_values_fail_without_committing() {
-        let mut out = Limited { inner: Vec::new(), remaining: 3, exceeded: false };
-        assert!(out.write_all(b"four").is_err());
-        assert!(out.inner.is_empty());
-        assert!(out.exceeded);
-        let t = Temp::new();
-        let id = new_id().unwrap();
-        let mut store = Store::new(t.0.clone()).unwrap();
-        store.save(snapshot(&id, "valid")).unwrap();
-        let first = store.entries[&id].path.clone();
-        let bytes = fs::read(&first).unwrap();
-        let mut invalid = snapshot(&id, "invalid");
-        invalid.document.last_section.page_w = f32::NAN;
-        assert!(store.save(invalid).is_err_and(|e| e.permanent));
-        assert_eq!(fs::read(first).unwrap(), bytes);
-        assert_eq!(Store::files(&t.0.join(id)).unwrap().len(), 1);
-    }
-
-    /// Copies are written with picture bytes in base64 (#586 follow-up); those written before kept
-    /// them as arrays of numbers and are still listed and restored, bytes intact.
-    #[test]
-    fn copies_with_byte_arrays_written_before_still_restore() {
-        let t = Temp::new();
-        let id = new_id().unwrap();
-        let mut s = snapshot(&id, "Synthetic draft with a picture");
-        s.generation = 1;
-        s.document.media.insert("media/image1.png".into(), Arc::new(vec![0, 1, 127, 128, 254, 255]));
-        let mut value = serde_json::to_value(&s).unwrap();
-        assert_eq!(value["document"]["media"]["media/image1.png"], "AAF/gP7/");
-        value["document"]["media"]["media/image1.png"] = json!([0, 1, 127, 128, 254, 255]);
-        private_dir(&t.0.join(&id)).unwrap();
-        fs::write(t.0.join(&id).join("snapshot-00000000000000000001.json"), serde_json::to_vec(&value).unwrap()).unwrap();
-        let mut store = Store::new(t.0.clone()).unwrap();
-        store.scan().unwrap();
-        assert_eq!(store.inventory().len(), 1);
-        assert_eq!(store.load(&id).unwrap().document, s.document);
-    }
-
-    #[test]
-    fn snapshot_that_cannot_be_copied_is_not_retried_until_the_document_changes() {
-        // #2625: a failure caused by the snapshot itself (here a value the format cannot keep;
-        // in the field, the 256 MiB limit) used to be rewritten every interval while dirty.
-        let t = Temp::new();
-        let mut s = session(&t.0);
-        s.run("document.setText", &json!({"text": "Synthetic draft"})).unwrap();
-        s.doc.last_section.page_w = f32::NAN;
-        save_now(&mut s);
-        assert!(s.recovery_error().is_some());
-        assert!(s.recovery_wait().is_none());
-        s.recovery.as_mut().unwrap().due = Instant::now();
-        s.recovery_tick();
-        assert!(!s.recovery_busy(), "the unchanged document was snapshotted again");
-        assert!(s.recovery_error().is_some());
-        // An edit tries again.
-        s.doc.last_section.page_w = 612.0;
-        s.run("text.insert", &json!({"text": "!"})).unwrap();
-        save_now(&mut s);
-        assert!(s.recovery_error().is_none());
-        assert_eq!(s.recovery_documents().len(), 1);
-    }
-
-    #[test]
-    fn failed_pruning_cannot_push_a_record_beyond_the_discovery_limit() {
-        let t = Temp::new();
-        let id = new_id().unwrap();
-        let mut store = Store::new(t.0.clone()).unwrap();
-        store.save(snapshot(&id, "Last valid copy")).unwrap();
-        let first = store.entries[&id].path.clone();
-        let bytes = fs::read(&first).unwrap();
-        // A failed cleanup must not allow the next write to exceed the reader's bound.
-        for n in 2..=MAX_FILES {
-            fs::write(t.0.join(&id).join(format!("snapshot-{n:020}.json")), b"{truncated").unwrap();
-        }
-        assert!(store.save(snapshot(&id, "New copy")).is_err());
-        assert_eq!(fs::read(first).unwrap(), bytes);
-        drop(store);
-        let mut reopened = reopen_reporting_unreadable(&t.0);
-        assert_eq!(load_retrying(&mut reopened, &id).document.plain_text(StoryRef::Body), "Last valid copy");
-    }
-
-    #[test]
-    fn failed_first_write_does_not_consume_a_record_slot() {
-        let t = Temp::new();
-        let mut store = Store::new(t.0.clone()).unwrap();
-        let mut invalid = snapshot(&new_id().unwrap(), "Synthetic draft");
-        invalid.document.last_section.page_w = f32::NAN;
-        assert!(store.save(invalid).is_err());
-        assert!(store.directories().unwrap().is_empty());
-    }
-
-    #[test]
-    fn discovery_reclaims_a_crashed_first_write_but_keeps_valid_records() {
-        let t = Temp::new();
-        let id = new_id().unwrap();
-        let empty = new_id().unwrap();
-        let mut store = Store::new(t.0.clone()).unwrap();
-        store.save(snapshot(&id, "Valid synthetic draft")).unwrap();
-        drop(store);
-        let dir = t.0.join(&empty);
-        private_dir(&dir).unwrap();
-        fs::write(dir.join(format!("pending-{}.tmp", new_id().unwrap())), b"{unfinished").unwrap();
-        let mut reopened = Store::new(t.0.clone()).unwrap();
-        reopened.scan().unwrap();
-        assert!(!dir.exists());
-        assert_eq!(load_retrying(&mut reopened, &id).document.plain_text(StoryRef::Body), "Valid synthetic draft");
-    }
-
-    #[test]
-    fn live_records_are_locked_and_discard_releases_storage() {
-        let t = Temp::new();
-        let id = new_id().unwrap();
-        let mut owner = Store::new(t.0.clone()).unwrap();
-        owner.save(snapshot(&id, "live")).unwrap();
-        let mut other = Store::new(t.0.clone()).unwrap();
-        other.scan().unwrap();
-        assert!(other.inventory().is_empty());
-        assert!(other.discard(&id).is_err());
-        assert!(other.discard("../outside").is_err());
-        drop(owner);
-        other.scan().unwrap();
-        assert_eq!(other.inventory().len(), 1);
-        other.discard(&id).unwrap();
-        assert!(!t.0.join(id).exists(), "discard must release the record slot");
-    }
-
-    #[test]
-    fn new_draft_restarts_restores_unsaved_and_explicitly_discards() {
-        let t = Temp::new();
-        let mut s = session(&t.0);
-        s.run("text.insert", &json!({"text": "Unsaved synthetic draft"})).unwrap();
-        save_now(&mut s);
-        assert!(s.recovery_wait().is_none(), "unchanged documents must not schedule idle work");
-        let expected = s.doc.clone();
-        drop(s);
-        let mut s = session(&t.0);
-        let id = s.recovery_documents()[0].id.clone();
-        s.run("file.recover", &json!({"restore": id})).unwrap();
-        settle(&mut s);
-        assert_eq!(s.doc, expected);
-        assert!(s.dirty && s.path.is_none());
-        s.run("file.recover", &json!({"discard": id})).unwrap();
-        settle(&mut s);
-        save_now(&mut s);
-        assert!(s.recovery_documents().is_empty(), "discard isn't undone by the next timer");
-        assert_eq!(s.doc, expected, "discard deletes the copy, not the editing document");
-    }
-
-    #[test]
-    fn existing_file_is_unchanged_and_successful_save_removes_copy() {
-        let t = Temp::new();
-        let file = t.0.join("original.docx");
-        let root = t.0.join("profile");
-        crate::io::save_path(&file, &Document::from_text("Original business note")).unwrap();
-        let original = fs::read(&file).unwrap();
-        let mut s = session(&root);
-        s.run("file.open", &json!({"path": file})).unwrap();
-        s.run("text.insert", &json!({"text": "Unsaved edit. "})).unwrap();
-        save_now(&mut s);
-        let expected = s.doc.clone();
-        drop(s);
-        let mut s = session(&root);
-        let id = s.recovery_documents()[0].id.clone();
-        s.run("file.recover", &json!({"restore": id})).unwrap();
-        settle(&mut s);
-        assert_eq!(s.doc, expected);
-        assert!(s.path.is_none() && s.dirty);
-        assert_eq!(fs::read(&file).unwrap(), original);
-        let saved = t.0.join("recovered.json");
-        s.run("file.save", &json!({"path": saved})).unwrap();
-        settle(&mut s);
-        assert!(s.recovery_documents().is_empty());
-        assert_eq!(fs::read(file).unwrap(), original);
-    }
-
-    #[test]
-    fn password_barrier_clears_in_flight_plaintext_and_blocks_new_copies() {
-        let t = Temp::new();
-        let mut s = session(&t.0);
-        s.run("text.insert", &json!({"text": "Confidential synthetic draft"})).unwrap();
-        s.recovery.as_mut().unwrap().due = Instant::now();
-        s.recovery_tick();
-        assert!(s.recovery_busy());
-        s.run("file.encrypt", &json!({"password": "synthetic-password"})).unwrap();
-        assert!(s.recovery_documents().is_empty());
-        s.run("text.insert", &json!({"text": "More confidential edits"})).unwrap();
-        save_now(&mut s);
-        assert!(fs::read_dir(&t.0).unwrap().next().is_none());
-        // Removing protection makes future recovery possible again.
-        s.run("file.encrypt", &json!({"password": null})).unwrap();
-        save_now(&mut s);
-        assert_eq!(s.recovery_documents().len(), 1);
-    }
-
-    #[test]
-    fn failed_password_cleanup_rejects_protection_and_preserves_snapshot() {
-        let t = Temp::new();
-        let mut s = session(&t.0);
-        s.run("text.insert", &json!({"text": "Synthetic text"})).unwrap();
-        save_now(&mut s);
-        let id = s.recovery_documents()[0].id.clone();
-        let dir = t.0.join(id);
-        // An unknown file prevents removal: don't report that plaintext was purged.
-        let first = Store::files(&dir).unwrap()[0].clone();
-        let bytes = fs::read(&first).unwrap();
-        fs::write(dir.join("unexpected"), b"unexpected").unwrap();
-        assert!(s.run("file.encrypt", &json!({"password": "synthetic-password"})).is_err());
-        assert!(s.password.is_none());
-        assert_eq!(fs::read(first).unwrap(), bytes);
-    }
-
-    #[test]
-    fn delayed_restore_cannot_replace_new_edits() {
-        let t = Temp::new();
-        let mut s = session(&t.0);
-        s.run("text.insert", &json!({"text": "Saved draft"})).unwrap();
-        save_now(&mut s);
-        drop(s);
-        let mut s = session(&t.0);
-        let id = s.recovery_documents()[0].id.clone();
-        s.run("file.recover", &json!({"restore": id})).unwrap();
-        s.run("text.insert", &json!({"text": "New work"})).unwrap();
-        settle(&mut s);
-        assert_eq!(s.doc.plain_text(StoryRef::Body), "New work");
-        assert!(s.recovery_error().unwrap().contains("document changed"));
-    }
-
-    #[test]
-    fn opening_protected_file_and_password_save_never_leave_plaintext_copies() {
-        let t = Temp::new();
-        let original = t.0.join("protected.docx");
-        let root = t.0.join("profile");
-        crate::io::save_path_with(
-            &original,
-            &Document::from_text("Synthetic confidential note"),
-            Some("synthetic-password"),
-            &crate::io::ExportOptions::default(),
-        )
-        .unwrap();
-        let bytes = fs::read(&original).unwrap();
-        let mut s = session(&root);
-        s.run("file.open", &json!({"path": original, "password": "synthetic-password"})).unwrap();
-        s.run("text.insert", &json!({"text": "Confidential edit"})).unwrap();
-        save_now(&mut s);
-        assert!(fs::read_dir(&root).unwrap().next().is_none());
-        assert_eq!(fs::read(&original).unwrap(), bytes);
-        s.run("file.new", &json!({})).unwrap();
-        s.run("text.insert", &json!({"text": "New confidential draft"})).unwrap();
-        save_now(&mut s);
-        assert_eq!(s.recovery_documents().len(), 1);
-        let saved = t.0.join("saved.docx");
-        s.run("file.save", &json!({"path": saved, "password": "synthetic-password"})).unwrap();
-        settle(&mut s);
-        assert!(fs::read_dir(root).unwrap().next().is_none());
-        assert_eq!(fs::read(original).unwrap(), bytes);
-    }
-
-    #[test]
-    fn protection_after_document_switch_does_not_discard_another_draft() {
-        let t = Temp::new();
-        let mut s = session(&t.0);
-        s.run("text.insert", &json!({"text": "First synthetic draft"})).unwrap();
-        save_now(&mut s);
-        s.run("file.new", &json!({})).unwrap();
-        // Protection can be commanded before the host's next recovery tick.
-        s.run("file.encrypt", &json!({"password": "synthetic-password"})).unwrap();
-        settle(&mut s);
-        assert_eq!(s.recovery_documents().len(), 1);
-    }
-}
+mod tests;

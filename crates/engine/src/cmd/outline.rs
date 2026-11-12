@@ -460,6 +460,51 @@ pub(crate) fn move_shown(s: &mut Session, up: bool) -> Option<CmdResult> {
     Some(sel_result(s))
 }
 
+/// Keeps collapsed headings collapsed after an edit: each one moves to the nearest heading with the
+/// same text that is still free.
+fn remap_collapsed_headings(s: &mut Session) {
+    let hashes: Vec<Option<u64>> = (0..s.doc.body.len()).map(|i| text_hash(&s.doc, i)).collect();
+    let levels = ol::levels(&s.doc);
+    // The headings not yet taken, by text hash.
+    let mut by_hash: HashMap<u64, BTreeSet<usize>> = HashMap::new();
+    for (j, h) in hashes.iter().enumerate() {
+        if let Some(h) = h
+            && levels.get(j).is_some_and(|l| *l < BODY)
+        {
+            by_hash.entry(*h).or_default().insert(j);
+        }
+    }
+    let mut used = BTreeSet::new();
+    let mut out = Vec::new();
+    for (i, h) in std::mem::take(&mut s.view.outline.collapsed) {
+        let free = |j: usize, used: &BTreeSet<usize>| levels.get(j).is_some_and(|l| *l < BODY) && !used.contains(&j);
+        let same = |j: usize| hashes.get(j).copied().flatten() == Some(h);
+        let found = if free(i, &used) && same(i) {
+            Some(i)
+        } else {
+            // The nearest free heading with the same text (the earlier one on a tie).
+            let nearest = by_hash.get(&h).and_then(|set| {
+                let below = set.range(..=i).next_back().copied();
+                let above = set.range(i..).next().copied();
+                match (below, above) {
+                    (Some(b), Some(a)) => Some(if a.abs_diff(i) < b.abs_diff(i) { a } else { b }),
+                    (b, a) => b.or(a),
+                }
+            });
+            nearest.or_else(|| free(i, &used).then_some(i))
+        };
+        if let Some(j) = found {
+            used.insert(j);
+            if let Some(set) = hashes.get(j).copied().flatten().and_then(|hj| by_hash.get_mut(&hj)) {
+                set.remove(&j);
+            }
+            out.push((j, hashes.get(j).copied().flatten().unwrap_or(h)));
+        }
+    }
+    out.sort_unstable();
+    s.view.outline.collapsed = out;
+}
+
 /// After every command: collapsed headings are found again where edits moved them (by their
 /// text; one whose text changed in place stays collapsed), and in Outline view a caret the
 /// outline doesn't show (in collapsed text, or past a body paragraph's first line) moves on to
@@ -467,46 +512,7 @@ pub(crate) fn move_shown(s: &mut Session, up: bool) -> Option<CmdResult> {
 /// `changed` says whether the document changed (its revision moved); if not, nothing moved.
 pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) {
     if changed && !s.view.outline.collapsed.is_empty() {
-        let hashes: Vec<Option<u64>> = (0..s.doc.body.len()).map(|i| text_hash(&s.doc, i)).collect();
-        let levels = ol::levels(&s.doc);
-        // The headings not yet taken, by text hash.
-        let mut by_hash: HashMap<u64, BTreeSet<usize>> = HashMap::new();
-        for (j, h) in hashes.iter().enumerate() {
-            if let Some(h) = h
-                && levels.get(j).is_some_and(|l| *l < BODY)
-            {
-                by_hash.entry(*h).or_default().insert(j);
-            }
-        }
-        let mut used = BTreeSet::new();
-        let mut out = Vec::new();
-        for (i, h) in std::mem::take(&mut s.view.outline.collapsed) {
-            let free = |j: usize, used: &BTreeSet<usize>| levels.get(j).is_some_and(|l| *l < BODY) && !used.contains(&j);
-            let same = |j: usize| hashes.get(j).copied().flatten() == Some(h);
-            let found = if free(i, &used) && same(i) {
-                Some(i)
-            } else {
-                // The nearest free heading with the same text (the earlier one on a tie).
-                let nearest = by_hash.get(&h).and_then(|set| {
-                    let below = set.range(..=i).next_back().copied();
-                    let above = set.range(i..).next().copied();
-                    match (below, above) {
-                        (Some(b), Some(a)) => Some(if a.abs_diff(i) < b.abs_diff(i) { a } else { b }),
-                        (b, a) => b.or(a),
-                    }
-                });
-                nearest.or_else(|| free(i, &used).then_some(i))
-            };
-            if let Some(j) = found {
-                used.insert(j);
-                if let Some(set) = hashes.get(j).copied().flatten().and_then(|hj| by_hash.get_mut(&hj)) {
-                    set.remove(&j);
-                }
-                out.push((j, hashes.get(j).copied().flatten().unwrap_or(h)));
-            }
-        }
-        out.sort_unstable();
-        s.view.outline.collapsed = out;
+        remap_collapsed_headings(s);
     }
     if s.view.mode != ViewMode::Outline || !s.sel.is_collapsed() || s.sel.focus.story != StoryRef::Body {
         return;
@@ -514,13 +520,25 @@ pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) 
     if s.layout().caret(&s.sel.focus).is_some() {
         return;
     }
-    let Some(&block) = s.sel.focus.path.0.first() else { return };
-    let block = block as usize;
+    let forward = before.focus <= s.sel.focus;
+    let focus = s.sel.focus.clone();
+    if let Some(t) = shown_pos(s, &focus, forward) {
+        s.sel = Selection::caret(t);
+    }
+}
+
+/// In Outline view, the nearest place the outline shows to body position `pos`, which it doesn't
+/// show (in collapsed text, or past a body paragraph's first line), going on (`forward`) or back
+/// from it. `None` outside Outline view and the body, or when no paragraph shows that way.
+pub(crate) fn shown_pos(s: &mut Session, pos: &Pos, forward: bool) -> Option<Pos> {
+    if s.view.mode != ViewMode::Outline || pos.story != StoryRef::Body {
+        return None;
+    }
+    let block = *pos.path.0.first()? as usize;
     let levels = ol::levels(&s.doc);
     let hidden = ol::hidden(&levels, &s.view.outline.view());
     let layout = s.layout();
     let shown_para = |j: usize| !hidden.get(j).copied().unwrap_or(true) && matches!(s.doc.body.get(j).map(|b| &**b), Some(Block::Para(_)));
-    let forward = before.focus <= s.sel.focus;
     let next = (block + 1..levels.len()).find(|j| shown_para(*j)).map(|j| Pos::body(j, 0));
     let prev = || {
         if shown_para(block) {
@@ -532,8 +550,5 @@ pub(crate) fn after_command(s: &mut Session, before: &Selection, changed: bool) 
         Some(if layout.caret(&end).is_some() { end } else { Pos::body(j, 0) })
     };
     let target = if forward { next.or_else(prev) } else { prev().or(next) };
-    if let Some(t) = target {
-        let t = s.doc.clamp(&t);
-        s.sel = Selection::caret(t);
-    }
+    target.map(|t| s.doc.clamp(&t))
 }

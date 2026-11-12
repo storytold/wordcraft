@@ -6,8 +6,8 @@ use wordcraft_doc::fill::Fill;
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, ParagraphTextDirection, Rgb, RowProps,
+    TabAlign, TabLeader, TabStop, TableLook, TextAlignment, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -89,10 +89,13 @@ fn every_char_prop_round_trips() {
         caps: Some(true),
         small_caps: Some(false),
         hidden: Some(true),
+        web_hidden: Some(true),
+        snap_to_grid: Some(false),
         spacing: Some(1.5),
         scale: Some(150.0),
         position: Some(3.0),
         kern: Some(8.0),
+        emphasis: Some(wordcraft_doc::props::EmphasisMark::Comma),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
         outline: Some(true),
         shadow: Some(true),
@@ -173,6 +176,7 @@ fn every_para_prop_round_trips() {
         line_spacing: Some(LineSpacing::Multiple(1.5)),
         contextual_spacing: Some(true),
         mirror_indents: Some(true),
+        adjust_right_indent: Some(false),
         keep_next: Some(true),
         keep_lines: Some(false),
         page_break_before: Some(true),
@@ -191,6 +195,7 @@ fn every_para_prop_round_trips() {
         suppress_hyphens: Some(true),
         suppress_line_numbers: Some(true),
         bidi: Some(false),
+        text_direction: Some(ParagraphTextDirection::TbRl),
         drop_cap: None,
         drop_cap_margin: None,
         drop_cap_distance: None,
@@ -206,6 +211,7 @@ fn every_para_prop_round_trips() {
             h_anchor: "margin".into(),
             v_anchor: "text".into(),
             wrap: "around".into(),
+            anchor_lock: Some(true),
             h_space: 9.0,
             v_space: 0.0,
         }),
@@ -218,6 +224,7 @@ fn every_para_prop_round_trips() {
         num_change: None,
         fmt_change: None,
         snap_to_grid: Some(false),
+        text_alignment: Some(TextAlignment::Top),
     };
     let variants = [
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
@@ -246,7 +253,7 @@ fn every_para_prop_round_trips() {
 #[test]
 fn styles_and_lists_round_trip() {
     let mut d = Document::new();
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyle".into(),
         name: "My Style".into(),
         kind: StyleKind::Paragraph,
@@ -263,7 +270,7 @@ fn styles_and_lists_round_trip() {
         default: false,
         table: None,
     });
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "MyStyleChar".into(),
         name: "My Style Char".into(),
         kind: StyleKind::Character,
@@ -272,10 +279,10 @@ fn styles_and_lists_round_trip() {
         hidden: true,
         ..Default::default()
     });
-    let bullets = d.numbering.add_list(ListKind::Bullet);
-    let nums = d.numbering.add_list(ListKind::Legal);
-    let outline = d.numbering.add_list(ListKind::Outline);
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == outline) {
+    let bullets = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
+    let nums = Arc::make_mut(&mut d.numbering).add_list(ListKind::Legal);
+    let outline = Arc::make_mut(&mut d.numbering).add_list(ListKind::Outline);
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == outline) {
         n.start_overrides.push((0, 4));
     }
     let mut ps = Vec::new();
@@ -425,6 +432,7 @@ fn images_round_trip() {
         // Room for a shadow: kept through save and load.
         float: Float { effect: [12.0, 12.0, 27.0, 27.0], ..Default::default() },
         crop: [0.1, 0.0, 0.25, 0.05],
+        fx: Default::default(),
         ole: None,
     };
     let floating = InlineObject::Image {
@@ -434,6 +442,7 @@ fn images_round_trip() {
         alt: String::new(),
         float: Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Margin, x: 36.0, y: 12.5, dist: 9.0, ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let aligned = InlineObject::Image {
@@ -453,6 +462,7 @@ fn images_round_trip() {
             ..Default::default()
         },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let mut floats = vec![floating.clone(), aligned];
@@ -464,6 +474,7 @@ fn images_round_trip() {
             alt: String::new(),
             float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 0.0, y: 0.0, dist: 0.0, ..Default::default() },
             crop: [0.0; 4],
+            fx: Default::default(),
             ole: None,
         });
     }
@@ -565,7 +576,7 @@ fn table_style_formatting_round_trips() {
         band_size: Some(3),
         ..Default::default()
     };
-    d.styles.upsert(Style {
+    Arc::make_mut(&mut d.styles).upsert(Style {
         id: "Whole".into(),
         name: "Whole".into(),
         kind: StyleKind::Table,
@@ -618,7 +629,7 @@ fn every_table_style_part_round_trips() {
         };
         st.set_table_part(part, f);
     }
-    d.styles.upsert(st.clone());
+    Arc::make_mut(&mut d.styles).upsert(st.clone());
     let r = rt(&d);
     let got = r.styles.get("Parts").unwrap();
     for part in TablePart::ALL {
@@ -984,6 +995,80 @@ fn tracked_changes_round_trip() {
 }
 
 #[test]
+fn tracked_equations_round_trip() {
+    // Issue #6011: equations saved with tracked revision marks (w:ins / w:del) around math.
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    d.settings.track_changes = true;
+    let ins = CharProps { ins: Some(0), ..Default::default() };
+    let del = CharProps { del: Some(1), ..Default::default() };
+    let plain = CharProps::default();
+    let mut p = Paragraph::with_text("Formula: ", CharProps::default());
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "x+1".into(), display: false, math: Default::default() }, &ins).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "E=mc^2".into(), display: true, math: Default::default() }, &del).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "a^2+b^2=c^2".into(), display: true, math: Default::default() }, &ins).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "y=mx+b".into(), display: false, math: Default::default() }, &del).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::Equation { linear: "z=1".into(), display: false, math: Default::default() }, &plain).unwrap();
+    d.body = vec![para_block(p.clone())];
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<w:ins w:id="1" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMath>"#), "ins directly encloses inline math: {xml}");
+    assert!(
+        xml.contains(r#"<w:del w:id="2" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMathPara>"#),
+        "del directly encloses display math: {xml}"
+    );
+    assert!(
+        xml.contains(r#"<w:ins w:id="3" w:author="Alice" w:date="2026-05-01T10:00:00Z"><m:oMathPara>"#),
+        "ins directly encloses display math: {xml}"
+    );
+    assert!(xml.contains(r#"<w:del w:id="4" w:author="Bob" w:date="2026-05-02T10:00:00Z"><m:oMath>"#), "del directly encloses inline math: {xml}");
+    assert!(xml.contains(r#"</w:del><m:oMath>"#), "plain equation follows closing tag without revision wrapper: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    assert_eq!(r.revisions, d.revisions);
+    let got = &paras(&r)[0];
+    assert_eq!(got.objects.len(), 5);
+    let eq_summary: Vec<(bool, String)> = got
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::Equation { display, linear, .. } => (*display, linear.clone()),
+            _ => panic!("expected equation object, got {o:?}"),
+        })
+        .collect();
+    assert_eq!(
+        eq_summary,
+        vec![(false, "x+1".into()), (true, "E=mc^2".into()), (true, "a^2+b^2=c^2".into()), (false, "y=mx+b".into()), (false, "z=1".into()),]
+    );
+    assert_eq!(got.runs, p.runs);
+}
+
+#[test]
+fn nested_omath_para_revisions_read() {
+    // Defensive reader check: w:ins and w:del nested inside m:oMathPara.
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: "2026-05-01T10:00:00Z".into(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Charles".into(), date: "2026-05-02T10:00:00Z".into(), move_name: None });
+    let doc_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><w:body><w:p><m:oMathPara><w:ins w:id="1" w:author="Ada" w:date="2026-05-01T10:00:00Z"><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></w:ins><w:del w:id="2" w:author="Charles" w:date="2026-05-02T10:00:00Z"><m:oMath><m:r><m:t>y-1</m:t></m:r></m:oMath></w:del></m:oMathPara></w:p></w:body></w:document>"#;
+    let base = wordcraft_docx::write(&d).unwrap();
+    let bytes = replace_part(&base, "word/document.xml", doc_xml.as_bytes());
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = &paras(&r)[0];
+    assert_eq!(got.objects.len(), 2);
+    assert!(matches!(&got.objects[0], InlineObject::Equation { display: true, linear, .. } if linear == "x+1"));
+    assert!(matches!(&got.objects[1], InlineObject::Equation { display: true, linear, .. } if linear == "y-1"));
+    assert_eq!(got.runs[0].props.ins, Some(0));
+    assert_eq!(got.runs[1].props.del, Some(1));
+}
+
+#[test]
 fn tracked_paragraph_marks_round_trip() {
     // Issue #229: an inserted / deleted paragraph mark is `w:ins` / `w:del` in the mark's
     // `w:rPr` (ECMA-376 §17.13.5.16, §17.13.5.15), alone or with mark formatting.
@@ -1186,7 +1271,16 @@ fn groups_round_trip() {
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
     let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("In the group", CharProps::default()))]);
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "A picture".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "A picture".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let oval = InlineObject::Shape {
         kind: ShapeKind::Ellipse,
         w: 50.0,
@@ -1273,7 +1367,16 @@ fn drawing_canvas_round_trips() {
     use wordcraft_doc::para::{CanvasStyle, GroupChild};
     let mut d = Document::new();
     let key = d.add_media(tiny_png(), "png");
-    let pic = InlineObject::Image { media: key, w: 60.0, h: 40.0, alt: "In the canvas".into(), float: Float::default(), crop: [0.0; 4], ole: None };
+    let pic = InlineObject::Image {
+        media: key,
+        w: 60.0,
+        h: 40.0,
+        alt: "In the canvas".into(),
+        float: Float::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
     let star = InlineObject::Shape {
         kind: ShapeKind::Star,
         w: 72.0,
@@ -1706,7 +1809,7 @@ fn kitchen_sink() -> Document {
     let mut d = Document::new();
     let png = tiny_png();
     let key = d.add_media(png, "png");
-    let num = d.numbering.add_list(ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let h = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Head", CharProps::default()))]);
     let f = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]);
     let c = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Comment", CharProps::default()))]);
@@ -1731,7 +1834,16 @@ fn kitchen_sink() -> Document {
     let mut img = Paragraph::new();
     img.insert_object(
         0,
-        InlineObject::Image { media: key, w: 30.0, h: 20.0, alt: "pic".into(), float: Float::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 30.0,
+            h: 20.0,
+            alt: "pic".into(),
+            float: Float::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -1826,6 +1938,7 @@ fn hostile_model_values_still_write() {
             alt: String::new(),
             float: Float::default(),
             crop: [f32::NAN; 4],
+            fx: Default::default(),
             ole: None,
         },
         &CharProps::default(),
@@ -1938,10 +2051,10 @@ fn list_level_overrides_round_trip() {
     use wordcraft_doc::numbering::{Counters, Level};
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::new();
-    let num = d.numbering.add_list(ListKind::Numbered);
-    let restart = d.numbering.restart(num).unwrap();
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let restart = Arc::make_mut(&mut d.numbering).restart(num).unwrap();
     let own = Level { format: NumFormat::DecimalZero, text: "%1.%2".into(), indent: 26.5, hanging: 26.5, ..Level::default() };
-    if let Some(n) = d.numbering.nums.iter_mut().find(|n| n.id == restart) {
+    if let Some(n) = Arc::make_mut(&mut d.numbering).nums.iter_mut().find(|n| n.id == restart) {
         n.level_overrides = vec![(1, own.clone())];
     }
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
@@ -2096,6 +2209,7 @@ fn rotation_and_flips_round_trip() {
         alt: String::new(),
         float: Float { rot: 30.0, effect: [6.0; 4], ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let shape = |kind, float| InlineObject::Shape {
@@ -2262,9 +2376,46 @@ fn bibliography_sources_round_trip() {
     });
 
     let bytes = wordcraft_docx::write(&d).expect("write");
-    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
 
-    // Verify package-root customXml parts exist
+    assert_bibliography_parts(&bytes);
+    assert_bibliography_sources_round_trip(&bytes);
+}
+
+/// #4848: a corporate author saves as Word's `b:Corporate`, in place of a name list (a role holds
+/// one or the other), and reads back whole.
+#[test]
+fn a_corporate_author_round_trips() {
+    let mut d = Document::new();
+    d.sources.push(Source {
+        tag: "Wor20".into(),
+        kind: "report".into(),
+        corporate: "World Health Organization".into(),
+        title: "World report on hearing".into(),
+        year: "2020".into(),
+        editor: "Chadha, Shelly".into(),
+        ..Default::default()
+    });
+    d.sources.push(Source {
+        tag: "Both".into(),
+        author: "Rivera, Alex".into(),
+        corporate: "Harbor Guild, Inc.".into(),
+        title: "Shared Spaces".into(),
+        ..Default::default()
+    });
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes[..])).unwrap();
+    let mut item_xml = String::new();
+    std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    assert!(item_xml.contains("<b:Author><b:Author><b:Corporate>World Health Organization</b:Corporate></b:Author><b:Editor>"), "{item_xml}");
+    assert!(item_xml.contains("<b:Corporate>Harbor Guild, Inc.</b:Corporate>"), "{item_xml}");
+    assert!(!item_xml.contains("<b:Last>Rivera</b:Last>"), "the corporate author takes the person authors' place: {item_xml}");
+    let back = wordcraft_docx::read(&bytes).expect("read");
+    let got: Vec<(&str, &str, &str)> = back.sources.iter().map(|s| (s.corporate.as_str(), s.author.as_str(), s.editor.as_str())).collect();
+    assert_eq!(got, [("World Health Organization", "", "Chadha, Shelly"), ("Harbor Guild, Inc.", "", "")]);
+}
+
+fn assert_bibliography_parts(bytes: &[u8]) {
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
     assert!(zip.by_name("customXml/item1.xml").is_ok());
     assert!(zip.by_name("customXml/itemProps1.xml").is_ok());
     assert!(zip.by_name("customXml/_rels/item1.xml.rels").is_ok());
@@ -2281,6 +2432,12 @@ fn bibliography_sources_round_trip() {
 
     let mut item_xml = String::new();
     std::io::Read::read_to_string(&mut zip.by_name("customXml/item1.xml").unwrap(), &mut item_xml).unwrap();
+    assert_bibliography_types(&item_xml);
+    assert_bibliography_people(&item_xml);
+    assert_bibliography_details(&item_xml);
+}
+
+fn assert_bibliography_types(item_xml: &str) {
     assert!(item_xml.contains("SelectedStyle=\"\\APA.XSL\""), "{item_xml}");
     assert!(item_xml.contains("StyleName=\"APA\""), "{item_xml}");
     assert!(item_xml.contains("<b:SourceType>Book</b:SourceType>"), "{item_xml}");
@@ -2288,12 +2445,18 @@ fn bibliography_sources_round_trip() {
     assert!(item_xml.contains("<b:SourceType>InternetSite</b:SourceType>"), "{item_xml}");
     assert!(item_xml.contains("<b:SourceType>BookSection</b:SourceType>"), "{item_xml}");
     assert!(item_xml.contains("<b:SourceType>Misc</b:SourceType>"), "{item_xml}");
+}
+
+fn assert_bibliography_people(item_xml: &str) {
     assert!(item_xml.contains("<b:Author><b:Author><b:NameList><b:Person>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Rivera</b:Last><b:First>Alex</b:First>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Smith</b:Last><b:First>John</b:First><b:Middle>David</b:Middle>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Solo</b:Last>"), "{item_xml}");
     assert!(item_xml.contains("<b:Editor>"), "{item_xml}");
     assert!(item_xml.contains("<b:Last>Johnson</b:Last><b:First>Robert</b:First>"), "{item_xml}");
+}
+
+fn assert_bibliography_details(item_xml: &str) {
     assert!(item_xml.contains("<b:Edition>2nd</b:Edition>"), "{item_xml}");
     assert!(item_xml.contains("<b:Month>10</b:Month>"), "{item_xml}");
     assert!(item_xml.contains("<b:Day>15</b:Day>"), "{item_xml}");
@@ -2303,50 +2466,68 @@ fn bibliography_sources_round_trip() {
     assert!(item_xml.contains("<b:MonthAccessed>05</b:MonthAccessed>"), "{item_xml}");
     assert!(item_xml.contains("<b:DayAccessed>15</b:DayAccessed>"), "{item_xml}");
     assert!(item_xml.contains("<b:Accessed>2024-05-15</b:Accessed>"), "{item_xml}");
+}
 
-    let back = wordcraft_docx::read(&bytes).expect("read");
+fn assert_bibliography_sources_round_trip(bytes: &[u8]) {
+    let back = wordcraft_docx::read(bytes).expect("read");
     assert_eq!(back.sources.len(), 5);
-    assert_eq!(back.sources[0].tag, "Rivera2021");
-    assert_eq!(back.sources[0].kind, "book");
-    assert_eq!(back.sources[0].author, "Rivera, Alex; Chen, Mei");
-    assert_eq!(back.sources[0].title, "Shared Spaces");
-    assert_eq!(back.sources[0].year, "2021");
-    assert_eq!(back.sources[0].publisher, "Harbor Books");
-    assert_eq!(back.sources[0].city, "Portland");
-    assert_eq!(back.sources[0].editor, "Johnson, Robert");
-    assert_eq!(back.sources[0].edition, "2nd");
-    assert_eq!(back.sources[0].month, "10");
-    assert_eq!(back.sources[0].day, "15");
+    assert_bibliography_source_0(&back.sources[0]);
+    assert_bibliography_source_1(&back.sources[1]);
+    assert_bibliography_source_2(&back.sources[2]);
+    assert_bibliography_source_3(&back.sources[3]);
+    assert_bibliography_source_4(&back.sources[4]);
+}
 
-    assert_eq!(back.sources[1].tag, "Smith2023");
-    assert_eq!(back.sources[1].kind, "article");
-    assert_eq!(back.sources[1].author, "Smith, John David");
-    assert_eq!(back.sources[1].title, "Modern Typography");
-    assert_eq!(back.sources[1].journal, "Design Quarterly");
-    assert_eq!(back.sources[1].volume, "12");
-    assert_eq!(back.sources[1].pages, "45-60");
-    assert_eq!(back.sources[1].url, "https://example.com/typo");
-    assert_eq!(back.sources[1].issue, "4");
-    assert_eq!(back.sources[1].doi, "10.1000/182");
+fn assert_bibliography_source_0(source: &Source) {
+    assert_eq!(source.tag, "Rivera2021");
+    assert_eq!(source.kind, "book");
+    assert_eq!(source.author, "Rivera, Alex; Chen, Mei");
+    assert_eq!(source.title, "Shared Spaces");
+    assert_eq!(source.year, "2021");
+    assert_eq!(source.publisher, "Harbor Books");
+    assert_eq!(source.city, "Portland");
+    assert_eq!(source.editor, "Johnson, Robert");
+    assert_eq!(source.edition, "2nd");
+    assert_eq!(source.month, "10");
+    assert_eq!(source.day, "15");
+}
 
-    assert_eq!(back.sources[2].tag, "WebSite2024");
-    assert_eq!(back.sources[2].kind, "website");
-    assert_eq!(back.sources[2].author, "Solo");
-    assert_eq!(back.sources[2].title, "Open Fonts");
-    assert_eq!(back.sources[2].url, "https://example.org");
-    assert_eq!(back.sources[2].accessed, "2024-05-15");
+fn assert_bibliography_source_1(source: &Source) {
+    assert_eq!(source.tag, "Smith2023");
+    assert_eq!(source.kind, "article");
+    assert_eq!(source.author, "Smith, John David");
+    assert_eq!(source.title, "Modern Typography");
+    assert_eq!(source.journal, "Design Quarterly");
+    assert_eq!(source.volume, "12");
+    assert_eq!(source.pages, "45-60");
+    assert_eq!(source.url, "https://example.com/typo");
+    assert_eq!(source.issue, "4");
+    assert_eq!(source.doi, "10.1000/182");
+}
 
-    assert_eq!(back.sources[3].tag, "Chapter2025");
-    assert_eq!(back.sources[3].kind, "bookSection");
-    assert_eq!(back.sources[3].author, "Lee, Harper");
-    assert_eq!(back.sources[3].title, "Chapter One");
-    assert_eq!(back.sources[3].journal, "Anthology of Prose");
-    assert_eq!(back.sources[3].pages, "1-20");
+fn assert_bibliography_source_2(source: &Source) {
+    assert_eq!(source.tag, "WebSite2024");
+    assert_eq!(source.kind, "website");
+    assert_eq!(source.author, "Solo");
+    assert_eq!(source.title, "Open Fonts");
+    assert_eq!(source.url, "https://example.org");
+    assert_eq!(source.accessed, "2024-05-15");
+}
 
-    assert_eq!(back.sources[4].tag, "Misc2026");
-    assert_eq!(back.sources[4].kind, "other");
-    assert_eq!(back.sources[4].title, "Archive Manuscript");
-    assert_eq!(back.sources[4].city, "Oxford");
+fn assert_bibliography_source_3(source: &Source) {
+    assert_eq!(source.tag, "Chapter2025");
+    assert_eq!(source.kind, "bookSection");
+    assert_eq!(source.author, "Lee, Harper");
+    assert_eq!(source.title, "Chapter One");
+    assert_eq!(source.journal, "Anthology of Prose");
+    assert_eq!(source.pages, "1-20");
+}
+
+fn assert_bibliography_source_4(source: &Source) {
+    assert_eq!(source.tag, "Misc2026");
+    assert_eq!(source.kind, "other");
+    assert_eq!(source.title, "Archive Manuscript");
+    assert_eq!(source.city, "Oxford");
 }
 
 #[test]
@@ -2529,6 +2710,7 @@ fn alt_text_title_and_decorative_round_trip_for_every_object() {
         alt: "A kiln at dusk".into(),
         float: Float { alt: AltText { title: "Kiln".into(), ..Default::default() }, ..Default::default() },
         crop: [0.0; 4],
+        fx: Default::default(),
         ole: None,
     };
     let shape = |alt: AltText| InlineObject::Shape {

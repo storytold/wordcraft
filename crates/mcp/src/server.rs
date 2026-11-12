@@ -22,7 +22,10 @@ const INSTRUCTIONS: &str = "WordCraft is a word processor (a Microsoft Word clon
 parameters with list_commands and run them with execute (or several with batch). Positions are \
 {story:\"body\", path:[block,(row,cell,block)...], off:byteOffset}. Typical flow: new_document → type_text \
 \"Hello\" → execute text.newParagraph → execute para.style {style:\"Heading 1\"} → select_text {text:\"Hello\"} → \
-execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}.";
+execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}. \
+Several documents can be open: new_document and open_document open another one and make it active; \
+list_documents gives their ids, and `doc` on execute, batch and the other document tools works on one \
+without switching.";
 
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";
@@ -103,10 +106,14 @@ impl Server {
     /// the protocol stream).
     pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         loop {
-            let reply = match read_bounded_line(&mut input, MAX_REQUEST_LINE)? {
-                BoundedLine::Eof => break,
-                BoundedLine::Line(line) => self.handle_line(&line),
-                BoundedLine::TooLong => Some(error(Value::Null, INVALID_REQUEST, "request line too long").to_string()),
+            let reply = match read_bounded_line(&mut input, MAX_REQUEST_LINE) {
+                Ok(BoundedLine::Eof) => break,
+                Ok(BoundedLine::Line(line)) => self.handle_line(&line),
+                Ok(BoundedLine::TooLong) => Some(error(Value::Null, INVALID_REQUEST, "request line too long").to_string()),
+                Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                    Some(error(Value::Null, PARSE_ERROR, "request line is not UTF-8").to_string())
+                }
+                Err(e) => return Err(e),
             };
             if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;

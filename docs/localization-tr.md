@@ -1,6 +1,6 @@
 # Turkish interface
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** trivial (the catalog moved to storytold/craft-i18n, `locales/tr/wordcraft.tsv`; previously trivial: interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously minor: Turkish interface catalog completed, 2,325 entries, #774; previously minor: Turkish interface catalog and regression checks) · **Target:** WordCraft 0.5.0
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-01 · **Change:** trivial (Turkish proofing's code is craft-proof's `crates/proof/src/tr` in storytold/craft-libs, #5202; previously trivial: the catalog moved to storytold/craft-i18n, `locales/tr/wordcraft.tsv`; previously trivial: interface-language tests: a missing translation never fails a test, `cargo xtask i18n-report` in `cargo xtask ci` prints the strings each language lacks, and lookup and template tests use inline fixture catalogs or the pseudo-language; previously minor: Turkish interface catalog completed, 2,325 entries, #774; previously minor: Turkish interface catalog and regression checks) · **Target:** WordCraft 0.5.0
 
 Choose **File › Options › Interface language › Türkçe**, or follow a Turkish system display language
 (`tr-TR`, `tr-CY`, `tr_TR.UTF-8`). The catalog code is `tr`; `ui.language` with `{"value":"tr"}`
@@ -52,7 +52,7 @@ test checks dotted and dotless I under Turkish casing with fixture labels, and t
 and ASCII command ids still match. The shared checks (catalog validation and the missing-translation report, `cargo xtask i18n-report`)
 include Turkish automatically.
 
-Turkish proofing (`crates/proof/src/tr`) provides spelling against installed Hunspell `tr_TR`
+Turkish proofing (`crates/proof/src/tr` in storytold/craft-libs, the `craft-proof` crate) provides spelling against installed Hunspell `tr_TR`
 dictionaries, spelling suggestions tuned for Turkish diacritics and detached particles, rule-based grammar
 checks (reduplications, conjunction commas, capitalization), and syllable hyphenation by TDK rules.
 
@@ -60,6 +60,7 @@ checks (reduplications, conjunction commas, capitalization), and syllable hyphen
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | trivial | Turkish proofing's code moved with craft-proof to storytold/craft-libs (`crates/proof/src/tr`); its path here says so (#5202) |
 | 2026-10-23 | trivial | The catalog moved to storytold/craft-i18n (`locales/tr/wordcraft.tsv`) |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |
 | 2026-10-23 | trivial | Interface-language tests: a missing translation falls back to English and never fails a test; `cargo xtask i18n-report` (part of `cargo xtask ci`) prints the strings each language lacks; single-language coverage tests removed |
