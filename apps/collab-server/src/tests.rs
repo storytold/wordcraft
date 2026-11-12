@@ -45,8 +45,18 @@ fn claims(sub: &str, sid: &str) -> Claims {
     }
 }
 
+/// A config whose store lives in a directory of its own.
+///
+/// The tests in this binary run in parallel and several of them clear their
+/// `data_dir`; while they all shared one directory per process, a cleanup in
+/// one test could delete the file another had just been told was committed
+/// (`undo_and_redo_over_the_socket_change_the_committed_text` saw the store's
+/// `source.docx` vanish under load). One directory per config keeps the
+/// cleanup inside the test that asked for it.
 fn dev_config() -> Config {
-    let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let nth = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!("wordcraft-collab-test-{}-{nth}", std::process::id()));
     Config {
         bind: "127.0.0.1:0".into(),
         jwt_secret: Some("test-secret".into()),
