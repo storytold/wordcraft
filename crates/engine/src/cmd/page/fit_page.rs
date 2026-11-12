@@ -9,7 +9,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::shrink::fit_document_typography;
-use wordcraft_doc::{Document, ParaProps, StoryRef};
+use wordcraft_doc::{CharProps, Document, ParaProps, StoryRef};
 use wordcraft_layout::{LayoutCache, LayoutOptions, Page, Placed, ViewMode};
 
 use crate::cmd::sel_result;
@@ -133,20 +133,63 @@ fn min_blocks_font_size(
     min_sz
 }
 
-/// Returns true when these blocks contain an explicit page break or a resolved `page_break_before`,
-/// including inside table cells (and nested tables).
-fn blocks_have_explicit_breaks(doc: &Document, blocks: &[Arc<wordcraft_doc::Block>], table_para: Option<&ParaProps>) -> bool {
+/// True when a paragraph has a page-break character in a run that Print layout draws.
+fn paragraph_has_visible_page_break(
+    doc: &Document,
+    p: &wordcraft_doc::para::Paragraph,
+    table_chr: Option<&CharProps>,
+    hide_deleted: bool,
+    show_hidden: bool,
+) -> bool {
+    let style_id = p.props.style.as_deref();
+    if p.runs.is_empty() {
+        let mark = doc.styles.resolve_char_in(style_id, table_chr, &p.mark);
+        let visible = !(mark.hidden && !show_hidden) && !(hide_deleted && p.mark.del.is_some());
+        return visible && p.text.contains(wordcraft_doc::para::PAGE_BREAK);
+    }
+    let mut run_start = 0usize;
+    for r in &p.runs {
+        let run_end = run_start.saturating_add(r.len).min(p.text.len());
+        let run_text = p.text.get(run_start..run_end).unwrap_or("");
+        run_start = run_end;
+        if hide_deleted && r.props.del.is_some() {
+            continue;
+        }
+        let resolved = doc.styles.resolve_char_in(style_id, table_chr, &r.props);
+        if resolved.hidden && !show_hidden {
+            continue;
+        }
+        if run_text.contains(wordcraft_doc::para::PAGE_BREAK) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true when these blocks contain a visible explicit page break or a resolved
+/// `page_break_before`, including inside table cells (and nested tables).
+fn blocks_have_explicit_breaks(
+    doc: &Document,
+    blocks: &[Arc<wordcraft_doc::Block>],
+    table_para: Option<&ParaProps>,
+    table_chr: Option<&CharProps>,
+    hide_deleted: bool,
+    show_hidden: bool,
+) -> bool {
     for b in blocks {
         if let Some(p) = b.as_para() {
-            if p.text.contains(wordcraft_doc::para::PAGE_BREAK) || doc.styles.resolve_para_in(&p.props, table_para).page_break_before {
+            if doc.styles.resolve_para_in(&p.props, table_para).page_break_before
+                || paragraph_has_visible_page_break(doc, p, table_chr, hide_deleted, show_hidden)
+            {
                 return true;
             }
         } else if let Some(tbl) = b.as_table() {
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
             let cell_para = style.as_ref().map(|st| &st.para);
+            let cell_chr = style.as_ref().map(|st| &st.chr);
             for row in &tbl.rows {
                 for cell in &row.cells {
-                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para) {
+                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para, cell_chr, hide_deleted, show_hidden) {
                         return true;
                     }
                 }
@@ -158,7 +201,7 @@ fn blocks_have_explicit_breaks(doc: &Document, blocks: &[Arc<wordcraft_doc::Bloc
 
 /// Returns true if the document contains explicit page or section breaks that
 /// physically force content onto additional pages.
-fn has_explicit_breaks(doc: &Document) -> bool {
+fn has_explicit_breaks(doc: &Document, hide_deleted: bool, show_hidden: bool) -> bool {
     let sections = doc.sections();
     if sections.len() > 1 {
         for (_, sec) in &sections[1..] {
@@ -167,7 +210,7 @@ fn has_explicit_breaks(doc: &Document) -> bool {
             }
         }
     }
-    blocks_have_explicit_breaks(doc, &doc.body, None)
+    blocks_have_explicit_breaks(doc, &doc.body, None, None, hide_deleted, show_hidden)
 }
 
 /// True when `item` is a line-number decoration: a `DECOR_STORY` line with no block path.
@@ -574,7 +617,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
 
     // Explicit breaks force pages regardless of typography; refuse before any trial can appear to
     // succeed by moving text around them.
-    if has_explicit_breaks(&s.doc) {
+    if has_explicit_breaks(&s.doc, hide_deleted, shown_hidden) {
         return Err(CmdError::Failed("Unable to fit document to one page: explicit page or section breaks prevent page reduction.".into()));
     }
 
@@ -714,7 +757,7 @@ mod tests {
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.props.page_break_before = Some(true);
         }
-        assert!(has_explicit_breaks(&doc), "a direct page_break_before is an explicit break");
+        assert!(has_explicit_breaks(&doc, false, false), "a direct page_break_before is an explicit break");
 
         let mut doc = Document::new();
         doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("body", Default::default()))];
@@ -729,7 +772,7 @@ mod tests {
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.props.style = Some("BreakBefore".into());
         }
-        assert!(has_explicit_breaks(&doc), "a style-inherited page_break_before is an explicit break");
+        assert!(has_explicit_breaks(&doc, false, false), "a style-inherited page_break_before is an explicit break");
 
         let mut doc = Document::new();
         let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
@@ -737,6 +780,26 @@ mod tests {
         cell_p.props.page_break_before = Some(true);
         table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell_p)];
         doc.body = vec![Arc::new(wordcraft_doc::Block::Table(table))];
-        assert!(has_explicit_breaks(&doc), "a page_break_before inside a table cell is an explicit break");
+        assert!(has_explicit_breaks(&doc, false, false), "a page_break_before inside a table cell is an explicit break");
+    }
+
+    #[test]
+    fn hidden_and_deleted_page_breaks_follow_print_visibility() {
+        let text = format!("before{}after", wordcraft_doc::para::PAGE_BREAK);
+        let mut doc = Document::new();
+        doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            p.runs[0].props.hidden = Some(true);
+        }
+        assert!(!has_explicit_breaks(&doc, false, false), "hidden break is omitted in Print view");
+        assert!(has_explicit_breaks(&doc, false, true), "hidden break counts when hidden marks are shown");
+
+        let mut doc = Document::new();
+        doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
+            p.runs[0].props.del = Some(0);
+        }
+        assert!(!has_explicit_breaks(&doc, true, false), "deleted break is omitted while markup is hidden");
+        assert!(has_explicit_breaks(&doc, false, false), "deleted break counts when markup is shown");
     }
 }
