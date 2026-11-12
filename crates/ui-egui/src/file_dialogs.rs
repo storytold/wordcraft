@@ -481,10 +481,9 @@ impl WordApp {
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let db = wordcraft_fonts::FontDb::global();
-            let before: std::collections::HashSet<String> = db.families().iter().map(|f| f.to_lowercase()).collect();
-            db.load_system_fonts();
-            let found = db.families().iter().filter(|f| !before.contains(&f.to_lowercase())).count();
+            // The faces found that are new: a style of an installed family counts, a family's
+            // legacy names in the font list don't.
+            let found = wordcraft_fonts::FontDb::global().load_new_system_fonts();
             if found > 0 {
                 let msg = crate::i18n::fmt(tl!("Loaded {count} system fonts."), &[("count", &found.to_string())]);
                 self.status(msg);

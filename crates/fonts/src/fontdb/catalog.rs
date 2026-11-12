@@ -189,15 +189,61 @@ impl FontDb {
         })
     }
 
-    /// After a rescan: forget the fallback answers and the characters no font covered (a font
-    /// installed since may), and tell watchers ([`FontDb::generation`]), so text is laid out
-    /// again and the font lists show what was found (#2499).
+    /// [`FontDb::load_system_fonts`], returning how many of the faces found are new: not
+    /// cataloged before, a font installed since or a style of one (#2499).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_new_system_fonts(&self) -> usize {
+        let key = |c: &CatalogEntry| (c.path.clone(), c.family.to_lowercase(), c.style.to_lowercase());
+        let before: std::collections::HashSet<_> = self.read_catalog().iter().map(key).collect();
+        self.load_system_fonts();
+        self.read_catalog().iter().filter(|c| !before.contains(&key(c))).count()
+    }
+
+    /// After a rescan: load the styles installed since of families loaded from the font folders,
+    /// forget the fallback answers, the characters no font covered (a font installed since may)
+    /// and what each file covers (one replaced since may cover more), and tell watchers
+    /// ([`FontDb::generation`]), so text is laid out again and the font lists show what was found
+    /// (#2499).
     #[cfg(not(target_arch = "wasm32"))]
     fn rescanned(&self) {
+        self.load_new_styles();
+        for file in self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner).files.iter_mut() {
+            file.ranges = None;
+        }
         self.fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner).map.clear();
         *self.run_fallbacks.write().unwrap_or_else(std::sync::PoisonError::into_inner) = super::RunFallbackCache::default();
         self.sys.lock().unwrap_or_else(std::sync::PoisonError::into_inner).misses.clear();
         self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Load the cataloged files of the families loaded from the font folders that aren't loaded
+    /// yet (a style installed since): [`FontDb::load_cataloged`] skips a loaded family, which
+    /// would otherwise keep only the styles it loaded with.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn load_new_styles(&self) {
+        let _loading = self.loading.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let loaded: std::collections::HashSet<std::path::PathBuf> = {
+            let index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            index.loaded.iter().cloned().chain(index.files.iter().filter(|f| f.used).map(|f| f.path.clone())).collect()
+        };
+        let mut paths: Vec<std::path::PathBuf> = {
+            let cat = self.read_catalog();
+            let families: std::collections::HashSet<String> =
+                cat.iter().filter(|c| loaded.contains(&c.path)).map(|c| c.family.to_lowercase()).collect();
+            cat.iter().filter(|c| !loaded.contains(&c.path) && families.contains(&c.family.to_lowercase())).map(|c| c.path.clone()).collect()
+        };
+        if paths.is_empty() {
+            return;
+        }
+        paths.sort();
+        paths.dedup();
+        let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).map(|b| (b, None)).collect();
+        self.add_fonts(files);
+        let mut index = self.coverage.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for file in index.files.iter_mut().filter(|f| paths.contains(&f.path)) {
+            file.used = true;
+        }
+        index.loaded.extend(paths);
     }
 
     #[cfg(not(target_arch = "wasm32"))]

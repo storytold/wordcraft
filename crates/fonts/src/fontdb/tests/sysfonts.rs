@@ -155,6 +155,42 @@ fn a_rescan_tells_watchers_and_retries_fallbacks() {
     assert!(db.sys.lock().unwrap().misses.is_empty(), "misses are retried after a rescan");
 }
 
+/// #2499 review: a style installed since for a family already loaded is loaded by the rescan:
+/// the family's lookups find it instead of drawing it from the styles loaded before.
+#[test]
+fn a_rescan_loads_a_style_installed_since_for_a_loaded_family() {
+    let dir = font_dir("rescan-style");
+    let later = dir.join("Later");
+    std::fs::create_dir_all(&later).unwrap();
+    std::fs::copy(dir.join("Sysfont-Regular.ttf"), later.join("Sysfont-Regular.ttf")).unwrap();
+    let db = FontDb::with_font_dirs(vec![later.clone()]);
+    assert_eq!(db.face(FAMILY, "Regular").style, "Regular");
+    assert_eq!(db.face(FAMILY, "Bold").style, "Regular", "no Bold installed yet");
+    std::fs::copy(dir.join("Sub/Sysfont-Bold.TTF"), later.join("Sysfont-Bold.ttf")).unwrap();
+    let families = db.families();
+    assert_eq!(db.load_new_system_fonts(), 1, "the Bold face is new");
+    assert_eq!(db.families(), families, "though the font list has no new entry");
+    let bold = db.face(FAMILY, "Bold");
+    assert_eq!((bold.family.as_str(), bold.style.as_str()), (FAMILY, "Bold"));
+}
+
+/// #2499 review: a rescan reads a font file again that was replaced since at the same path
+/// (an updated font): its earlier coverage no longer holds.
+#[test]
+fn a_rescan_reads_a_font_file_replaced_since_again() {
+    let dir = font_dir("rescan-replaced");
+    let file = dir.join("Replaced.ttf");
+    let regular = "SourceSans3-Regular.ttf";
+    std::fs::write(&file, mapping(regular, "Sysfont Repl1", 0xF_0001, 0xF_0001)).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    assert!(db.fallback_for('\u{F0005}', latin.id()).is_none());
+    std::fs::write(&file, mapping(regular, "Sysfont Repl1", 0xF_0005, 0xF_0005)).unwrap();
+    db.load_system_fonts();
+    let f = db.fallback_for('\u{F0005}', latin.id()).expect("the replaced file maps it now");
+    assert_eq!(f.family, "Sysfont Repl1");
+}
+
 #[test]
 fn a_background_scan_serves_the_first_lookup() {
     let dir = font_dir("background");
