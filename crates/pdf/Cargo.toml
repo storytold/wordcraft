@@ -17,6 +17,7 @@ wordcraft-metafile = { workspace = true }
 craft-pdf = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
+unicode-normalization = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 chrono = { workspace = true }

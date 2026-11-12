@@ -49,6 +49,7 @@ chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
 rayon = "1"
 unicode-bidi = "0.3"
+unicode-normalization = "0.1"
 unicode-segmentation = "1"
 unicode-linebreak = "0.1"
 unicode-script = "0.5"
