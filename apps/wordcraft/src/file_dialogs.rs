@@ -168,9 +168,17 @@ impl Launcher {
                                         Ok(Vec::new())
                                     }
                                     Err(e) => {
-                                        log::info!("portal save dialog unavailable ({e}), using rfd");
-                                        let picked = pick(picking, unparented, TOO_QUICK);
-                                        picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                                        // Giving the dialog up cancels the request. A portal that then
+                                        // fails with another error must not open the rfd dialog, which
+                                        // nothing would be waiting for.
+                                        if portal_arm.as_ref().is_some_and(|armed| armed.token.is_cancelled()) {
+                                            log::info!("portal save dialog given up ({e})");
+                                            Ok(Vec::new())
+                                        } else {
+                                            log::info!("portal save dialog unavailable ({e}), using rfd");
+                                            let picked = pick(picking, unparented, TOO_QUICK);
+                                            picked.map(|f| f.iter().map(|f| f.path().to_string_lossy().to_string()).collect())
+                                        }
                                     }
                                 }
                             } else {
