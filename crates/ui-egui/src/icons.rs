@@ -1034,6 +1034,15 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
         }
         "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // A heading mark, then lines of text.
+        "markdownSource" => {
+            pen.line_c(&[(4.0, 3.0), (4.0, 9.0)], a);
+            pen.line_c(&[(7.5, 3.0), (7.5, 9.0)], a);
+            pen.line_c(&[(2.5, 5.0), (9.0, 5.0)], a);
+            pen.line_c(&[(2.5, 7.0), (9.0, 7.0)], a);
+            pen.lines(3.0, 17.0, &[12.0, 15.0]);
+            pen.lines(11.0, 17.0, &[4.0, 7.0]);
+        }
         "focus" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
