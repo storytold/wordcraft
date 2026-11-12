@@ -289,11 +289,8 @@ impl Package {
             return Err(DocxError::Preservation("source package has unreadable or ambiguous entries".into()));
         }
         // Re-emitting an unsafe ZIP name could attack a consumer that extracts the saved file.
-        if self.files.keys().any(|name| {
-            name.contains(['\\', '\0'])
-                || name.split('/').next().is_some_and(|segment| segment.contains(':'))
-                || name.split('/').any(|segment| matches!(segment, "" | "." | ".."))
-        }) {
+        // Colons are legal IRI characters, but can select Windows streams in any path segment.
+        if self.files.keys().any(|name| name.contains(['\\', '\0', ':']) || name.split('/').any(|segment| matches!(segment, "" | "." | ".."))) {
             return Err(DocxError::Preservation("source package has an unsafe part name".into()));
         }
         Ok(self.files.clone())
