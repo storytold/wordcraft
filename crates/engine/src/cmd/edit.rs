@@ -79,12 +79,14 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some("the Spike is empty")
             }
         }),
-        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste)
+            .key("Mod+V / Shift+Insert")
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
             .key("Mod+Shift+Alt+V"),
         CommandSpec::new("edit.pasteMerge", "Paste: Merge Formatting", "Home › Clipboard › Paste", paste_merge)
-            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "privateClipboard"?: bool}"#),
         CommandSpec::new("edit.clipboardPane", "Clipboard Pane", "Home › Clipboard", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!s.view.clipboard_pane);
             s.view.clipboard_pane = on;

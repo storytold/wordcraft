@@ -1193,6 +1193,52 @@ fn clipboard_round_trip() {
     assert_eq!(text(&s), "plain\ntext");
 }
 
+/// Whether any run in the body is bold.
+fn any_bold(s: &Session) -> bool {
+    s.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.runs.iter()).any(|r| r.props.bold == Some(true))
+}
+
+#[test]
+fn paste_from_another_program_does_not_bring_back_our_fragment() {
+    // Review on #6225: when another program owns the clipboard, matching text must not make
+    // Paste put WordCraft's own formatted fragment back.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "Bold");
+
+    // The same text, copied by another program: paste it as plain text, not our bold fragment.
+    run(&mut s, "document.setText", json!({"text": "Plain "}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": "Bold", "privateClipboard": false}));
+    assert_eq!(text(&s), "Plain Bold");
+    assert!(!any_bold(&s), "{:?}", s.doc.body);
+
+    // Callers that omit the flag (an agent, the CLI) still get the session's own copy.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.paste", json!({"text": "Bold"}));
+    assert!(any_bold(&s), "{:?}", s.doc.body);
+}
+
+#[test]
+fn paste_special_does_not_offer_our_fragment_for_another_programs_copy() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Bold"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+
+    let r = run(&mut s, "edit.pasteSpecial", json!({"text": "Bold", "privateClipboard": false}));
+    let ids: Vec<&str> = r["formats"].as_array().map(|a| a.iter().filter_map(|f| f["id"].as_str()).collect()).unwrap_or_default();
+    assert!(!ids.contains(&"formatted"), "{ids:?}");
+    assert_eq!(s.ui_requests.last().and_then(|r| r.get("privateClipboard")), Some(&json!(false)), "{:?}", s.ui_requests);
+
+    let e = s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "Bold", "privateClipboard": false}));
+    assert!(e.is_err(), "another program's copy cannot be pasted as our fragment");
+}
+
 /// Equations in the paragraphs of a session's body, as linear text.
 fn equations(s: &Session) -> Vec<String> {
     let mut out = Vec::new();
