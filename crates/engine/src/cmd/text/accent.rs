@@ -108,7 +108,7 @@ impl Accent {
 /// An accent key: the next character typed at this selection takes the accent. Changes nothing
 /// in the document, so the typing undo step stays open and the accented letter joins it.
 pub(super) fn wait_for_letter(s: &mut Session, accent: Accent) -> CmdResult {
-    s.accent_prefix = Some((accent, s.sel.clone()));
+    s.accent_prefix = Some((accent, s.sel.clone(), s.document_id()));
     Ok(json!({"accent": accent.name()}))
 }
 
@@ -118,9 +118,9 @@ pub(super) fn not_in_equation(s: &Session) -> Option<&'static str> {
 }
 
 impl Session {
-    /// The accent key waiting for its letter, if any.
+    /// The accent key waiting for its letter in the active document, if any.
     pub fn accent_waiting(&self) -> Option<Accent> {
-        self.accent_prefix.as_ref().map(|(a, _)| *a)
+        self.accent_prefix.as_ref().filter(|(_, _, doc)| *doc == self.document_id()).map(|(a, _, _)| *a)
     }
 
     /// Forget a waiting accent key (Escape, or a key that types nothing).
@@ -138,8 +138,9 @@ impl Session {
             }
             return Cow::Borrowed(params);
         }
-        // The selection moved since the accent key (a click, another window): it is forgotten.
-        if self.accent_prefix.as_ref().is_some_and(|(_, at)| *at != self.sel) {
+        // The selection moved since the accent key (a click), or the letter is typed in another
+        // document (another window): it is forgotten.
+        if self.accent_prefix.as_ref().is_some_and(|(_, at, doc)| *at != self.sel || *doc != self.document_id()) {
             self.accent_prefix = None;
         }
         self.accent_for(params).map_or(Cow::Borrowed(params), Cow::Owned)
@@ -158,7 +159,7 @@ impl Session {
     /// when nothing changes: no accent waits, no character is typed, or the accent doesn't apply
     /// to it.
     fn accent_for(&self, params: &Value) -> Option<Value> {
-        let (accent, _) = self.accent_prefix.as_ref()?;
+        let (accent, _, _) = self.accent_prefix.as_ref()?;
         let text = accent.compose_text(params.get("text")?.as_str()?)?;
         let mut composed = params.clone();
         composed.as_object_mut()?.insert("text".into(), Value::String(text));

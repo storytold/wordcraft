@@ -88,9 +88,10 @@ pub struct Session {
     pub initials: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
-    /// An accent key (Ctrl+', Ctrl+`…) waiting for its letter, with the selection it was pressed
-    /// at: the next `text.insert` there accents its first character (#6328).
-    pub(crate) accent_prefix: Option<(crate::cmd::text::Accent, Selection)>,
+    /// An accent key (Ctrl+', Ctrl+`…) waiting for its letter, with the selection and the id of
+    /// the document it was pressed in: the next `text.insert` there accents its first character
+    /// (#6328). It survives a front end making another document active only to draw it.
+    pub(crate) accent_prefix: Option<(crate::cmd::text::Accent, Selection, u64)>,
     /// Last message for the status bar / agents.
     pub status: String,
     /// Headers/footers `insert.createHeader`/`insert.createFooter` made for a page that had none

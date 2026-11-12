@@ -2156,6 +2156,33 @@ fn an_accent_waits_through_an_empty_or_refused_insertion_and_not_across_document
     assert_eq!(raw_texts(&s), ["e"], "back in the first document");
 }
 
+/// #6368 review: a front end with a window per document makes each window's document active to
+/// draw it (`switch_document`). The accent key waits through a draw of the other window, and a
+/// letter typed in that other document, its caret where this one's is, is not accented.
+#[test]
+fn an_accent_waits_while_another_window_draws_and_stays_in_its_document() {
+    let mut s = s();
+    let first = s.document_id();
+    let second = s.add_document(wordcraft_doc::Document::new());
+    // Both carets stand at the start of an empty document.
+    run(&mut s, "text.accentAcute", json!({}));
+    s.switch_document(first).unwrap();
+    assert_eq!(s.accent_waiting(), None, "not waiting in the other document");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"], "the first document: the accent was pressed in the second");
+    s.switch_document(second).unwrap();
+    assert_eq!(s.accent_waiting(), None, "typing in the first document forgot the accent");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"]);
+
+    run(&mut s, "text.accentAcute", json!({}));
+    s.switch_document(first).unwrap();
+    s.switch_document(second).unwrap();
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute));
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["eé"], "the second document, after the first one drew");
+}
+
 /// #6328: the accented letter is typing: it joins the typing undo step around it, takes
 /// AutoCorrect, and Repeat and macros replay the accented letter, not the plain one.
 #[test]
