@@ -1,7 +1,8 @@
 # Real-time collaboration: implementation status
 
 - Date: 2026-11-12 (PR facts checked at the 2026-11-12T05:45:42Z update of
-  PR #5834; the server slice §5.43 was gated the same day)
+  PR #5834; the server slice §5.43 was gated the same day, and §5.44 is the
+  cabinet's end-to-end run on it)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
@@ -4261,6 +4262,76 @@ no engine, UI or workspace-wide run was taken in this pass.
 `b85e193a`, and `089bec7c` plus this page's documentation commit are local. The
 end-to-end proof — a viewer tab through the real cabinet after a save — belongs
 to the cabinet's M96 acceptance run, not to a headless test here.
+
+### 5.44 The cabinet run: a viewer reads the live document, and Save's version is the cap (run 2026-11-12)
+
+The end-to-end proof §5.43 asked the cabinet's M96 run for. Three SSO accounts
+(`craft-e2e-owner/editor/viewer@lzmkm.ru`) opened file 40 through the cabinet on
+prod (`https://mail.lzmkm.ru`), static pin `0.15.1-collab.c211e63a` unchanged,
+the room rebuilt from `089bec7c` and deployed at 20:18 MSK
+(`wordcraft-collab-server` `7f90a64d…`, backup `4f397800…`). Two engines:
+Chromium 1243 and WebKit 2368 (WPE). The measured flow was the same in both:
+owner and editor open, both type a Cyrillic mark, the owner presses Ctrl+S, and
+the viewer opens **after** that save — the case that was refused `lease`.
+
+| Step | Chromium | WebKit |
+|---|---|---|
+| Two writers | `Участников: 2 | synced` on both | same |
+| Ops sent / applied frames | 29 + 29 sent; 58 + 58 applied | 29 + 29; 58 + 58 |
+| Presence frames | 118 / 101 | 112 / 63 |
+| `Ctrl+S` → `PUT /files/40/content` | `200`, `Изменения сохранены` | `200` |
+| Versions (`GET /files/40/versions`) | 28 → 29 (**10 → 10** rows) | 29 → 30 (**10 → 10**) |
+| Viewer join after the save | `welcome {role:"viewer", participants: 3, resync: true}`, snapshot, **0 `rejected`** | same |
+| Viewer ops / versions after typing | 0; list unchanged | 0; list unchanged |
+| Downloaded `.docx` | 6 861 B, both marks, Cyrillic | 6 869 B, both marks, Cyrillic |
+
+**The viewer.** The `welcome` names it `viewer` beside the owner's and the
+editor's `client_id`s, the snapshot carries the room's document, and the header
+reads `Участников: 3 | synced`. Typing into its canvas puts no `op` on the wire
+(0 frames) and no version in the file; the stored `.docx` holds the two writers'
+marks and does not hold the viewer's. Screenshots in the cabinet repository:
+`docs/acceptance/m96/{chromium,webkit}-viewer.png` and
+`…-viewer-after-typing.png`.
+
+**Save's version.** "10 → 10" is the retention cap, not a missing version:
+`FILES_MAX_VERSIONS` defaults to 10 and `writeContent` snapshots the previous
+content and prunes the oldest, so the row count is constant while the newest
+`version` moves (28 → 29, 29 → 30 above; `created_at` is the save's second).
+A ticket probe around one save of the same bytes says the same from the other
+side: `POST /files/40/craft` before it answers `sessionId
+wordcraft-40-1794507112`, after it `wordcraft-40-1794507197`, and
+`GET /versions` goes 31 → 32. So the cabinet's replace path does create a
+version, and the M95 reading ("версий 10 → 10", `CRAFT-ACCEPTANCE.md` §12.3.1)
+was the cap, not the behaviour.
+
+**What is left, named.** A *writer's* ticket is in the same position as the
+viewer's was and still is not covered: after a save, a new editor tab names the
+new session id and the room answers `rejected code=lease` while the lease holder
+is connected (measured with the fixed room: `offline`, two `rejected` frames,
+no `welcome`; the owner stays `synced`). The cause is the identity the cabinet
+mints:
+
+```go
+// internal/application/craft/service.go
+sessionID := fmt.Sprintf("%s-%d-%d", app.ID, file.ID, file.UpdatedAt.UTC().Unix())   // :639 file, :780 commit ticket
+sessionID := fmt.Sprintf("%s-doc-%d-%d", app.ID, document.ID, document.UpdatedAt.UTC().Unix()) // :868
+```
+
+`sid` is the room's lease (ADR-0008) *and* it moves with the file version, so a
+save mints a new "cabinet session" for the document that is already open. The
+same value is what `CraftEditorView.renew` compares to decide "same room"
+(ADR-0069 §4), which is why a renewal after a save is dropped by the page today.
+The fix belongs to the cabinet, not to the room: keep the version in
+`fileVersion`/the commit etag and make the session id stable per
+`<app>-<fileId>`; the room's join rule then needs no writer exemption. It is
+recorded in the cabinet's `docs/BACKLOG.md` §7 with this evidence.
+
+**Artifacts.** `/tmp/opencode/m96w/`: `accept-chromium.json`,
+`accept-webkit.json`, `prove-session-churn.json`, `probe-writer-after-save.json`,
+`repro-save-viewer-chromium.json` (the same step before the fix: two
+`rejected code=lease` frames and `pending`) and `shots/` (copied to the cabinet
+repository's `docs/acceptance/m96/`). Test accounts and passwords stay in
+`/home/l/projects/mail.lzmkm.ru/.local/craft-e2e-accounts.txt`, not in a script.
 
 ## 6. Where things live
 
