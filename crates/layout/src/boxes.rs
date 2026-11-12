@@ -2,7 +2,7 @@ use super::ctx::{Ctx, page_anchored};
 use super::floats::{
     ObjFrame, ObjectPlacement, WrapArea, align_in, float_rect, floating, left_out_objects, place_objects, rel_exclusions, wrap_area,
 };
-use super::page::PageFrame;
+use super::page::{PageFrame, margin_y};
 use super::placed::Placed;
 use super::table_flow::below;
 use super::{
@@ -290,7 +290,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     let h = ctx.float_height(o, w, h);
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page =
-                            PageFrame { sect: &pin.sect, margin_top: pin.margin_top, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
+                            PageFrame { sect: &pin.sect, margin_area: pin.margin_area, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
                         continue;
                     }
@@ -494,11 +494,7 @@ fn box_float_table_rect(
         let s = fr.sect;
         match f.v_rel {
             Anchor::Page => Some((0.0, s.page_h)),
-            Anchor::Margin => {
-                let mut reference = s.clone();
-                reference.margin_top = fr.margin_top.unwrap_or(s.margin_top);
-                Some((reference.margin_top, reference.text_height()))
-            }
+            Anchor::Margin => Some(margin_y(fr)),
             _ => None,
         }
     };

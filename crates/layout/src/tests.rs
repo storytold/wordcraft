@@ -15065,6 +15065,124 @@ fn header_boundary_pinned() {
     }
 }
 
+/// A header picture aligned in the Margin area when both the header and the footer reach past
+/// their margins: Word centres (or bottom-aligns) it in the rendered body, between the body's
+/// top and the footer's top, not down to the declared bottom margin.
+#[test]
+fn header_margin_tracks_body_bottom() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    for footer_tall in [false, true] {
+        for align in [FloatAlign::Center, FloatAlign::End] {
+            let mut doc = Document::from_text("Body");
+            doc.last_section.margin_top = 20.0;
+            doc.last_section.margin_bottom = 20.0;
+            doc.last_section.header = 36.0;
+            doc.last_section.footer = if footer_tall { 36.0 } else { 0.0 };
+            let mut hp = boundary_header_para();
+            let float =
+                Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: Anchor::Margin, v_align: Some(align), x: 300.0, ..Default::default() };
+            hp.insert_object(0, rect_shape(40.0, 10.0, float), &Default::default()).unwrap();
+            let header = doc.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+            doc.last_section.headers.default = Some(header);
+            if footer_tall {
+                let footer = doc.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(boundary_header_para())]);
+                doc.last_section.footers.default = Some(footer);
+            }
+            let laid = lay(&doc);
+            let page = &laid.pages[0];
+            let s = &doc.last_section;
+            assert!(page.body.y > s.margin_top, "the header reaches past the top margin");
+            let bottom = page.body.bottom();
+            assert_eq!(bottom < s.page_h - s.margin_bottom - 1.0, footer_tall, "footer_tall={footer_tall}: body {:?}", page.body);
+            let expected = match align {
+                FloatAlign::End => bottom - 10.0,
+                _ => page.body.y + (bottom - page.body.y - 10.0) / 2.0,
+            };
+            let rects = shapes(&page.header);
+            assert_eq!(rects.len(), 1);
+            assert!(
+                (rects[0].y - expected).abs() < 0.01,
+                "footer_tall={footer_tall} {align:?}: {:?}, expected {expected}, body {:?}",
+                rects[0],
+                page.body
+            );
+        }
+    }
+}
+
+/// A tall picture bottom-aligned on the Margin in the header: the rendered body bottom (a footer
+/// taller than its margin) lifts it into the header's lines. The body top was measured with the
+/// declared margins, where it stays clear of them, so a picture that wraps text keeps that
+/// placement and the header's lines stay above the body; one behind the text follows the body.
+#[test]
+fn header_margin_wrap_keeps_measured_header_height() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    for wrap in [Wrap::BehindText, Wrap::Square] {
+        let mut doc = Document::from_text("Body");
+        let s = &mut doc.last_section;
+        s.margin_top = 20.0;
+        s.margin_bottom = 20.0;
+        s.header = 36.0;
+        s.footer = 36.0;
+        let (pw, ph) = (s.page_w, s.page_h);
+        // Five 10 pt header lines from 36 to 86; the footer's five lines top at ph - 86. Bottom
+        // on the declared margin the picture's top is 116, below the lines; on the footer's top
+        // it is 50, across them.
+        let h = ph - 136.0;
+        let mut hp = boundary_header_para();
+        let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Margin, v_align: Some(FloatAlign::End), ..Default::default() };
+        hp.insert_object(0, rect_shape(pw, h, float), &Default::default()).unwrap();
+        let header = doc.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        doc.last_section.headers.default = Some(header);
+        let footer = doc.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(boundary_header_para())]);
+        doc.last_section.footers.default = Some(footer);
+        let laid = lay(&doc);
+        let page = &laid.pages[0];
+        assert_eq!((page.body.y, page.body.bottom()), (86.0, ph - 86.0), "{wrap:?}: body {:?}", page.body);
+        let tops: Vec<f32> = page.header.iter().filter_map(|i| if let Placed::Lines { y, .. } = i { Some(*y) } else { None }).collect();
+        assert_eq!(tops, [36.0], "{wrap:?}: the header's lines stay where the body top was measured");
+        let expected = if wrap == Wrap::Square { ph - 20.0 - h } else { page.body.bottom() - h };
+        let rects = shapes(&page.header);
+        assert_eq!(rects.len(), 1);
+        assert!((rects[0].y - expected).abs() < 0.01, "{wrap:?}: {:?}, expected {expected}", rects[0]);
+    }
+}
+
+/// The header laid out again with the declared margins (above) counts its list labels from the
+/// same place as the layout it replaces: each page's header shows the next number, once.
+#[test]
+fn header_margin_wrap_retry_counts_labels_once() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    let labels = |wrap: Wrap| {
+        let mut doc = Document::from_text(&"Body\n".repeat(120));
+        let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        let s = &mut doc.last_section;
+        s.margin_top = 20.0;
+        s.margin_bottom = 20.0;
+        s.header = 36.0;
+        s.footer = 36.0;
+        let (pw, ph) = (s.page_w, s.page_h);
+        let mut hp = boundary_header_para();
+        hp.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Margin, v_align: Some(FloatAlign::End), ..Default::default() };
+        hp.insert_object(0, rect_shape(pw, ph - 136.0, float), &Default::default()).unwrap();
+        let header = doc.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+        doc.last_section.headers.default = Some(header);
+        let footer = doc.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(boundary_header_para())]);
+        doc.last_section.footers.default = Some(footer);
+        let laid = lay(&doc);
+        assert!(laid.pages.len() >= 2, "{wrap:?}: {} pages", laid.pages.len());
+        laid.pages
+            .iter()
+            .map(|p| {
+                p.header.iter().find_map(|it| if let Placed::Lines { para, .. } = it { para.label.as_ref().map(|l| l.text.clone()) } else { None })
+            })
+            .collect::<Vec<_>>()
+    };
+    let retried = labels(Wrap::Square);
+    assert_eq!(retried, labels(Wrap::BehindText), "the retried header counts like the one laid out once");
+}
+
 #[test]
 fn header_boundary_obstacle() {
     use wordcraft_doc::para::Anchor;
