@@ -50,7 +50,9 @@ fn table_width_at_caret(s: &mut Session) -> f32 {
         _ => None,
     });
     let x = lines_x.unwrap_or(caret.x) - page.body.x;
-    boxes.iter().rev().find(|(cx, _)| x >= cx - 0.5).map_or(first, |(_, w)| *w)
+    // The column with the rightmost left edge at or before x. `column_boxes` is in reading order,
+    // which in a right-to-left section runs leftwards, so pick by edge, not by position in it.
+    boxes.iter().filter(|(cx, _)| x >= cx - 0.5).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(first, |(_, w)| *w)
 }
 
 pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
@@ -66,6 +68,9 @@ pub(super) fn table(s: &mut Session, v: &Value) -> CmdResult {
     // The table replaces the selection: sized for where it goes once the selection is deleted, as
     // a selection across a section break leaves one section's properties.
     delete_selection(s)?;
+    // A new revision, so the caret's column is read from the document after the deletion, not
+    // from pages laid out before it.
+    s.touch();
     let mut t = Table::new(rows, cols, table_width_at_caret(s));
     if style.is_some() {
         t.props.style = style;
