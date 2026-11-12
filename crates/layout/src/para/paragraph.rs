@@ -837,6 +837,14 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     if !before_slash.is_empty() {
         found.extend(before_slash);
     }
+    // Word breaks after a space whatever follows it, where UAX #14 keeps a space with a closing
+    // bracket or punctuation after it (LB13: "x :=", "false );", "JDK} ,") and an opening bracket
+    // with the space after it (LB14: "( word"). Measured in Word for Mac and Windows: the next line
+    // starts with ":=", ";", ",", ".", ")", "]", "}", "!", "?", "%", or with "word" after "( ". Not
+    // before another space or a no-break space: the spaces stay together.
+    found.extend(
+        text.match_indices(' ').map(|(i, _)| i + 1).filter(|&i| text.get(i..).and_then(|t| t.chars().next()).is_some_and(|c| !c.is_whitespace())),
+    );
 
     // Word breaks after a hyphen even when a digit follows ("2016-" / "2022"), where UAX #14
     // keeps a hyphen and a number together (LB25), and when a slash and a letter follow

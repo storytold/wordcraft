@@ -7592,6 +7592,42 @@ fn no_line_break_right_after_a_slash() {
     assert!(lines > 10, "{lines} lines");
 }
 
+#[test]
+fn a_line_breaks_after_a_space_before_closing_punctuation() {
+    // UAX #14 (LB13) keeps a space with the ":", ")" or "," after it, so "status := 1" moved down
+    // whole with the word before it; Word breaks at the space and starts the next line with ":="
+    // (measured in Word for Mac and Windows: ":=", ";", ",", ")", "}", "!" all start a line).
+    let text: String =
+        (1..80).map(|i| format!("{} := 1; {} ); {} , ", "w".repeat(i % 9 + 1), "v".repeat(i % 7 + 1), "u".repeat(i % 5 + 1))).collect();
+    let lines = body_lines(&lay(&Document::from_text(&text)), &text);
+    assert!(lines.len() > 5, "{lines:?}");
+    assert!(lines.iter().any(|l| l.starts_with([':', ')', ','])), "no line starts with the punctuation: {lines:?}");
+}
+
+#[test]
+fn a_line_breaks_after_the_space_of_an_opening_bracket() {
+    // UAX #14 (LB14) keeps "( " with the word after it; Word breaks after the space.
+    let text: String = (1..60).map(|i| format!("{} ( word ", "w".repeat(i % 9 + 1))).collect();
+    let lines = body_lines(&lay(&Document::from_text(&text)), &text);
+    assert!(lines.iter().any(|l| l.trim_end().ends_with('(')), "no line ends with the bracket: {lines:?}");
+}
+
+/// The lines of the body's first paragraph, as text.
+fn body_lines(l: &DocLayout, text: &str) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| &p.items)
+        .filter_map(|it| {
+            if let Placed::Lines { para, l0, l1, .. } = it {
+                Some(para.lines[*l0..*l1].iter().map(|line| text[line.start..line.stop].to_string()))
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect()
+}
+
 /// #2963: a word after a slash ("caption /заполняется") wraps whole, as in Word. UAX #14 forbids a
 /// break between the space and the slash, and the break after the slash is dropped (Word keeps
 /// "and/or" whole), so the slash word had no break before it and split between two letters.
