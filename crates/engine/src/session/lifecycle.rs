@@ -1,7 +1,7 @@
 use super::doc_state::MAX_UI_REQUESTS;
 use super::prefs::Prefs;
 use super::view::ViewState;
-use super::{Arc, DocState, Document, ImeEditOutcome, Registry, Session, Value};
+use super::{Arc, DEFAULT_AUTHOR, DocState, Document, ImeEditOutcome, Registry, Session, Value};
 
 impl Session {
     /// Queue a request for the front end. A headless session never drains the queue, so only
@@ -106,7 +106,7 @@ impl Session {
             goal_x,
             page_hint,
             registry,
-            author: "WordCraft User".into(),
+            author: DEFAULT_AUTHOR.into(),
             initials: String::new(),
             painter: None,
             status: String::new(),

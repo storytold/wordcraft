@@ -41,6 +41,11 @@ pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
 
+/// The author name a session starts with, until the host or File › Options sets the user's own.
+/// The desktop app replaces it with the system account's name on a first start (#2209), so it
+/// never counts as a name the person chose; anything still holding it is a name worth asking for.
+pub const DEFAULT_AUTHOR: &str = "WordCraft User";
+
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which
 /// every command works on; the other open documents wait in [`DocState`] values and are swapped

@@ -69,6 +69,11 @@ x11rb = "0.13"
 # these versions and with this feature.
 x11-dl = "2.21"
 xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
+# The account's uid, for the `user_name` passwd lookup: the environment's logon name can say
+# anything, and a non-dumpable process's `/proc/self` belongs to root (proc(5)), so neither says
+# which account this process runs as. `getuid` through `libc` needs unsafe, which the workspace
+# forbids; rustix is already in the build at this version, and this adds only its `process` module.
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The upstream default-apps button opens Windows Settings; printing uses craft-print instead.
@@ -76,9 +81,10 @@ open = "5"
 # The system's Animation effects setting (Settings › Accessibility › Visual effects), read through
 # the Windows Runtime's UISettings: a safe API, where the Win32 call needs unsafe, which our
 # workspace forbids. Already in the build through wgpu and AccessKit, at this version; this adds
-# only the `UI_ViewManagement` bindings, and `System_UserProfile` for the home region new
-# documents take their paper and units from (#838).
-windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfile"] }
+# only the `UI_ViewManagement` bindings, `System_UserProfile` for the home region new documents
+# take their paper and units from (#838), and `System` for the account's first and last name a
+# first start takes as the user name (#2209).
+windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfile", "System"] }
 # The clipboard's "Rich Text Format" and the names of its formats (#687, #833), which arboard
 # doesn't read. Already in the build through arboard, at this version.
 clipboard-win = { version = "5.4", features = ["std"] }
