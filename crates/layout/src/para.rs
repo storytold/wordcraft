@@ -41,6 +41,7 @@ use lines::break_lines;
 pub(crate) use lines::takes_room;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
+pub(crate) use paragraph::layout_para_continued;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;
 pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text};
@@ -141,7 +142,7 @@ impl ParaLayout {
     }
 
     /// The automatic space in cluster `k`'s advance ([`auto_space`]), 0 without one.
-    fn auto_space_after(&self, k: usize) -> f32 {
+    pub(crate) fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)
     }
     /// The line the list label is drawn on: the first, unless the paragraph opens with a page

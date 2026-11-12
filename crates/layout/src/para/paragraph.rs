@@ -3,7 +3,7 @@ use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
 use super::justify::hyphenation_points;
-use super::lines::break_lines;
+use super::lines::{break_lines, break_lines_from};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, ParaEnv, RubyLayout, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
 use wordcraft_fonts::ShapeContext;
@@ -645,6 +645,16 @@ fn shown_text(cx: &Cx) -> Option<String> {
 
 /// Lay out one paragraph.
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
+    layout_para_from(p, env, None)
+}
+
+/// Rebreak a continuation from its byte offset, retaining a non-painted prefix so borders,
+/// numbering and object anchors still distinguish it from the paragraph's first piece.
+pub(crate) fn layout_para_continued(p: &Paragraph, env: &ParaEnv, resume: (usize, f32)) -> ParaLayout {
+    layout_para_from(p, env, Some(resume))
+}
+
+fn layout_para_from(p: &Paragraph, env: &ParaEnv, resume: Option<(usize, f32)>) -> ParaLayout {
     #[cfg(test)]
     crate::test_fonts();
     let doc = env.doc;
@@ -721,7 +731,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     keep_graphemes_whole(&mut pl);
-    break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    if let Some(resume) = resume {
+        break_lines_from(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l), resume);
+    } else {
+        break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    }
     if gone {
         collapse(&mut pl);
     }

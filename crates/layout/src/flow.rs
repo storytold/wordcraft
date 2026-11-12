@@ -104,6 +104,14 @@ pub(crate) fn again<T>(ctx: &mut Ctx, eq_start: u32, f: impl FnOnce(&mut Ctx) ->
 /// columns and pages it runs onto (#1374).
 const MAX_WRAP_RELAYS: usize = 64;
 
+/// Bound repeated layouts when a paragraph crosses unequal columns (#2382).
+const MAX_WIDTH_RELAYS: usize = 64;
+
+#[cfg(test)]
+thread_local! {
+    pub(crate) static WIDTH_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`), then take it back.
 fn with_page_map<T>(ctx: &mut Ctx, map: &mut Vec<(usize, u32)>, f: impl FnOnce(&mut Ctx) -> T) -> T {
     ctx.fields.page_from = std::mem::take(map);
@@ -173,8 +181,12 @@ struct Flow<'a> {
     /// of pages keeps the last number it got), and for the wrap areas of a later column (#1374).
     page_relays: usize,
     wrap_relays: usize,
+    width_relays: usize,
     /// The first line not placed yet.
     l0: usize,
+    /// The top where this piece was rebroken from, before an exclusion moved its first line
+    /// down. Placement retains that leading clearance instead of moving the line back up.
+    resume_top: Option<f32>,
     /// Its floats anchored on a later page or column than its first piece (#4250).
     late: LateFloats,
     /// Whether the floats past the first piece were checked ([`Flow::recheck_late`]), and those
@@ -217,7 +229,9 @@ impl<'a> Flow<'a> {
             page_map: Vec::new(),
             page_relays: 0,
             wrap_relays: 0,
+            width_relays: 0,
             l0: 0,
+            resume_top: None,
             late: LateFloats::new(&late),
             rechecked: false,
             forced: Vec::new(),
@@ -248,7 +262,16 @@ impl<'a> Flow<'a> {
     /// Lay the paragraph out again around the wrap areas `rel`, with its fields on their pages.
     fn relay(&mut self, ctx: &mut Ctx, rel: &[para::Exclusion]) -> Arc<ParaLayout> {
         let (p, width, eq_start, label) = (self.p, self.laid_width, self.eq_start, &self.label);
-        with_page_map(ctx, &mut self.page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width, None, rel, label.clone())))
+        let resume = if self.width_relays > 0 { self.pl.lines.get(self.l0).map(|l| (l.start, *self.resume_top.get_or_insert(l.top))) } else { None };
+        with_page_map(ctx, &mut self.page_map, |ctx| {
+            again(ctx, eq_start, |ctx| {
+                if let Some(resume) = resume {
+                    ctx.para_continued(p, width, rel, label.clone(), resume)
+                } else {
+                    ctx.para_labelled(p, width, None, rel, label.clone())
+                }
+            })
+        })
     }
 
     /// The space before the paragraph, after the one between it and the previous paragraph is
@@ -356,6 +379,32 @@ impl<'a> Flow<'a> {
         before
     }
 
+    /// Break a natural overflow for the destination column's width (#2382), retaining the
+    /// already placed text and floats. Equal-width columns need no additional layout.
+    fn relay_width(&mut self, ctx: &mut Ctx, pb: &PageBuilder) {
+        if self.l0 == 0 || pb.web || self.width_relays >= MAX_WIDTH_RELAYS || (pb.col_w() - self.laid_width).abs() <= 0.5 {
+            return;
+        }
+        let Some((resume, t)) = self.pl.lines.get(self.l0).map(|l| (l.start, l.top)) else { return };
+        self.width_relays += 1;
+        ctx.fields.page = self.laid_page;
+        #[cfg(test)]
+        WIDTH_RELAYS.with(|c| c.set(c.get() + 1));
+        let width_now = pb.col_w();
+        // Destination exclusions are mapped from the continuation's fixed top; the prefix
+        // is retained only to identify a continuation, never to choose its new line breaks.
+        let here = continued_exclusions(&[], &body_wraps(ctx, pb), pb.col_x(), pb.y, t, width_now);
+        let (p, eq_start, label) = (self.p, self.eq_start, &self.label);
+        let relaid = with_page_map(ctx, &mut self.page_map, |ctx| {
+            again(ctx, eq_start, |ctx| ctx.para_continued(p, width_now, &here, label.clone(), (resume, t)))
+        });
+        if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
+            (self.pl, self.rel, self.l0) = (relaid, here, k);
+            self.laid_width = width_now;
+            self.resume_top = Some(t);
+        }
+    }
+
     /// The lines going into a new column (or page) were broken around the wrap areas where the
     /// paragraph started: break them again around this column's (the lines before stay as they
     /// were, and so do the paragraph's own floating objects), when they differ (#1374).
@@ -364,6 +413,7 @@ impl<'a> Flow<'a> {
             return;
         }
         let Some((resume, t)) = self.pl.lines.get(self.l0).map(|l| (l.start, l.top)) else { return };
+        let t = self.resume_top.unwrap_or(t);
         let here = continued_exclusions(&self.rel, &body_wraps(ctx, pb), pb.col_x(), pb.y, t, self.laid_width);
         if here == self.rel {
             return;
@@ -373,10 +423,11 @@ impl<'a> Flow<'a> {
         #[cfg(test)]
         WRAP_RELAYS.with(|c| c.set(c.get() + 1));
         let relaid = self.relay(ctx, &here);
-        // Only if the rest still starts at the same line, at the same height (an outline
-        // reaching above it could move the lines before down, and the column's areas with them).
+        // A normal whole-paragraph relay must keep the original line and height. After a
+        // width relay, the breaker starts at the saved continuation origin; an exclusion may
+        // move its first line below that origin, and placement keeps the resulting clearance.
         if let Some(k) = relaid.lines.iter().position(|l| l.start == resume)
-            && relaid.lines.get(k).is_some_and(|l| (l.top - t).abs() < 0.01)
+            && relaid.lines.get(k).is_some_and(|l| if self.width_relays > 0 { l.top >= t - 0.01 } else { (l.top - t).abs() < 0.01 })
         {
             (self.pl, self.rel, self.l0) = (relaid, here, k);
         }
@@ -500,6 +551,7 @@ impl<'a> Flow<'a> {
     /// Nothing fits on this page: move to the next column or page, and place the floats again
     /// there if this is the paragraph's start.
     fn move_on(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
+        self.resume_top = None;
         pb.advance(self.block, self.body_top);
         if self.l0 == 0 {
             let y0 = pb.y;
@@ -537,7 +589,9 @@ impl<'a> Flow<'a> {
         {
             edges.up = (y - end).max(0.0);
         }
-        let end = push_para(&mut items, (StoryRef::Body, &[self.block as u32]), &self.pl, (l0, l1), (x, y), self.width, edges);
+        // Decoration follows the column this piece occupies, including after a width relay.
+        let col_w = pb.col_w();
+        let end = push_para(&mut items, (StoryRef::Body, &[self.block as u32]), &self.pl, (l0, l1), (x, y), col_w, edges);
         pb.para_end = Some((pb.pages.len(), pb.col, end));
         // Late floats whose anchor line came here after all are placed with these lines.
         self.late.piece = (pb.pages.len(), pb.col);
@@ -549,7 +603,7 @@ impl<'a> Flow<'a> {
         // Pictures, shapes and text boxes in these lines (web view: floats placed by this piece).
         let at = ObjFrame {
             page: Some(PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror }),
-            col: (x, self.width),
+            col: (x, col_w),
             para_y: if pb.web { y } else { self.anchor_y },
             table_chr: None,
             pinned: None,
@@ -578,6 +632,7 @@ impl<'a> Flow<'a> {
             pb.content_bottom = pb.content_bottom.max(pb.y);
         }
         self.l0 = l1;
+        self.resume_top = None;
     }
 
     /// Start the next page or column if the lines just placed end one, or are not the last.
@@ -631,23 +686,31 @@ impl<'a> Flow<'a> {
         }
     }
 
+    fn continuation_lead(&self) -> f32 {
+        self.resume_top.zip(self.pl.lines.get(self.l0)).map_or(0.0, |(top, line)| (line.top - top).max(0.0))
+    }
+
     /// Late floats anchored in the lines that fit in this column are placed here, so these lines
     /// are broken again around them ([`Flow::relay_wrap`]).
-    fn place_due_late(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) {
+    fn place_due_late(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder) -> bool {
         if self.l0 == 0 || pb.web || self.late.placed.is_empty() {
-            return;
+            return false;
         }
         self.late.piece = (pb.pages.len(), pb.col);
-        let lines = self.l0..fitting(&self.pl, self.l0, pb.y, pb.bottom, (0, pb.top));
-        self.place_due(ctx, pb, lines, pb.y - self.space_here);
+        let lead = self.continuation_lead();
+        let lines = self.l0..fitting(&self.pl, self.l0, pb.y + lead, pb.bottom, (0, pb.top));
+        self.place_due(ctx, pb, lines, pb.y - self.space_here)
     }
 
     /// Place the late floats due with this piece whose anchor line is in `lines`, positioned from
     /// `top`.
-    fn place_due(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, lines: std::ops::Range<usize>, top: f32) {
-        for oi in self.late.due(self.p, &self.pl, lines) {
+    fn place_due(&mut self, ctx: &mut Ctx, pb: &mut PageBuilder, lines: std::ops::Range<usize>, top: f32) -> bool {
+        let due = self.late.due(self.p, &self.pl, lines);
+        let placed = !due.is_empty();
+        for oi in due {
             place_late(ctx, pb, self.p, oi, top, &mut self.late);
         }
+        placed
     }
 
     /// Late floats placed for lines that went on after all (past `l1`) wait for the next piece;
@@ -844,14 +907,24 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         f.anchor_y = y0 - applied_before;
     }
     while f.l0 < f.n() {
-        f.place_due_late(ctx, pb);
-        f.relay_wrap(ctx, pb);
+        f.relay_width(ctx, pb);
+        // A wider continuation can bring another deferred anchor into this piece. Place
+        // newly due floats before painting and rebreak around them, including any further
+        // anchors admitted by that rebreak. The same global relay bound limits this work.
+        for _ in 0..MAX_WRAP_RELAYS {
+            let placed = f.place_due_late(ctx, pb);
+            let before = f.pl.clone();
+            f.relay_wrap(ctx, pb);
+            if (!placed && Arc::ptr_eq(&before, &f.pl)) || f.wrap_relays >= MAX_WRAP_RELAYS {
+                break;
+            }
+        }
         f.relay_pages(ctx, pb);
         // What is laid out for these lines from here (their footnotes) is on this page.
         ctx.fields.page = pb.number;
         // A paragraph's first line may start below its top (pushed down by a floating object).
         let Some(first) = f.pl.lines.get(f.l0) else { break };
-        let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { 0.0 };
+        let lead = if f.l0 == 0 { first.top.max(0.0) + rooms.top } else { f.continuation_lead() };
         let notes = para_notes(ctx.doc, p, &f.pl);
         let mut fit = f.fit_lines(ctx, pb, &notes, lead);
         fit.l1 = f.settled_end(pb, &fit);
