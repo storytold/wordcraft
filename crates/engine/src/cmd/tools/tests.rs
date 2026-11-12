@@ -1116,6 +1116,66 @@ fn compare_style_drops_numbering_with_missing_abstract() {
     let _ = std::fs::remove_file(rev_path);
 }
 
+/// #5841: numbering IDs are document-local. The same numeric ID with a different list definition
+/// is still a style difference, and Accept All/Reject All must switch between the two lists.
+#[test]
+fn compare_style_remaps_same_id_with_different_list_definition() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    let old_abstract = original.numbering.abstract_of(num).cloned().expect("original list definition");
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-same-id-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 });
+    }
+    let new_abstract = revised.numbering.abstract_of(revised_num).cloned().expect("revised list definition");
+    assert_ne!(new_abstract.levels, old_abstract.levels, "the definitions differ");
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-same-id-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(r["changes"], 1, "the differing list is a style change");
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    let imported = h1.para.numbering.expect("style still numbered").num;
+    assert_ne!(imported, num, "the revised list is imported under its own ID");
+    assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_abstract.levels));
+    let ch = h1.para.fmt_change.as_deref().expect("style change recorded");
+    assert_eq!(ch.old.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+
+    let accepted = s.doc.clone();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let rej = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(rej.para.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert_eq!(s.doc.numbering.abstract_of(num).map(|a| &a.levels), Some(&old_abstract.levels));
+
+    let mut acc = Session::new(accepted);
+    acc.run("review.acceptAll", &json!({})).unwrap();
+    let acc_h = acc.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(acc_h.para.numbering, Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }));
+    assert_eq!(acc.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_abstract.levels));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
 /// #5841: carried-forward fmt_change markers do not increment the change count when formatting is identical.
 #[test]
 fn compare_style_carried_forward_fmt_change_no_extra_count() {

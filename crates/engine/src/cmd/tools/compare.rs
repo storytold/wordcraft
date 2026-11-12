@@ -221,8 +221,10 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
                 let mut updated = new_st.clone();
                 updated.para.fmt_change = None;
                 updated.chr.fmt_change = None;
-                let needs_remapping =
-                    updated.para.numbering.is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || s.doc.numbering.num(n.num).is_none()));
+                let needs_remapping = updated
+                    .para
+                    .numbering
+                    .is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || !same_numbering(&s.doc, revised, n.num)));
                 if needs_remapping {
                     remap_style_numbering(&mut s.doc, revised, &mut updated.para.numbering, &mut num_map, &mut abs_map);
                 }
@@ -256,6 +258,13 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
         s.doc.styles = Arc::new(result_styles);
     }
     changes
+}
+
+/// Whether numbering `id` names the same list in both documents: the instance and the abstract
+/// definition it points at, with their overrides. Numbering IDs are document-local, so equal
+/// numbers alone don't make equal lists.
+fn same_numbering(a: &Document, b: &Document, id: u32) -> bool {
+    a.numbering.num(id) == b.numbering.num(id) && a.numbering.abstract_of(id) == b.numbering.abstract_of(id)
 }
 
 /// Import any numbering definition referenced by `num_ref` from `revised` into `doc` and remap
