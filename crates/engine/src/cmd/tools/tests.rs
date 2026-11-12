@@ -603,6 +603,58 @@ fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
 }
 
 #[test]
+fn compare_keeps_a_ref_field_whose_result_changed_live() {
+    // #6268: the heading a REF field points at was renamed, so the revised document's field
+    // shows the new text. The result keeps both fields as fields (the old one deleted, the new
+    // one inserted), not their text, and the saved file still has the field codes.
+    fn with_ref(result: &str) -> Session {
+        let mut s = Session::new(Document::from_text("Title.\nSee "));
+        s.run("caret.set", &json!({"pos": Pos::body(1, "See ".len())})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF h1 \\h", "result": result})).unwrap();
+        s.run("text.insert", &json!({"text": " for details."})).unwrap();
+        s
+    }
+    /// Each field in the second paragraph: its code and result, and whether it is deleted or
+    /// inserted.
+    fn fields(d: &Document) -> Vec<(String, String, bool, bool)> {
+        let p = d.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        p.objects_with_offsets()
+            .filter_map(|(off, o)| match o {
+                InlineObject::Field { instr, result, .. } => {
+                    let c = p.props_of_char(off);
+                    Some((instr.clone(), result.clone(), c.del.is_some(), c.ins.is_some()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+    let f = |r: &str, del, ins| ("REF h1 \\h".to_string(), r.to_string(), del, ins);
+    let dir = std::env::temp_dir();
+    let rev_path = dir.join(format!("wc-compare-ref-{}.docx", std::process::id()));
+    let out_path = dir.join(format!("wc-compare-ref-out-{}.docx", std::process::id()));
+    crate::io::save_path(&rev_path, &with_ref("New title").doc).unwrap();
+    for (then, left, text) in
+        [("review.acceptAll", "New title", "See New title for details."), ("review.rejectAll", "Old title", "See Old title for details.")]
+    {
+        let mut s = with_ref("Old title");
+        s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+        assert_eq!(fields(&s.doc), [f("Old title", true, false), f("New title", false, true)]);
+        crate::io::save_path(&out_path, &s.doc).unwrap();
+        let saved = crate::io::open_path(&out_path).unwrap();
+        assert_eq!(fields(&saved), [f("Old title", true, false), f("New title", false, true)], "saved result");
+        s.run(then, &json!({})).unwrap();
+        assert_eq!(fields(&s.doc), [f(left, false, false)], "{then}");
+        assert_eq!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().plain_text(), text, "{then}");
+    }
+    // An unchanged field stays one field, unmarked.
+    let mut s = with_ref("New title");
+    s.run("review.compare", &json!({"path": rev_path.to_string_lossy()})).unwrap();
+    assert_eq!(fields(&s.doc), [f("New title", false, false)]);
+    let _ = std::fs::remove_file(&rev_path);
+    let _ = std::fs::remove_file(&out_path);
+}
+
+#[test]
 fn compare_bounds_total_diff_work() {
     // Many long, slightly different paragraphs: each pair alone fits one comparison table,
     // but the work over all pairs must stay bounded. Pairs past the budget are compared

@@ -404,6 +404,8 @@ enum Tok<'a> {
 enum Key {
     Text(String),
     Obj(Box<InlineObject>, Vec<String>),
+    /// A field: its code (spacing collapsed) and its result as the options say.
+    Field(String, String),
 }
 
 fn obj_key(doc: &Document, o: &InlineObject) -> Key {
@@ -421,7 +423,8 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them. Fields stay whole objects, so the result keeps them live (#6268); other
+/// objects with text (equations…) count as their text.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
         cur.push(c);
@@ -438,7 +441,7 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
             continue;
         }
         match objects.next() {
-            Some(o) if o.plain_text().is_empty() => {
+            Some(o) if o.plain_text().is_empty() || matches!(o, InlineObject::Field { .. }) => {
                 if !cur.is_empty() {
                     v.push(Tok::Text(std::mem::take(&mut cur)));
                 }
@@ -503,6 +506,10 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t) => Key::Text(ctx.opts.key(t)),
+        // A field whose code or result changed is the old field deleted and the new one inserted.
+        Tok::Obj(InlineObject::Field { instr, result, .. }) => {
+            Key::Field(instr.split_whitespace().collect::<Vec<_>>().join(" "), ctx.opts.key(result))
+        }
         Tok::Obj(o) => obj_key(doc, o),
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
