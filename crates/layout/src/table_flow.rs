@@ -180,15 +180,17 @@ pub(crate) fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc
         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
         let h: f32 = tl.rows.iter().map(|r| r.height).sum();
         if h <= pb.uncapped_bottom() - pb.top + 0.01 {
-            let Some(top) = place_floating_table(ctx, pb, &tl, &f, legacy, block, body_top) else { return };
-            // Running on, it starts at its own top (its vertical offset kept), never above the
-            // text before it.
+            let Some((x, top)) = place_floating_table(ctx, pb, &tl, &f, legacy, block, body_top) else { return };
+            // Running on, it starts where it stands: at its own top (its vertical offset kept),
+            // never above the text before it, and at the left edge clearing the floating tables
+            // before it gave it.
             pb.y = pb.y.max(top);
+            tl.x = x - pb.col_x();
+        } else {
+            // Too tall for a page: Word lets it run across pages like a table in the text, from
+            // its own left edge.
+            tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
         }
-        // Too tall for a page, or placed relative to the paragraph and too tall for the rest of
-        // this one (#2359): Word lets it run across pages like a table in the text, from its own
-        // left edge.
-        tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
     // Its own space above (ODT), not at the top of a page.
     if let Some(s) = t.props.space_before.filter(|s| s.is_finite() && *s > 0.0 && !pb.at_top()) {
@@ -336,8 +338,8 @@ const MAX_TABLE_SPACE: f32 = 1584.0;
 
 /// Place floating table `tl` (`w:tblpPr`): at its own position, which takes no room in the text
 /// flow; the text after it wraps around it. `None` once placed; for a table placed relative to the
-/// paragraph that would run off the page, nothing is placed and its top is returned: the caller
-/// runs it on in the text from there.
+/// paragraph that would run off the page, nothing is placed and its left edge and top are
+/// returned: the caller runs it on in the text from there.
 fn place_floating_table(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
@@ -346,7 +348,7 @@ fn place_floating_table(
     legacy: f32,
     block: usize,
     body_top: f32,
-) -> Option<f32> {
+) -> Option<(f32, f32)> {
     let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
     let w = tl.width.clamp(1.0, 100_000.0);
     let [dl, dt, dr, db] = f.dist_from_text();
@@ -376,7 +378,7 @@ fn place_floating_table(
         if attempt == 0 && !pb.at_top() {
             if f.v_rel == Anchor::Paragraph {
                 if r.bottom() > pb.bottom + 0.01 {
-                    return Some(r.y);
+                    return Some((r.x, r.y));
                 }
             } else if pb.y + h > pb.bottom + 0.01 && pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r))) {
                 pb.advance(block, body_top);

@@ -7617,6 +7617,43 @@ fn a_paragraph_anchored_table_running_on_keeps_its_vertical_offset() {
     assert!((y36 - y0 - 36.0).abs() < 1.0, "36 pt further down: {y0} then {y36}");
 }
 
+/// #2359 review: a paragraph-anchored table moved below another floating table keeps its
+/// distance from the text on the left, and running on it starts there too, not at its offset.
+#[test]
+fn a_paragraph_anchored_table_running_on_keeps_where_clearing_put_it() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let text: Vec<String> = (0..18).map(|i| format!("Paragraph {i} before the tables.")).collect();
+    let mut d = Document::from_text(&(text.join("\n") + "\nAfter the tables."));
+    let table = |rows: usize, dist_left: f32| {
+        let mut t = Table::new(rows, 1, 300.0);
+        for (i, r) in t.rows.iter_mut().enumerate() {
+            r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row {i}"), Default::default()))];
+        }
+        t.props.float = Some(TableFloat {
+            h_rel: Anchor::Column,
+            v_rel: Anchor::Paragraph,
+            dist: [dist_left, 0.0, 0.0, 0.0],
+            overlap: false,
+            ..Default::default()
+        });
+        t
+    };
+    // A short one that fits, then a long one where it stands, which moves below it.
+    d.insert_block(StoryRef::Body, &Path::top(18), wordcraft_doc::Block::Table(table(2, 0.0))).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(19), wordcraft_doc::Block::Table(table(30, 18.0))).unwrap();
+    let l = lay(&d);
+    let first_cell = |of: usize| {
+        l.pages.iter().enumerate().flat_map(|(i, p)| p.items.iter().map(move |it| (i, it))).find_map(|(i, it)| match it {
+            Placed::Cell { story: StoryRef::Body, table, rect, row: 0, .. } if *table == Path::top(of) => Some((i, *rect)),
+            _ => None,
+        })
+    };
+    let (Some((0, short)), Some((0, long))) = (first_cell(18), first_cell(19)) else { panic!("both start on page 1") };
+    assert!(long.y >= short.bottom() - 0.01, "the long table is below the short one: {short:?}, {long:?}");
+    assert!((long.x - short.x - 18.0).abs() < 0.5, "18 pt from the text's left edge, as cleared: {short:?}, {long:?}");
+}
+
 /// #534: a paragraph that starts with a page break right where the page is full keeps the break
 /// on that page: no blank page between the two tables around it.
 #[test]
