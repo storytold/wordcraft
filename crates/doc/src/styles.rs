@@ -55,6 +55,10 @@ pub struct Style {
     /// level-only numbering, and the reader derives it again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub numbering_from_base: bool,
+    /// The old side of the style's paragraph change named only a level; rejecting keeps that
+    /// list inherited from the based-on style, while an explicit old list stays explicit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub old_numbering_from_base: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
 }

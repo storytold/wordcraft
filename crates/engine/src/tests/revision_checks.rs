@@ -1,11 +1,13 @@
 //! #1329: table deletion, Change Case and field unlink respect locked content controls and
 //! Track Changes (Reject All restores what they changed).
 
+use std::sync::Arc;
+
 use serde_json::{Value, json};
 use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::props::{NumRef, ParaProps, PropChange};
 use wordcraft_doc::styles::{Style, StyleKind, StyleSheet};
-use wordcraft_doc::{Pos, StoryRef, Table};
+use wordcraft_doc::{Document, Pos, Revision, RevisionKind, StoryRef, Table};
 
 use crate::{Selection, Session};
 
@@ -510,6 +512,20 @@ fn resolving_a_base_style_change_updates_inherited_numbering() {
             numbering_from_base: true,
             ..Default::default()
         });
+        // Its current list is inherited, but its old side names an explicit list.
+        sheet.styles.push(Style {
+            id: "Reverted".into(),
+            name: "Reverted".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Base".into()),
+            para: ParaProps {
+                numbering: Some(NumRef { num: 99, level: 0 }),
+                fmt_change: PropChange::boxed(0, ParaProps { numbering: Some(NumRef { num: 42, level: 0 }), ..Default::default() }),
+                ..Default::default()
+            },
+            numbering_from_base: true,
+            ..Default::default()
+        });
         sheet
     }
 
@@ -526,9 +542,62 @@ fn resolving_a_base_style_change_updates_inherited_numbering() {
         Some(NumRef { num: 42, level: 2 }),
         "a grandchild reads the corrected parent, not its stale list"
     );
+    let reverted = rejected.styles.iter().find(|s| s.id == "Reverted").expect("Reverted style");
+    assert_eq!(reverted.para.numbering, Some(NumRef { num: 42, level: 0 }));
+    assert!(!reverted.numbering_from_base, "an explicit rejected old list is no longer marked inherited");
 
     let mut accepted = sheet();
     crate::cmd::fmt_revisions::resolve_styles(&mut accepted, true);
+    let reverted = accepted.styles.iter().find(|s| s.id == "Reverted").expect("Reverted style");
+    assert_eq!(reverted.para.numbering, Some(NumRef { num: 99, level: 0 }));
+    assert!(reverted.numbering_from_base, "accepting keeps the inherited current list");
     assert_eq!(accepted.styles.iter().find(|s| s.id == "Mid").expect("Mid style").para.numbering, Some(NumRef { num: 99, level: 1 }));
     assert_eq!(accepted.styles.iter().find(|s| s.id == "Leaf").expect("Leaf style").para.numbering, Some(NumRef { num: 99, level: 2 }));
+}
+
+/// Rejecting a style whose old side names an explicit list clears the inheritance flag; saving
+/// and reloading keeps that rejected list instead of re-deriving the current base list.
+#[test]
+fn rejecting_an_explicit_old_list_survives_save_and_reload() {
+    let mut doc = Document::from_text("Item");
+    {
+        let styles = Arc::make_mut(&mut doc.styles);
+        styles.styles.push(Style {
+            id: "Base".into(),
+            name: "Base".into(),
+            kind: StyleKind::Paragraph,
+            para: ParaProps {
+                numbering: Some(NumRef { num: 99, level: 0 }),
+                fmt_change: PropChange::boxed(0, ParaProps { numbering: Some(NumRef { num: 42, level: 0 }), ..Default::default() }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        styles.styles.push(Style {
+            id: "Child".into(),
+            name: "Child".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Base".into()),
+            para: ParaProps {
+                numbering: Some(NumRef { num: 99, level: 1 }),
+                fmt_change: PropChange::boxed(1, ParaProps { numbering: Some(NumRef { num: 42, level: 1 }), ..Default::default() }),
+                ..Default::default()
+            },
+            numbering_from_base: true,
+            old_numbering_from_base: false,
+            ..Default::default()
+        });
+    }
+    doc.revisions.push(Revision { kind: RevisionKind::Format, author: "Editor".into(), date: "2026-01-01T00:00:00Z".into(), move_name: None });
+    doc.revisions.push(Revision { kind: RevisionKind::Format, author: "Editor".into(), date: "2026-01-01T00:00:00Z".into(), move_name: None });
+
+    crate::cmd::fmt_revisions::resolve_styles(Arc::make_mut(&mut doc.styles), false);
+    let child = doc.styles.styles.iter().find(|s| s.id == "Child").expect("Child style");
+    assert_eq!(child.para.numbering, Some(NumRef { num: 42, level: 1 }));
+    assert!(!child.numbering_from_base, "the rejected explicit list is no longer inherited");
+
+    let reloaded = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).expect("reload");
+    let child = reloaded.styles.styles.iter().find(|s| s.id == "Child").expect("Child style after reload");
+    assert_eq!(child.para.numbering, Some(NumRef { num: 42, level: 1 }), "save and reload keep the rejected list");
+    assert!(!child.numbering_from_base);
 }

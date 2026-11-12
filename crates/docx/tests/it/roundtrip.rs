@@ -269,6 +269,7 @@ fn styles_and_lists_round_trip() {
         locked: true,
         default: false,
         numbering_from_base: false,
+        old_numbering_from_base: false,
         table: None,
     });
     Arc::make_mut(&mut d.styles).upsert(Style {
@@ -3070,6 +3071,16 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
                 </w:pPrChange>
             </w:pPr>
         </w:style>
+        <w:style w:type="paragraph" w:styleId="CustomExplicit">
+            <w:name w:val="Custom Explicit"/>
+            <w:basedOn w:val="CustomBase"/>
+            <w:pPr>
+                <w:numPr><w:ilvl w:val="2"/></w:numPr>
+                <w:pPrChange w:id="3" w:author="Editor" w:date="2026-11-07T00:00:00Z">
+                    <w:pPr><w:numPr><w:ilvl w:val="2"/><w:numId w:val="42"/></w:numPr></w:pPr>
+                </w:pPrChange>
+            </w:pPr>
+        </w:style>
         </w:styles>"#
     );
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
@@ -3106,6 +3117,14 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
         Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }),
         "old level-only list comes from the base style's old numbering"
     );
+    assert!(child.old_numbering_from_base, "the child's old side named only a level");
+
+    let explicit = doc.styles.get("CustomExplicit").expect("CustomExplicit style exists");
+    assert_eq!(explicit.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 2 }));
+    assert!(explicit.numbering_from_base);
+    let ech = explicit.para.fmt_change.as_deref().expect("explicit pPrChange preserved");
+    assert_eq!(ech.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }));
+    assert!(!explicit.old_numbering_from_base, "an explicit old list stays explicit on reject");
 
     // Saving writes inherited styles with level-only numbering; reloading derives the flag again.
     let reloaded = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).expect("reload");

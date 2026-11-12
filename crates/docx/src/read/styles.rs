@@ -143,13 +143,14 @@ impl Reader<'_> {
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
                 if let Some(ch) = p.child("w:pPrChange") {
-                    let mut old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                    let mut old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0).unwrap_or_default();
+                    st.old_numbering_from_base = old.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY);
                     // The old snapshot needs the implicit level too: rejecting restores it, and
                     // nothing else recomputes the level afterwards.
                     if kind == StyleKind::Paragraph && st.builtin && old.outline_level.is_none() {
                         old.outline_level = s.child_val("w:name").and_then(builtin_heading_level);
                     }
-                    st.para.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                    st.para.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old.formatting());
                 }
             }
             // Word gives its built-in heading styles their outline level whether or not the file

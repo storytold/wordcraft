@@ -397,8 +397,15 @@ pub fn resolve_para(p: &mut ParaProps, accept: bool) {
 /// properties via [`resolve_para`] and [`resolve_char`].
 pub fn resolve_styles(sheet: &mut wordcraft_doc::styles::StyleSheet, accept: bool) {
     let changed: Vec<bool> = sheet.styles.iter().map(|s| s.para.fmt_change.is_some()).collect();
-    for s in &mut sheet.styles {
+    // Rejecting restores the old side's provenance too: an explicit old list must stay explicit,
+    // while an old level-only list keeps inheriting from the base.
+    let old_provenance: Vec<Option<bool>> =
+        sheet.styles.iter().map(|s| (!accept && s.para.fmt_change.is_some()).then_some(s.old_numbering_from_base)).collect();
+    for (s, old) in sheet.styles.iter_mut().zip(old_provenance) {
         resolve_para(&mut s.para, accept);
+        if let Some(old) = old {
+            s.numbering_from_base = old;
+        }
         resolve_char(&mut s.chr, accept);
     }
     // An unchanged style whose list came from its based-on style follows it again now that the
