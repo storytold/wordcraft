@@ -44,7 +44,7 @@ const TABLE: u16 = 0x0236;
 
 /// Whether `bytes` is a compound file holding an Excel workbook stream.
 pub fn is_xls(bytes: &[u8]) -> bool {
-    if !bytes.starts_with(&MAGIC) {
+    if !bytes.starts_with(&MAGIC) || wordcraft_doc::cfb_guard::check(bytes).is_err() {
         return false;
     }
     let Ok(comp) = cfb::CompoundFile::open(Cursor::new(bytes)) else { return false };
@@ -68,6 +68,7 @@ pub fn read_rows(bytes: &[u8], pick: super::Pick<'_>) -> Result<(Vec<String>, Ve
 }
 
 fn workbook_stream(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    wordcraft_doc::cfb_guard::check(bytes).map_err(|e| format!("not a valid Excel 97–2003 workbook ({e})"))?;
     let mut comp = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|e| format!("not a valid Excel 97–2003 workbook ({e})"))?;
     if !comp.is_stream("/Workbook") {
         if comp.is_stream("/Book") {
@@ -317,14 +318,41 @@ fn sheet_rows(stream: &[u8], offset: usize, g: &Globals) -> Result<Vec<Vec<Strin
     // A FORMULA with a string result waits for the STRING record after it (only shared-formula,
     // array and table records may come between).
     let mut pending: Option<(u16, u16)> = None;
+    let mut depth = 1usize;
     while let Some((kind, d, next)) = record(stream, pos) {
         pos = next;
-        if kind == EOF || kind == BOF {
-            break;
+        if kind == BOF {
+            depth = depth.saturating_add(1);
+            continue;
+        }
+        if kind == EOF {
+            depth = depth.saturating_sub(1);
+            if depth == 0 {
+                break;
+            }
+            continue;
+        }
+        if depth > 1 {
+            continue;
         }
         if kind == STRING {
-            if let (Some((r, c)), Some(s)) = (pending.take(), unicode_string(d, 0)) {
-                put(&mut cells, r, c, &s, &mut count);
+            let mut parts = vec![d];
+            let mut p = pos;
+            while let Some((CONTINUE, cd, n)) = record(stream, p) {
+                parts.push(cd);
+                p = n;
+            }
+            pos = p;
+            if let Some((r, c)) = pending.take() {
+                let cch = usize::from(u16_at(parts[0], 0).unwrap_or(0));
+                let high = parts[0].get(2).is_some_and(|f| f & 1 != 0);
+                if let Some(s) = parts[0].get(3..).and_then(|first| {
+                    let mut all_parts = vec![first];
+                    all_parts.extend_from_slice(&parts[1..]);
+                    Pieces::new(all_parts).chars(cch, high)
+                }) {
+                    put(&mut cells, r, c, &s, &mut count);
+                }
             }
             continue;
         }
@@ -513,6 +541,59 @@ mod tests {
         r.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect()
     }
 
+    /// #3642: a DIFAT naming one FAT sector thousands of times is refused before `cfb` builds
+    /// a FAT far larger than the file.
+    #[test]
+    fn a_repeating_difat_is_refused_before_cfb_opens_it() {
+        let f = wordcraft_doc::cfb_guard::repeating_difat_sample();
+        assert!(!is_xls(&f));
+        assert!(sheet_names(&f).is_err_and(|e| e.contains("FAT sectors in a file of")));
+    }
+
+    /// #3642 review: valid workbooks pass the guard and open. The repository keeps no files
+    /// Excel made, so these are written by the `cfb` crate in the shape of Excel 97–2003 ones:
+    /// the Workbook stream [`build`] writes with the summary streams Excel adds, in 512-byte
+    /// sectors (version 3, Excel's own) and 4096-byte ones (version 4); and one with an 8 MB
+    /// stream beside it, past what the header's 109 FAT sector slots map in 512-byte sectors, so
+    /// its FAT sectors are listed in a DIFAT chain too, which the guard walks.
+    #[test]
+    fn valid_xls_shaped_compound_files_pass_the_guard_and_open() {
+        use std::io::{Read, Write};
+        let book = build(&[("Sheet1", rows(&[&["a", "1"], &["b", "2"]]))]).unwrap();
+        let mut workbook = Vec::new();
+        cfb::CompoundFile::open(Cursor::new(book.as_slice())).unwrap().open_stream("/Workbook").unwrap().read_to_end(&mut workbook).unwrap();
+        let file = |version: cfb::Version, streams: &[(&str, &[u8])]| {
+            let mut comp = cfb::CompoundFile::create_with_version(version, Cursor::new(Vec::new())).unwrap();
+            for (name, data) in streams {
+                comp.create_stream(format!("/{name}")).unwrap().write_all(data).unwrap();
+            }
+            comp.into_inner().into_inner()
+        };
+        let summary = vec![0xFEu8; 4096];
+        let big: Vec<u8> = (0..8usize << 20).map(|i| (i % 251) as u8).collect();
+        let files = [
+            ("as built", book.clone()),
+            (
+                "version 3",
+                file(
+                    cfb::Version::V3,
+                    &[("Workbook", &workbook), ("\u{5}SummaryInformation", &summary), ("\u{5}DocumentSummaryInformation", &summary)],
+                ),
+            ),
+            ("version 4", file(cfb::Version::V4, &[("Workbook", &workbook), ("\u{5}SummaryInformation", &summary)])),
+            ("with a DIFAT chain", file(cfb::Version::V3, &[("Workbook", &workbook), ("Ctls", &big)])),
+        ];
+        let difat_sectors = |f: &[u8]| f.get(0x48..0x4C).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        assert!(difat_sectors(&files[3].1) > 0, "the 8 MB file lists FAT sectors past the header's");
+        for (what, f) in &files {
+            assert_eq!(wordcraft_doc::cfb_guard::check(f), Ok(()), "{what}");
+            assert!(is_xls(f), "{what}");
+            assert_eq!(sheet_names(f).unwrap(), vec!["Sheet1"], "{what}");
+            let (_, r) = read_rows(f, Pick::Index(0)).unwrap();
+            assert_eq!(r, rows(&[&["a", "1"], &["b", "2"]]), "{what}");
+        }
+    }
+
     #[test]
     fn reads_a_biff8_workbook() {
         let book = build(&[
@@ -595,6 +676,17 @@ mod tests {
         assert_eq!(sheet_rows(&sheet_stream(&recs), 0, &g).unwrap(), rows(&[&["late"]]));
     }
 
+    /// #2334: a formula's string result split by a CONTINUE record is read whole.
+    #[test]
+    fn formula_string_continues_in_a_continue_record() {
+        let mut formula = vec![0u8, 0, 0, 0, 0, 0, 0xFF, 0xFF];
+        formula.extend_from_slice(&[0; 6]);
+        let g = globals_with(Vec::new());
+        // cch 4, Latin-1: two characters here, the other two after the CONTINUE's flag byte.
+        let recs = vec![(FORMULA, cell(0, 0, &formula)), (STRING, vec![4u8, 0, 0, b'a', b'b']), (CONTINUE, vec![0u8, b'c', b'd'])];
+        assert_eq!(sheet_rows(&sheet_stream(&recs), 0, &g).unwrap(), rows(&[&["abcd"]]));
+    }
+
     #[test]
     fn hostile_workbooks_fail_cleanly() {
         let book = build(&[("S", rows(&[&["a", "1"]]))]).unwrap();
@@ -618,5 +710,39 @@ mod tests {
         comp.create_stream("/Book").unwrap();
         let old = comp.into_inner().into_inner();
         assert!(sheet_names(&old).unwrap_err().contains("Excel 5.0/95"));
+    }
+
+    #[test]
+    fn embedded_substream_does_not_truncate_sheet() {
+        let mut stream = Vec::new();
+        fn rec(out: &mut Vec<u8>, kind: u16, data: &[u8]) {
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(&(data.len() as u16).to_le_bytes());
+            out.extend_from_slice(data);
+        }
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x05, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let sheet_offset = 37u32;
+        rec(&mut stream, BOUNDSHEET, &[sheet_offset as u8, 0, 0, 0, 0, 0, 1, 0, b'S']);
+        rec(&mut stream, EOF, &[]);
+        assert_eq!(stream.len(), sheet_offset as usize);
+        // Worksheet BOF
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x10, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        // Cell row 0, col 0 = NUMBER 1.0
+        let mut c1 = vec![0, 0, 0, 0, 0, 0];
+        c1.extend_from_slice(&1.0f64.to_le_bytes());
+        rec(&mut stream, NUMBER, &c1);
+        // Embedded chart substream: BOF(0x0020) ... EOF
+        rec(&mut stream, BOF, &[0x00, 0x06, 0x20, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        rec(&mut stream, EOF, &[]);
+        // Cell row 1, col 0 = NUMBER 2.0
+        let mut c2 = vec![1, 0, 0, 0, 0, 0];
+        c2.extend_from_slice(&2.0f64.to_le_bytes());
+        rec(&mut stream, NUMBER, &c2);
+        // Worksheet EOF
+        rec(&mut stream, EOF, &[]);
+
+        let g = globals(&stream).unwrap();
+        let rows = sheet_rows(&stream, sheet_offset as usize, &g).unwrap();
+        assert_eq!(rows, vec![vec!["1".to_string()], vec!["2".to_string()]]);
     }
 }

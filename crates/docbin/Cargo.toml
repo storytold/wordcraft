@@ -17,7 +17,9 @@ miniz_oxide = { workspace = true }
 sha1 = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }
 serde_json = { workspace = true }
