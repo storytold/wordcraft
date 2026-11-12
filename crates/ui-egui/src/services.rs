@@ -21,6 +21,10 @@ pub struct Services {
     /// sender counts as cancelled. An `Err` says no system dialog could be shown, and the app shows
     /// its built-in file browser instead (#576). The app shows one dialog at a time ([`file_dialogs`]).
     pub file_dialog: Option<Box<dyn Fn(FileDialogRequest) -> std::sync::mpsc::Receiver<FileDialogAnswer>>>,
+    /// Desktop: stop waiting for the system file dialog the host is showing, if it can (a portal
+    /// that never answers). The app calls it when it gives the dialog up (File › Open › Browse in
+    /// WordCraft…), so the host closes the request and answers as cancelled.
+    pub cancel_file_dialog: Option<Box<dyn Fn()>>,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
