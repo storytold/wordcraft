@@ -74,6 +74,11 @@ pub struct Session {
     /// RTF for the system clipboard beside [`Self::clipboard_html`], for programs that read RTF
     /// rather than HTML; empty when nothing was copied.
     pub clipboard_rtf: String,
+    /// The source document context captured at Copy, shared across open documents.
+    pub clipboard_source: Option<Arc<Document>>,
+    pub clipboard_document_id: u64,
+    pub clipboard_native_id: u64,
+    pub clipboard_whole: bool,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
     pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
