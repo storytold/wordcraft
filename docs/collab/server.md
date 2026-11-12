@@ -102,6 +102,15 @@ it, not by the id it happens to hold. A claim from another account or another
 cabinet session is refused `invalid` (not retryable) and counted in
 `wordcraft_collab_client_id_conflicts_total`.
 
+**A role that cannot write takes no lease** (ADR-0008, §5.43 of `STATUS.md`).
+The cabinet mints a session id per file version, so a read-only ticket issued
+after a save names a different `sid` than the one holding the room. A `viewer`
+joins anyway: it takes nothing and can damage nothing, and the lease stays with
+the session that holds it — including its TTL — so the writers it protects keep
+writing. Its operation is refused by the role gate (`forbidden`, final), never
+by the lease: `lease` is retryable, and a read-only client would wait for a
+lease it will never hold.
+
 ## Snapshots on disk
 
 A room is snapshotted every 500 operations, after a commit, when its last peer

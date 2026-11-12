@@ -1,80 +1,62 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-12 (PR facts checked at the 2026-11-11T21:11:02Z delivery)
+- Date: 2026-11-12 (PR facts checked at the 2026-11-12T05:45:42Z update of
+  PR #5834; the server slice §5.43 was gated the same day)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
-  since 2026-11-10 14:57Z, no longer a draft)
-- Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4)
+  since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
+  authoritative sync server, document adapter, client core"
+- Base: upstream `main` `4b0d3995`; the branch was rebased onto it (§5.4) and
+  the PR's `baseRefOid` is still that commit. Upstream `main` was `10e5bb8b`
+  (64 commits past the base) when this page was updated, and the branch was not
+  rebased again.
 - The delivered head of PR #5834 is the documentation tip of the branch — the
-  commit that carries this page, one fast-forward away for the owner. The code
-  head **of that tip** is `d7a4cf05` (§5.42, the two hosts and the panel), above
-  `347947ef` (§5.41, `crates/collab-client` only); the
-  code head of the *delivered* tip `d55d7c94` was `a32524b5`, and every code
-  fact on this page is about `a32524b5` unless it names §5.41 or §5.42. When the
-  delivery was checked the tip that the fork and the PR answered was `d55d7c94`
-  ("docs(collab): sync STATUS to the delivered head b4b5f50b and the PR's
-  state"; `docs/collab/STATUS.md` only, +106/−64), one documentation commit
-  above `b4b5f50b` (+126/−70, the page that recorded the `a32524b5` delivery
-  and the runs on it), which rides on `a32524b5` (the documentation triage of
-  review `5855379673` — `docs/collab/STATUS.md`, ADR 0003 and `server.md`:
-  three files, +152/−41), on `65037c7b` (the code answer to the same review —
-  six files, +493/−48), on `fab0530c` (the page that recorded the delivery of
-  `2e414114`) and above `2e414114`, `af6c311b` and `50c68e3a`. `2e414114`,
-  which §5.36 described as the delivered head, and `50c68e3a`, the head of
-  §5.34 and §5.35, are history now. `d55d7c94` is **delivered**: the fork
-  branch (`git ls-remote fork refs/heads/feature/realtime-collaboration`), the
-  `headRefOid` of PR #5834 and the local `HEAD` of `upstream/` all answered
-  `d55d7c94e3133cae42f9fd8b4243b996428cdc6d`, the PR was updated at
-  2026-11-11T21:11:02Z, `git rev-list --left-right --count
-  fork/feature/realtime-collaboration...HEAD` was `0 0` and the tree was clean
-  (§5.40). The shape of this sentence is deliberate: each documentation sync
-  lands one commit above the previous tip, becomes the delivered head and
-  leaves the code head `a32524b5` untouched, so the paragraph stays true after
-  the next docs commit too; `d55d7c94` is the value the check returned, not the
-  only head this page could describe. At `d55d7c94`, the branch is 102 commits
-  over `4b0d3995` and its diff is 69 files, +31645/−22; the PR's `baseRefOid`
-  is still `4b0d3995`, upstream `main` was `07f97737` (62 commits past that
-  base) when this page was updated, and the branch was not rebased again. The
-  eight findings of `5853542478` are answered in `af6c311b`, each with the test
-  or ADR §5.35 names; the ninth, the
-  snapshot rollback in the review body, is closed in §5.41, and §5.42 renders
-  the queue it takes at the author's panel. The nine
-  findings of `5855379673` are answered in `65037c7b` and `a32524b5` and
-  triaged in §5.37; the whole branch is in the fork and in the PR. It was
-  pushed on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z (`077b4056`), at
-  20:15Z (`af9a43a2`), around 03:27Z on 2026-11-11 (`50c68e3a`), at 07:26Z
-  (`af6c311b` and `2e414114` together), at 11:27Z (`fab0530c`, `65037c7b` and
-  `a32524b5` together), at 13:29Z (`b4b5f50b`) and at 21:11Z (`d55d7c94`); at
-  each point the local `HEAD`, the fork branch and the `headRefOid` of PR #5834
-  were the same commit
-  (§5.21, §5.24, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39, §5.40). This page is
-  the documentation sync that becomes the next tip (`docs/collab/STATUS.md`
-  only); the owner's one fast-forward publishes it.
+  commit that carries §5.42 — and the code head under that tip is `d7a4cf05`
+  (§5.42, the two hosts and the panel), above `347947ef` (§5.41,
+  `crates/collab-client` only). When it was checked, the fork branch
+  (`git ls-remote fork refs/heads/feature/realtime-collaboration`), the
+  `headRefOid` of PR #5834 and the local `HEAD` all answered
+  `b85e193af8706c29dd5e79f0869f6c0edc59d6f2`, the tree was clean and
+  `git rev-list --left-right --count fork/feature/realtime-collaboration...HEAD`
+  was `0 0`; the PR was updated at 2026-11-12T05:45:42Z. At `b85e193a` the
+  branch is 107 commits over `4b0d3995` and its diff is 70 files, +32598/−22.
+  `d55d7c94` (§5.40), `bd8efca0` and `7a6c9543` are history now: each was the
+  delivered head in its turn.
+- Above the delivered head the local branch carries two commits the fork and
+  the PR do not have: `089bec7c` (the server slice of §5.43 —
+  `apps/collab-server/src/lib.rs` +22/−6 and `src/tests.rs` +50, gated on the
+  build host) and the documentation sync that carries this page. The owner's
+  one fast-forward publishes both. The shape of the paragraph above is
+  deliberate: each documentation sync lands one commit above the previous tip,
+  becomes the delivered head and leaves the code head alone, so the paragraph
+  stays true after the next sync too; `b85e193a` is the value the check
+  returned, not the only head this page could describe.
+- The branch was pushed on 2026-11-10 at 14:38Z (`15c9625b`), around 17:14Z
+  (`077b4056`), at 20:15Z (`af9a43a2`), around 03:27Z on 2026-11-11
+  (`50c68e3a`), at 07:26Z (`af6c311b` and `2e414114` together), at 11:27Z
+  (`fab0530c`, `65037c7b` and `a32524b5` together), at 13:29Z (`b4b5f50b`), at
+  21:11Z (`d55d7c94`) and at 05:42Z on 2026-11-12 (`b85e193a`); at each point
+  the local `HEAD`, the fork branch and the `headRefOid` of PR #5834 were the
+  same commit (§5.21, §5.24, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39, §5.40).
 - The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
   branch merges cleanly, and `BLOCKED` is the required review plus the
-  unapproved workflows. It was marked ready for review at 2026-11-10
-  14:57:53Z, and the title reads "Real-time collaboration: authoritative sync
-  server, document adapter, client core". Its rollup on `d55d7c94` holds one
-  check, CodeRabbit's `skipped` (started and finished at 2026-11-11T21:13:02Z);
-  no run on that head has executed. The fork git source is gone from the
-  manifest and the
-  lock (§5.24), and the three `printing.yml` steps are green on the pushed tree
-  at the build host (§5.25).
+  unapproved workflows. Its rollup on `b85e193a` holds one check, CodeRabbit's
+  `skipped` (started and finished at 2026-11-12T05:44:26Z); no run on that head
+  has executed. The fork git source is gone from the manifest and the lock
+  (§5.24), and the three `printing.yml` steps are green on the pushed tree at
+  the build host (§5.25).
 - CI has still not executed on any pushed head. The five runs created at
-  2026-11-11T21:10:48Z on `d55d7c94` were created and not executed — each is
+  2026-11-12T05:42:17Z on `b85e193a` were created and not executed — each is
   `completed` with `conclusion: action_required` and no job started:
-  `Printing` (`43100830603`), `CI` (`43100830896`), `Packaging lint`
-  (`43100830916`), `Nix` (`43100830984`) and `SonarCloud` (`43100830897`). The
-  same holds for the five on `b4b5f50b` (13:29:41Z: `CI` #9837, `Printing`
-  #7417, `Packaging lint` #695, `Nix` #1608, `SonarCloud` #9611), the five on
-  `a32524b5` (11:27:00Z: `CI` #9805, `Printing` #7396, `Packaging lint` #694,
-  `Nix` #1606, `SonarCloud` #9579), the five on `2e414114` (07:26:39Z), the
-  five on `50c68e3a` (03:27:31Z), the five on `077b4056` (17:14Z) and the five
-  on `af9a43a2` (20:15:37Z), until a maintainer approves them (§5.2, §5.26,
-  §5.27, §5.35, §5.36, §5.38, §5.39, §5.40). A maintainer had approved the
-  workflows for `467948fa`; there `Nix` and `SonarCloud` passed and `Printing`
-  failed on
-  a stale `Cargo.lock`, not on code (§5.23).
+  `Printing` (`43163143760`), `CI` (`43163144197`), `Packaging lint`
+  (`43163144484`), `Nix` (`43163144162`) and `SonarCloud` (`43163144068`). The
+  same holds for the five on `d55d7c94` (2026-11-11T21:10:48Z: `Printing`
+  `43100830603`, `CI` `43100830896`, `Packaging lint` `43100830916`, `Nix`
+  `43100830984`, `SonarCloud` `43100830897`) and for every head before it
+  (§5.2, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39, §5.40), until a maintainer
+  approves them. A maintainer had approved the workflows for `467948fa`; there
+  `Nix` and `SonarCloud` passed and `Printing` failed on a stale `Cargo.lock`,
+  not on code (§5.23).
 - The branch carries exactly one CI change, declared here so that a reviewer
   does not have to find it alone: `15c9625b` adds a `git-sources` job to
   `.github/workflows/ci.yml` (45 lines, one `ubuntu-latest` job; no shared
@@ -87,17 +69,19 @@
   gate close one hole together, so the job rides in this branch as a
   self-contained commit that splits out on request (§5.24).
 - CodeRabbit's last completed review is `5855379673` on `2e414114`
-  (07:39:16Z, three inline comments and six outside the diff); all nine are
-  triaged in §5.37, and the confirmed ones are fixed in `65037c7b` and
-  `a32524b5`, both delivered. On the delivered head `d55d7c94` the check is
-  `skipped` (2026-11-11T21:13:02Z) and no review exists for it. The review
-  before it, `5853542478` on `50c68e3a` (03:42:23Z, eight actionable comments),
-  is answered
-  in `af6c311b` and triaged in §5.35. The one finding of that earlier review
-  body without an inline id stays confirmed and open (§4).
+  (2026-11-11T07:39:16Z, three inline comments and six outside the diff); all
+  nine are triaged in §5.37, and the confirmed ones are fixed in `65037c7b` and
+  `a32524b5`, both delivered. On `b85e193a` the check is `skipped`
+  (2026-11-12T05:44:26Z) and no review exists for it, as for `d55d7c94`. The
+  review before it, `5853542478` on `50c68e3a` (2026-11-11T03:42:23Z, eight
+  actionable comments), is answered in `af6c311b` and triaged in §5.35. The one
+  finding of that earlier review body without an inline id — the snapshot
+  rollback — was confirmed and open; it is closed in the code by `347947ef`
+  (§5.41).
 - Protocol: `rfc.md`; server: `server.md`; run book: `README.md`; host bridge:
   `host-bridge.md`; operator view and the callback contract:
-  `production.md`.
+  `production.md`; the implementation ADRs beside this page:
+  `adr/0001`…`adr/0008`.
 
 This page records what is implemented, how it was verified, what is known to be
 missing, and where the next session should start.
@@ -350,6 +334,11 @@ missing, and where the next session should start.
 - One room per document with a lease; a different cabinet session may join as
   owner or after the old session has been silent for `COLLAB_LEASE_TTL_SECS`
   (default 120) and has no connected peer.
+- A role that cannot write takes no lease: a viewer joins a room whose lease
+  belongs to another cabinet session, leaves the lease (and its TTL) with the
+  session that holds it, and is refused `forbidden` — its role's answer — rather
+  than a retryable `lease` it would never hold (§5.43). The takeover check in
+  `handle_op` keeps its meaning for writers.
 - Presence is fanned out to the other participants and never journaled; a viewer
   may send it. Presence is not echoed to its author. A successful join is
   announced to the other peers after `welcome` with the same frame (empty
@@ -383,11 +372,11 @@ missing, and where the next session should start.
 | Changes converge without loss or duplicates | **done** for the silent-divergence class (§5.28, §5.29), with a named price: a forced resync can cost unconfirmed keystrokes | `a_replica_applies_the_deltas_and_converges`, socket tests, `three_replicas_converge_on_a_hundred_page_document_and_one_undoes_under_live_edits` (§5.22) pass. Finding 1 is closed in `925bb0c9`: a positional text primitive whose `baseVersion` is behind another client's change of the same paragraph is refused `stale` (retryable) and its author resyncs (`a_text_edit_on_a_paragraph_another_client_changed_since_its_base_is_refused`, `a_stale_positional_edit_resyncs_instead_of_diverging`; ADR `0001-positional-edit-guard.md`). Finding 5 is closed in `264afd18`: an operation dropped from a full peer outbox marks the peer stale, wakes its stuck write and ends the connection, and every write to a peer is bounded by the heartbeat period, so the client reconnects and resyncs instead of staying stale (`a_peer_that_stops_reading_is_closed_and_resyncs_instead_of_staying_stale`, `a_full_outbox_marks_the_peer_stale_once`; ADR `0002-stale-peer-close.md`). Finding 2 is closed in §5.30: a stored snapshot that cannot be read or parsed is told apart from a missing one and refuses the join instead of becoming an empty room that is written over it (`a_corrupt_snapshot_refuses_the_join_and_is_not_overwritten`, store tests; ADR `0003-corrupt-snapshot-refused.md`). The remaining §5.26 findings are separate failure modes: 3 (room seeding) is closed in §5.31, 6 (connection identity) in §5.32 and 8 (a failed edit stayed local while the session said `InSync`) in §5.33 — a session whose plan or submission failed now leaves `InSync` for `Status::Diverged`, refuses the next edit and the commit with the reason, and resyncs (`a_command_that_cannot_be_planned_pauses_the_session_before_a_commit`, `a_command_that_cannot_be_submitted_pauses_the_session_before_a_commit`; ADR `0006-diverged-session-pauses.md`); 10 (the token renewal that replaced the client) is closed in §5.34 — a repeated `session` for the live connection renews its credentials in place, so the unconfirmed edit and the participant list survive (`a_repeated_session_renews_the_same_connection_and_keeps_an_unconfirmed_edit`; ADR `0007-token-renewal-keeps-the-connection.md`); 9 (per-document connections) remains open, named in §4. The last finding of `5853542478` — a client whose base stayed above a restored room's head — is closed in §5.41: the base follows the head and the queue built above it is dropped and reported, not replayed (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`, `two_clients_converge_after_the_room_is_restored`; ADR `0008-restore-lowers-the-base.md`), and the author sees the cost since §5.42: the panel names the room's head, the count and the ids of the dropped operations, and the session reads `Resyncing` until the snapshot lands (`a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`) |
 | Reconnect and resync | done | `a_reconnecting_client_catches_up_from_the_journal`, `reconnect.rs`, gap→snapshot; a room restored from an older snapshot is a case of its own (§5.41): the base is lowered to the head and the queue built above it is dropped with the ids reported, so the next operation lands instead of being refused `Stale` (`a_welcome_below_the_base_lowers_it_and_reports_the_queue_it_drops`, `a_restored_room_does_not_refuse_the_next_operation_stale`); the panel shows that queue at its author and the session leaves `InSync` until the snapshot lands (§5.42, `a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync`, `a_welcome_below_the_base_without_a_snapshot_shows_the_reason`) |
 | Per-user undo/redo | done | `undo_and_redo_over_the_socket_change_the_committed_text`, `undo_round_trips_through_the_room`; table inverses §5.8; the author applies its own answer once and a refused undo shows §5.9; character and paragraph formatting commands carry an exact inverse §5.10; a paragraph move, a paragraph sort, an outline level step, a bulleted/numbered list step, a multilevel list step, a restarted list step and a blank-paragraph removal are addressable structural operations that undo and redo §5.12, §5.13, §5.14, §5.15, §5.16, §5.17 |
-| Viewer cannot edit | done | `a_viewer_cannot_write` + client gate |
+| Viewer cannot edit | done | `a_viewer_cannot_write` + client gate; a viewer's write is refused `forbidden` even when another cabinet session holds the lease, and its read-only join does not take that lease (`a_viewer_joins_a_room_whose_lease_belongs_to_another_session`, §5.43) |
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; the delivered head is the documentation tip — `d55d7c94` when it was checked, with the fork branch, `headRefOid` and the local `HEAD` matching and a clean tree (§5.40) — and the code head under it is `a32524b5`; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `d55d7c94` were created at 2026-11-11T21:10:48Z as `action_required` (`Printing` 43100830603, `CI` 43100830896, `Packaging lint` 43100830916, `Nix` 43100830984, `SonarCloud` 43100830897) and the rollup holds only CodeRabbit's `skipped` at 21:13:02Z (§5.2, §5.40); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41), which is local and one commit above `a32524b5` and not pushed, and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; the delivered head is the documentation tip — `b85e193a` when it was checked, with the fork branch, `headRefOid` and the local `HEAD` matching and a clean tree (§5.40, §5.42) — and the code head under it is `d7a4cf05`; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `b85e193a` were created at 2026-11-12T05:42:17Z as `action_required` (`Printing` 43163143760, `CI` 43163144197, `Packaging lint` 43163144484, `Nix` 43163144162, `SonarCloud` 43163144068) and the rollup holds only CodeRabbit's `skipped` at 05:44:26Z (§5.2, §5.40); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); two commits above the delivered head are local and not pushed — `089bec7c` (the server slice of §5.43) and this page's documentation sync; the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -410,6 +399,15 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
+- §5.43, the server slice above the delivered head (`089bec7c`): on the build
+  host, `cargo fmt --all -- --check` EXIT=0, `cargo clippy -p
+  wordcraft-collab-server --all-targets -- -D warnings` EXIT=0, and `cargo test
+  -p wordcraft-collab-server` — 78 passed, 0 failed, 1 ignored (the LibreOffice
+  commit gate; `a_viewer_joins_a_room_whose_lease_belongs_to_another_session`
+  among them). The new test fails without the `lib.rs` half of the slice ("a
+  viewer must join a room whose lease is held elsewhere, got rejected"); the
+  tree was restored afterwards. Only `apps/collab-server` changed, so no
+  workspace-wide run was taken in this pass.
 - §5.28, the slice this page records: on the build host, `cargo fmt --all --
   --check` EXIT=0, `cargo clippy` over `collab`, `collab-client`, `collab-doc`,
   `collab-app` and `collab-server` (`--all-targets -D warnings`) EXIT=0, and
@@ -722,9 +720,9 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    service token must be in both `.env`s.
 2. Get a maintainer's approval for the runs on the PR head. The delivered head
    is the documentation tip of the branch: when it was checked the fork branch
-   and the PR `headRefOid` were `d55d7c94` (the local `HEAD` and a clean tree
-   matched, §5.40), and the code under it is `a32524b5`; the PR is `MERGEABLE`,
-   and it was marked
+   and the PR `headRefOid` were `b85e193a` (the local `HEAD` and a clean tree
+   matched, §5.40, §5.42), and the code under it is `d7a4cf05`; the PR is
+   `MERGEABLE`, and it was marked
    ready for review at 14:57:53Z, so the draft flag is gone (§5.21, §5.26,
    §5.35). A maintainer had approved the workflows for the earlier head
    `467948fa`: `Nix` and `SonarCloud` passed, `Printing` failed on a stale
@@ -732,16 +730,18 @@ and `apps/wordcraft-web/src/web.rs` (web); test
    since started a fresh set
    of five runs that sit in `action_required`, so nothing has executed on any of
    them; the three `printing.yml` steps and the gates of §5.36 and §5.37 have
-   been run on the pushed tree at the build host instead (§5.25). The latest set
-   is the one on `d55d7c94`, created at 2026-11-11T21:10:48Z — `Printing`
-   (`43100830603`), `CI` (`43100830896`), `Packaging lint` (`43100830916`),
-   `Nix` (`43100830984`) and `SonarCloud` (`43100830897`), all `completed` with
+   been run on the pushed tree at the build host instead (§5.25), and the
+   server slice of §5.43 was gated there from the local tree. The latest set is
+   the one on `b85e193a`, created at 2026-11-12T05:42:17Z — `Printing`
+   (`43163143760`), `CI` (`43163144197`), `Packaging lint` (`43163144484`),
+   `Nix` (`43163144162`) and `SonarCloud` (`43163144068`), all `completed` with
    `conclusion: action_required` and no job started — and CodeRabbit's check on
-   that head is `skipped` (21:13:02Z), so the PR has no executing check at all
+   that head is `skipped` (05:44:26Z), so the PR has no executing check at all
    (§5.40). The code and
-   the documentation of §5.37 are in `a32524b5` already; what is left is a
-   maintainer's approval and a review decision, and nothing else waits for a
-   push.
+   the documentation of §5.37 and of §5.41–§5.42 are in `b85e193a` already;
+   `089bec7c` (the server slice of §5.43) and this page's documentation commit
+   are local, so the owner's push comes first, then a maintainer's approval and
+   a review decision.
 3. Optional hardening: property primitives or an offline queue. (The join
    broadcast that carries the role before the first presence frame is done:
    §5.3. The multi-operation undo transaction is done:
@@ -4201,6 +4201,66 @@ notice and the `collab-web` restore test fail; the tree was restored afterwards.
 
 **What is left.** The push is the owner's (§5.41, item 1); the undo history
 after a restore is still open (§5.41, item 3).
+
+### 5.43 A read-only join takes no lease (run 2026-11-12)
+
+**The defect.** A read-only tab in a live room never joined it. The cabinet
+mints a session id per file version: a ticket issued after a save names a
+different `sid` than the one that holds the lease. `register` treated that as a
+takeover attempt, refused the join `lease` ("another session holds this
+document") and left the tab outside the room, so its `session-state` never read
+`synced` and the host showed the participant as offline (the cabinet's M96
+track; the DeckCraft case of the same track is M95b). The refusal was wrong on
+its own terms: the lease exists to keep a *writer* whose session was superseded
+from writing (review `5855379673`, §5.37), and a reader takes nothing and can
+damage nothing.
+
+**The change** (`089bec7c`, two files: `apps/collab-server/src/lib.rs` +22/−6,
+`apps/collab-server/src/tests.rs` +50):
+
+1. `register` takes the lease only for a role that can write. An empty room
+   first entered by a viewer stays empty, and a takeover still sets `session`
+   and `lease_seen` for a writer.
+2. A viewer whose `sid` differs from the lease holder's joins. The takeover
+   check (another session alive or not stale) is asked of writers only, and the
+   join neither moves `guard.session` nor refreshes `lease_seen`, so the
+   session that holds the lease keeps it — including its TTL, which a read-only
+   join must not extend any more than it must not take it.
+3. `handle_op` asks the lease of a writer only. A viewer's operation falls
+   through to `room.submit`, whose role gate answers `forbidden`: final, and the
+   answer the client can act on, where `lease` is retryable and would be retried
+   for the rest of the session (`crates/collab-client` treats it as a lost lease
+   and resyncs).
+4. Nothing else moved: commit stays owner-only (`can_commit`), presence is
+   unchanged and a viewer still may send it, and a role that gains write rights
+   reconnects with a new token, which is an ordinary writer join.
+
+**The test.**
+
+| Test | What it holds |
+|---|---|
+| `a_viewer_joins_a_room_whose_lease_belongs_to_another_session` (`collab-server`) | the owner holds the lease on `sid-1`; a viewer joins on `sid-2` and its `welcome` carries `role: "viewer"` and two participants; it addresses a paragraph of the room's document; its write is refused `forbidden`; the owner still writes, and its answer is version 1 |
+
+It fails without the `lib.rs` half of the slice — the viewer's `welcome` never
+arrives and the test stops at "a viewer must join a room whose lease is held
+elsewhere, got rejected" (checked on the build host; the tree was restored
+afterwards, `sha256` of the file compared with the pre-run copy).
+
+**The gate on `089bec7c`** (build host `agents`, 2026-11-12):
+
+| Command | Result |
+|---|---|
+| `cargo fmt --all -- --check` | EXIT=0 |
+| `cargo clippy -j 12 -p wordcraft-collab-server --all-targets -- -D warnings` | EXIT=0 |
+| `cargo test -j 12 -p wordcraft-collab-server` | 78 passed, 0 failed, 1 ignored (the LibreOffice commit gate) |
+
+Only `apps/collab-server` changed, so the crate's own run is the slice's gate:
+no engine, UI or workspace-wide run was taken in this pass.
+
+**What is left.** The push is the owner's: the fork branch and PR #5834 answer
+`b85e193a`, and `089bec7c` plus this page's documentation commit are local. The
+end-to-end proof — a viewer tab through the real cabinet after a save — belongs
+to the cabinet's M96 acceptance run, not to a headless test here.
 
 ## 6. Where things live
 
