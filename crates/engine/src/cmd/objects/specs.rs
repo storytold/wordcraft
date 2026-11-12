@@ -13,7 +13,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("picture.size", "Size", "Picture Format › Size", size)
             .params(
-                r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent, "original"?: bool} (scale: of the current size, or with original of the picture's original size, its pixels at 96 ppi less what is cropped; original alone restores that size; one side alone keeps the proportions unless lockAspect is false; 1–4000 pt: when the proportions are kept, a side past 4000 pt shrinks the other with it)"#,
+                r#"{"width"?: pt, "height"?: pt, "lockAspect"?: bool, "scale"?: percent, "original"?: bool} (scale: of the current size, or with original of the picture's original size, its pixels at 96 ppi less what is cropped; original alone restores that size; one side alone keeps the proportions unless lockAspect is false; 1–4000 pt: when the proportions are kept (from the original, or with both sides having a length), a side past 4000 pt shrinks the other with it; a side the call leaves as it was keeps its size, a straight line's 0 too)"#,
             )
             .when(has_sizable),
         CommandSpec::new("picture.crop", "Crop", "Picture Format › Size", crop)
@@ -132,14 +132,26 @@ pub fn specs() -> Vec<CommandSpec> {
             } else {
                 return Err(CmdError::Params("`path` or `data` required".into()));
             };
-            wordcraft_geom::picture::probe(&bytes).map_err(|e| match e {
-                wordcraft_geom::picture::Refusal::Unsupported(why) => CmdError::Failed(why.into()),
-                _ => CmdError::Failed("not a supported image".into()),
-            })?;
+            let (px_w, px_h) = wordcraft_geom::picture::probe(&bytes)
+                .map(|p| (p.width, p.height))
+                .map_err(|e| match e {
+                    wordcraft_geom::picture::Refusal::Unsupported(why) => CmdError::Failed(why.into()),
+                    _ => CmdError::Failed("not a supported image".into()),
+                })?;
             let key = s.doc.add_media(bytes.clone(), crate::cmd::insert::image_ext(&bytes));
             with_obj(s, |o| {
-                if let InlineObject::Image { media, .. } = o {
+                if let InlineObject::Image { media, w, h, crop, .. } = o {
                     *media = key.clone();
+                    // The replacement keeps the picture's width and takes its own aspect ratio, so a
+                    // picture of another shape isn't stretched into the old frame. The old crop
+                    // described the old picture, so it is dropped.
+                    if px_w > 0 && px_h > 0 && w.is_finite() && *w > 0.0 {
+                        let nh = *w * px_h as f32 / px_w as f32;
+                        if nh.is_finite() && nh > 0.0 {
+                            *h = nh;
+                        }
+                    }
+                    *crop = [0.0; 4];
                 }
             })
         })

@@ -391,9 +391,9 @@ fn table_borders_and_borderless_round_trip() {
     let mut doc = Document::new();
     let mut t_borderless = Table::new(2, 2, 400.0);
     t_borderless.props.style = None;
-    for r in 0..2 {
-        for c in 0..2 {
-            t_borderless.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+    for row in &mut t_borderless.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
         }
     }
     doc.body = vec![Arc::new(Block::Table(t_borderless))];
@@ -407,9 +407,9 @@ fn table_borders_and_borderless_round_trip() {
     let mut doc_bordered = Document::new();
     let mut t_bordered = Table::new(2, 2, 400.0);
     t_bordered.props.style = Some("TableGrid".to_string());
-    for r in 0..2 {
-        for c in 0..2 {
-            t_bordered.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+    for row in &mut t_bordered.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
         }
     }
     doc_bordered.body = vec![Arc::new(Block::Table(t_bordered))];
@@ -459,4 +459,15 @@ fn ligature_characters_split_across_runs_stay_apart() {
     assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
     let back = import(tex.as_bytes());
     assert_eq!(back.plain_text(Default::default()).trim(), "a--b ''x", "{tex}");
+}
+
+#[test]
+fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
+    // A 5,000-cell row with spans widened the multirow tracking every later row walks; the
+    // document keeps MAX_COLS cells a row, so the rest are left out while parsing.
+    let wide = vec!["\\multicolumn{63}{c}{x}"; 5000].join("&");
+    let toks = tokenize(&format!("{wide}\\\\ a & b \\\\"));
+    let t = table::table(&toks, "", 0);
+    assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
+    assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }

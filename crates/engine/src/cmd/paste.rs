@@ -37,7 +37,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.pasteSpecial", "Paste Special", "Home › Clipboard › Paste", paste_special)
             .key("Mod+Alt+V")
-            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64}"#),
+            .params(r#"{"as"?: "formatted"|"rtf"|"html"|"picture"|"text", "text"?: string, "html"?: string, "rtf"?: string, "picture"?: base64, "privateClipboard"?: bool}"#),
         CommandSpec::new("edit.pasteChange", "Paste Options", "Home › Clipboard › Paste", change_paste)
             .params(r#"{"mode": "source"|"text"|"merge"|"picture" (Keep Source Formatting, Keep Text Only, Merge Formatting, Picture)}"#)
             .when(|s| if paste_options(s).is_empty() { Some("there is no paste to change") } else { None }),
@@ -61,11 +61,18 @@ fn looks_like_html(t: &str) -> bool {
     t.starts_with('<') && (t.contains("</") || t.contains("/>"))
 }
 
+/// Whether the system clipboard still holds this window's copy. A front end that can check says
+/// so in `privateClipboard`; callers that cannot (an agent, the CLI) omit it, and the session's
+/// copy is used as before.
+fn owns_clipboard(v: &Value) -> bool {
+    p::bool(v, "privateClipboard").unwrap_or(true)
+}
+
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" => {
+        "formatted" if owns_clipboard(v) => {
             let f = s.clipboard.as_ref()?;
             // System clipboard text that isn't our own copy means someone else copied since.
             match p::str(v, "text") {
@@ -73,6 +80,7 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
                 _ => Some(String::new()),
             }
         }
+        "formatted" => None,
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
         "picture" => p::str(v, "picture").map(str::to_string).and_then(non_empty),
@@ -107,6 +115,10 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             if let Some(t) = p::str(v, k) {
                 req[k] = json!(t);
             }
+        }
+        // Keep the ownership result so the dialog's list is the same as this one.
+        if let Some(own) = p::bool(v, "privateClipboard") {
+            req["privateClipboard"] = json!(own);
         }
         // Only the newest dialog request matters; older ones would pin their payloads.
         s.ui_requests.retain(|r| r["open"] != "pasteSpecial");
@@ -284,10 +296,13 @@ pub enum Pasted {
 }
 
 /// What Paste inserts: WordCraft's own copy while the system clipboard still holds it, else
-/// another program's formatted copy (HTML, RTF), else the system clipboard's text.
+/// another program's formatted copy (HTML, RTF), else the system clipboard's text. A front end
+/// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
+/// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    if let Some(f) = &s.clipboard
+    if owns_clipboard(v)
+        && let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
@@ -411,6 +426,11 @@ const PICTURE_MAX_H: f32 = 7000.0;
 fn fragment_picture(s: &Session, frag: &Fragment) -> Result<(Vec<u8>, f32, f32), CmdError> {
     let mut d = s.doc.clone();
     d.body = frag.blocks.iter().cloned().map(Arc::new).collect();
+    // The fragment's own pictures: copied from another document they sit under keys ours lacks (or
+    // uses for something else), and only the fragment is drawn.
+    for (key, data) in &frag.media {
+        d.media.insert(key.clone(), data.clone());
+    }
     d.last_section.landscape = false;
     let width = d.sections().first().map(|(_, sp)| sp.text_width()).filter(|w| w.is_finite() && *w > 10.0).unwrap_or(468.0).min(1500.0);
     let sect = &mut d.last_section;
@@ -498,7 +518,7 @@ fn fit_to_page_height(s: &Session, width: f32, height: f32) -> Result<f32, CmdEr
 /// one paragraph with its cells' text separated by commas.
 fn text_only(frag: &Fragment) -> Fragment {
     fn cell_text(cell: &wordcraft_doc::Cell) -> String {
-        let doc = Fragment { blocks: cell.blocks.iter().map(|b| (**b).clone()).collect(), parts: Default::default() };
+        let doc = Fragment { blocks: cell.blocks.iter().map(|b| (**b).clone()).collect(), ..Default::default() };
         doc.plain_text().split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
     }
     fn lines(b: &Block, out: &mut Vec<String>, depth: usize) {
@@ -509,7 +529,7 @@ fn text_only(frag: &Fragment) -> Fragment {
                 }
             }
             other => {
-                let one = Fragment { blocks: vec![other.clone()], parts: Default::default() };
+                let one = Fragment { blocks: vec![other.clone()], ..Default::default() };
                 out.extend(one.plain_text().split('\n').map(str::to_string));
             }
         }
@@ -948,6 +968,39 @@ mod tests {
         let err = s.run("edit.pasteChange", &json!({"mode": "picture"})).unwrap_err();
         assert!(err.to_string().contains("too long"), "{err}");
         assert!(!paste_options(&s).is_empty(), "the paste is unchanged and still offers its options");
+    }
+
+    /// A copied picture from another document turns into a picture too: the fragment brings its
+    /// own images, which the destination's media do not hold under that key.
+    #[test]
+    fn a_picture_copied_from_another_document_draws() {
+        let png = {
+            let mut out = Vec::new();
+            image::RgbaImage::from_pixel(40, 40, image::Rgba([200, 30, 30, 255]))
+                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        let mut a = Session::new(wordcraft_doc::Document::new());
+        a.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&png)})).unwrap();
+        a.run("select.all", &json!({})).unwrap();
+        a.run("edit.copy", &json!({})).unwrap();
+        let mut b = Session::new(wordcraft_doc::Document::new());
+        // The destination holds an unrelated image under the same key the copy uses.
+        let other = {
+            let mut out = Vec::new();
+            image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 0, 0, 0]))
+                .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        for k in a.clipboard.as_ref().map(|f| f.media.keys().cloned().collect::<Vec<_>>()).unwrap_or_default() {
+            b.doc.media.insert(k, Arc::new(other.clone()));
+        }
+        b.clipboard = a.clipboard.clone();
+        b.run("edit.paste", &json!({})).unwrap();
+        assert!(!paste_options(&b).is_empty(), "a picture paste offers its options");
+        b.run("edit.pasteChange", &json!({"mode": "picture"})).expect("the copied picture is drawn from the fragment's own media");
     }
 
     /// Picture at the start of a document puts the paragraph the paste restyled back.

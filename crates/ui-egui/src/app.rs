@@ -13,6 +13,8 @@ use super::{
 mod commands;
 mod control;
 mod files;
+#[cfg(test)]
+pub(crate) use files::suggested_stem;
 mod fonts;
 mod frame;
 mod input;
@@ -20,6 +22,7 @@ mod pictures;
 mod prefs;
 
 pub(crate) use commands::works_without_document;
+pub(crate) use frame::STATUS_MS;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {
@@ -99,6 +102,7 @@ impl WordApp {
                 ..UiState::default()
             },
             services,
+            clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
             integrated_titlebar: false,
@@ -377,6 +381,7 @@ impl WordApp {
     /// Read Aloud, its file dialog, AutoSave of its document. Runs in [`WordApp::logic`] for the
     /// active window and, with native windows, as each window draws.
     pub(crate) fn window_work(&mut self, ctx: &egui::Context) {
+        crate::windows::arrange::poll(self, ctx);
         if self.windows.native() {
             let doc = self.session.document_id();
             if self.print_document.is_none_or(|d| d == doc || !self.session.is_open(d)) {
@@ -441,7 +446,11 @@ impl WordApp {
             return;
         }
         let t = theme::Tokens::get(&ctx);
-        self.escape_free = self.dialog.is_none() && !self.ui.backstage && self.ui.keytips == keytips::Phase::Off && !egui::Popup::is_any_open(&ctx);
+        self.escape_free = self.dialog.is_none()
+            && !self.ui.backstage
+            && self.ui.keytips == keytips::Phase::Off
+            && !egui::Popup::is_any_open(&ctx)
+            && !crate::chrome::title_search_open(self, &ctx);
         // Keytips are read before layout so the frame paints the new state; badges paint after
         // the ribbon so they sit on top of it.
         crate::keytips::logic(self, &ctx);
