@@ -10399,6 +10399,26 @@ fn a_text_frame_in_a_cell_floats_beside_the_text() {
     assert!(frame.x > text.x + 200.0, "right-aligned in the cell: {} vs {}", frame.x, text.x);
 }
 
+/// A cell paragraph framed against the page (a divider page's floating table, its paragraphs
+/// carrying the table's page position as a frame) stays in its cell in Word. WordCraft placed it
+/// apart at the page offset, past the page's foot, and added a blank page per divider.
+#[test]
+fn a_page_anchored_frame_in_a_cell_stays_in_the_cell() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::from_text("Above");
+    let mut t = Table::new(1, 1, 300.0);
+    let mut framed = wordcraft_doc::Paragraph::with_text("Divider", Default::default());
+    framed.props.frame = Some(TextFrame { y: 777.5, h_anchor: "page".into(), v_anchor: "page".into(), wrap: "around".into(), ..Default::default() });
+    let text = wordcraft_doc::Paragraph::with_text("Cell text", Default::default());
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(framed), wordcraft_doc::para_block(text)];
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let at = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 0, i]), off: 0 }).unwrap();
+    let (frame, text) = (at(0), at(1));
+    assert!(text.top > frame.top + 5.0, "the framed paragraph takes its line: {} vs {}", frame.top, text.top);
+    assert_eq!(l.pages.len(), 1, "no page for the frame's offset");
+}
+
 /// Word has no frames inside a text box: a paragraph there whose style carries a frame (a
 /// letterhead's "Weld" and "Governor" styles, framed at the page's left) runs in the box's text
 /// like any other. WordCraft placed each one apart at the frame's offset, so two of them in a row
