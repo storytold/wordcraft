@@ -620,7 +620,7 @@ mod platform {
             && let Some(format) = raw::register_format("HTML Format")
             && let Ok(_open) = Clipboard::new_attempts(10)
         {
-            let cf = wrap_cf_html(html);
+            let cf = super::wrap_cf_html(html);
             let _ = raw::set_without_clear(format.get(), &cf);
         }
         record_own();
