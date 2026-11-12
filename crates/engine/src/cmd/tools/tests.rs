@@ -732,6 +732,26 @@ fn compare_deletes_the_mark_of_a_paragraph_deleted_whole() {
     assert_eq!(last.mark.del, None);
 }
 
+/// A paragraph whose mark carries a section break is deleted whole by Compare: its text is
+/// tracked as deleted, but its mark stays untracked, so accepting the deletion leaves the
+/// (now empty) paragraph — and its section break — in place instead of removing the break.
+#[test]
+fn compare_deleted_whole_keeps_a_section_break_paragraphs_mark_untracked() {
+    let mut doc = Document::from_text("First section text.\nSecond section text.\nTail.");
+    if let Some(Block::Para(p)) = doc.body.get_mut(0).map(Arc::make_mut) {
+        p.section = Some(Box::new(wordcraft_doc::SectionProps::default()));
+    }
+    assert_eq!(doc.sections().len(), 2);
+    let mut s = Session::new(doc);
+    s.run("review.compare", &json!({"text": "Second section text.\nTail."})).unwrap();
+    let gone = s.doc.body[0].as_para().unwrap();
+    assert!(gone.runs.iter().all(|r| r.props.del.is_some()), "the deleted text is tracked");
+    assert_eq!(gone.mark.del, None, "a section break's mark must stay untracked");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.sections().len(), 2, "accepting the deletion removed the section break");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "\nSecond section text.\nTail.");
+}
+
 /// Text moved away keeps `w:t` (in `w:moveFrom`, §17.13.5.22), and so does the text box of an
 /// anchor moved with it: only deletions are written as `w:delText`.
 #[test]
