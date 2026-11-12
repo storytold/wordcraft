@@ -181,15 +181,49 @@ impl WindowGeometry {
         Some(monitor.min + (free / 2.0).max(egui::Vec2::ZERO))
     }
 
+    /// Once the monitor size is known, on a Mac: the saved size of a restored window that opened
+    /// smaller. AppKit trims a new window that nearly fills its screen (a window filled with
+    /// Option and the green button, saved at 1920 × 976 on a 1920 × 1080 screen, opened at
+    /// 1900 × 956), but lets the open window grow back. Only on the monitor it was saved on, where
+    /// that size fits; on another one the rescue moves it instead.
+    pub fn resize_after_open(&self, window: &RawWindowState) -> Option<egui::Vec2> {
+        self.resize_after_open_on(window, cfg!(target_os = "macos"))
+    }
+
+    /// [`Self::resize_after_open`] for a Mac (`mac`) or another system, so tests cover both anywhere.
+    fn resize_after_open_on(&self, window: &RawWindowState, mac: bool) -> Option<egui::Vec2> {
+        if !mac || self.maximized || self.position.is_none() {
+            return None;
+        }
+        if window.maximized == Some(true) || window.fullscreen == Some(true) || window.minimized == Some(true) {
+            return None;
+        }
+        let monitor = window.monitor_size.filter(|s| s.is_finite() && s.x > 0.0 && s.y > 0.0)?;
+        let same_monitor = self.monitor.is_some_and(|saved| (monitor - egui::Vec2::from(saved)).length() <= 1.0);
+        let now = window.inner_rect.filter(|r| r.is_finite())?.size();
+        let saved = egui::vec2(self.width, self.height);
+        let trimmed = saved.x - now.x > 1.0 || saved.y - now.y > 1.0;
+        (same_monitor && trimmed && saved.x <= monitor.x && saved.y <= monitor.y).then_some(saved)
+    }
+
     /// Once the monitor size is known: a smaller size and a centred position for a window that
     /// doesn't fit on its monitor, frame included (#1215). eframe shrinks the start size to the
     /// monitor's, but not by the frame, the title bar or the taskbar, so on a laptop screen the
     /// default window reached past the screen's edge, and the end of the scroll bar with it: a
     /// drag of the scroll bar stopped where the pointer met the edge. A window the system placed
     /// (no position here) is on the primary monitor, whose top-left corner is the origin, so its
-    /// position counts too; a restored one may be on another monitor, so only its size does. A
-    /// maximized window fills its monitor already.
+    /// position counts too; a restored one may be on another monitor, so only its size does. On a
+    /// Mac a restored window only shrinks when it is larger than the monitor itself: egui can't
+    /// tell a zoomed or filled window (the green button), so it is saved at that size, which fits
+    /// beside the menu bar and the Dock. Elsewhere a maximized window is saved as maximized, and
+    /// the margin keeps a restored window's bottom reachable. A maximized window fills its monitor
+    /// already.
     pub fn fit_on_monitor(&self, window: &RawWindowState) -> Option<(egui::Pos2, egui::Vec2)> {
+        self.fit_on_monitor_on(window, cfg!(target_os = "macos"))
+    }
+
+    /// [`Self::fit_on_monitor`] for a Mac (`mac`) or another system, so tests cover both anywhere.
+    fn fit_on_monitor_on(&self, window: &RawWindowState, mac: bool) -> Option<(egui::Pos2, egui::Vec2)> {
         if self.maximized || window.maximized == Some(true) || window.fullscreen == Some(true) || window.minimized == Some(true) {
             return None;
         }
@@ -198,7 +232,8 @@ impl WindowGeometry {
         let outer = window.outer_rect.filter(|r| r.is_finite()).unwrap_or(inner);
         let frame = (outer.size() - inner.size()).max(egui::Vec2::ZERO);
         let room = monitor - 2.0 * SYSTEM_BAR;
-        let too_big = outer.width() > room.x || outer.height() > room.y;
+        let limit = if mac && self.position.is_some() { monitor } else { room };
+        let too_big = outer.width() > limit.x || outer.height() > limit.y;
         let edge = monitor - SYSTEM_BAR;
         let past_edge = self.position.is_none() && (outer.max.x > edge.x || outer.max.y > edge.y);
         if !too_big && !past_edge {
@@ -566,6 +601,22 @@ mod tests {
         // A restored window keeps its place: it may be on another monitor (its origin isn't known).
         assert_eq!(saved().fit_on_monitor(&opened(at, start, full_hd)), None);
         assert_eq!(saved().fit_on_monitor(&opened(egui::pos2(2000.0, 78.0), start, full_hd)), None);
+        // A window restored at the size the system gave it keeps it: here a Mac's zoomed window
+        // (no frame around the content), as wide as the screen and as tall as the room between the
+        // menu bar and the Dock. It used to shrink by the taskbar margin and move to the centre.
+        let mac = egui::vec2(1470.0, 956.0);
+        let zoomed = egui::Rect::from_min_size(egui::pos2(0.0, 37.0), egui::vec2(1470.0, 844.0));
+        let saved_zoomed =
+            WindowGeometry { position: Some([0.0, 37.0]), width: 1470.0, height: 844.0, monitor: Some([1470.0, 956.0]), maximized: false };
+        assert_eq!(saved_zoomed.fit_on_monitor_on(&raw(zoomed, mac), true), None);
+        // Elsewhere a maximized window is saved as maximized, so a restored window that large keeps
+        // the margin, which keeps its bottom on screen: it shrinks and is centred.
+        assert_eq!(saved_zoomed.fit_on_monitor_on(&raw(zoomed, mac), false), Some((egui::pos2(48.0, 56.0), egui::vec2(1374.0, 844.0))));
+        // On a Mac too, a restored window larger than its monitor still shrinks to fit (#1215).
+        let huge = egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(2000.0, 1100.0));
+        let saved_huge = WindowGeometry { width: 2000.0, height: 1100.0, ..saved_zoomed };
+        assert_eq!(saved_huge.fit_on_monitor_on(&raw(huge, mac), true), Some((egui::pos2(48.0, 48.0), egui::vec2(1374.0, 860.0))));
+        assert_eq!(saved_zoomed.fit_on_monitor(&raw(zoomed, mac)), saved_zoomed.fit_on_monitor_on(&raw(zoomed, mac), cfg!(target_os = "macos")));
         // Room to spare: nothing moves.
         assert_eq!(system.fit_on_monitor(&opened(at, start, egui::vec2(2560.0, 1440.0))), None);
         // Once fitted, the window saved and restored on the next launch stays as it is.
@@ -590,6 +641,43 @@ mod tests {
         assert_eq!(system.fit_on_monitor(&i), None);
         // Wayland reports no rects.
         assert_eq!(system.fit_on_monitor(&RawWindowState { monitor_size: Some(laptop), ..Default::default() }), None);
+    }
+
+    /// AppKit opens a filled window 20 points short of it: on a Mac it grows back once open, never
+    /// past its monitor, and not on another monitor (the rescue's job), once it is right, while it
+    /// is maximized, full screen or minimized, or without a monitor or window size.
+    #[test]
+    fn a_trimmed_mac_window_grows_back_to_its_saved_size() {
+        let screen = egui::vec2(1920.0, 1080.0);
+        let filled = WindowGeometry { position: Some([0.0, 30.0]), width: 1920.0, height: 976.0, monitor: Some([1920.0, 1080.0]), maximized: false };
+        let at = |w: f32, h: f32| raw(egui::Rect::from_min_size(egui::pos2(0.0, 30.0), egui::vec2(w, h)), screen);
+        let trimmed = at(1900.0, 956.0);
+        assert_eq!(filled.resize_after_open_on(&trimmed, true), Some(egui::vec2(1920.0, 976.0)));
+        assert_eq!(filled.resize_after_open_on(&trimmed, false), None);
+        assert_eq!(filled.resize_after_open(&trimmed), filled.resize_after_open_on(&trimmed, cfg!(target_os = "macos")));
+        // One side short is enough; a point or less is rounding, and a larger window stays.
+        assert_eq!(filled.resize_after_open_on(&at(1920.0, 974.5), true), Some(egui::vec2(1920.0, 976.0)));
+        assert_eq!(filled.resize_after_open_on(&at(1919.0, 975.0), true), None);
+        assert_eq!(filled.resize_after_open_on(&at(1920.0, 976.0), true), None);
+        assert_eq!(filled.resize_after_open_on(&at(1920.0, 1000.0), true), None);
+        // Another monitor, a saved size past this one, a maximized or default geometry.
+        let other = RawWindowState { monitor_size: Some(egui::vec2(1470.0, 956.0)), ..trimmed };
+        assert_eq!(filled.resize_after_open_on(&other, true), None);
+        assert_eq!(WindowGeometry { width: 2000.0, ..filled }.resize_after_open_on(&trimmed, true), None);
+        assert_eq!(WindowGeometry { maximized: true, ..filled }.resize_after_open_on(&trimmed, true), None);
+        assert_eq!(WindowGeometry::default().resize_after_open_on(&trimmed, true), None);
+        // The window maximized, full screen or minimized, or no usable monitor or window size.
+        for state in [
+            RawWindowState { maximized: Some(true), ..trimmed },
+            RawWindowState { fullscreen: Some(true), ..trimmed },
+            RawWindowState { minimized: Some(true), ..trimmed },
+            RawWindowState { monitor_size: None, ..trimmed },
+            RawWindowState { monitor_size: Some(egui::Vec2::ZERO), ..trimmed },
+            RawWindowState { monitor_size: Some(egui::vec2(f32::NAN, 1080.0)), ..trimmed },
+            RawWindowState { inner_rect: None, ..trimmed },
+        ] {
+            assert_eq!(filled.resize_after_open_on(&state, true), None, "{state:?}");
+        }
     }
 
     /// On displays with smaller dimensions or high DPI scaling (e.g. 2560x1440 at 200% scale,
