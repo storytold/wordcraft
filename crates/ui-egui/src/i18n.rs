@@ -129,12 +129,14 @@ pub static LANGUAGES: [LangInfo; 28] = [
     LangInfo { code: "ar", prefer_hans: false, editing_lang: None },
     // Slovenian; `sl`, `sl-SI` and `sl_SI.UTF-8` resolve here.
     LangInfo { code: "sl", prefer_hans: false, editing_lang: None },
+    // Hebrew; `he`, `he-IL`, `he_IL.UTF-8` and legacy `iw`/`iw-IL` resolve here.
+    LangInfo { code: "he", prefer_hans: false, editing_lang: Some("he-IL") },
 ];
 
 /// Interface languages written right to left. Their catalogs are written in typing order and
 /// egui's text layout orders each line itself, so the lookups return them as they are; the window
 /// is mirrored ([`crate::rtl`]).
-const RTL_LANGUAGES: [&str; 1] = ["ar"];
+const RTL_LANGUAGES: [&str; 2] = ["ar", "he"];
 
 /// A language the UI can be shown in: English, or an offered language whose catalogs are embedded.
 #[derive(Clone, Copy)]
@@ -182,7 +184,7 @@ impl Lang {
     /// Whether the interface is written right to left. Its translations come back from the lookups
     /// as written, in typing order (see [`RTL_LANGUAGES`]).
     pub fn rtl(self) -> bool {
-        RTL_LANGUAGES.contains(&self.code())
+        self.i18n().rtl(self.lang) || matches!(self.code(), "he" | "ar") || RTL_LANGUAGES.contains(&self.code())
     }
 
     pub fn prefers_hans(self) -> bool {
@@ -293,6 +295,15 @@ pub fn lang_from_tag(tag: &str) -> Option<Lang> {
     if non_brazilian_portuguese(tag) {
         return None;
     }
+    let trimmed = tag.trim();
+    let normalized;
+    let tag = match trimmed.split(['-', '_', '.', '@']).next() {
+        Some(first) if first.eq_ignore_ascii_case("iw") => {
+            normalized = format!("he{}", &trimmed[first.len()..]);
+            normalized.as_str()
+        }
+        _ => tag,
+    };
     I18N.match_tag(tag).and_then(|lang| Lang::from_code(I18N.code(lang)))
 }
 
