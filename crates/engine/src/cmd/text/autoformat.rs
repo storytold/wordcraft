@@ -404,6 +404,12 @@ fn char_look(s: &Session, style: Option<&str>, c: &wordcraft_doc::props::CharPro
     r
 }
 
+/// The parts of a paragraph mark's look that set the height of the paragraph's last line.
+fn mark_metrics(r: &wordcraft_doc::resolve::ResolvedChar) -> impl PartialEq + use<> {
+    let shape = (r.bold, r.italic, r.caps, r.small_caps, r.hidden);
+    (r.font.clone(), r.size, r.position, r.vert_align, r.emphasis, shape)
+}
+
 /// Remove the direct character formatting that a heading style gives instead.
 fn consume_char_formatting(c: &mut wordcraft_doc::props::CharProps) {
     (c.font, c.font_cs, c.font_ea, c.size, c.size_cs, c.kern, c.spacing, c.color) = (None, None, None, None, None, None, None, None);
@@ -493,9 +499,12 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
     styled.format(0, styled.len(), &consume_char_formatting).ok()?;
     styled.mark = heading_mark(s, &id, para);
     styled.normalize();
-    // The paragraph must look as it did before, without a number from the style's list.
+    // The paragraph must look as it did before, without a number from the style's list. The
+    // paragraph mark sets the last line's height as before, or as the text does.
     let after = styles.resolve_para(&styled.props);
+    let mark = mark_metrics(&char_look(s, Some(&id), &styled.mark));
     let same = laid_out(s, &styled.props, &styled.mark) == before
+        && (mark == mark_metrics(&char_look(s, None, &para.mark)) || mark == mark_metrics(&look))
         && after.numbering.is_none_or(|n| n.num == 0)
         && styled.text == para.text
         && styled.run_ranges().all(|(_, c)| char_look(s, Some(&id), c) == look);

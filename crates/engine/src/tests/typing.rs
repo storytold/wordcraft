@@ -1549,6 +1549,27 @@ fn indents_in_characters_are_compared_in_the_paragraph_mark_size() {
 }
 
 #[test]
+fn a_paragraph_mark_that_would_change_the_last_line_height_stays_as_typed() {
+    // The mark keeps its own size, which is larger than the text, and the heading style would draw
+    // it in the heading's font: the last line's height would change.
+    let mut s = typed_like_heading("Results", 1);
+    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    p.mark.size = Some(30.0);
+    p.touch();
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&s));
+    // A mark at the text's look, or one that keeps its own look, still lets the style apply.
+    let mut s = typed_like_heading("Results", 1);
+    let st = s.doc.styles.get("Heading1").cloned().unwrap_or_default();
+    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    (p.mark.font, p.mark.size) = (st.chr.font.clone(), Some(30.0));
+    p.touch();
+    typ(&mut s, "\n");
+    assert_eq!(styled(&s).first().and_then(|(_, st)| st.as_deref()), Some("Heading1"));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.mark.size), Some(30.0));
+}
+
+#[test]
 fn text_formatted_like_a_heading_that_wraps_or_indents_otherwise_stays_as_typed() {
     // A heading that breaks Latin words at any character, or mirrors its indents, lays the text
     // out differently.
