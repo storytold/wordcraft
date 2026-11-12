@@ -184,12 +184,24 @@ fn blocks_have_explicit_breaks(
                 return true;
             }
         } else if let Some(tbl) = b.as_table() {
+            use wordcraft_doc::styles::PartSet;
+
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
             let cell_para = style.as_ref().map(|st| &st.para);
-            let cell_chr = style.as_ref().map(|st| &st.chr);
-            for row in &tbl.rows {
-                for cell in &row.cells {
-                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para, cell_chr, hide_deleted, show_hidden) {
+            let nrows = tbl.rows.len();
+            let ncols = tbl.cols();
+            for (ri, row) in tbl.rows.iter().enumerate() {
+                for (ci, cell) in row.cells.iter().enumerate() {
+                    let mut cell_chr = CharProps::default();
+                    if let Some(st) = &style {
+                        let sizes = (st.parts.band_size.unwrap_or(0), st.parts.col_band_size.unwrap_or(0));
+                        let region = PartSet::of_cell(&tbl.props.look, sizes, (ri, nrows), (tbl.grid_col(ri, ci), cell.span(), ncols));
+                        cell_chr.overlay(&st.chr);
+                        for part in region.iter() {
+                            cell_chr.overlay(&st.part(part).chr);
+                        }
+                    }
+                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para, Some(&cell_chr), hide_deleted, show_hidden) {
                         return true;
                     }
                 }
@@ -801,5 +813,30 @@ mod tests {
         }
         assert!(!has_explicit_breaks(&doc, true, false), "deleted break is omitted while markup is hidden");
         assert!(has_explicit_breaks(&doc, false, false), "deleted break counts when markup is shown");
+    }
+
+    #[test]
+    fn conditional_table_style_hidden_override_hides_page_break() {
+        let text = format!("before{}after", wordcraft_doc::para::PAGE_BREAK);
+        let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        table.props.style = Some("HiddenHeader".into());
+
+        let mut doc = Document::new();
+        doc.body = vec![Arc::new(wordcraft_doc::Block::Table(table))];
+        let style = wordcraft_doc::Style {
+            id: "HiddenHeader".into(),
+            name: "Hidden Header".into(),
+            kind: wordcraft_doc::StyleKind::Table,
+            table: Some(wordcraft_doc::styles::TableStyleParts {
+                header_chr: CharProps { hidden: Some(true), ..Default::default() },
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        Arc::make_mut(&mut doc.styles).upsert(style);
+
+        assert!(!has_explicit_breaks(&doc, false, false), "a first-row hidden override must hide the break");
+        assert!(has_explicit_breaks(&doc, false, true), "the hidden break counts when hidden marks are shown");
     }
 }
