@@ -1,8 +1,7 @@
-#[cfg(test)]
-use super::TALL_GROUPS;
-use super::buttons::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, DROPDOWN, LABEL_H, bg, label_line};
+use super::buttons::{CONTENT_H, DROPDOWN, LABEL_H, bg};
 use super::{Align2, Color32, Rect, Response, Sense, Stroke, Tokens, Ui, WordApp, icons, pos2, regular, vec2};
-
+#[cfg(test)]
+use super::{TALL_GROUPS, clear_row_tops, drawn_rows, note_group_rows};
 /// A ribbon group: content, a centred label below and a divider on the right.
 pub fn group(ui: &mut Ui, title: &str, launcher: Option<&str>, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
     // The English title keys the launcher's id; the drawn title is translated.
@@ -20,22 +19,24 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
     // #662: the window may be too narrow for the tab; the plan says how this group fits.
     let position = crate::ribbon_fit::position(ui.ctx());
     let level = crate::ribbon_fit::level(ui.ctx(), id_title);
-    if level == crate::ribbon_fit::COLLAPSED {
-        collapsed_group(ui, id_title, position, title, launcher, app, add);
+    if level == crate::ribbon_fit::COMPACT {
+        compact_group(ui, id_title, position, title, launcher, app, add);
     } else {
         // Not folded: a drop-down left open while it was folded doesn't come back by itself.
-        ui.data_mut(|d| d.remove::<bool>(collapsed_open_id(ui, id_title, position)));
+        ui.data_mut(|d| d.remove::<bool>(compact_open_id(ui, id_title, position)));
         let label_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size().x);
         // Reserve the paint slot before children so the glow stays beneath the controls.
         let glow = ui.painter().add(egui::Shape::Noop);
         let inner = crate::rtl::vertical(ui, |ui| {
             ui.set_min_width(label_w + if launcher.is_some() { 22.0 } else { 10.0 });
-            crate::ribbon_fit::set_compact(ui.ctx(), level == crate::ribbon_fit::COMPACT);
             let content = ui.allocate_ui_with_layout(vec2(ui.available_width(), CONTENT_H), crate::rtl::row_layout(ui, egui::Align::Min), |ui| {
                 ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+                #[cfg(test)]
+                clear_row_tops();
                 add(ui, app);
+                #[cfg(test)]
+                note_group_rows(id_title, drawn_rows());
             });
-            crate::ribbon_fit::end_compact(ui.ctx());
             #[cfg(test)]
             if content.response.rect.height() > CONTENT_H + 0.5 {
                 TALL_GROUPS.with(|g| g.borrow_mut().push(format!("{id_title}: {:.1}", content.response.rect.height())));
@@ -51,14 +52,15 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
         if lit > 0.0 {
             ui.painter().set(glow, group_glow(area, t.accent, lit));
         }
-        title_row(
-            ui,
-            Rect::from_min_max(pos2(if rtl { r.min.x } else { start.x }, start.y + CONTENT_H), pos2(r.max.x, start.y + CONTENT_H + LABEL_H)),
-            id_title,
-            title,
-            launcher,
-            app,
-        );
+        // The band runs the group's full width along the row. Take it from the row's cursor, not
+        // from the child's rect: a COMPACT Font or Paragraph group can lay its content out past
+        // that rect, and the label was then centred far off the card and never drawn.
+        let band = if rtl {
+            Rect::from_min_max(pos2(ui.cursor().max.x, start.y + CONTENT_H), pos2(start_cursor.max.x, start.y + CONTENT_H + LABEL_H))
+        } else {
+            Rect::from_min_max(pos2(start.x, start.y + CONTENT_H), pos2(ui.cursor().min.x, start.y + CONTENT_H + LABEL_H))
+        };
+        title_row(ui, band, id_title, title, launcher, app);
     }
     ui.add_space(5.0);
     let x = if rtl { ui.cursor().max.x } else { ui.cursor().min.x };
@@ -106,6 +108,17 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     let title_y = r.center().y;
     let rtl = crate::rtl::flows(ui);
     ui.painter().text(pos2(r.center().x, title_y), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
+    #[cfg(test)]
+    {
+        let size = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size());
+        crate::widgets::GROUP_LABELS.with(|g| {
+            g.borrow_mut().push(crate::widgets::DrawnGroupLabel {
+                title: title.to_string(),
+                band: r,
+                text: Rect::from_center_size(pos2(r.center().x, title_y), size),
+            });
+        });
+    }
     if let Some(cmd) = launcher {
         let lr = Rect::from_center_size(pos2(crate::rtl::trail_x(rtl, r, 6.0), title_y), vec2(11.0, 11.0));
         let resp = ui.interact(lr, ui.scope_id().with(("launch", id_title)), Sense::click());
@@ -119,17 +132,18 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     }
 }
 
-/// Where a collapsed group remembers whether its drop-down is open.
-fn collapsed_open_id(ui: &Ui, id_title: &str, position: usize) -> egui::Id {
-    ui.scope_id().with(("collapsed_group", id_title, position))
+/// Where a compact group remembers whether its drop-down is open.
+fn compact_open_id(ui: &Ui, id_title: &str, position: usize) -> egui::Id {
+    ui.scope_id().with(("compact_group", id_title, position))
 }
 
-/// A group folded into one drop-down button (the window is too narrow, #662): the button, as tall
-/// as the group with its title, shows the group's name, and its drop-down holds the whole group as
-/// designed with its title and launcher. The drop-down stays open while it is used (#1285): only a
-/// click outside it, or on the button, closes it; clicks in the menus and lists its controls open
-/// (font and size lists, Change Case, colours) count as inside.
-fn collapsed_group(
+/// A section drawn as one row (the window is too narrow for its natural rows, #662): a drop-down
+/// button with the group's icon, name and chevron, and the group's name in the label band below,
+/// as Word draws a section it has made one row. The drop-down holds the whole group as designed
+/// with its title and launcher. The drop-down stays open while it is used (#1285): only a click
+/// outside it, or on the button, closes it; clicks in the menus and lists its controls open (font
+/// and size lists, Change Case, colours) count as inside.
+fn compact_group(
     ui: &mut Ui,
     id_title: &str,
     position: usize,
@@ -139,20 +153,32 @@ fn collapsed_group(
     add: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
     let t = Tokens::get(ui.ctx());
-    let text_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size().x);
-    let (r, resp) = ui.allocate_exact_size(vec2((text_w + DROPDOWN + 14.0).max(48.0), CONTENT_H + LABEL_H), Sense::click());
+    let size = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size());
+    let w = (size.x + 18.0 + 6.0 + DROPDOWN + 14.0).max(64.0);
+    // The row is as tall as every other section's content, so the label band stays on one line.
+    let (r, _) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::hover());
+    let br = Rect::from_center_size(pos2(r.center().x, r.min.y + CONTENT_H / 2.0), vec2(w, 28.0));
+    let resp = ui.interact(br, ui.scope_id().with(("compact_button", id_title, position)), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
-    let open_id = collapsed_open_id(ui, id_title, position);
+    let open_id = compact_open_id(ui, id_title, position);
     let was_open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
-    bg(ui, r, &resp, was_open, &t);
+    bg(ui, br, &resp, was_open, &t);
+    // Icon, name and chevron, centred in the one row.
+    let content_w = 18.0 + 6.0 + size.x + 4.0 + DROPDOWN;
+    let x0 = br.center().x - content_w / 2.0;
+    icons::paint(ui.painter(), Rect::from_min_size(pos2(x0, br.center().y - 9.0), vec2(18.0, 18.0)), group_icon(id_title), t.icon, t.accent);
+    let text_x = x0 + 18.0 + 6.0;
+    let galley = ui.painter().layout_no_wrap(title.to_string(), regular(11.5), t.text);
+    ui.painter().galley(pos2(text_x, br.center().y - galley.size().y / 2.0), galley.clone(), t.text);
     icons::paint(
         ui.painter(),
-        Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)),
-        group_icon(id_title),
-        t.icon,
+        Rect::from_center_size(pos2(text_x + size.x + 4.0 + DROPDOWN / 2.0, br.center().y), vec2(DROPDOWN, DROPDOWN)),
+        "dropdown",
+        t.text,
         t.accent,
     );
-    label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, title, regular(11.5), t.text, true);
+    let band = Rect::from_min_max(pos2(r.min.x, r.min.y + CONTENT_H), pos2(r.max.x, r.min.y + CONTENT_H + LABEL_H));
+    title_row(ui, band, id_title, title, None, app);
     let resp = resp.on_hover_text(title);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let mut open = was_open;

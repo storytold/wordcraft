@@ -512,6 +512,40 @@ fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
     }
 }
 
+/// The compact Styles popup at a 360-pt window: the gallery shows the tiles that fit
+/// instead of painting six tiles past the window edge.
+#[test]
+fn the_styles_gallery_fits_a_narrow_window() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+    app.run("ui.tab", json!({"tab": "Home"})).unwrap();
+    let names: Vec<String> = app.session.doc.styles.gallery().iter().take(super::STYLE_TILES).map(|s| crate::i18n::style_name(s)).collect();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(360.0, 600.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(8);
+    // The Styles group is folded at 360 pt: open its drop-down, then read the tiles.
+    for _ in 0..10 {
+        if h.query_all_by_label("Styles").any(|n| n.rect().max.x <= 360.0 && n.rect().min.x >= 0.0) {
+            break;
+        }
+        h.get_by_label("Scroll ribbon right").click();
+        h.run_steps(3);
+    }
+    h.get_by_label("Styles").click();
+    h.run_steps(3);
+    let tiles: Vec<egui::Rect> = names.iter().filter_map(|s| h.query_by_label(s.as_str()).map(|n| n.rect())).collect();
+    assert!(!tiles.is_empty(), "a narrow window still shows style tiles");
+    for r in &tiles {
+        assert!(r.max.x <= 360.0 + 0.5, "tile {r:?} runs past the 360-pt window");
+    }
+}
+
 #[test]
 fn font_sample_shows_small_caps_and_the_script_mark() {
     let white = wordcraft_doc::Rgb(255, 255, 255);

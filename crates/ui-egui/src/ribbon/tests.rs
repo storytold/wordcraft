@@ -610,12 +610,49 @@ fn chart_design_tab_appears_when_chart_selected_and_buttons_open_dialogs() {
 }
 
 /// No group's content runs into its label: View › Show stacked four check boxes in a column
-/// made for three, so "Hide White Space" was drawn under "Show". Every tab, every language.
+/// made for three, so "Hide White Space" was drawn under "Show". Every tab, every language, at a
+/// width that shows every measured wide form and at one that shows Mailings' two- and three-row
+/// forms.
 #[test]
 fn ribbon_groups_fit_above_their_labels() {
+    let mut tall = Vec::new();
+    // 2560 pt shows the wide forms (Symbols, Index, Table of Authorities, Tracking, Views);
+    // 900 pt shows Mailings › Create's two rows and Start Mail Merge's three.
+    for width in [2560.0, 900.0] {
+        let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        // 2560 pt keeps every tab's groups off its scroll arrows; 900 pt draws the narrow forms.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(width, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for lang in crate::i18n::Lang::all() {
+            h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
+            for tab in TABS.iter().filter(|t| **t != "File") {
+                h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
+                h.run_steps(2);
+                crate::widgets::TALL_GROUPS.with(|g| g.borrow_mut().clear());
+                h.run_steps(1);
+                let found = crate::widgets::TALL_GROUPS.with(|g| g.take());
+                tall.extend(found.into_iter().map(|g| format!("{} {width} {tab} › {g}", lang.code())));
+            }
+        }
+    }
+    tall.sort();
+    tall.dedup();
+    assert!(tall.is_empty(), "groups taller than the ribbon: {tall:#?}");
+}
+
+/// The card's three bands at a 1024 × 768 window on a 125 % display (819 × 614 points): every
+/// tab keeps a group-label band under its content, on one row, with each title centred and whole
+/// inside it (Word draws these labels at every width, narrow windows included).
+#[test]
+fn group_labels_sit_in_the_cards_label_band_at_1024() {
     let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
-    // Wide enough that no tab hides groups behind its scroll arrows.
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(819.0, 614.0)).with_pixels_per_point(1.25).build_ui_state(
         |ui, app: &mut WordApp| {
             let ctx = ui.ctx().clone();
             app.logic(&ctx);
@@ -623,21 +660,56 @@ fn ribbon_groups_fit_above_their_labels() {
         },
         app,
     );
-    let mut tall = Vec::new();
-    for lang in crate::i18n::Lang::all() {
-        h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
-        for tab in TABS.iter().filter(|t| **t != "File") {
-            h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
-            h.run_steps(2);
-            crate::widgets::TALL_GROUPS.with(|g| g.borrow_mut().clear());
-            h.run_steps(1);
-            let found = crate::widgets::TALL_GROUPS.with(|g| g.take());
-            tall.extend(found.into_iter().map(|g| format!("{} {tab} › {g}", lang.code())));
+    h.run_steps(3);
+    for tab in ["Home", "Insert", "Draw", "Design", "Layout", "References", "Mailings", "Review", "View", "Help"] {
+        h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
+        h.run_steps(2);
+        crate::widgets::GROUP_LABELS.with(|g| g.borrow_mut().clear());
+        h.run_steps(1);
+        let labels = crate::widgets::GROUP_LABELS.with(|g| g.borrow().clone());
+        assert!(!labels.is_empty(), "{tab}: the card drew no group labels");
+        // The band the card's height must leave room for: one row under every group's content.
+        let (top, bottom) = (labels[0].band.top(), labels[0].band.bottom());
+        assert!(bottom - top >= crate::widgets::LABEL_H - 0.01, "{tab}: the label band is {} tall", bottom - top);
+        for l in &labels {
+            assert!(
+                (l.band.top() - top).abs() <= 0.5 && (l.band.bottom() - bottom).abs() <= 0.5,
+                "{tab} › {}: the label band {:?} is not on the card's label row ({top}–{bottom})",
+                l.title,
+                l.band
+            );
+            assert!(
+                l.text.top() >= l.band.top() - 0.01 && l.text.bottom() <= l.band.bottom() + 0.01,
+                "{tab} › {}: the title {:?} leaves its band {:?}, so the card clips it",
+                l.title,
+                l.text,
+                l.band
+            );
+            assert!(
+                l.band.height() - l.text.height() >= 1.5,
+                "{tab} › {}: {:.1} pt of band for a {:.1} pt title leaves no room to read it",
+                l.title,
+                l.band.height(),
+                l.text.height()
+            );
+            assert!(
+                (l.text.center().x - l.band.center().x).abs() <= 1.0,
+                "{tab} › {}: the title is off centre in its band ({:?} in {:?})",
+                l.title,
+                l.text,
+                l.band
+            );
+            assert!(l.text.width() <= l.band.width() + 0.5, "{tab} › {}: the title is wider than its band", l.title);
         }
     }
-    tall.sort();
-    tall.dedup();
-    assert!(tall.is_empty(), "groups taller than the ribbon: {tall:#?}");
+}
+
+/// The ribbon panel's height leaves room for the content and the label band after its margins:
+/// `Panel::top("ribbon")` is `CONTENT_H + LABEL_H + 10.0` with 4-point top and bottom margins.
+#[test]
+fn the_ribbon_card_leaves_room_for_the_label_band() {
+    let card = crate::widgets::CONTENT_H + crate::widgets::LABEL_H + 10.0 - 8.0;
+    assert!(card >= crate::widgets::CONTENT_H + crate::widgets::LABEL_H, "{card} leaves the label band no room");
 }
 
 /// #897: the tabs that didn't fit were drawn under Comments / Editing / Share, so at 1280 pt
@@ -660,7 +732,9 @@ fn table_tabs_stay_clickable_when_the_tab_strip_overflows() {
         app,
     );
     h.run_steps(3);
-    let buttons = [tl!("Comments"), tl!("Editing")].map(|b| h.get_by_label(b).rect());
+    // The group names are also accessible names in the card; the tab strip is the topmost node.
+    let buttons =
+        [tl!("Comments"), tl!("Editing")].map(|b| h.get_all_by_label(b).map(|n| n.rect()).min_by(|a, b| a.top().total_cmp(&b.top())).expect("a tab"));
     for tab in ["Table Design", "Table Layout"] {
         let r = h.get_by_label(tl!(tab)).rect();
         assert!(r.right() <= 1280.0 && buttons.iter().all(|b| !b.intersects(r)), "{tab} {r:?} under {buttons:?}");

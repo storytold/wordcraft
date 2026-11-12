@@ -1,4 +1,4 @@
-use super::common::stack;
+use super::common::{stack, top_row};
 use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small, vec2};
 
 /// Draws the View tab's Views, Immersive, Page Movement, Show, Zoom, Dark Mode, Window and Macros
@@ -6,13 +6,45 @@ use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small, vec2}
 pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
     let v = app.session.view.clone();
     group(ui, "Views", None, app, |ui, app| {
-        big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
-        big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
-        big(ui, app, "webLayout", "Web\nLayout", "view.webLayout", json!({}), false);
-        stack(ui, |ui| {
+        // Measured: two rows from 1100 px (880 pt): the view buttons, then Outline and Draft.
+        let layout = |ui: &mut Ui, app: &mut WordApp| {
+            big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
+            big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
+            big(ui, app, "webLayout", "Web\nLayout", "view.webLayout", json!({}), false);
+        };
+        let modes = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "outline", Some("Outline"), "Outline", crate::widgets::ButtonAction::new("view.outline", json!({}), false));
             small(ui, app, "draft", Some("Draft"), "Draft", crate::widgets::ButtonAction::new("view.draft", json!({}), false));
-        });
+        };
+        if crate::ribbon_fit::rows_for(ui.ctx(), "View", "Views", 1) >= 2 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    small(ui, app, "readMode", Some("Read Mode"), "Read\nMode", crate::widgets::ButtonAction::new("view.readMode", json!({}), false));
+                    small(
+                        ui,
+                        app,
+                        "printLayout",
+                        Some("Print Layout"),
+                        "Print\nLayout",
+                        crate::widgets::ButtonAction::new("view.printLayout", json!({}), false),
+                    );
+                    small(
+                        ui,
+                        app,
+                        "webLayout",
+                        Some("Web Layout"),
+                        "Web\nLayout",
+                        crate::widgets::ButtonAction::new("view.webLayout", json!({}), false),
+                    );
+                });
+                crate::widgets::row(ui, |ui| modes(ui, app));
+            });
+        } else {
+            top_row(ui, |ui| {
+                layout(ui, app);
+                modes(ui, app);
+            });
+        }
     });
     group(ui, "Immersive", None, app, |ui, app| {
         big(ui, app, "focus", "Focus", "view.focus", json!({}), false);
@@ -46,15 +78,30 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Zoom", None, app, |ui, app| {
-        big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
-        big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
-        // Step the zoom up and down by 10% (issue #67), from whatever the page shows now.
-        stack(ui, |ui| {
+        let zoom = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "zoom", "Zoom", "ui.dialog", json!({"name": "zoom"}), false);
+            } else {
+                small(ui, app, "zoom", Some("Zoom"), "Zoom", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "zoom"}), false));
+            }
+        };
+        let zoom100 = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "zoom100", "100%", "view.zoom100", json!({}), false);
+            } else {
+                small(ui, app, "zoom100", Some("100%"), "100%", crate::widgets::ButtonAction::new("view.zoom100", json!({}), false));
+            }
+        };
+        let zoom_in = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "zoomIn", Some("Zoom In"), "Zoom In", crate::widgets::ButtonAction::new("view.zoomIn", json!({}), false));
+        };
+        let zoom_out = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", crate::widgets::ButtonAction::new("view.zoomOut", json!({}), false));
-        });
-        stack(ui, |ui| {
+        };
+        let one_page = |ui: &mut Ui, app: &mut WordApp| {
             small(ui, app, "onePage", Some("One Page"), "One Page", crate::widgets::ButtonAction::new("view.onePage", json!({}), v.fit == "onePage"));
+        };
+        let multi = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -63,6 +110,8 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
                 "Multiple Pages",
                 crate::widgets::ButtonAction::new("view.multiplePages", json!({}), v.multi_page),
             );
+        };
+        let page_width = |ui: &mut Ui, app: &mut WordApp| {
             small(
                 ui,
                 app,
@@ -71,7 +120,31 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
                 "Page Width",
                 crate::widgets::ButtonAction::new("view.pageWidth", json!({}), v.fit == "pageWidth"),
             );
-        });
+        };
+        // Measured: one row below 1400 px (1120 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "View", "Zoom", 1) >= 3 {
+            zoom(ui, app, true);
+            zoom100(ui, app, true);
+            stack(ui, |ui| {
+                zoom_in(ui, app);
+                zoom_out(ui, app);
+            });
+            stack(ui, |ui| {
+                one_page(ui, app);
+                multi(ui, app);
+                page_width(ui, app);
+            });
+        } else {
+            top_row(ui, |ui| {
+                zoom(ui, app, true);
+                zoom100(ui, app, true);
+                zoom_in(ui, app);
+                zoom_out(ui, app);
+                one_page(ui, app);
+                multi(ui, app);
+                page_width(ui, app);
+            });
+        }
     });
     group(ui, "Dark Mode", None, app, |ui, app| {
         big(ui, app, "darkMode", "Switch\nModes", "view.darkMode", json!({}), false);
@@ -90,12 +163,37 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         );
     });
     group(ui, "Window", None, app, |ui, app| {
-        big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
-        big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
-        big(ui, app, "split", "Split", "view.split", json!({}), false);
+        let new_window = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
+            } else {
+                small(ui, app, "newWindow", Some("New Window"), "New Window", crate::widgets::ButtonAction::new("view.newWindow", json!({}), false));
+            }
+        };
+        let arrange_all = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
+            } else {
+                small(
+                    ui,
+                    app,
+                    "arrangeAll",
+                    Some("Arrange All"),
+                    "Arrange All",
+                    crate::widgets::ButtonAction::new("view.arrangeAll", json!({}), false),
+                );
+            }
+        };
+        let split = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                big(ui, app, "split", "Split", "view.split", json!({}), false);
+            } else {
+                small(ui, app, "split", Some("Split"), "Split", crate::widgets::ButtonAction::new("view.split", json!({}), false));
+            }
+        };
         // Across the app's windows (#322; `windows`).
         let w = app.session.windows.clone();
-        stack(ui, |ui| {
+        let side_by_side = |ui: &mut Ui, app: &mut WordApp| {
             if w.side_by_side.is_none() && w.others.len() > 1 {
                 menu_button(
                     ui,
@@ -107,22 +205,75 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
                 let action = crate::widgets::ButtonAction::new("view.sideBySide", json!({}), w.side_by_side.is_some());
                 small(ui, app, "sideBySide", Some("View Side by Side"), "View Side by Side", action);
             }
+        };
+        let sync_scroll = |ui: &mut Ui, app: &mut WordApp| {
             let action = crate::widgets::ButtonAction::new("view.syncScroll", json!({}), w.sync_scroll);
             small(ui, app, "syncScroll", Some("Synchronous Scrolling"), "Synchronous Scrolling", action);
-        });
-        menu_button(
-            ui,
-            app,
-            crate::widgets::MenuButtonOptions::new("switchWindows", Some("Switch\nWindows"), "Switch Windows", true, "view.switchWindows"),
-            crate::documents::switch_windows_menu,
-        );
-        // The Full Screen button carries its name for assistive technology (and for the
-        // regression test that clicks it): big buttons are otherwise drawn unlabeled. Its
-        // enabled state is the command's own, as every other ribbon control reports: the
-        // browser has no full screen to ask for, and says so (#662).
-        let on = crate::widgets::enabled(app, "view.fullScreen");
-        let resp = big_toggle(ui, app, "fullScreen", "Full\nScreen", "view.fullScreen", v.full_screen);
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, v.full_screen, "Full Screen"));
+        };
+        let switch_windows = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            menu_button(
+                ui,
+                app,
+                crate::widgets::MenuButtonOptions::new(
+                    "switchWindows",
+                    Some(if big_btn { "Switch\nWindows" } else { "Switch Windows" }),
+                    "Switch Windows",
+                    big_btn,
+                    "view.switchWindows",
+                ),
+                crate::documents::switch_windows_menu,
+            );
+        };
+        let full_screen = |ui: &mut Ui, app: &mut WordApp, big_btn: bool| {
+            if big_btn {
+                // The Full Screen button carries its name for assistive technology (and for the
+                // regression test that clicks it): big buttons are otherwise drawn unlabeled.
+                let resp = big_toggle(ui, app, "fullScreen", "Full\nScreen", "view.fullScreen", v.full_screen);
+                let on = crate::widgets::enabled(app, "view.fullScreen");
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, v.full_screen, "Full Screen"));
+            } else {
+                small(
+                    ui,
+                    app,
+                    "fullScreen",
+                    Some("Full Screen"),
+                    "Full Screen",
+                    crate::widgets::ButtonAction::new("view.fullScreen", json!({}), v.full_screen),
+                );
+            }
+        };
+        // Measured: one row below 1300 px (1040 pt), three rows from there.
+        if crate::ribbon_fit::rows_for(ui.ctx(), "View", "Window", 1) >= 3 {
+            stack(ui, |ui| {
+                crate::widgets::row(ui, |ui| {
+                    new_window(ui, app, false);
+                    arrange_all(ui, app, false);
+                    split(ui, app, false);
+                });
+                crate::widgets::row(ui, |ui| {
+                    side_by_side(ui, app);
+                    sync_scroll(ui, app);
+                });
+                crate::widgets::row(ui, |ui| {
+                    switch_windows(ui, app, false);
+                    full_screen(ui, app, false);
+                });
+            });
+        } else {
+            // Seven controls in one row can run past a narrow popup: scroll instead of
+            // clipping the trailing ones (Full Screen) out of reach.
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                top_row(ui, |ui| {
+                    new_window(ui, app, true);
+                    arrange_all(ui, app, true);
+                    split(ui, app, true);
+                    side_by_side(ui, app);
+                    sync_scroll(ui, app);
+                    switch_windows(ui, app, true);
+                    full_screen(ui, app, true);
+                });
+            });
+        }
     });
     group(ui, "Macros", None, app, |ui, app| {
         big(ui, app, "macros", "Macros", "tools.macros", json!({}), false);

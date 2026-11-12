@@ -42,6 +42,55 @@ thread_local! {
     /// Groups drawn taller than [`CONTENT_H`] (title and height): their content runs into the
     /// group label below, as View › Show did with four check boxes in one column.
     pub(crate) static TALL_GROUPS: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Group labels as drawn (title, the label band's rectangle and the text inside it): the
+    /// band must sit below the content and hold the whole text, never clipped by the card.
+    pub(crate) static GROUP_LABELS: std::cell::RefCell<Vec<DrawnGroupLabel>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Top edges of the ribbon buttons drawn inside the group being laid out: distinct tops are
+    /// the control rows the group shows (a large button spans one row, like Word's UIA rows).
+    pub(crate) static DRAWN_ROW_TOPS: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+
+    /// Each group's drawn row count (title and distinct control rows) this frame.
+    pub(crate) static GROUP_ROWS: std::cell::RefCell<Vec<(String, usize)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Record a drawn ribbon button's top edge for the group row count (tests).
+#[cfg(test)]
+pub(crate) fn note_row_top(y: f32) {
+    DRAWN_ROW_TOPS.with(|t| t.borrow_mut().push(y));
+}
+
+/// The distinct tops recorded since the last clear: the rows a group drew.
+#[cfg(test)]
+pub(crate) fn drawn_rows() -> usize {
+    DRAWN_ROW_TOPS.with(|t| {
+        let mut tops: Vec<i32> = t.borrow().iter().map(|y| (y * 2.0).round() as i32).collect();
+        tops.sort_unstable();
+        tops.dedup();
+        tops.len()
+    })
+}
+
+/// Forget the tops recorded for the group being laid out (tests).
+#[cfg(test)]
+pub(crate) fn clear_row_tops() {
+    DRAWN_ROW_TOPS.with(|t| t.borrow_mut().clear());
+}
+
+/// Record a group's drawn row count for this frame (tests).
+#[cfg(test)]
+pub(crate) fn note_group_rows(title: &str, rows: usize) {
+    GROUP_ROWS.with(|g| g.borrow_mut().push((title.to_string(), rows)));
+}
+
+/// A group label as painted, for tests of the card's three bands.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct DrawnGroupLabel {
+    pub title: String,
+    pub band: Rect,
+    pub text: Rect,
 }
 
 #[cfg(test)]
