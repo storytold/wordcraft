@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -1435,3 +1435,4 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
+| 2026-11-12 | minor | Progress log: layout.fitOnePage condenses a multi-page document by one page while preserving typography hierarchy (#6433) |
