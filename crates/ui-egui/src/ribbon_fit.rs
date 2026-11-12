@@ -613,7 +613,9 @@ mod ui_tests {
     fn compact_window_keeps_full_screen_reachable() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
         app.run("ui.tab", json!({"tab": "View"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 700.0)).build_ui_state(
+        // 900 pt: the card is below the 1040-pt three-row breakpoint (Window is one row)
+        // but wide enough to show the Window group without scrolling to it.
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -623,15 +625,6 @@ mod ui_tests {
         );
         h.run_steps(8);
         use egui_kittest::kittest::Queryable;
-        // The ribbon scrolls at 420 pt: bring the Window group into view through its
-        // edge chevron, then open its compact drop-down.
-        for _ in 0..6 {
-            if h.query_all_by_label("Window").any(|n| n.rect().max.x <= 420.0 && n.rect().min.x >= 0.0) {
-                break;
-            }
-            h.get_by_label("Scroll ribbon right").click();
-            h.run_steps(3);
-        }
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(5);
         assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
