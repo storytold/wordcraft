@@ -565,9 +565,8 @@ mod ui_tests {
         );
         h.run_steps(8);
         // The split button's arrow opens Built-In; the plain insert would show no menu.
-        let eq: Vec<(String, f32, f32)> =
-            h.query_all_by_label_contains("Equation").map(|n| (format!("{:?}", n.rect()), n.rect().width(), n.rect().min.y)).collect();
-        let _ = eq;
+        let eq: Vec<String> = h.query_all(By::new().predicate(|_| true)).filter_map(|n| n.accesskit_node().label()).collect();
+        panic!("labels at 1120pt: {eq:?}");
         let arrow = h
             .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l.contains("Equation"))))
             .find(|n| n.rect().width() < 20.0 && n.rect().min.y >= 0.0)
