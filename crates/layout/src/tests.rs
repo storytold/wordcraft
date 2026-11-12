@@ -7553,6 +7553,28 @@ fn a_page_break_at_the_bottom_of_a_full_page_leaves_no_blank_page() {
     assert!(last_on_2, "the text after the break is on page 2");
 }
 
+/// Measured in Word: a paragraph of nothing but a page break whose line doesn't fit at the foot
+/// of a full page moves on and leaves a blank page; a break with text after it stays.
+#[test]
+fn a_pure_page_break_past_the_foot_leaves_a_blank_page() {
+    crate::test_fonts();
+    use wordcraft_doc::props::LineSpacing;
+    let para = |text: &str, before: f32| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { line_spacing: Some(LineSpacing::Exactly(18.0)), space_before: Some(before), space_after: Some(0.0), ..Default::default() };
+        wordcraft_doc::para_block(p)
+    };
+    // Letter: 648pt of text, 5pt and 35 lines of 18pt leave 13pt.
+    let lines: Vec<_> = (0..35).map(|i| para(&format!("Line {i}"), if i == 0 { 5.0 } else { 0.0 })).collect();
+    for (tail, pages) in [("", 3), ("Next", 2)] {
+        let mut d = Document::from_text("");
+        d.body = lines.clone();
+        d.body.push(para(&format!("\u{000C}{tail}"), 0.0));
+        d.body.push(para("After", 0.0));
+        assert_eq!(lay(&d).pages.len(), pages, "break then {tail:?}");
+    }
+}
+
 /// #534: indents in characters (`w:firstLineChars`) are measured in the paragraph mark's font
 /// size and win over the indent in points.
 #[test]
