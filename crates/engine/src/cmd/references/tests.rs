@@ -1014,6 +1014,63 @@ fn style_references_leave_out_the_deletions_that_are_hidden() {
     }
 }
 
+/// Review of #6263: a tracked cut in the body pasted into a text box makes the cut text the
+/// source of a move without changing the body's blocks (only its revision gets a move name). With
+/// Deletions marked Hidden the header's STYLEREF leaves the text out while it is a deletion, and
+/// shows it again once it is moved text, which is struck through, not hidden.
+#[test]
+fn a_header_style_reference_follows_a_deletion_becoming_a_move() {
+    use wordcraft_doc::{CharProps, Paragraph, PartKind};
+    let mut doc = wordcraft_doc::Document::from_text("Keep this. Move these words.\nBody ");
+    let field = InlineObject::Field {
+        instr: "STYLEREF \"Heading 1\"".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, field, &CharProps::default()).unwrap();
+    let id = doc.add_part(PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+    doc.last_section.headers.default = Some(id);
+    let mut s = Session::new(doc);
+    s.run("select.text", &json!({"text": "Keep this."})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    let story = s.run("insert.textBox", &json!({"text": "Box "})).unwrap()["story"].as_u64().unwrap() as u32;
+    let in_box = s.sel.focus.clone();
+    assert_eq!(in_box.story, StoryRef::Part(story));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    let header = |s: &mut Session| -> String {
+        let l = s.layout();
+        let items = l.pages.first().map(|p| p.header.clone()).unwrap_or_default();
+        items
+            .iter()
+            .filter_map(|it| {
+                if let wordcraft_layout::Placed::Lines { para, .. } = it {
+                    Some(para.shown.iter().map(|x| x.1.clone()).collect::<String>())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    assert_eq!(header(&mut s), "Keep this. Move these words.");
+    s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+    s.run("select.text", &json!({"text": "Move these words."})).unwrap();
+    s.run("edit.cut", &json!({})).unwrap();
+    assert_eq!(header(&mut s), "Keep this.", "a deletion, hidden");
+    let body = s.doc.body.clone();
+    s.run("caret.set", &json!({"pos": in_box})).unwrap();
+    s.run("edit.paste", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Part(story)), "Box Move these words.");
+    assert!(body.iter().zip(s.doc.body.iter()).all(|(a, b)| std::sync::Arc::ptr_eq(a, b)), "the body's blocks are the same");
+    assert_eq!(s.doc.revisions.iter().filter(|r| r.move_name.is_some()).count(), 2, "a move");
+    assert_eq!(header(&mut s), "Keep this. Move these words.", "moved text, struck through");
+}
+
 /// Output looks the bookmarks up once for all of a document's REF fields: several fields to one
 /// bookmark, fields to others, and one to a bookmark the document lacks each show what
 /// `bookmark_text` (F9's lookup) gives, or Word's error.
