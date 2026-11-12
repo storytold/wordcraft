@@ -7521,7 +7521,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "aes-gcm",
  "base64 0.23.1",
@@ -7720,7 +7720,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-office-js"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "js-sys",
  "serde_json",
@@ -7752,7 +7752,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-plugin"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "log",
  "quick-xml 0.41.0",

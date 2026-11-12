@@ -424,6 +424,14 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let asked = path.clone();
     let path = crate::io::macro_enabled_path(&s.doc, &asked).unwrap_or(path);
     let renamed = (path != asked).then(|| asked.to_string_lossy().into_owned());
+    // Whoever asked agreed to replace the name they gave, not the macro-enabled one: another
+    // file already there under that name is left alone.
+    if renamed.is_some() && s.path.as_deref() != Some(path.as_path()) && crate::io::is_regular_file(&path).is_some() {
+        return Err(CmdError::Failed(format!(
+            "this document has macros, so it is saved as {}, and a file with that name already exists: choose another name",
+            path.display()
+        )));
+    }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut opts = export_options(s, v);
     match v.get("format").filter(|f| !f.is_null()) {
