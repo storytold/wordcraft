@@ -137,7 +137,7 @@ pub(super) fn find_in_navigation_pane(app: &mut WordApp, ctx: &egui::Context, te
 
 /// Whether `e` is the text of the shortcut that opened a box (see `Dialog::Commands::swallow`):
 /// a plain key press first means the user is typing, and one swallowed text is all there is.
-pub(super) fn swallow_shortcut_text(swallow: &mut bool, e: &egui::Event) -> bool {
+pub(crate) fn swallow_shortcut_text(swallow: &mut bool, e: &egui::Event) -> bool {
     match e {
         egui::Event::Key { pressed: true, modifiers, .. } if !modifiers.alt => {
             *swallow = false;
@@ -177,8 +177,8 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
     } else {
         Vec::new()
     };
-    ui.horizontal_top(|ui| {
-        ui.vertical(|ui| {
+    crate::rtl::horizontal_top(ui, |ui| {
+        crate::rtl::vertical(ui, |ui| {
             ui.label(tl!("Go to what:"));
             for (w, label) in [(GoToWhat::Page, "Page"), (GoToWhat::Bookmark, "Bookmark")] {
                 if ui.selectable_label(*what == w, tl!(label)).clicked() && *what != w {
@@ -189,7 +189,7 @@ pub(super) fn goto_body(app: &mut WordApp, ui: &mut Ui, what: &mut GoToWhat, tar
             }
         });
         ui.add_space(16.0);
-        ui.vertical(|ui| match what {
+        crate::rtl::vertical(ui, |ui| match what {
             GoToWhat::Page => {
                 let label = ui.label(tl!("Enter page number:"));
                 let r = ui.add(egui::TextEdit::singleline(target).desired_width(220.0)).labelled_by(label.id);

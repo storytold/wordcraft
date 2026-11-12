@@ -551,3 +551,24 @@ fn an_icon_menu_item_does_not_take_the_whole_width_on_offer() {
     assert_eq!(plain, 200.0, "content width, at least min_w");
     assert_eq!(justified, 300.0, "a justified menu's width");
 }
+
+/// The tab strip exposes each tab as a button with its selected state, and a click on an
+/// unselected tab reports its index.
+#[test]
+fn dialog_tabs_expose_the_selected_state_and_report_clicks() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 60.0)).build_ui_state(
+        |ui, st: &mut (usize, Option<usize>)| {
+            if let Some(i) = dialog_tabs(ui, &["One".to_string(), "Two".to_string()], st.0) {
+                st.1 = Some(i);
+            }
+        },
+        (0usize, None),
+    );
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("One").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    assert_eq!(h.get_by_label("Two").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+    h.get_by_label("Two").click();
+    h.run_steps(2);
+    assert_eq!(h.state().1, Some(1));
+}

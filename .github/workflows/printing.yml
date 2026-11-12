@@ -6,6 +6,7 @@ on:
   pull_request:
     paths:
       - 'Cargo*'
+      - 'craft-i18n.rev'
       - 'apps/wordcraft/**'
       - 'apps/wordcraft-web/**'
       - 'crates/ui-egui/**'
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - 'Cargo*'
+      - 'craft-i18n.rev'
       - 'apps/wordcraft/**'
       - 'apps/wordcraft-web/**'
       - 'crates/ui-egui/**'
@@ -40,7 +42,36 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: '0'
     steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
+        with:
+          egress-policy: audit
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The interface catalogs and craft-proof's Language data come from craft-i18n at the commit in
+      # craft-i18n.rev, so these tests build with the same data as the gate (ci.yml).
+      - name: Check out craft-i18n
+        uses: storytold/craft-common-actions/actions/checkout-craft-i18n@main
+
+      # The catalogs include CJK interface languages, so the UI tests need the suite's fonts, as in
+      # the gate (same commit as ci.yml and release.yml).
+      - name: Check out craft-fonts
+        uses: storytold/craft-common-actions/actions/checkout-craft-fonts@main
+        with:
+          ref: b076417b5880bd4154bd22f00695b1d28c6bea83
+
+      - name: Build with craft-fonts
+        shell: bash
+        run: |
+          echo "CRAFT_FONTS_DIR=$GITHUB_WORKSPACE/craft-fonts" >> "$GITHUB_ENV"
+          echo "CRAFT_FONTS_REQUIRED=1" >> "$GITHUB_ENV"
+
+      # apt falls back to mirrors outside ubuntu.com when it doesn't resolve (as on 11 Nov 2026).
+      - name: Configure apt mirrors
+        if: runner.os == 'Linux'
+        uses: storytold/craft-common-actions/actions/configure-apt-mirrors@main
 
       - name: Install Linux build and software-rendering dependencies
         if: runner.os == 'Linux'
@@ -50,12 +81,13 @@ jobs:
             pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev \
             libxi-dev libgtk-3-dev libfontconfig1-dev libfreetype-dev libvulkan1 mesa-vulkan-drivers
 
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: step-security/dtolnay-rust-toolchain@8dd607977d06adf4ed49b190381e74c17a9dd25f # v1.0.0
         with:
+          toolchain: stable
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: step-security/rust-cache@8871c8ba063416da7c32246932ea6ae08700453e # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
