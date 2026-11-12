@@ -87,6 +87,7 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
                 ("w:gutter", &twips(s.gutter.max(0.0))),
             ],
         );
+        paper_source(w, s);
         if let Some(b) = &s.page_borders {
             borders(w, "w:pgBorders", b, None, &[("w:offsetFrom", "text")]);
         }
@@ -107,14 +108,7 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:lnNumType", &refs);
         }
-        if s.page_num_set || s.page_num_start.is_some() || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal {
-            let mut a = vec![("w:fmt", s.page_num_format.ooxml().to_string())];
-            if let Some(st) = s.page_num_start {
-                a.push(("w:start", st.to_string()));
-            }
-            let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            w.empty("w:pgNumType", &refs);
-        }
+        page_number_type(w, s);
         let c = &s.columns;
         let count = c.count.clamp(1, 45);
         let mut ca = vec![("w:space", twips(c.space.max(0.0))), ("w:num", n(count as i64))];
@@ -134,6 +128,9 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             let refs: Vec<(&str, &str)> = ca.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:cols", &refs);
         }
+        if let Some(count) = s.footnote_columns.filter(|count| *count > 0) {
+            w.empty("w15:footnoteColumns", &[("w:val", &count.clamp(1, 45).to_string())]);
+        }
         if let Some(on) = s.form_prot {
             w.empty("w:formProt", if on { &[] } else { &[("w:val", "0")] });
         }
@@ -142,6 +139,9 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             wordcraft_doc::section::PageVAlign::Center => w.val("w:vAlign", "center"),
             wordcraft_doc::section::PageVAlign::Justify => w.val("w:vAlign", "both"),
             wordcraft_doc::section::PageVAlign::Bottom => w.val("w:vAlign", "bottom"),
+        }
+        if let Some(on) = s.no_endnote {
+            w.empty("w:noEndnote", if on { &[] } else { &[("w:val", "0")] });
         }
         if s.title_page {
             w.empty("w:titlePg", &[]);
@@ -165,6 +165,43 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             w.empty("w:docGrid", &refs);
         }
     }
+}
+
+fn paper_source(w: &mut W, s: &SectionProps) {
+    let mut attrs = Vec::new();
+    if let Some(first) = s.paper_src_first {
+        attrs.push(("w:first", first.to_string()));
+    }
+    if let Some(other) = s.paper_src_other {
+        attrs.push(("w:other", other.to_string()));
+    }
+    if !attrs.is_empty() {
+        let refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+        w.empty("w:paperSrc", &refs);
+    }
+}
+
+fn page_number_type(w: &mut W, s: &SectionProps) {
+    if !(s.page_num_set
+        || s.page_num_start.is_some()
+        || s.page_num_format != wordcraft_doc::section::NumFormat::Decimal
+        || s.chapter_style.is_some()
+        || s.chapter_sep.is_some())
+    {
+        return;
+    }
+    let mut attrs = vec![("w:fmt", s.page_num_format.ooxml().to_string())];
+    if let Some(start) = s.page_num_start {
+        attrs.push(("w:start", start.to_string()));
+    }
+    if let Some(style) = s.chapter_style {
+        attrs.push(("w:chapStyle", style.to_string()));
+    }
+    if let Some(separator) = s.chapter_sep {
+        attrs.push(("w:chapSep", separator.ooxml().to_string()));
+    }
+    let refs: Vec<(&str, &str)> = attrs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    w.empty("w:pgNumType", &refs);
 }
 
 /// The children of a `w:footnotePr` / `w:endnotePr` in schema order (`w:pos`, `w:numFmt`,

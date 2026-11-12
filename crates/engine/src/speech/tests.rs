@@ -187,6 +187,76 @@ fn player_finishes_on_its_own() {
 }
 
 #[test]
+fn every_reading_counts_as_a_new_one() {
+    // The worker forgets what it learnt about the speech programs when a reading starts, even
+    // when the same worker thread carries on (a pause, then Read Aloud again).
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    let readings = |r: &ReadAloud| lock(&r.shared.0).readings;
+    let doc = Document::from_text("One. Two.");
+    r.start(sentences(&doc, &Pos::body(0, 0), None, true));
+    let first = readings(&r);
+    r.play_pause();
+    r.start(sentences(&doc, &Pos::body(0, 0), None, true));
+    assert_eq!(readings(&r), first + 1);
+    r.play_pause();
+    r.play_pause();
+    assert_eq!(readings(&r), first + 1, "pause and play are the same reading");
+    r.stop();
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn a_sentence_that_never_began_says_so_not_another_program() {
+    // No begin event within the queue bound: no other program need be involved, so the
+    // message names the sentence not starting, not another program stopping it.
+    let halted = |o| match dispatcher_spoken(Ok(o)) {
+        Spoken::Halted(m) => m,
+        _ => String::new(),
+    };
+    assert_eq!(halted(ssip::Outcome::NotStarted), NOT_STARTED);
+    assert!(!NOT_STARTED.contains("another program"));
+    assert_eq!(halted(ssip::Outcome::Halted), HALTED_BY_OTHER);
+}
+
+#[test]
+fn play_after_a_failed_sentence_plays_it_again() {
+    // A sentence whose end never came stops reading with an error (as the worker does on a
+    // timeout); Play starts it again and the message goes.
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    r.skip(1);
+    {
+        let mut s = lock(&r.shared.0);
+        s.state = State::Stopped;
+        s.error = Some("Read Aloud couldn't use Speech Dispatcher: the sentence didn't end".into());
+    }
+    r.play_pause();
+    assert_eq!((r.state(), r.progress().0, r.error()), (State::Playing, 1, None));
+    r.stop();
+}
+
+#[test]
+fn play_after_a_halt_carries_on_and_clears_the_message() {
+    // Another program stopped the sentence: reading paused on it with a message, and Play
+    // goes on from the same sentence.
+    let mut r = ReadAloud::default();
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    {
+        let mut s = lock(&r.shared.0);
+        s.state = State::Paused;
+        s.error = Some("stopped by another program".into());
+    }
+    r.play_pause();
+    assert_eq!(r.state(), State::Playing);
+    assert_eq!(r.progress().0, 0);
+    assert_eq!(r.error(), None);
+    r.stop();
+}
+
+#[test]
 fn empty_queue_does_not_play() {
     let mut r = ReadAloud::default();
     r.start(Vec::new());
@@ -271,6 +341,38 @@ fn espeak_gets_the_language() {
     assert_eq!(espeak_args("180", Some("uk")), ["-s", "180", "-v", "uk", "--stdin"]);
     assert_eq!(espeak_args("180", None), ["-s", "180", "--stdin"]);
     assert_eq!(espeak_args("180", Some("--evil")), ["-s", "180", "--stdin"]);
+    assert_eq!(espeak_args("180", Some("hu-HU")), ["-s", "180", "-v", "hu", "--stdin"]);
+}
+
+#[test]
+fn speech_dispatcher_rate_follows_the_speed() {
+    assert_eq!(spd_rate(1.0), 0);
+    assert_eq!(spd_rate(MIN_RATE), -50);
+    assert_eq!(spd_rate(MAX_RATE), 100);
+    assert_eq!(spd_rate(2.0), 50);
+    assert_eq!(spd_rate(10.0), 100);
+    assert_eq!(spd_rate(0.0), -50);
+    assert_eq!(spd_rate(f32::NAN), 0);
+    assert_eq!(spd_rate(1.5), 25);
+}
+
+#[test]
+fn speech_dispatcher_keeps_the_region() {
+    let tag = |t| dispatcher_language(Some(t));
+    assert_eq!(tag("en-GB").as_deref(), Some("en-GB"));
+    assert_eq!(tag(" pt-BR ").as_deref(), Some("pt-BR"));
+    assert_eq!(tag("zh-TW").as_deref(), Some("zh-TW"));
+    assert_eq!(tag("hu").as_deref(), Some("hu"));
+    assert_eq!(tag("HU-hu").as_deref(), Some("hu-HU"));
+    // SSIP takes language and region: script and variant subtags are left out.
+    assert_eq!(tag("sr-Latn-RS").as_deref(), Some("sr-RS"));
+    assert_eq!(tag("zh-Hant-TW").as_deref(), Some("zh-TW"));
+    assert_eq!(tag("es-419").as_deref(), Some("es-419"));
+    assert_eq!(tag("de-CH-1996").as_deref(), Some("de-CH"));
+    assert_eq!(tag("sr-Cyrl").as_deref(), Some("sr"));
+    assert_eq!(dispatcher_language(Some("x-none")), None);
+    assert_eq!(dispatcher_language(Some("hu\r\nQUIT")), None);
+    assert_eq!(dispatcher_language(None), None);
 }
 
 #[test]
@@ -363,4 +465,36 @@ fn macos_voice_matches_the_language() {
     assert_eq!(mac_voice("el", list, "en"), None);
     assert_eq!(mac_voice("ru", "", "en"), None);
     assert_eq!(mac_voice("ru", "garbage line\n\n  \n", "en"), None);
+}
+
+#[test]
+fn skipped_spans_match_a_scan_of_every_span() {
+    // Overlapping, nested, touching, empty-range and reversed spans.
+    let raw = vec![
+        (Pos::body(0, 5), Pos::body(0, 9)),
+        (Pos::body(0, 7), Pos::body(0, 12)),
+        (Pos::body(0, 20), Pos::body(0, 20)),
+        (Pos::body(0, 30), Pos::body(2, 3)),
+        (Pos::body(1, 4), Pos::body(1, 8)),
+        (Pos::body(3, 9), Pos::body(3, 2)),
+        (Pos::body(4, 0), Pos::body(4, 1)),
+        (Pos::body(4, 2), Pos::body(4, 3)),
+    ];
+    let spans = Spans::new(raw.clone());
+    for block in 0..6 {
+        for off in 0..40 {
+            let p = Pos::body(block, off);
+            let scan = raw.iter().any(|(a, b)| *a <= p && p <= *b);
+            assert_eq!(spans.contains(&p), scan, "{p:?}");
+        }
+    }
+}
+
+#[test]
+fn many_citations_are_looked_up_quickly() {
+    // 50,000 disjoint spans and 200,000 lookups: a scan of every span per position would take
+    // ten billion comparisons.
+    let spans = Spans::new((0..50_000).map(|i| (Pos::body(0, i * 4), Pos::body(0, i * 4 + 1))).collect());
+    let hits = (0..200_000).filter(|&off| spans.contains(&Pos::body(0, off))).count();
+    assert_eq!(hits, 100_000);
 }
