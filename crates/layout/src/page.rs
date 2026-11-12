@@ -307,6 +307,7 @@ impl PageBuilder<'_> {
     /// their own order: Word draws them on top, and the shading, borders and lines of the
     /// paragraphs and tables after their anchor would otherwise cover them (#5534). Once all
     /// pages are laid out, so going back to a [`Snap`] still finds the items where they went.
+    /// Their place in reading order stays in [`Page::reading`].
     pub(crate) fn raise_front(&mut self) {
         for ((pg, ranges), behind) in self.pages.iter_mut().zip(&mut self.front).zip(&self.behind) {
             if ranges.is_empty() {
@@ -317,8 +318,8 @@ impl PageBuilder<'_> {
                 let (start, end) = (r.start.saturating_add(*behind), r.end.saturating_add(*behind));
                 raised.get_mut(start..end.min(pg.items.len())).into_iter().flatten().for_each(|f| *f = true);
             }
-            let (top, under): (Vec<_>, Vec<_>) = std::mem::take(&mut pg.items).into_iter().zip(raised).partition(|(_, up)| *up);
-            pg.items = under.into_iter().chain(top).map(|(it, _)| it).collect();
+            let (top, under): (Vec<_>, Vec<_>) = std::mem::take(&mut pg.items).into_iter().zip(raised).enumerate().partition(|(_, (_, up))| *up);
+            (pg.reading, pg.items) = under.into_iter().chain(top).map(|(at, (it, _))| (at, it)).unzip();
         }
     }
     /// Finish the current page: the lines between its columns, its vertical alignment and its

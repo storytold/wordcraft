@@ -292,7 +292,12 @@ pub struct Page {
     pub section: usize,
     /// Page number as displayed (after section restarts).
     pub number: u32,
+    /// The body's items in drawing order: floating objects in front of the text after all of it.
     pub items: Vec<Placed>,
+    /// Where each of `items` comes in reading order (its anchor's), when that isn't its place in
+    /// `items`: floating objects in front of the text are drawn after it (#5534) but read after
+    /// their anchor. Empty when the two orders are the same; items past its end are read in place.
+    pub reading: Vec<usize>,
     /// Header / footer items (drawn dimmed while editing the body).
     pub header: Vec<Placed>,
     pub footer: Vec<Placed>,

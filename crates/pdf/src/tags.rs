@@ -32,10 +32,13 @@ pub(crate) fn figure_alt(alt: &str, kind: Option<GraphicKind>) -> &str {
     }
 }
 
-/// A structure element being collected (one per paragraph, in reading order).
+/// A structure element being collected (one per paragraph or figure).
 pub(crate) struct TagEntry {
     pub(crate) kind: TagKind,
     pub(crate) children: Vec<Node>,
+    /// Where it is first read: the page (in the order pages are drawn) and the place there of
+    /// the item it came from (`Page::reading`). The tree is in this order, not the drawing order.
+    pub(crate) at: (usize, usize),
 }
 
 /// What the content being drawn is, for tagging.
