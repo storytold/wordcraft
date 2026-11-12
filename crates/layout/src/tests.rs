@@ -488,6 +488,52 @@ fn a_framed_closing_mark_of_another_style_keeps_the_space_before_below_it() {
     assert!(without >= 12.0 - 0.01, "the 12 pt space before is kept: gap {without}");
 }
 
+/// A float anchored to the first paragraph of a continuous section follows the paragraph up when
+/// the space after above it comes off (contextual spacing across the break), whether or not text
+/// wraps around it: it sat that space below its paragraph when nothing wrapped.
+#[test]
+fn a_paragraph_float_follows_its_paragraph_up_a_continuous_section_break() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    for wrap in [Wrap::InFrontOfText, Wrap::BehindText, Wrap::Square] {
+        let mut d = Document::new();
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+        let props = ParaProps {
+            style: Some("SpacingA".into()),
+            space_before: Some(0.0),
+            space_after: Some(10.0),
+            contextual_spacing: Some(true),
+            line_spacing: Some(LineSpacing::Exactly(24.0)),
+            ..Default::default()
+        };
+        let mut above = wordcraft_doc::Paragraph::with_text("Above", chr.clone());
+        above.props = props.clone();
+        above.section = Some(Box::new(SectionProps::default()));
+        let mut below = wordcraft_doc::Paragraph::with_text("Below", chr);
+        below.props = ParaProps { space_before: Some(12.0), ..props };
+        d.body = vec![wordcraft_doc::para_block(above), wordcraft_doc::para_block(below)];
+        d.last_section.start = SectionStart::Continuous;
+        let float = Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        d.insert_object(&Pos::body(1, 0), picture(20.0, 20.0, float), &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let text = items.iter().find_map(|i| match i {
+            Placed::Lines { path, y, .. } if path.0 == [1] => Some(*y),
+            _ => None,
+        });
+        let shape = items.iter().find_map(|i| match i {
+            Placed::Shape { rect, .. } => Some(rect.y),
+            _ => None,
+        });
+        let (Some(text), Some(shape)) = (text, shape) else { panic!("{wrap:?}: no paragraph or shape") };
+        // Both spaces dropped: the paragraph, and its float, start right under the one above.
+        assert!((text - 96.0).abs() < 0.01, "{wrap:?}: paragraph at {text}");
+        assert!((shape - text).abs() < 0.01, "{wrap:?}: shape at {shape}, paragraph at {text}");
+    }
+}
+
 /// Paragraphs of style `SpacingA` (exactly 24 pt lines), each `(space before, space after,
 /// contextual spacing, section it closes, lines)`, then laid out: each one's first piece's (page,
 /// x, top, bottom).

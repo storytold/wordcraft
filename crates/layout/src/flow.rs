@@ -852,8 +852,13 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     pb.y += before;
     let rooms = Rooms::of(ctx, block, &f.pl);
     let applied_before = f.keep_together(ctx, pb, rooms, before);
-    // A different top only matters when there is something to wrap around.
-    if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && !pb.excl.is_empty()) {
+    // A different top only matters when there is something to wrap around, or when the
+    // paragraph's own top moved (the first paragraph of a continuous section rising by the space
+    // after taken off above it): floats anchored to the paragraph follow it. A space before that
+    // contextual spacing dropped leaves the top, and those floats, where they are.
+    let top_then = f.guess - ctx.doc.styles.resolve_para(&p.props).space_before;
+    let top_moved = (pb.y - applied_before - top_then).abs() > 0.01;
+    if spot(pb) != placed_at || ((pb.y - f.guess).abs() > 0.01 && (!pb.excl.is_empty() || top_moved)) {
         let y0 = pb.y;
         f.reanchor(ctx, pb, (y0, applied_before), &[]);
         f.anchor_y = y0 - applied_before;
