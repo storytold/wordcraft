@@ -600,3 +600,20 @@ fn proofing_custom_dictionary_interaction() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #5840: a bound custom dictionary file is the source of truth. The `ui.json` word copy must not
+/// be restored first, or words from a missing file would reach the default dictionary on the next
+/// Add to Dictionary.
+#[test]
+fn a_bound_custom_dictionary_does_not_restore_saved_backup_words() {
+    let saved = UiState {
+        dictionary: vec!["zqxbackupword".to_string()],
+        editing: wordcraft_engine::Prefs { custom_dictionary: Some("/nonexistent/custom.dic".to_string()), ..Default::default() },
+        ..Default::default()
+    };
+
+    let mut a = app();
+    a.apply_prefs(saved);
+    assert!(!wordcraft_engine::proof::user_dictionary().contains(&"zqxbackupword".to_string()), "backup words stay out of memory");
+    assert_eq!(a.session.prefs.custom_dictionary.as_deref(), Some("/nonexistent/custom.dic"), "the file setting is kept");
+}
