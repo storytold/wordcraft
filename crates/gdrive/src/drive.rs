@@ -42,6 +42,10 @@ pub struct DriveFile {
     /// file shared with the person.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parents: Vec<String>,
+    /// The current content revision; empty for Google Docs. Unlike `version`, renaming or
+    /// sharing the file doesn't change it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head_revision_id: String,
 }
 
 fn opt_u64_str<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Option<u64>, D::Error> {
@@ -50,6 +54,11 @@ fn opt_u64_str<'de, D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Op
 }
 
 impl DriveFile {
+    /// What the conflict check compares: the content revision when Drive gives one, so a
+    /// rename or a new share isn't taken for an edit; otherwise `version`.
+    pub fn content_version(&self) -> &str {
+        if self.head_revision_id.is_empty() { &self.version } else { &self.head_revision_id }
+    }
     /// A native Google Doc: opened by exporting it as `.docx`, never overwritten.
     pub fn is_google_doc(&self) -> bool {
         self.mime_type == MIME_GOOGLE_DOC
@@ -63,7 +72,8 @@ impl DriveFile {
 /// Where a save goes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SaveTarget {
-    /// Replace the contents of a file opened from Drive, if it is still at `version`.
+    /// Replace the contents of a file opened from Drive, if it is still at `version` (its
+    /// [`DriveFile::content_version`] when it was opened).
     Existing { id: String, name: String, version: String },
     /// A new file, in `parent` (a folder id) or My Drive.
     New { name: String, parent: Option<String> },
@@ -148,8 +158,11 @@ impl Drive {
 
     /// Sends `req` with a fresh access token. A 401 (the token was revoked or expired early)
     /// drops the cached token and retries once after a refresh; if Google refuses the refresh,
-    /// `access_token` signs out and this answers `NotSignedIn`.
+    /// `access_token` signs out and this answers `NotSignedIn`. A 401 even with a freshly refreshed
+    /// token is Drive's answer, not a sign-out: it comes back as that error, and the person stays
+    /// signed in (the page keeps offering Sign out).
     fn send(&mut self, req: Request) -> Result<Response> {
+        let mut last = None;
         for _ in 0..2 {
             let token = self.auth.access_token(Instant::now())?;
             let resp = self.auth.http().send(req.clone().bearer(&token))?;
@@ -157,8 +170,9 @@ impl Drive {
                 return Ok(resp);
             }
             self.auth.invalidate_access();
+            last = Some(resp);
         }
-        Err(Error::NotSignedIn)
+        Err(last.map_or(Error::NotSignedIn, |r| r.api_error()))
     }
 
     fn file(resp: Response) -> Result<DriveFile> {
@@ -230,8 +244,8 @@ impl Drive {
                 if now.is_google_doc() {
                     return Err(Error::Invalid(format!("{} is a Google Doc; save a .docx copy instead", now.name)));
                 }
-                if now.version != *version {
-                    return Err(Error::Conflict { name: name.clone(), opened: version.clone(), remote: now.version });
+                if now.content_version() != version {
+                    return Err(Error::Conflict { name: name.clone(), opened: version.clone(), remote: now.content_version().to_string() });
                 }
                 let url = format!("{UPLOAD_API}/files/{id}?uploadType=media&fields={}", pct(FIELDS));
                 let req = Request::new(Method::Patch, url).body(mime_for(&now.name), content.to_vec());

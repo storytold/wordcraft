@@ -70,6 +70,10 @@ pub struct DriveLink {
     /// File › Export's "Save the copy to Google Drive" checkbox.
     pub export_to_drive: bool,
     origins: HashMap<u64, Origin>,
+    /// A downloaded file that needs its password (name, Drive file, bytes): kept while the
+    /// Password dialog asks, so the right password opens it as a Drive document.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pending_open: Option<(String, Origin, Vec<u8>)>,
     /// Per document: how many local saves set where it lives (see [`note_local_save`]). A Drive
     /// upload that ends after a newer one leaves the destination alone.
     local_saves: HashMap<u64, u64>,
@@ -741,6 +745,12 @@ mod native {
                 app.drive.unavailable = None;
                 app.drive.signed_in = None;
                 app.drive.busy = None;
+                // Another client may be another account: its files aren't this one's.
+                app.drive.files.clear();
+                app.drive.next_page = None;
+                app.drive.listed = false;
+                app.drive.error = None;
+                app.drive.consent_url = None;
                 worker(app).map(|_| json!({"started": true}))
             }
             "list" => {
@@ -768,8 +778,11 @@ mod native {
                 send(app, Job::Open { id: id.to_owned() }, "open")
             }
             "save" => save(app, params),
+            "openProtected" => open_protected(app, params),
             "export" => export(app, params),
-            other => Err(format!("unknown Google Drive command `{other}`; use status, start, reload, signIn, cancel, signOut, list, open or save")),
+            other => Err(format!(
+                "unknown Google Drive command `{other}`; use status, start, reload, enable, client, importClient, signIn, cancel, signOut, list, open, openProtected, save or export"
+            )),
         }
     }
 
@@ -809,16 +822,43 @@ mod native {
         let doc = app.session.document_id();
         let origin = app.drive.origin(doc).cloned();
         let name = save_name(app, given);
+        // `file.save` options a Drive save can't honour are refused, not dropped.
+        if params.get("format").is_some_and(|f| !f.is_null()) || params.get("strict").and_then(Value::as_bool) == Some(true) {
+            return Err("`format` and `strict` aren't supported for a save to Google Drive".into());
+        }
+        // Refused before anything changes: the worker takes one job at a time.
+        idle(app)?;
         let target = save_target(origin, copy, given.is_some(), &name);
-        // A save is a save wherever it goes: stamp first, as the desktop and web saves do.
+        // A save with a password encrypts this and later saves, as `file.save`'s `password` does.
+        if let Some(pw) = params.get("password").filter(|v| !v.is_null()) {
+            if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
+                return Err("only Word documents (.docx, .docm, .dotx, .dotm) and OpenDocument text files (.odt, .ott) can be saved with a password, and it can't be empty".into());
+            }
+            app.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
+        }
+        // A save is a save wherever it goes: stamp first, as the desktop and web saves do, and
+        // undo the stamps if the save can't start (as the engine does for a failed write).
+        let s = &app.session;
+        let before =
+            (s.doc.settings.zoom, s.doc.core.last_modified_by.clone(), s.doc.core.created.clone(), s.doc.core.modified.clone(), s.doc.core.revision);
         app.session.stamp_save();
-        let password = app.session.password.as_ref().map(wordcraft_engine::Password::as_str);
-        let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
-        let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
-        let marked_saved = crate::state::keeps_everything(&name);
-        let rev = app.session.rev();
-        let local = app.drive.local_saves.get(&doc).copied().unwrap_or(0);
-        let r = send(app, Job::Save { doc, rev, local, target, bytes, marked_saved }, "save")?;
+        let started = (|| {
+            let password = app.session.password.as_ref().map(wordcraft_engine::Password::as_str);
+            let opts = wordcraft_engine::cmd::file::export_options(&app.session, &json!({}));
+            let bytes = wordcraft_engine::io::save_bytes_with(&name, &app.session.doc, password, &opts)?;
+            let marked_saved = crate::state::keeps_everything(&name);
+            let rev = app.session.rev();
+            let local = app.drive.local_saves.get(&doc).copied().unwrap_or(0);
+            send(app, Job::Save { doc, rev, local, target, bytes, marked_saved }, "save")
+        })();
+        let r = match started {
+            Ok(r) => r,
+            Err(e) => {
+                let d = &mut app.session.doc;
+                (d.settings.zoom, d.core.last_modified_by, d.core.created, d.core.modified, d.core.revision) = before;
+                return Err(e);
+            }
+        };
         app.status(i18n::fmt(tl!("Saving {name} to Google Drive…"), &[("name", &name)]));
         Ok(r)
     }
@@ -842,7 +882,8 @@ mod native {
             }
         };
         let http: Arc<dyn wordcraft_gdrive::http::Transport> = Arc::new(wordcraft_gdrive::http::Ureq::default());
-        let mut drive = Drive::new(wordcraft_gdrive::Auth::new(cfg, http, wordcraft_gdrive::store::system()));
+        let store = wordcraft_gdrive::store::system(&cfg.client_id);
+        let mut drive = Drive::new(wordcraft_gdrive::Auth::new(cfg, http, store));
         let restored = drive.auth.restore().unwrap_or_else(|e| {
             log::warn!("Google Drive: {e}");
             false
@@ -948,7 +989,7 @@ mod native {
             }
             Event::Opened { file, bytes } => {
                 d.busy = None;
-                open(app, file, &bytes);
+                open(app, file, bytes);
             }
             Event::Saved { doc, rev, local, file, marked_saved } => {
                 d.busy = None;
@@ -958,13 +999,20 @@ mod native {
                 // A local save that set the document's home while this one uploaded (a Save As,
                 // or Save to the same local file) is newer: it keeps that destination.
                 let newer_local = d.local_saves.get(&doc).copied().unwrap_or(0) != local;
-                if app.session.document_id() == doc && !newer_local {
+                // Another document in front by now (Switch Windows): the saved one is updated in
+                // the background, as the multi-window frame loop switches to draw each one.
+                let active = app.session.document_id();
+                let reached = !newer_local && (doc == active || (app.session.is_open(doc) && app.session.switch_document(doc).is_ok()));
+                if reached {
                     // Drive is now where the document lives: Save goes back there, not to a
                     // local file it was saved to earlier.
                     app.session.path = None;
                     app.session.file_name = Some(name.clone());
                     if marked_saved && app.session.rev() == rev {
                         app.session.dirty = false;
+                    }
+                    if doc != active {
+                        let _ = app.session.switch_document(active);
                     }
                 }
                 app.status(i18n::fmt(tl!("Saved {name} to Google Drive"), &[("name", &name)]));
@@ -994,9 +1042,6 @@ mod native {
         }
     }
 
-    /// Opens downloaded bytes the way File › Open opens a file's bytes, then makes the document
-    /// a Drive document: no local path (so Save never writes beside the app, and nothing joins
-    /// the recent files) and its Drive origin.
     /// Where a Drive save goes. A Google Doc, a copy, or a new name: a new file. Otherwise the
     /// file it came from. A Google Doc's Word copy and a copy go beside the Drive file (in its
     /// folder, when Drive says which); a new name, or a document not from Drive, to My Drive.
@@ -1009,29 +1054,69 @@ mod native {
     }
 
     fn origin_of(file: DriveFile) -> Origin {
-        Origin { google_doc: file.is_google_doc(), parent: file.parents.into_iter().next(), id: file.id, name: file.name, version: file.version }
+        let version = file.content_version().to_string();
+        Origin { google_doc: file.is_google_doc(), parent: file.parents.into_iter().next(), version, id: file.id, name: file.name }
     }
 
-    fn open(app: &mut WordApp, file: DriveFile, bytes: &[u8]) {
+    /// Opens downloaded bytes the way File › Open opens a file's bytes, then makes the document
+    /// a Drive document: no local path (so Save never writes beside the app, and nothing joins
+    /// the recent files) and its Drive origin. A protected file asks for its password (the
+    /// Password dialog then runs `ui.drive.openProtected`).
+    pub(super) fn open(app: &mut WordApp, file: DriveFile, bytes: Vec<u8>) {
         let name = file.open_name();
-        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
-        match app.session.run("file.open", &json!({"path": name, "data": data})) {
-            Ok(_) => {
-                app.session.path = None;
-                app.session.file_name = Some(name.clone());
-                app.session.dirty = false;
-                let doc = app.session.document_id();
-                app.drive.origins.insert(doc, origin_of(file));
-                let _ = app.run("ui.backstage", json!({"value": false}));
-                app.canvas.want_focus = true;
-                app.status(i18n::fmt(tl!("Opened {name} from Google Drive"), &[("name", &name)]));
+        let origin = origin_of(file);
+        match open_bytes(app, &name, origin.clone(), &bytes, None) {
+            Ok(()) => {}
+            Err(e) if wordcraft_engine::io::needs_password(&e) => {
+                app.drive.pending_open = Some((name.clone(), origin, bytes));
+                app.dialog = Some(crate::dialogs::Dialog::Password {
+                    name,
+                    then: "ui.drive.openProtected".into(),
+                    params: json!({}),
+                    password: Default::default(),
+                    message: String::new(),
+                });
             }
             Err(e) => {
-                let msg = i18n::fmt(tl!("Couldn't open {name}: {error}"), &[("name", &name), ("error", &e.to_string())]);
+                let msg = i18n::fmt(tl!("Couldn't open {name}: {error}"), &[("name", &name), ("error", &e)]);
                 app.drive.error = Some(msg.clone());
                 app.status(msg);
             }
         }
+    }
+
+    /// `ui.drive.openProtected {password}`: the file the Password dialog asked about. A wrong
+    /// password keeps it, so the dialog can ask again.
+    fn open_protected(app: &mut WordApp, params: &Value) -> Result<Value, String> {
+        let password = params.get("password").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("`password` is required")?;
+        let Some((name, origin, bytes)) = app.drive.pending_open.take() else {
+            return Err("no protected Google Drive file is waiting to open".into());
+        };
+        match open_bytes(app, &name, origin.clone(), &bytes, Some(password)) {
+            Ok(()) => Ok(json!({"opened": name})),
+            Err(e) => {
+                app.drive.pending_open = Some((name, origin, bytes));
+                Err(e)
+            }
+        }
+    }
+
+    fn open_bytes(app: &mut WordApp, name: &str, origin: Origin, bytes: &[u8], password: Option<&str>) -> Result<(), String> {
+        let data = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let mut params = json!({"path": name, "data": data});
+        if let Some(pw) = password {
+            params["password"] = pw.into();
+        }
+        app.session.run("file.open", &params).map_err(|e| e.to_string())?;
+        app.session.path = None;
+        app.session.file_name = Some(name.to_string());
+        app.session.dirty = false;
+        let doc = app.session.document_id();
+        app.drive.origins.insert(doc, origin);
+        let _ = app.run("ui.backstage", json!({"value": false}));
+        app.canvas.want_focus = true;
+        app.status(i18n::fmt(tl!("Opened {name} from Google Drive"), &[("name", name)]));
+        Ok(())
     }
 }
 

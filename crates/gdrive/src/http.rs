@@ -109,7 +109,12 @@ impl Default for Ureq {
     fn default() -> Self {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(std::time::Duration::from_secs(120)))
+            // Limits on a stalled connection, not on the whole call: a large document on a slow
+            // link takes as long as it takes while bytes keep moving.
+            .timeout_connect(Some(std::time::Duration::from_secs(30)))
+            .timeout_per_read(Some(std::time::Duration::from_secs(60)))
+            .timeout_per_write(Some(std::time::Duration::from_secs(60)))
+            .timeout_recv_response(Some(std::time::Duration::from_secs(120)))
             .user_agent(concat!("WordCraft/", env!("CARGO_PKG_VERSION")))
             .build();
         Self { agent: config.into() }

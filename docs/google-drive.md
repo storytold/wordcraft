@@ -33,11 +33,14 @@ flowchart LR
 - **Conflicts.** Before saving, WordCraft checks the file's Drive version. If the file changed
   since you opened it (someone edited it in Drive, or another device saved it), nothing is
   overwritten. The save is refused, and **Save a Copy** saves your version as a new file in the same folder.
+  Renaming or sharing the file in Drive doesn't count as a change: only its content does.
   Drive v3 has no conditional update, so a change landing in the fraction of a second between
   that check and the upload isn't caught.
 - **No local file.** A document opened from Drive has no path on disk. It isn't added to
   the recent files, and File › Save never writes it beside the app. Save As still saves a local
   copy wherever you choose. Local recovery copies work as for any unsaved document.
+- **Password-protected files.** A file saved with a password opens after the Password dialog
+  asks for it, and stays a Drive document.
 - **Desktop only.** The web build answers that Drive needs the desktop app.
 
 ## Set up: your own OAuth client
@@ -57,12 +60,15 @@ their own Google Cloud project, so sign-in never goes through a WordCraft server
    choose one) and enable the **Google Drive API**.
 2. Set up the **OAuth consent screen** (Google Auth Platform › Branding / Audience). For
    yourself: user type *External*, publishing status *Testing*, and add your own Google
-   account under **Test users**.
+   account under **Test users**. Google expires a *Testing* app's sign-ins after 7 days, so
+   you'll sign in again each week. Publishing the app (or, in Google Workspace, user type
+   *Internal*) avoids that.
 3. Under **Clients**, create an OAuth client ID of type **Desktop app**, then download its JSON.
 4. In WordCraft, go to **File › Options › Accounts** and tick **Use Google Drive**. Under
    **1 App registration**, enter the client ID and secret from that JSON and click **Save
    registration**. Under **2 Your Google account**, click **Sign in with Google**.
-   That writes `google-drive.json` (owner-only) for you. Or save the JSON yourself as
+   That writes `google-drive.json` (owner-only on macOS, Linux and BSD) for you. Leaving the
+   secret empty keeps the one already saved for the same client ID. Or save the JSON yourself as
    `google-drive.json` in WordCraft's profile folder:
    - macOS: `~/Library/Application Support/WordCraft/`
    - Windows: `%APPDATA%\WordCraft\`
@@ -116,7 +122,8 @@ WordCraft follows Google's flow for installed apps:
 
 There is no embedded browser, and WordCraft never sees your Google password. The **refresh token** is kept in the system
 keychain: Keychain on macOS, Credential Manager on Windows, Secret Service on Linux and the BSDs.
-It is never written to a file. If no keychain is available, or storing the token fails, sign-in
+Each OAuth client has its own entry, so changing the registration doesn't reuse another
+client's sign-in. It is never written to a file. If no keychain is available, or storing the token fails, sign-in
 lasts until you quit. **Sign out** removes the token and asks Google to revoke it. A token revoked
 elsewhere (from your Google account's security page, say) signs WordCraft out the next time it
 calls Drive.
@@ -142,10 +149,13 @@ headless.
 | `ui.drive.signOut` | Revokes and forgets the sign-in |
 | `ui.drive.list` | `{"search"?: string, "more"?: bool}`: documents, newest first, 100 at a time |
 | `ui.drive.open` | `{"id": string}`: opens a file from the list |
-| `ui.drive.save` | `{"name"?: string, "copy"?: bool}`: back to the file it came from; with `name` or `copy`, a new file in My Drive |
+| `ui.drive.save` | `{"name"?: string, "copy"?: bool, "password"?: string}`: back to the file it came from; with `copy`, a new file beside it (in its folder); with `name`, a new file in My Drive; `password` encrypts it, as `file.save`'s does |
+| `ui.drive.openProtected` | `{"password": string}`: opens the password-protected Drive file the Password dialog is asking about |
 
-Each command except `status` returns at once with `{"started": …}`. Read `ui.drive.status` for
-the result. `file.save` without a `path` on a document from Drive runs `ui.drive.save`.
+The commands that talk to Google (`start`, `reload`, `signIn`, `signOut`, `list`, `open`, `save`,
+`export`) return at once with `{"started": …}`; read `ui.drive.status` for the result. The rest
+answer straight away. `file.save` without a `path` on a document from Drive runs `ui.drive.save`
+(with its `password`; `format` and `strict` are refused).
 
 ## Code
 
