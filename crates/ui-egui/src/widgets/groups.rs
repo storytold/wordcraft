@@ -233,6 +233,7 @@ pub fn command_icon(id: &str) -> &str {
         ("edit.repeat", "redo"),
         ("file.new", "blankPage"),
         ("tools.customizeRibbon", "more"),
+        ("layout.linkToPrevious", "link"),
     ];
     ICONS.iter().find(|(c, _)| *c == id).map_or_else(|| id.rsplit('.').next().unwrap_or(id), |(_, icon)| *icon)
 }

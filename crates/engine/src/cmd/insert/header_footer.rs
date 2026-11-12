@@ -3,39 +3,178 @@ use super::{
     json, p, para_block,
 };
 
+/// The header/footer part id for `slot` in `set`.
+pub(crate) fn slot_of(slot: wordcraft_layout::HfSlot, set: &wordcraft_doc::section::HeaderSet) -> Option<u32> {
+    match slot {
+        wordcraft_layout::HfSlot::First => set.first,
+        wordcraft_layout::HfSlot::Even => set.even,
+        wordcraft_layout::HfSlot::Default => set.default,
+    }
+}
+
+/// Mutable reference to the header/footer part id for `slot` in `set`.
+pub(crate) fn slot_of_mut(slot: wordcraft_layout::HfSlot, set: &mut wordcraft_doc::section::HeaderSet) -> &mut Option<u32> {
+    match slot {
+        wordcraft_layout::HfSlot::First => &mut set.first,
+        wordcraft_layout::HfSlot::Even => &mut set.even,
+        wordcraft_layout::HfSlot::Default => &mut set.default,
+    }
+}
+
+/// The header or footer part that section `si` inherits from earlier sections for `slot`.
+/// For an even slot, falls back to the resolved default header/footer (own section or preceding)
+/// if no preceding section defines an even header/footer, matching layout's `even.or(default)`.
+pub(crate) fn inherited_hf_part(doc: &wordcraft_doc::Document, si: usize, header: bool, slot: wordcraft_layout::HfSlot) -> Option<u32> {
+    let sections = doc.sections();
+    let resolve_preceding = |target_slot: wordcraft_layout::HfSlot| {
+        for prev_i in (0..si).rev() {
+            if let Some((_, sp)) = sections.get(prev_i) {
+                let set = if header { &sp.headers } else { &sp.footers };
+                if let Some(id) = slot_of(target_slot, set).filter(|id| doc.parts.contains_key(id)) {
+                    return Some(id);
+                }
+            }
+        }
+        None
+    };
+
+    if slot == wordcraft_layout::HfSlot::Even {
+        resolve_preceding(wordcraft_layout::HfSlot::Even).or_else(|| {
+            // If no preceding section defines even, fall back to resolved default (own section or preceding)
+            for prev_i in (0..=si).rev() {
+                if let Some((_, sp)) = sections.get(prev_i) {
+                    let set = if header { &sp.headers } else { &sp.footers };
+                    if let Some(id) = set.default.filter(|id| doc.parts.contains_key(id)) {
+                        return Some(id);
+                    }
+                }
+            }
+            None
+        })
+    } else {
+        resolve_preceding(slot)
+    }
+}
+
+/// Toggle or set whether the current section's header or footer is linked to previous.
+pub(crate) fn link_to_previous(s: &mut Session, v: &Value) -> CmdResult {
+    let si = crate::cmd::page::section_index_for_hf(s);
+    if si == 0 {
+        return Err(CmdError::Disabled("first section cannot link to previous".into()));
+    }
+
+    let header = match p::bool(v, "footer") {
+        Some(f) => !f,
+        None => match s.sel.focus.story {
+            StoryRef::Part(id) => s.doc.parts.get(&id).map(|p| !matches!(p.kind, PartKind::Footer)).unwrap_or(true),
+            _ => true,
+        },
+    };
+
+    let slot = {
+        let layout = s.layout();
+        let page = if s.sel.focus.story == StoryRef::Body { layout.page_of(&s.sel.focus).unwrap_or(s.page_hint) } else { s.page_hint };
+        layout.pages.get(page).map(|pg| pg.hf_slot).unwrap_or(wordcraft_layout::HfSlot::Default)
+    };
+
+    let currently_linked = {
+        let sect = s.doc.section_mut_at(si);
+        let set = if header { &sect.headers } else { &sect.footers };
+        slot_of(slot, set).is_none()
+    };
+
+    let target_linked = p::bool(v, "linked").unwrap_or(!currently_linked);
+    if target_linked == currently_linked {
+        return Ok(json!({"linked": currently_linked, "section": si, "header": header}));
+    }
+
+    if target_linked {
+        let sect = s.doc.section_mut_at(si);
+        let set = if header { &mut sect.headers } else { &mut sect.footers };
+        *slot_of_mut(slot, set) = None;
+
+        let inherited_id = inherited_hf_part(&s.doc, si, header, slot);
+        if matches!(s.sel.focus.story, StoryRef::Part(_)) {
+            if let Some(id) = inherited_id {
+                s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
+            } else {
+                let back = s.hf_return.take();
+                s.sel = back.unwrap_or_else(|| Selection::caret(s.doc.start_of(StoryRef::Body)));
+            }
+        }
+        s.touch();
+        Ok(json!({"linked": true, "section": si, "header": header}))
+    } else {
+        let inherited_id = inherited_hf_part(&s.doc, si, header, slot);
+
+        let style = if header { "Header" } else { "Footer" };
+        let inh_blocks = inherited_id.and_then(|inh_id| s.doc.parts.get(&inh_id).map(|p| p.blocks.clone()));
+        let blocks = if let Some(inh_blocks) = inh_blocks {
+            s.doc.clone_blocks_with_text_boxes(&inh_blocks)
+        } else {
+            vec![para_block(Paragraph::new().styled(style))]
+        };
+
+        let kind = if header { PartKind::Header } else { PartKind::Footer };
+        let new_id = s.doc.add_part(kind, blocks);
+
+        let sect = s.doc.section_mut_at(si);
+        let set = if header { &mut sect.headers } else { &mut sect.footers };
+        *slot_of_mut(slot, set) = Some(new_id);
+
+        if matches!(s.sel.focus.story, StoryRef::Part(_)) {
+            s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(new_id)));
+        }
+        s.touch();
+        Ok(json!({"linked": false, "section": si, "header": header, "story": new_id}))
+    }
+}
+
 /// The header (or footer) of the caret's section in the slot the caret's page uses (first page,
 /// even page or the default), made when there is none: with Different First Page on, a header
 /// inserted on page 1 is the one page 1 shows (#2826).
 pub(super) fn hf_part(s: &mut Session, header: bool) -> u32 {
-    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+    let si = crate::cmd::page::section_index_for_hf(s);
     let layout = s.layout();
     let page = if s.sel.focus.story == StoryRef::Body { layout.page_of(&s.sel.focus) } else { Some(s.page_hint) };
     let slot = page.and_then(|pg| layout.pages.get(pg)).map(|pg| pg.hf_slot).unwrap_or_default();
-    fn slot_of(slot: wordcraft_layout::HfSlot, set: &mut wordcraft_doc::section::HeaderSet) -> &mut Option<u32> {
-        match slot {
-            wordcraft_layout::HfSlot::First => &mut set.first,
-            wordcraft_layout::HfSlot::Even => &mut set.even,
-            wordcraft_layout::HfSlot::Default => &mut set.default,
+    let sections = s.doc.sections();
+    let own_slot = sections.get(si).and_then(|(_, sp)| {
+        let set = if header { &sp.headers } else { &sp.footers };
+        slot_of(slot, set)
+    });
+
+    if let Some(id) = own_slot {
+        if s.doc.parts.contains_key(&id) {
+            return id;
         }
+        let style = if header { "Header" } else { "Footer" };
+        let new_id = s.doc.add_part(if header { PartKind::Header } else { PartKind::Footer }, vec![para_block(Paragraph::new().styled(style))]);
+        let sect = s.doc.section_mut_at(si);
+        *slot_of_mut(slot, if header { &mut sect.headers } else { &mut sect.footers }) = Some(new_id);
+        return new_id;
     }
-    let mut sect = s.doc.section_mut(block).clone();
-    let existing = *slot_of(slot, if header { &mut sect.headers } else { &mut sect.footers });
-    if let Some(id) = existing.filter(|id| s.doc.parts.contains_key(id)) {
+
+    if let Some(id) = inherited_hf_part(&s.doc, si, header, slot) {
         return id;
     }
+
+    // No preceding section defines one either: when editing from an existing header/footer story,
+    // attach to current section; otherwise create in section 0 so all linked sections inherit it (#4847).
     let style = if header { "Header" } else { "Footer" };
     let id = s.doc.add_part(if header { PartKind::Header } else { PartKind::Footer }, vec![para_block(Paragraph::new().styled(style))]);
-    let sect = s.doc.section_mut(block);
-    *slot_of(slot, if header { &mut sect.headers } else { &mut sect.footers }) = Some(id);
+    let target_si = if matches!(s.sel.focus.story, StoryRef::Part(_)) { si } else { 0 };
+    let sect = s.doc.section_mut_at(target_si);
+    *slot_of_mut(slot, if header { &mut sect.headers } else { &mut sect.footers }) = Some(id);
     id
 }
 
 /// Three independently editable cells spanning the section's text width.
 fn three_column_hf(s: &Session, style: &str) -> wordcraft_doc::Blocks {
-    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+    let si = crate::cmd::page::section_index_for_hf(s);
     // The section `section_mut` would pick, read without making anything unique.
     let sections = s.doc.sections();
-    let own = sections.iter().position(|(end, _)| block <= *end).filter(|i| i + 1 < sections.len()).and_then(|i| sections.get(i));
+    let own = sections.get(si);
     let width = own.map_or_else(|| s.doc.last_section.text_width(), |(_, sec)| sec.text_width());
     let mut table = Table::new(1, 3, width);
     table.props.style = Some("TableNormal".into());
@@ -54,7 +193,14 @@ fn three_column_hf(s: &Session, style: &str) -> wordcraft_doc::Blocks {
     vec![std::sync::Arc::new(Block::Table(table)), para_block(Paragraph::new().styled(style))]
 }
 
+/// Insert or populate a header or footer with standard presets or custom text.
 pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResult {
+    let focus = s.sel.focus.clone();
+    if focus.story == StoryRef::Body
+        && let Some(pg) = s.layout().page_of(&focus)
+    {
+        s.page_hint = pg;
+    }
     let id = hf_part(s, header);
     let style = if header { "Header" } else { "Footer" };
     if let Some(text) = p::str(v, "text") {
@@ -88,6 +234,7 @@ pub(super) fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResu
     Ok(json!({"story": id}))
 }
 
+/// Edit the header or footer shown on a page (or the caret's section), creating it if missing.
 pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let mut page = p::u64(v, "page").map(|page| usize::try_from(page).unwrap_or(usize::MAX));
     if page.is_none() && s.sel.focus.story == StoryRef::Body {
@@ -98,26 +245,41 @@ pub(super) fn edit_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let shown = match page {
         Some(page) => shown_hf(s, page, header)?,
         None => {
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            let set = s
-                .doc
-                .sections()
-                .into_iter()
-                .find(|(end, _)| block <= *end)
-                .or_else(|| s.doc.sections().pop())
-                .map(|(_, sp)| if header { sp.headers.default } else { sp.footers.default });
-            set.flatten().filter(|id| s.doc.parts.contains_key(id))
+            let si = crate::cmd::page::section_index_for_hf(s);
+            let slot = s.current_layout().and_then(|l| l.pages.get(s.page_hint).map(|pg| pg.hf_slot)).unwrap_or_default();
+            let sections = s.doc.sections();
+            let resolve_slot = |target_slot: wordcraft_layout::HfSlot| {
+                for prev_i in (0..=si).rev() {
+                    if let Some((_, sp)) = sections.get(prev_i) {
+                        let set = if header { &sp.headers } else { &sp.footers };
+                        let id = match target_slot {
+                            wordcraft_layout::HfSlot::First => set.first,
+                            wordcraft_layout::HfSlot::Even => set.even,
+                            wordcraft_layout::HfSlot::Default => set.default,
+                        };
+                        if let Some(id) = id.filter(|id| s.doc.parts.contains_key(id)) {
+                            return Some(id);
+                        }
+                    }
+                }
+                None
+            };
+            if slot == wordcraft_layout::HfSlot::Even {
+                resolve_slot(wordcraft_layout::HfSlot::Even).or_else(|| resolve_slot(wordcraft_layout::HfSlot::Default))
+            } else {
+                resolve_slot(slot)
+            }
         }
     };
+    if let Some(page) = page {
+        s.page_hint = page;
+    }
     let Some(id) = shown else {
         // None yet: made by the mutating command, so it is an undo step and protection applies.
         let cmd = if header { "insert.createHeader" } else { "insert.createFooter" };
         let params = page.map_or_else(|| json!({}), |page| json!({ "page": page }));
         return s.run(cmd, &params);
     };
-    if let Some(page) = page {
-        s.page_hint = page;
-    }
     s.touch();
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));
     Ok(json!({"story": id}))
@@ -131,14 +293,22 @@ fn shown_hf(s: &mut Session, page: usize, header: bool) -> Result<Option<u32>, C
     Ok(shown.filter(|id| s.doc.parts.contains_key(id)))
 }
 
+/// Create a new header or footer part for the current or specified page and move the caret into it.
 pub(super) fn create_hf(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let id = match p::u64(v, "page") {
         Some(page) => {
             let page = usize::try_from(page).unwrap_or(usize::MAX);
+            let id = page_hf_part(s, page, header)?;
             s.page_hint = page;
-            page_hf_part(s, page, header)?
+            id
         }
         None => {
+            let focus = s.sel.focus.clone();
+            if focus.story == StoryRef::Body
+                && let Some(pg) = s.layout().page_of(&focus)
+            {
+                s.page_hint = pg;
+            }
             let before = s.doc.parts.len();
             let id = hf_part(s, header);
             if s.doc.parts.len() > before {

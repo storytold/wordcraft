@@ -551,3 +551,21 @@ fn dialog_tabs_expose_the_selected_state_and_report_clicks() {
     h.run_steps(2);
     assert_eq!(h.state().1, Some(1));
 }
+
+#[test]
+fn big_toggle_reports_accessible_label_and_selected_state() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(200.0, 100.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(
+            |ui, app: &mut WordApp| {
+                big_toggle(ui, app, "link", "Link to\nPrevious", "view.fullScreen", true);
+            },
+            app,
+        );
+    h.run_steps(2);
+    let node = h.get_by_role_and_label(egui::accesskit::Role::Button, "Link to Previous");
+    assert!(node.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True) || node.accesskit_node().is_selected() == Some(true));
+}

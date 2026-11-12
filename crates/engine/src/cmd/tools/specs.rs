@@ -236,24 +236,17 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"csv"?: string, "values"?: [[cell, …], …] (rows of equal length, at most 1000 rows × 63 columns; wins over csv), "header"?: bool (first row repeats on each page), "style"?: table style name (default GridTable1Light)}"#),
         CommandSpec::new("layout.linkToPrevious", "Link to Previous", "Header & Footer › Navigation", |s, v| {
-            let header = p::bool(v, "footer").map(|f| !f).unwrap_or(true);
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            let sect = s.doc.section_mut(block);
-            if header {
-                sect.headers = Default::default();
-            } else {
-                sect.footers = Default::default();
-            }
-            Ok(json!({"linked": true}))
+            crate::cmd::insert::link_to_previous(s, v)
         })
+        .when(|s| if crate::cmd::page::section_index_for_hf(s) == 0 { Some("first section") } else { None })
         .key(crate::cmd::non_mac("Alt+Shift+R"))
-        .params(r#"{"footer"?: bool}"#),
+        .params(r#"{"linked"?: bool, "footer"?: bool}"#),
         CommandSpec::new("hf.next", "Next Section", "Header & Footer › Navigation", |s, _| hf_nav(s, 1)).pure(),
         CommandSpec::new("hf.previous", "Previous Section", "Header & Footer › Navigation", |s, _| hf_nav(s, -1)).pure(),
         CommandSpec::new("hf.position", "Header/Footer Position", "Header & Footer › Position", |s, v| {
             let (h, f) = (p::f32(v, "header"), p::f32(v, "footer"));
-            let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
-            let sect = s.doc.section_mut(block);
+            let si = crate::cmd::page::section_index_for_hf(s);
+            let sect = s.doc.section_mut_at(si);
             if let Some(h) = h {
                 sect.header = h.clamp(0.0, 300.0);
             }

@@ -5,6 +5,11 @@ use super::view::DRAFT_WIDTH;
 use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
 
 impl Session {
+    /// A cached layout if one has been computed.
+    pub fn current_layout(&self) -> Option<Arc<DocLayout>> {
+        self.layout[0].as_ref().map(|e| e.5.clone())
+    }
+
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
         let typing = self.typing_word();
