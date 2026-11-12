@@ -825,12 +825,14 @@ fn break_positions(text: &str, rp: &wordcraft_doc::resolve::ResolvedPara) -> Vec
     }
     // UAX #14 (LB13) also forbids a break between a space and a slash, so with the break after the
     // slash gone as well, "caption /word" had no break at all and the word split mid-letter. Word
-    // wraps "/word" whole to the next line: break before a slash that starts a word.
+    // wraps "/word" whole to the next line: break before a slash that starts a word, and before a
+    // slash standing alone between spaces ("object (GeoJSON) / string": Word for Windows starts
+    // the next line with "/ string" where the slash no longer fits).
     let before_slash: Vec<usize> = text
         .match_indices('/')
         .filter(|&(i, _)| {
             text.get(..i).and_then(|t| t.chars().next_back()).is_some_and(|c| c.is_whitespace() && !matches!(c, '\u{a0}' | '\u{2007}' | '\u{202f}'))
-                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(char::is_alphanumeric)
+                && text.get(i + 1..).and_then(|t| t.chars().next()).is_some_and(|c| c.is_alphanumeric() || c == ' ')
         })
         .map(|(i, _)| i)
         .collect();
