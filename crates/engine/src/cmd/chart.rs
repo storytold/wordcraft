@@ -194,12 +194,15 @@ fn edit(s: &mut Session, f: impl Fn(&mut ChartSpec) -> Result<(), CmdError>) -> 
     Ok(out)
 }
 
-/// Draw the chart of `o` again at its current size (after a resize), if it has a model.
+/// Draw the chart of `o` again at its current size (after a resize, or when it opens), if it
+/// has a model. It keeps the chart as read (its `source`): the chart itself is unchanged, and
+/// saving writes that back with the look WordCraft doesn't model.
 pub fn redraw(o: &mut InlineObject, theme: &[Rgb]) {
     if let InlineObject::Graphic { w, h, graphic, .. } = o
         && let Some(spec) = graphic.chart.as_deref()
     {
-        *graphic = Arc::new(chart_graphic(spec.clone(), theme, *w, *h));
+        let source = graphic.source.clone();
+        *graphic = Arc::new(Graphic { source, ..chart_graphic(spec.clone(), theme, *w, *h) });
     }
 }
 

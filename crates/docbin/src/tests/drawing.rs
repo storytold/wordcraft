@@ -184,6 +184,41 @@ fn shapes_keep_kind_colours_wrap_and_text_box_text() {
 }
 
 #[test]
+fn braces_and_brackets_are_unfilled_unless_filled_is_set() {
+    // A right brace (88) in front of the text with no fill properties, and a left bracket (85)
+    // whose fFilled is set: only the bracket is filled. A plain rectangle (1) keeps its default
+    // white fill.
+    let brace = sp(&[fsp(88, 1026, 0xA00)]);
+    let bracket = sp(&[fsp(85, 1027, 0xA00), fopt(&[(0x01BF, (1 << 20) | (1 << 4))], &[])]);
+    let rect = sp(&[fsp(1, 1028, 0xA00)]);
+    let art = art_content(&[], &[brace, bracket, rect]);
+    let flags = spa_flags(0, 0, 3, false);
+    let spas =
+        plc(&[1, 2, 3, 5], &[spa(1026, [0, 0, 240, 1140], flags), spa(1027, [0, 0, 240, 1140], flags), spa(1028, [0, 0, 240, 1140], flags)].concat());
+    let text = "A\u{8}\u{8}\u{8}B\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let fills: Vec<_> = p0
+        .objects
+        .iter()
+        .map(|o| match o {
+            InlineObject::Shape { fill, stroke, w, h, .. } => (fill.clone(), *stroke, *w, *h),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        fills,
+        [
+            (None, Some(Rgb::BLACK), 12.0, 57.0),
+            (Some(Fill::solid(Rgb::WHITE)), Some(Rgb::BLACK), 12.0, 57.0),
+            (Some(Fill::solid(Rgb::WHITE)), Some(Rgb::BLACK), 12.0, 57.0),
+        ]
+    );
+}
+
+#[test]
 fn text_boxes_pointing_at_the_same_story_text_read_it_once() {
     // Two text boxes whose PlcftxbxTxt stories are both [0, 7) (the table steps back to CP 0
     // in between): each was read into its own part, so a hostile table could copy one story
@@ -391,6 +426,7 @@ fn a_floating_copy_is_charged_its_alt_text() {
         alt,
         float: Default::default(),
         crop: Default::default(),
+        fx: Default::default(),
         ole: None,
     };
     let bare = crate::object_cost(&image(String::new()));

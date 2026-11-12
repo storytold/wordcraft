@@ -29,6 +29,7 @@ fn complete_document() -> Document {
             alt: "Original synthetic picture".into(),
             float: Default::default(),
             crop: Default::default(),
+            fx: Default::default(),
             ole: Some(source.clone()),
         },
         &CharProps::default(),

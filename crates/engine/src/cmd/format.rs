@@ -138,6 +138,17 @@ pub fn specs() -> Vec<CommandSpec> {
             apply(s, &|c| c.position = Some(x))
         })
         .params(r#"{"points": number}"#),
+        // Font › Emphasis mark: a mark over (or under) each character.
+        CommandSpec::new("format.emphasisMark", "Emphasis Mark", "Home › Font › Font", |s, v| {
+            use wordcraft_doc::props::EmphasisMark;
+            let name = p::str(v, "mark").unwrap_or("dot");
+            let mark = EmphasisMark::ALL
+                .into_iter()
+                .find(|m| m.ooxml().eq_ignore_ascii_case(name.trim()))
+                .ok_or_else(|| CmdError::Params(format!("unknown emphasis mark `{name}` (none, dot, comma, circle, underDot)")))?;
+            apply(s, &|c| c.emphasis = Some(mark))
+        })
+        .params(r#"{"mark"?: "none" | "dot" | "comma" | "circle" | "underDot"}"#),
         CommandSpec::new("format.charStyle", "Apply Character Style", "Home › Styles", char_style).params(r#"{"style": string}"#),
         CommandSpec::new("format.set", "Set Character Formatting", "Home › Font › Font", set).params(r#"{"props": CharProps}"#),
         CommandSpec::new("format.fontDialog", "Font Dialog", "Home › Font", |s, _| {
@@ -866,8 +877,14 @@ pub fn state(s: &Session) -> Value {
     let at = selected_text_box(s).map_or_else(|| s.sel.focus.clone(), |(a, _)| a);
     let style = s.doc.para_at(&at).and_then(|p| p.props.style.clone()).unwrap_or_else(|| "Normal".into());
     let style_name = s.doc.styles.get(&style).map(|st| st.name.clone()).unwrap_or(style.clone());
+    let font = same(&|r| json!(r.font));
+    // The font's substitute when it isn't installed: the face its text is drawn in, apart from
+    // characters the substitute lacks. `font.missing` lists every face the shown text is drawn
+    // in, fallback faces too, and which fonts change the layout.
+    let shown_as = font.as_str().and_then(|f| crate::cmd::font::shown_as(&s.doc, f));
     json!({
-        "font": same(&|r| json!(r.font)),
+        "font": font,
+        "fontShownAs": shown_as,
         "fontEastAsia": same(&|r| json!(r.font_ea)),
         "size": same(&|r| json!(r.size)),
         "bold": all.iter().all(|r| r.bold),
@@ -882,6 +899,7 @@ pub fn state(s: &Session) -> Value {
         "caps": all.iter().all(|r| r.caps),
         "hidden": all.iter().all(|r| r.hidden),
         "spacing": same(&|r| json!(r.spacing)),
+        "emphasisMark": same(&|r| json!(r.emphasis.ooxml())),
         // Kerning for fonts: the smallest kerned size, points; 0 = off.
         "kern": same(&|r| json!(r.kern)),
         "color": same(&|r| json!(match r.color { TextColor::Auto => "auto".to_string(), TextColor::Rgb(c) => c.hex() })),
