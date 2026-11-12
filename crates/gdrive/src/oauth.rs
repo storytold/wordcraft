@@ -79,9 +79,9 @@ impl ClientConfig {
             return Err(Error::NotConfigured(format!("set {ENV_CLIENT_ID}")));
         };
         let path = dir.join(CONFIG_FILE);
-        let text = match std::fs::read(&path) {
-            Ok(b) if b.len() <= 64 * 1024 => b,
-            Ok(_) => return Err(Error::NotConfigured(format!("{} is too large", path.display()))),
+        let text = match read_small(&path) {
+            Ok(Some(b)) => b,
+            Ok(None) => return Err(Error::NotConfigured(format!("{} is too large or not a file", path.display()))),
             Err(_) => return Err(Error::NotConfigured(format!("add {} or set {ENV_CLIENT_ID}", path.display()))),
         };
         Self::from_json(&text).map_err(|e| match e {
@@ -99,6 +99,22 @@ impl ClientConfig {
         let id = s("client_id").ok_or_else(|| Error::NotConfigured("no \"client_id\"".into()))?;
         Self::new(id, s("client_secret"), v.get("scope").and_then(|x| x.as_str()))
     }
+}
+
+/// The most a client file may hold: a real one is under 1 KiB.
+const MAX_CLIENT_FILE: u64 = 64 * 1024;
+
+/// Reads a client file: `None` for anything but a regular file of at most `MAX_CLIENT_FILE`
+/// bytes, checked before reading, so a device, pipe or huge file is refused without blocking or
+/// filling memory.
+fn read_small(path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+    let meta = std::fs::metadata(path)?;
+    if !meta.is_file() || meta.len() > MAX_CLIENT_FILE {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    std::io::Read::read_to_end(&mut std::io::Read::take(std::fs::File::open(path)?, MAX_CLIENT_FILE + 1), &mut bytes)?;
+    Ok((bytes.len() as u64 <= MAX_CLIENT_FILE).then_some(bytes))
 }
 
 /// The folder a browser saves downloads to: `~/Downloads` (`%USERPROFILE%\\Downloads` on Windows).
@@ -123,9 +139,9 @@ pub fn newest_client_file(dir: &Path) -> Option<std::path::PathBuf> {
 /// Imports a client JSON downloaded from Google Cloud console (`{"installed": {…}}`) into
 /// `dir`'s `google-drive.json`: checked first, so a wrong file changes nothing.
 pub fn import_client(dir: &Path, file: &Path) -> Result<ClientConfig> {
-    let text = match std::fs::read(file) {
-        Ok(b) if b.len() <= 64 * 1024 => b,
-        Ok(_) => return Err(Error::NotConfigured(format!("{} is too large for an OAuth client file", file.display()))),
+    let text = match read_small(file) {
+        Ok(Some(b)) => b,
+        Ok(None) => return Err(Error::NotConfigured(format!("{} is too large for an OAuth client file, or not a file", file.display()))),
         Err(e) => return Err(Error::NotConfigured(format!("couldn't read {}: {e}", file.display()))),
     };
     let cfg = ClientConfig::from_json(&text)?;
@@ -137,12 +153,16 @@ pub fn import_client(dir: &Path, file: &Path) -> Result<ClientConfig> {
 /// checked first, keeping a `scope` the file already had. Owner-only on Unix.
 pub fn write_client(dir: &Path, client_id: &str, client_secret: Option<&str>) -> Result<()> {
     let path = dir.join(CONFIG_FILE);
-    let scope = std::fs::read(&path)
-        .ok()
-        .filter(|b| b.len() <= 64 * 1024)
-        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+    let old = read_small(&path).ok().flatten();
+    let scope = old
+        .as_deref()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(b).ok())
         .and_then(|v| v.get("scope").and_then(|x| x.as_str()).map(str::to_string));
-    let cfg = ClientConfig::new(client_id, client_secret, scope.as_deref())?;
+    // No secret given for the same client: keep the one on file (Google needs it for a
+    // Desktop client), so re-entering just the ID doesn't break the next sign-in.
+    let kept = old.as_deref().and_then(|b| ClientConfig::from_json(b).ok()).filter(|k| k.client_id == client_id.trim()).and_then(|k| k.client_secret);
+    let given = client_secret.filter(|s| !s.trim().is_empty());
+    let cfg = ClientConfig::new(client_id, given.or(kept.as_deref()), scope.as_deref())?;
     let mut v = serde_json::json!({ "client_id": cfg.client_id });
     if let Some(secret) = &cfg.client_secret {
         v["client_secret"] = secret.as_str().into();
@@ -194,7 +214,9 @@ pub fn auth_url(cfg: &ClientConfig, redirect: &str, challenge: &str, state: &str
 }
 
 /// Reads the authorization code out of the redirect's request target (`/?code=…&state=…`),
-/// checking `state`. Returns `Ok(None)` for a request that isn't the redirect (a favicon).
+/// checking `state`. Returns `Ok(None)` for a request that isn't the redirect: a favicon, or
+/// anything without this sign-in's `state` (which can't end the sign-in or put its text in the
+/// status line).
 pub fn parse_callback(target: &str, expected_state: &str) -> Result<Option<String>> {
     let (path, query) = target.split_once('?').unwrap_or((target, ""));
     if path != "/" {
@@ -202,16 +224,15 @@ pub fn parse_callback(target: &str, expected_state: &str) -> Result<Option<Strin
     }
     let pairs = encode::parse_query(query, 32);
     let get = |k: &str| pairs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+    // Compare state first: a request from anything but our consent page is ignored.
+    if get("state") != Some(expected_state) {
+        return Ok(None);
+    }
     if let Some(err) = get("error") {
         return Err(Error::SignIn(match err {
             "access_denied" => "access was denied on the Google consent page".into(),
-            e => format!("Google returned {e:?}"),
+            _ => "Google refused the sign-in".into(),
         }));
-    }
-    // Compare state before looking at the code: a request from anything but our consent page is
-    // refused.
-    if get("state") != Some(expected_state) {
-        return Err(Error::SignIn("the sign-in response didn't match this request".into()));
     }
     match get("code") {
         Some(c) if !c.is_empty() && c.len() <= MAX_TOKEN_LEN => Ok(Some(c.to_owned())),

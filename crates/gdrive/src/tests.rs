@@ -159,9 +159,13 @@ fn auth_url_carries_pkce_state_and_offline_access() {
 fn callback_checks_state_and_reports_denial() {
     assert_eq!(oauth::parse_callback("/?state=s1&code=4%2Fabc", "s1").unwrap(), Some("4/abc".into()));
     assert_eq!(oauth::parse_callback("/favicon.ico", "s1").unwrap(), None);
-    assert!(matches!(oauth::parse_callback("/?state=other&code=x", "s1"), Err(Error::SignIn(_))));
-    assert!(matches!(oauth::parse_callback("/?code=x", "s1"), Err(Error::SignIn(_))));
+    // Without this sign-in's state, nothing ends it: not a code, not an error.
+    assert_eq!(oauth::parse_callback("/?state=other&code=x", "s1").unwrap(), None);
+    assert_eq!(oauth::parse_callback("/?code=x", "s1").unwrap(), None);
+    assert_eq!(oauth::parse_callback("/?error=Visit%20example.com", "s1").unwrap(), None);
     assert!(matches!(oauth::parse_callback("/?error=access_denied&state=s1", "s1"), Err(Error::SignIn(m)) if m.contains("denied")));
+    // Google's error text isn't echoed.
+    assert!(matches!(oauth::parse_callback("/?error=Visit%20example.com&state=s1", "s1"), Err(Error::SignIn(m)) if !m.contains("example")));
     assert!(matches!(oauth::parse_callback("/?state=s1", "s1"), Err(Error::SignIn(_))));
 }
 
@@ -322,6 +326,7 @@ fn google_docs_are_exported_as_docx() {
         version: "1".into(),
         size: None,
         parents: Vec::new(),
+        head_revision_id: String::new(),
     };
     assert_eq!(d.download(&f).unwrap(), b"PK\x03\x04docx");
     let req = &fake.seen()[1];
@@ -337,6 +342,24 @@ fn save_refuses_when_drive_changed_since_open() {
     let err = d.save(&target, b"PK").unwrap_err();
     assert_eq!(err, Error::Conflict { name: "Essay.docx".into(), opened: "7".into(), remote: "9".into() });
     assert!(fake.seen().iter().all(|r| r.method != Method::Patch), "nothing was uploaded");
+}
+
+/// A rename or a new share bumps Drive's `version` but not the content revision: the save goes
+/// ahead. A new content revision is a conflict.
+#[test]
+fn only_a_content_change_is_a_conflict() {
+    let with_rev = |version: &str, rev: &str| {
+        let mut v = file_json("f1", "Essay.docx", drive::MIME_DOCX, version);
+        v["headRevisionId"] = rev.into();
+        (200, v)
+    };
+    let target = SaveTarget::Existing { id: "f1".into(), name: "Essay.docx".into(), version: "r1".into() };
+    let fake = Fake::with(vec![token_reply(), with_rev("9", "r1"), with_rev("10", "r2")]);
+    let mut d = Drive::new(signed_in(&fake));
+    assert_eq!(d.save(&target, b"PK").unwrap().content_version(), "r2", "renamed or shared only: saved");
+    let fake = Fake::with(vec![token_reply(), with_rev("9", "r5")]);
+    let mut d = Drive::new(signed_in(&fake));
+    assert_eq!(d.save(&target, b"PK").unwrap_err(), Error::Conflict { name: "Essay.docx".into(), opened: "r1".into(), remote: "r5".into() });
 }
 
 #[test]
@@ -429,6 +452,44 @@ fn a_401_then_a_refused_refresh_signs_out() {
     assert_eq!(d.list(None, None), Err(Error::NotSignedIn));
     assert_eq!(d.auth.access_token(Instant::now()), Err(Error::NotSignedIn), "signed out, nothing more sent");
     assert_eq!(fake.seen().len(), 3);
+}
+
+#[test]
+fn a_401_with_a_fresh_token_is_drives_error_not_a_sign_out() {
+    let denied = || (401, json!({"error": {"code": 401, "message": "Invalid Credentials"}}));
+    let fake =
+        Fake::with(vec![token_reply(), denied(), (200, json!({"access_token": "access-2", "expires_in": 3599, "token_type": "Bearer"})), denied()]);
+    let mut d = Drive::new(signed_in(&fake));
+    assert_eq!(d.list(None, None), Err(Error::Api { status: 401, message: "Invalid Credentials".into() }));
+    assert_eq!(fake.seen().len(), 4, "one retry only");
+}
+
+#[test]
+fn client_files_are_read_only_when_small_regular_files() {
+    let dir = Scratch::new("small");
+    std::fs::create_dir_all(dir.join("folder")).unwrap();
+    assert!(matches!(oauth::import_client(&dir, &dir.join("folder")), Err(Error::NotConfigured(_))), "a folder is refused");
+    let big = dir.join("client_secret_big.json");
+    std::fs::write(&big, vec![b' '; 65 * 1024]).unwrap();
+    assert!(matches!(oauth::import_client(&dir, &big), Err(Error::NotConfigured(m)) if m.contains("too large")));
+    #[cfg(unix)]
+    {
+        let fifo = dir.join("client_secret_fifo.json");
+        if std::process::Command::new("mkfifo").arg(&fifo).status().is_ok_and(|s| s.success()) {
+            assert!(matches!(oauth::import_client(&dir, &fifo), Err(Error::NotConfigured(_))), "a pipe is refused without blocking");
+        }
+    }
+    assert!(!dir.join(oauth::CONFIG_FILE).exists(), "nothing written");
+}
+
+#[test]
+fn re_entering_only_the_client_id_keeps_its_secret() {
+    let dir = Scratch::new("keep");
+    oauth::write_client(&dir, "123-abc.apps.googleusercontent.com", Some("s3cret")).unwrap();
+    oauth::write_client(&dir, "123-abc.apps.googleusercontent.com", None).unwrap();
+    assert_eq!(ClientConfig::load(Some(&dir)).unwrap().client_secret.as_deref(), Some("s3cret"), "same client: secret kept");
+    oauth::write_client(&dir, "456-def.apps.googleusercontent.com", None).unwrap();
+    assert_eq!(ClientConfig::load(Some(&dir)).unwrap().client_secret, None, "another client: not kept");
 }
 
 #[test]
@@ -546,4 +607,10 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+#[test]
+fn each_client_has_its_own_keychain_entry() {
+    assert_eq!(crate::store::account(" 123-abc.apps.googleusercontent.com "), "refresh-token:123-abc.apps.googleusercontent.com");
+    assert_ne!(crate::store::account("a"), crate::store::account("b"));
 }

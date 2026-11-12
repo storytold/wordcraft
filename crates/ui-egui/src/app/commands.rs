@@ -1217,6 +1217,8 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
             | "file.share"
             | "ui.print"
             | "ui.printSubmit"
+            | "ui.drive.save"
+            | "ui.drive.export"
     ) || discards_document(id, params)
 }
 

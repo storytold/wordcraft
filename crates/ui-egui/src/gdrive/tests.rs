@@ -139,6 +139,71 @@ fn copies_go_beside_the_drive_file() {
     );
 }
 
+/// A password-protected file from Drive (one WordCraft saved with a password, say) asks for its
+/// password, and the right one opens it as a Drive document: no local path, Save goes to Drive.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_protected_drive_file_asks_for_its_password() {
+    let mut src = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+    src.run("text.insert", &json!({"text": "secret words"})).unwrap();
+    let opts = wordcraft_engine::cmd::file::export_options(&src, &json!({}));
+    let bytes = wordcraft_engine::io::save_bytes_with("Essay.docx", &src.doc, Some("pa55word"), &opts).unwrap();
+
+    let mut a = app();
+    super::native::apply(&mut a, super::native::Event::Opened { file: drive_file(), bytes });
+    assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Password { ref then, .. }) if then == "ui.drive.openProtected"), "asks for the password");
+
+    let wrong = a.execute("ui.drive.openProtected", json!({"password": "nope"}));
+    assert!(wrong.is_err_and(|e| wordcraft_engine::io::wrong_password(&e)), "a wrong password can be tried again");
+    a.execute("ui.drive.openProtected", json!({"password": "pa55word"})).unwrap();
+    assert!(a.session.path.is_none(), "no local path");
+    assert_eq!(a.session.file_name.as_deref(), Some("Essay.docx"));
+    assert!(super::saves_to_drive(&a), "Save goes back to Drive");
+    assert!(a.execute("ui.drive.openProtected", json!({"password": "pa55word"})).is_err(), "nothing left waiting");
+}
+
+/// A Drive save that can't start changes nothing: not the password, not the save stamps. Options
+/// a Drive save can't honour are refused, never dropped.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_refused_drive_save_changes_nothing() {
+    let dir = Scratch::new("refused");
+    let mut a = app();
+    a.services.drive_profile = Some(dir.to_path_buf());
+    let doc = a.session.document_id();
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false, parent: None });
+    let stamps = |a: &WordApp| (a.session.doc.core.revision, a.session.doc.core.modified.clone());
+    let before = stamps(&a);
+    a.drive.busy = Some("list");
+    let r = a.execute("file.save", json!({"password": "pa55word"}));
+    assert!(r.is_err_and(|e| e.contains("busy")), "refused while busy");
+    assert!(a.session.password.is_none(), "not encrypted");
+    assert_eq!(stamps(&a), before, "save stamps unchanged");
+    a.drive.busy = None;
+    for p in [json!({"format": "flatOpc"}), json!({"strict": true})] {
+        assert!(a.execute("file.save", p.clone()).is_err(), "{p} refused");
+    }
+    assert_eq!(stamps(&a), before);
+}
+
+/// A Drive save that finishes after another document came to the front still marks the saved
+/// one as saved, and leaves the front one alone.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_save_finishing_behind_another_document_still_counts() {
+    let mut a = app();
+    a.session.dirty = true;
+    let doc = a.session.document_id();
+    a.drive.origins.insert(doc, Origin { id: "f1".into(), name: "Essay.docx".into(), version: "3".into(), google_doc: false, parent: None });
+    let rev = a.session.rev();
+    a.run("file.new", json!({})).unwrap();
+    let front = a.session.document_id();
+    assert_ne!(front, doc);
+    super::native::apply(&mut a, super::native::Event::Saved { doc, rev, local: 0, file: drive_file(), marked_saved: true });
+    assert_eq!(a.session.document_id(), front, "the front document stays in front");
+    assert!(!a.session.document_dirty(doc), "the saved document is marked saved");
+}
+
 /// A new registration isn't written while Drive is busy (signing in, say): the worker would keep
 /// using the old client while the file held the new one.
 #[cfg(not(target_arch = "wasm32"))]
@@ -179,6 +244,7 @@ fn save_follows_the_last_destination() {
         version: "1".into(),
         size: Some(10),
         parents: Vec::new(),
+        head_revision_id: String::new(),
     };
     let rev = a.session.rev();
     let local = a.drive.local_saves.get(&doc).copied().unwrap_or(0);
@@ -198,6 +264,7 @@ fn drive_file() -> wordcraft_gdrive::DriveFile {
         version: "1".into(),
         size: Some(10),
         parents: Vec::new(),
+        head_revision_id: String::new(),
     }
 }
 
