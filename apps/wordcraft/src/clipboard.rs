@@ -128,6 +128,29 @@ pub fn is_own() -> bool {
     platform::is_own()
 }
 
+/// Wrap HTML in the Windows CF_HTML header format required by clipboard readers.
+///
+/// Offsets are byte offsets from the start of the payload; `EndHTML` excludes the trailing NUL.
+#[cfg(any(target_os = "windows", test))]
+fn wrap_cf_html(ctn: &str) -> Vec<u8> {
+    let h_version = "Version:0.9";
+    let h_start_html = "\r\nStartHTML:";
+    let h_end_html = "\r\nEndHTML:";
+    let h_start_frag = "\r\nStartFragment:";
+    let h_end_frag = "\r\nEndFragment:";
+    let c_start_frag = "\r\n<html>\r\n<body>\r\n<!--StartFragment-->\r\n";
+    let c_end_frag = "\r\n<!--EndFragment-->\r\n</body>\r\n</html>\0";
+    let h_len = h_version.len() + h_start_html.len() + 10 + h_end_html.len() + 10 + h_start_frag.len() + 10 + h_end_frag.len() + 10;
+    let n_start_html = h_len + 2;
+    let n_start_frag = h_len + c_start_frag.len();
+    let n_end_frag = n_start_frag + ctn.len();
+    let n_end_html = n_end_frag + c_end_frag.len() - 1;
+    let header = format!(
+        "{h_version}{h_start_html}{n_start_html:010}{h_end_html}{n_end_html:010}{h_start_frag}{n_start_frag:010}{h_end_frag}{n_end_frag:010}{c_start_frag}{ctn}{c_end_frag}"
+    );
+    header.into_bytes()
+}
+
 /// The clipboard's text.
 pub fn text() -> Option<String> {
     open()?.get_text().ok()
@@ -585,26 +608,6 @@ mod platform {
         false
     }
 
-    /// Wrap HTML in the Windows CF_HTML header format required by clipboard readers.
-    fn wrap_cf_html(ctn: &str) -> Vec<u8> {
-        let h_version = "Version:0.9";
-        let h_start_html = "\r\nStartHTML:";
-        let h_end_html = "\r\nEndHTML:";
-        let h_start_frag = "\r\nStartFragment:";
-        let h_end_frag = "\r\nEndFragment:";
-        let c_start_frag = "\r\n<html>\r\n<body>\r\n<!--StartFragment-->\r\n";
-        let c_end_frag = "\r\n<!--EndFragment-->\r\n</body>\r\n</html>\0";
-        let h_len = h_version.len() + h_start_html.len() + 10 + h_end_html.len() + 10 + h_start_frag.len() + 10 + h_end_frag.len() + 10;
-        let n_start_html = h_len + 2;
-        let n_start_frag = h_len + c_start_frag.len();
-        let n_end_frag = n_start_frag + ctn.len();
-        let n_end_html = n_end_frag + c_end_frag.len() - 1;
-        let header = format!(
-            "{h_version}{h_start_html}{n_start_html:010}{h_end_html}{n_end_html:010}{h_start_frag}{n_start_frag:010}{h_end_frag}{n_end_frag:010}{c_start_frag}{ctn}{c_end_frag}"
-        );
-        header.into_bytes()
-    }
-
     /// Add PNG and CF_HTML formats alongside arboard's image, then mark ownership.
     pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
         if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone())
@@ -795,4 +798,34 @@ mod platform {
 
     /// Add MathML to the clipboard on the fallback platform.
     pub fn add_mathml(_mathml: &str) {}
+}
+
+#[cfg(test)]
+mod cf_html_tests {
+    use super::wrap_cf_html;
+
+    fn field(data: &[u8], name: &str) -> usize {
+        let at = data.windows(name.len()).position(|w| w == name.as_bytes()).expect("field") + name.len();
+        std::str::from_utf8(&data[at..at + 10]).expect("offset digits").parse().expect("offset")
+    }
+
+    #[test]
+    fn cf_html_offsets_delimit_the_fragment_bytes() {
+        let fragment = "<p>Olá, 世界 — café</p>";
+        let data = wrap_cf_html(fragment);
+
+        let start_html = field(&data, "StartHTML:");
+        let end_html = field(&data, "EndHTML:");
+        let start_fragment = field(&data, "StartFragment:");
+        let end_fragment = field(&data, "EndFragment:");
+
+        assert!(start_html < start_fragment, "HTML starts before its fragment");
+        assert!(start_fragment < end_fragment, "fragment has a positive length");
+        assert!(end_fragment < end_html, "fragment ends inside the document");
+        assert_eq!(&data[start_html..start_html + "<html>".len()], b"<html>");
+        assert_eq!(&data[start_fragment..end_fragment], fragment.as_bytes());
+        assert_eq!(end_fragment - start_fragment, fragment.len(), "offsets count UTF-8 bytes");
+        assert_eq!(&data[end_html..], b"\0", "EndHTML excludes the trailing NUL");
+        assert_eq!(end_html, data.len() - 1);
+    }
 }

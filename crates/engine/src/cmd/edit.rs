@@ -365,9 +365,10 @@ impl ClipHistory {
     }
 
     pub(crate) fn push(&mut self, f: &Fragment, text: &str) {
-        // Text plus per-paragraph overhead; pictures are references into the document.
+        // Text plus per-paragraph overhead, plus the picture bytes the fragment keeps alive.
         let paras = text.matches('\n').count().saturating_add(f.blocks.len()).saturating_add(f.parts.len()).saturating_add(1);
-        let bytes = text.len().saturating_mul(2).saturating_add(paras.saturating_mul(256));
+        let media = f.media.values().map(|m| m.len()).fold(0, usize::saturating_add);
+        let bytes = text.len().saturating_mul(2).saturating_add(paras.saturating_mul(256)).saturating_add(media);
         if bytes > CLIP_ITEM_BYTES || f.blocks.is_empty() {
             return;
         }
