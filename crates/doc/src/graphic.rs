@@ -45,10 +45,21 @@ pub struct Graphic {
 pub struct Embedded {
     /// The object's markup as a standalone XML element with its namespace declarations (DOCX:
     /// the `a:graphic` of a chart, SmartArt diagram or native ink, an ink `mc:AlternateContent`,
-    /// or the `w:object` of an OLE object).
+    /// the `w:object` of an OLE object, or the `w:pict` of a signature line).
     pub xml: String,
     /// The relationships it uses, by the ids in `xml` (or in its parts, for a SmartArt drawing).
     pub refs: Vec<EmbeddedRef>,
+}
+
+impl Embedded {
+    /// The root element of an ODF embedded object's markup: its files are kept in
+    /// [`crate::Document::passthrough`] for the ODT writer; DOCX shows it as its picture.
+    pub const ODF_OBJECT: &'static str = "<wordcraft:odf-object";
+
+    /// Is it an ODF embedded object (a spreadsheet in an ODT), not Word markup?
+    pub fn is_odf_object(&self) -> bool {
+        self.xml.trim_start().starts_with(Self::ODF_OBJECT)
+    }
 }
 
 /// One relationship an [`Embedded`] object uses.

@@ -237,7 +237,9 @@ fn unescape(s: &str) -> String {
     s.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&")
 }
 
-#[cfg(test)]
+// Unix only: fontconfig configurations name Unix absolute folders (`/usr/share/fonts`), which
+// are not absolute on Windows, where the system font scan never reads them.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

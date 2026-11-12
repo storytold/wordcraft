@@ -12,6 +12,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::props::Rgb;
+
 /// Most items in a SmartArt graphic.
 pub const MAX_ITEMS: usize = 100;
 /// Longest item text, characters.
@@ -198,11 +200,14 @@ pub struct SmartArtItem {
     pub text: String,
     #[serde(default)]
     pub level: u8,
+    /// Fill of the item's shape in place of the style's colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<Rgb>,
 }
 
 impl SmartArtItem {
     pub fn new(text: impl Into<String>, level: u8) -> SmartArtItem {
-        SmartArtItem { text: text.into(), level }
+        SmartArtItem { text: text.into(), level, color: None }
     }
 }
 
@@ -254,6 +259,35 @@ impl SmartArtSpec {
             let most = prev.map_or(0, |p| p.saturating_add(1)).min(MAX_LEVEL);
             it.level = it.level.min(most);
             prev = Some(it.level);
+        }
+    }
+
+    /// Whether any item has its own colour.
+    pub fn has_custom_colors(&self) -> bool {
+        self.items.iter().any(|it| it.color.is_some())
+    }
+
+    /// Give every item the style's colour again.
+    pub fn clear_custom_colors(&mut self) {
+        for it in &mut self.items {
+            it.color = None;
+        }
+    }
+
+    /// The theme accent (1–6) the style gives item `i`; `None` when the item has no shape of
+    /// its own (it is text inside another item's shape).
+    pub fn style_accent(&self, i: usize) -> Option<usize> {
+        let it = self.items.get(i)?;
+        let tops = || self.items.iter().take(i).filter(|o| o.level == 0).count();
+        match self.layout {
+            SmartArtLayout::Hierarchy => Some(self.colors.accent(i)),
+            SmartArtLayout::Radial if i == 0 => Some(self.colors.accent(0)),
+            SmartArtLayout::Radial => {
+                let parents = self.parents();
+                let spoke = |j: usize| j > 0 && matches!(parents.get(j), Some(Some(0)) | Some(None));
+                spoke(i).then(|| self.colors.accent((1..i).filter(|j| spoke(*j)).count() + 1))
+            }
+            _ => (it.level == 0).then(|| self.colors.accent(tops())),
         }
     }
 

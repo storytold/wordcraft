@@ -67,11 +67,11 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     None
 }
 
-/// Put a copy on the system clipboard: its HTML beside the text (the formatting, #1523, and
-/// equations as MathML, #816; a lone equation in the MathML formats too, #1297) when the host can
-/// set it, else the text through egui. egui sets its text at the end of the frame, which would
-/// replace the HTML, so only one of them runs.
-pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
+/// Put a copy on the system clipboard: its HTML and RTF beside the text (the formatting, #1523,
+/// and equations as MathML, #816; a lone equation in the MathML formats too, #1297) when the host
+/// can set them, else the text through egui. egui sets its text at the end of the frame, which
+/// would replace the rest, so only one of them runs.
+pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, rtf: &str, mathml: &str) {
     if text.is_empty() {
         // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
         // else Paste would find the text copied before it and paste that instead of our copy.
@@ -80,7 +80,7 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, ma
         }
         return;
     }
-    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
+    if !(html.is_empty() && rtf.is_empty()) && app.services.set_clipboard_rich.as_ref().is_some_and(|f| f(text, html, rtf, mathml)) {
         return;
     }
     ctx.copy_text(text.to_string());
@@ -89,7 +89,7 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, ma
 /// Put what Copy or Cut returned on the system clipboard (see [`put`]).
 pub(crate) fn put_result(app: &WordApp, ctx: &egui::Context, r: &Value) {
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
-    put(app, ctx, s("text"), s("html"), s("mathml"));
+    put(app, ctx, s("text"), s("html"), s("rtf"), s("mathml"));
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -249,12 +249,12 @@ mod tests {
 
     #[test]
     fn copying_an_equation_puts_its_html_on_the_system_clipboard() {
-        // #816: the host gets HTML with the equation as MathML beside the text.
-        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, String, String)>::new()));
+        // #816: the host gets HTML with the equation as MathML beside the text, and RTF.
+        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, String, String, String)>::new()));
         let sink = got.clone();
         let mut a = app(Services {
-            set_clipboard_html: Some(Box::new(move |h, t, m| {
-                sink.borrow_mut().push((h.to_string(), t.to_string(), m.to_string()));
+            set_clipboard_rich: Some(Box::new(move |t, h, r, m| {
+                sink.borrow_mut().push((h.to_string(), t.to_string(), m.to_string(), r.to_string()));
                 true
             })),
             ..Default::default()
@@ -271,7 +271,8 @@ mod tests {
         assert!(got_now[0].0.contains("<math") && got_now[0].1.contains("y=2x_s"), "{got_now:?}");
         // With text around it, no MathML formats: Word would paste the equation alone (#1297).
         assert!(got_now[0].2.is_empty(), "{got_now:?}");
-        // Text without an equation gets HTML too, so other programs keep its formatting (#1523).
+        // Text without an equation gets HTML too, so other programs keep its formatting (#1523),
+        // and RTF for the programs that read that (gap-clipboard-rtf).
         a.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 5}})).unwrap();
         let r = a.run("edit.copy", json!({})).unwrap();
         put_result(&a, &ctx, &r);
@@ -279,6 +280,7 @@ mod tests {
         assert_eq!(got_now.len(), 2);
         assert!(got_now[1].0.contains("Speed") && !got_now[1].0.contains("<math") && got_now[1].1 == "Speed", "{got_now:?}");
         assert!(got_now[1].2.is_empty(), "{got_now:?}");
+        assert!(got_now[1].3.starts_with("{\\rtf1") && got_now[1].3.contains("Speed"), "{got_now:?}");
         // The equation alone: its MathML for the platform's MathML formats too (#1297).
         a.run("select.range", json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 9}})).unwrap();
         let r = a.run("edit.copy", json!({})).unwrap();

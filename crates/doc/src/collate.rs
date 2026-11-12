@@ -150,6 +150,8 @@ const HU: &[Tailor] = &[
 const SV: &[Tailor] = &[t("å", 'z', 1), t("ä", 'z', 2), ts("æ", 'z', 2, 16), t("ö", 'z', 3), ts("ø", 'z', 3, 11)];
 const DA: &[Tailor] = &[t("æ", 'z', 1), ts("ä", 'z', 1, 4), t("ø", 'z', 2), ts("ö", 'z', 2, 4), t("å", 'z', 3)];
 const ES: &[Tailor] = &[t("ñ", 'n', 1)];
+// Russian ё shares е's primary weight; the diaeresis breaks ties (CLDR Russian standard).
+const RU: &[Tailor] = &[ts("ё", 'е', 0, 4)];
 const TR: &[Tailor] = &[t("ç", 'c', 1), t("ğ", 'g', 1), t("ı", 'h', 1), t("ö", 'o', 1), t("ş", 's', 1), t("ü", 'u', 1)];
 const HR: &[Tailor] =
     &[t("č", 'c', 1), t("ć", 'c', 2), t("dž", 'd', 1), t("đ", 'd', 2), t("lj", 'l', 1), t("nj", 'n', 1), t("š", 's', 1), t("ž", 'z', 1)];
@@ -184,6 +186,7 @@ fn tailoring(lang: Option<&str>) -> &'static [Tailor] {
         "sv" | "fi" => SV,
         "da" | "nb" | "nn" | "no" => DA,
         "es" | "gl" => ES,
+        "ru" => RU,
         "tr" | "az" => TR,
         "hr" | "bs" | "sr" => HR,
         "ro" => RO,
@@ -196,7 +199,7 @@ fn tailoring(lang: Option<&str>) -> &'static [Tailor] {
     }
 }
 
-/// A lowercase Latin letter followed by a combining mark, and the single letter Unicode
+/// A lowercase Latin or Russian letter followed by a combining mark, and the single letter Unicode
 /// composes them to (NFC; generated from the Unicode Character Database). Text pasted from
 /// decomposed sources (macOS file names: `z` + U+0307) collates like the composed letter.
 const COMPOSE: &[(char, char, char)] = &[
@@ -329,6 +332,8 @@ const COMPOSE: &[(char, char, char)] = &[
     ('z', '\u{302}', 'ẑ'),
     ('z', '\u{307}', 'ż'),
     ('z', '\u{30c}', 'ž'),
+    ('е', '\u{308}', 'ё'),
+    ('и', '\u{306}', 'й'),
 ];
 
 /// `s` lowercased, with each letter + combining mark that has a single-letter form composed.
@@ -474,6 +479,25 @@ mod tests {
     fn german_sorts_umlauts_with_their_base_letter() {
         assert_eq!(sorted(&["Zug", "Äpfel", "Apfel", "Bach"], "de-DE"), ["Apfel", "Äpfel", "Bach", "Zug"]);
         assert_eq!(sorted(&["Straße", "Strasse", "Strand"], "de"), ["Strand", "Strasse", "Straße"]);
+    }
+
+    #[test]
+    fn russian_yo_sorts_with_e_instead_of_after_ya() {
+        for lang in ["ru", "ru-RU", "RU_ru"] {
+            assert_eq!(sorted(&["яблоко", "ёлка", "жук", "ель", "ёж", "еж"], lang), ["еж", "ёж", "ёлка", "ель", "жук", "яблоко"]);
+            assert_eq!(collate("ЁЛКА", "ёлка", Some(lang)), Ordering::Equal);
+            assert_eq!(heading_letter("Ёлка", Some(lang)).as_deref(), Some("Ё"));
+        }
+    }
+
+    #[test]
+    fn russian_decomposed_letters_match_their_composed_forms() {
+        for (composed, decomposed) in [("ёлка", "е\u{308}лка"), ("Ёлка", "Е\u{308}лка"), ("йод", "и\u{306}од"), ("Йод", "И\u{306}од")]
+        {
+            assert_eq!(collate(composed, decomposed, Some("ru-RU")), Ordering::Equal);
+            assert_eq!(heading_letter(composed, Some("ru")), heading_letter(decomposed, Some("ru")));
+        }
+        assert_eq!(sorted(&["к", "и\u{306}", "и"], "ru"), ["и", "и\u{306}", "к"]);
     }
 
     #[test]
