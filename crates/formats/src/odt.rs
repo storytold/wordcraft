@@ -49,6 +49,7 @@ mod formula_size;
 mod frames;
 mod geometry;
 mod import;
+mod ink_picture;
 mod kept;
 mod limits;
 mod objects;

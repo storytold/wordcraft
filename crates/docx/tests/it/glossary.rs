@@ -460,13 +460,13 @@ fn hostile_glossaries_never_panic() {
         .collect();
     let doc = read(one(glossary_xml(&many)));
     assert!(doc.glossary.len() <= 10_000, "{}", doc.glossary.len());
-    // Deep nesting (tables in tables).
+    // Uninspected deep markup may contain compatibility requirements and cannot be skipped.
     let deep = format!(
         r#"<w:docPart><w:docPartPr><w:name w:val="Deep"/></w:docPartPr><w:docPartBody>{}<w:p/>{}</w:docPartBody></w:docPart>"#,
         "<w:tbl><w:tr><w:tc>".repeat(400),
         "</w:tc></w:tr></w:tbl>".repeat(400)
     );
-    let _ = read(one(glossary_xml(&deep)));
+    assert!(matches!(wordcraft_docx::read(&one(glossary_xml(&deep))), Err(wordcraft_docx::DocxError::Limit(_))));
     // Not a glossary at all, or a wrong content type: nothing read.
     let doc = read(one(format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>"#)));
     assert!(doc.glossary.is_empty());

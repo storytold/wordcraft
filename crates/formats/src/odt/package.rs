@@ -336,6 +336,19 @@ fn page_parts(doc: &Document, sec: &SectionProps, w: &mut Writer) -> PageParts {
     out
 }
 
+/// Build page stories; a retained master must not replace a baked ink picture.
+fn page_parts_all(doc: &Document, pages: &[(String, SectionProps)], kept: Option<&wordcraft_doc::kept::KeptXml>, w: &mut Writer) -> Vec<PageParts> {
+    let mut parts = Vec::with_capacity(pages.len());
+    for (name, sec) in pages {
+        let before = w.ink_images_emitted;
+        parts.push(page_parts(doc, sec, w));
+        if w.ink_images_emitted != before && kept.is_some_and(|k| k.pages_as_read(doc) && k.defs.contains_key(&format!("master:{name}"))) {
+            w.ink_pictures.borrow_mut().retained();
+        }
+    }
+    parts
+}
+
 /// A header's content with `shape` (anchored to a character) at the start of its first
 /// paragraph, or in a paragraph of its own before a table that starts it.
 fn with_watermark(body: &str, shape: &str) -> String {
@@ -1165,10 +1178,11 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     );
     let mut hw = Writer::with_prefix(if kept.is_some() { "wcM" } else { "M" });
     // Headers' and footers' new pictures and objects skip the kept files' names too.
+    hw.ink_pictures = w.ink_pictures.clone();
     hw.reserved = std::sync::Arc::clone(&w.reserved);
     hw.accents = accents;
     hw.variables.clone_from(&w.variables);
-    let parts: Vec<PageParts> = pages.iter().map(|(_, sec)| page_parts(doc, sec, &mut hw)).collect();
+    let parts = page_parts_all(doc, &pages, kept, &mut hw);
     // A custom style kept paragraphs name is written from the model (as edited), not as read.
     for st in &doc.styles.styles {
         let name = super::writer::odf_name(&st.id);
@@ -1200,6 +1214,9 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
         &format!("{draw_xml}{named_text_xml}<style:style style:name=\"Frame\" style:family=\"graphic\"/><style:style style:name=\"Graphics\" style:family=\"graphic\"/></office:styles>"),
         1,
     );
+    if let Some(error) = w.ink_pictures.borrow_mut().error.take() {
+        return Err(error);
+    }
     w.pictures.append(&mut hw.pictures);
     w.objects.append(&mut hw.objects);
     w.object_dirs.append(&mut hw.object_dirs);

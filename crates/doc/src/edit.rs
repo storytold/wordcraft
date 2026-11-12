@@ -516,8 +516,16 @@ impl Relink<'_> {
             }
             InlineObject::Graphic { graphic, .. } => {
                 let mapped = |m: &str| self.media.get(m).filter(|k| k.as_str() != m);
-                if graphic.items.iter().any(|i| matches!(i, crate::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
-                    for i in &mut Arc::make_mut(graphic).items {
+                if graphic.ink_fallback.as_deref().is_some_and(|m| mapped(m).is_some())
+                    || graphic.items.iter().any(|i| matches!(i, crate::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some()))
+                {
+                    let graphic = Arc::make_mut(graphic);
+                    if let Some(media) = &mut graphic.ink_fallback
+                        && let Some(k) = self.media.get(media.as_str())
+                    {
+                        *media = k.clone();
+                    }
+                    for i in &mut graphic.items {
                         if let crate::graphic::GraphicItem::Image { media, .. } = i
                             && let Some(k) = self.media.get(media.as_str())
                         {

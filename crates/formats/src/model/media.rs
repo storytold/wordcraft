@@ -61,6 +61,7 @@ pub fn sized_img(data: Arc<Vec<u8>>, ext: &str, natural: Option<(f32, f32)>, w: 
         float: None,
         object: None,
         crop: [0.0; 4],
+        ink_fx: Default::default(),
     }
 }
 

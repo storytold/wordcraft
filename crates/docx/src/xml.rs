@@ -2,7 +2,9 @@
 //!
 //! Element and attribute names are rewritten to *canonical prefixes* by namespace URI (`w:p`,
 //! `r:id`, `a:blip`…), so the reader doesn't care which prefixes a producer chose. Names in
-//! unknown namespaces keep their local name behind a `?:` prefix.
+//! unknown namespaces get bounded, URI-specific generated prefixes so retained markup is lossless.
+
+use std::collections::{HashMap, HashSet};
 
 use quick_xml::XmlVersion;
 use quick_xml::events::Event;
@@ -29,7 +31,11 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("mc", "http://schemas.openxmlformats.org/markup-compatibility/2006"),
     ("w14", "http://schemas.microsoft.com/office/word/2010/wordml"),
     ("wpi", "http://schemas.microsoft.com/office/word/2010/wordprocessingInk"),
+    ("ink", "http://www.w3.org/2003/InkML"),
+    ("mml", "http://www.w3.org/1998/Math/MathML"),
     ("w15", "http://schemas.microsoft.com/office/word/2012/wordml"),
+    ("w16cid", "http://schemas.microsoft.com/office/word/2016/wordml/cid"),
+    ("w16cex", "http://schemas.microsoft.com/office/word/2018/wordml/cex"),
     ("wp14", "http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"),
     ("wps", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"),
     ("wpg", "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"),
@@ -51,6 +57,46 @@ pub const NAMESPACES: &[(&str, &str)] = &[
     ("cx7", "http://schemas.microsoft.com/office/drawing/2016/5/13/chartex"),
     ("cx8", "http://schemas.microsoft.com/office/drawing/2016/5/14/chartex"),
 ];
+
+/// Namespaces whose document features this reader processes, as distinct from names the XML
+/// serializer can merely preserve. ChartEx extension, MathML and InkML names are recognized for
+/// retention but do not by themselves mean those vocabularies are understood. In particular,
+/// wp14 percentage positions are not interpreted; AlternateContent must use its fallback.
+pub(crate) fn mc_understood(prefix: &str) -> bool {
+    matches!(
+        prefix,
+        "w" | "r"
+            | "wp"
+            | "a"
+            | "c"
+            | "pic"
+            | "mc"
+            | "w14"
+            | "w15"
+            | "w16cid"
+            | "w16cex"
+            | "wps"
+            | "wpg"
+            | "wpc"
+            | "dgm"
+            | "dsp"
+            | "m"
+            | "v"
+            | "o"
+            | "w10"
+            | "xml"
+            | "xsi"
+            | "b"
+            | "rel"
+            | "ct"
+            | "cp"
+            | "dc"
+            | "dcterms"
+            | "ep"
+            | "op"
+            | "vt"
+    )
+}
 
 /// The `a:ext` URI under which a drawing is marked decorative ([MS-ODRAWXML]), and the
 /// namespace of its `adec:decorative` element.
@@ -155,6 +201,168 @@ fn requirement_prefix(uri: &[u8]) -> &'static str {
     }
 }
 
+/// Per-part registry: generated prefixes cannot be rebound by input declarations. Keep
+/// unknown expanded names distinct, including names appearing only in MC attribute values.
+#[derive(Default)]
+struct UnknownNamespaces {
+    uris: Vec<String>,
+    prefixes: Vec<String>,
+    indices: HashMap<String, usize>,
+    prefix_indices: HashMap<String, usize>,
+    next_prefix: usize,
+    uri_bytes: usize,
+}
+
+impl UnknownNamespaces {
+    fn prefix(&mut self, uri: &[u8], extra: &[(&'static str, &str)]) -> Result<String, DocxError> {
+        let known = prefix_for(uri, extra);
+        if known != "?" {
+            return Ok(known.into());
+        }
+        let uri = std::str::from_utf8(uri).map_err(|_| DocxError::Xml("namespace URI is not valid UTF-8".into()))?;
+        let index = if let Some(index) = self.indices.get(uri) {
+            *index
+        } else {
+            self.uri_bytes = self.uri_bytes.saturating_add(uri.len());
+            if self.uris.len() >= MAX_ATTRS || uri.len() > MAX_MC_VALUE_BYTES || self.uri_bytes > crate::package::MAX_EMBEDDED_XML {
+                return Err(DocxError::Limit("too many or oversized unknown namespaces".into()));
+            }
+            let uri = uri.to_owned();
+            let index = self.uris.len();
+            let prefix = loop {
+                let prefix = format!("u{}", self.next_prefix);
+                self.next_prefix = self.next_prefix.saturating_add(1);
+                if !extra.iter().any(|(p, _)| *p == prefix) {
+                    break prefix;
+                }
+            };
+            self.uris.push(uri.clone());
+            self.prefixes.push(prefix.clone());
+            self.indices.insert(uri, index);
+            self.prefix_indices.insert(prefix, index);
+            index
+        };
+        self.prefixes.get(index).cloned().ok_or_else(|| DocxError::Xml("missing generated namespace prefix".into()))
+    }
+}
+
+const MAX_MC_VALUES: usize = 64;
+const MAX_MC_VALUE_LEN: usize = 128;
+const MAX_MC_VALUE_BYTES: usize = 16 * 1024;
+
+/// Checks a whitespace-separated markup-compatibility list before allocating or resolving it.
+fn mc_values<'a>(value: &'a str, attribute: &str) -> Result<Vec<&'a str>, DocxError> {
+    if value.len() > MAX_MC_VALUE_BYTES {
+        return Err(DocxError::Limit(format!("oversized value in {attribute}")));
+    }
+    let values: Vec<_> = value.split_whitespace().take(MAX_MC_VALUES + 1).collect();
+    if values.len() > MAX_MC_VALUES || values.iter().any(|value| value.len() > MAX_MC_VALUE_LEN) {
+        return Err(DocxError::Limit(format!("too many or oversized values in {attribute}")));
+    }
+    Ok(values)
+}
+
+/// Rewrites `mc:Ignorable` and `mc:MustUnderstand` namespace-prefix lists while their bindings
+/// are still in scope. Document reads reject unresolvable prefixes: silently dropping one can
+/// change preserved markup's semantics. The generic parser retains its legacy lenient policy.
+fn normalize_mc_prefixes(
+    reader: &mut NsReader<&[u8]>,
+    attribute: &str,
+    value: &str,
+    extra: &[(&'static str, &str)],
+    unknown: &mut UnknownNamespaces,
+    defer_unknown_must_understand: bool,
+) -> Result<String, DocxError> {
+    let mut normalized = Vec::new();
+    for prefix in mc_values(value, attribute)? {
+        if !valid_ncname(prefix, false) {
+            if attribute == "mc:Ignorable" && !defer_unknown_must_understand {
+                continue;
+            }
+            return Err(DocxError::Xml(format!("invalid namespace prefix in {attribute}")));
+        }
+        let name = format!("{prefix}:ignored");
+        match reader.resolver_mut().resolve_attribute(QName(name.as_bytes())).0 {
+            ResolveResult::Bound(namespace) => {
+                let canonical = prefix_for(namespace.as_ref(), if attribute == "mc:Ignorable" { &[] } else { extra });
+                if canonical == "?" {
+                    if attribute == "mc:Ignorable" || defer_unknown_must_understand {
+                        normalized.push(unknown.prefix(namespace.as_ref(), extra)?);
+                        continue;
+                    }
+                    return Err(DocxError::Xml(format!("unknown namespace prefix in {attribute}")));
+                }
+                normalized.push(canonical.to_string());
+            }
+            _ if attribute == "mc:Ignorable" && !defer_unknown_must_understand => {}
+            _ => return Err(DocxError::Xml(format!("unbound namespace prefix in {attribute}"))),
+        }
+    }
+    Ok(normalized.join(" "))
+}
+
+/// Rewrites qualified-name lists in `mc:ProcessContent`, `mc:PreserveElements`, and
+/// `mc:PreserveAttributes` before the element's namespace declarations are discarded. Values
+/// whose namespace cannot be represented by this tree are refused rather than serialized with
+/// an undeclared or incorrectly rebound prefix.
+fn normalize_mc_qnames(
+    reader: &mut NsReader<&[u8]>,
+    attribute: &str,
+    value: &str,
+    extra: &[(&'static str, &str)],
+    unknown: &mut UnknownNamespaces,
+) -> Result<String, DocxError> {
+    mc_values(value, attribute)?
+        .into_iter()
+        .map(|token| {
+            let Some((prefix, local)) = token.split_once(':') else {
+                return Err(DocxError::Xml(format!("unqualified name in {attribute}")));
+            };
+            if !valid_ncname(prefix, false) || !valid_ncname(local, true) {
+                return Err(DocxError::Xml(format!("invalid qualified name in {attribute}")));
+            }
+            match reader.resolver_mut().resolve_attribute(QName(token.as_bytes())).0 {
+                ResolveResult::Bound(namespace) => {
+                    let canonical = unknown.prefix(namespace.as_ref(), extra)?;
+                    Ok(format!("{canonical}:{local}"))
+                }
+                _ => Err(DocxError::Xml(format!("unbound namespace prefix in {attribute}"))),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|values| values.join(" "))
+}
+
+/// XML 1.0 NCName syntax, with the markup-compatibility wildcard allowed only as a whole local part.
+fn valid_ncname(value: &str, wildcard: bool) -> bool {
+    if wildcard && value == "*" {
+        return true;
+    }
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    is_ncname_start(first) && chars.all(is_ncname_char)
+}
+
+/// Is `c` a legal non-colon XML 1.0 NCName start character?
+fn is_ncname_start(c: char) -> bool {
+    let n = c as u32;
+    c == '_'
+        || c.is_ascii_alphabetic()
+        || matches!(n,
+            0x00C0..=0x00D6 | 0x00D8..=0x00F6 | 0x00F8..=0x02FF | 0x0370..=0x037D |
+            0x037F..=0x1FFF | 0x200C..=0x200D | 0x2070..=0x218F | 0x2C00..=0x2FEF |
+            0x3001..=0xD7FF | 0xF900..=0xFDCF | 0xFDF0..=0xFFFD | 0x10000..=0xEFFFF
+        )
+}
+
+/// Is `c` a legal non-colon XML 1.0 NCName continuation character?
+fn is_ncname_char(c: char) -> bool {
+    let n = c as u32;
+    is_ncname_start(c) || c.is_ascii_digit() || matches!(n, 0x002D | 0x002E | 0x00B7 | 0x0300..=0x036F | 0x203F..=0x2040)
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Node {
     El(El),
@@ -230,9 +438,26 @@ impl El {
     }
     /// Child elements.
     pub fn els(&self) -> impl Iterator<Item = &El> {
-        self.kids.iter().filter_map(|n| match n {
-            Node::El(e) => Some(e),
-            Node::Text(_) => None,
+        // MC's processing view is distinct from its preservation view. A transparent
+        // ignorable wrapper still exists in `kids` and `to_xml`, but readers see its
+        // children in place. An explicit iterator stack avoids recursive iterator types.
+        let mut current = self.kids.iter();
+        let mut stack = Vec::new();
+        std::iter::from_fn(move || {
+            loop {
+                match current.next() {
+                    Some(Node::El(e)) if e.attrs.iter().any(|(k, _)| k == "?ignore") => {}
+                    Some(Node::El(e)) if e.attrs.iter().any(|(k, _)| k == "?process") => {
+                        if stack.len() < MAX_DEPTH {
+                            stack.push(current.clone());
+                            current = e.kids.iter();
+                        }
+                    }
+                    Some(Node::El(e)) => return Some(e),
+                    Some(Node::Text(_)) => {}
+                    None => current = stack.pop()?,
+                }
+            }
         })
     }
     pub fn child(&self, name: &str) -> Option<&El> {
@@ -245,14 +470,22 @@ impl El {
     pub fn child_val(&self, name: &str) -> Option<&str> {
         self.child(name).and_then(|c| c.attr("w:val"))
     }
-    /// Direct text content.
+    /// Direct text content, including transparent ProcessContent wrappers in document order.
     pub fn text(&self) -> String {
-        let mut s = String::new();
-        for n in &self.kids {
-            if let Node::Text(t) = n {
-                s.push_str(t);
+        fn append(e: &El, out: &mut String, depth: usize) {
+            if depth > MAX_DEPTH {
+                return;
+            }
+            for node in &e.kids {
+                match node {
+                    Node::Text(text) => out.push_str(text),
+                    Node::El(child) if child.attrs.iter().any(|(name, _)| name == "?process") => append(child, out, depth + 1),
+                    Node::El(_) => {}
+                }
             }
         }
+        let mut s = String::new();
+        append(self, &mut s, 0);
         s
     }
     /// All descendant text (depth-bounded by the parser).
@@ -265,7 +498,8 @@ impl El {
             for n in &e.kids {
                 match n {
                     Node::Text(t) => s.push_str(t),
-                    Node::El(c) => go(c, s, depth + 1),
+                    Node::El(c) if !c.attrs.iter().any(|(k, _)| k == "?ignore") => go(c, s, depth + 1),
+                    Node::El(_) => {}
                 }
             }
         }
@@ -290,8 +524,8 @@ impl El {
         }
         go(self, name, 0)
     }
-    /// The element as XML with canonical prefixes (for re-emitting kept content). Elements and
-    /// attributes in unknown namespaces are dropped.
+    /// The element as XML with canonical prefixes (for re-emitting kept content). Unknown
+    /// namespaces use generated, locally declared prefixes. Internal processing flags are omitted.
     pub fn to_xml(&self) -> String {
         fn go(e: &El, s: &mut String, depth: usize) {
             if depth > MAX_DEPTH || e.name.starts_with("?:") {
@@ -300,7 +534,7 @@ impl El {
             s.push('<');
             s.push_str(&e.name);
             for (k, v) in &e.attrs {
-                if k.starts_with("?:") {
+                if k.starts_with('?') {
                     continue;
                 }
                 s.push(' ');
@@ -354,22 +588,220 @@ pub fn parse(bytes: &[u8]) -> Result<El, DocxError> {
 /// [`parse`] with `extra` namespaces (prefix, URI) mapped to canonical prefixes first, so a
 /// related vocabulary (WordprocessingML 2003) reads with the prefixes the reader knows.
 pub fn parse_ns(bytes: &[u8], extra: &[(&'static str, &str)]) -> Result<El, DocxError> {
-    parse_with(bytes, extra, false)
+    parse_with(bytes, extra, false, false, &mut false)
 }
 
 /// [`parse`] for a part whose loss would be silent data loss (the main document): a mismatched end
 /// tag or an element left open at the end of the data is an error, not a cue to stop reading.
+#[cfg(test)]
 pub fn parse_strict(bytes: &[u8]) -> Result<El, DocxError> {
-    parse_with(bytes, &[], true)
+    parse_with(bytes, &[], true, false, &mut false)
 }
 
-fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Result<El, DocxError> {
+/// The public error plus whether the failure came from compatibility processing. This separate
+/// internal flag lets optional and nested readers propagate MC failures without matching messages.
+#[derive(Debug)]
+pub(crate) struct ParseError {
+    pub error: DocxError,
+    pub compatibility: bool,
+}
+
+fn parse_for_document(bytes: &[u8], strict: bool) -> Result<El, ParseError> {
+    let mut compatibility = false;
+    parse_with(bytes, &[], strict, true, &mut compatibility).map_err(|error| ParseError { error, compatibility })
+}
+
+/// Parse the main document strictly, deferring bound unknown MustUnderstand namespaces until
+/// the reader has selected AlternateContent branches and identified ignorable markup.
+pub(crate) fn parse_document(bytes: &[u8]) -> Result<El, ParseError> {
+    parse_for_document(bytes, true)
+}
+
+/// Parse a related part with the reader's normal lenient XML policy, deferring bound unknown
+/// MustUnderstand namespaces until markup-compatibility processing selects active content.
+pub(crate) fn parse_compat(bytes: &[u8]) -> Result<El, ParseError> {
+    parse_for_document(bytes, false)
+}
+
+/// Whether a failed optional part contains only Word-prefixed names without namespace declarations.
+/// Such a part can be skipped only while retaining the whole source package for an unchanged save.
+pub(crate) fn safe_malformed_optional_part(bytes: &[u8]) -> bool {
+    if bytes.len() > crate::package::MAX_EMBEDDED_XML {
+        return false;
+    }
+    let transcoded = utf16_to_utf8(bytes);
+    let bytes = transcoded.as_ref().map_or(bytes, String::as_bytes);
+    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    reader.config_mut().check_end_names = true;
+    reader.config_mut().allow_unmatched_ends = false;
+    let mut elements = 0usize;
+    let mut depth = 0usize;
+    let mut found_word_name = false;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(element)) => {
+                elements += 1;
+                depth += 1;
+                if elements > MAX_ELEMENTS || depth > MAX_DEPTH || !safe_word_element(&element) {
+                    return false;
+                }
+                found_word_name = true;
+            }
+            Ok(Event::Empty(element)) => {
+                elements += 1;
+                if elements > MAX_ELEMENTS || depth >= MAX_DEPTH || !safe_word_element(&element) {
+                    return false;
+                }
+                found_word_name = true;
+            }
+            Ok(Event::End(element)) => {
+                if depth == 0 {
+                    return false;
+                }
+                depth -= 1;
+                let name = element.name();
+                let Ok(name) = std::str::from_utf8(name.as_ref()) else { return false };
+                if !safe_word_qname(name) {
+                    return false;
+                }
+            }
+            Ok(Event::Eof) => return found_word_name,
+            Ok(Event::DocType(_)) => return false,
+            Ok(_) => {}
+            Err(_) => return false,
+        }
+    }
+}
+
+fn safe_word_element(element: &quick_xml::events::BytesStart<'_>) -> bool {
+    let name = element.name();
+    let Ok(name) = std::str::from_utf8(name.as_ref()) else { return false };
+    if !safe_word_qname(name) {
+        return false;
+    }
+    for (count, attr) in element.attributes().with_checks(false).enumerate() {
+        if count >= MAX_ATTRS {
+            return false;
+        }
+        let Ok(attr) = attr else { return false };
+        let Ok(name) = std::str::from_utf8(attr.key.as_ref()) else { return false };
+        if name == "xmlns" || name.starts_with("xmlns:") {
+            return false;
+        }
+        let local = name.rsplit_once(':').map_or(name, |(_, local)| local);
+        if matches!(local, "id" | "Requires" | "Ignorable" | "MustUnderstand" | "ProcessContent" | "PreserveElements" | "PreserveAttributes") {
+            return false;
+        }
+        if let Some((prefix, _)) = name.split_once(':')
+            && !matches!(prefix, "w" | "xml")
+        {
+            return false;
+        }
+    }
+    true
+}
+
+fn safe_word_qname(name: &str) -> bool {
+    name.split_once(':').is_some_and(|(prefix, local)| prefix == "w" && valid_ncname(local, false))
+}
+
+/// Parses a retained run fragment in the namespace scope of the generated document. This keeps
+/// canonical prefixes usable without accepting undeclared prefixes or serializing malformed XML.
+pub(crate) fn parse_retained_fragment(bytes: &[u8]) -> Result<El, DocxError> {
+    let mut wrapped = String::from("<fragment");
+    for (name, value) in body_ns() {
+        wrapped.push(' ');
+        wrapped.push_str(&name);
+        wrapped.push_str("=\"");
+        wrapped.push_str(&value);
+        wrapped.push('\"');
+    }
+    wrapped.push('>');
+    let fragment = std::str::from_utf8(bytes).map_err(|e| DocxError::Xml(e.to_string()))?;
+    wrapped.push_str(fragment);
+    wrapped.push_str("</fragment>");
+    parse_with(wrapped.as_bytes(), &[], true, false, &mut false)
+}
+
+/// Reject declarations that quick-xml's namespace resolver would compare without XML attribute
+/// normalization. This deliberately refuses valid references and literal whitespace in namespace
+/// names until resolution can operate on normalized values; ordinary text and attributes are unaffected.
+fn check_namespace_declarations(bytes: &[u8], compatibility_error: &mut bool) -> Result<(), DocxError> {
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    reader.config_mut().check_end_names = false;
+    reader.config_mut().allow_unmatched_ends = true;
+    let mut count = 0usize;
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event() {
+            Ok(event @ (Event::Start(_) | Event::Empty(_))) => {
+                let is_start = matches!(event, Event::Start(_));
+                let (Event::Start(e) | Event::Empty(e)) = event else { continue };
+                count += 1;
+                if count > MAX_ELEMENTS {
+                    return Err(DocxError::Limit("too many XML elements".into()));
+                }
+                if is_start {
+                    depth += 1;
+                    if depth > MAX_DEPTH {
+                        return Err(DocxError::Limit("XML nesting too deep".into()));
+                    }
+                }
+                if e.attributes().with_checks(false).take(MAX_ATTRS + 1).count() > MAX_ATTRS {
+                    return Err(DocxError::Limit("too many attributes on one element".into()));
+                }
+                let mut lexical_names = HashSet::new();
+                for (index, attr) in e.attributes().with_checks(false).enumerate() {
+                    if index >= MAX_ATTRS {
+                        return Err(DocxError::Limit("too many attributes on one element".into()));
+                    }
+                    let attr = attr.map_err(|error| {
+                        *compatibility_error = true;
+                        DocxError::Xml(format!("ambiguous XML attributes prevent namespace validation: {error}"))
+                    })?;
+                    let key = attr.key.as_ref();
+                    if !lexical_names.insert(key.to_vec()) {
+                        *compatibility_error = true;
+                        return Err(DocxError::Xml("duplicate lexical XML attribute name".into()));
+                    }
+                    if (key == b"xmlns" || key.starts_with(b"xmlns:")) && attr.value.iter().any(|b| matches!(b, b'&' | b'\t' | b'\r' | b'\n')) {
+                        *compatibility_error = true;
+                        return Err(DocxError::Xml("namespace declaration requires unsupported attribute normalization".into()));
+                    }
+                }
+            }
+            Ok(Event::End(_)) => depth = depth.saturating_sub(1),
+            Ok(Event::Eof) => return Ok(()),
+            Ok(_) => {}
+            Err(error) => {
+                // An incomplete token can hide a declaration from the event reader. Do not let
+                // malformed VBA recovery discard it, even when the declaration looked harmless.
+                if bytes.windows(5).any(|window| window == b"xmlns") {
+                    *compatibility_error = true;
+                    return Err(DocxError::Xml(format!("cannot validate namespace declarations: {error}")));
+                }
+                return Ok(());
+            }
+        }
+    }
+}
+
+/// Parses XML with optional namespace aliases and strict end-tag validation.
+fn parse_with(
+    bytes: &[u8],
+    extra: &[(&'static str, &str)],
+    strict: bool,
+    defer_unknown_must_understand: bool,
+    compatibility_error: &mut bool,
+) -> Result<El, DocxError> {
     // UTF-16 (with a BOM) is transcoded to UTF-8; a UTF-8 BOM is stripped.
     let transcoded = utf16_to_utf8(bytes);
     let bytes = match &transcoded {
         Some(s) => s.as_bytes(),
         None => bytes.strip_prefix(&[0xEF, 0xBB, 0xBF][..]).unwrap_or(bytes),
     };
+    check_namespace_declarations(bytes, compatibility_error)?;
     let mut r = NsReader::from_reader(bytes);
     {
         let c = r.config_mut();
@@ -378,16 +810,27 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
         c.expand_empty_elements = false;
         c.check_end_names = strict;
     }
+    let mut unknown = UnknownNamespaces::default();
+    let mut unknown_bindings_bytes = 0usize;
     let mut stack: Vec<El> = Vec::new();
     let mut root: Option<El> = None;
     let mut count = 0usize;
     let mut buf = Vec::new();
     loop {
         buf.clear();
-        let (res, ev) = r.read_resolved_event_into(&mut buf).map_err(|e| DocxError::Xml(e.to_string()))?;
+        let (res, ev) = r.read_resolved_event_into(&mut buf).map_err(|e| {
+            if matches!(e, quick_xml::Error::Namespace(_)) {
+                *compatibility_error = true;
+            }
+            DocxError::Xml(e.to_string())
+        })?;
         let el_ns = match &res {
             ResolveResult::Bound(ns) => Some(ns.as_ref()),
-            _ => None,
+            ResolveResult::Unbound => None,
+            ResolveResult::Unknown(_) => {
+                *compatibility_error = true;
+                return Err(DocxError::Xml("undeclared XML element prefix".into()));
+            }
         };
         match ev {
             Event::Start(ref e) | Event::Empty(ref e) => {
@@ -398,12 +841,20 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                 if count > MAX_ELEMENTS {
                     return Err(DocxError::Limit("too many XML elements".into()));
                 }
-                let local = String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
+                std::str::from_utf8(e.name().as_ref()).map_err(|_| DocxError::Xml("element name is not valid UTF-8".into()))?;
+                let local =
+                    std::str::from_utf8(e.local_name().as_ref()).map_err(|_| DocxError::Xml("element name is not valid UTF-8".into()))?.to_owned();
                 let name = match el_ns {
-                    Some(ns) => format!("{}:{local}", element_prefix(ns, &local, stack.last().map(|p| p.name.as_str()), extra)),
+                    Some(ns) => {
+                        let prefix = element_prefix(ns, &local, stack.last().map(|p| p.name.as_str()), extra);
+                        let prefix = if prefix == "?" { unknown.prefix(ns, extra)? } else { prefix.into() };
+                        format!("{prefix}:{local}")
+                    }
                     None => local,
                 };
                 let mut el = El { name, attrs: Vec::new(), kids: Vec::new() };
+                let mut expanded_names = HashSet::new();
+                let mut canonical_names = HashSet::new();
                 for a in e.attributes().with_checks(false) {
                     if el.attrs.len() >= MAX_ATTRS {
                         return Err(DocxError::Limit("too many attributes on one element".into()));
@@ -411,15 +862,38 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                     let Ok(a) = a else { continue };
                     let key = a.key;
                     let raw_key = key.as_ref();
+                    std::str::from_utf8(raw_key).map_err(|_| DocxError::Xml("attribute name is not valid UTF-8".into()))?;
                     if raw_key == b"xmlns" || raw_key.starts_with(b"xmlns:") {
                         continue;
                     }
                     let (ares, alocal) = r.resolver_mut().resolve_attribute(key);
                     let alocal = String::from_utf8_lossy(alocal.as_ref()).into_owned();
+                    let namespace = match &ares {
+                        ResolveResult::Bound(ns) => Some(ns.as_ref().to_vec()),
+                        ResolveResult::Unbound => None,
+                        ResolveResult::Unknown(_) => {
+                            *compatibility_error = true;
+                            return Err(DocxError::Xml("undeclared XML attribute prefix".into()));
+                        }
+                    };
+                    if !expanded_names.insert((namespace, alocal.clone())) {
+                        *compatibility_error = true;
+                        return Err(DocxError::Xml("duplicate expanded XML attribute name".into()));
+                    }
                     let aname = match ares {
-                        ResolveResult::Bound(ns) => format!("{}:{alocal}", prefix_for(ns.as_ref(), extra)),
+                        ResolveResult::Bound(ns) => format!("{}:{alocal}", unknown.prefix(ns.as_ref(), extra)?),
                         _ => alocal,
                     };
+                    // Different namespaces can map to the same canonical prefix. The tree's
+                    // name-based lookup cannot distinguish those attributes, so refuse ambiguity.
+                    if !canonical_names.insert(aname.clone()) {
+                        *compatibility_error = true;
+                        return Err(DocxError::Xml("ambiguous canonical XML attribute name".into()));
+                    }
+                    if (aname.starts_with("mc:") || (el.name == "mc:Choice" && aname == "Requires")) && std::str::from_utf8(&a.value).is_err() {
+                        *compatibility_error = true;
+                        return Err(DocxError::Xml("markup compatibility value is not valid UTF-8".into()));
+                    }
                     let val = match a.normalized_value(XmlVersion::Explicit1_0) {
                         Ok(v) => v.into_owned(),
                         Err(_) => String::from_utf8_lossy(&a.value).into_owned(),
@@ -443,11 +917,25 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                                 .collect::<Vec<_>>()
                                 .join(" ")
                         }
+                    } else if matches!(aname.as_str(), "mc:Ignorable" | "mc:MustUnderstand") {
+                        normalize_mc_prefixes(&mut r, &aname, &val, extra, &mut unknown, defer_unknown_must_understand).inspect_err(|_| {
+                            *compatibility_error = true;
+                        })?
+                    } else if matches!(aname.as_str(), "mc:ProcessContent" | "mc:PreserveElements" | "mc:PreserveAttributes") {
+                        normalize_mc_qnames(&mut r, &aname, &val, extra, &mut unknown).inspect_err(|_| {
+                            *compatibility_error = true;
+                        })?
                     } else {
                         val
                     };
                     el.attrs.push((aname, val));
                 }
+                materialize_retained_mc(&mut el, &stack, &mut unknown_bindings_bytes).inspect_err(|_| {
+                    *compatibility_error = true;
+                })?;
+                prepare_unknown_markup(&mut el, &stack, &unknown, &mut unknown_bindings_bytes, defer_unknown_must_understand).inspect_err(|_| {
+                    *compatibility_error = true;
+                })?;
                 if matches!(ev, Event::Start(_)) {
                     if stack.len() >= MAX_DEPTH {
                         return Err(DocxError::Limit("XML nesting too deep".into()));
@@ -513,6 +1001,138 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
         attach(&mut stack, &mut root, el);
     }
     root.ok_or_else(|| DocxError::Xml("no root element".into()))
+}
+
+/// Detached drawings, ink and content-control properties lose their original ancestors.
+/// Carry their inherited MC declarations and charge copies to the namespace-binding budget.
+fn materialize_retained_mc(el: &mut El, stack: &[El], copied_bytes: &mut usize) -> Result<(), DocxError> {
+    let in_control_properties = el.name == "w:sdtEndPr" || stack.iter().rev().any(|parent| matches!(parent.name.as_str(), "w:sdtPr" | "w:sdtEndPr"));
+    let control_extension = if in_control_properties {
+        // Check each ancestor only once, even for hostile elements with many attributes.
+        let prefixes: std::collections::HashSet<_> = std::iter::once(el.name.as_str())
+            .chain(el.attrs.iter().map(|(name, _)| name.as_str()))
+            .filter_map(|name| name.split_once(':').map(|(prefix, _)| prefix))
+            // These namespaces are already declared ignorable on every generated story.
+            .filter(|prefix| !mc_understood(prefix) && !matches!(*prefix, "wp14" | "ink" | "mml"))
+            .collect();
+        !prefixes.is_empty()
+            && std::iter::once(&*el)
+                .chain(stack.iter())
+                .any(|e| e.attrs.iter().any(|(name, value)| name == "mc:Ignorable" && value.split_whitespace().any(|v| prefixes.contains(v))))
+    } else {
+        false
+    };
+    if !matches!(el.name.as_str(), "a:graphic" | "w14:contentPart") && !control_extension {
+        return Ok(());
+    }
+    for name in ["mc:Ignorable", "mc:MustUnderstand", "mc:ProcessContent", "mc:PreserveElements", "mc:PreserveAttributes"] {
+        let mut tokens = Vec::new();
+        let mut inherited = false;
+        for (ancestor, e) in stack.iter().map(|e| (true, e)).chain(std::iter::once((false, &*el))) {
+            if let Some((_, value)) = e.attrs.iter().find(|(k, _)| k == name) {
+                inherited |= ancestor;
+                for token in mc_values(value, name)? {
+                    if !tokens.contains(&token) {
+                        tokens.push(token);
+                        if tokens.len() > MAX_MC_VALUES {
+                            return Err(DocxError::Limit(format!("too many inherited values in {name}")));
+                        }
+                    }
+                }
+            }
+        }
+        if !inherited {
+            continue;
+        }
+        let value = tokens.join(" ");
+        *copied_bytes = copied_bytes.saturating_add(name.len()).saturating_add(value.len());
+        if *copied_bytes > crate::package::MAX_EMBEDDED_XML {
+            return Err(DocxError::Limit("too many retained compatibility declarations".into()));
+        }
+        if let Some((_, existing)) = el.attrs.iter_mut().find(|(k, _)| k == name) {
+            *existing = value;
+        } else {
+            el.attrs.push((name.into(), value));
+        }
+    }
+    Ok(())
+}
+
+/// Build the processing view separately from preserved markup. Prefixes in directives
+/// already represent expanded namespace names, so local rebinding cannot change a match.
+fn prepare_unknown_markup(
+    el: &mut El,
+    stack: &[El],
+    unknown: &UnknownNamespaces,
+    binding_bytes: &mut usize,
+    use_consumer_capabilities: bool,
+) -> Result<(), DocxError> {
+    let is_unknown = |p: &str| unknown.prefix_indices.contains_key(p) || (use_consumer_capabilities && !mc_understood(p));
+    fn mc_attr<'a>(e: &'a El, name: &str) -> Option<&'a str> {
+        e.attrs.iter().find(|(k, _)| k == name).map(|(_, v)| v.as_str())
+    }
+    let is_ignorable = |p: &str| {
+        std::iter::once(&*el).chain(stack.iter().rev()).any(|e| mc_attr(e, "mc:Ignorable").is_some_and(|v| v.split_whitespace().any(|v| v == p)))
+    };
+    for (key, value) in &el.attrs {
+        if matches!(key.as_str(), "mc:ProcessContent" | "mc:PreserveElements" | "mc:PreserveAttributes") {
+            for token in value.split_whitespace() {
+                let p = token.split_once(':').map(|(p, _)| p).unwrap_or("");
+                if is_unknown(p) && !is_ignorable(p) {
+                    return Err(DocxError::Xml(format!("non-ignorable namespace in {key}")));
+                }
+            }
+        }
+    }
+    let prefix = el.name.split_once(':').map(|(p, _)| p);
+    let ignored = prefix.is_some_and(|p| is_unknown(p) && is_ignorable(p));
+    let process = ignored
+        && std::iter::once(&*el).chain(stack.iter().rev()).any(|e| {
+            mc_attr(e, "mc:ProcessContent")
+                .is_some_and(|v| v.split_whitespace().any(|v| v == el.name || v.strip_suffix(":*").is_some_and(|p| Some(p) == prefix)))
+        });
+    if process {
+        el.attrs.push(("?process".into(), String::new()));
+    } else if ignored {
+        el.attrs.push(("?ignore".into(), String::new()));
+    }
+    // Locally declare even prefixes used only inside MC values, so any retained subtree
+    // is self-contained. Bound the total copying of inherited, potentially long URIs.
+    if unknown.uris.is_empty() {
+        return Ok(());
+    }
+    let mut indices = Vec::new();
+    let mut seen = [false; MAX_ATTRS];
+    let mut mark = |name: &str| {
+        let prefix = name.split(':').next().unwrap_or("");
+        if let Some(&i) = unknown.prefix_indices.get(prefix)
+            && let Some(seen) = seen.get_mut(i)
+            && !*seen
+        {
+            *seen = true;
+            indices.push(i);
+        }
+    };
+    mark(&el.name);
+    for (key, value) in &el.attrs {
+        mark(key);
+        if matches!(key.as_str(), "mc:Ignorable" | "mc:MustUnderstand" | "mc:ProcessContent" | "mc:PreserveElements" | "mc:PreserveAttributes") {
+            for token in value.split_whitespace() {
+                mark(token);
+            }
+        }
+    }
+    for i in indices {
+        if let (Some(uri), Some(prefix)) = (unknown.uris.get(i), unknown.prefixes.get(i)) {
+            let key = format!("xmlns:{prefix}");
+            *binding_bytes = binding_bytes.saturating_add(key.len()).saturating_add(uri.len());
+            if *binding_bytes > crate::package::MAX_EMBEDDED_XML {
+                return Err(DocxError::Limit("too many retained namespace bindings".into()));
+            }
+            el.attrs.push((key, uri.clone()));
+        }
+    }
+    Ok(())
 }
 
 fn push_text(top: &mut El, s: &str) {
@@ -616,10 +1236,18 @@ impl W {
     }
 }
 
-/// `xmlns:` declarations for the body-part namespaces, plus `mc:Ignorable`.
+/// Every canonical namespace that retained elements/attributes may use. Metadata
+/// namespaces can occur inside opaque annotations, not only in metadata parts.
+pub fn declared_namespaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    NAMESPACES.iter().chain(OTHER_NAMESPACES).copied().filter(|(p, _)| *p != "xml")
+}
+
+/// `xmlns:` declarations for body parts and retained markup, plus `mc:Ignorable`.
 pub fn body_ns() -> Vec<(String, String)> {
-    let mut v: Vec<(String, String)> = NAMESPACES.iter().map(|(p, u)| (format!("xmlns:{p}"), (*u).to_string())).collect();
-    v.push(("mc:Ignorable".into(), "w14 w15 wp14".into()));
+    let mut v: Vec<(String, String)> = declared_namespaces().map(|(p, u)| (format!("xmlns:{p}"), u.to_string())).collect();
+    // Retained InkML/MathML properties are optional extensions, not mandatory
+    // WordprocessingML. Readers without those namespaces must still open the file.
+    v.push(("mc:Ignorable".into(), "w14 w15 wp14 ink mml".into()));
     v
 }
 
@@ -670,13 +1298,13 @@ mod tests {
             wpg:wgp wpg:cNvPr wpg:cNvGrpSpPr wpg:grpSpPr wpg:grpSp wpg:cNvGrpSpPr wpg:grpSpPr wps:wsp wps:cNvCnPr wps:spPr wps:linkedTxbx wps:bodyPr \
             wpg:graphicFrame wpg:cNvPr wpg:cNvFrPr wpg:xfrm a:graphic wpg:extLst wpg:extLst \
             wpc:wpc wpc:bg wpc:whole wps:wsp wps:spPr wps:txbx w:txbxContent wps:extLst wpg:wgp wpg:grpSpPr wpc:extLst \
-            ?:txbxContent wp:inline wp:docPr wp:bodyPr wp:bg";
+            u0:txbxContent wp:inline wp:docPr wp:bodyPr wp:bg";
         assert_eq!(got.join(" "), want);
         // The Transitional namespaces read as before.
         let xml = br#"<w:body xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml"><wp:inline><wp:docPr/></wp:inline><wps:wsp><wps:txbx><w:txbxContent/></wps:txbx></wps:wsp><wne:toolbars/></w:body>"#;
         let mut got = Vec::new();
         names(&parse(xml).unwrap(), &mut got);
-        assert_eq!(got.join(" "), "w:body wp:inline wp:docPr wps:wsp wps:txbx w:txbxContent ?:toolbars");
+        assert_eq!(got.join(" "), "w:body wp:inline wp:docPr wps:wsp wps:txbx w:txbxContent u0:toolbars");
     }
 
     #[test]
@@ -754,11 +1382,186 @@ mod tests {
     }
 
     #[test]
+    fn optional_part_recovery_accepts_only_unbound_word_markup() {
+        assert!(safe_malformed_optional_part(b"<w:styles><w:style w:type='paragraph'/>"));
+        for unsafe_xml in [
+            b"<w:styles><w:altChunk bad:id='r1'/></w:styles>".as_slice(),
+            b"<w:styles><w:Choice bad:Requires='w'/></w:styles>".as_slice(),
+            b"<w:styles xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' xmlns:f='urn:future' mc:MustUnderstand='f'/>"
+                .as_slice(),
+            b"<w:styles xmlns:w='urn:one' xmlns:a='urn:two'/>".as_slice(),
+            b"<f:opaque/>".as_slice(),
+        ] {
+            assert!(!safe_malformed_optional_part(unsafe_xml), "{}", String::from_utf8_lossy(unsafe_xml));
+        }
+    }
+
+    #[test]
+    fn retained_fragments_inherit_canonical_namespaces_but_stay_strict() {
+        let parsed = parse_retained_fragment(b"<w:r><w:separator/></w:r>").unwrap();
+        assert_eq!(parsed.child("w:r").and_then(|r| r.child("w:separator")).map(|e| e.name.as_str()), Some("w:separator"));
+        assert!(parse_retained_fragment(b"<w:r><bad:required/></w:r>").is_err());
+        assert!(parse_retained_fragment(b"<w:r>").is_err());
+    }
+
+    #[test]
+    fn expanded_attribute_names_respect_scope_and_default_namespace() {
+        let valid = br#"<r xmlns="urn:default" xmlns:a="urn:first" xmlns:b="urn:second" id="plain" a:id="first" b:id="second"><child xmlns:a="urn:second" a:id="rebound"/></r>"#;
+        for parse in [parse_document, parse_compat] {
+            assert!(parse(valid).is_ok());
+            let duplicate = br#"<r xmlns:a="urn:first" xmlns:b="urn:second"><child xmlns:a="urn:second" a:id="one" b:id="two"/></r>"#;
+            assert!(parse(duplicate).is_err_and(|e| e.compatibility));
+        }
+        // Strict and transitional Word namespaces canonicalize to the same prefix; the tree
+        // cannot safely represent both attributes under the same canonical name.
+        let collision = br#"<r xmlns:a="http://purl.oclc.org/ooxml/wordprocessingml/main" xmlns:b="http://schemas.openxmlformats.org/wordprocessingml/2006/main" a:val="one" b:val="two"/>"#;
+        assert!(parse_document(collision).is_err_and(|e| e.compatibility));
+    }
+
+    #[test]
     fn choice_requirements_resolve_namespace_aliases_and_rebindings() {
         let x = br#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:pen="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"><mc:Choice Requires="pen"/><mc:Choice xmlns:pen="urn:future" Requires="pen"/><mc:Choice Requires="undeclared"/></mc:AlternateContent>"#;
         let e = parse(x).unwrap();
         let values: Vec<_> = e.children("mc:Choice").map(|c| c.attr("Requires")).collect();
         assert_eq!(values, [Some("wpi"), Some("?"), Some("?")]);
+    }
+
+    /// Ignorable extension wrappers can carry processable known children.
+    #[test]
+    fn unknown_ignorable_process_content_keeps_known_children() {
+        let xml = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:example:future" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:Ignorable="f" mc:ProcessContent="f:wrapper"><f:wrapper><w:t>survives</w:t></f:wrapper></r>"#;
+        let parsed = parse_strict(xml).unwrap();
+        assert_eq!(parsed.find("w:t").map(El::text).as_deref(), Some("survives"));
+        let saved = parsed.to_xml();
+        assert!(saved.contains("survives"), "{saved}");
+    }
+
+    #[test]
+    fn generated_unknown_prefix_never_collides_with_extra_canonical_prefix() {
+        let x = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:a="urn:known-extra" xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrapper"><a:known/><f:wrapper><a:child/></f:wrapper></r>"#;
+        let root = parse_ns(x, &[("u0", "urn:known-extra")]).unwrap();
+        assert!(root.child("u0:known").is_some());
+        assert!(root.child("u0:child").is_some());
+        let saved = root.to_xml();
+        assert!(saved.contains("xmlns:u1=\"urn:future\"") && saved.contains("mc:ProcessContent=\"u1:wrapper\""), "{saved}");
+    }
+
+    #[test]
+    fn ignored_extension_descendants_do_not_leak_into_processing_view() {
+        let x = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:Ignorable="f"><f:hidden><w:t>hidden</w:t></f:hidden><w:t>visible</w:t></r>"#;
+        let root = parse_document(x).unwrap();
+        assert_eq!(root.find("w:t").unwrap().text(), "visible");
+        assert_eq!(root.deep_text(), "visible");
+        assert!(root.to_xml().contains("hidden"), "the preservation view must retain the wrapper");
+    }
+
+    #[test]
+    fn invalid_utf8_namespace_uris_are_not_conflated() {
+        let x = b"<f:x xmlns:f=\"urn:\xff\"/>";
+        assert!(parse_document(x).is_err(), "invalid namespace bytes cannot identify a stable expanded name");
+        let x = b"<f:\xff xmlns:f=\"urn:future\"/>";
+        assert!(parse_document(x).is_err(), "invalid local names cannot identify a stable expanded name");
+        let x = b"<r xmlns:f=\"urn:future\" f:\xff=\"x\"/>";
+        assert!(parse_document(x).is_err(), "invalid attribute names cannot identify a stable expanded name");
+        let x =
+            b"<r xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:f=\"urn:future\" mc:PreserveElements=\"f:\xff\"/>";
+        assert!(parse_document(x).is_err(), "invalid MC qualified names cannot be normalized lossily");
+    }
+
+    #[test]
+    fn unknown_namespaces_preserve_rebindings_and_processing_scope() {
+        let x = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:first" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:Ignorable="f" mc:ProcessContent="f:*" mc:PreserveElements="f:wrapper" mc:PreserveAttributes="f:*"><f:wrapper f:flag="yes"><w:t>visible</w:t></f:wrapper><f:wrapper xmlns:f="urn:second"><w:t>hidden</w:t></f:wrapper></r>"#;
+        let root = parse_strict(x).unwrap();
+        let visible: Vec<_> = root.els().filter(|e| e.name == "w:t").map(El::text).collect();
+        assert_eq!(visible, ["visible"]);
+        let saved = root.to_xml();
+        assert!(saved.contains("urn:first") && saved.contains("urn:second") && saved.contains("flag=\"yes\""), "{saved}");
+        assert!(saved.contains("mc:PreserveElements") && saved.contains("mc:PreserveAttributes"));
+        let wrapped = format!("<doc xmlns:w=\"{}\" xmlns:mc=\"{}\">{saved}</doc>", NAMESPACES[0].1, NAMESPACES[6].1);
+        let reopened = parse_strict(wrapped.as_bytes()).unwrap();
+        assert_eq!(reopened.child("r").unwrap().els().filter(|e| e.name == "w:t").count(), 1);
+        let required = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:first" mc:MustUnderstand="f"/>"#;
+        assert!(parse_strict(required).is_err());
+    }
+
+    #[test]
+    fn markup_compatibility_qname_values_survive_prefix_canonicalization() {
+        let x = br#"<mc:Choice xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:ink="http://www.w3.org/2003/InkML" xmlns:future="urn:future" mc:ProcessContent="math:* ink:trace" mc:PreserveElements="math:* ink:trace" mc:PreserveAttributes="math:id ink:*" mc:MustUnderstand="math ink"/>"#;
+        let e = parse(x).unwrap();
+        assert_eq!(e.attr("mc:ProcessContent"), Some("mml:* ink:trace"));
+        assert_eq!(e.attr("mc:PreserveElements"), Some("mml:* ink:trace"));
+        assert_eq!(e.attr("mc:PreserveAttributes"), Some("mml:id ink:*"));
+        assert_eq!(e.attr("mc:MustUnderstand"), Some("mml ink"));
+
+        // Bindings are scoped at the element carrying the MC attribute, including local
+        // rebindings. Wildcard local names survive, while unknown and unbound references fail
+        // rather than leaving undeclared prefixes in serialized markup.
+        let x = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:alias="http://www.w3.org/1998/Math/MathML" xmlns:pen="http://www.w3.org/2003/InkML"><mc:Choice mc:ProcessContent="alias:*"><x xmlns:alias="http://www.w3.org/2003/InkML" mc:PreserveElements="alias:trace"/></mc:Choice></r>"#;
+        let first = parse(x).unwrap().to_xml();
+        assert!(first.contains(r#"mc:ProcessContent="mml:*""#), "{first}");
+        assert!(first.contains(r#"mc:PreserveElements="ink:trace""#), "{first}");
+        let wrap = |xml: &str| {
+            format!(r#"<root xmlns:mc="{}" xmlns:mml="{}" xmlns:ink="{}">{xml}</root>"#, NAMESPACES[6].1, NAMESPACES[10].1, NAMESPACES[9].1)
+        };
+        let second = parse(wrap(&first).as_bytes()).unwrap().child("r").unwrap().to_xml();
+        assert_eq!(parse(wrap(&second).as_bytes()).unwrap().child("r").unwrap().to_xml(), second);
+
+        let unknown =
+            br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:alias="urn:future" mc:ProcessContent="alias:item"/>"#;
+        assert!(parse(unknown).is_err());
+        let unbound = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:PreserveAttributes="missing:id"/>"#;
+        assert!(parse(unbound).is_err());
+        let unknown_required = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:MustUnderstand="missing"/>"#;
+        assert!(parse(unknown_required).is_err());
+        let ignorable_unknown = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="future"/>"#;
+        assert_eq!(parse(ignorable_unknown).unwrap().attr("mc:Ignorable"), Some(""));
+        let malformed = br#"<r xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:alias="urn:math" mc:ProcessContent="alias:bad:name"/>"#;
+        assert!(parse(malformed).is_err());
+        let too_many = format!(
+            r#"<r xmlns:mc="{}" xmlns:mml="{}" mc:ProcessContent="{}"/>"#,
+            NAMESPACES[6].1,
+            NAMESPACES[10].1,
+            vec!["mml:math"; MAX_MC_VALUES + 1].join(" ")
+        );
+        assert!(matches!(parse(too_many.as_bytes()), Err(DocxError::Limit(_))));
+        let too_long = format!(
+            r#"<r xmlns:mc="{}" xmlns:mml="{}" mc:PreserveElements="mml:{}"/>"#,
+            NAMESPACES[6].1,
+            NAMESPACES[10].1,
+            "a".repeat(MAX_MC_VALUE_LEN)
+        );
+        assert!(matches!(parse(too_long.as_bytes()), Err(DocxError::Limit(_))));
+        let oversized_value = format!(r#"<r xmlns:mc="{}" mc:Ignorable="{}"/>"#, NAMESPACES[6].1, " ".repeat(MAX_MC_VALUE_BYTES + 1));
+        assert!(matches!(parse(oversized_value.as_bytes()), Err(DocxError::Limit(_))));
+    }
+
+    #[test]
+    fn namespace_declaration_normalization_fails_closed() {
+        for declaration in [
+            r#"xmlns:c="http://schemas.openxmlformats.org/markup-compatibility/200&#54;""#,
+            r#"xmlns="urn:&#x61;""#,
+            r#"xmlns:x="urn:a&amp;b""#,
+            r#"xmlns:x="urn:&#38;""#,
+            r#"xmlns:x="urn:&unknown;""#,
+            r#"xmlns:x="urn:&""#,
+            r#"xmlns:x="urn:a
+b""#,
+            r#"xmlns:xml="http://www.w3.org/XML/1998/namespac&#101;""#,
+            r#"xmlns:x="http://www.w3.org/XML/1998/namespac&#101;""#,
+        ] {
+            for xml in [format!("<r {declaration}/>"), format!("<r xmlns:x='urn:outer'><x:a {declaration}/></r>")] {
+                for result in [parse_document(xml.as_bytes()), parse_compat(xml.as_bytes())] {
+                    assert!(result.is_err_and(|error| error.compatibility), "{xml}");
+                }
+            }
+        }
+        for xml in ["<r bad xmlns:x='urn:&#97;'/>", "<r xmlns:x='a' xmlns:x='b'/>", "<r/><x xmlns:x='urn:&#97;'/>"] {
+            assert!(parse_compat(xml.as_bytes()).is_err_and(|error| error.compatibility), "{xml}");
+        }
+        let normal = br#"<r xmlns:xml="http://www.w3.org/XML/1998/namespace" a="a&amp;b">a&amp;b</r>"#;
+        let root = parse_document(normal).unwrap();
+        assert_eq!(root.attr("a"), Some("a&b"));
+        assert_eq!(root.text(), "a&b");
     }
 
     #[test]

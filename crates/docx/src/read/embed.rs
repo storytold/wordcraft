@@ -18,7 +18,7 @@ use super::Reader;
 use crate::package::{
     CUSTOM_XML_ROOTS, ContentTypes, MAX_EMBEDDED_PARTS, MAX_EMBEDDED_RELS, MAX_EMBEDDED_XML, Rel, Rels, manifest_field_ok, rel_is, rt,
 };
-use crate::xml::{El, MAX_DEPTH, NAMESPACES, esc, is_rel_attr};
+use crate::xml::{El, MAX_DEPTH, declared_namespaces, esc, is_rel_attr};
 
 /// Relationship types (last path segment) the reader models or the writer produces itself, so
 /// they are never carried verbatim: carrying them would duplicate or contradict the written part.
@@ -126,7 +126,7 @@ impl Reader<'_> {
                 // Native ink shares the custom XML relationship type, but its part belongs to the
                 // drawing that refers to it: kept with it, or dropped with it (no orphan part).
                 let pkg = self.pkg;
-                if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&rel.target) == Some("application/inkml+xml") {
+                if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).is_inkml(&rel.target) {
                     continue;
                 }
                 if self.keep_part_tree(&rel.target) {
@@ -198,6 +198,9 @@ impl Reader<'_> {
             }
         }
         let xml = standalone_xml(el)?;
+        if opaque_values_need_source(el, false, 0) {
+            self.required_source.set(true);
+        }
         Some(Arc::new(Embedded { xml, refs }))
     }
 
@@ -266,6 +269,30 @@ impl Reader<'_> {
     }
 }
 
+/// Canonical names do not preserve namespace scope used only by opaque QName values.
+/// As with raw control properties, replay the source rather than guessing those bindings.
+fn opaque_values_need_source(el: &El, opaque: bool, depth: usize) -> bool {
+    if depth > MAX_DEPTH {
+        return true;
+    }
+    let opaque = opaque || el.name.split_once(':').is_none_or(|(prefix, _)| !crate::xml::mc_understood(prefix));
+    el.attrs.iter().any(|(name, _)| {
+        if name.starts_with('?')
+            || name == "xmlns"
+            || name.starts_with("xmlns:")
+            || name.starts_with("mc:")
+            // EmbeddedRef explicitly retains and rewrites these IDs; they are not QNames.
+            || is_rel_attr(&el.name, name)
+        {
+            return false;
+        }
+        opaque || name == "xsi:type" || name.split_once(':').is_some_and(|(prefix, _)| !crate::xml::mc_understood(prefix))
+    }) || el.kids.iter().any(|node| match node {
+        crate::xml::Node::El(child) => opaque_values_need_source(child, opaque, depth + 1),
+        crate::xml::Node::Text(text) => opaque && !text.trim().is_empty(),
+    })
+}
+
 /// The relationship ids `e` uses (attributes in the relationships namespace, VML's `o:relid`,
 /// and the unqualified alias of one on an element that carries a relationship), in document
 /// order. `None` past [`MAX_IDS`].
@@ -281,8 +308,12 @@ fn rel_ids(e: &El, out: &mut Vec<String>, depth: usize) -> Option<()> {
             out.push(v.clone());
         }
     }
-    for c in e.els() {
-        rel_ids(c, out, depth + 1)?;
+    // Retained markup includes the wrappers hidden by MC's processing view. Their
+    // relationships must be retained too, including preserved extension content.
+    for node in &e.kids {
+        if let crate::xml::Node::El(c) = node {
+            rel_ids(c, out, depth + 1)?;
+        }
     }
     Some(())
 }
@@ -293,7 +324,7 @@ fn standalone_xml(e: &El) -> Option<String> {
     let xml = e.to_xml();
     let rest = xml.get(1 + e.name.len()..).filter(|_| !xml.is_empty())?;
     let mut s = format!("<{}", e.name);
-    for (p, u) in NAMESPACES {
+    for (p, u) in declared_namespaces() {
         s.push_str(&format!(" xmlns:{p}=\"{}\"", esc(u)));
     }
     s.push_str(rest);
@@ -337,6 +368,22 @@ mod tests {
             zw.write_all(bytes).unwrap();
         }
         zw.finish().unwrap().into_inner()
+    }
+
+    /// Standalone retained XML declares its namespaces and keeps qualified attributes.
+    #[test]
+    fn standalone_embedded_ink_and_mathml_keep_their_namespaces() {
+        let xml = br#"<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><pen:trace xmlns:pen="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="math"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"/></pen:trace></a:graphic>"#;
+        let root = crate::xml::parse(xml).unwrap();
+        let kept = super::standalone_xml(&root).unwrap();
+        assert!(kept.contains(r#"xmlns:ink="http://www.w3.org/2003/InkML""#), "{kept}");
+        assert!(kept.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#), "{kept}");
+        assert!(kept.contains(r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#), "{kept}");
+        assert!(kept.contains(r#"mc:Ignorable="mml""#) && kept.contains("xsi:schemaLocation="), "{kept}");
+        assert!(kept.contains(r#"<mml:math mml:id="formula" "#), "{kept}");
+        let back = crate::xml::parse(kept.as_bytes()).unwrap();
+        let ink = back.child("ink:trace").unwrap();
+        assert_eq!(ink.child("mml:math").and_then(|e| e.attr("mml:id")), Some("formula"));
     }
 
     /// The parts the reader carries over unchanged, as one string.
@@ -427,7 +474,7 @@ mod tests {
 
         // A VML shape's `id` is its own: it names no part, so the part is carried over.
         let own = package(
-            r#"<w:p><w:r><w:pict><v:shape id="rIdDoc1" style="width:10pt;height:10pt"/></w:pict></w:r></w:p>"#,
+            r#"<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml" id="rIdDoc1" style="width:10pt;height:10pt"/></w:pict></w:r></w:p>"#,
             &[("rIdDoc1", "keep.bin")],
             &[("word/keep.bin", b"kept")],
         );

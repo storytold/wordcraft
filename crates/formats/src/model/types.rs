@@ -174,6 +174,8 @@ pub struct Img {
     /// How much is cut off its left, top, right and bottom, fractions of its size (0..1), for
     /// formats that keep it (ODT).
     pub crop: [f32; 4],
+    /// Native ink fallback corrections, applied only by ODT export.
+    pub ink_fx: wordcraft_doc::picfx::PicFx,
 }
 
 /// An embedded object WordCraft shows but doesn't edit, kept whole for saving back (ODF 1.3

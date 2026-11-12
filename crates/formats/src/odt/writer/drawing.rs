@@ -305,18 +305,40 @@ impl Writer {
     }
 
     pub(in crate::odt) fn image(&mut self, img: &model::Img, place: Place<'_>, out: &mut String) {
+        let baked;
+        let is_ink = !img.ink_fx.is_identity();
+        let img = if is_ink {
+            self.ink_images_emitted = self.ink_images_emitted.saturating_add(1);
+            let Some(data) = self.ink_pictures.borrow_mut().bake(&img.data, img.ink_fx) else { return };
+            baked = model::Img { data, ext: "png".into(), ink_fx: Default::default(), ..img.clone() };
+            &baked
+        } else {
+            img
+        };
         if let Some(o) = img.object.as_deref() {
             let inner = self.kept_object(o, img);
             return self.image_frame(img, place, &inner, out);
         }
-        let href = self.picture(img);
+        let key = std::sync::Arc::as_ptr(&img.data) as usize;
+        let existing = if is_ink { self.ink_pictures.borrow().names.get(&key).cloned() } else { None };
+        let href = match existing {
+            Some(href) => href,
+            None => {
+                let href = self.picture(img);
+                if is_ink {
+                    self.ink_pictures.borrow_mut().names.insert(key, href.clone());
+                }
+                href
+            }
+        };
         let inner = format!("<draw:image xlink:href=\"{href}\" xlink:type=\"simple\" xlink:show=\"embed\" xlink:actuate=\"onLoad\"/>");
         self.image_frame(img, place, &inner, out);
     }
 
     /// A picture's frame at `place`, holding `inner`.
     fn image_frame(&mut self, img: &model::Img, place: Place<'_>, inner: &str, out: &mut String) {
-        let n = self.pictures.len();
+        self.image_names = self.image_names.saturating_add(1);
+        let n = self.image_names;
         let clip = clip_attr(img);
         // Always placed by a style: in line, standing on the baseline (LibreOffice puts a frame
         // with no placement at the line's top).
@@ -670,6 +692,7 @@ mod tests {
             float: None,
             object: None,
             crop: [0.0; 4],
+            ink_fx: Default::default(),
         };
         let names: Vec<String> = (0..3).map(|_| w.picture(&img)).collect();
         assert_eq!(names, ["Pictures/wcimage2.png", "Pictures/wcimage3.png", "Pictures/wcimage4.png"]);

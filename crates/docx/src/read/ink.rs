@@ -1,0 +1,696 @@
+//! Bounded native InkML previews built from the public W3C Recommendation.
+//!
+//! Original package bytes remain authoritative for saves. This decoder builds disposable vector
+//! geometry; unsupported visual semantics, invalid input and exhausted work refuse the entire
+//! preview so the reader can retain its original picture fallback. No external URI is fetched.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use crate::xml::El;
+use brush::{Brush, Stroke};
+use format::Format;
+use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg};
+use wordcraft_doc::props::Rgb;
+
+mod brush;
+mod format;
+mod mapping;
+mod projection;
+mod trace;
+mod units;
+mod views;
+mod xml;
+
+/// File-wide allowance for InkML decoding and geometry copies, including failed attempts.
+/// Kept separate from chart/SmartArt work so hostile ink cannot erase unrelated previews.
+pub(super) const MAX_WORK: usize = 2_000_000;
+/// One part cannot consume the file's entire allowance, leaving room for later small ink.
+const MAX_PART_WORK: usize = 1_000_000;
+
+/// Maximum InkML XML size accepted for vector decoding (original bytes are preserved separately).
+const MAX_BYTES: usize = 2 * 1024 * 1024;
+/// Maximum number of indexed XML elements, including annotations and definitions.
+const MAX_NODES: usize = 8192;
+/// Maximum XML, reference, mapping and trace-view nesting depth.
+const MAX_DEPTH: usize = 16;
+/// Maximum combined regular/intermittent channels in a trace format.
+const MAX_CHANNELS: usize = 16;
+/// Maximum decoded samples, including repeated references and pen-up samples.
+const MAX_POINTS: usize = 100_000;
+/// Bound on input numbers and evaluated mapping intermediates.
+const MAX_VALUE: f64 = 1_000_000_000.0;
+
+/// Before bypassing the WordprocessingML bibliography probe for a typed InkML part, prove that
+/// its bytes cannot contain compatibility directives. A positive result is checked by the
+/// namespace-aware DOCX parser; undecidable encodings are refused rather than silently skipped.
+/// Returns (check visible MC directives, require unchanged source replay). These decisions are
+/// independent: a DTD can have visible directives as well as an uninspectable external subset.
+pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<(bool, bool), crate::DocxError> {
+    use std::borrow::Cow;
+
+    if bytes.len() > wordcraft_doc::kept::MAX_KEPT_BYTES {
+        return Err(crate::DocxError::Limit("InkML compatibility inspection exceeds the retained-byte limit".into()));
+    }
+    if bytes.starts_with(&[0xff, 0xfe, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xfe, 0xff]) {
+        return Err(crate::DocxError::Xml("cannot inspect UTF-32 InkML for compatibility directives".into()));
+    }
+    // An isolated 0xff/0xfe without a matching BOM cannot start an XML encoding supported by
+    // this reader. Keep such binary ink opaque, and require exact source replay on save. A visible
+    // compatibility name is still sent to the strict parser and causes refusal.
+    if matches!(bytes.first(), Some(0xff | 0xfe)) && !bytes.starts_with(&[0xff, 0xfe]) && !bytes.starts_with(&[0xfe, 0xff]) {
+        if contains_ascii(bytes, b"<!ENTITY") {
+            return Err(crate::DocxError::Xml("InkML entity declarations cannot be inspected safely".into()));
+        }
+        return Ok((compatibility_name(bytes), true));
+    }
+    let (text, utf16) = if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
+        let le = bytes.starts_with(&[0xff, 0xfe]);
+        let (pairs, rest) = bytes[2..].as_chunks::<2>();
+        if !rest.is_empty() {
+            return Err(crate::DocxError::Xml("invalid UTF-16 InkML encoding".into()));
+        }
+        let units: Vec<_> = pairs.iter().map(|pair| if le { u16::from_le_bytes(*pair) } else { u16::from_be_bytes(*pair) }).collect();
+        let text = String::from_utf16(&units).map_err(|_| crate::DocxError::Xml("invalid UTF-16 InkML encoding".into()))?;
+        (Cow::Owned(text), true)
+    } else {
+        let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+        let text =
+            std::str::from_utf8(bytes).map_err(|_| crate::DocxError::Xml("cannot inspect InkML encoding for compatibility directives".into()))?;
+        (Cow::Borrowed(text), false)
+    };
+    if text.contains('\0') {
+        return Err(crate::DocxError::Xml("cannot inspect InkML encoding for compatibility directives".into()));
+    }
+    if text.starts_with("<?xml") {
+        let mut reader = quick_xml::Reader::from_str(&text);
+        let Ok(quick_xml::events::Event::Decl(decl)) = reader.read_event() else {
+            return Err(crate::DocxError::Xml("cannot inspect InkML XML declaration".into()));
+        };
+        let raw: &[u8] = &decl;
+        let count = raw.windows(b"encoding".len()).filter(|window| window.eq_ignore_ascii_case(b"encoding")).count();
+        if !raw.is_ascii() || count > 1 || decl.version().is_err() {
+            return Err(crate::DocxError::Xml("cannot inspect InkML XML declaration".into()));
+        }
+        match decl.encoding() {
+            None if count == 0 => {}
+            Some(Ok(encoding))
+                if count == 1
+                    && if utf16 {
+                        encoding.eq_ignore_ascii_case(b"utf-16")
+                            || (bytes.starts_with(&[0xff, 0xfe]) && encoding.eq_ignore_ascii_case(b"utf-16le"))
+                            || (bytes.starts_with(&[0xfe, 0xff]) && encoding.eq_ignore_ascii_case(b"utf-16be"))
+                    } else {
+                        encoding.eq_ignore_ascii_case(b"utf-8") || encoding.eq_ignore_ascii_case(b"us-ascii")
+                    } => {}
+            _ => return Err(crate::DocxError::Xml("cannot inspect the declared InkML encoding".into())),
+        }
+    }
+    Ok((compatibility_name(text.as_bytes()), declaration_hints(&text)?))
+}
+
+/// Ignore declaration examples in opaque XML events, but never expand a real DTD or entity.
+fn declaration_hints(text: &str) -> Result<bool, crate::DocxError> {
+    use quick_xml::events::Event;
+
+    let mut reader = quick_xml::Reader::from_str(text);
+    // Malformed ink can still use its picture. Only the compatibility exclusion must fail closed.
+    reader.config_mut().check_end_names = false;
+    reader.config_mut().allow_unmatched_ends = true;
+    let mut require_source = false;
+    loop {
+        let start = usize::try_from(reader.buffer_position()).unwrap_or(0);
+        let suspicious = match reader.read_event() {
+            Ok(Event::Comment(_) | Event::CData(_) | Event::PI(_)) => false,
+            Ok(Event::DocType(dtd)) => {
+                // External subsets can contribute unseen markup. An unchanged package replay is
+                // required even without visible MC; entity replacement text is always refused.
+                require_source = true;
+                doctype_has_entities(dtd.as_ref())
+            }
+            Ok(Event::Eof) => return Ok(require_source),
+            Ok(event) => contains_ascii(event.as_ref(), b"<!ENTITY"),
+            Err(_) => {
+                // An incomplete token cannot prove that a later marker is only comment/CDATA.
+                let rest = text.as_bytes().get(start..).unwrap_or(text.as_bytes());
+                if !contains_ascii(rest, b"<!ENTITY") {
+                    return Ok(require_source || contains_ascii(rest, b"<!DOCTYPE"));
+                }
+                true
+            }
+        };
+        if suspicious {
+            return Err(crate::DocxError::Xml("InkML entity declarations cannot be inspected safely".into()));
+        }
+    }
+}
+
+/// A DocType event includes its internal subset; skip comments and quoted DTD literals there.
+fn doctype_has_entities(mut bytes: &[u8]) -> bool {
+    while let Some((&first, rest)) = bytes.split_first() {
+        if bytes.starts_with(b"<!--") {
+            let Some(end) = bytes.windows(3).position(|window| window == b"-->") else { return true };
+            bytes = bytes.get(end + 3..).unwrap_or_default();
+        } else if matches!(first, b'\'' | b'"') {
+            let Some(end) = rest.iter().position(|b| *b == first) else { return true };
+            bytes = rest.get(end + 1..).unwrap_or_default();
+        } else if bytes.get(..8).is_some_and(|head| head.eq_ignore_ascii_case(b"<!ENTITY")) {
+            return true;
+        } else {
+            bytes = rest;
+        }
+    }
+    false
+}
+
+fn compatibility_name(bytes: &[u8]) -> bool {
+    const NAMES: &[&[u8]] = &[
+        b"Ignorable",
+        b"MustUnderstand",
+        b"ProcessContent",
+        b"PreserveElements",
+        b"PreserveAttributes",
+        b"AlternateContent",
+        b"Choice",
+        b"Fallback",
+        b"Requires",
+    ];
+    NAMES.iter().any(|name| contains_ascii(bytes, name))
+}
+
+fn contains_ascii(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
+}
+
+/// Decode a supported native ink preview under the document's shared ink-work allowance.
+pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
+    let allowance = (*work).min(MAX_PART_WORK);
+    let mut left = allowance;
+    let result = read_part(bytes, &mut left);
+    // Debit successful reservations even when decoding later fails, but not a
+    // rejected reservation or the unused part allowance. Repeated parts are cached.
+    *work -= allowance - left;
+    result
+}
+
+/// Decode one part using only the work reserved for it by `read`.
+fn read_part(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
+    if bytes.len() > MAX_BYTES {
+        return None;
+    }
+    spend(work, bytes.len().div_ceil(16))?;
+    let root = xml::parse(bytes, work)?;
+    if root.name != "ink:ink" {
+        return None;
+    }
+    let mut reader = InkReader {
+        ids: HashMap::new(),
+        definitions: HashSet::new(),
+        definition_traces: HashSet::new(),
+        definition_groups: HashMap::new(),
+        contexts: HashMap::new(),
+        work,
+        strokes: Vec::new(),
+        points: 0,
+        default_context: Context::default(),
+        tails: HashMap::new(),
+    };
+    reader.index(&root, &mut 0, 0, false, None)?;
+    reader.walk(&root, Context::default(), 0)?;
+    if reader.strokes.is_empty() {
+        // A valid pen-up-only part must not resurrect an unrelated picture fallback.
+        return Some(Graphic {
+            kind: GraphicKind::Ink,
+            items: vec![GraphicItem::InkOutline { segs: Vec::new(), color: Rgb::BLACK, alpha: 0.0, mask_pen: false }],
+            w: 1.0,
+            h: 1.0,
+            ..Default::default()
+        });
+    }
+    brush::drawing(reader.strokes, reader.work)
+}
+
+/// Fit local geometry to a frame; circular widths use the mean of the composed axis scales.
+pub(super) fn fit_frame(graphic: &mut Graphic, w: f32, h: f32) {
+    if graphic.w <= 0.0 || graphic.h <= 0.0 {
+        return;
+    }
+    let (sx, sy) = (w / graphic.w, h / graphic.h);
+    let width_scale = graphic.ink_width_scale(sx, sy);
+    let [x, y] = graphic.ink_scale.unwrap_or([1.0, 1.0]);
+    graphic.ink_scale = Some([x * f64::from(sx), y * f64::from(sy)]);
+    for item in &mut graphic.items {
+        match item {
+            GraphicItem::Path { segs, stroke_width, .. } => {
+                scale_segments(segs, sx, sy);
+                *stroke_width = (*stroke_width * width_scale).min(crate::units::MAX_LEN_PT);
+            }
+            GraphicItem::InkOutline { segs, .. } => scale_segments(segs, sx, sy),
+            GraphicItem::Shape { rect, kind, fill, stroke, .. } => {
+                let [x, y, width, height] = *rect;
+                if *kind == wordcraft_doc::para::ShapeKind::Ellipse && fill.is_some() && stroke.is_none() && width == height {
+                    let size = (width * width_scale).min(crate::units::MAX_LEN_PT);
+                    *rect = [(x + width / 2.0) * sx - size / 2.0, (y + height / 2.0) * sy - size / 2.0, size, size];
+                } else {
+                    for (v, scale) in rect.iter_mut().zip([sx, sy, sx, sy]) {
+                        *v *= scale;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    graphic.w = w;
+    graphic.h = h;
+}
+
+pub(super) fn place_frame(graphic: &mut Graphic, outer: (f32, f32), inner: [f32; 4]) {
+    if graphic.items.is_empty() {
+        return;
+    }
+    let [x, y, w, h] = inner;
+    fit_frame(graphic, w, h);
+    for item in &mut graphic.items {
+        match item {
+            GraphicItem::Path { segs, .. } | GraphicItem::InkOutline { segs, .. } => {
+                for seg in segs {
+                    match seg {
+                        PathSeg::Move(a, b) | PathSeg::Line(a, b) => {
+                            *a += x;
+                            *b += y;
+                        }
+                        PathSeg::Cubic(a, b, c, d, e, f) => {
+                            *a += x;
+                            *b += y;
+                            *c += x;
+                            *d += y;
+                            *e += x;
+                            *f += y;
+                        }
+                        PathSeg::Close => {}
+                    }
+                }
+            }
+            GraphicItem::Shape { rect, .. } => {
+                let [a, b, _, _] = rect;
+                *a += x;
+                *b += y;
+            }
+            _ => {}
+        }
+    }
+    if w <= 0.0 || h <= 0.0 {
+        graphic.items = vec![GraphicItem::InkOutline { segs: Vec::new(), color: Rgb::BLACK, alpha: 0.0, mask_pen: false }];
+    }
+    graphic.ink_frame = Some(inner);
+    graphic.w = outer.0;
+    graphic.h = outer.1;
+}
+
+/// Scale bounded path coordinates, including any future curve segments.
+fn scale_segments(segs: &mut [PathSeg], sx: f32, sy: f32) {
+    for seg in segs {
+        match seg {
+            PathSeg::Move(x, y) | PathSeg::Line(x, y) => {
+                *x *= sx;
+                *y *= sy;
+            }
+            PathSeg::Cubic(a, b, c, d, e, f) => {
+                *a *= sx;
+                *b *= sy;
+                *c *= sx;
+                *d *= sy;
+                *e *= sx;
+                *f *= sy;
+            }
+            PathSeg::Close => {}
+        }
+    }
+}
+
+/// Reserve before doing work; a refused operation spends nothing. Previously
+/// completed operations remain charged even when the whole preview is rejected.
+fn spend(work: &mut usize, amount: usize) -> Option<()> {
+    *work = work.checked_sub(amount)?;
+    Some(())
+}
+
+/// Accept only finite numbers small enough for bounded geometry and mapping evaluation.
+fn bounded(value: f64) -> bool {
+    value.is_finite() && value.abs() <= MAX_VALUE
+}
+
+/// Parse a bounded decimal/exponent attribute or MathML literal.
+fn number(value: &str) -> Option<f64> {
+    if value.len() > 64 {
+        return None;
+    }
+    let value = value.parse::<f64>().ok()?;
+    bounded(value).then_some(value)
+}
+
+/// Fully resolved non-geometric context; large declarations are shared rather than cloned per sample.
+#[derive(Clone, Default)]
+struct Context<'a> {
+    /// Recorded sample format, optionally calibrated by an ink source.
+    format: Arc<Format>,
+    /// Source metadata is retained when a later trace format overrides the source's format.
+    source: Option<&'a El>,
+    /// Brush property overrides.
+    brush: Brush,
+    /// Explicit output canvas; absent means use the source's physical coordinates.
+    canvas: Option<Arc<Format>>,
+    /// Forward mapping element, compiled against the resolved source/canvas formats per trace.
+    transform: Option<&'a El>,
+}
+
+/// The last pen-down run of a continuation fragment, and whether another fragment may follow.
+struct Tail {
+    /// Index of the final stroke, absent if the fragment ends pen-up.
+    stroke: Option<usize>,
+    /// A begin/middle fragment may be consumed exactly once.
+    open: bool,
+}
+
+/// Stateful stream reader with bounded local references and document-wide work accounting.
+struct InkReader<'a, 'w> {
+    /// Unique local IDs; URI references cannot escape this part.
+    ids: HashMap<&'a str, &'a El>,
+    /// IDs syntactically declared inside definitions, where context defaults are isolated.
+    definitions: HashSet<&'a str>,
+    /// Identity of definition-contained traces, including anonymous group children. Pointers
+    /// are compared only, never dereferenced; the immutable XML tree outlives this reader.
+    definition_traces: HashSet<*const El>,
+    /// Syntactic group parents of definition-backed traces, groups and views. Direct
+    /// references must retain the same inherited context as selection through a group.
+    definition_groups: HashMap<*const El, &'a El>,
+    /// Contexts encountered in stream order retain their declaration-time defaults.
+    contexts: HashMap<&'a str, Context<'a>>,
+    /// Shared allowance for parsing, reference expansion, mappings, geometry and copying.
+    work: &'w mut usize,
+    /// Pen-down runs ready for vector construction.
+    strokes: Vec<Stroke>,
+    /// Decoded sample count including unknown/pen-up data and expanded views.
+    points: usize,
+    /// Stream properties used by the reserved DefaultContext URI.
+    default_context: Context<'a>,
+    /// Continuation references already seen, preventing forks, cycles and use after end.
+    tails: HashMap<&'a str, Tail>,
+}
+
+impl<'a> InkReader<'a, '_> {
+    /// Index uniquely identified elements and enforce nesting/node bounds before reference traversal.
+    fn index(&mut self, el: &'a El, nodes: &mut usize, depth: usize, in_definitions: bool, mut group: Option<&'a El>) -> Option<()> {
+        spend(self.work, 1)?;
+        *nodes += 1;
+        if *nodes > MAX_NODES || depth > MAX_DEPTH {
+            return None;
+        }
+        if matches!(el.name.as_str(), "ink:annotation" | "ink:annotationXML") {
+            return Some(());
+        }
+        let in_definitions = in_definitions || el.name == "ink:definitions";
+        if el.name == "ink:definitions" {
+            group = None;
+        }
+        if in_definitions && matches!(el.name.as_str(), "ink:trace" | "ink:traceGroup" | "ink:traceView") {
+            if let Some(parent) = group {
+                spend(self.work, 1)?;
+                self.definition_groups.insert(el as *const El, parent);
+            }
+            if el.name == "ink:traceGroup" {
+                group = Some(el);
+            }
+        }
+        if in_definitions && el.name == "ink:trace" {
+            self.definition_traces.insert(el as *const El);
+        }
+        if let Some(id) = xml::id(el) {
+            if id.is_empty()
+                || id.len() > 256
+                || matches!(id, "DefaultContext" | "DefaultBrush" | "DefaultCanvas" | "DefaultTraceFormat")
+                || self.ids.insert(id, el).is_some()
+            {
+                return None;
+            }
+            if in_definitions {
+                self.definitions.insert(id);
+            }
+        }
+        for child in el.els() {
+            self.index(child, nodes, depth + 1, in_definitions, group)?;
+        }
+        Some(())
+    }
+
+    /// Resolve only a local fragment of the expected InkML kind.
+    fn resolve(&mut self, reference: &str, name: &str) -> Option<&'a El> {
+        spend(self.work, 1)?;
+        let el = *self.ids.get(reference.strip_prefix('#')?)?;
+        (el.name == name).then_some(el)
+    }
+
+    /// Resolve a brush's inheritance chain, bounded independently of XML nesting.
+    fn brush(&mut self, el: &'a El, depth: usize) -> Option<Brush> {
+        spend(self.work, 1)?;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let mut brush = match el.attr("brushRef") {
+            None | Some("#DefaultBrush") => Brush::default(),
+            Some(reference) => {
+                let parent = self.resolve(reference, "ink:brush")?;
+                self.brush(parent, depth + 1)?
+            }
+        };
+        brush.properties(el, self.work)?;
+        Some(brush)
+    }
+
+    /// Resolve a format child before its reference; overridden references need not be valid.
+    fn format(&mut self, el: &'a El) -> Option<Option<Format>> {
+        if let Some(format) = el.child("ink:traceFormat") {
+            return Some(Some(format::read(format, self.work)?));
+        }
+        match el.attr("traceFormatRef") {
+            None => Some(None),
+            Some("#DefaultTraceFormat") => Some(Some(Format::default())),
+            Some(reference) => {
+                let format = self.resolve(reference, "ink:traceFormat")?;
+                Some(Some(format::read(format, self.work)?))
+            }
+        }
+    }
+
+    /// Resolve context inheritance and property precedence according to InkML §4.6.
+    fn context(&mut self, el: &'a El, inherited: Context<'a>, depth: usize) -> Option<Context<'a>> {
+        spend(self.work, el.kids.len().saturating_add(el.attrs.len()).saturating_mul(12).max(1))?;
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let mut ctx = match el.attr("contextRef") {
+            None => inherited,
+            Some("#DefaultContext") => self.default_context.clone(),
+            Some(reference) => {
+                let id = reference.strip_prefix('#')?;
+                if let Some(ctx) = self.contexts.get(id) {
+                    ctx.clone()
+                } else {
+                    let parent = self.resolve(reference, "ink:context")?;
+                    // Definitions are independent of stream state. Forward references outside
+                    // definitions are not previously defined contexts and cannot be guessed.
+                    if !self.definitions.contains(id) {
+                        return None;
+                    }
+                    self.context(parent, Context::default(), depth + 1)?
+                }
+            }
+        };
+        if let Some(source) = el.child("ink:inkSource") {
+            ctx.source = Some(source);
+            ctx.format = Arc::new(format::source(source, self.work)?);
+        } else if let Some(reference) = el.attr("inkSourceRef") {
+            let source = self.resolve(reference, "ink:inkSource")?;
+            ctx.source = Some(source);
+            ctx.format = Arc::new(format::source(source, self.work)?);
+        }
+        if let Some(mut format) = self.format(el)? {
+            if let Some(source) = ctx.source {
+                format::calibrate(&mut format, source, self.work)?;
+            }
+            ctx.format = Arc::new(format);
+        }
+        if let Some(canvas) = el.child("ink:canvas") {
+            ctx.canvas = Some(Arc::new(self.format(canvas)??));
+        } else if let Some(reference) = el.attr("canvasRef") {
+            ctx.canvas = Some(Arc::new(if reference == "#DefaultCanvas" {
+                Format::default()
+            } else {
+                let canvas = self.resolve(reference, "ink:canvas")?;
+                self.format(canvas)??
+            }));
+        }
+        if let Some(transform) = el.child("ink:canvasTransform") {
+            ctx.transform = Some(transform);
+        } else if let Some(reference) = el.attr("canvasTransformRef") {
+            ctx.transform = Some(self.resolve(reference, "ink:canvasTransform")?);
+        }
+        if let Some(brush) = el.child("ink:brush") {
+            ctx.brush = self.brush(brush, 0)?;
+        } else if let Some(reference) = el.attr("brushRef") {
+            ctx.brush = if reference == "#DefaultBrush" {
+                Brush::default()
+            } else {
+                let brush = self.resolve(reference, "ink:brush")?;
+                self.brush(brush, 0)?
+            };
+        }
+        Some(ctx)
+    }
+
+    /// Process stream elements in order without leaking group properties into following siblings.
+    fn walk(&mut self, el: &'a El, mut ctx: Context<'a>, depth: usize) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        for child in el.els() {
+            spend(self.work, 1)?;
+            if depth == 0 {
+                self.default_context = ctx.clone();
+            }
+            match child.name.as_str() {
+                "ink:definitions" | "ink:annotation" | "ink:annotationXML" | "ink:timestamp" => {}
+                "ink:traceFormat" => {
+                    let mut format = format::read(child, self.work)?;
+                    if let Some(source) = ctx.source {
+                        format::calibrate(&mut format, source, self.work)?;
+                    }
+                    ctx.format = Arc::new(format);
+                }
+                "ink:inkSource" => {
+                    ctx.source = Some(child);
+                    ctx.format = Arc::new(format::source(child, self.work)?);
+                }
+                "ink:brush" => ctx.brush = self.brush(child, 0)?,
+                "ink:context" => {
+                    ctx = self.context(child, ctx, 0)?;
+                    if let Some(id) = xml::id(child) {
+                        self.contexts.insert(id, ctx.clone());
+                    }
+                }
+                "ink:traceGroup" => {
+                    let group = self.context(child, ctx.clone(), 0)?;
+                    self.walk(child, group, depth + 1)?;
+                }
+                "ink:trace" => {
+                    let trace = self.context(child, ctx.clone(), 0)?;
+                    self.trace(child, &trace, None)?;
+                }
+                "ink:traceView" => self.view(child, ctx.clone(), depth + 1)?,
+                _ => return None,
+            }
+        }
+        Some(())
+    }
+
+    fn prior(&mut self, el: &'a El, range: Option<(usize, usize)>) -> Option<Option<usize>> {
+        match (el.attr("continuation"), el.attr("priorRef")) {
+            (None, None) | (Some("begin"), None) => Some(None),
+            (Some("middle" | "end"), Some(reference)) => {
+                if range.is_some() {
+                    self.validate_prior(el, 0)?;
+                }
+                let id = reference.strip_prefix('#')?;
+                let Some(prior) = self.tails.get_mut(id) else {
+                    return range.map(|_| None);
+                };
+                if !prior.open {
+                    return range.map(|_| None);
+                }
+                prior.open = false;
+                Some(if range.is_none_or(|r| r.0 == 1) { prior.stroke } else { None })
+            }
+            _ => None,
+        }
+    }
+
+    fn validate_prior(&mut self, el: &'a El, depth: usize) -> Option<()> {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        spend(self.work, el.attrs.len().saturating_mul(8).max(1))?;
+        match (el.attr("continuation"), el.attr("priorRef")) {
+            (Some("begin"), None) => Some(()),
+            (Some("middle" | "end"), Some(reference)) => {
+                let prior = self.resolve(reference, "ink:trace")?;
+                if !matches!(prior.attr("continuation"), Some("begin" | "middle")) {
+                    return None;
+                }
+                self.validate_prior(prior, depth + 1)
+            }
+            _ => None,
+        }
+    }
+
+    /// Decode, map and append one trace fragment. A view optionally selects a 1-based inclusive range.
+    fn trace(&mut self, el: &'a El, ctx: &Context<'a>, range: Option<(usize, usize)>) -> Option<()> {
+        if el.els().next().is_some() {
+            return None;
+        }
+        let default_down = match el.attr("type") {
+            None | Some("penDown") => Some(true),
+            Some("penUp") => Some(false),
+            Some("indeterminate") => None,
+            _ => return None,
+        };
+        let mut tail = self.prior(el, range)?;
+        let samples = trace::read(&el.text(), &ctx.format, self.work, &mut self.points)?;
+        let (from, to) = range.unwrap_or((1, samples.len()));
+        if from == 0 || to < from || to > samples.len() {
+            return None;
+        }
+        let projection = projection::Projection::new(ctx, &self.ids, self.work)?;
+        let visual = &projection.format;
+        for values in samples.get(from - 1..to)? {
+            let resolved = projection.apply(values, self.work)?;
+            let down = if visual.index("S").is_some() {
+                match visual.value(&resolved, "S") {
+                    Some(0.0) => false,
+                    Some(1.0) => true,
+                    _ => return None,
+                }
+            } else {
+                default_down?
+            };
+            if !down {
+                tail = None;
+                continue;
+            }
+            let xy = [visual.value(&resolved, "X")?, visual.value(&resolved, "Y")?];
+            if !xy.iter().all(|v| bounded(*v)) {
+                return None;
+            }
+            let point = ctx.brush.point(visual, &resolved, xy)?;
+            match tail {
+                Some(i) => {
+                    let stroke = self.strokes.get_mut(i)?;
+                    if stroke.curve != ctx.brush.curve {
+                        return None;
+                    }
+                    stroke.points.push(point);
+                }
+                None => {
+                    tail = Some(self.strokes.len());
+                    self.strokes.push(Stroke { points: vec![point], curve: ctx.brush.curve });
+                }
+            }
+        }
+        if let Some(id) = xml::id(el) {
+            self.tails.insert(id, Tail { stroke: tail, open: to == samples.len() && matches!(el.attr("continuation"), Some("begin" | "middle")) });
+        }
+        Some(())
+    }
+}
+
+#[cfg(test)]
+mod tests;

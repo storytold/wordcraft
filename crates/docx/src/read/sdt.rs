@@ -6,7 +6,7 @@ use wordcraft_doc::control::{CHECKED, ContentControl, ControlKind, ControlLock, 
 use crate::xml::El;
 
 /// Most bytes of `w:sdtPr` children kept verbatim per control.
-const MAX_EXTRA: usize = 64 * 1024;
+pub(super) const MAX_EXTRA: usize = 64 * 1024;
 
 fn text(v: Option<&str>) -> String {
     let v = v.unwrap_or("");
@@ -92,6 +92,19 @@ pub fn sdt_pr(pr: Option<&El>, block: bool) -> ContentControl {
                     extra_len += x.len();
                     c.extra.push(x);
                 }
+            }
+        }
+    }
+    // Ignorable extension properties are excluded from the processing view, but this control's
+    // existing raw-property preservation must still retain them.
+    for node in &pr.kids {
+        if let crate::xml::Node::El(k) = node
+            && k.attrs.iter().any(|(key, _)| key == "?ignore")
+        {
+            let x = k.to_xml();
+            if !x.is_empty() && extra_len + x.len() <= MAX_EXTRA {
+                extra_len += x.len();
+                c.extra.push(x);
             }
         }
     }

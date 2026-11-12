@@ -654,9 +654,9 @@ fn inline_objects(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
                 object_draws(o, rect, Spin::default(), alpha, opts, out)
             }
-            Some(InlineObject::Graphic { graphic, alt, .. }) => {
+            Some(InlineObject::Graphic { graphic, alt, .. }) if !opts.hide_ink || graphic.kind != wordcraft_doc::graphic::GraphicKind::Ink => {
                 let mut draws = Vec::new();
-                spun(spin, rect, graphic_draws(doc, graphic, rect, alpha), &mut draws);
+                spun(spin, super::objects::graphic_rotation_frame(graphic, rect), graphic_draws(doc, graphic, rect, alpha), &mut draws);
                 out.push(Draw::Figure { alt: alt.clone(), kind: Some(graphic.kind), draws })
             }
             Some(InlineObject::Equation { .. }) => {

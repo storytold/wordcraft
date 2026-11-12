@@ -167,7 +167,7 @@ impl Writer<'_> {
                 self.rev_close(w, props);
             }
             InlineObject::Opaque { format, xml, text } => {
-                if format == "docx" && crate::xml::parse(xml.as_bytes()).is_ok() {
+                if format == "docx" && crate::xml::parse_retained_fragment(xml.as_bytes()).is_ok() {
                     w.raw(xml);
                 } else if !text.is_empty() {
                     self.rev_open(w, props);
@@ -184,6 +184,7 @@ impl Writer<'_> {
     fn write_graphic(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, _depth: usize) {
         let InlineObject::Graphic { w: gw, h: gh, alt, float, graphic } = o else { return };
         let ink = graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink;
+        self.unretained_ink_fallback |= ink && graphic.ink_fallback_unretained;
         let root = match (graphic.chart.as_deref(), graphic.smart_art.as_deref(), graphic.source.as_deref()) {
             (Some(spec), _, _) => crate::xml::parse(self.chart_graphic(spec, rels).as_bytes()).ok(),
             (None, Some(spec), _) => crate::xml::parse(self.smart_art_graphic(spec, *gw, *gh, rels).as_bytes()).ok(),
@@ -458,11 +459,39 @@ impl Writer<'_> {
                 }
                 // Native ink kept from the file, with its fallback, at the member's place.
                 InlineObject::Graphic { w: iw, h: ih, float, graphic, .. } if graphic.kind == wordcraft_doc::graphic::GraphicKind::Ink => {
+                    self.unretained_ink_fallback |= graphic.ink_fallback_unretained;
                     if let Some(src) = graphic.source.as_deref()
                         && let Some(mut root) = self.embedded_tree(src, rels, None)
                     {
                         Self::place_member(&mut root, [c.x, c.y, *iw, *ih], float, 0);
-                        w.raw(&root.to_xml());
+                        // If an invalid extra relationship prevented keeping the original
+                        // alternate, retain its usable picture by rebuilding only the fallback.
+                        if root.name == "w14:contentPart"
+                            && let Some(media) = graphic.ink_fallback.as_ref()
+                            && let Some(file) = self.media_files.get(media).cloned()
+                        {
+                            let style = graphic.ink_fallback_style.as_ref();
+                            let image = InlineObject::Image {
+                                media: media.clone(),
+                                w: *iw,
+                                h: *ih,
+                                alt: String::new(),
+                                float: float.clone(),
+                                crop: style.map_or([0.0; 4], |s| s.crop),
+                                fx: style.map_or_else(Default::default, |s| s.fx),
+                                ole: None,
+                            };
+                            w.open("mc:AlternateContent", &[]);
+                            w.open("mc:Choice", &[("Requires", "wpi")]);
+                            w.raw(&root.to_xml());
+                            w.close("mc:Choice");
+                            w.open("mc:Fallback", &[]);
+                            self.pic(w, &image, &file, at, rels);
+                            w.close("mc:Fallback");
+                            w.close("mc:AlternateContent");
+                        } else {
+                            w.raw(&root.to_xml());
+                        }
                     }
                 }
                 _ => {}

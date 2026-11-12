@@ -7,6 +7,7 @@ mod drawing_color;
 mod embed;
 mod freeform;
 mod glossary;
+mod ink;
 pub(crate) mod math;
 mod props;
 mod sdt;
@@ -14,6 +15,7 @@ mod shape_style;
 mod story;
 mod wordart;
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -31,11 +33,11 @@ use wordcraft_doc::{
     Zoom, ZoomFit, para_block,
 };
 
-use crate::DocxError;
 use crate::bibliography::{MAX_SOURCES, Seen};
 use crate::package::{ContentTypes, EMBEDDED_PARTS, EmbeddedManifest, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
 use crate::units::{flag, int, on_off, tw, u32_of};
 use crate::xml::El;
+use crate::{DocxError, Flavor};
 pub(crate) use props::PropCtx;
 use story::StoryCtx;
 
@@ -72,6 +74,10 @@ pub(crate) struct Reader<'p> {
     pkg: &'p Package,
     pub doc: Document,
     pub pc: PropCtx,
+    /// Fatal compatibility or preservation failures must survive optional part readers and
+    /// nested chunks, which otherwise deliberately ignore unreadable content.
+    mc_error: RefCell<Option<DocxError>>,
+    required_source: std::cell::Cell<bool>,
     revs: HashMap<(u8, String, String, Option<String>), u32>,
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
@@ -98,6 +104,8 @@ pub(crate) struct Reader<'p> {
     graphic_parts: HashMap<String, Option<Arc<El>>>,
     /// Charts and diagrams by (kind, part path, width bits, height bits), built once.
     graphics: HashMap<(GraphicKind, String, u32, u32), Arc<Graphic>>,
+    /// Ink parts already checked for compatibility, including failed preview decodes.
+    ink_compatibility_checked: HashSet<String>,
     /// Drawing ids connectors are glued to (`a:stCxn`, `a:endCxn`), and whether any shape's id
     /// was kept while reading (those not glued to are dropped at the end).
     pub glued: HashSet<u32>,
@@ -112,6 +120,8 @@ pub(crate) struct Reader<'p> {
     embedded: EmbeddedManifest,
     /// What alternative format chunks may still bring in, and how (see [`chunk`]).
     chunks: ChunkState<'p>,
+    /// Package-signature checks are shared by repeated references to the same chunk bytes.
+    chunk_package_candidates: HashMap<(usize, usize), bool>,
     /// Linked text boxes as read: (`wps:txbx/@id` or `wps:linkedTxbx/@id`, `seq` (0 for the box
     /// holding the text), text box part). See [`link_text_boxes`].
     pub txbx_links: Vec<(u32, u32, u32)>,
@@ -123,6 +133,32 @@ pub(crate) struct Reader<'p> {
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
 /// constant): a crafted id can't make a chart of some other, possibly huge, part.
+/// Internal fatality classification travels through nested readers without changing the public error API.
+#[derive(Debug)]
+struct ReadFailure {
+    error: DocxError,
+    fatal: bool,
+}
+
+impl ReadFailure {
+    fn fatal(error: DocxError) -> Self {
+        Self { error, fatal: true }
+    }
+}
+
+impl From<DocxError> for ReadFailure {
+    fn from(error: DocxError) -> Self {
+        Self { error, fatal: false }
+    }
+}
+
+impl From<crate::xml::ParseError> for ReadFailure {
+    fn from(error: crate::xml::ParseError) -> Self {
+        let fatal = error.compatibility || matches!(error.error, DocxError::Limit(_));
+        Self { error: error.error, fatal }
+    }
+}
+
 fn part_of(rels: &Rels, id: &str, kind: &str) -> Option<String> {
     rels.by_id(id).filter(|r| !r.external && rel_is(&r.kind, kind)).map(|r| r.target.clone())
 }
@@ -146,20 +182,150 @@ pub(crate) fn read_package(bytes: &[u8], chunks: Option<ChunkImporter>) -> Resul
 /// Read a package whose parts are already unpacked (from a zip, a Flat OPC file or a converted
 /// Word 2003 XML document).
 pub(crate) fn read_opened(pkg: &Package, chunks: Option<ChunkImporter>) -> Result<Document, DocxError> {
-    read_opened_in(pkg, ChunkState::new(chunks)).map(|(doc, ..)| doc)
+    read_opened_in(pkg, ChunkState::new(chunks)).map(|(doc, ..)| doc).map_err(|e| e.error)
+}
+
+/// The legacy VBA reader may discard unreadable project relationships, but not an uninspected
+/// compatibility requirement. Accept only bounded ASCII or BOM-marked UTF-16 input whose entire
+/// byte stream has none of the XML names that could introduce compatibility processing or a DTD.
+fn broken_vba_rels_without_compatibility(bytes: &[u8]) -> bool {
+    if bytes.len() > crate::package::MAX_EMBEDDED_XML || bytes.starts_with(&[0xff, 0xfe, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xfe, 0xff])
+    {
+        return false;
+    }
+    let utf16 = bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]);
+    let normalized: Vec<u8> = if let Some(rest) = bytes.strip_prefix(&[0xff, 0xfe]).or_else(|| bytes.strip_prefix(&[0xfe, 0xff])) {
+        let le = bytes.starts_with(&[0xff, 0xfe]);
+        rest.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                let unit = if le { u16::from_le_bytes([pair[0], pair[1]]) } else { u16::from_be_bytes([pair[0], pair[1]]) };
+                u8::try_from(unit).ok().filter(u8::is_ascii).unwrap_or(0xff)
+            })
+            .collect()
+    } else {
+        let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+        // Without a BOM, UTF-16/32 could disguise ASCII markup names with zero bytes.
+        if !bytes.is_ascii()
+            || bytes
+                .windows(2)
+                .any(|w| (w[0] == 0 && (w[1].is_ascii_alphabetic() || w[1] == b'<')) || (w[1] == 0 && (w[0].is_ascii_alphabetic() || w[0] == b'<')))
+        {
+            return false;
+        }
+        bytes.to_vec()
+    };
+    // A declared non-UTF encoding such as UTF-7 could encode markup names without literal
+    // ASCII bytes. Do not apply the exclusion unless the declaration confirms our decoding.
+    if normalized.starts_with(b"<?xml") {
+        let mut reader = quick_xml::Reader::from_reader(normalized.as_slice());
+        let Ok(quick_xml::events::Event::Decl(decl)) = reader.read_event() else { return false };
+        let raw: &[u8] = &decl;
+        let count = raw.windows(b"encoding".len()).filter(|v| v.eq_ignore_ascii_case(b"encoding")).count();
+        if !raw.is_ascii() || count > 1 || decl.version().is_err() {
+            return false;
+        }
+        match decl.encoding() {
+            None if count == 0 => {}
+            Some(Ok(encoding)) if count == 1 => {
+                let valid = if utf16 {
+                    encoding.eq_ignore_ascii_case(b"utf-16")
+                        || (bytes.starts_with(&[0xff, 0xfe]) && encoding.eq_ignore_ascii_case(b"utf-16le"))
+                        || (bytes.starts_with(&[0xfe, 0xff]) && encoding.eq_ignore_ascii_case(b"utf-16be"))
+                } else {
+                    encoding.eq_ignore_ascii_case(b"utf-8") || encoding.eq_ignore_ascii_case(b"us-ascii")
+                };
+                if !valid {
+                    return false;
+                }
+            }
+            _ => return false,
+        }
+    }
+    const COMPATIBILITY_NAMES: &[&[u8]] = &[
+        b"Ignorable",
+        b"MustUnderstand",
+        b"ProcessContent",
+        b"PreserveElements",
+        b"PreserveAttributes",
+        b"AlternateContent",
+        b"Choice",
+        b"Fallback",
+        b"Requires",
+        b"<!DOCTYPE",
+        b"<!ENTITY",
+    ];
+    !COMPATIBILITY_NAMES.iter().any(|needle| normalized.windows(needle.len()).any(|candidate| candidate.eq_ignore_ascii_case(needle)))
+}
+
+/// A lenient attribute iterator can overlook malformed metadata and hide a later MC directive.
+/// The tree parser has already enforced XML limits and rejected duplicate attributes before this check.
+fn validate_vba_relationship_attributes(bytes: &[u8]) -> Result<(), DocxError> {
+    let utf16 = crate::xml::utf16_to_utf8(bytes);
+    let bytes = utf16.as_ref().map_or(bytes, |text| text.as_bytes());
+    let mut reader = quick_xml::Reader::from_reader(bytes);
+    loop {
+        match reader.read_event().map_err(|e| DocxError::Xml(e.to_string()))? {
+            quick_xml::events::Event::Start(e) | quick_xml::events::Event::Empty(e) => {
+                for attr in e.attributes().with_checks(false) {
+                    attr.map_err(|e| DocxError::Xml(e.to_string()))?;
+                }
+            }
+            quick_xml::events::Event::Eof => return Ok(()),
+            _ => {}
+        }
+    }
+}
+
+/// Metadata is regenerated on ordinary saves. Only the actual VBA project's broken .rels
+/// retains its historical recovery, after a bounded whole-input compatibility exclusion.
+fn inspect_metadata(pkg: &Package, main: &str) -> Result<bool, ReadFailure> {
+    let vba_rels = pkg
+        .rels(main)
+        .by_type(rt::VBA_PROJECT)
+        .filter(|r| !r.external && pkg.get(&r.target).is_some())
+        .map(|r| crate::package::relationship_path(&r.target));
+    let mut metadata_required = false;
+    for (name, bytes) in pkg.metadata_parts() {
+        let is_vba_rels = vba_rels.as_ref().is_some_and(|path| path.eq_ignore_ascii_case(name));
+        let parsed = crate::xml::parse_document(bytes).and_then(|root| {
+            if is_vba_rels {
+                validate_vba_relationship_attributes(bytes).map_err(|error| crate::xml::ParseError { error, compatibility: false })?;
+            }
+            Ok(root)
+        });
+        let root = match parsed {
+            Ok(root) => root,
+            Err(error)
+                if !error.compatibility
+                    && matches!(error.error, DocxError::Xml(_))
+                    && is_vba_rels
+                    && broken_vba_rels_without_compatibility(bytes) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(ReadFailure::fatal(error.error)),
+        };
+        story::validate_must_understand(&root).map_err(ReadFailure::fatal)?;
+        metadata_required |= story::needs_source_preservation(&root);
+    }
+    Ok(metadata_required)
 }
 
 /// [`read_opened`] with what chunks may still bring in; also gives the chunks, chunk bytes and
-/// graphic work left of that.
-fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize), DocxError> {
+/// chart/diagram and ink work left of that.
+fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize, u64, usize, usize), ReadFailure> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
+    let metadata_required = inspect_metadata(pkg, &main)?;
     let Some(root) = pkg.xml_strict(&main)? else {
-        return Err(DocxError::MissingPart(main));
+        return Err(DocxError::MissingPart(main).into());
     };
     if root.name != "w:document" {
-        return Err(DocxError::NotWord(format!("root element is {}", root.name)));
+        return Err(DocxError::NotWord(format!("root element is {}", root.name)).into());
     }
+    story::validate_must_understand(&root).map_err(ReadFailure::fatal)?;
     let rels = pkg.rels(&main);
     let mut doc = Document::new();
     doc.body.clear();
@@ -167,6 +333,8 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         pkg,
         doc,
         pc: PropCtx::default(),
+        mc_error: RefCell::new(None),
+        required_source: std::cell::Cell::new(metadata_required || story::needs_source_preservation(&root)),
         revs: HashMap::new(),
         moves: MoveCtx::default(),
         media_by_path: HashMap::new(),
@@ -183,6 +351,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         next_perm: 0,
         graphic_parts: HashMap::new(),
         graphics: HashMap::new(),
+        ink_compatibility_checked: HashSet::new(),
         glued: HashSet::new(),
         shape_ids: false,
         main: main.clone(),
@@ -193,7 +362,9 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         theme_fills: Default::default(),
         group_fill: None,
         chunks,
+        chunk_package_candidates: HashMap::new(),
     };
+    r.inspect_all_typed_ink()?;
     r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -267,8 +438,16 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     let mut seen_sources = Seen::default();
     for path in &bib_parts {
+        // InkML may share customXml relationships with bibliography stores. Do not parse it as
+        // bibliography: its dedicated decoder handles XML versions and malformed fallbacks while
+        // retaining the original bytes. Potential MC directives still require the strict DOCX
+        // compatibility check, including fatal propagation through nested documents.
+        if r.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).is_inkml(path) {
+            r.inspect_ink_compatibility(path);
+            continue;
+        }
         if r.doc.sources.len() >= MAX_SOURCES {
-            break;
+            continue;
         }
         lenient("customXml bibliography", r.read_bibliography(path, &mut seen_sources));
     }
@@ -344,10 +523,31 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     if r.shape_ids {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
-    let (left, bytes, graphic) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic);
+    if let Some(error) = r.mc_error.borrow_mut().take() {
+        return Err(ReadFailure::fatal(error));
+    }
+    let (left, bytes, graphic, ink) = (r.chunks.left, r.chunks.bytes, r.chunks.graphic, r.chunks.ink);
+    let required_source = r.required_source.get();
     let mut doc = r.doc;
     doc.ensure_nonempty();
-    Ok((doc, left, bytes, graphic))
+    if required_source {
+        if pkg.size() > wordcraft_doc::kept::MAX_KEPT_BYTES as u64 {
+            return Err(ReadFailure::fatal(DocxError::Limit("required DOCX source exceeds the retained markup budget".into())));
+        }
+        crate::required::mark(&mut doc);
+        doc.passthrough.insert(crate::write::REQUIRED_SOURCE_GUARD.into(), Arc::new(Vec::new()));
+        let snapshot = Arc::new(doc.clone());
+        let main_content_type = ContentTypes::read(pkg).of(&main).unwrap_or(Flavor::Document.main_content_type()).to_string();
+        doc.kept = wordcraft_doc::kept::Kept::new(wordcraft_doc::kept::KeptXml {
+            docx_required: Some(Arc::new(wordcraft_doc::kept::DocxRequired {
+                source: pkg.shared_parts().map_err(ReadFailure::fatal)?,
+                snapshot,
+                main_content_type,
+            })),
+            ..Default::default()
+        });
+    }
+    Ok((doc, left, bytes, graphic, ink))
 }
 
 /// Most move ranges open at once, and most move names tracked, per file.
@@ -465,4 +665,45 @@ fn keep_glued_ids(doc: &mut Document, glued: &HashSet<u32>) {
         InlineObject::Group { children, .. } => children.iter_mut().for_each(|c| clear(&mut c.obj)),
         o => clear(o),
     });
+}
+
+#[cfg(test)]
+mod metadata_recovery_tests {
+    use super::broken_vba_rels_without_compatibility;
+
+    #[test]
+    fn broken_vba_relationship_exclusion_is_bounded_and_encoding_aware() {
+        assert!(broken_vba_rels_without_compatibility(b"<Relationships <<< \0"));
+        assert!(broken_vba_rels_without_compatibility(&[0xff, 0xfe, b'<', 0, 0, 0xd8, b'a']));
+        assert!(!broken_vba_rels_without_compatibility(b"<\0R\0e\0l\0"));
+        assert!(!broken_vba_rels_without_compatibility(&[0xff, 0xfe, 0, 0, b'<', 0, 0, 0]));
+        assert!(!broken_vba_rels_without_compatibility(&[0, 0, 0xfe, 0xff, 0, 0, 0, b'<']));
+        assert!(!broken_vba_rels_without_compatibility(&[0x80]));
+        assert!(broken_vba_rels_without_compatibility(br#"<?xml version="1.0" encoding="UTF-8"?><broken"#));
+        assert!(!broken_vba_rels_without_compatibility(br#"<?xml version="1.0" encoding="UTF-7"?><broken"#));
+        assert!(!broken_vba_rels_without_compatibility(br#"<?xml version="1.0" encoding="UTF-8" encoding="UTF-7"?><broken"#));
+        assert!(!broken_vba_rels_without_compatibility(&vec![b'x'; crate::package::MAX_EMBEDDED_XML + 1]));
+        for token in [
+            "Ignorable",
+            "MustUnderstand",
+            "ProcessContent",
+            "PreserveElements",
+            "PreserveAttributes",
+            "AlternateContent",
+            "Choice",
+            "Fallback",
+            "Requires",
+            "<!DOCTYPE",
+            "<!ENTITY",
+        ] {
+            let broken = format!("<broken << <alias:{token}");
+            assert!(!broken_vba_rels_without_compatibility(broken.as_bytes()), "{token}");
+            for le in [true, false] {
+                let mut bytes = if le { vec![0xff, 0xfe] } else { vec![0xfe, 0xff] };
+                bytes.extend(broken.encode_utf16().flat_map(|u| if le { u.to_le_bytes() } else { u.to_be_bytes() }));
+                bytes.push(0);
+                assert!(!broken_vba_rels_without_compatibility(&bytes), "{token}, le={le}");
+            }
+        }
+    }
 }

@@ -61,6 +61,24 @@ fn body_lines(d: &Document) -> Vec<String> {
 }
 
 #[test]
+fn nested_header_reserved_namespace_error_is_fatal() {
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:xml="urn:bad"/>"#;
+    let outer = |header: &str| {
+        let nested = super::fixtures::zip(&[
+            ("_rels/.rels", ROOT_RELS.as_bytes()),
+            ("word/document.xml", format!(r#"<w:document {NS}><w:body><w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#).as_bytes()),
+            ("word/_rels/document.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="header" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#),
+            ("word/header1.xml", header.as_bytes()),
+        ]);
+        package(CHUNK, Some(("docx", DOCX_MAIN, &nested)))
+    };
+    let valid = header.replace("urn:bad", "http://www.w3.org/XML/1998/namespace");
+    read(&outer(&valid)).expect("a nested header with a valid xml binding must open");
+    let Err(wordcraft_docx::DocxError::Xml(error)) = read(&outer(header)) else { panic!("nested reserved binding must be fatal") };
+    assert!(error.contains("xml") && error.contains("urn:bad"), "wrong failure: {error}");
+}
+
+#[test]
 fn a_chunk_comes_in_through_the_importer_where_it_stands() {
     let html = b"<p>Chunk one</p><p>Chunk two</p>";
     let bytes = package(&format!("{}{CHUNK}{}", p("Before"), p("After")), Some(("htm", "application/xhtml+xml", html)));
@@ -299,15 +317,22 @@ fn match_src_keeps_a_word_chunks_own_formatting() {
 }
 
 #[test]
+fn nested_wordprocessing_chunk_depth_does_not_hide_must_understand() {
+    let mut bytes =
+        package(r#"<w:p xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" mc:MustUnderstand="f"/>"#, None);
+    for _ in 0..5 {
+        bytes = package(CHUNK, Some(("docx", DOCX_MAIN, &bytes)));
+    }
+    assert!(matches!(read(&bytes), Err(wordcraft_docx::DocxError::Limit(_))));
+}
+
+#[test]
 fn nested_wordprocessing_chunks_stop_at_a_depth() {
     let mut bytes = package(&p("Deepest"), None);
     for level in 0..8 {
         bytes = package(&format!("{}{CHUNK}", p(&format!("Level {level}"))), Some(("docx", DOCX_MAIN, &bytes)));
     }
-    let lines = body_lines(&read(&bytes).unwrap());
-    assert_eq!(lines.first().map(String::as_str), Some("Level 7"));
-    assert!(!lines.iter().any(|l| l == "Deepest"), "{lines:?}");
-    assert!(lines.len() >= 4, "{lines:?}");
+    assert!(matches!(read(&bytes), Err(wordcraft_docx::DocxError::Limit(_))));
 }
 
 #[test]

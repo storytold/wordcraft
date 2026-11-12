@@ -205,6 +205,29 @@ pub struct Package {
     /// Lowercased part name → its stored spelling (the first in name order): part names are
     /// case-insensitive (ECMA-376 Part 2 §6.2.2.3), so every spelling is one part.
     lower: HashMap<String, String>,
+    /// A replay must not hide entries lost to corruption or ambiguous names.
+    incomplete_source: bool,
+}
+
+/// `zip` deduplicates exact names while building its index, before `len()` is observable.
+/// Count raw central-directory records to detect that loss before source replay.
+fn central_entry_count(bytes: &[u8], start: u64) -> Option<usize> {
+    let mut pos = usize::try_from(start).ok()?;
+    let mut count = 0usize;
+    while bytes.get(pos..pos.checked_add(4)?) == Some(b"PK\x01\x02") {
+        let header = bytes.get(pos..pos.checked_add(46)?)?;
+        let u16_at = |i: usize| header.get(i..i.checked_add(2)?).and_then(|v| <[u8; 2]>::try_from(v).ok()).map(u16::from_le_bytes).map(usize::from);
+        let len = 46usize.checked_add(u16_at(28)?)?.checked_add(u16_at(30)?)?.checked_add(u16_at(32)?)?;
+        pos = pos.checked_add(len)?;
+        if pos > bytes.len() {
+            return None;
+        }
+        count = count.checked_add(1)?;
+        if count > MAX_ENTRIES {
+            return None;
+        }
+    }
+    Some(count)
 }
 
 impl Package {
@@ -221,11 +244,13 @@ impl Package {
         }
         let mut files = BTreeMap::new();
         let mut total: u64 = 0;
+        let mut incomplete_source = central_entry_count(bytes, zip.central_directory_start()) != Some(zip.len());
         for i in 0..zip.len() {
             let mut f = match zip.by_index(i) {
                 Ok(f) => f,
                 Err(e) => {
                     log::warn!("docx: skipping unreadable zip entry {i}: {e}");
+                    incomplete_source = true;
                     continue;
                 }
             };
@@ -248,11 +273,40 @@ impl Package {
             if let Err(e) = read {
                 // A corrupt entry: keep going unless it's a part we can't do without.
                 log::warn!("docx: zip entry {name} unreadable: {e}");
+                incomplete_source = true;
                 continue;
             }
-            files.insert(name, Arc::new(buf));
+            if files.insert(name, Arc::new(buf)).is_some() {
+                incomplete_source = true;
+            }
         }
-        Ok(Package::new(files))
+        Ok(Package::new(files, incomplete_source))
+    }
+
+    /// Share the bounded source parts when exact package preservation is required.
+    pub(crate) fn shared_parts(&self) -> Result<BTreeMap<String, Arc<Vec<u8>>>, DocxError> {
+        if self.incomplete_source {
+            return Err(DocxError::Preservation("source package has unreadable or ambiguous entries".into()));
+        }
+        // Re-emitting an unsafe ZIP name could attack a consumer that extracts the saved file.
+        // Colons are legal IRI characters, but can select Windows streams in any path segment.
+        if self.files.keys().any(|name| name.contains(['\\', '\0', ':']) || name.split('/').any(|segment| matches!(segment, "" | "." | ".."))) {
+            return Err(DocxError::Preservation("source package has an unsafe part name".into()));
+        }
+        Ok(self.files.clone())
+    }
+
+    /// Names of all bounded package parts, including parts not reached from the main story.
+    pub(crate) fn part_names(&self) -> impl Iterator<Item = &str> {
+        self.files.keys().map(String::as_str)
+    }
+
+    /// OPC metadata is rewritten on save, even when no modeled content refers to a part.
+    pub(crate) fn metadata_parts(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.files
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("[Content_Types].xml") || name.to_ascii_lowercase().ends_with(".rels"))
+            .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
     }
 
     /// The bytes of all its parts.
@@ -263,10 +317,15 @@ impl Package {
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
     /// name without the leading `/`.
     pub fn from_parts(files: BTreeMap<String, Vec<u8>>) -> Package {
-        Package::new(files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect())
+        Self::from_parts_with_ambiguity(files, false)
     }
 
-    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>) -> Package {
+    /// Flat OPC may have dropped empty or duplicate parts before constructing the map.
+    pub(crate) fn from_parts_with_ambiguity(files: BTreeMap<String, Vec<u8>>, incomplete_source: bool) -> Package {
+        Package::new(files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect(), incomplete_source)
+    }
+
+    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>, incomplete_source: bool) -> Package {
         let mut lower: HashMap<String, String> = HashMap::new();
         let mut collides = false;
         for name in files.keys() {
@@ -278,7 +337,7 @@ impl Package {
             }
         }
         if !collides {
-            return Package { files, lower };
+            return Package { files, lower, incomplete_source };
         }
         // Entries whose names differ only in case are one part, so every spelling of the name
         // reaches the same stored entry (#3704). The spelling kept is the one a relationship
@@ -292,7 +351,7 @@ impl Package {
         files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
         let dropped = before.saturating_sub(files.len());
         log::warn!("docx: {dropped} zip entries are other spellings of parts already read; they are left out");
-        Package { files, lower }
+        Package { files, lower, incomplete_source: true }
     }
 
     /// The stored spelling of part `name` (leading `/` ignored; case-insensitive).
@@ -312,9 +371,9 @@ impl Package {
     }
 
     /// [`Package::xml`] for the main document part: malformed XML is an error, not a truncated read.
-    pub fn xml_strict(&self, name: &str) -> Result<Option<El>, DocxError> {
+    pub fn xml_strict(&self, name: &str) -> Result<Option<El>, xml::ParseError> {
         match self.get(name) {
-            Some(b) => xml::parse_strict(b).map(Some),
+            Some(b) => xml::parse_document(b).map(Some),
             None => Ok(None),
         }
     }
@@ -328,8 +387,8 @@ impl Package {
 
     /// Relationships of `part` (from `dir/_rels/name.rels`).
     pub fn rels(&self, part: &str) -> Rels {
-        let (dir, file) = split_dir(part);
-        let path = if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") };
+        let (dir, _) = split_dir(part);
+        let path = relationship_path(part);
         let mut rels = Rels::default();
         let root = match self.xml(&path) {
             Ok(Some(root)) => root,
@@ -383,6 +442,11 @@ impl ContentTypes {
         ct
     }
 
+    /// InkML discovery uses case-insensitive MIME identity, without changing preserved spelling.
+    pub fn is_inkml(&self, part: &str) -> bool {
+        self.of(part).is_some_and(|content_type| content_type.eq_ignore_ascii_case("application/inkml+xml"))
+    }
+
     /// Content type of `part` (a package path without the leading `/`).
     pub fn of(&self, part: &str) -> Option<&str> {
         let part = part.trim_start_matches('/').to_ascii_lowercase();
@@ -417,6 +481,12 @@ impl Rels {
     pub fn by_type(&self, full: &str) -> Option<&Rel> {
         self.list.iter().find(|r| rel_is(&r.kind, full))
     }
+}
+
+/// OPC relationship-part path for an owner, including the package root.
+pub(crate) fn relationship_path(part: &str) -> String {
+    let (dir, file) = split_dir(part);
+    if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") }
 }
 
 fn split_dir(part: &str) -> (&str, &str) {

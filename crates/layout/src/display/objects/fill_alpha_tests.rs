@@ -61,6 +61,61 @@ fn freeform_fill_has_own_alpha() {
 }
 
 #[test]
+fn native_taps_and_strokes_use_the_same_mean_scale_at_layout() {
+    let graphic = Graphic {
+        kind: GraphicKind::Ink,
+        w: 11.0,
+        h: 11.0,
+        items: vec![
+            GraphicItem::Path {
+                segs: vec![PathSeg::Move(0.5, 0.5), PathSeg::Line(10.5, 0.5)],
+                fill: None,
+                stroke: Some(Rgb::BLACK),
+                stroke_width: 1.0,
+            },
+            GraphicItem::Shape { rect: [5.0, 5.0, 1.0, 1.0], kind: ShapeKind::Ellipse, fill: Some(Rgb::BLACK), stroke: None, stroke_width: 0.0 },
+        ],
+        ..Default::default()
+    };
+    for (sx, sy) in [(4.0, 1.0), (1.0, 4.0), (0.5, 3.0), (2.0, 2.0)] {
+        let draws = graphic_draws(&Document::new(), &graphic, Rect::new(100.0, 200.0, 11.0 * sx, 11.0 * sy), 1.0);
+        let [Draw::NativeInk { width, .. }, Draw::Shape { rect, .. }] = draws.as_slice() else { panic!("{draws:?}") };
+        let expected = (sx + sy) / 2.0;
+        assert!((*width - expected).abs() < 1e-6);
+        assert!((rect.w - expected).abs() < 1e-6 && (rect.h - expected).abs() < 1e-6);
+        assert!((rect.x + rect.w / 2.0 - (100.0 + 5.5 * sx)).abs() < 1e-5);
+        assert!((rect.y + rect.h / 2.0 - (200.0 + 5.5 * sy)).abs() < 1e-5);
+    }
+    let chart = Graphic { kind: GraphicKind::Chart, ..graphic };
+    let draws = graphic_draws(&Document::new(), &chart, Rect::new(0.0, 0.0, 44.0, 11.0), 1.0);
+    assert!(matches!(&draws[1], Draw::Shape { rect, .. } if rect.w == 4.0 && rect.h == 1.0));
+}
+
+#[test]
+fn native_ink_preview_style_applies_only_to_its_fallback_image() {
+    let style = wordcraft_doc::graphic::InkFallbackStyle { crop: [0.25, 0.0, 0.0, 0.0], fx: wordcraft_doc::picfx::PicFx::new(20_000, 0, 0) };
+    let mut graphic = Graphic {
+        kind: GraphicKind::Ink,
+        w: 10.0,
+        h: 10.0,
+        ink_fallback: Some("preview".into()),
+        ink_fallback_style: Some(style.clone()),
+        items: vec![
+            GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "preview".into() },
+            GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "other".into() },
+        ],
+        ..Default::default()
+    };
+    let rect = Rect::new(0.0, 0.0, 10.0, 10.0);
+    let draws = graphic_draws(&Document::new(), &graphic, rect, 1.0);
+    assert!(matches!(&draws[0], Draw::Image { crop, fx, .. } if *crop == style.crop && *fx == style.fx));
+    assert!(matches!(&draws[1], Draw::Image { crop, fx, .. } if *crop == [0.0; 4] && fx.is_identity()));
+    graphic.kind = GraphicKind::Chart;
+    let draws = graphic_draws(&Document::new(), &graphic, rect, 1.0);
+    assert!(matches!(&draws[0], Draw::Image { crop, fx, .. } if *crop == [0.0; 4] && fx.is_identity()));
+}
+
+#[test]
 fn other_path_alpha_defaults() {
     let rect = Rect::new(4.0, 4.0, 24.0, 24.0);
     let graphic = Graphic {

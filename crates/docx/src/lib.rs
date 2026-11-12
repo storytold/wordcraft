@@ -15,6 +15,7 @@ mod flat;
 mod fonts;
 mod package;
 mod read;
+mod required;
 mod smart_art;
 #[cfg(test)]
 mod test_log;
@@ -164,6 +165,9 @@ pub enum DocxError {
     /// The input exceeds a safety limit (size, nesting, element count).
     #[error("limit exceeded: {0}")]
     Limit(String),
+    /// Saving would silently discard document content that could not be retained.
+    #[error("cannot preserve document content: {0}")]
+    Preservation(String),
     /// The package is readable but isn't a WordprocessingML document.
     #[error("not a Word document: {0}")]
     NotWord(String),
