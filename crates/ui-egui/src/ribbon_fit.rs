@@ -616,9 +616,15 @@ mod ui_tests {
         );
         h.run_steps(8);
         use egui_kittest::kittest::Queryable;
-        let win = h.get_by_role_and_label(Role::Button, "Window");
-        win.scroll_to_me();
-        h.run_steps(2);
+        // The ribbon scrolls at 420 pt: bring the Window group into view through its
+        // edge chevron, then open its compact drop-down.
+        for _ in 0..6 {
+            if h.query_all_by_label("Window").any(|n| n.rect().max.x <= 420.0 && n.rect().min.x >= 0.0) {
+                break;
+            }
+            h.get_by_label("Scroll ribbon right").click();
+            h.run_steps(3);
+        }
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(5);
         let labels: Vec<String> = h.query_all_by(|n| n.label().is_some()).filter_map(|n| n.accesskit_node().label()).take(100).collect();
