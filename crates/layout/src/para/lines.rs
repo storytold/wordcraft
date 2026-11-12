@@ -1,7 +1,7 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
 use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
-use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
+use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv, StyleRun};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
 use super::{Align, Arc, Level, LevelSuffix, LineSpacing, MathJc, ParaLayout, TabAlign, TabLeader, TabStop, VecDeque, WrapText};
@@ -450,7 +450,16 @@ impl<'e> Breaker<'e> {
                 }
             } else {
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
-                let (a, d) = st.line_extent();
+                let (mut a, mut d) = st.line_extent();
+                // A cluster drawn in several faces (a field result mixing scripts, #2491) reaches
+                // as far as its tallest face, as the same text in clusters of its own would.
+                if let Ok(i) = pl.faces.binary_search_by_key(&(c0 + k), |(i, _)| *i)
+                    && let Some((_, runs)) = pl.faces.get(i)
+                {
+                    for (fa, fd) in runs.iter().filter_map(|r| pl.styles.get(r.style as usize)).map(StyleRun::line_extent) {
+                        (a, d) = (a.max(fa), d.max(fd));
+                    }
+                }
                 (a.max(c.obj_h + st.shift), d)
             };
             ex.asc = ex.asc.max(a);

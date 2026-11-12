@@ -10232,6 +10232,44 @@ fn a_field_result_mixing_scripts_draws_each_glyph_in_its_own_face() {
     assert!(faces.len() >= 2, "Latin and box drawing in faces of their own: {faces:?}");
 }
 
+/// #2491 review: a field result's glyphs in a second, taller face make its line as tall as that
+/// face's text would: each face run counts toward the line's ascent and descent, as separate
+/// clusters of the same text would.
+#[test]
+fn a_field_result_mixing_scripts_sizes_its_line_by_every_face() {
+    crate::test_fonts();
+    let latin = wordcraft_doc::styles::BODY_FONT;
+    if wordcraft_fonts::word::resolve(latin, false, false).face.covers('─') || wordcraft_fonts::FontDb::global().fallback_for('─', 0).is_none() {
+        eprintln!("skipped: no fallback face for box drawing apart from the Latin one");
+        return;
+    }
+    let field = InlineObject::Field {
+        instr: "HYPERLINK \\l \"_Sample1\"".into(),
+        result: "1 ──┼──".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("");
+    d.insert_object(&Pos::body(0, 0), field, &Default::default()).unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, wordcraft_doc::para::OBJ.len_utf8()), &|c| c.font = Some(latin.into())).unwrap();
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let line = &para.lines[0];
+    let runs: Vec<_> = para.faces.iter().flat_map(|(_, r)| r.iter()).collect();
+    assert!(runs.len() >= 2, "the result is drawn in two faces: {runs:?}");
+    for r in runs {
+        let (a, dsc) = para.styles[r.style as usize].line_extent();
+        assert!(
+            line.text_asc >= a - 0.01 && line.text_desc >= dsc - 0.01,
+            "line {}/{} fits face run {r:?} ({a}/{dsc})",
+            line.text_asc,
+            line.text_desc
+        );
+    }
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]
