@@ -567,9 +567,11 @@ mod ui_tests {
         // The split button's arrow opens Built-In; the plain insert would show no menu.
         let eq: Vec<String> = h.query_all(By::new().predicate(|_| true)).filter_map(|n| n.accesskit_node().label()).collect();
         assert!(eq.iter().any(|l| l.contains("Equation")), "Insert tab shows an Equation control: {eq:?}");
+        // The arrow rect reports wider than its 11-pt allocation in the accesskit tree;
+        // match by label instead: the split body is "Equation", its arrow "Equation options".
         let arrow = h
-            .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l.contains("Equation"))))
-            .find(|n| n.rect().width() < 20.0 && n.rect().min.y >= 0.0)
+            .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l == "Equation options")))
+            .find(|n| n.rect().min.y >= 0.0)
             .expect("the two-row Equation split button has an arrow");
         arrow.click();
         h.run_steps(3);
