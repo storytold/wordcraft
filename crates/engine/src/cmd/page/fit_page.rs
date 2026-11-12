@@ -10,7 +10,7 @@ use serde_json::Value;
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::shrink::fit_document_typography;
 use wordcraft_doc::{CharProps, Document, ParaProps, StoryRef};
-use wordcraft_layout::{LayoutCache, LayoutOptions, Page, Placed, ViewMode};
+use wordcraft_layout::{HideDeleted, LayoutCache, LayoutOptions, Page, Placed, ViewMode};
 
 use crate::cmd::sel_result;
 use crate::{CmdError, CmdResult, Session, p};
@@ -45,20 +45,19 @@ const CANDIDATE_STEPS: [(f32, f32); 10] = [
 ///
 /// Resolves character formatting using `resolve_char_in` against `table_chr` (when inside a table cell)
 /// and inspects both standard and complex-script text properties while ignoring superscript/subscript characters.
-/// When `hide_deleted` is true, runs with deletion markup (`props.del.is_some()`) are skipped because they
-/// are not rendered in Print view when revision markup is hidden.
+/// When `hides` hides a deletion, runs carrying it are skipped because Print layout omits them.
 /// When `show_hidden` is false, runs with hidden text formatting are skipped because they are omitted from layout.
 fn min_para_font_size(
     doc: &Document,
     p: &wordcraft_doc::para::Paragraph,
     table_chr: Option<&wordcraft_doc::CharProps>,
-    hide_deleted: bool,
+    hides: HideDeleted,
     show_hidden: bool,
 ) -> f32 {
     let style_id = p.props.style.as_deref();
     let mut min_size = if p.runs.is_empty() {
         let mark_resolved = doc.styles.resolve_char_in(style_id, table_chr, &p.mark);
-        if (mark_resolved.hidden && !show_hidden) || (hide_deleted && p.mark.del.is_some()) { f32::INFINITY } else { mark_resolved.size }
+        if (mark_resolved.hidden && !show_hidden) || hides.hides(doc, p.mark.del) { f32::INFINITY } else { mark_resolved.size }
     } else {
         f32::INFINITY
     };
@@ -67,7 +66,7 @@ fn min_para_font_size(
         let run_end = run_start.saturating_add(r.len).min(p.text.len());
         let run_text = p.text.get(run_start..run_end).unwrap_or("");
         run_start = run_end;
-        if hide_deleted && r.props.del.is_some() {
+        if hides.hides(doc, r.props.del) {
             continue;
         }
 
@@ -92,13 +91,13 @@ fn min_para_font_size(
 
 /// Recursively calculates the minimum effective font size in points across blocks, resolving table-style conditional formatting.
 ///
-/// When `hide_deleted` is true, deleted text runs hidden in Print view are skipped.
+/// When `hides` hides a deletion, deleted text runs are skipped.
 /// When `show_hidden` is false, hidden text runs omitted from Print view are skipped.
 fn min_blocks_font_size(
     doc: &Document,
     blocks: &[Arc<wordcraft_doc::Block>],
     table_chr: Option<&wordcraft_doc::CharProps>,
-    hide_deleted: bool,
+    hides: HideDeleted,
     show_hidden: bool,
 ) -> f32 {
     use wordcraft_doc::styles::PartSet;
@@ -106,7 +105,7 @@ fn min_blocks_font_size(
     let mut min_sz = f32::INFINITY;
     for b in blocks {
         if let Some(p) = b.as_para() {
-            min_sz = min_sz.min(min_para_font_size(doc, p, table_chr, hide_deleted, show_hidden));
+            min_sz = min_sz.min(min_para_font_size(doc, p, table_chr, hides, show_hidden));
         } else if let Some(tbl) = b.as_table() {
             let style = tbl.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
             let nrows = tbl.rows.len();
@@ -125,7 +124,7 @@ fn min_blocks_font_size(
                             cell_chr.overlay(&f.chr);
                         }
                     }
-                    min_sz = min_sz.min(min_blocks_font_size(doc, &cell.blocks, Some(&cell_chr), hide_deleted, show_hidden));
+                    min_sz = min_sz.min(min_blocks_font_size(doc, &cell.blocks, Some(&cell_chr), hides, show_hidden));
                 }
             }
         }
@@ -138,13 +137,13 @@ fn paragraph_has_visible_page_break(
     doc: &Document,
     p: &wordcraft_doc::para::Paragraph,
     table_chr: Option<&CharProps>,
-    hide_deleted: bool,
+    hides: HideDeleted,
     show_hidden: bool,
 ) -> bool {
     let style_id = p.props.style.as_deref();
     if p.runs.is_empty() {
         let mark = doc.styles.resolve_char_in(style_id, table_chr, &p.mark);
-        let visible = !(mark.hidden && !show_hidden) && !(hide_deleted && p.mark.del.is_some());
+        let visible = !(mark.hidden && !show_hidden) && !hides.hides(doc, p.mark.del);
         return visible && p.text.contains(wordcraft_doc::para::PAGE_BREAK);
     }
     let mut run_start = 0usize;
@@ -152,7 +151,7 @@ fn paragraph_has_visible_page_break(
         let run_end = run_start.saturating_add(r.len).min(p.text.len());
         let run_text = p.text.get(run_start..run_end).unwrap_or("");
         run_start = run_end;
-        if hide_deleted && r.props.del.is_some() {
+        if hides.hides(doc, r.props.del) {
             continue;
         }
         let resolved = doc.styles.resolve_char_in(style_id, table_chr, &r.props);
@@ -173,13 +172,13 @@ fn blocks_have_explicit_breaks(
     blocks: &[Arc<wordcraft_doc::Block>],
     table_para: Option<&ParaProps>,
     table_chr: Option<&CharProps>,
-    hide_deleted: bool,
+    hides: HideDeleted,
     show_hidden: bool,
 ) -> bool {
     for b in blocks {
         if let Some(p) = b.as_para() {
             if doc.styles.resolve_para_in(&p.props, table_para).page_break_before
-                || paragraph_has_visible_page_break(doc, p, table_chr, hide_deleted, show_hidden)
+                || paragraph_has_visible_page_break(doc, p, table_chr, hides, show_hidden)
             {
                 return true;
             }
@@ -201,7 +200,7 @@ fn blocks_have_explicit_breaks(
                             cell_chr.overlay(&st.part(part).chr);
                         }
                     }
-                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para, Some(&cell_chr), hide_deleted, show_hidden) {
+                    if blocks_have_explicit_breaks(doc, &cell.blocks, cell_para, Some(&cell_chr), hides, show_hidden) {
                         return true;
                     }
                 }
@@ -213,7 +212,7 @@ fn blocks_have_explicit_breaks(
 
 /// Returns true if the document contains explicit page or section breaks that
 /// physically force content onto additional pages.
-fn has_explicit_breaks(doc: &Document, hide_deleted: bool, show_hidden: bool) -> bool {
+fn has_explicit_breaks(doc: &Document, hides: HideDeleted, show_hidden: bool) -> bool {
     let sections = doc.sections();
     if sections.len() > 1 {
         for (_, sec) in &sections[1..] {
@@ -222,7 +221,7 @@ fn has_explicit_breaks(doc: &Document, hide_deleted: bool, show_hidden: bool) ->
             }
         }
     }
-    blocks_have_explicit_breaks(doc, &doc.body, None, None, hide_deleted, show_hidden)
+    blocks_have_explicit_breaks(doc, &doc.body, None, None, hides, show_hidden)
 }
 
 /// True when `item` is a line-number decoration: a `DECOR_STORY` line with no block path.
@@ -318,27 +317,23 @@ fn final_page_volume(doc: &Document, page: &Page) -> (usize, f32) {
 
 /// Calculates the minimum effective body font size in points across the document body and editable text boxes.
 ///
-/// When `hide_deleted` is true, deleted text runs hidden in Print view are skipped.
-/// When `show_hidden` is false, hidden text runs omitted from Print view are skipped.
-fn min_body_font_size(doc: &Document, hide_deleted: bool, show_hidden: bool) -> f32 {
+/// Uses the same deletion visibility as the session's Print layout for each story.
+fn min_body_font_size(doc: &Document, opts: &LayoutOptions) -> f32 {
     let hf_boxes = wordcraft_doc::shrink::header_footer_text_boxes(doc);
-    let mut min_sz = min_blocks_font_size(doc, &doc.body, None, hide_deleted, show_hidden);
+    let mut min_sz = min_blocks_font_size(doc, &doc.body, None, opts.hides_deleted(StoryRef::Body), opts.show_hidden);
     for (id, part) in &doc.parts {
         if !matches!(part.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer | wordcraft_doc::PartKind::Comment)
             && !hf_boxes.contains(id)
         {
-            min_sz = min_sz.min(min_blocks_font_size(doc, &part.blocks, None, hide_deleted, show_hidden));
+            min_sz = min_sz.min(min_blocks_font_size(doc, &part.blocks, None, opts.hides_deleted(StoryRef::Part(*id)), opts.show_hidden));
         }
     }
     if min_sz.is_finite() { min_sz } else { wordcraft_doc::props::DEFAULT_FONT_SIZE }
 }
 
 /// Checks whether effective body font sizes are at or below the minimum readable font size (8.5 pt).
-///
-/// When `hide_deleted` is true, deleted text runs hidden in Print view are skipped.
-/// When `show_hidden` is false, hidden text runs omitted from Print view are skipped.
-fn doc_has_unreadable_body_font(doc: &Document, hide_deleted: bool, show_hidden: bool) -> bool {
-    min_body_font_size(doc, hide_deleted, show_hidden) < MIN_COMFORTABLE_BODY_FONT_SIZE
+fn doc_has_unreadable_body_font(doc: &Document, opts: &LayoutOptions) -> bool {
+    min_body_font_size(doc, opts) < MIN_COMFORTABLE_BODY_FONT_SIZE
 }
 
 /// Collects all effective font sizes in points across a slice of blocks.
@@ -637,7 +632,6 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
     // 2. Build equivalent Print layout options
     let print_opts = fit_layout_options(s);
     let shown_hidden = print_opts.show_hidden;
-    let hide_deleted = print_opts.hide_deleted;
     let pre_font_sizes = collect_body_font_sizes(&s.doc);
     let pre_line_spacings = collect_body_line_spacings(&s.doc);
 
@@ -652,7 +646,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
 
     // Explicit breaks force pages regardless of typography; refuse before any trial can appear to
     // succeed by moving text around them.
-    if has_explicit_breaks(&s.doc, hide_deleted, shown_hidden) {
+    if has_explicit_breaks(&s.doc, print_opts.hides_deleted(StoryRef::Body), shown_hidden) {
         return Err(CmdError::Failed("Unable to fit document to one page: explicit page or section breaks prevent page reduction.".into()));
     }
 
@@ -696,7 +690,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
         }
         // Anti-compound guard: refuse font reduction if body font is already at or below the readability floor,
         // while allowing spacing-only candidates (delta == 0.0) to run.
-        if delta > 0.0 && doc_has_unreadable_body_font(&s.doc, hide_deleted, shown_hidden) {
+        if delta > 0.0 && doc_has_unreadable_body_font(&s.doc, &print_opts) {
             continue;
         }
 
@@ -704,7 +698,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
         fit_document_typography(&mut trial_doc, delta, alpha);
 
         // Validate the trial document's effective body font sizes against 8.5 pt minimum before accepting
-        if delta > 0.0 && doc_has_unreadable_body_font(&trial_doc, hide_deleted, shown_hidden) {
+        if delta > 0.0 && doc_has_unreadable_body_font(&trial_doc, &print_opts) {
             continue;
         }
 
@@ -738,7 +732,7 @@ pub fn fit_one_page(s: &mut Session, v: &Value) -> CmdResult {
             sel_result(s)
         }
         _ => {
-            if min_body_font_size(&s.doc, hide_deleted, shown_hidden) <= MIN_COMFORTABLE_BODY_FONT_SIZE {
+            if min_body_font_size(&s.doc, &print_opts) <= MIN_COMFORTABLE_BODY_FONT_SIZE {
                 Err(CmdError::Failed("Unable to shrink document further without reducing text beyond readability limits.".into()))
             } else {
                 Err(CmdError::Failed("Unable to fit document to one page: no permitted typography adjustment could remove a page.".into()))
@@ -796,7 +790,7 @@ mod tests {
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.props.page_break_before = Some(true);
         }
-        assert!(has_explicit_breaks(&doc, false, false), "a direct page_break_before is an explicit break");
+        assert!(has_explicit_breaks(&doc, HideDeleted::default(), false), "a direct page_break_before is an explicit break");
 
         let mut doc = Document::new();
         doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("body", Default::default()))];
@@ -811,7 +805,7 @@ mod tests {
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.props.style = Some("BreakBefore".into());
         }
-        assert!(has_explicit_breaks(&doc, false, false), "a style-inherited page_break_before is an explicit break");
+        assert!(has_explicit_breaks(&doc, HideDeleted::default(), false), "a style-inherited page_break_before is an explicit break");
 
         let mut doc = Document::new();
         let mut table = wordcraft_doc::Table::new(1, 1, 100.0);
@@ -819,7 +813,7 @@ mod tests {
         cell_p.props.page_break_before = Some(true);
         table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cell_p)];
         doc.body = vec![Arc::new(wordcraft_doc::Block::Table(table))];
-        assert!(has_explicit_breaks(&doc, false, false), "a page_break_before inside a table cell is an explicit break");
+        assert!(has_explicit_breaks(&doc, HideDeleted::default(), false), "a page_break_before inside a table cell is an explicit break");
     }
 
     #[test]
@@ -830,16 +824,16 @@ mod tests {
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.runs[0].props.hidden = Some(true);
         }
-        assert!(!has_explicit_breaks(&doc, false, false), "hidden break is omitted in Print view");
-        assert!(has_explicit_breaks(&doc, false, true), "hidden break counts when hidden marks are shown");
+        assert!(!has_explicit_breaks(&doc, HideDeleted::default(), false), "hidden break is omitted in Print view");
+        assert!(has_explicit_breaks(&doc, HideDeleted::default(), true), "hidden break counts when hidden marks are shown");
 
         let mut doc = Document::new();
         doc.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
         if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[0]) {
             p.runs[0].props.del = Some(0);
         }
-        assert!(!has_explicit_breaks(&doc, true, false), "deleted break is omitted while markup is hidden");
-        assert!(has_explicit_breaks(&doc, false, false), "deleted break counts when markup is shown");
+        assert!(!has_explicit_breaks(&doc, HideDeleted::ALL, false), "deleted break is omitted while markup is hidden");
+        assert!(has_explicit_breaks(&doc, HideDeleted::default(), false), "deleted break counts when markup is shown");
     }
 
     #[test]
@@ -863,8 +857,8 @@ mod tests {
         };
         Arc::make_mut(&mut doc.styles).upsert(style);
 
-        assert!(!has_explicit_breaks(&doc, false, false), "a first-row hidden override must hide the break");
-        assert!(has_explicit_breaks(&doc, false, true), "the hidden break counts when hidden marks are shown");
+        assert!(!has_explicit_breaks(&doc, HideDeleted::default(), false), "a first-row hidden override must hide the break");
+        assert!(has_explicit_breaks(&doc, HideDeleted::default(), true), "the hidden break counts when hidden marks are shown");
     }
 
     #[test]
