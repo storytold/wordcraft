@@ -41,6 +41,85 @@ const MAX_POINTS: usize = 100_000;
 /// Bound on input numbers and evaluated mapping intermediates.
 const MAX_VALUE: f64 = 1_000_000_000.0;
 
+/// Before bypassing the WordprocessingML bibliography probe for a typed InkML part, prove that
+/// its bytes cannot contain compatibility directives. A positive result is checked by the
+/// namespace-aware DOCX parser; undecidable encodings are refused rather than silently skipped.
+/// This does not parse or expand DTDs: the InkML preview decoder rejects them independently.
+pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<Option<bool>, crate::DocxError> {
+    use std::borrow::Cow;
+
+    if bytes.len() > wordcraft_doc::kept::MAX_KEPT_BYTES {
+        return Err(crate::DocxError::Limit("InkML compatibility inspection exceeds the retained-byte limit".into()));
+    }
+    if bytes.starts_with(&[0xff, 0xfe, 0x00, 0x00]) || bytes.starts_with(&[0x00, 0x00, 0xfe, 0xff]) {
+        return Err(crate::DocxError::Xml("cannot inspect UTF-32 InkML for compatibility directives".into()));
+    }
+    // An isolated 0xff/0xfe without a matching BOM cannot start an XML encoding supported by
+    // this reader. Keep such binary ink opaque, and require exact source replay on save. A visible
+    // compatibility name is still sent to the strict parser and causes refusal.
+    if matches!(bytes.first(), Some(0xff | 0xfe)) && !bytes.starts_with(&[0xff, 0xfe]) && !bytes.starts_with(&[0xfe, 0xff]) {
+        return Ok(if compatibility_name(bytes) { Some(true) } else { None });
+    }
+    let (text, utf16) = if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
+        let le = bytes.starts_with(&[0xff, 0xfe]);
+        let (pairs, rest) = bytes[2..].as_chunks::<2>();
+        if !rest.is_empty() {
+            return Err(crate::DocxError::Xml("invalid UTF-16 InkML encoding".into()));
+        }
+        let units: Vec<_> = pairs.iter().map(|pair| if le { u16::from_le_bytes(*pair) } else { u16::from_be_bytes(*pair) }).collect();
+        let text = String::from_utf16(&units).map_err(|_| crate::DocxError::Xml("invalid UTF-16 InkML encoding".into()))?;
+        (Cow::Owned(text), true)
+    } else {
+        let bytes = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]).unwrap_or(bytes);
+        let text =
+            std::str::from_utf8(bytes).map_err(|_| crate::DocxError::Xml("cannot inspect InkML encoding for compatibility directives".into()))?;
+        (Cow::Borrowed(text), false)
+    };
+    if text.contains('\0') {
+        return Err(crate::DocxError::Xml("cannot inspect InkML encoding for compatibility directives".into()));
+    }
+    if text.starts_with("<?xml") {
+        let mut reader = quick_xml::Reader::from_str(&text);
+        let Ok(quick_xml::events::Event::Decl(decl)) = reader.read_event() else {
+            return Err(crate::DocxError::Xml("cannot inspect InkML XML declaration".into()));
+        };
+        let raw: &[u8] = &decl;
+        let count = raw.windows(b"encoding".len()).filter(|window| window.eq_ignore_ascii_case(b"encoding")).count();
+        if !raw.is_ascii() || count > 1 || decl.version().is_err() {
+            return Err(crate::DocxError::Xml("cannot inspect InkML XML declaration".into()));
+        }
+        match decl.encoding() {
+            None if count == 0 => {}
+            Some(Ok(encoding))
+                if count == 1
+                    && if utf16 {
+                        encoding.eq_ignore_ascii_case(b"utf-16")
+                            || (bytes.starts_with(&[0xff, 0xfe]) && encoding.eq_ignore_ascii_case(b"utf-16le"))
+                            || (bytes.starts_with(&[0xfe, 0xff]) && encoding.eq_ignore_ascii_case(b"utf-16be"))
+                    } else {
+                        encoding.eq_ignore_ascii_case(b"utf-8") || encoding.eq_ignore_ascii_case(b"us-ascii")
+                    } => {}
+            _ => return Err(crate::DocxError::Xml("cannot inspect the declared InkML encoding".into())),
+        }
+    }
+    Ok(Some(compatibility_name(text.as_bytes())))
+}
+
+fn compatibility_name(bytes: &[u8]) -> bool {
+    const NAMES: &[&[u8]] = &[
+        b"Ignorable",
+        b"MustUnderstand",
+        b"ProcessContent",
+        b"PreserveElements",
+        b"PreserveAttributes",
+        b"AlternateContent",
+        b"Choice",
+        b"Fallback",
+        b"Requires",
+    ];
+    NAMES.iter().any(|name| bytes.windows(name.len()).any(|window| window.eq_ignore_ascii_case(name)))
+}
+
 /// Decode a supported native ink preview under the document's shared ink-work allowance.
 pub(super) fn read(bytes: &[u8], work: &mut usize) -> Option<Graphic> {
     let allowance = (*work).min(MAX_PART_WORK);

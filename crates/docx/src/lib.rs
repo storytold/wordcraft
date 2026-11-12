@@ -15,6 +15,7 @@ mod flat;
 mod fonts;
 mod package;
 mod read;
+mod required;
 mod smart_art;
 #[cfg(test)]
 mod test_log;

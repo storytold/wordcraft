@@ -39,6 +39,9 @@ impl Reader<'_> {
             if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&part) != Some("application/inkml+xml") {
                 return None;
             }
+            if !self.inspect_ink_compatibility(&part) {
+                return None;
+            }
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
             float.bare_turn = !anchored && float.rot != 0.0 && float.effect == [0.0; 4];
@@ -278,8 +281,33 @@ impl Reader<'_> {
         if self.content_types.get_or_insert_with(|| ContentTypes::read(pkg)).of(&part) != Some("application/inkml+xml") {
             return None;
         }
+        if !self.inspect_ink_compatibility(&part) {
+            return None;
+        }
         let source = self.keep_embedded(content, rels, &[])?;
         Some(self.ink_graphic(&part, source))
+    }
+
+    /// Check each referenced InkML part once, even if the bibliography candidate cap was reached.
+    pub(in crate::read) fn inspect_ink_compatibility(&mut self, part: &str) -> bool {
+        if !self.ink_compatibility_checked.insert(part.to_string()) {
+            return self.mc_error.borrow().is_none();
+        }
+        let Some(bytes) = self.pkg.get(part) else { return true };
+        let result = match crate::read::ink::compatibility_hints(bytes) {
+            Ok(Some(true)) => self.xml(part).map(|_| ()),
+            Ok(Some(false)) => Ok(()),
+            Ok(None) => {
+                self.required_source.set(true);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        };
+        if let Err(error) = result {
+            self.mc_error.borrow_mut().get_or_insert(error);
+            return false;
+        }
+        true
     }
 
     /// Reuse a part's decoded InkML vectors within the file-wide ink-work budget.

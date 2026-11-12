@@ -64,7 +64,28 @@ impl Reader<'_> {
     }
 
     pub(super) fn xml(&self, path: &str) -> Result<Option<El>, DocxError> {
-        self.pkg.xml(path)
+        let Some(bytes) = self.pkg.get(path) else { return Ok(None) };
+        let root = match crate::xml::parse_compat(bytes) {
+            Ok(root) => root,
+            Err(error) => {
+                if error.compatibility && crate::xml::safe_malformed_optional_part(bytes) {
+                    // We cannot model or rewrite this malformed part. Skipping it is safe only
+                    // while the untouched document can replay its bounded source package exactly.
+                    self.required_source.set(true);
+                } else if error.compatibility || matches!(error.error, DocxError::Limit(_)) {
+                    self.mc_error.borrow_mut().get_or_insert_with(|| error.error.clone());
+                }
+                return Err(error.error);
+            }
+        };
+        if super::story::needs_source_preservation(&root) {
+            self.required_source.set(true);
+        }
+        if let Err(error) = super::story::validate_must_understand(&root) {
+            self.mc_error.borrow_mut().get_or_insert_with(|| error.clone());
+            return Err(error);
+        }
+        Ok(Some(root))
     }
 
     pub fn revision(&mut self, kind: RevisionKind, e: &El) -> u32 {

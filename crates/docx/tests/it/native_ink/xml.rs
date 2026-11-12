@@ -47,6 +47,54 @@ fn native_ink_xml_versions_and_encodings_preserve_vectors_and_original_bytes() {
     }
 }
 
+/// Bypassing the unrelated bibliography parser must not hide requirements in a typed InkML part.
+#[test]
+fn native_ink_markup_compatibility_requirements_remain_fatal() {
+    let ink = INK_XML.replacen(
+        "<ink ",
+        r#"<ink xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:unsupported" mc:MustUnderstand="f" "#,
+        1,
+    );
+    for bytes in [ink.as_bytes().to_vec(), utf16(&ink, true), utf16(&ink, false)] {
+        for fallback in [false, true] {
+            for (docx, _) in frames(fallback) {
+                assert!(matches!(wordcraft_docx::read(&replace_xml(&docx, &bytes)), Err(wordcraft_docx::DocxError::Xml(_))));
+            }
+        }
+    }
+    // A referenced part remains checked even when unrelated custom-XML relationships exhaust the
+    // bibliography candidate limit before the ink relationship is reached.
+    for (docx, _) in frames(true) {
+        let mut files = unzip(&replace_xml(&docx, ink.as_bytes()));
+        let extra: String = (0..64)
+            .map(|i| format!(r#"<Relationship Id="other{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="unused{i}.xml"/>"#))
+            .collect();
+        let rels = text(&files, "word/_rels/document.xml.rels").replace(r#"<Relationship Id="rInk""#, &format!(r#"{extra}<Relationship Id="rInk""#));
+        assert!(rels.contains(r#"Id="other63""#));
+        files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
+        assert!(matches!(wordcraft_docx::read(&zip(&entries)), Err(wordcraft_docx::DocxError::Xml(_))));
+    }
+    // An unknown encoding could hide the directive from an ASCII byte scan; refuse it.
+    let encoded = format!("<?xml version=\"1.0\" encoding=\"UTF-7\"?>{INK_XML}");
+    assert!(matches!(wordcraft_docx::read(&replace_xml(&frames(true)[0].0, encoded.as_bytes())), Err(wordcraft_docx::DocxError::Xml(_))));
+}
+
+/// An unambiguously non-XML binary part may be replayed but must not be lost on edits.
+#[test]
+fn binary_native_ink_requires_unchanged_source_and_cannot_hide_mc() {
+    let source = replace_xml(&frames(true)[0].0, &[0xff, 0x00, b'<', 0xfe]);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    let saved = wordcraft_docx::write(&doc).unwrap();
+    assert!(unzip(&saved).values().any(|b| b == &[0xff, 0x00, b'<', 0xfe]));
+    doc.core.title = "changed".into();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+
+    let mut suspicious = vec![0xff, 0x00];
+    suspicious.extend_from_slice(b"mc:MustUnderstand='f'");
+    assert!(matches!(wordcraft_docx::read(&replace_xml(&frames(true)[0].0, &suspicious)), Err(wordcraft_docx::DocxError::Xml(_))));
+}
+
 /// Malformed or unsupported XML qualification retains fallback images and the original payload.
 #[test]
 fn native_ink_xml_qualification_failures_keep_fallbacks_and_source_bytes() {

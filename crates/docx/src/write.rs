@@ -141,6 +141,8 @@ pub(crate) struct Writer<'d> {
 }
 
 const CT_WML: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.";
+/// Persisted in the model even when transient source ownership is not serialized.
+pub(crate) const REQUIRED_SOURCE_GUARD: &str = "\0wordcraft:docx-required-markup";
 
 /// Write a `.docx` package.
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
