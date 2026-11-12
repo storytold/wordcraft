@@ -15,6 +15,7 @@ mod flat;
 mod fonts;
 mod package;
 mod read;
+mod required;
 mod smart_art;
 #[cfg(test)]
 mod test_log;
@@ -167,6 +168,9 @@ pub enum DocxError {
     /// The package is readable but isn't a WordprocessingML document.
     #[error("not a Word document: {0}")]
     NotWord(String),
+    /// Required source markup cannot be safely mapped back to the current model.
+    #[error("cannot preserve required DOCX markup: {0}")]
+    Preservation(String),
     /// An `.xml` file that is neither a Word XML Document (Flat OPC) nor Word 2003 XML.
     #[error("not a Word XML document")]
     NotWordXml,

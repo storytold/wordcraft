@@ -1,5 +1,8 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
+#[path = "fixtures/mc_review.rs"]
+mod mc_review;
+
 use std::io::Write;
 use std::sync::Arc;
 
@@ -8,7 +11,7 @@ use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, Underline, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph, RevisionKind};
 
-const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
+const W_NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office""#;
 
 const ROOT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
@@ -47,6 +50,228 @@ fn docx(body: &str, doc_rels: &[(&str, &str, &str)], extra: &[(&str, &str)]) -> 
 
 fn read_body(body: &str) -> Document {
     wordcraft_docx::read(&docx(body, &[], &[])).unwrap()
+}
+
+#[test]
+fn undeclared_qnames_and_reserved_bindings_are_fatal() {
+    let bodies = [
+        r#"<mc:AlternateContent><mc:Choice bad:Requires="w"><w:p/></mc:Choice><mc:Fallback><w:p/></mc:Fallback></mc:AlternateContent>"#,
+        r#"<w:altChunk bad:id="rIdC"/>"#,
+        r#"<bad:unknown/>"#,
+    ];
+    for body in bodies {
+        assert!(matches!(wordcraft_docx::read(&docx(body, &[], &[])), Err(wordcraft_docx::DocxError::Xml(_))), "{body}");
+    }
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:xml="urn:bad"/>"#;
+    let package = |header: &str| {
+        docx(
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#,
+            &[("rHeader", "header", "header1.xml")],
+            &[("word/header1.xml", header)],
+        )
+    };
+    let valid = header.replace("urn:bad", "http://www.w3.org/XML/1998/namespace");
+    wordcraft_docx::read(&package(&valid)).expect("the same header with a valid xml binding must open");
+    let Err(wordcraft_docx::DocxError::Xml(error)) = wordcraft_docx::read(&package(header)) else { panic!("reserved binding must be fatal") };
+    assert!(error.contains("xml") && error.contains("urn:bad"), "wrong failure: {error}");
+}
+
+#[test]
+fn duplicate_expanded_attributes_are_fatal_in_document_and_optional_parts() {
+    for attrs in [
+        r#"mc:MustUnderstand="w" x:MustUnderstand="f""#,
+        r#"x:MustUnderstand="f" mc:MustUnderstand="w""#,
+        r#"a:flag="one" b:flag="two""#,
+        r#"b:flag="two" a:flag="one""#,
+    ] {
+        let declarations = r#"xmlns:x="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" xmlns:a="urn:unknown" xmlns:b="urn:unknown""#;
+        let body = format!(r#"<w:p {declarations} {attrs}/>"#);
+        assert!(matches!(wordcraft_docx::read(&docx(&body, &[], &[])), Err(wordcraft_docx::DocxError::Xml(_))), "document: {attrs}");
+        let header = format!(r#"<w:hdr {W_NS} {declarations} {attrs}/>"#);
+        let bytes = docx(
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#,
+            &[("rHeader", "header", "header1.xml")],
+            &[("word/header1.xml", &header)],
+        );
+        assert!(matches!(wordcraft_docx::read(&bytes), Err(wordcraft_docx::DocxError::Xml(_))), "header: {attrs}");
+        let mut files = unzip(&docx("<w:p/>", &[], &[]));
+        let metadata = format!(r#"<root {W_NS} {declarations} {attrs}/>"#);
+        files.insert("word/_rels/unused.xml.rels".into(), metadata.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        assert!(matches!(wordcraft_docx::read(&zip(&entries)), Err(wordcraft_docx::DocxError::Xml(_))), "metadata: {attrs}");
+    }
+}
+
+#[test]
+fn retained_ink_markup_keeps_unknown_preserved_extensions_twice() {
+    let mut files = unzip(&ink_docx(false, false));
+    let body = text(&files, "word/document.xml")
+        .replace(
+            "<q:contentPart ",
+            r#"<q:contentPart xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*" f:flag="keep" "#,
+        )
+        .replace("</q:contentPart>", "<f:opaque>extension</f:opaque></q:contentPart>");
+    files.insert("word/document.xml".into(), body.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let body = text(&unzip(&saved), "word/document.xml");
+        assert!(body.contains("urn:future") && body.contains("extension") && body.contains("flag=\"keep\""), "{body}");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn retained_ink_inherits_compatibility_directives_twice() {
+    let mut files = unzip(&ink_docx(false, false));
+    let body = text(&files, "word/document.xml")
+        .replace("<w:drawing>", r#"<w:drawing xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*">"#)
+        .replace("</q:contentPart>", "<f:opaque>extension</f:opaque></q:contentPart>");
+    files.insert("word/document.xml".into(), body.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let body = text(&unzip(&saved), "word/document.xml");
+        assert!(body.contains("urn:future") && body.contains("extension") && body.contains("mc:PreserveElements"), "{body}");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn preserved_unknown_paragraph_markup_survives_two_saves() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*" f:flag="keep"><f:opaque>keep extension</f:opaque><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let body = text(&unzip(&saved), "word/document.xml");
+        assert!(body.contains("urn:future") && body.contains("keep extension") && body.contains("flag=\"keep\""), "{body}");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn preserved_unknown_run_markup_survives_two_saves() {
+    let body = r#"<w:p xmlns:f="urn:future:run" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*"><w:r f:flag="run-keep"><w:t>visible run</w:t><f:opaque>run extension</f:opaque></w:r></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let body = text(&unzip(&saved), "word/document.xml");
+        assert!(body.contains("urn:future:run") && body.contains("run extension") && body.contains("flag=\"run-keep\""), "{body}");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn unbound_ignorable_namespace_is_not_silently_discarded() {
+    let body = r#"<w:p mc:Ignorable="missing"><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    assert!(matches!(wordcraft_docx::read(&docx(body, &[], &[])), Err(wordcraft_docx::DocxError::Xml(_))));
+}
+
+#[test]
+fn must_understand_rejects_a_known_but_unimplemented_namespace() {
+    // `cx8` is named in the XML namespace registry so retained chart markup can be
+    // rewritten, but this consumer doesn't implement that ChartEx vocabulary.
+    let body = r#"<w:p xmlns:future="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" mc:MustUnderstand="future"><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let unknown = r#"<w:p xmlns:future="urn:future:unsupported" mc:MustUnderstand="future"><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    // wp14 positions are read via AlternateContent's fallback, not implemented directly.
+    let wp14 = r#"<w:p xmlns:position="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" mc:MustUnderstand="position"><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    for body in [body, unknown, wp14] {
+        let result = wordcraft_docx::read(&docx(body, &[], &[]));
+        assert!(matches!(result, Err(wordcraft_docx::DocxError::Xml(_))), "a bound namespace name does not mean its features are understood");
+    }
+}
+
+#[test]
+fn must_understand_checks_only_the_processed_markup() {
+    for ns in ["http://schemas.microsoft.com/office/drawing/2016/5/14/chartex", "urn:future:unsupported"] {
+        let ignored = format!(
+            r#"<w:p xmlns:future="{ns}" mc:Ignorable="future"><future:extension mc:MustUnderstand="future"/><w:r><w:t>visible</w:t></w:r></w:p>"#
+        );
+        let alternate = format!(
+            r#"<w:p xmlns:future="{ns}"><mc:AlternateContent><mc:Choice Requires="future" mc:MustUnderstand="future"><w:r><w:t>wrong</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>visible</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#
+        );
+        let understood = r#"<w:p mc:MustUnderstand="w"><w:r><w:t>visible</w:t></w:r></w:p>"#;
+        for body in [&ignored, &alternate, understood] {
+            let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+            assert!(paras(&doc).iter().any(|p| p.text.contains("visible")));
+        }
+    }
+}
+
+#[test]
+fn alternate_content_requires_understood_namespaces_not_registered_aliases() {
+    // The serializer can name a14, but the reader does not implement that vocabulary.
+    let body = r#"<w:p xmlns:f="http://schemas.microsoft.com/office/drawing/2010/main"><mc:AlternateContent><mc:Choice Requires="f" mc:MustUnderstand="f"><w:r><w:t>unsupported</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    assert!(paras(&doc).iter().any(|p| p.text.contains("fallback")));
+    let body = r#"<w:p><mc:AlternateContent><mc:Choice Requires="w"><w:r><w:t>supported</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    assert!(paras(&doc).iter().any(|p| p.text.contains("supported")));
+    // Retaining native ink isn't a blanket claim to understand arbitrary wpi choices.
+    let body = r#"<w:p xmlns:pen="http://schemas.microsoft.com/office/word/2010/wordprocessingInk"><mc:AlternateContent><mc:Choice Requires="pen"><w:r><w:t>unsupported</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    assert!(paras(&doc).iter().any(|p| p.text.contains("fallback")));
+    let body = r#"<w:p xmlns:pos="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing"><mc:AlternateContent><mc:Choice Requires="pos"><w:r><w:t>unsupported</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    assert!(paras(&doc).iter().any(|p| p.text.contains("fallback")));
+}
+
+#[test]
+fn alternate_content_without_requirements_uses_fallback() {
+    for requires in ["", r#" Requires="""#] {
+        let body = format!(
+            r#"<w:p><mc:AlternateContent><mc:Choice{requires}><w:r><w:t>unsupported</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#
+        );
+        let doc = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+        assert!(paras(&doc).iter().any(|p| p.text.contains("fallback")));
+        assert!(!paras(&doc).iter().any(|p| p.text.contains("unsupported")));
+    }
+}
+
+#[test]
+fn must_understand_uses_the_locally_bound_namespace() {
+    let good = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f"><w:r xmlns:f="http://schemas.openxmlformats.org/wordprocessingml/2006/main" mc:MustUnderstand="f"><w:t>visible</w:t></w:r></w:p>"#;
+    assert!(wordcraft_docx::read(&docx(good, &[], &[])).is_ok());
+    let bad = r#"<w:p xmlns:f="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r xmlns:f="urn:future" mc:MustUnderstand="f"><w:t>visible</w:t></w:r></w:p>"#;
+    assert!(matches!(wordcraft_docx::read(&docx(bad, &[], &[])), Err(wordcraft_docx::DocxError::Xml(_))));
+}
+
+#[test]
+fn must_understand_in_a_header_is_not_silently_dropped() {
+    let body = r#"<w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#;
+    for required in [r#"xmlns:future="urn:future:unsupported" mc:MustUnderstand="future""#, r#"mc:MustUnderstand="missing""#] {
+        let header = format!(
+            r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" {required}><w:p><w:r><w:t>header</w:t></w:r></w:p></w:hdr>"#
+        );
+        let bytes = docx(body, &[("rHeader", "header", "header1.xml")], &[("word/header1.xml", &header)]);
+        assert!(matches!(wordcraft_docx::read(&bytes), Err(wordcraft_docx::DocxError::Xml(_))));
+    }
+}
+
+#[test]
+fn ignorable_process_content_opens_and_survives_two_saves() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrapper"><f:wrapper><w:r><w:t>processable text</w:t></w:r></f:wrapper></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    for cycle in 0..3 {
+        assert!(paras(&doc).iter().any(|p| p.text.to_string().contains("processable text")), "cycle {cycle}");
+        if cycle < 2 {
+            doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn process_content_uses_supported_features_not_just_known_namespace_names() {
+    let body = r#"<w:p xmlns:f="http://schemas.microsoft.com/office/drawing/2016/5/14/chartex" mc:Ignorable="f" mc:ProcessContent="f:wrapper"><f:wrapper><w:r><w:t>processable known-name text</w:t></w:r></f:wrapper></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    for cycle in 0..3 {
+        assert!(paras(&doc).iter().any(|p| p.text.contains("processable known-name text")), "cycle {cycle}");
+        if cycle < 2 {
+            doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
 }
 
 /// Markup compatibility replaces an AlternateContent wrapper with one selected branch,
@@ -4768,4 +4993,1089 @@ fn vml_horizontal_rules_are_read_and_kept() {
     .concat();
     let d = read_body(&body);
     assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
+}
+
+#[test]
+fn required_paragraph_markup_refuses_edits_copies_and_missing_source() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let mut changed = doc.clone();
+    let Block::Para(p) = Arc::make_mut(&mut changed.body[0]) else { panic!("paragraph") };
+    p.insert_text(0, "edit", &Default::default()).unwrap();
+    assert!(matches!(wordcraft_docx::write(&changed), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let mut retyped = doc.clone();
+    let Block::Para(p) = Arc::make_mut(&mut retyped.body[0]) else { panic!("paragraph") };
+    p.delete(0, p.len()).unwrap();
+    p.insert_text(0, "visible", &Default::default()).unwrap();
+    assert!(matches!(wordcraft_docx::write(&retyped), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let mut deleted = doc.clone();
+    deleted.body.clear();
+    assert!(matches!(wordcraft_docx::write(&deleted), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let mut copied = Document::new();
+    copied.body = doc.body.clone();
+    assert!(matches!(wordcraft_docx::write(&copied), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let json = serde_json::to_vec(&doc).unwrap();
+    let restored: Document = serde_json::from_slice(&json).unwrap();
+    assert!(matches!(wordcraft_docx::write(&restored), Err(wordcraft_docx::DocxError::Preservation(_))));
+    assert!(matches!(wordcraft_docx::write_as(&doc, wordcraft_docx::Flavor::Template), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_markup_retains_source_relationships_and_rebound_namespaces() {
+    let body = r#"<w:p xmlns:f="urn:first" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*"><f:opaque r:id="rId9"/><w:r f:flag="one"><w:t>visible</w:t><f:inside xmlns:f="urn:second"/></w:r></w:p>"#;
+    let original = docx(body, &[("rId9", "customXml", "custom/item.xml")], &[("word/custom/item.xml", "payload")]);
+    let expected = unzip(&original);
+    let mut doc = wordcraft_docx::read(&original).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), expected);
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn required_markup_in_process_content_and_header_is_protected() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrapper" mc:PreserveElements="f:opaque"><f:wrapper><f:opaque/><w:r><w:t>visible</w:t></w:r></f:wrapper></w:p>"#;
+    let source = docx(body, &[], &[]);
+    let doc = wordcraft_docx::read(&source).unwrap();
+    assert_eq!(unzip(&wordcraft_docx::write(&doc).unwrap()), unzip(&source));
+    let header = format!(
+        r#"<w:hdr {W_NS} xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveAttributes="f:*"><w:p><w:r f:flag="keep"><w:t>header</w:t></w:r></w:p></w:hdr>"#
+    );
+    let body = r#"<w:p><w:r><w:t>body</w:t></w:r></w:p><w:sectPr><w:headerReference w:type="default" r:id="rId9"/></w:sectPr>"#;
+    let source = docx(body, &[("rId9", "header", "header1.xml")], &[("word/header1.xml", &header)]);
+    let doc = wordcraft_docx::read(&source).unwrap();
+    assert_eq!(unzip(&wordcraft_docx::write(&doc).unwrap()), unzip(&source));
+}
+
+#[test]
+fn required_attributes_on_nested_run_content_are_protected() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveAttributes="f:*"><w:r><w:t f:flag="keep">visible</w:t></w:r></w:p>"#;
+    let source = docx(body, &[], &[]);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), unzip(&source));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn required_markup_in_nested_docx_chunk_preserves_outer_package() {
+    let inner =
+        docx(r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>chunk</w:t></w:r></w:p>"#, &[], &[]);
+    let document = format!(r#"<w:document {W_NS}><w:body><w:altChunk r:id="rId9"/></w:body></w:document>"#);
+    let relations = rels(&[("rId9", "aFChunk", "chunk.docx")]);
+    let source = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/chunk.docx", &inner),
+    ]);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), unzip(&source));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+    doc.body.clear();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_process_content_ancestor_preserves_owner_wrapper() {
+    let body = r#"<f:wrapper xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrapper" mc:PreserveElements="f:wrapper"><w:p><w:r><w:t>visible</w:t></w:r></w:p></f:wrapper>"#;
+    let source = docx(body, &[], &[]);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    assert!(paras(&doc).iter().any(|p| p.text == "visible"));
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), unzip(&source));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn required_source_rejects_unsafe_package_part_names() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:opaque"><f:opaque/></w:p>"#;
+    let source = docx(body, &[], &[("../outside.xml", "unsafe")]);
+    assert!(matches!(wordcraft_docx::read(&source), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_source_refuses_requested_privacy_scrubbing() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:ins w:id="1" w:author="Private Author" w:date="2020-01-01T00:00:00Z"><w:r><w:t>visible</w:t></w:r></w:ins></w:p>"#;
+    for flag in ["removePersonalInformation", "removeDateAndTime"] {
+        let settings = format!(r#"<w:settings {W_NS}><w:{flag}/></w:settings>"#);
+        let source = docx(body, &[("rId9", "settings", "settings.xml")], &[("word/settings.xml", &settings)]);
+        let doc = wordcraft_docx::read(&source).unwrap();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))), "{flag}");
+    }
+}
+
+#[test]
+fn required_source_refuses_macro_in_falsely_declared_docx() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let document = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let relations = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="vba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/></Relationships>"#;
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
+    let source = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/vbaProject.bin", b"vba"),
+        ("[Content_Types].xml", types.as_bytes()),
+    ]);
+    let doc = wordcraft_docx::read(&source).unwrap();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+fn assert_required_control_property_is_preserved(props: &str) {
+    let body = format!(
+        r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*"><w:sdt>{props}<w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+    );
+    let source = docx(&body, &[], &[]);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), unzip(&source));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn required_control_modeled_property_attribute_is_preserved() {
+    assert_required_control_property_is_preserved(r#"<w:sdtPr><w:alias w:val="title" f:flag="keep"/></w:sdtPr>"#);
+}
+
+#[test]
+fn required_control_large_property_is_preserved() {
+    assert_required_control_property_is_preserved(&format!("<w:sdtPr><f:opaque>{}</f:opaque></w:sdtPr>", "X".repeat(70_000)));
+}
+
+#[test]
+fn required_control_large_end_property_is_preserved() {
+    assert_required_control_property_is_preserved(&format!("<w:sdtPr/><w:sdtEndPr><f:opaque>{}</f:opaque></w:sdtEndPr>", "X".repeat(70_000)));
+}
+
+#[test]
+fn required_source_refuses_corrupt_or_duplicate_zip_entries() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque r:id="rId9"/></w:p>"#;
+    let source = docx(body, &[("rId9", "customXml", "custom/item.xml")], &[("word/custom/item.xml", "uniquepayloadforcrc")]);
+    let mut corrupt = source.clone();
+    let needle = b"word/custom/item.xml";
+    let pos = corrupt.windows(needle.len()).rposition(|v| v == needle).expect("central directory filename");
+    assert_eq!(&corrupt[pos - 46..pos - 42], b"PK\x01\x02");
+    corrupt[pos - 46 + 16] ^= 1; // Central-directory CRC no longer agrees with the data.
+    assert!(matches!(wordcraft_docx::read(&corrupt), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let mut files = unzip(&source);
+    let doc = files.remove("word/document.xml").unwrap();
+    let mut duplicate = zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", &doc), ("word/documenT.xml", &doc)]);
+    assert!(matches!(wordcraft_docx::read(&duplicate), Err(wordcraft_docx::DocxError::Preservation(_))));
+    for i in (0..duplicate.len() - b"word/documenT.xml".len()).rev() {
+        if duplicate[i..].starts_with(b"word/documenT.xml") {
+            duplicate[i + b"word/documen".len()] = b't';
+        }
+    }
+    assert!(matches!(wordcraft_docx::read(&duplicate), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_source_refuses_macro_in_nested_docx_chunk() {
+    let inner_document = format!(r#"<w:document {W_NS}><w:body><w:p><w:r><w:t>inner</w:t></w:r></w:p></w:body></w:document>"#);
+    let inner_relations = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="vba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/></Relationships>"#;
+    let inner = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", inner_document.as_bytes()),
+        ("word/_rels/document.xml.rels", inner_relations.as_bytes()),
+        ("word/vbaProject.bin", b"vba"),
+    ]);
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/></w:p><w:altChunk r:id="rId9"/>"#;
+    let document = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let relations = rels(&[("rId9", "aFChunk", "chunk.docx")]);
+    let source = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/chunk.docx", &inner),
+    ]);
+    let doc = wordcraft_docx::read(&source).unwrap();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_control_property_keeps_inherited_processing_context_and_order() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrapper"><w:sdt><w:sdtPr><f:opaque mc:Ignorable="f" mc:PreserveElements="f:*"><f:inside/></f:opaque><w:alias w:val="title"/></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    let source = docx(body, &[], &[]);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), unzip(&source));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+fn wrap_docx_chunk(inner: &[u8]) -> Vec<u8> {
+    let document = format!(r#"<w:document {W_NS}><w:body><w:altChunk r:id="rId9"/></w:body></w:document>"#);
+    let relations = rels(&[("rId9", "aFChunk", "chunk.docx")]);
+    zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/chunk.docx", inner),
+    ])
+}
+
+fn protected_inner_with_extra(name: &str, extra: &[u8]) -> Vec<u8> {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let document = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", document.as_bytes()), (name, extra)])
+}
+
+#[test]
+fn nested_required_source_refuses_corrupt_duplicate_and_colliding_parts() {
+    let base = protected_inner_with_extra("word/other.xml", b"unique nested bytes");
+    let mut corrupt = base.clone();
+    let needle = b"word/other.xml";
+    let pos = corrupt.windows(needle.len()).rposition(|x| x == needle).unwrap();
+    assert_eq!(&corrupt[pos - 46..pos - 42], b"PK\x01\x02");
+    corrupt[pos - 30] ^= 1;
+    let doc = text(&unzip(&base), "word/document.xml");
+    let colliding = zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", doc.as_bytes()), ("word/documenT.xml", doc.as_bytes())]);
+    let mut duplicate = colliding.clone();
+    for i in (0..duplicate.len() - b"word/documenT.xml".len()).rev() {
+        if duplicate[i..].starts_with(b"word/documenT.xml") {
+            duplicate[i + b"word/documen".len()] = b't';
+        }
+    }
+    let mut silently_accepted = Vec::new();
+    for (name, inner) in [("corrupt", corrupt), ("duplicate", duplicate), ("case-collision", colliding)] {
+        let once = wrap_docx_chunk(&inner);
+        for outer in [&once, &wrap_docx_chunk(&once)] {
+            if !matches!(wordcraft_docx::read(outer), Err(wordcraft_docx::DocxError::Preservation(_))) {
+                silently_accepted.push(name);
+            }
+        }
+    }
+    assert!(silently_accepted.is_empty(), "nested sources silently accepted: {silently_accepted:?}");
+}
+
+#[test]
+fn nested_required_source_over_retained_budget_is_fatal() {
+    let large = vec![0u8; 64 * 1024 * 1024 + 1];
+    let inner = protected_inner_with_extra("word/large.bin", &large);
+    assert!(matches!(wordcraft_docx::read(&wrap_docx_chunk(&inner)), Err(wordcraft_docx::DocxError::Limit(_))));
+}
+
+#[test]
+fn required_source_refuses_prefixed_nested_zip_with_vba() {
+    let document = format!(r#"<w:document {W_NS}><w:body><w:p/></w:body></w:document>"#);
+    let relations = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="vba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/></Relationships>"#;
+    let inner = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/vbaProject.bin", b"vba"),
+    ]);
+    let mut prefixed = b"self-extracting stub".to_vec();
+    prefixed.extend_from_slice(&inner);
+    assert!(zip::ZipArchive::new(std::io::Cursor::new(&prefixed)).is_ok());
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/></w:p>"#;
+    let document = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let source = zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", document.as_bytes()), ("word/embed.bin", &prefixed)]);
+    let doc = wordcraft_docx::read(&source).unwrap();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_source_rejects_drive_qualified_part_names() {
+    let inner = protected_inner_with_extra("C:/outside.xml", b"unsafe");
+    assert!(matches!(wordcraft_docx::read(&inner), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn required_source_refuses_flat_conversion_losing_content_types() {
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types" xmlns:f="urn:future" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="f" mc:PreserveElements="f:*"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><f:opaque/></Types>"#;
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/></w:p>"#;
+    let source = docx(body, &[], &[("[Content_Types].xml", types)]);
+    let doc = wordcraft_docx::read(&source).unwrap();
+    assert!(matches!(wordcraft_docx::write_flat(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn protected_flat_opc_refuses_duplicate_and_empty_part_names() {
+    let document = format!(
+        r#"<w:document {W_NS}><w:body><w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/></w:p></w:body></w:document>"#
+    );
+    let part = |name: &str, xml: &str| {
+        format!(r#"<pkg:part pkg:name="{name}" pkg:contentType="application/xml"><pkg:xmlData>{xml}</pkg:xmlData></pkg:part>"#)
+    };
+    let root_rels = part("/_rels/.rels", ROOT_RELS);
+    let main = part("/word/document.xml", &document);
+    let mut silently_accepted = Vec::new();
+    for (name, extra) in
+        [("duplicate", part("/word/document.xml", "<different/>")), ("slash", part("/", "<empty/>")), ("empty", part("", "<empty/>"))]
+    {
+        let flat = format!(r#"<pkg:package xmlns:pkg="http://schemas.microsoft.com/office/2006/xmlPackage">{root_rels}{main}{extra}</pkg:package>"#);
+        if !matches!(wordcraft_docx::read_xml(flat.as_bytes()), Err(wordcraft_docx::DocxError::Preservation(_))) {
+            silently_accepted.push(name);
+        }
+    }
+    assert!(silently_accepted.is_empty(), "ambiguous Flat OPC sources silently accepted: {silently_accepted:?}");
+}
+
+#[test]
+fn nested_chunk_open_limit_is_fatal_instead_of_discarding_content() {
+    let mut inner = protected_inner_with_extra("word/other.bin", b"small");
+    let needle = b"word/other.bin";
+    let pos = inner.windows(needle.len()).rposition(|x| x == needle).unwrap();
+    assert_eq!(&inner[pos - 46..pos - 42], b"PK\x01\x02");
+    inner[pos - 46 + 24..pos - 46 + 28].copy_from_slice(&(256u32 * 1024 * 1024 + 1).to_le_bytes());
+    assert!(matches!(wordcraft_docx::read(&wrap_docx_chunk(&inner)), Err(wordcraft_docx::DocxError::Limit(_))));
+}
+
+#[test]
+fn prefixed_nested_docx_preserves_required_content() {
+    let inner = protected_inner_with_extra("word/other.xml", b"payload");
+    let mut prefixed = b"self-extracting stub".to_vec();
+    prefixed.extend_from_slice(&inner);
+    let source = wrap_docx_chunk(&prefixed);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    assert!(paras(&doc).iter().any(|p| p.text == "visible"));
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert_eq!(unzip(&saved), unzip(&source));
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn wordml2003_refuses_required_docx_source_markup() {
+    let body =
+        r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque>required</f:opaque><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    assert!(matches!(wordcraft_docx::write_wordml2003(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn wordml2003_refuses_missing_or_copied_required_source_ownership() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let json = serde_json::to_vec(&doc).unwrap();
+    let restored: Document = serde_json::from_slice(&json).unwrap();
+    assert!(matches!(wordcraft_docx::write_wordml2003(&restored), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let mut unavailable = doc.clone();
+    unavailable.kept.clear();
+    assert!(matches!(wordcraft_docx::write_wordml2003(&unavailable), Err(wordcraft_docx::DocxError::Preservation(_))));
+    let mut copied = Document::new();
+    copied.body = doc.body.clone();
+    assert!(matches!(wordcraft_docx::write_wordml2003(&copied), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn wordml2003_unprotected_docx_remains_convertible() {
+    let doc = read_body("<w:p><w:r><w:t>visible</w:t></w:r></w:p>");
+    let xml = wordcraft_docx::write_wordml2003(&doc).unwrap();
+    assert_eq!(wordcraft_docx::sniff_xml(&xml), wordcraft_docx::XmlKind::WordMl2003);
+    let reopened = wordcraft_docx::read_xml(&xml).unwrap();
+    assert!(paras(&reopened).iter().any(|p| p.plain_text() == "visible"));
+}
+
+#[test]
+fn metadata_required_markup_is_preserved_without_required_document_markup() {
+    for name in ["[Content_Types].xml", "_rels/.rels", "word/_rels/document.xml.rels", "word/_rels/unused.xml.rels"] {
+        let mut files = unzip(&docx("<w:p/>", &[], &[]));
+        files.insert("[Content_Types].xml".into(), br#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#.to_vec());
+        let original = files
+            .get(name)
+            .map(|v| String::from_utf8(v.clone()).unwrap())
+            .unwrap_or_else(|| r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"#.to_string());
+        let xml = if name == "[Content_Types].xml" {
+            original.replace("<Types ", r#"<Types xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*" f:flag="keep" "#).replace("</Types>", "<f:opaque>retain</f:opaque></Types>")
+        } else {
+            let original = if name == "word/_rels/unused.xml.rels" {
+                r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>"#.to_string()
+            } else {
+                original
+            };
+            original.replace("<Relationships ", r#"<Relationships xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*" mc:PreserveAttributes="f:*" f:flag="keep" "#).replace("</Relationships>", "<f:opaque>retain</f:opaque></Relationships>")
+        };
+        files.insert(name.into(), xml.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            assert_eq!(unzip(&saved).get(name), files.get(name), "{name}");
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+    }
+}
+
+#[test]
+fn metadata_must_understand_and_limits_are_not_silently_ignored() {
+    for name in ["[Content_Types].xml", "_rels/.rels", "word/_rels/document.xml.rels"] {
+        for directive in [r#"xmlns:f="urn:future" mc:MustUnderstand="f""#, r#"mc:MustUnderstand="missing""#] {
+            let mut files = unzip(&docx("<w:p/>", &[], &[]));
+            let xml = format!(r#"<root xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" {directive}/>"#);
+            files.insert(name.into(), xml.into_bytes());
+            let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+            assert!(matches!(wordcraft_docx::read(&zip(&entries)), Err(wordcraft_docx::DocxError::Xml(_))), "{name} {directive}");
+        }
+        let mut files = unzip(&docx("<w:p/>", &[], &[]));
+        let xml = format!("{}<f:opaque/>{}", "<x>".repeat(260), "</x>".repeat(260));
+        files.insert(name.into(), xml.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        assert!(matches!(wordcraft_docx::read(&zip(&entries)), Err(wordcraft_docx::DocxError::Limit(_))), "{name}");
+    }
+}
+
+#[test]
+fn related_part_xml_limit_does_not_hide_required_markup() {
+    let body = r#"<w:p/><w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#;
+    let header = format!(
+        r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future">{}<f:opaque mc:MustUnderstand="f"/>{}</w:hdr>"#,
+        "<w:p>".repeat(260),
+        "</w:p>".repeat(260)
+    );
+    let bytes = docx(body, &[("rHeader", "header", "header1.xml")], &[("word/header1.xml", &header)]);
+    assert!(matches!(wordcraft_docx::read(&bytes), Err(wordcraft_docx::DocxError::Limit(_))));
+}
+
+#[test]
+fn detached_control_properties_retain_inherited_ignorable_namespace_scopes() {
+    let body = r#"<w:p><w:sdt><w:sdtPr><f:property>outer</f:property></w:sdtPr><w:sdtContent><w:r><w:t>one</w:t></w:r></w:sdtContent></w:sdt><w:sdt xmlns:f="urn:rebound" mc:Ignorable="f"><w:sdtPr><f:property>inner</f:property></w:sdtPr><w:sdtContent><w:r><w:t>two</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    for with_text in [true, false] {
+        let variant = if with_text { body.to_string() } else { body.replace(">outer</f:property>", "/>").replace(">inner</f:property>", "/>") };
+        let mut files = unzip(&docx(&variant, &[], &[]));
+        let document = text(&files, "word/document.xml").replace("<w:document ", r#"<w:document xmlns:f="urn:outer" mc:Ignorable="f" "#);
+        files.insert("word/document.xml".into(), document.into_bytes());
+        let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            let xml = text(&unzip(&saved), "word/document.xml");
+            if with_text {
+                // Unknown text may be a QName, so preserve its entire original scope.
+                assert_eq!(xml, text(&files, "word/document.xml"));
+            } else {
+                // Empty optional properties still take the editable canonicalizing path.
+                for uri in ["urn:outer", "urn:rebound"] {
+                    let pos = xml.find(uri).unwrap_or_else(|| panic!("{uri} missing: {xml}"));
+                    let start = xml[..pos].rfind('<').unwrap();
+                    let end = xml[pos..].find('>').unwrap() + pos;
+                    let tag = &xml[start..=end];
+                    let prefix = tag.strip_prefix('<').unwrap().split(':').next().unwrap();
+                    let values =
+                        tag.split("mc:Ignorable=\"").nth(1).and_then(|s| s.split('"').next()).unwrap_or_else(|| panic!("no ignorable scope: {tag}"));
+                    assert!(values.split_whitespace().any(|v| v == prefix), "{tag}");
+                }
+            }
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+    }
+}
+
+#[test]
+fn required_source_allows_binary_with_isolated_zip_signatures() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    for binary in [&b"opaque \x50\x4b\x03\x04 data"[..], &b"opaque \x50\x4b\x05\x06 data"[..], &b"\x50\x4b\x03\x04"[..]] {
+        let mut files = unzip(&docx(body, &[], &[]));
+        files.insert("word/media/binary.bin".into(), binary.to_vec());
+        let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        let source = zip(&entries);
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            assert_eq!(unzip(&saved), unzip(&source));
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+    }
+}
+
+#[test]
+fn malformed_unused_relationships_are_refused_before_requirements_can_be_ruled_out() {
+    let source = docx("<w:p/>", &[], &[("word/_rels/unused.xml.rels", "<Relationships><unfinished")]);
+    assert!(matches!(wordcraft_docx::read(&source), Err(wordcraft_docx::DocxError::Xml(_))));
+}
+
+#[test]
+fn required_source_refuses_plausible_but_uninspectable_nested_zip() {
+    let body = r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:PreserveElements="f:*"><f:opaque/><w:r><w:t>visible</w:t></w:r></w:p>"#;
+    let archive = zip(&[("word/vbaProject.bin", b"vba")]);
+    let end = archive.windows(4).position(|w| w == b"PK\x01\x02").unwrap();
+    let truncated = &archive[..end];
+    let mut prefixed = b"stub".to_vec();
+    prefixed.extend_from_slice(truncated);
+    for bytes in [truncated, prefixed.as_slice()] {
+        let mut files = unzip(&docx(body, &[], &[]));
+        files.insert("word/media/binary.bin".into(), bytes.to_vec());
+        let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+        let doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+    }
+}
+
+#[test]
+fn detached_known_control_properties_keep_inherited_ignorable_attributes() {
+    let control = |scope: &str, label: &str| {
+        format!(
+            r#"<w:sdt {scope}><w:sdtPr><w:rPr f:flag="{label}-rpr"><w:b f:flag="{label}-child"/></w:rPr><w:dataBinding f:flag="{label}-binding"/></w:sdtPr><w:sdtEndPr f:flag="{label}-end"><w:rPr f:flag="{label}-end-child"/></w:sdtEndPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt>"#
+        )
+    };
+    let body = format!("<w:p>{}{}</w:p>", control("", "outer"), control(r#"xmlns:f="urn:rebound" mc:Ignorable="f""#, "rebound"));
+    let mut files = unzip(&docx(&body, &[], &[]));
+    let document = text(&files, "word/document.xml").replace("<w:document ", r#"<w:document xmlns:f="urn:outer" mc:Ignorable="f" "#);
+    files.insert("word/document.xml".into(), document.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let xml = text(&unzip(&saved), "word/document.xml");
+        use quick_xml::events::Event;
+        use quick_xml::name::{QName, ResolveResult};
+        let mut reader = quick_xml::reader::NsReader::from_str(&xml);
+        let mut scopes: Vec<Vec<String>> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        loop {
+            let event = reader.read_event().unwrap();
+            match event {
+                Event::Start(ref e) | Event::Empty(ref e) => {
+                    let mut active = scopes.last().cloned().unwrap_or_default();
+                    for attr in e.attributes().flatten().filter(|a| a.key.as_ref() == b"mc:Ignorable") {
+                        for prefix in std::str::from_utf8(&attr.value).unwrap().split_whitespace() {
+                            let name = format!("{prefix}:scope");
+                            let (ns, _) = reader.resolver().resolve_attribute(QName(name.as_bytes()));
+                            let ResolveResult::Bound(ns) = ns else { panic!("undeclared ignorable prefix {prefix}") };
+                            active.push(std::str::from_utf8(ns.as_ref()).unwrap().to_string());
+                        }
+                    }
+                    for attr in e.attributes().flatten().filter(|a| a.key.local_name().as_ref() == b"flag") {
+                        let (ns, _) = reader.resolver().resolve_attribute(attr.key);
+                        let ResolveResult::Bound(ns) = ns else { panic!("unbound extension attribute") };
+                        let uri = std::str::from_utf8(ns.as_ref()).unwrap();
+                        let value = std::str::from_utf8(&attr.value).unwrap();
+                        let expected = if value.starts_with("outer-") { "urn:outer" } else { "urn:rebound" };
+                        assert_eq!(uri, expected, "{value}");
+                        assert!(active.iter().any(|ignored| ignored == uri), "{value} lacks ignorable scope");
+                        seen.insert(value.to_string());
+                    }
+                    if matches!(event, Event::Start(_)) {
+                        scopes.push(active);
+                    }
+                }
+                Event::End(_) => {
+                    scopes.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        for label in ["outer", "rebound"] {
+            for part in ["rpr", "child", "binding", "end", "end-child"] {
+                assert!(seen.contains(&format!("{label}-{part}")), "missing {label}-{part}");
+            }
+        }
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn required_raw_control_choice_keeps_rebound_unknown_requirements_twice() {
+    let body = r#"<w:p xmlns:f="urn:outer"><w:sdt><w:sdtPr><f:property mc:Ignorable="f" mc:PreserveElements="f:*"><mc:AlternateContent><mc:Choice xmlns:f="urn:rebound" Requires="f"><w:r><w:t>hidden choice</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>hidden fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></f:property></w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt><mc:AlternateContent><mc:Choice Requires="f"><w:r><w:t>wrong branch</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>correct fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#;
+    let source = docx(body, &[], &[]);
+    let source_parts = unzip(&source);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        assert!(paras(&doc).iter().any(|p| p.text.contains("correct fallback") && !p.text.contains("wrong branch")));
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let files = unzip(&saved);
+        assert!(files.get("word/document.xml") == source_parts.get("word/document.xml"), "required source document must be replayed");
+        let xml = text(&files, "word/document.xml");
+        assert!(xml.contains(r#"xmlns:f="urn:rebound" Requires="f""#), "{xml}");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn raw_control_choice_without_preservation_directive_cannot_serialize_invalid_requires() {
+    for property in [
+        r#"<w:sdtPr><f:property mc:Ignorable="f"><mc:AlternateContent><mc:Choice Requires="f"/><mc:Fallback/></mc:AlternateContent></f:property></w:sdtPr>"#,
+        r#"<w:sdtPr><w:rPr><mc:AlternateContent><mc:Choice Requires="f"/><mc:Fallback/></mc:AlternateContent></w:rPr></w:sdtPr>"#,
+        r#"<w:sdtPr/><w:sdtEndPr><mc:AlternateContent><mc:Choice Requires="f"/><mc:Fallback/></mc:AlternateContent></w:sdtEndPr>"#,
+        // a14 is a recognized choice requirement but is not declared by the normal writer.
+        r#"<w:sdtPr><w:rPr><mc:AlternateContent><mc:Choice xmlns:f="http://schemas.microsoft.com/office/drawing/2010/main" Requires="f"/><mc:Fallback/></mc:AlternateContent></w:rPr></w:sdtPr>"#,
+    ] {
+        let body = format!(r#"<w:p xmlns:f="urn:future"><w:sdt>{property}<w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#);
+        let source = docx(&body, &[], &[]);
+        let source_parts = unzip(&source);
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            assert!(unzip(&saved).get("word/document.xml") == source_parts.get("word/document.xml"), "source must be replayed: {property}");
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+    }
+}
+
+#[test]
+fn required_control_unqualified_relationship_aliases_keep_targets_twice() {
+    for reference in [
+        r#"<a:blip embed="rIdImg"/>"#,
+        r#"<v:imagedata id="rIdImg"/>"#,
+        r#"<dgm:relIds xmlns:dgm="http://schemas.openxmlformats.org/drawingml/2006/diagram" dm="rIdImg"/>"#,
+        r#"<a:blip xmlns:other="http://schemas.openxmlformats.org/officeDocument/2006/relationships" other:embed="rIdImg"/>"#,
+    ] {
+        let body = format!(
+            r#"<w:p xmlns:f="urn:outer"><w:sdt><w:sdtPr><f:property mc:Ignorable="f" mc:PreserveElements="f:*"><f:inner xmlns:f="urn:rebound" xmlns:r="urn:not-a-relationship" r:flag="kept">{reference}</f:inner></f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        );
+        let source = docx(&body, &[("rIdImg", "image", "media/image.bin")], &[("word/media/image.bin", "image payload")]);
+        let parts = unzip(&source);
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            assert!(unzip(&saved) == parts, "source relationships and target must survive: {reference}");
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+        doc.body.clear();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+    }
+}
+
+#[test]
+fn required_control_missing_relationships_replay_unchanged_and_refuse_edits() {
+    let body = r#"<w:p xmlns:f="urn:outer"><w:sdt><w:sdtPr><f:property mc:Ignorable="f" mc:PreserveElements="f:*"><f:inner xmlns:f="urn:rebound"><a:blip embed="missing"/></f:inner></f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    for rels in [&[][..], &[("missing", "image", "media/missing.bin")][..]] {
+        let source = docx(body, rels, &[]);
+        let parts = unzip(&source);
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            assert!(unzip(&saved) == parts, "a pre-existing dangling reference must not be rewritten");
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+        doc.body.clear();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+    }
+}
+
+#[test]
+fn required_control_relationship_alias_refuses_ambiguous_source_parts() {
+    let body = r#"<w:p xmlns:f="urn:future"><w:sdt><w:sdtPr><f:property mc:Ignorable="f" mc:PreserveElements="f:*"><a:blip embed="rIdImg"/></f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    let source = docx(body, &[("rIdImg", "image", "media/image.bin")], &[("word/media/image.bin", "first")]);
+    let files = unzip(&source);
+    let mut entries: Vec<_> = files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect();
+    entries.push(("WORD/media/image.bin", b"second"));
+    assert!(matches!(wordcraft_docx::read(&zip(&entries)), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+// Compare expanded QName values rather than relying on the spelling of a prefix.
+fn qname_values(xml: &str, attr: &str) -> Vec<(String, String)> {
+    use quick_xml::events::Event;
+    use quick_xml::name::{QName, ResolveResult};
+    use quick_xml::reader::NsReader;
+
+    let mut reader = NsReader::from_str(xml);
+    let mut found = Vec::new();
+    let local_attr = attr.rsplit(':').next().unwrap_or(attr);
+    loop {
+        match reader.read_event().unwrap() {
+            Event::Start(e) | Event::Empty(e) => {
+                for attribute in e.attributes().flatten().filter(|a| a.key.local_name().as_ref() == local_attr.as_bytes()) {
+                    let name = QName(attribute.value.as_ref());
+                    let (ns, local) = reader.resolver().resolve_attribute(name);
+                    let ResolveResult::Bound(ns) = ns else { panic!("unbound QName in {attr}") };
+                    found.push((String::from_utf8(ns.as_ref().to_vec()).unwrap(), String::from_utf8(local.as_ref().to_vec()).unwrap()));
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    found
+}
+
+#[test]
+fn required_control_qname_attribute_values_keep_inherited_and_rebound_bindings() {
+    for attr in ["xsi:type", "f:arbitrary", "ordinary"] {
+        let body = format!(
+            r#"<w:p xmlns:f="urn:property" xmlns:q="urn:outer" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><w:sdt><w:sdtPr><f:property mc:Ignorable="f" mc:PreserveElements="f:*" {attr}="q:Outer"><f:child xmlns:q="urn:inner" {attr}="q:Inner"/></f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        );
+        let source = docx(&body, &[], &[]);
+        let parts = unzip(&source);
+        let expected = vec![("urn:outer".to_string(), "Outer".to_string()), ("urn:inner".to_string(), "Inner".to_string())];
+        assert_eq!(qname_values(&text(&parts, "word/document.xml"), attr), expected);
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            let saved_parts = unzip(&saved);
+            assert!(saved_parts == parts, "source namespace scopes must survive: {attr}");
+            assert_eq!(qname_values(&text(&saved_parts, "word/document.xml"), attr), expected);
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+        doc.body.clear();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+    }
+}
+
+#[test]
+fn nonrequired_ignorable_control_property_still_allows_edits() {
+    let body = r#"<w:p xmlns:f="urn:future"><w:sdt><w:sdtPr><f:property mc:Ignorable="f"/></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    doc.body.clear();
+    assert!(wordcraft_docx::write(&doc).is_ok());
+}
+
+#[test]
+fn nonrequired_control_qname_attribute_values_keep_inherited_and_rebound_bindings() {
+    for attr in ["xsi:type", "f:arbitrary", "ordinary"] {
+        let body = format!(
+            r#"<w:p xmlns:f="urn:property" xmlns:q="urn:outer" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><w:sdt><w:sdtPr><f:property mc:Ignorable="f" {attr}="q:Outer"><f:child xmlns:q="urn:inner" {attr}="q:Inner"/></f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        );
+        let source = docx(&body, &[], &[]);
+        let expected = vec![("urn:outer".to_string(), "Outer".to_string()), ("urn:inner".to_string(), "Inner".to_string())];
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        for _ in 0..2 {
+            let saved = wordcraft_docx::write(&doc).unwrap();
+            assert_eq!(qname_values(&text(&unzip(&saved), "word/document.xml"), attr), expected);
+            doc = wordcraft_docx::read(&saved).unwrap();
+        }
+        doc.body.clear();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+    }
+}
+
+#[test]
+fn modeled_control_unqualified_attributes_allow_edit_and_save() {
+    let body = r#"<w:p><w:sdt><w:sdtPr><w:id val="42"/><w:alias val="title"/><w:text multiLine="1"/></w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>outside</w:t></w:r></w:p>"#;
+    let mut doc = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let Block::Para(para) = Arc::make_mut(doc.body.get_mut(1).unwrap()) else { panic!("expected paragraph") };
+    para.insert_text(0, "edited ", &Default::default()).unwrap();
+    let saved = wordcraft_docx::write(&doc).unwrap();
+    let reopened = wordcraft_docx::read(&saved).unwrap();
+    assert!(paras(&reopened).iter().any(|p| p.text.contains("edited outside")));
+    let mut found = Vec::new();
+    wordcraft_doc::control::walk_controls(&reopened.body, &mut |c| found.push((c.id, c.title.clone())));
+    assert!(found.contains(&(Some(42), "title".into())));
+}
+
+#[test]
+fn nonrequired_control_qname_text_keeps_inherited_and_rebound_bindings() {
+    use quick_xml::events::Event;
+    use quick_xml::name::{QName, ResolveResult};
+    let body = r#"<w:p xmlns:f="urn:property" xmlns:q="urn:outer"><w:sdt><w:sdtPr><f:property mc:Ignorable="f">q:Outer<f:child xmlns:q="urn:inner">q:Inner</f:child></f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    let source = docx(body, &[], &[]);
+    let parts = unzip(&source);
+    let expected = [("urn:outer", "Outer"), ("urn:inner", "Inner")];
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        let saved_parts = unzip(&saved);
+        let xml = text(&saved_parts, "word/document.xml");
+        let mut reader = quick_xml::reader::NsReader::from_str(&xml);
+        let mut found = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Text(t) if t.as_ref().starts_with(b"q:") => {
+                    let (ns, local) = reader.resolver().resolve_attribute(QName(t.as_ref()));
+                    let ResolveResult::Bound(ns) = ns else { panic!("unbound QName text") };
+                    found.push((std::str::from_utf8(ns.as_ref()).unwrap().to_string(), std::str::from_utf8(local.as_ref()).unwrap().to_string()));
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        assert_eq!(found, expected.map(|(ns, local)| (ns.to_string(), local.to_string())));
+        assert!(saved_parts == parts, "opaque text source scopes must be replayed");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+    doc.body.clear();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
+#[test]
+fn nonrequired_control_unprefixed_qname_text_preserves_default_namespace() {
+    let body = r#"<w:p xmlns:f="urn:property"><w:sdt><w:sdtPr><f:property xmlns="urn:default" mc:Ignorable="f">LocalName</f:property></w:sdtPr><w:sdtContent><w:r><w:t>visible</w:t></w:r></w:sdtContent></w:sdt></w:p>"#;
+    let source = docx(body, &[], &[]);
+    let parts = unzip(&source);
+    let mut doc = wordcraft_docx::read(&source).unwrap();
+    for _ in 0..2 {
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert!(unzip(&saved) == parts, "QName text may use an inherited default namespace");
+        doc = wordcraft_docx::read(&saved).unwrap();
+    }
+}
+
+#[test]
+fn nested_modeled_control_aliases_allow_unrelated_edits() {
+    let cases = [
+        ("placeholder", r#"<w:placeholder><w:docPart val="default"/></w:placeholder>"#),
+        ("combo", r#"<w:comboBox lastValue="b"><w:listItem displayText="Beta" value="b"/></w:comboBox>"#),
+        ("dropdown", r#"<w:dropDownList lastValue="b"><w:listItem displayText="Beta" value="b"/></w:dropDownList>"#),
+        (
+            "date",
+            r#"<w:date fullDate="2020-01-02"><w:dateFormat val="yyyy"/><w:lid val="en-US"/><w:calendar val="gregorian"/><w:storeMappedDataAs val="date"/></w:date>"#,
+        ),
+        ("gallery", r#"<w:docPartObj><w:docPartGallery val="custom"/><w:docPartCategory val="general"/><w:docPartUnique/></w:docPartObj>"#),
+        ("gallery-list", r#"<w:docPartList><w:docPartGallery val="custom"/><w:docPartCategory val="general"/></w:docPartList>"#),
+        (
+            "checkbox",
+            r#"<w14:checkbox><w14:checked val="1"/><w14:checkedState val="2612" font="Open"/><w14:uncheckedState val="2610" font="Open"/></w14:checkbox>"#,
+        ),
+        ("repeating", r#"<w15:repeatingSection><w15:sectionTitle val="items"/><w15:doNotAllowInsertDeleteSection/></w15:repeatingSection>"#),
+    ];
+    let mut failed = Vec::new();
+    for (name, property) in cases {
+        let body = format!(
+            r#"<w:p xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdt><w:sdtPr><w:id val="42"/>{property}</w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>outside</w:t></w:r></w:p>"#
+        );
+        let mut doc = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+        let mut before = Vec::new();
+        wordcraft_doc::control::walk_controls(&doc.body, &mut |c| before.push((c.id, c.placeholder.clone(), c.kind.clone())));
+        assert_eq!(before.len(), 1, "{name}");
+        let Block::Para(para) = Arc::make_mut(doc.body.get_mut(1).unwrap()) else { panic!("expected paragraph") };
+        para.insert_text(0, "edited ", &Default::default()).unwrap();
+        let Ok(saved) = wordcraft_docx::write(&doc) else {
+            failed.push(name);
+            continue;
+        };
+        let reopened = wordcraft_docx::read(&saved).unwrap();
+        let mut after = Vec::new();
+        wordcraft_doc::control::walk_controls(&reopened.body, &mut |c| after.push((c.id, c.placeholder.clone(), c.kind.clone())));
+        assert_eq!(after, before, "{name}");
+        assert!(paras(&reopened).iter().any(|p| p.text.contains("edited outside")), "{name}");
+    }
+    assert!(failed.is_empty(), "modeled control aliases refused edits: {failed:?}");
+}
+
+#[test]
+fn modeled_alias_names_in_opaque_or_unmodeled_paths_remain_protected() {
+    for property in [
+        r#"<w:rPr><w:placeholder><w:docPart val="q:Value"/></w:placeholder></w:rPr>"#,
+        r#"<w:comboBox><w:listItem displayText="Beta" value="b" other="q:Value"/></w:comboBox>"#,
+        r#"<f:property mc:Ignorable="f"><w:placeholder><w:docPart val="q:Value"/></w:placeholder></f:property>"#,
+        r#"<w:docPartObj><w:docPartUnique other="q:Value"/></w:docPartObj>"#,
+        r#"<w15:repeatingSection xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w15:doNotAllowInsertDeleteSection other="q:Value"/></w15:repeatingSection>"#,
+    ] {
+        let body = format!(
+            r#"<w:p xmlns:f="urn:future" xmlns:q="urn:q"><w:sdt><w:sdtPr>{property}</w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt></w:p>"#
+        );
+        let source = docx(&body, &[], &[]);
+        let parts = unzip(&source);
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert!(unzip(&saved) == parts, "ambiguous raw path must preserve source: {property}");
+        doc.body.clear();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))), "{property}");
+    }
+}
+
+#[test]
+fn nested_modeled_on_off_aliases_allow_edits_and_reopen() {
+    let mut refused = Vec::new();
+    for (kind, root, child) in [
+        ("gallery-object", "w:docPartObj", "w:docPartUnique"),
+        ("gallery-list", "w:docPartList", "w:docPartUnique"),
+        ("repeating", "w15:repeatingSection", "w15:doNotAllowInsertDeleteSection"),
+    ] {
+        for (value, expected) in [("0", false), ("1", true)] {
+            let property = format!(r#"<{root}><{child} val="{value}"/></{root}>"#);
+            let body = format!(
+                r#"<w:p xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml"><w:sdt><w:sdtPr><w:id val="42"/>{property}</w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>outside</w:t></w:r></w:p>"#
+            );
+            let mut doc = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+            let mut before = Vec::new();
+            wordcraft_doc::control::walk_controls(&doc.body, &mut |c| before.push(c.kind.clone()));
+            match before.as_slice() {
+                [wordcraft_doc::control::ControlKind::Gallery { unique, .. }] => assert_eq!(*unique, expected, "{kind} {value}"),
+                [wordcraft_doc::control::ControlKind::RepeatingSection { no_insert_delete, .. }] => {
+                    assert_eq!(*no_insert_delete, expected, "{kind} {value}")
+                }
+                _ => panic!("unexpected {kind} control: {before:?}"),
+            }
+            let Block::Para(para) = Arc::make_mut(doc.body.get_mut(1).unwrap()) else { panic!("expected paragraph") };
+            para.insert_text(0, "edited ", &Default::default()).unwrap();
+            let Ok(saved) = wordcraft_docx::write(&doc) else {
+                refused.push(format!("{kind}={value}"));
+                continue;
+            };
+            let reopened = wordcraft_docx::read(&saved).unwrap();
+            let mut after = Vec::new();
+            wordcraft_doc::control::walk_controls(&reopened.body, &mut |c| after.push(c.kind.clone()));
+            assert_eq!(after, before, "{kind} {value}");
+            assert!(paras(&reopened).iter().any(|p| p.text.contains("edited outside")));
+        }
+    }
+    assert!(refused.is_empty(), "modeled on/off aliases refused edits: {refused:?}");
+}
+
+#[test]
+fn direct_modeled_control_aliases_allow_edits_and_reopen() {
+    let properties = [
+        r#"<w:alias val="title"/>"#,
+        r#"<w:tag val="tag"/>"#,
+        r#"<w:lock val="sdtLocked"/>"#,
+        r#"<w:temporary val="0"/>"#,
+        r#"<w:temporary val="1"/>"#,
+        r#"<w:showingPlcHdr val="0"/>"#,
+        r#"<w:showingPlcHdr val="1"/>"#,
+        r#"<w:text multiLine="0"/>"#,
+        r#"<w:text multiLine="1"/>"#,
+        r#"<w:date fullDate="2020-01-02"/>"#,
+        r#"<w:comboBox lastValue="choice"/>"#,
+        r#"<w:dropDownList lastValue="choice"/>"#,
+    ];
+    for property in properties {
+        let body = format!(
+            r#"<w:p><w:sdt><w:sdtPr><w:id val="42"/>{property}</w:sdtPr><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt></w:p><w:p><w:r><w:t>outside</w:t></w:r></w:p>"#
+        );
+        let mut doc = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+        let mut before = Vec::new();
+        wordcraft_doc::control::walk_controls(&doc.body, &mut |c| {
+            before.push((c.id, c.tag.clone(), c.title.clone(), c.lock, c.temporary, c.showing_placeholder, c.kind.clone()))
+        });
+        let Block::Para(para) = Arc::make_mut(doc.body.get_mut(1).unwrap()) else { panic!("expected paragraph") };
+        para.insert_text(0, "edited ", &Default::default()).unwrap();
+        let reopened = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        let mut after = Vec::new();
+        wordcraft_doc::control::walk_controls(&reopened.body, &mut |c| {
+            after.push((c.id, c.tag.clone(), c.title.clone(), c.lock, c.temporary, c.showing_placeholder, c.kind.clone()))
+        });
+        assert_eq!(after, before, "{property}");
+        assert!(paras(&reopened).iter().any(|p| p.text.contains("edited outside")), "{property}");
+    }
+}
+
+#[test]
+fn process_content_text_preserves_order_ignores_unprocessed_and_rebound_wrappers() {
+    let fragment = r#"A<f:wrap>B<f:wrap>D</f:wrap><x:hidden><mc:AlternateContent><mc:Choice Requires="f">wrong</mc:Choice><mc:Fallback>wrong</mc:Fallback></mc:AlternateContent></x:hidden><f:wrap xmlns:f="urn:other" mc:Ignorable="f">wrong</f:wrap></f:wrap>C"#;
+    let body = format!(
+        r#"<w:p xmlns:f="urn:future" xmlns:x="urn:ignored" mc:Ignorable="f x" mc:ProcessContent="f:wrap"><w:r><w:t>{fragment}</w:t></w:r></w:p><w:p xmlns:f="urn:future" xmlns:x="urn:ignored" mc:Ignorable="f x" mc:ProcessContent="f:wrap"><w:del w:id="2" w:author="A"><w:r><w:delText>{fragment}</w:delText></w:r></w:del></w:p>"#
+    );
+    let mut doc = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+    for _ in 0..3 {
+        let ps = paras(&doc);
+        assert_eq!(ps[0].text, "ABDC");
+        assert_eq!(ps[1].text, "ABDC");
+        doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn process_content_field_instruction_text_survives_two_saves() {
+    for tag in ["instrText", "delInstrText"] {
+        let body = format!(
+            r#"<w:p xmlns:f="urn:future" xmlns:x="urn:ignored" mc:Ignorable="f x" mc:ProcessContent="f:wrap"><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:{tag}>RE<f:wrap>F <f:wrap>target</f:wrap><x:hidden>wrong</x:hidden><f:wrap xmlns:f="urn:other" mc:Ignorable="f">wrong</f:wrap></f:wrap> \h</w:{tag}></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>result</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#
+        );
+        let mut doc = wordcraft_docx::read(&docx(&body, &[], &[])).unwrap();
+        for _ in 0..3 {
+            assert!(
+                paras(&doc).iter().flat_map(|p| &p.objects).any(|o| matches!(o, InlineObject::Field { instr, .. } if instr == r"REF target \h")),
+                "{tag}"
+            );
+            doc = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn process_content_text_nesting_limit_is_an_error() {
+    let body = format!(
+        r#"<w:p xmlns:f="urn:future" mc:Ignorable="f" mc:ProcessContent="f:wrap"><w:r><w:t>{}X{}</w:t></w:r></w:p>"#,
+        "<f:wrap>".repeat(260),
+        "</f:wrap>".repeat(260)
+    );
+    assert!(matches!(wordcraft_docx::read(&docx(&body, &[], &[])), Err(wordcraft_docx::DocxError::Limit(_))));
+}
+
+#[test]
+fn malformed_vba_relationships_do_not_hide_compatibility_requirements() {
+    let document = format!(r#"<w:document {W_NS}><w:body><w:p/></w:body></w:document>"#);
+    let relations = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="vba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/></Relationships>"#;
+    let ordinary = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/vbaProject.bin", b"project"),
+        ("word/_rels/vbaProject.bin.rels", b"<Relationships <<< \0"),
+    ]);
+    assert!(wordcraft_docx::read(&ordinary).is_ok(), "ordinary malformed VBA relationships remain recoverable");
+    let broken = r#"<Relationships <<< <z:property z:PreserveElements="f:*"/>"#;
+    let utf16: Vec<u8> = [0xff, 0xfe].into_iter().chain(broken.encode_utf16().flat_map(u16::to_le_bytes)).chain([0]).collect();
+    for bytes in [broken.as_bytes(), utf16.as_slice()] {
+        let source = zip(&[
+            ("_rels/.rels", ROOT_RELS.as_bytes()),
+            ("word/document.xml", document.as_bytes()),
+            ("word/_rels/document.xml.rels", relations.as_bytes()),
+            ("word/vbaProject.bin", b"project"),
+            ("word/_rels/vbaProject.bin.rels", bytes),
+        ]);
+        let result = wordcraft_docx::read(&source);
+        assert!(
+            matches!(result, Err(wordcraft_docx::DocxError::Xml(_))),
+            "compatibility directives in malformed metadata must not be dropped: {result:?}"
+        );
+    }
+    // Even without MC tokens, duplicate expanded names must not enter broken VBA recovery.
+    let duplicate = r#"<Relationships xmlns:a="urn:unknown" xmlns:b="urn:unknown" a:id="one" b:id="two"/>"#;
+    for bytes in [duplicate.as_bytes().to_vec(), [vec![0xff, 0xfe], duplicate.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat()] {
+        let source = zip(&[
+            ("_rels/.rels", ROOT_RELS.as_bytes()),
+            ("word/document.xml", document.as_bytes()),
+            ("word/_rels/document.xml.rels", relations.as_bytes()),
+            ("word/vbaProject.bin", b"project"),
+            ("word/_rels/vbaProject.bin.rels", &bytes),
+        ]);
+        assert!(matches!(wordcraft_docx::read(&source), Err(wordcraft_docx::DocxError::Xml(_))));
+    }
+    let deep = format!("{}<x/>{}", "<r>".repeat(260), "</r>".repeat(260));
+    let source = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", document.as_bytes()),
+        ("word/_rels/document.xml.rels", relations.as_bytes()),
+        ("word/vbaProject.bin", b"project"),
+        ("word/_rels/vbaProject.bin.rels", deep.as_bytes()),
+    ]);
+    assert!(matches!(wordcraft_docx::read(&source), Err(wordcraft_docx::DocxError::Limit(_))));
+}
+
+#[test]
+fn encoded_namespace_declarations_are_fatal_in_document_and_related_parts() {
+    let directive = r#"xmlns:c="http://schemas.openxmlformats.org/markup-compatibility/200&#54;" xmlns:f="urn:unsupported" c:MustUnderstand="f""#;
+    let main = format!(r#"<w:document {W_NS} {directive}><w:body><w:p/></w:body></w:document>"#);
+    let plain = format!(r#"<w:document {W_NS}><w:body><w:p/></w:body></w:document>"#);
+    let relations = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="vba" Type="http://schemas.microsoft.com/office/2006/relationships/vbaProject" Target="vbaProject.bin"/></Relationships>"#;
+    for metadata in [
+        format!(r#"<Relationships {directive}/>"#),
+        r#"<Relationships xmlns:c="urn:&#97;"/>"#.to_string(),
+        format!(r#"<Relationships/><extra {directive}/>"#),
+    ] {
+        for bytes in [
+            metadata.as_bytes().to_vec(),
+            [vec![0xff, 0xfe], metadata.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat(),
+            [vec![0xfe, 0xff], metadata.encode_utf16().flat_map(u16::to_be_bytes).collect()].concat(),
+        ] {
+            let source = zip(&[
+                ("_rels/.rels", ROOT_RELS.as_bytes()),
+                ("word/document.xml", plain.as_bytes()),
+                ("word/_rels/document.xml.rels", relations.as_bytes()),
+                ("word/vbaProject.bin", b"project"),
+                ("word/_rels/vbaProject.bin.rels", &bytes),
+            ]);
+            assert!(matches!(wordcraft_docx::read(&source), Err(wordcraft_docx::DocxError::Xml(_))));
+        }
+    }
+    for bytes in [
+        main.as_bytes().to_vec(),
+        [vec![0xff, 0xfe], main.encode_utf16().flat_map(u16::to_le_bytes).collect()].concat(),
+        [vec![0xfe, 0xff], main.encode_utf16().flat_map(u16::to_be_bytes).collect()].concat(),
+    ] {
+        let source = zip(&[("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", &bytes)]);
+        assert!(matches!(wordcraft_docx::read(&source), Err(wordcraft_docx::DocxError::Xml(_))));
+    }
+    let body = r#"<w:p/><w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#;
+    let header = format!(r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" {directive}><w:p/></w:hdr>"#);
+    assert!(matches!(
+        wordcraft_docx::read(&docx(body, &[("rHeader", "header", "header1.xml")], &[("word/header1.xml", &header)])),
+        Err(wordcraft_docx::DocxError::Xml(_))
+    ));
 }

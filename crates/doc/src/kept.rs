@@ -22,6 +22,8 @@ pub struct Kept(Option<Arc<KeptXml>>);
 /// What a reader kept.
 #[derive(Clone, Debug, Default)]
 pub struct KeptXml {
+    /// Original DOCX package and the modeled state it represents, for required MC markup.
+    pub docx_required: Option<Arc<DocxRequired>>,
     /// The format it came from (`"odt"`): only that format's writer uses it.
     pub format: String,
     /// Paragraph [`fingerprint`] → the paragraph's markup, in the order read (identical
@@ -83,6 +85,15 @@ pub struct KeptXml {
     /// Each section's master page, as the file named it where its section starts (`None`: the
     /// file's default), for a writer naming the file's own master pages.
     pub section_masters: Vec<Option<String>>,
+}
+
+/// A whole-package preservation boundary: source relationships and namespace bindings stay
+/// intact, and any model change is refused until its ownership can be mapped safely.
+#[derive(Clone, Debug)]
+pub struct DocxRequired {
+    pub source: BTreeMap<String, Arc<Vec<u8>>>,
+    pub snapshot: Arc<crate::Document>,
+    pub main_content_type: String,
 }
 
 impl PartialEq for Kept {
