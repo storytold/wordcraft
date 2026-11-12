@@ -319,7 +319,12 @@ impl Reader<'_> {
         if let Some(p) = t.child("w:tblPr") {
             table.props = self.pc.tblpr(p);
             if let Some(ch) = p.child("w:tblPrChange") {
-                let old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                let mut old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
+                // Old properties without `w:tblStyle` had the default table style too (#5056):
+                // rejecting the change keeps it.
+                if old.style.is_none() {
+                    old.style.clone_from(&self.default_table_style);
+                }
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
         }

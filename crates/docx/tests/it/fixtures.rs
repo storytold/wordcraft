@@ -936,6 +936,11 @@ fn a_table_without_a_style_takes_the_default_table_style() {
         (ruled_named("TableNormal", "Foo", "1"), "", Some("TableNormal")),
         // An id too long to copy into every table is not given to them.
         (ruled(&"L".repeat(300), "1"), "", None),
+        // A style defined twice is its last definition: that one says whether it is the default
+        // and what it is named.
+        (format!("{}{}", ruled("Rule", "1"), ruled_named("Rule", "Normal Table", "1")), "", None),
+        (format!("{}{}", ruled_named("Rule", "Normal Table", "1"), ruled("Rule", "1")), "", Some("Rule")),
+        (format!("{}{}", ruled("Rule", "1"), ruled("Rule", "0")), "", None),
     ] {
         assert_eq!(style(&read(&styles, tbl_style)).as_deref(), want, "{tbl_style} {styles}");
     }
@@ -946,6 +951,19 @@ fn a_table_without_a_style_takes_the_default_table_style() {
     assert!(d.body[0].as_table().unwrap().props.look.header_row);
     assert_eq!(head.v_align, Some(wordcraft_doc::props::VAlign::Bottom));
     assert!(head.borders.and_then(|b| b.bottom).is_some_and(|b| b.style == BorderStyle::Single));
+    // A tracked table change's old properties without `w:tblStyle` had the default style too, so
+    // rejecting the change keeps it; an old style of their own stays.
+    let old_style = |old: &str| {
+        let change = format!(
+            r#"<w:tblW w:w="5000" w:type="dxa"/><w:tblPrChange w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z"><w:tblPr>{old}<w:tblW w:w="4000" w:type="dxa"/></w:tblPr></w:tblPrChange>"#
+        );
+        let d = read(&format!("{}{}", ruled("Rule", "1"), ruled("Other", "0")), &change);
+        let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(t.props.style.as_deref(), Some("Rule"));
+        t.props.fmt_change.as_ref().unwrap().old.style.clone()
+    };
+    assert_eq!(old_style("").as_deref(), Some("Rule"));
+    assert_eq!(old_style(r#"<w:tblStyle w:val="Other"/>"#).as_deref(), Some("Other"));
     // A save keeps the style and the file's default flag (`on` included); the plain Normal Table
     // that saving writes as the default still leaves the table unstyled.
     let back = wordcraft_docx::read(&wordcraft_docx::write(&read(&ruled("Rule", "on"), "")).unwrap()).unwrap();

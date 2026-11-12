@@ -3,6 +3,7 @@ use super::{
     VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
@@ -204,9 +205,17 @@ impl Reader<'_> {
         // A table with no `w:tblStyle` takes the default table style, as in Word (#5056); the
         // `default` flag above leaves `TableNormal` out. A default named Normal Table is skipped:
         // Word gives the table nothing from it, so it stays unstyled, as saving writes it.
-        self.default_table_style = root
-            .children("w:style")
-            .take(10_000)
+        // A style defined twice is its last definition, as in the sheet: that one decides.
+        let mut last: HashMap<String, &El> = HashMap::new();
+        for s in root.children("w:style").take(10_000) {
+            if let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) {
+                last.insert(self.pc.style_id(raw_id), s);
+            }
+        }
+        self.default_table_style = sheet
+            .styles
+            .iter()
+            .filter_map(|st| last.get(&st.id).copied())
             .find(|s| s.attr("w:type") == Some("table") && is_default(s))
             .filter(|s| !is_normal_table(s))
             .and_then(|s| s.attr("w:styleId"))
