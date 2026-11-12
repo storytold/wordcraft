@@ -27,18 +27,23 @@ pub fn reviewers(doc: &Document) -> Vec<String> {
             for r in &p.runs {
                 revs.extend([r.props.ins, r.props.del, r.props.fmt_change.as_ref().map(|c| c.rev)].into_iter().flatten());
             }
-            // A table's, row's and cell's own changes, once per cell (at its first paragraph).
-            if path.last() == 0
-                && let Some((tp, row, cell)) = path.cell()
-                && let Some(t) = doc.table(st, &tp)
-            {
-                let row = t.rows.get(row);
-                let changes = [
-                    t.props.fmt_change.as_ref().map(|c| c.rev),
-                    row.and_then(|x| x.props.fmt_change.as_ref().map(|c| c.rev)),
-                    row.and_then(|x| x.cells.get(cell)).and_then(|x| x.props.fmt_change.as_ref().map(|c| c.rev)),
-                ];
-                revs.extend(changes.into_iter().flatten());
+            // A table's, row's and cell's own changes, once per cell (at its first paragraph), for
+            // every table around the paragraph: a cell that starts with a nested table has its first
+            // paragraph in that table. Each step up is three indexes shorter, so the walk ends.
+            let mut at = path.clone();
+            while let Some((tp, row, cell)) = at.cell() {
+                if at.last() == 0
+                    && let Some(t) = doc.table(st, &tp)
+                {
+                    let row = t.rows.get(row);
+                    let changes = [
+                        t.props.fmt_change.as_ref().map(|c| c.rev),
+                        row.and_then(|x| x.props.fmt_change.as_ref().map(|c| c.rev)),
+                        row.and_then(|x| x.cells.get(cell)).and_then(|x| x.props.fmt_change.as_ref().map(|c| c.rev)),
+                    ];
+                    revs.extend(changes.into_iter().flatten());
+                }
+                at = tp;
             }
         }
     }

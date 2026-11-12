@@ -1231,3 +1231,25 @@ fn a_hidden_reviewers_changes_are_drawn_as_plain_text() {
     assert_eq!((bars(&d, body_x), horizontal(&d), comment_fills(&d), author(&d)), (0, 0, 0, 0), "no markup at all");
     assert!(glyph_text(&d).contains("new") && glyph_text(&d).contains("gone"));
 }
+
+/// Review: a cell whose first block is a nested table still lists the author of the cell's own
+/// tracked formatting change (and of its table's and row's), so they can be hidden.
+#[test]
+fn a_cell_starting_with_a_nested_table_lists_its_own_reviewer() {
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run("table.quick", &json!({"kind": "matrix"})).unwrap();
+    s.run("caret.set", &json!({"pos": {"story": "body", "path": [1, 1, 1, 0], "off": 0}})).unwrap();
+    s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+    s.author = "Cy".into();
+    let rev = crate::cmd::new_revision(&mut s, wordcraft_doc::RevisionKind::Format);
+    let outer = s.doc.table_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+    let cell = outer.rows.get_mut(1).and_then(|r| r.cells.get_mut(1)).unwrap();
+    // The nested table is the cell's first block, so no paragraph of the cell's own starts it.
+    let nested = cell.blocks.iter().position(|b| b.as_table().is_some()).expect("a nested table");
+    cell.blocks.drain(..nested);
+    cell.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, cell.props.clone());
+    assert!(crate::cmd::review::reviewers::reviewers(&s.doc).contains(&"Cy".to_string()));
+    s.run("review.showReviewer", &json!({"author": "Cy", "value": false})).unwrap();
+    assert_eq!(s.view.hidden_reviewers, ["Cy"]);
+}
