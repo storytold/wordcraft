@@ -155,8 +155,27 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
                 ));
             }
             Inline::Anchor(a) => o.push_str(&format!("<a id=\"{}\"></a>", esc(a))),
+            Inline::Note { .. }
+            | Inline::Comment { .. }
+            | Inline::CommentEnd(_)
+            | Inline::Shape { .. }
+            | Inline::Group { .. }
+            | Inline::FieldStart(_)
+            | Inline::FieldEnd
+            | Inline::AnchorEnd(_) => {}
+            // ASK and SET show nothing (see `model::shows_nothing`).
+            Inline::Field { instr, .. } if model::shows_nothing(instr) => {}
+            Inline::Field { result, fmt, .. } | Inline::Control { text: result, fmt, .. } => {
+                let (open, close) = fmt_tags(fmt);
+                let at_start = o.is_empty();
+                o.push_str(&open);
+                o.push_str(&text_html(result, at_start));
+                for c in close.iter().rev() {
+                    o.push_str(c);
+                }
+            }
             // No picture to show: the browser shows the alt text in its place.
-            Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
+            Inline::Figure(alt) | Inline::Chart(crate::model::Chart { alt, .. }) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
             Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
         }

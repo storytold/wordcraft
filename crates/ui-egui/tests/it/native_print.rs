@@ -221,6 +221,23 @@ fn native_ranges_and_parity_do_not_duplicate_spooler_copies() {
     assert!(!jobs[0].2, "uncollated copies reach the spooler");
 }
 
+/// #1211: with no CUPS destinations, discovery reports `noPrinters`, not silence.
+#[test]
+fn empty_discovery_reports_no_printers_instead_of_silence() {
+    // #1211: a machine with no CUPS destinations must say "no printers", never detour silently.
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.services.printers = Some(Box::new(|| {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Vec::new()).unwrap();
+        receiver
+    }));
+    app.run("ui.printSettings", json!({"refresh": true})).unwrap();
+    app.printing.poll(&egui::Context::default());
+    let st = app.run("ui.printSettings", json!({})).unwrap();
+    assert!(st["printers"].as_array().is_some_and(|p| p.is_empty()));
+    assert_eq!(st["status"], "noPrinters", "{st}");
+}
+
 /// Default or auto orientation sends `orientation-requested=3`, landscape sends 4 plus
 /// `landscape=true`, and portrait sends 3.
 #[test]

@@ -294,8 +294,10 @@ fn write_document_body(doc: &Document, wr: &mut Writer<'_>, rels: &mut PartRels,
             wr.used_media.insert(p.media.clone());
             w.open("v:background", &[("id", "_x0000_s1025"), ("o:bwmode", "white")]);
             let mut fa: Vec<(&str, &str)> = vec![("r:id", &rid)];
-            if !p.fill_type.is_empty() {
-                fa.push(("type", &p.fill_type));
+            // VML has no centred fill (an ODT page background's): stretched to the page.
+            let kind = if p.fill_type.eq_ignore_ascii_case("center") { "frame" } else { p.fill_type.as_str() };
+            if !kind.is_empty() {
+                fa.push(("type", kind));
             }
             if !p.title.is_empty() {
                 fa.push(("o:title", &p.title));

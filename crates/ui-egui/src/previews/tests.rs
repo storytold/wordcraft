@@ -121,10 +121,10 @@ fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
     let (tx, rx) = std::sync::mpsc::channel();
     let worker = std::thread::spawn(move || {
         let ctx = egui::Context::default();
-        let preview = Previews::default().font_preview_fn();
+        let mut previews = Previews::default();
+        let preview = previews.font_preview_fn();
         let budget_id = egui::Id::unique("font_preview_budget");
-        let sans_id = egui::Id::unique("font:Source Sans 3");
-        let inter_id = egui::Id::unique("font:Inter");
+        let (sans, inter) = (font_key("Source Sans 3", 1.0), font_key("Inter", 1.0));
         ctx.data_mut(|d| d.insert_temp(budget_id, (1.0_f64, 11_u32)));
 
         for time in [1.0, 2.0, 3.0] {
@@ -134,16 +134,16 @@ fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
                 preview(ui, "Inter");
             })
             .drop_without_applying_deltas();
-            ctx.data(|d| {
-                assert!(d.get_temp::<TextureHandle>(sans_id).is_some());
-                if time == 1.0 {
-                    assert!(d.get_temp::<TextureHandle>(inter_id).is_none(), "over-budget entry should defer");
-                    assert_eq!(d.get_temp::<(f64, u32)>(budget_id), Some((1.0, 13)));
-                } else {
-                    assert!(d.get_temp::<TextureHandle>(inter_id).is_some(), "deferred entry should render next frame");
-                    assert_eq!(d.get_temp::<(f64, u32)>(budget_id), Some((2.0, 1)), "cached entries should not consume budget");
-                }
-            });
+            let drawn = |key: &str| previews.fonts.lock().atlas.uv.contains_key(key);
+            assert!(drawn(&sans));
+            let budget = ctx.data(|d| d.get_temp::<(f64, u32)>(budget_id));
+            if time == 1.0 {
+                assert!(!drawn(&inter), "over-budget entry should defer");
+                assert_eq!(budget, Some((1.0, 13)));
+            } else {
+                assert!(drawn(&inter), "deferred entry should render next frame");
+                assert_eq!(budget, Some((2.0, 1)), "cached entries should not consume budget");
+            }
         }
         tx.send(()).unwrap();
     });
@@ -262,12 +262,12 @@ fn equation_pictures_share_one_texture() {
 fn math_atlas_packs_rows() {
     let mut a = AtlasPage::default();
     assert_eq!(a.place(100, 40), Some([0, 0]));
-    assert_eq!(a.place(100, 20), Some([100 + MATH_ATLAS_GAP, 0]));
-    assert_eq!(a.place(MATH_ATLAS, 10), Some([0, 40 + MATH_ATLAS_GAP]), "a new row under the tallest");
-    assert_eq!(a.place(MATH_ATLAS + 1, 10), None);
+    assert_eq!(a.place(100, 20), Some([100 + ATLAS_GAP, 0]));
+    assert_eq!(a.place(ATLAS, 10), Some([0, 40 + ATLAS_GAP]), "a new row under the tallest");
+    assert_eq!(a.place(ATLAS + 1, 10), None);
     assert_eq!(a.place(10, 0), None);
-    assert_eq!(a.place(10, MATH_ATLAS), None, "full");
-    assert_eq!(a.place(10, 10), Some([0, 40 + MATH_ATLAS_GAP + 10 + MATH_ATLAS_GAP]), "still room after a refusal");
+    assert_eq!(a.place(10, ATLAS), None, "full");
+    assert_eq!(a.place(10, 10), Some([0, 40 + ATLAS_GAP + 10 + ATLAS_GAP]), "still room after a refusal");
 }
 
 /// #1002: a page is never wiped in a frame that handed out one of its pictures (they are
@@ -275,16 +275,16 @@ fn math_atlas_packs_rows() {
 #[test]
 fn math_atlas_never_wipes_a_page_drawn_from_this_frame() {
     let ctx = egui::Context::default();
-    let img = || egui::ColorImage::filled([MATH_ATLAS, MATH_ATLAS], egui::Color32::TRANSPARENT);
+    let img = || egui::ColorImage::filled([ATLAS, ATLAS], egui::Color32::TRANSPARENT);
     let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
-        let mut a = MathAtlas::default();
-        let first: Vec<_> = (0..MATH_ATLAS_PAGES).map(|i| a.add(ui.ctx(), 1, &format!("p{i}"), img())).collect();
+        let mut a = PreviewAtlas::default();
+        let first: Vec<_> = (0..ATLAS_PAGES).map(|i| a.add(ui.ctx(), 1, &format!("p{i}"), img())).collect();
         assert!(first.iter().all(Option::is_some), "a page each");
         let ids: std::collections::HashSet<_> = first.iter().flatten().map(|(id, _)| *id).collect();
-        assert_eq!(ids.len(), MATH_ATLAS_PAGES);
+        assert_eq!(ids.len(), ATLAS_PAGES);
         assert!(a.add(ui.ctx(), 1, "more", img()).is_none(), "every page was drawn from this frame");
         assert_eq!(a.wipes, 0);
-        assert!(a.uv.len() == MATH_ATLAS_PAGES, "nothing forgotten");
+        assert!(a.uv.len() == ATLAS_PAGES, "nothing forgotten");
         // Next frame: page 0 is drawn from again, so the one drawn longest ago is page 1.
         assert_eq!(a.get(2, "p0"), first.first().copied().flatten());
         let (id, _) = a.add(ui.ctx(), 2, "more", img()).expect("a page starts over");
@@ -347,6 +347,70 @@ fn ink_mask_keeps_the_ink_and_drops_the_paper() {
     assert_eq!(img.pixels[2].a(), 127, "antialiased ink keeps its coverage");
 }
 
+/// #5105: on Windows, font menu entries showed on black strips in light mode and on white or
+/// red ones in dark mode: each entry was a texture of its own, and browsing the list created
+/// and freed hundreds of them, the DirectX 12 texture mix-up of #1002. Entries are now drawn
+/// from a few shared pages written in place: scrolling through a long font list, at a high
+/// display scale too, creates at most [`ATLAS_PAGES`] textures and frees none. Once fonts are
+/// added or removed (from any window), every entry is drawn again.
+#[test]
+fn font_menu_entries_share_a_few_textures_and_free_none() {
+    for ppp in [1.0, 3.0] {
+        let ctx = egui::Context::default();
+        ctx.set_pixels_per_point(ppp);
+        let mut previews = Previews::default();
+        let preview = previews.font_preview_fn();
+        let names: Vec<String> = (0..300).map(|i| format!("Font {i}")).collect();
+        let (mut created, mut freed, mut ids) = (std::collections::HashSet::new(), 0, std::collections::HashSet::new());
+        // A menu shows about fifteen entries a frame; scroll it through the list twice.
+        for (frame, rows) in names.chunks(15).chain(names.chunks(15)).enumerate() {
+            let input = egui::RawInput { time: Some(frame as f64), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| {
+                for name in rows {
+                    preview(ui, name);
+                }
+            });
+            created.extend(
+                out.textures_delta
+                    .set
+                    .iter()
+                    .filter(|(id, ds)| **id != egui::TextureId::default() && ds.iter().any(|d| d.pos.is_none()))
+                    .map(|(id, _)| *id),
+            );
+            freed += out.textures_delta.free.len();
+            for s in &out.shapes {
+                if let egui::Shape::Mesh(m) = &s.shape
+                    && m.texture_id != egui::TextureId::default()
+                {
+                    ids.insert(m.texture_id);
+                }
+            }
+            out.textures_delta.clear();
+        }
+        assert!(!created.is_empty() && created.len() <= ATLAS_PAGES, "{ppp}: {} textures created", created.len());
+        assert_eq!(freed, 0, "{ppp}: no texture is freed while the list is browsed");
+        assert!(ids.len() <= ATLAS_PAGES, "{ppp}: entries drawn from {} textures", ids.len());
+        // An entry is drawn from the atlas, not as plain text.
+        ctx.run_ui(egui::RawInput { time: Some(1000.0), ..Default::default() }, |ui| {
+            preview(ui, "Font 298");
+            preview(ui, "Font 299");
+        })
+        .drop_without_applying_deltas();
+        assert!(previews.fonts.lock().atlas.uv.contains_key(&font_key("Font 299", ppp)));
+        // Fonts were added or removed since the entries were drawn: the next entry drawn starts
+        // the atlas over, so none keeps a face it no longer has.
+        previews.fonts.lock().generation = u64::MAX;
+        ctx.run_ui(egui::RawInput { time: Some(1001.0), ..Default::default() }, |ui| {
+            preview(ui, "Font 298");
+        })
+        .drop_without_applying_deltas();
+        let fonts = previews.fonts.lock();
+        // Not compared with the database's generation: tests running alongside add and remove fonts.
+        assert_ne!(fonts.generation, u64::MAX, "the atlas took the database's generation");
+        assert!(fonts.atlas.uv.contains_key(&font_key("Font 298", ppp)) && !fonts.atlas.uv.contains_key(&font_key("Font 299", ppp)));
+    }
+}
+
 /// #535: font menu entries drew on a white strip in dark mode. They are now tinted with the
 /// theme's text colour and draw no background of their own.
 #[test]
@@ -380,4 +444,82 @@ fn font_menu_entries_take_the_theme_text_colour() {
         }
         assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
     }
+}
+
+/// Where the Home tab's Styles group, laid out as the ribbon lays it out in the current interface
+/// language, puts its parts, by their accessible rectangles: the gallery's first tiles in gallery
+/// order, the column of scroll arrows and "more" from the top (the unnamed buttons beside the
+/// tiles; only "more" has a name), and the button named for the Styles pane.
+fn styles_group_rects() -> (Vec<(String, Rect)>, Vec<Rect>, Option<Rect>) {
+    use egui_kittest::kittest::{Queryable, by};
+    let app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+    let names: Vec<String> = app.session.doc.styles.gallery().iter().take(super::STYLE_TILES).map(|s| crate::i18n::style_name(s)).collect();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 200.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            crate::rtl::root(ui, |ui| {
+                crate::rtl::horizontal_top(ui, |ui| {
+                    crate::widgets::group(ui, "Styles", Some("styles.pane"), app, |ui, app| style_gallery(app, ui, &json!({})));
+                });
+            });
+        },
+        app,
+    );
+    h.run_steps(3);
+    let tiles: Vec<(String, Rect)> = names.iter().map(|n| (n.clone(), h.get_by_label(n).rect())).collect();
+    let row = tiles.first().map_or(Rect::NOTHING, |(_, r)| *r);
+    // The arrows are 14 points wide and stacked beside the tiles; the group's launcher is below them.
+    let mut arrows: Vec<Rect> = h
+        .query_all(by().predicate(|n| n.bounding_box().is_some()))
+        .map(|n| n.rect())
+        .filter(|r| r.width() <= 16.0 && (row.min.y..=row.max.y).contains(&r.center().y))
+        .collect();
+    arrows.sort_by(|a, b| a.min.y.total_cmp(&b.min.y));
+    let more = h.query_by_label(crate::i18n::t("Styles Pane")).map(|n| n.rect());
+    (tiles, arrows, more)
+}
+
+/// #5566: in a right-to-left interface the Styles gallery starts at the right, as the rest of
+/// the ribbon does: the first style (Normal) is the rightmost tile, and the scroll arrows and
+/// "more" sit at the gallery's left end. Left to right is unchanged.
+#[test]
+fn the_styles_gallery_reads_from_the_right_in_a_right_to_left_interface() {
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    let (tiles, arrows, more) = styles_group_rects();
+    assert!(tiles.len() >= 2, "the gallery shows its tiles: {tiles:?}");
+    assert_eq!(arrows.len(), 3, "up, down and more: {arrows:?}");
+    assert!(tiles.windows(2).all(|w| w[0].1.center().x < w[1].1.center().x), "left to right, tiles run rightwards: {tiles:?}");
+    assert!(
+        arrows.iter().all(|a| tiles.iter().all(|(_, r)| a.min.x >= r.max.x)),
+        "left to right, the arrows are right of every tile: {arrows:?} {tiles:?}"
+    );
+    let ltr_more = (more, arrows.last().copied());
+
+    // An Arabic interface; its catalog is not needed (the harness has no Arabic font to draw it).
+    crate::i18n::set_current(crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n"));
+    let (tiles, arrows, more) = styles_group_rects();
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    assert_eq!(tiles.first().map(|(n, _)| n.as_str()), Some("Normal"), "the first tile is Normal");
+    assert_eq!(arrows.len(), 3, "up, down and more: {arrows:?}");
+    assert!(tiles.windows(2).all(|w| w[0].1.center().x > w[1].1.center().x), "right to left, tiles run leftwards: {tiles:?}");
+    assert!(
+        arrows.iter().all(|a| tiles.iter().all(|(_, r)| a.max.x <= r.min.x)),
+        "right to left, the arrows are left of every tile: {arrows:?} {tiles:?}"
+    );
+
+    // Screen readers find "more", the bottom arrow, by the pane it opens, in either direction.
+    for (more, bottom) in [ltr_more, (more, arrows.last().copied())] {
+        assert!(more.is_some() && more == bottom, "the bottom arrow ({bottom:?}) is named for the Styles pane ({more:?})");
+    }
+}
+
+#[test]
+fn font_sample_shows_small_caps_and_the_script_mark() {
+    let white = wordcraft_doc::Rgb(255, 255, 255);
+    let plain = CharProps { size: Some(20.0), ..Default::default() };
+    let draw = |p: &CharProps, mark, dark| font_sample("AaBbYyZz", p, mark, (200.0, 40.0, 1.0), white, dark).map(|i| i.pixels);
+    let small = CharProps { small_caps: Some(true), ..plain.clone() };
+    assert_ne!(draw(&plain, None, false), draw(&small, None, false), "small caps change the sample");
+    let sup = Some(wordcraft_doc::props::VertAlign::Superscript);
+    assert_ne!(draw(&plain, None, false), draw(&plain, sup, false), "the mark is drawn");
+    assert_ne!(draw(&plain, None, false), draw(&plain, None, true), "Switch Modes transforms the preview");
 }

@@ -5,7 +5,7 @@ use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
-use crate::{WordApp, icons};
+use crate::{StatusCount, StatusCounts, WordApp, icons};
 
 /// Why the caret's language isn't spell-checked (dictionary unreadable or missing), if it isn't.
 pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::PathBuf, String)>, missing: Option<&str>) -> Option<String> {
@@ -53,6 +53,8 @@ const QAT_MENU: [&str; 10] =
 /// Match the toolbar's enabled state for keyboard activation too.
 pub(crate) fn qat_enabled(app: &WordApp, id: &str) -> bool {
     match id {
+        // The Markdown Source pane's arrows undo its typing.
+        "edit.undo" | "edit.redo" if app.session.md_source.is_some() => crate::md_source::can_undo(app, id == "edit.redo"),
         "edit.undo" => app.session.can_undo(),
         "edit.redo" => app.session.can_redo(),
         "file.save" => app.has_document(),
@@ -82,6 +84,8 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         }
         crate::widgets::command_menu(&resp, app, id);
         if id == "edit.undo" {
+            // The list is the document's steps, not the Markdown Source pane's typing.
+            let enabled = enabled && app.session.md_source.is_none();
             undo_list_button(ui, app, enabled);
         }
     }
@@ -281,6 +285,24 @@ fn autosave_knob_x(rtl: bool, on: bool, r: Rect) -> f32 {
     crate::rtl::lead_x(rtl != on, r, 8.0)
 }
 
+/// The `ctx.data` key for the part of the title bar that drags this document window.
+fn title_drag_id(ctx: &egui::Context) -> egui::Id {
+    egui::Id::unique(("title_drag_rect", ctx.viewport_id()))
+}
+
+/// Notes `rect` as the part of the title bar that drags the window in this frame: behind a modal
+/// dialog its backdrop has the pointer there, and moves the window instead ([`title_drag_rect`]).
+pub(crate) fn note_title_drag(ctx: &egui::Context, rect: Rect) {
+    let (key, pass) = (title_drag_id(ctx), ctx.cumulative_pass_nr());
+    ctx.data_mut(|d| d.insert_temp(key, (rect, pass)));
+}
+
+/// The part of the title bar that drags the window, if it was drawn in this frame.
+pub(crate) fn title_drag_rect(ctx: &egui::Context) -> Option<Rect> {
+    let (key, pass) = (title_drag_id(ctx), ctx.cumulative_pass_nr());
+    ctx.data(|d| d.get_temp::<(Rect, u64)>(key)).filter(|(_, p)| *p == pass).map(|(r, _)| r)
+}
+
 /// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
 /// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
@@ -300,6 +322,10 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+            // Elsewhere the system's own title bar above this one moves the window.
+            if mac {
+                note_title_drag(ui.ctx(), full);
             }
             if drag.double_clicked() {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
@@ -446,12 +472,148 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         });
 }
 
+/// The title bar's Search box while it is typed in (#5398): the query, whether the text of the
+/// shortcut that opened it (Alt+Q's `q` on some platforms) is still to be dropped, and where the
+/// results showed last frame.
+#[derive(Clone, Default)]
+struct TitleSearch {
+    query: String,
+    swallow: bool,
+    results: Option<Rect>,
+}
+
+/// Width of the Search box, and of its results under it.
+const SEARCH_BOX_W: f32 = 260.0;
+const SEARCH_RESULTS_W: f32 = 380.0;
+
+/// Search in the title bar's box, as Word's: when this window drew the box in its last frame
+/// (the title bar, or Full Screen's Commands bar), Search opens there, typed into in place with
+/// its results under it, instead of in the Search Commands dialog. `true` when it did.
+pub(crate) fn open_title_search(app: &mut WordApp) -> bool {
+    let Some(ctx) = app.ctx.clone() else { return false };
+    // Focus hides the box even when the last frame, before Focus came on, drew it.
+    if Screen::of(&app.session.view) == Screen::Focus || !search_box_drawn(app, &ctx) {
+        return false;
+    }
+    let id = app.window_id("title_search");
+    // Only Alt+Q may send its `q` as text after it; a click sends none. Alt is read from the
+    // shortcut's key event too: the box takes the keys from its first frame, that same text
+    // included.
+    let swallow =
+        ctx.input(|i| i.modifiers.alt || i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, modifiers, .. } if modifiers.alt)));
+    ctx.data_mut(|d| d.insert_temp(id, TitleSearch { swallow, ..Default::default() }));
+    ctx.request_repaint();
+    true
+}
+
+/// What is typed in the title bar's Search, while it is open.
+pub(crate) fn title_search_query(app: &WordApp, ctx: &egui::Context) -> Option<String> {
+    ctx.data(|d| d.get_temp::<TitleSearch>(app.window_id("title_search"))).map(|s| s.query)
+}
+
+/// Whether this window drew the Search box in its last frame.
+fn search_box_drawn(app: &WordApp, ctx: &egui::Context) -> bool {
+    let shown = ctx.data(|d| d.get_temp::<u64>(app.window_id("title_search_shown")));
+    shown.is_some_and(|f| f.saturating_add(1) >= ctx.cumulative_frame_nr())
+}
+
+/// Whether the title bar's Search is being typed in (Escape closes it, not Full Screen). Search
+/// whose box is no longer drawn (Focus came on) is dropped, so it can't keep Escape.
+pub(crate) fn title_search_open(app: &WordApp, ctx: &egui::Context) -> bool {
+    if title_search_query(app, ctx).is_none() {
+        return false;
+    }
+    if search_box_drawn(app, ctx) {
+        return true;
+    }
+    ctx.data_mut(|d| d.remove::<TitleSearch>(app.window_id("title_search")));
+    false
+}
+
+/// The Search box being typed in: a text box in its place and the results under it. `false`
+/// once it closes: a command or the find ran, Escape, or a click outside both.
+fn typing_search(app: &mut WordApp, ui: &mut Ui, control_h: f32, s: &mut TitleSearch) -> bool {
+    if s.swallow {
+        ui.ctx().input_mut(|i| i.events.retain(|e| !crate::dialogs::swallow_shortcut_text(&mut s.swallow, e)));
+    }
+    let ph = tl!("Search commands and help");
+    // The box takes the keys from its first frame: focused before it reads this frame's input,
+    // so what is typed straight after Alt+Q goes into it. It takes the focus back whenever it lost
+    // it, except to one of its results (Tab moves there, so a keyboard user can pick one), and
+    // not while a press on a result is under way (#2986).
+    let id = app.window_id("title_search_edit");
+    let on_result = ui
+        .memory(|m| m.focused())
+        .filter(|f| *f != id)
+        .and_then(|f| ui.ctx().read_response(f))
+        .is_some_and(|r| s.results.is_some_and(|x| x.contains_rect(r.rect)));
+    if !on_result && !ui.memory(|m| m.has_focus(id)) && !ui.input(|i| i.pointer.any_down()) {
+        ui.memory_mut(|m| m.request_focus(id));
+    }
+    let typing = ui.memory(|m| m.has_focus(id));
+    let edit = ui.add_sized(
+        vec2(SEARCH_BOX_W, control_h),
+        egui::TextEdit::singleline(&mut s.query).id(id).hint_text(ph).align(if crate::rtl::on() {
+            Align2::RIGHT_CENTER
+        } else {
+            Align2::LEFT_CENTER
+        }),
+    );
+    let r = edit.rect;
+    // Enter in the box runs the first result, and is used up: a dialog that result opens (Word
+    // Count) mustn't take the same Enter as its OK. A result Tab moved to takes Enter or Space
+    // itself.
+    let (enter, escape, pressed_at) = ui.input_mut(|i| {
+        let pressed = i.pointer.any_pressed().then(|| i.pointer.press_origin()).flatten();
+        (typing && i.consume_key(egui::Modifiers::NONE, egui::Key::Enter), i.key_pressed(egui::Key::Escape), pressed)
+    });
+    let inside = |p: egui::Pos2| r.contains(p) || s.results.is_some_and(|x| x.contains(p));
+    if escape || pressed_at.is_some_and(|p| !inside(p)) {
+        return false;
+    }
+    let rtl = crate::rtl::on();
+    let (pivot, at) = if rtl { (Align2::RIGHT_TOP, r.right_bottom()) } else { (Align2::LEFT_TOP, r.left_bottom()) };
+    let mut done = false;
+    let shown = egui::Area::new(app.window_id("title_search_results"))
+        .order(egui::Order::Foreground)
+        .pivot(pivot)
+        .fixed_pos(at + vec2(0.0, 2.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_width(SEARCH_RESULTS_W);
+                // Rows of a list, as a menu's, not a stack of framed buttons.
+                ui.style_mut().visuals.button_frame = false;
+                done = crate::dialogs::search_results(app, ui, &s.query, enter, SEARCH_RESULTS_W);
+            });
+        });
+    s.results = Some(shown.response.rect);
+    if done {
+        // A result run with Enter from the keyboard: the dialog it opens mustn't take that Enter.
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+    }
+    !done
+}
+
 /// Search ("Tell me"): a box that opens command search. In the title bar, and in the Commands bar
-/// of Full Screen (#1678).
+/// of Full Screen (#1678). Clicked (or Alt+Q), it takes the typing in place (#5398).
 fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.ctx().data_mut(|d| d.insert_temp(app.window_id("title_search_shown"), frame));
+    let id = app.window_id("title_search");
+    if let Some(mut s) = ui.ctx().data(|d| d.get_temp::<TitleSearch>(id)) {
+        let open = typing_search(app, ui, control_h, &mut s);
+        ui.ctx().data_mut(|d| {
+            if open {
+                d.insert_temp(id, s);
+            } else {
+                d.remove::<TitleSearch>(id);
+            }
+        });
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let rtl = crate::rtl::on();
-    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(SEARCH_BOX_W, control_h), Sense::click());
     let ph = tl!("Search commands and help");
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
@@ -464,15 +626,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     );
     let pfont = TypeRung::Control.regular();
     let ptrack = TypeRung::Control.tracking();
-    paint_text(
-        ui.painter(),
-        pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y - TypeRung::Control.line_height() / 2.0),
-        crate::rtl::lead_top(rtl),
-        ph,
-        &pfont,
-        ptrack,
-        t.text_dim,
-    );
+    paint_text(ui.painter(), pos2(crate::rtl::lead_x(rtl, r, 30.0), r.center().y), crate::rtl::lead_center(rtl), ph, &pfont, ptrack, t.text_dim);
     if app.ui.keytips == crate::keytips::Phase::Tabs {
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
@@ -627,15 +781,29 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     {
                         let _ = app.run("ui.dialog", json!({"name": "goto"}));
                     }
-                    let words = app.cached_word_count();
+                    // The live count: words (the default, as Word's status bar counts), characters
+                    // with spaces, or characters without spaces — whichever the person chose (#2797).
+                    let unit = app.ui.status_count;
+                    let counts = app.cached_status_counts();
                     // A selected picture/shape/text box isn't a text selection: show the total.
                     let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
-                        crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
+                        status_count_text(unit, counts.in_unit(unit), None)
                     } else {
-                        let sw = wordcraft_doc::count_words(&app.session.selected_text());
-                        crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
+                        let selected = crate::count_in_unit(&app.session.selected_text(), unit);
+                        status_count_text(unit, counts.in_unit(unit), Some(selected))
                     };
-                    if st(ui, &wtxt).clicked() {
+                    let counted = st(ui, &wtxt);
+                    // Right-click, as Word's status bar offers: choose what the count shows (#2797).
+                    counted.context_menu(|ui| {
+                        ui.set_min_width(180.0);
+                        for c in crate::StatusCount::ALL {
+                            if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                                let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                                ui.close();
+                            }
+                        }
+                    });
+                    if counted.clicked() {
                         let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                     }
                     if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
@@ -798,7 +966,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                     });
                     if let Some((msg, at)) = &app.status_msg
-                        && crate::now_ms() - at < 6000.0
+                        && crate::now_ms() - at < crate::app::STATUS_MS
                     {
                         let font = TypeRung::Caption.regular();
                         let track = TypeRung::Caption.tracking();
@@ -903,14 +1071,43 @@ impl WordApp {
         wordcraft_engine::cmd::font::warns(font, &shown).then_some(shown)
     }
 
-    /// Word count, recomputed only when the document changes.
-    pub fn cached_word_count(&mut self) -> usize {
-        // The count option changes the count without a document change.
+    /// The document's counts, recomputed only when the document (or the count option) changes:
+    /// words as the status bar and the Word Count dialog count them, and characters with and
+    /// without spaces as the dialog does (#2797).
+    pub fn cached_status_counts(&mut self) -> StatusCounts {
+        // The count option changes the counts without a document change.
         let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
-        if self.word_count.0 != key {
-            self.word_count = (key, self.session.word_count());
+        if self.status_counts.0 != key {
+            let text = self.session.counted_text();
+            self.status_counts = (
+                key,
+                StatusCounts {
+                    words: self.session.word_count(),
+                    chars: wordcraft_doc::count_chars(&text),
+                    chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
+                },
+            );
         }
-        self.word_count.1
+        self.status_counts.1
+    }
+}
+
+/// The status bar's count line (#2797): the whole document's `total`, or "selected of total" when
+/// part of it is selected, worded as the Word Count dialog words the same counts.
+pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Option<usize>) -> String {
+    match (unit, selected) {
+        (StatusCount::Words, None) => crate::i18n::fmt(tl!("{words} words"), &[("words", &total.to_string())]),
+        (StatusCount::Words, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &n.to_string()), ("words", &total.to_string())])
+        }
+        (StatusCount::Characters, None) => crate::i18n::fmt(tl!("{chars} characters"), &[("chars", &total.to_string())]),
+        (StatusCount::Characters, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
+        (StatusCount::CharactersNoSpaces, None) => crate::i18n::fmt(tl!("{chars} characters (no spaces)"), &[("chars", &total.to_string())]),
+        (StatusCount::CharactersNoSpaces, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters (no spaces)"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
     }
 }
 

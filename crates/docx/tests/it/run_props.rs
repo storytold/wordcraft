@@ -30,6 +30,30 @@ fn part(bytes: &[u8], name: &str) -> String {
 }
 
 #[test]
+fn paragraph_adjust_right_indent_inherits_from_style() {
+    let styles =
+        r#"<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:pPr><w:adjustRightInd/></w:pPr></w:style>"#;
+    let body = r#"<w:p><w:pPr><w:adjustRightInd w:val="0"/></w:pPr><w:r><w:t>off</w:t></w:r></w:p>
+        <w:p><w:r><w:t>inherited</w:t></w:r></w:p>"#;
+    let mut d = wordcraft_docx::read(&docx(body, styles)).unwrap();
+    let paragraphs: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+    assert_eq!(paragraphs[0].props.adjust_right_indent, Some(false));
+    assert!(!d.styles.resolve_para(&paragraphs[0].props).adjust_right_indent);
+    assert!(d.styles.resolve_para(&paragraphs[1].props).adjust_right_indent);
+
+    for _ in 0..2 {
+        let out = wordcraft_docx::write(&d).unwrap();
+        assert!(part(&out, "word/document.xml").contains(r#"<w:adjustRightInd w:val="0""#));
+        assert!(part(&out, "word/styles.xml").contains("<w:adjustRightInd/>"));
+        d = wordcraft_docx::read(&out).unwrap();
+        let paragraphs: Vec<_> = d.body.iter().filter_map(|b| b.as_para()).collect();
+        assert!(!d.styles.resolve_para(&paragraphs[0].props).adjust_right_indent);
+        assert!(d.styles.resolve_para(&paragraphs[1].props).adjust_right_indent);
+        assert_eq!(paragraphs[0].props.adjust_right_indent, Some(false));
+    }
+}
+
+#[test]
 fn run_and_style_snap_to_grid_and_web_hidden_survive_two_saves() {
     let styles = r#"
         <w:style w:type="character" w:styleId="On"><w:rPr><w:snapToGrid/><w:webHidden/></w:rPr></w:style>
