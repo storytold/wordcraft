@@ -835,20 +835,31 @@ fn register(
         let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::TooLarge, "the room is full");
         return Err(reject);
     }
+    // The lease protects the document from a *writer* whose session was
+    // superseded. A role that cannot write takes nothing and can damage
+    // nothing, so it joins whatever the lease says: refusing it turned a valid
+    // cabinet ticket into "another session holds this document" for a
+    // participant who only reads (M96). A read-only join also never takes the
+    // lease, so the writers it protects keep it (ADR-0008).
     if guard.session.is_empty() {
-        guard.session = claims.sid.clone();
-        guard.lease_seen = std::time::Instant::now();
+        if role.can_write() {
+            guard.session = claims.sid.clone();
+            guard.lease_seen = std::time::Instant::now();
+        }
     } else if guard.session != claims.sid {
         let lease_alive = guard.peers.values().any(|peer| peer.sid == guard.session);
         let stale = guard.lease_seen.elapsed().as_secs() >= guard.lease_ttl_secs;
-        if role != Role::Owner && (lease_alive || !stale) {
+        if role.can_write() && role != Role::Owner && (lease_alive || !stale) {
             let reject = Reject::new(wordcraft_collab::wire::OpId::new("server", 0), RejectCode::Lease, "another session holds this document");
             return Err(reject);
         }
-        guard.session = claims.sid.clone();
+        if role.can_write() {
+            guard.session = claims.sid.clone();
+            guard.lease_seen = std::time::Instant::now();
+        }
+    } else {
         guard.lease_seen = std::time::Instant::now();
     }
-    guard.lease_seen = std::time::Instant::now();
     // Only now, with every refusal behind us, does a takeover retire the old
     // connection: a join the lease check refuses must leave the working socket
     // in place, or the client loses a live connection to a refusal that changes
@@ -1019,11 +1030,16 @@ async fn handle_op(conn: &Conn<'_>, sink: &mut futures_util::stream::SplitSink<W
     let structural = op.kind.is_structural();
     let result = {
         let mut guard = room.lock().unwrap_or_else(|poison| poison.into_inner());
-        if guard.session != claims.sid {
+        if role.can_write() && guard.session != claims.sid {
             // The lease moved to another cabinet session (ADR WC-0008). This
             // connection is still open, but it no longer speaks for the
             // document: without this check an earlier session keeps writing
             // after a takeover took the document from it (review 5855379673).
+            //
+            // A role that cannot write is refused by its role, not by the
+            // lease: `lease` is retryable and a read-only client would wait for
+            // a lease it will never hold, while `forbidden` is the answer it
+            // can act on (M96).
             Err(Reject::new(op.op_id.clone(), RejectCode::Lease, "another session holds this document"))
         } else {
             if guard.window.elapsed() >= std::time::Duration::from_secs(1) {

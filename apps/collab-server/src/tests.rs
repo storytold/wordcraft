@@ -1235,6 +1235,56 @@ fn a_second_session_needs_the_owner_role() {
     assert!(super::register(&state, &room, "carol", &claims("carol", "sid-3"), wordcraft_collab::room::Role::Owner, &tx, None).is_ok());
 }
 
+/// A viewer is a participant, not a takeover. The cabinet mints a session id
+/// per file version, so a ticket issued after a save names a different session
+/// than the one that holds the lease; the room used to refuse the read-only tab
+/// with `lease` and the cabinet showed it as "offline" (M96). A reader takes
+/// nothing and can damage nothing: it joins, sees the document, keeps its
+/// refusal for writing, and leaves the lease with the session that holds it.
+#[tokio::test]
+async fn a_viewer_joins_a_room_whose_lease_belongs_to_another_session() {
+    let cfg = config_for("lease-viewer");
+    let (url, _state) = spawn_server_state(cfg.clone()).await;
+    // The owner's cabinet session holds the lease.
+    let mut owner = connect_as(&url, &cfg, "owner", "owner", "owner", "sid-1").await;
+    assert!(matches!(next_msg(&mut owner).await, ServerMsg::Welcome { .. }));
+    let node = node_of(&mut owner).await;
+
+    // The viewer's ticket names another cabinet session (a save moved the file's
+    // version, and the cabinet's session id follows the version).
+    let mut viewer = connect_as(&url, &cfg, "viewer", "viewer", "viewer", "sid-2").await;
+    match next_msg(&mut viewer).await {
+        ServerMsg::Welcome { role, participants, .. } => {
+            assert_eq!(role, "viewer", "the role comes from the token");
+            assert_eq!(participants.len(), 2, "the room already held the owner, and now holds the viewer");
+        }
+        other => panic!("a viewer must join a room whose lease is held elsewhere, got {}", frame_name(&other)),
+    }
+    assert_eq!(node_of(&mut viewer).await, node, "the viewer addresses a paragraph of the room's document");
+
+    // The refusal a viewer gets is its role's: `forbidden` is final, while a
+    // `lease` would be retried as a lost lease for the rest of the session.
+    assert!(send_op(&mut viewer, insert("viewer", 1, 0, node, 0, "peek")).await);
+    match next_msg(&mut viewer).await {
+        ServerMsg::Rejected { reject } => assert_eq!(reject.code, wordcraft_collab::wire::RejectCode::Forbidden),
+        other => panic!("a viewer may not write, got {}", frame_name(&other)),
+    }
+
+    // The read-only join did not take the lease: the owner's session still
+    // writes, on the flow it had.
+    assert!(send_op(&mut owner, insert("owner", 1, 0, node, 0, "still mine")).await);
+    loop {
+        match next_msg(&mut owner).await {
+            ServerMsg::Presence { .. } | ServerMsg::Left { .. } => continue,
+            ServerMsg::Applied { applied } => {
+                assert_eq!(applied.version, 1);
+                break;
+            }
+            other => panic!("the lease holder must keep writing, got {}", frame_name(&other)),
+        }
+    }
+}
+
 /// The lease is not only a join rule. When another cabinet session takes the
 /// document, the connection that held it is still open, and it may no longer
 /// write or commit: otherwise the session that was taken over keeps changing
