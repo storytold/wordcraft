@@ -1,6 +1,6 @@
 # Control protocol
 
-> **Last updated:** 2026-11-09 · #6159: refuse ui.screenshot on secondary document windows and support root window selection with view.switchWindows.
+> **Last updated:** 2026-11-09 · #6146: scroll speed preferences (`ui.scrollSpeed`, `ui.touchpadScrollSpeed`); #6159: refuse ui.screenshot on secondary document windows and support root window selection with view.switchWindows.
 
 Start the app with a control port: `wordcraft --control 7981` (or `WORDCRAFT_CONTROL_PORT=7981`).
 A missing or invalid port after `--control` (not 1–65535) prints an error and exits with status 2.
