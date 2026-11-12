@@ -189,12 +189,15 @@ fn trim_num(v: f32) -> String {
 }
 
 fn para_attrs(p: &Para) -> String {
-    let mut css: Vec<&str> = Vec::new();
+    let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
-        css.push(a);
+        css.push(a.to_string());
     }
     if p.page_break {
-        css.push("break-before:page;page-break-before:always");
+        css.push("break-before:page;page-break-before:always".to_string());
+    }
+    if let Some(bg) = p.extra.as_ref().and_then(|x| x.shading) {
+        css.push(format!("background-color:#{}", bg.hex()));
     }
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
 }
@@ -310,7 +313,8 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                 out.push('\n');
             }
             FBlock::Para(p) if p.kind == Kind::Code => {
-                out.push_str("<pre><code>");
+                // Consecutive code paragraphs share one `<pre>`; its shading comes from the first.
+                out.push_str(&format!("<pre{}><code>", para_attrs(p)));
                 let mut first = true;
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     if q.kind != Kind::Code || q.list.is_some() {
@@ -357,14 +361,14 @@ fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
 
 /// A complete HTML document.
 pub fn export(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     export_flow(&flow, doc.styles.default_chr.lang.as_deref().unwrap_or("en"))
 }
 
 /// `doc`'s content as an HTML fragment (no head or style sheet): what a copy puts on the system
 /// clipboard beside its text, equations as MathML (#816).
 pub fn export_fragment(doc: &Document) -> String {
-    let flow = model::from_doc(doc);
+    let flow = model::from_doc_with(doc, model::FlowOpts { paras: true, ..Default::default() });
     let mut out = String::from("<meta charset=\"utf-8\">");
     blocks_html(&flow.blocks, &mut out, 0);
     out

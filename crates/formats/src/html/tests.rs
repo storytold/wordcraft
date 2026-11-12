@@ -851,6 +851,22 @@ fn block_element_backgrounds_preserve_paragraph_shading() {
     }
 }
 
+/// Verify that paragraph shading created by a container background survives an HTML round trip (#6157).
+#[test]
+fn paragraph_shading_survives_an_html_round_trip() {
+    let html = r#"<div style="background-color:#1e1e1e"><p>code</p></div><pre style="background-color:#2a2a2a">pre</pre>"#;
+    let doc = import(html);
+    let out = crate::html::export(&doc);
+    assert!(out.contains("background-color:#1E1E1E"), "paragraph shading is exported: {out}");
+    assert!(out.contains("background-color:#2A2A2A"), "code block shading is exported: {out}");
+
+    let back = import(&out);
+    let wordcraft_doc::Block::Para(p1) = &*back.body[0] else { panic!("expected Para") };
+    let wordcraft_doc::Block::Para(p2) = &*back.body[1] else { panic!("expected Para") };
+    assert_eq!(p1.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)));
+    assert_eq!(p2.props.shading, Some(wordcraft_doc::Rgb(0x2a, 0x2a, 0x2a)));
+}
+
 /// Verify that CSS-escaped quote characters in background shorthand URLs remain part of the URL
 /// content and do not cause the shorthand declaration to be rejected.
 #[test]
