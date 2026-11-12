@@ -613,26 +613,28 @@ fn chart_design_tab_appears_when_chart_selected_and_buttons_open_dialogs() {
 /// made for three, so "Hide White Space" was drawn under "Show". Every tab, every language.
 #[test]
 fn ribbon_groups_fit_above_their_labels() {
-    let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
-    // Wide enough that no tab hides groups behind its scroll arrows.
-    let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).build_ui_state(
-        |ui, app: &mut WordApp| {
-            let ctx = ui.ctx().clone();
-            app.logic(&ctx);
-            app.ui(ui);
-        },
-        app,
-    );
     let mut tall = Vec::new();
-    for lang in crate::i18n::Lang::all() {
-        h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
-        for tab in TABS.iter().filter(|t| **t != "File") {
-            h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
-            h.run_steps(2);
-            crate::widgets::TALL_GROUPS.with(|g| g.borrow_mut().clear());
-            h.run_steps(1);
-            let found = crate::widgets::TALL_GROUPS.with(|g| g.take());
-            tall.extend(found.into_iter().map(|g| format!("{} {tab} › {g}", lang.code())));
+    for ppp in [1.0, 1.45, 2.0] {
+        let app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        // Wide enough that no tab hides groups behind its scroll arrows.
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(2560.0, 900.0)).with_pixels_per_point(ppp).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for lang in crate::i18n::Lang::all() {
+            h.state_mut().run("ui.language", json!({"value": lang.code()})).unwrap();
+            for tab in TABS.iter().filter(|t| **t != "File") {
+                h.state_mut().run("ui.tab", json!({"tab": tab})).unwrap();
+                h.run_steps(2);
+                crate::widgets::TALL_GROUPS.with(|g| g.borrow_mut().clear());
+                h.run_steps(1);
+                let found = crate::widgets::TALL_GROUPS.with(|g| g.take());
+                tall.extend(found.into_iter().map(|g| format!("{} {tab} › {g} at {ppp}x", lang.code())));
+            }
         }
     }
     tall.sort();
