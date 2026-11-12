@@ -555,7 +555,7 @@ mod ui_tests {
         use egui_kittest::kittest::Queryable;
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
         app.run("ui.tab", json!({"tab": "Insert"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1120.0, 614.0)).with_pixels_per_point(1.25).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 614.0)).with_pixels_per_point(1.25).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
