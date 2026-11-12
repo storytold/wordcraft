@@ -31,6 +31,8 @@ zeroize = { workspace = true }
 getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
+serde_json = { workspace = true }
 proptest = { workspace = true }
 image = { workspace = true }
 zip = { workspace = true }

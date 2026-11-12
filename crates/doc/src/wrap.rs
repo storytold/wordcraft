@@ -92,11 +92,7 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Op
         ShapeKind::Triangle => vec![(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::RightTriangle => vec![(0.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::Diamond => vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)],
-        ShapeKind::Arrow => {
-            // As drawn: the head is half the height long, the shaft 40% of the height thick.
-            let head = if w > 0.0 { (0.5 * h / w).min(1.0) } else { 0.5 };
-            vec![(0.0, 0.3), (1.0 - head, 0.3), (1.0 - head, 0.0), (1.0, 0.5), (1.0 - head, 1.0), (1.0 - head, 0.7), (0.0, 0.7)]
-        }
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => arrow_outline(kind, w, h),
         ShapeKind::Star => (0..10)
             .map(|i| {
                 let a = PI * i as f32 / 5.0 - FRAC_PI_2;
@@ -124,6 +120,26 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Op
         }
     };
     Some(pts)
+}
+
+/// A block arrow's outline in unit coordinates (0..1 across a `w` × `h` frame), pointing the way
+/// `kind` says (right for anything but the left, up and down arrows). The head is half the arrow's
+/// thickness long, the shaft 40% of the thickness thick.
+pub fn arrow_outline(kind: ShapeKind, w: f32, h: f32) -> Vec<(f32, f32)> {
+    let vertical = matches!(kind, ShapeKind::ArrowUp | ShapeKind::ArrowDown);
+    let (len, thick) = if vertical { (h, w) } else { (w, h) };
+    let head = if len > 0.0 { (0.5 * thick / len).min(1.0) } else { 0.5 };
+    // Pointing right: `u` runs along the arrow from its tail, `v` across it.
+    let right = [(0.0, 0.3), (1.0 - head, 0.3), (1.0 - head, 0.0), (1.0, 0.5), (1.0 - head, 1.0), (1.0 - head, 0.7), (0.0, 0.7)];
+    right
+        .iter()
+        .map(|&(u, v)| match kind {
+            ShapeKind::ArrowLeft => (1.0 - u, v),
+            ShapeKind::ArrowUp => (v, 1.0 - u),
+            ShapeKind::ArrowDown => (v, u),
+            _ => (u, v),
+        })
+        .collect()
 }
 
 /// Largest side of the grid [`alpha_outline`] looks at.
@@ -214,6 +230,16 @@ mod tests {
         assert!(WrapPolygon::from_unit(false, &[(f32::NAN, 0.0), (0.0, 0.0), (1.0, 0.0), (0.5, 1.0)]).is_some_and(|p| p.points.len() == 3));
     }
 
+    /// #3919: the tip of each block arrow lies on the side it points to.
+    #[test]
+    fn arrow_outlines_point_the_right_way() {
+        let tip = |kind| shape_outline(kind, 100.0, 100.0, None).unwrap()[3];
+        assert_eq!(tip(ShapeKind::Arrow), (1.0, 0.5));
+        assert_eq!(tip(ShapeKind::ArrowLeft), (0.0, 0.5));
+        assert_eq!(tip(ShapeKind::ArrowUp), (0.5, 0.0));
+        assert_eq!(tip(ShapeKind::ArrowDown), (0.5, 1.0));
+    }
+
     #[test]
     fn shape_outlines_stay_in_the_frame() {
         for kind in [
@@ -223,6 +249,9 @@ mod tests {
             ShapeKind::RightTriangle,
             ShapeKind::Diamond,
             ShapeKind::Arrow,
+            ShapeKind::ArrowLeft,
+            ShapeKind::ArrowUp,
+            ShapeKind::ArrowDown,
             ShapeKind::Star,
             ShapeKind::Heart,
         ] {

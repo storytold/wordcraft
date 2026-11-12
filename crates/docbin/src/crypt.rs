@@ -90,8 +90,11 @@ pub(crate) fn md5(data: &[u8]) -> [u8; 16] {
     out
 }
 
+/// SHA-1, as [MS-OFFCRYPTO] §2.3.5 specifies for the RC4 CryptoAPI key derivation.
+/// The digest is part of the file format, not a choice made here: a stronger hash would
+/// make password-protected `.doc` files written by Word unreadable.
 fn sha1(parts: &[&[u8]]) -> Vec<u8> {
-    let mut h = Sha1::new();
+    let mut h = Sha1::new(); // NOSONAR: required by the MS-OFFCRYPTO RC4 CryptoAPI format
     for p in parts {
         h.update(p);
     }
@@ -292,8 +295,13 @@ impl Cipher {
         if hflags & H_EXTERNAL != 0 {
             return Err(unsupported("the document uses an external encryption provider"));
         }
+        // [MS-OFFCRYPTO] defines AES only for the encrypted packages of Word 2007 and later
+        // (which open through the .docx reader whatever their extension); a Word 97-2003 file
+        // may only use XOR, RC4 or RC4 CryptoAPI, so there is no public scheme to follow here.
         if hflags & H_AES != 0 {
-            return Err(unsupported("AES-encrypted .doc files are not supported"));
+            return Err(unsupported(
+                "this Word 97-2003 file claims AES encryption, which is only defined for the newer encrypted-package format; it can't be opened",
+            ));
         }
         if hflags & H_CRYPTO_API == 0 {
             return Err(unsupported("unknown encryption header"));

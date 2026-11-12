@@ -21,7 +21,7 @@ APP_ID=ai.storyteller.wordcraft
 
 SKIP_BUILD=0
 FORMATS="appimage deb rpm tar"
-while [ $# -gt 0 ]; do
+while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-build) SKIP_BUILD=1; shift ;;
     --formats) FORMATS="$2"; shift 2 ;;
@@ -42,8 +42,8 @@ BASENAME="wordcraft-$VERSION-linux-$ARCH"
 
 echo "==> WordCraft $VERSION for Linux $ARCH ($FORMATS)"
 
-if [ "$SKIP_BUILD" = 0 ]; then
-  if [ -n "${CROSS_TARGET:-}" ]; then
+if [[ "$SKIP_BUILD" = 0 ]]; then
+  if [[ -n "${CROSS_TARGET:-}" ]]; then
     (cd "$ROOT" && cargo build --release --locked -p wordcraft -p wordcraft-cli --target "$CROSS_TARGET")
   else
     (cd "$ROOT" && cargo build --release --locked -p wordcraft -p wordcraft-cli)
@@ -75,7 +75,7 @@ if command -v appstreamcli >/dev/null; then
   appstreamcli validate --no-net --explain "$STAGE/usr/share/metainfo/$APP_ID.metainfo.xml"
 fi
 
-has() { case " $FORMATS " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+has() { local item="$1"; case " $FORMATS " in *" $item "*) return 0 ;; *) return 1 ;; esac; }
 
 # ---- .tar.gz ------------------------------------------------------------------------------------
 if has tar; then
@@ -99,27 +99,62 @@ fi
 
 # ---- AppImage -----------------------------------------------------------------------------------
 if has appimage; then
+  APPIMAGETOOL_VERSION=1.9.1
+  # appimagetool would otherwise embed type2-runtime's `continuous` build, unchecked.
+  RUNTIME_VERSION=20251108
+  case "$ARCH" in
+    x86_64)
+      APPIMAGETOOL_SHA256=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+      RUNTIME_SHA256=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+      ;;
+    aarch64)
+      APPIMAGETOOL_SHA256=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+      RUNTIME_SHA256=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+      ;;
+    *) APPIMAGETOOL_SHA256='' RUNTIME_SHA256='' ;;
+  esac
+  if [[ -z "$RUNTIME_SHA256" ]]; then
+    echo "no pinned AppImage runtime for $ARCH" >&2
+    exit 2
+  fi
+  # Downloads $1 to $3 once and checks it against SHA-256 $2, the cached copy again on every run.
+  fetch_pinned() {
+    local url="$1" expected_sha="$2" target="$3"
+    if [[ ! -x "$target" ]]; then
+      curl --proto '=https' -fsSL -o "$target.download" "$url"
+      printf '%s  %s\n' "$expected_sha" "$target.download" | sha256sum -c -
+      chmod 755 "$target.download"
+      mv "$target.download" "$target"
+    fi
+    printf '%s  %s\n' "$expected_sha" "$target" | sha256sum -c -
+    return 0
+  }
   APPDIR="$WORK/WordCraft.AppDir"
   cp -R "$STAGE" "$APPDIR"
-  mv "$APPDIR/usr/share/doc" "$WORK/doc-unused"
   ln -s usr/bin/wordcraft "$APPDIR/AppRun"
   cp "$HERE/$APP_ID.desktop" "$APPDIR/$APP_ID.desktop"
   cp "$ROOT/assets/app-icon/hicolor/256x256/apps/$APP_ID.png" "$APPDIR/$APP_ID.png"
   ln -s "$APP_ID.png" "$APPDIR/.DirIcon"
 
   TOOL="${APPIMAGETOOL:-$(command -v appimagetool || true)}"
-  if [ -z "$TOOL" ]; then
-    TOOL="$CARGO_TARGET_DIR/appimagetool-$ARCH.AppImage"
-    if [ ! -x "$TOOL" ]; then
-      curl --proto '=https' -fsSL -o "$TOOL" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-$ARCH.AppImage"
-      chmod +x "$TOOL"
+  if [[ -z "$TOOL" ]]; then
+    if [[ -z "$APPIMAGETOOL_SHA256" ]]; then
+      echo "no pinned appimagetool for $ARCH; set APPIMAGETOOL or put appimagetool on PATH" >&2
+      exit 2
     fi
+    TOOL="$CARGO_TARGET_DIR/appimagetool-$APPIMAGETOOL_VERSION-$ARCH.AppImage"
+    fetch_pinned "https://github.com/AppImage/appimagetool/releases/download/$APPIMAGETOOL_VERSION/appimagetool-$ARCH.AppImage" \
+      "$APPIMAGETOOL_SHA256" "$TOOL"
   fi
+  RUNTIME="$CARGO_TARGET_DIR/appimage-runtime-$RUNTIME_VERSION-$ARCH"
+  fetch_pinned "https://github.com/AppImage/type2-runtime/releases/download/$RUNTIME_VERSION/runtime-$ARCH" \
+    "$RUNTIME_SHA256" "$RUNTIME"
   # Absolute, because appimagetool runs in $DIST below (CARGO_TARGET_DIR or APPIMAGETOOL may be
   # relative, e.g. target/agent-<name>).
   OUT="$(cd "$DIST" && pwd)/$BASENAME.AppImage"
   APPDIR="$(cd "$APPDIR" && pwd)"
   TOOL="$(cd "$(dirname "$TOOL")" && pwd)/$(basename "$TOOL")"
+  RUNTIME="$(cd "$(dirname "$RUNTIME")" && pwd)/$(basename "$RUNTIME")"
   # A .zsync left by an earlier run would hide a missing zsyncmake and describe another file.
   rm -f "$OUT.zsync"
   # Update information: AppImageUpdate, AppImageLauncher and the like read it from the file and
@@ -128,21 +163,22 @@ if has appimage; then
   # pre-release. A fork's builds point at its own releases through GITHUB_REPOSITORY.
   REPO="${GITHUB_REPOSITORY:-storytold/wordcraft}"
   UPDATE_INFO="gh-releases-zsync|${REPO%%/*}|${REPO#*/}|latest|wordcraft-*-linux-$ARCH.AppImage.zsync"
-  # Extract-and-run: works without FUSE (containers, CI). The output embeds the static runtime,
-  # so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
+  # Extract-and-run: works without FUSE (containers, CI). The output embeds the pinned static
+  # runtime, so users don't need libfuse2 either. With zsyncmake on the host (CI installs the zsync
   # package) appimagetool also writes the .zsync, into its working directory, hence the cd.
-  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream -u "$UPDATE_INFO" "$APPDIR" "$OUT")
+  (cd "$DIST" && ARCH="$ARCH" APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --no-appstream \
+    --runtime-file "$RUNTIME" -u "$UPDATE_INFO" "$APPDIR" "$OUT")
   echo "wrote $OUT"
-  if [ -s "$OUT.zsync" ]; then
+  if [[ -s "$OUT.zsync" ]]; then
     echo "wrote $OUT.zsync"
   else
     warn "zsyncmake not found, so $OUT.zsync was not written; AppImage delta updates need it"
   fi
 fi
 
-if [ -z "${CROSS_TARGET:-}" ]; then
+if [[ -z "${CROSS_TARGET:-}" ]]; then
   "$STAGE/usr/bin/wordcraft-cli" --version
-elif [ -n "${EMULATOR:-}" ]; then
+elif [[ -n "${EMULATOR:-}" ]]; then
   "$EMULATOR" "$STAGE/usr/bin/wordcraft-cli" --version
 fi
 echo "==> done"
