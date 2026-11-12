@@ -48,7 +48,7 @@ fn sync_file(file: &File) -> io::Result<()> {
         Err(e) => {
             #[cfg(target_vendor = "apple")]
             if full_flush_unsupported(&e) {
-                return match rustix::fs::fsync(file) {
+                return match rustix::fs::fsync(file).map_err(io::Error::from) {
                     Ok(()) => Ok(()),
                     Err(e2) if sync_unsupported(&e2) => Ok(()),
                     Err(e2) => Err(e2),
@@ -264,6 +264,10 @@ impl Temporary {
             }
         }
         let backup = backup.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not create a save backup name"))?;
+        // Never move a folder aside: a save destination must be a file.
+        if fs::metadata(destination).map(|m| m.is_dir()).unwrap_or(false) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "save destination is a folder"));
+        }
         if let Err(e) = fs::rename(destination, &backup) {
             // The destination may have vanished in the meantime; retry the direct rename.
             if e.kind() == io::ErrorKind::NotFound {
@@ -275,8 +279,13 @@ impl Temporary {
             return Err(e);
         }
         if let Err(e) = fs::rename(&self.path, destination) {
-            // Restore the previous file so a failed save leaves it in place.
-            let _ = fs::rename(&backup, destination);
+            // Restore the previous file so a failed save leaves it in place; report it if that fails too.
+            if let Err(restore_err) = fs::rename(&backup, destination) {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!("{e}; restoring the previous file from {} also failed: {restore_err}", backup.display()),
+                ));
+            }
             return Err(e);
         }
         self.committed = true;
