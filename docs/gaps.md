@@ -4,7 +4,7 @@
 
 > **Ink renderer primitives update:** 2026-11-08 · Mask blending and native-width display operations are available independently of import. Ordinary clipping and legacy ink widths are unchanged; no ranked gap closed.
 
-> **Retained XML update:** 2026-11-09 · The five list-valued Markup Compatibility attributes canonicalize scoped InkML/MathML aliases with bounded checks; unknown required/QName namespaces are refused rather than emitted undeclared. No ranked gap or readiness estimate changed.
+> **Retained XML update:** 2026-11-12 · Unsupported alternate content without a fallback contributes no content. Opaque drawing QName scopes use bounded unchanged-source replay; colon names in any ZIP segment are refused by replay's extraction-safety policy. Namespace guards remain intact; these synthetic regressions do not close a ranked gap or change readiness estimates.
 
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 

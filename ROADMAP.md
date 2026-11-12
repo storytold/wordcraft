@@ -4,7 +4,7 @@
 
 > **Ink renderer primitives update:** 2026-11-08 · Native stroke widths and binary mask blending have dedicated display operations; ordinary clips and authored/freeform ink retain their existing behavior. InkML import is a separate change.
 
-> **Retained XML update:** 2026-11-09 · All five list-valued Markup Compatibility attributes are scope-resolved and canonicalized in retained markup; unknown `MustUnderstand`/QName namespaces are refused rather than serialized undeclared. Synthetic two-round-trip evidence; no readiness change.
+> **Retained XML update:** 2026-11-12 · Unsupported alternate content without a fallback contributes no content. Opaque drawing QName values require unchanged-source replay when their original scope cannot be regenerated; replay names reject colons in every segment. MC namespace guards remain intact. Synthetic red/green and two-round-trip evidence; no readiness change.
 
 > **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.

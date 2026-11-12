@@ -62,15 +62,20 @@ fn body_lines(d: &Document) -> Vec<String> {
 
 #[test]
 fn nested_header_reserved_namespace_error_is_fatal() {
-    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:xml="urn:bad" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" mc:MustUnderstand="f"/>"#;
-    let nested = super::fixtures::zip(&[
-        ("_rels/.rels", ROOT_RELS.as_bytes()),
-        ("word/document.xml", format!(r#"<w:document {NS}><w:body><w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#).as_bytes()),
-        ("word/_rels/document.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="header" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#),
-        ("word/header1.xml", header.as_bytes()),
-    ]);
-    let outer = package(CHUNK, Some(("docx", DOCX_MAIN, &nested)));
-    assert!(matches!(read(&outer), Err(wordcraft_docx::DocxError::Xml(_))));
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:xml="urn:bad"/>"#;
+    let outer = |header: &str| {
+        let nested = super::fixtures::zip(&[
+            ("_rels/.rels", ROOT_RELS.as_bytes()),
+            ("word/document.xml", format!(r#"<w:document {NS}><w:body><w:sectPr><w:headerReference w:type="default" r:id="header"/></w:sectPr></w:body></w:document>"#).as_bytes()),
+            ("word/_rels/document.xml.rels", br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="header" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#),
+            ("word/header1.xml", header.as_bytes()),
+        ]);
+        package(CHUNK, Some(("docx", DOCX_MAIN, &nested)))
+    };
+    let valid = header.replace("urn:bad", "http://www.w3.org/XML/1998/namespace");
+    read(&outer(&valid)).expect("a nested header with a valid xml binding must open");
+    let Err(wordcraft_docx::DocxError::Xml(error)) = read(&outer(header)) else { panic!("nested reserved binding must be fatal") };
+    assert!(error.contains("xml") && error.contains("urn:bad"), "wrong failure: {error}");
 }
 
 #[test]

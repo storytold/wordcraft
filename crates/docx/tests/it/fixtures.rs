@@ -1,5 +1,8 @@
 //! Hand-written minimal WordprocessingML fixtures (written for these tests from the spec).
 
+#[path = "fixtures/mc_review.rs"]
+mod mc_review;
+
 use std::io::Write;
 use std::sync::Arc;
 
@@ -59,13 +62,18 @@ fn undeclared_qnames_and_reserved_bindings_are_fatal() {
     for body in bodies {
         assert!(matches!(wordcraft_docx::read(&docx(body, &[], &[])), Err(wordcraft_docx::DocxError::Xml(_))), "{body}");
     }
-    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:xml="urn:bad" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:future" mc:MustUnderstand="f"/>"#;
-    let bytes = docx(
-        r#"<w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#,
-        &[("rHeader", "header", "header1.xml")],
-        &[("word/header1.xml", header)],
-    );
-    assert!(matches!(wordcraft_docx::read(&bytes), Err(wordcraft_docx::DocxError::Xml(_))));
+    let header = r#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:xml="urn:bad"/>"#;
+    let package = |header: &str| {
+        docx(
+            r#"<w:sectPr><w:headerReference w:type="default" r:id="rHeader"/></w:sectPr>"#,
+            &[("rHeader", "header", "header1.xml")],
+            &[("word/header1.xml", header)],
+        )
+    };
+    let valid = header.replace("urn:bad", "http://www.w3.org/XML/1998/namespace");
+    wordcraft_docx::read(&package(&valid)).expect("the same header with a valid xml binding must open");
+    let Err(wordcraft_docx::DocxError::Xml(error)) = wordcraft_docx::read(&package(header)) else { panic!("reserved binding must be fatal") };
+    assert!(error.contains("xml") && error.contains("urn:bad"), "wrong failure: {error}");
 }
 
 #[test]
@@ -211,9 +219,7 @@ fn alternate_content_requires_understood_namespaces_not_registered_aliases() {
 }
 
 #[test]
-fn alternate_content_without_a_usable_branch_is_rejected() {
-    let body = r#"<w:p xmlns:future="urn:future"><mc:AlternateContent><mc:Choice Requires="future"><w:r><w:t>unsupported</w:t></w:r></mc:Choice></mc:AlternateContent></w:p>"#;
-    assert!(matches!(wordcraft_docx::read(&docx(body, &[], &[])), Err(wordcraft_docx::DocxError::Xml(_))));
+fn alternate_content_without_requirements_uses_fallback() {
     for requires in ["", r#" Requires="""#] {
         let body = format!(
             r#"<w:p><mc:AlternateContent><mc:Choice{requires}><w:r><w:t>unsupported</w:t></w:r></mc:Choice><mc:Fallback><w:r><w:t>fallback</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#

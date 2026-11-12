@@ -327,7 +327,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 
 ## Retained InkML and MathML namespaces
 
-> **Status:** 2026-11-09 · Canonical InkML/MathML prefixes and list-valued Markup Compatibility references remain declared and consistent on save.
+> **Status:** 2026-11-12 · Retained QName values use unchanged-source replay when their namespace scope cannot be regenerated; unsupported alternate content without a fallback contributes no content.
 
 The shared DOCX XML namespace registry recognizes InkML and MathML aliases. Standalone
 embedded markup and retained content-control properties preserve their canonical namespace
@@ -343,6 +343,16 @@ annotations, such as `xsi` and `dc`, are declared too. This is a retained-XML fi
 rendering or general InkML conformance. Synthetic tests cover scoped rebinding and two save/reopen
 cycles; no new Word-file comparison is claimed.
 
+Opaque retained drawings, like opaque control properties, can carry QName-valued attributes or
+text whose ancestor namespace scope is not reconstructible from canonical element names.
+Such values (including `xsi:type`) now require bounded, unchanged-source package replay; edits
+are refused rather than writing unbound or changed QNames. Ordinary modeled drawing attributes
+and relationship IDs do not by themselves require replay. Replayed ZIP entry names reject colons
+in every segment as an extraction-safety policy, not because OPC's IRI grammar forbids colons.
+An unsupported `mc:Choice` without `mc:Fallback` contributes no content (ECMA-376 Part 3 §9.4);
+active wrapper and selected-branch `MustUnderstand` checks remain enforced. Reserved-binding
+regressions have valid-binding controls independent of unsupported MC requirements.
+
 ## Native ink rendering
 
 Supported native ink has bounded vector previews without replacing its authoritative source.
@@ -357,6 +367,8 @@ decoding, placement and preservation. Evidence is synthetic, not native Word qua
 
 ## Revision history
 
+> 2026-11-12 · #6035 follow-up: empty alternate-content selection, opaque drawing QName scope and safe replay names; synthetic red/green and serialized two-round-trip regressions, no new readiness claim.
+>
 > 2026-11-11 · Refuse namespace declarations requiring normalization before resolution; uncommon valid references remain unsupported.
 >
 > 2026-11-09 · ODT/OTT refuses incomplete InkML vector export without a usable picture fallback while preserving image-only conversion; missing-fallback regressions are synthetic, with Word qualification deferred.
