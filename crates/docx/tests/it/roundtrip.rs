@@ -268,6 +268,7 @@ fn styles_and_lists_round_trip() {
         builtin: false,
         locked: true,
         default: false,
+        numbering_from_base: false,
         table: None,
     });
     Arc::make_mut(&mut d.styles).upsert(Style {
@@ -3093,6 +3094,9 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
     // list; its old value must not be what the child resolves against.
     let mid = doc.styles.get("CustomMid").expect("CustomMid style exists");
     assert_eq!(mid.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
+    assert!(mid.numbering_from_base, "the middle style's list came from its base");
+    assert!(!doc.styles.get("CustomBase").expect("CustomBase style exists").numbering_from_base);
+    assert!(!doc.styles.get("CustomChild").expect("CustomChild style exists").numbering_from_base);
 
     let child = doc.styles.get("CustomChild").expect("CustomChild style exists");
     assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));

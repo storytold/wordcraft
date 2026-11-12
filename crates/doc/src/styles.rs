@@ -50,6 +50,10 @@ pub struct Style {
     /// the default character, table and list styles something other than the English ids.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub default: bool,
+    /// The style's list came from a based-on style's level-only numbering at read time; rejecting
+    /// a change in that style recomputes it. Not part of the document model's file format.
+    #[serde(skip)]
+    pub numbering_from_base: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
 }

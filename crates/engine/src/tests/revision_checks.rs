@@ -3,6 +3,8 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{InlineObject, OBJ};
+use wordcraft_doc::props::{NumRef, ParaProps, PropChange};
+use wordcraft_doc::styles::{Style, StyleKind, StyleSheet};
 use wordcraft_doc::{Pos, StoryRef, Table};
 
 use crate::{Selection, Session};
@@ -471,4 +473,47 @@ fn new_tracked_change_does_not_alias_separator_revision() {
         let p = separator_para(&mut s, slot);
         assert!(p.run_ranges().all(|(_, c)| c.ins.is_none() && c.del.is_none()), "{slot:?}");
     }
+}
+
+/// An unchanged style whose list came from its based-on style follows the restored base after
+/// Reject All, and the revised base after Accept All.
+#[test]
+fn resolving_a_base_style_change_updates_inherited_numbering() {
+    fn sheet() -> StyleSheet {
+        let mut sheet = StyleSheet::default();
+        sheet.styles.push(Style {
+            id: "Base".into(),
+            name: "Base".into(),
+            kind: StyleKind::Paragraph,
+            para: ParaProps {
+                numbering: Some(NumRef { num: 99, level: 0 }),
+                fmt_change: PropChange::boxed(0, ParaProps { numbering: Some(NumRef { num: 42, level: 0 }), ..Default::default() }),
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        sheet.styles.push(Style {
+            id: "Mid".into(),
+            name: "Mid".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Base".into()),
+            para: ParaProps { numbering: Some(NumRef { num: 99, level: 1 }), ..Default::default() },
+            numbering_from_base: true,
+            ..Default::default()
+        });
+        sheet
+    }
+
+    let mut rejected = sheet();
+    crate::cmd::fmt_revisions::resolve_styles(&mut rejected, false);
+    assert_eq!(rejected.styles.iter().find(|s| s.id == "Base").expect("Base style").para.numbering, Some(NumRef { num: 42, level: 0 }));
+    assert_eq!(
+        rejected.styles.iter().find(|s| s.id == "Mid").expect("Mid style").para.numbering,
+        Some(NumRef { num: 42, level: 1 }),
+        "rejecting restores the base's old list for the inherited style"
+    );
+
+    let mut accepted = sheet();
+    crate::cmd::fmt_revisions::resolve_styles(&mut accepted, true);
+    assert_eq!(accepted.styles.iter().find(|s| s.id == "Mid").expect("Mid style").para.numbering, Some(NumRef { num: 99, level: 1 }));
 }

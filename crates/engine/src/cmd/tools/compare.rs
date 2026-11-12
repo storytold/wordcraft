@@ -49,7 +49,7 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let is_text = p::str(v, "text").is_some();
-    let revised = if let Some(t) = p::str(v, "text") {
+    let mut revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
     } else if let Some(path) = p::str(v, "path") {
         crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
@@ -78,6 +78,10 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
+    // Import revised numbering once for body paragraphs and styles: both must use the same IDs.
+    let mut maps = NumberingMaps::default();
+    register_shared_numbering(&s.doc.numbering, &revised.numbering, &mut maps);
+    remap_revised_numbering(&mut s.doc, &mut revised, &mut maps);
     let old: Vec<Arc<Block>> = s.doc.body.clone();
     let new: Vec<Arc<Block>> = if revised.parts.values().any(|p| p.kind == wordcraft_doc::PartKind::TextBox) {
         // The revised document's text boxes get stories of their own in the result, so its
@@ -168,7 +172,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.note_body_replaced();
     s.math = None;
     // Style definitions follow the revised document when comparing files.
-    changes += sync_style_definitions(s, &revised, is_text, opts.formatting, &author, &date);
+    changes += sync_style_definitions(s, &revised, is_text, opts.formatting, &author, &date, &mut maps);
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
@@ -204,24 +208,19 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
 /// the new styles are appended. Numbering references that changed or are missing are imported and
 /// remapped in every case. A plain `text` input has no meaningful style sheet of its own, so its
 /// definitions are not applied and the original document's customized styles stay intact.
-fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, formatting: bool, author: &str, date: &str) -> usize {
+fn sync_style_definitions(
+    s: &mut Session,
+    revised: &Document,
+    is_text: bool,
+    formatting: bool,
+    author: &str,
+    date: &str,
+    maps: &mut NumberingMaps,
+) -> usize {
     if is_text {
         return 0;
     }
     let mut changes = 0usize;
-    let mut num_map = std::collections::BTreeMap::new();
-    let mut abs_map = std::collections::BTreeMap::new();
-    // Both documents can hold the same list under the same ID. Counters live on the abstract
-    // list, so register those lists before importing any style: a revised-only style that shares
-    // one must keep sharing it instead of getting a clone with its own counter.
-    for src in &revised.numbering.nums {
-        if same_numbering(&s.doc, revised, src.id) {
-            num_map.insert(src.id, src.id);
-            if let Some(src_abs) = revised.numbering.abstract_of(src.id) {
-                abs_map.insert(src_abs.id, src_abs.id);
-            }
-        }
-    }
     if formatting {
         // The author's existing changes must stay recognizable while the loop appends new ones.
         let revisions_before = s.doc.revisions.clone();
@@ -232,12 +231,11 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
                 let mut updated = new_st.clone();
                 updated.para.fmt_change = None;
                 updated.chr.fmt_change = None;
-                let needs_remapping = updated
-                    .para
-                    .numbering
-                    .is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || !same_numbering(&s.doc, revised, n.num)));
+                let needs_remapping = updated.para.numbering.is_some_and(|n| {
+                    n.num != 0 && (old_st.para.numbering != Some(n) || !same_numbering(&s.doc.numbering, &revised.numbering, n.num))
+                });
                 if needs_remapping {
-                    remap_style_numbering(&mut s.doc, revised, &mut updated.para.numbering, &mut num_map, &mut abs_map);
+                    remap_style_numbering(&mut s.doc, &revised.numbering, &mut updated.para.numbering, maps);
                 }
                 let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character && old_st.para.formatting() != updated.para.formatting())
                     || (updated.kind != wordcraft_doc::StyleKind::Numbering && old_st.chr.formatting() != updated.chr.formatting());
@@ -250,7 +248,7 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
                 let mut added = new_st.clone();
                 added.para.fmt_change = None;
                 added.chr.fmt_change = None;
-                remap_style_numbering(&mut s.doc, revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
+                remap_style_numbering(&mut s.doc, &revised.numbering, &mut added.para.numbering, maps);
                 result_styles.styles.push(added);
             }
         }
@@ -262,7 +260,7 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
                 let mut added = new_st.clone();
                 added.para.fmt_change = None;
                 added.chr.fmt_change = None;
-                remap_style_numbering(&mut s.doc, revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
+                remap_style_numbering(&mut s.doc, &revised.numbering, &mut added.para.numbering, maps);
                 result_styles.styles.push(added);
             }
         }
@@ -274,44 +272,99 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
 /// Whether numbering `id` names the same list in both documents: the instance and the abstract
 /// definition it points at, with their overrides. Numbering IDs are document-local, so equal
 /// numbers alone don't make equal lists.
-fn same_numbering(a: &Document, b: &Document, id: u32) -> bool {
-    let (Some(a_abs), Some(b_abs)) = (a.numbering.abstract_of(id), b.numbering.abstract_of(id)) else {
+fn same_numbering(a: &wordcraft_doc::numbering::Numbering, b: &wordcraft_doc::numbering::Numbering, id: u32) -> bool {
+    let (Some(a_abs), Some(b_abs)) = (a.abstract_of(id), b.abstract_of(id)) else {
         // Two missing abstracts are not a shared list: nothing would define its formatting.
         return false;
     };
-    a.numbering.num(id) == b.numbering.num(id) && a_abs == b_abs
+    a.num(id) == b.num(id) && a_abs == b_abs
+}
+
+/// One numbering mapping shared by revised body paragraphs and styles.
+#[derive(Default)]
+struct NumberingMaps {
+    num: std::collections::BTreeMap<u32, u32>,
+    abs: std::collections::BTreeMap<u32, u32>,
+}
+
+/// Register the lists both documents already hold under the same ID: counters live on the
+/// abstract list, so later imports must keep sharing it instead of cloning it.
+fn register_shared_numbering(doc: &wordcraft_doc::numbering::Numbering, revised: &wordcraft_doc::numbering::Numbering, maps: &mut NumberingMaps) {
+    for src in &revised.nums {
+        if same_numbering(doc, revised, src.id) {
+            maps.num.insert(src.id, src.id);
+            if let Some(src_abs) = revised.abstract_of(src.id) {
+                maps.abs.insert(src_abs.id, src_abs.id);
+            }
+        }
+    }
+}
+
+const MAX_BLOCK_DEPTH: usize = 16;
+
+/// Import the revised body's direct numbering references into `doc` and remap them, so paragraphs
+/// and styles share one mapping instead of splitting one revised list into two definitions.
+fn remap_revised_numbering(doc: &mut Document, revised: &mut Document, maps: &mut NumberingMaps) {
+    let source = (*revised.numbering).clone();
+    remap_blocks_numbering(doc, &source, &mut revised.body, maps, 0);
+    for part in revised.parts.values_mut() {
+        remap_blocks_numbering(doc, &source, &mut part.blocks, maps, 0);
+    }
+}
+
+fn remap_blocks_numbering(
+    doc: &mut Document,
+    source: &wordcraft_doc::numbering::Numbering,
+    blocks: &mut [Arc<Block>],
+    maps: &mut NumberingMaps,
+    depth: usize,
+) {
+    if depth > MAX_BLOCK_DEPTH {
+        return;
+    }
+    for b in blocks {
+        match Arc::make_mut(b) {
+            Block::Para(p) => remap_style_numbering(doc, source, &mut p.props.numbering, maps),
+            Block::Table(t) => {
+                for r in &mut t.rows {
+                    for c in &mut r.cells {
+                        remap_blocks_numbering(doc, source, &mut c.blocks, maps, depth + 1);
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Import any numbering definition referenced by `num_ref` from `revised` into `doc` and remap
 /// `num_ref` to the imported definition's ID, avoiding references to missing IDs or collisions.
 fn remap_style_numbering(
     doc: &mut Document,
-    revised: &Document,
+    revised: &wordcraft_doc::numbering::Numbering,
     num_ref: &mut Option<wordcraft_doc::props::NumRef>,
-    num_map: &mut std::collections::BTreeMap<u32, u32>,
-    abs_map: &mut std::collections::BTreeMap<u32, u32>,
+    maps: &mut NumberingMaps,
 ) {
     let Some(nr) = num_ref.as_mut() else { return };
     if nr.num == 0 {
         return;
     }
-    if let Some(&mapped) = num_map.get(&nr.num) {
+    if let Some(&mapped) = maps.num.get(&nr.num) {
         nr.num = mapped;
         return;
     }
-    let Some(src_num) = revised.numbering.num(nr.num) else {
+    let Some(src_num) = revised.num(nr.num) else {
         // The revised style names a list its document doesn't have: leaving the ID would bind
         // the style to `doc`'s unrelated list with the same number, or dangle.
         *num_ref = None;
         return;
     };
-    let Some(src_abs) = revised.numbering.abstract_of(nr.num) else {
+    let Some(src_abs) = revised.abstract_of(nr.num) else {
         // An instance without its abstract list has no formatting to import; keeping its
         // abstract ID could bind to `doc`'s unrelated definition or dangle.
         *num_ref = None;
         return;
     };
-    let mapped_aid = abs_map.get(&src_abs.id).copied();
+    let mapped_aid = maps.abs.get(&src_abs.id).copied();
     let aid = match mapped_aid {
         Some(aid) => aid,
         None => {
@@ -335,13 +388,13 @@ fn remap_style_numbering(
         let mut new_abs = src_abs.clone();
         new_abs.id = aid;
         target_numbering.abstracts.push(new_abs);
-        abs_map.insert(src_abs.id, aid);
+        maps.abs.insert(src_abs.id, aid);
     }
     let mut new_n = src_num.clone();
     new_n.id = new_nid;
     new_n.abstract_id = aid;
     target_numbering.nums.push(new_n);
-    num_map.insert(nr.num, new_nid);
+    maps.num.insert(nr.num, new_nid);
     nr.num = new_nid;
 }
 

@@ -13,7 +13,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::props::VMerge;
-use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
+use wordcraft_doc::props::{CellProps, CharProps, NumRef, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::table::{Cell, Row, Table};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Path, Revision, RevisionKind, StoryRef};
@@ -31,6 +31,8 @@ fn records(id: &str) -> bool {
 
 /// Tables nested deeper than this aren't compared (hostile documents).
 const MAX_DEPTH: usize = 16;
+/// A `numPr` that names only a level; the list comes from the based-on style.
+const LEVEL_ONLY: u32 = u32::MAX;
 
 /// A paragraph's, table's or cell's tracked formatting change, if it carries one.
 type Slot<T> = Option<Box<PropChange<T>>>;
@@ -394,10 +396,51 @@ pub fn resolve_para(p: &mut ParaProps, accept: bool) {
 /// In either case, resolution clears `fmt_change` on each style's paragraph and character
 /// properties via [`resolve_para`] and [`resolve_char`].
 pub fn resolve_styles(sheet: &mut wordcraft_doc::styles::StyleSheet, accept: bool) {
+    let changed: Vec<bool> = sheet.styles.iter().map(|s| s.para.fmt_change.is_some()).collect();
     for s in &mut sheet.styles {
         resolve_para(&mut s.para, accept);
         resolve_char(&mut s.chr, accept);
     }
+    // An unchanged style whose list came from its based-on style follows it again now that the
+    // base's change is resolved: rejecting must restore the old list for everything inheriting it.
+    let inherited: Vec<Option<Option<NumRef>>> = sheet
+        .styles
+        .iter()
+        .zip(&changed)
+        .map(|(s, had_change)| {
+            if *had_change || !s.numbering_from_base {
+                return None;
+            }
+            let level = s.para.numbering?.level;
+            let base = s.based_on.as_deref()?;
+            Some(inherited_list(sheet, base).map(|num| NumRef { num, level }))
+        })
+        .collect();
+    for (s, n) in sheet.styles.iter_mut().zip(inherited) {
+        if let Some(n) = n {
+            s.para.numbering = n;
+        }
+    }
+}
+
+/// The nearest list a based-on chain names, in the sheet's current (possibly restored) state.
+fn inherited_list(sheet: &wordcraft_doc::styles::StyleSheet, base: &str) -> Option<u32> {
+    let mut id = Some(base);
+    let mut depth = 0;
+    while let Some(style_id) = id {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        depth += 1;
+        let st = sheet.styles.iter().find(|s| s.id == style_id)?;
+        if let Some(n) = st.para.numbering
+            && n.num != LEVEL_ONLY
+        {
+            return Some(n.num);
+        }
+        id = st.based_on.as_deref();
+    }
+    None
 }
 
 /// Accept or reject every table, row, cell and section change in `blocks` (paragraph changes

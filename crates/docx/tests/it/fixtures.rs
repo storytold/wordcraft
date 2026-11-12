@@ -796,6 +796,29 @@ fn table_style_whole_table_formatting_survives_rejecting_a_style_change() {
     assert_eq!(rch.old.bold, Some(true), "old values keep their own formatting");
 }
 
+/// A built-in heading's tracked change keeps the implicit outline level in its old snapshot, so
+/// rejecting the change leaves the heading in the Navigation pane and TOC.
+#[test]
+fn builtin_heading_change_old_snapshot_keeps_its_outline_level() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+ <w:style w:type="paragraph" w:styleId="Heading1">
+  <w:name w:val="heading 1"/>
+  <w:basedOn w:val="Normal"/>
+  <w:pPr>
+   <w:pPrChange w:id="1" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange>
+  </w:pPr>
+ </w:style>
+</w:styles>"#
+    );
+    let d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let st = d.styles.get("Heading1").expect("Heading1 style");
+    assert_eq!(st.para.outline_level, Some(0), "the built-in heading gets its level");
+    let ch = st.para.fmt_change.as_deref().expect("pPrChange read");
+    assert_eq!(ch.old.outline_level, Some(0), "the old snapshot keeps the built-in level");
+}
+
 fn gallery_ids(styles: &str) -> Vec<String> {
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)]);
     let d = wordcraft_docx::read(&bytes).unwrap();

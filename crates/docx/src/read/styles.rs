@@ -143,7 +143,12 @@ impl Reader<'_> {
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
                 if let Some(ch) = p.child("w:pPrChange") {
-                    let old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                    let mut old = ch.child("w:pPr").map(|o| self.pc.ppr(o).0.formatting()).unwrap_or_default();
+                    // The old snapshot needs the implicit level too: rejecting restores it, and
+                    // nothing else recomputes the level afterwards.
+                    if kind == StyleKind::Paragraph && st.builtin && old.outline_level.is_none() {
+                        old.outline_level = s.child_val("w:name").and_then(builtin_heading_level);
+                    }
                     st.para.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
                 }
             }
@@ -200,19 +205,20 @@ impl Reader<'_> {
         }
         // Styles that give only a list level take the list from the style they are based on
         // (Heading 3: level 3 of Heading 2's outline list).
-        let fixed: Vec<Option<wordcraft_doc::props::NumRef>> = sheet
+        let fixed: Vec<(Option<wordcraft_doc::props::NumRef>, bool)> = sheet
             .styles
             .iter()
             .map(|s| match s.para.numbering {
                 Some(n) if n.num == props::LEVEL_ONLY => {
                     let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
-                    base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level })
+                    (base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }), base.is_some())
                 }
-                other => other,
+                other => (other, false),
             })
             .collect();
-        for (s, n) in sheet.styles.iter_mut().zip(fixed) {
+        for (s, (n, inherited)) in sheet.styles.iter_mut().zip(fixed) {
             s.para.numbering = n;
+            s.numbering_from_base = inherited;
         }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;

@@ -1242,6 +1242,82 @@ fn compare_style_reuses_a_shared_list_for_a_revised_only_style() {
     let _ = std::fs::remove_file(rev_path);
 }
 
+/// #5841: a revised paragraph's direct list reference is imported through the same mapping as
+/// its style, so Accept All keeps one definition and Reject All restores the original one.
+#[test]
+fn compare_remaps_direct_numbering_with_the_style_mapping() {
+    fn numbered(doc: &mut Document, num: u32) {
+        if let Some(b) = doc.body.first_mut()
+            && let Block::Para(p) = &mut *Arc::make_mut(b)
+        {
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        }
+        if let Some(h) = Arc::make_mut(&mut doc.styles).get_mut("Heading1") {
+            h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        }
+    }
+    fn first_numbering(doc: &Document) -> Option<wordcraft_doc::props::NumRef> {
+        match doc.body.first().map(|b| &**b) {
+            Some(Block::Para(p)) => p.props.numbering,
+            _ => None,
+        }
+    }
+
+    let mut original = Document::from_text("Alpha");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    numbered(&mut original, num);
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-direct-num-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Alpha");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    numbered(&mut revised, revised_num);
+    let new_levels = revised.numbering.abstract_of(revised_num).expect("revised list definition").levels.clone();
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-direct-num-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["changes"], 2, "the paragraph and the style both change list");
+
+    let imported = first_numbering(&s.doc).expect("the revised paragraph is numbered").num;
+    assert_ne!(imported, num, "the revised list is imported under its own ID");
+    assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_levels));
+    assert_eq!(
+        s.doc.styles.get("Heading1").and_then(|st| st.para.numbering),
+        Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }),
+        "the style shares the imported list"
+    );
+    let change = s.doc.body.first().and_then(|b| match &**b {
+        Block::Para(p) => p.props.fmt_change.as_deref(),
+        _ => None,
+    });
+    assert_eq!(change.expect("numbering change recorded").old.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+
+    let accepted = s.doc.clone();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(first_numbering(&s.doc), Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert_eq!(s.doc.styles.get("Heading1").and_then(|st| st.para.numbering), Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+
+    let mut acc = Session::new(accepted);
+    acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(first_numbering(&acc.doc), Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }));
+    assert_eq!(acc.doc.styles.get("Heading1").and_then(|st| st.para.numbering), Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
 /// #5841: importing into a document whose largest numbering IDs are `u32::MAX` allocates unused
 /// IDs instead of saturating onto an occupied one.
 #[test]
