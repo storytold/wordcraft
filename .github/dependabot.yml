@@ -7,11 +7,30 @@ updates:
       interval: "daily"
       time: "06:00"
       timezone: "America/New_York"
-    # Consolidate updates into a single PR rather than one PR per crate
+    # Minor and patch updates share one PR. A breaking bump gets its own PR so one API change
+    # doesn't hold the safe updates back (#2973). For cargo, Dependabot counts a 0.y bump of a
+    # 0.x crate as major, as Cargo does. A dependency goes to the first group it matches, so the
+    # crate families that must move together come before the catch-all.
     groups:
+      egui:
+        patterns:
+          - "egui"
+          - "egui_*"
+          - "eframe"
+          - "winit"
+      fonts:
+        patterns:
+          - "skrifa"
+          - "harfrust"
+      hayro:
+        patterns:
+          - "hayro-*"
       cargo-dependencies:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
     commit-message:
       prefix: "chore(deps)"
 

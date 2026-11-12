@@ -485,7 +485,22 @@ pub fn install_fonts_language_extra(
     system_cjk: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
-    let mut fonts = font_definitions_language(prefer_hans, prefer_korean, prefer_hant, system_cjk);
+    install_fonts_language_arabic(ctx, prefer_hans, prefer_korean, prefer_hant, system_cjk, false, faces);
+}
+
+/// [`install_fonts_language_extra`], also adding an installed Arabic font when `system_arabic` is
+/// set and no embedded face has Arabic letters. Asked for by an Arabic interface only, apart from
+/// the installed CJK font: reading either is a font file read the other languages never need.
+pub fn install_fonts_language_arabic(
+    ctx: &egui::Context,
+    prefer_hans: bool,
+    prefer_korean: bool,
+    prefer_hant: bool,
+    system_cjk: bool,
+    system_arabic: bool,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+) {
+    let mut fonts = font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, system_arabic);
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
 }
@@ -541,6 +556,18 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
 
 /// The interface fonts, ordered for the preferred CJK writing system.
 pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_hant: bool, system_cjk: bool) -> FontDefinitions {
+    font_definitions_language_arabic(prefer_hans, prefer_korean, prefer_hant, system_cjk, false)
+}
+
+/// [`font_definitions_language`], also with an installed Arabic font when `system_arabic` is set
+/// and the build embeds none.
+pub fn font_definitions_language_arabic(
+    prefer_hans: bool,
+    prefer_korean: bool,
+    prefer_hant: bool,
+    system_cjk: bool,
+    system_arabic: bool,
+) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -598,8 +625,31 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, prefer_
     }
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
+    // Arabic-script faces last: the Arabic interface, its name in the language list, Arabic file
+    // names. Without an embedded one (a build without craft-fonts), an installed font, read when
+    // `system_arabic` is set: for an Arabic interface.
+    let arabic = wordcraft_fonts::ui_arabic_fonts();
+    for f in &arabic {
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if system_arabic
+        && arabic.is_empty()
+        && let Some(f) = system_arabic_font()
+    {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("system {}", f.family), data);
+    }
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
+}
+
+/// The installed Arabic interface font, read once.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static ARABIC: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    ARABIC.get_or_init(wordcraft_fonts::system_arabic_ui_font).as_ref()
 }
 
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
@@ -800,9 +850,20 @@ pub fn apply_animations(ctx: &egui::Context, on: bool) {
     });
 }
 
+/// Coverage exponent for light-on-dark interface text on Linux and the BSDs (see [`visuals`]).
+const DARK_TEXT_GAMMA: f32 = 0.8;
+
 /// egui's visuals for one of our palettes.
 fn visuals(t: &Tokens) -> Visuals {
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
+    // Light text on a dark background, on Linux and the BSDs: egui's dark default thickens every
+    // glyph edge, about a fifth more ink than FreeType gives it in Firefox and the other apps
+    // there, so the interface looked semi-bold. Plain coverage (Firefox's weight) left the thin
+    // light strokes on the darkest strips (the tab row) looking soft; a light boost, about 7 %
+    // more ink, was chosen side by side on a 145 % desktop.
+    if t.dark && cfg!(all(unix, not(target_os = "macos"))) {
+        v.text_options.color_transfer_function = egui::epaint::FontColorTransferFunction::Gamma(DARK_TEXT_GAMMA);
+    }
     v.panel_fill = t.ribbon;
     v.window_fill = t.menu;
     v.extreme_bg_color = t.input;
@@ -843,6 +904,51 @@ pub fn c32(c: wordcraft_doc::Rgb) -> Color32 {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
+
+    /// Ink of a line of interface text at 1.45x (a 145 % desktop) in `appearance`, drawn in the
+    /// palette's text colour extremes (black on white, white on black) so the two compare.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn interface_text_ink(appearance: super::Appearance) -> u64 {
+        let dark = matches!(appearance, super::Appearance::Dark);
+        let (fg, bg) = if dark { (egui::Color32::WHITE, egui::Color32::BLACK) } else { (egui::Color32::BLACK, egui::Color32::WHITE) };
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(560.0, 40.0)).with_pixels_per_point(1.45).wgpu().build_ui_state(
+            move |ui, set: &mut bool| {
+                if !*set {
+                    super::apply(ui.ctx(), appearance);
+                    ui.ctx().set_fonts(super::font_definitions(false, false));
+                    *set = true;
+                }
+                egui::Frame::new().fill(bg).inner_margin(8.0).show(ui, |ui| {
+                    ui.label(egui::RichText::new("Every Thursday evening the old print shop").font(egui::FontId::proportional(12.5)).color(fg));
+                });
+            },
+            false,
+        );
+        h.run();
+        let img = h.render().unwrap();
+        // Ink: how far each pixel, laid over the background (the window outside the frame is
+        // transparent), is from the background.
+        let back = u64::from(bg.r());
+        img.pixels()
+            .map(|p| {
+                let (v, a) = (u64::from(p.0[0]), u64::from(p.0[3]));
+                let shown = (v * a + back * (255 - a)) / 255;
+                shown.abs_diff(back)
+            })
+            .sum()
+    }
+
+    #[test]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn dark_interface_text_is_only_a_little_heavier_than_light_interface_text() {
+        // egui's dark default added about a fifth more ink than FreeType gives the same text in
+        // Firefox on Linux (semi-bold); plain coverage, Firefox's weight, looked soft on the dark
+        // tab row. The light boost chosen side by side adds about 7 %.
+        let (light, dark) = (interface_text_ink(super::Appearance::Light), interface_text_ink(super::Appearance::Dark));
+        assert!(light > 0);
+        let ratio = dark as f64 / light as f64;
+        assert!((1.03..1.12).contains(&ratio), "light {light}, dark {dark}: {ratio:.3}");
+    }
 
     /// WCAG contrast ratio between two opaque colours.
     pub(super) fn contrast(a: egui::Color32, b: egui::Color32) -> f32 {
@@ -947,6 +1053,20 @@ mod tests {
     /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
     /// the front and SourceSans after egui's complete default fallback block, including the
     /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
+    /// An installed Arabic font is read for an Arabic interface only (`system_arabic`), and the
+    /// installed CJK font request alone never brings it in: neither read is paid by the other.
+    #[test]
+    fn the_installed_arabic_font_is_asked_for_by_arabic_alone() {
+        let plain = super::font_definitions_language_arabic(false, false, false, false, false).font_data.len();
+        let cjk_only = super::font_definitions_language_arabic(false, false, false, true, false);
+        let arabic = super::font_definitions_language_arabic(false, false, false, false, true).font_data.len();
+        let installed_arabic = wordcraft_fonts::ui_arabic_fonts().is_empty() && wordcraft_fonts::system_arabic_ui_font().is_some();
+        assert_eq!(arabic, plain + usize::from(installed_arabic), "Arabic adds the installed font when nothing is embedded");
+        let arabic_named = |defs: &egui::FontDefinitions| defs.font_data.keys().filter(|k| k.starts_with("system ")).count();
+        let cjk_font = super::system_cjk_font(false, false).is_some();
+        assert_eq!(arabic_named(&cjk_only), usize::from(cjk_font), "the CJK request adds the CJK font and no Arabic one");
+    }
+
     #[test]
     fn interface_font_order_keeps_test_default_fonts_explicit() {
         let defs = super::font_definitions(false, false);

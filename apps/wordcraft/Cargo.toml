@@ -22,6 +22,8 @@ wordcraft-control-key = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
+serde = { workspace = true }
+tempfile = "3"
 log = { workspace = true }
 chrono = { workspace = true }
 
@@ -38,13 +40,14 @@ fmv-macos-events = "=0.1.0"
 # The system's Reduce motion setting (System Settings › Accessibility › Display), read through
 # NSWorkspace: a safe call in these bindings. Already in the build through eframe, rfd and arboard,
 # at this version; this adds the `NSAccessibility` bindings and, to fit the title bar around the
-# traffic lights, the window, button and view ones.
+# traffic lights, the window, button and view ones; and `NSPasteboard` for the clipboard's RTF.
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard"] }
 objc2 = "0.6"
 # A copied equation's MathML goes on the pasteboard as `public.mathml.presentation` beside
 # arboard's HTML and text (#1297), through NSPasteboard's safe `setString:forType:`. Already in
-# the build through arboard, at this version; this adds only the NSString bindings.
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+# the build through arboard, at this version; this adds only the NSString bindings, and NSData
+# for the clipboard's RTF (`public.rtf`).
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
 # Closing the window must quit through NSApplication rather than by dropping the NSWindow
 # inside the AppKit run loop (see `schedule_macos_terminate`).
 dispatch2 = "0.3"
@@ -58,6 +61,14 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 # types that arboard doesn't read, and the formats offered. Already in the build through arboard's
 # `wayland-data-control` feature, at this version.
 wl-clipboard-rs = "0.9"
+# Another program's RTF on X11 (`text/rtf`), which arboard doesn't read. Already in the build
+# through arboard, at this version.
+x11rb = "0.13"
+# Check that the libraries winit's X11 backend opens are installed before choosing XWayland (see
+# `x11_libraries` in main.rs). Both are already in the build through winit's `x11` feature, at
+# these versions and with this feature.
+x11-dl = "2.21"
+xkbcommon-dl = { version = "0.4.2", features = ["x11"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The upstream default-apps button opens Windows Settings; printing uses craft-print instead.
@@ -73,7 +84,9 @@ windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfi
 clipboard-win = { version = "5.4", features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-craft-print = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+# Pinned apart from craft-ui, which doesn't depend on it: `printer_queues`, the printer list that
+# asks no driver (#5710, storytold/craft-libs#618), and `submit_cancellable` (storytold/craft-libs#622).
+craft-print = { git = "https://github.com/storytold/craft-libs", rev = "a3e0b5a9440d18f19422a9dca13516747b7d3181" }
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.

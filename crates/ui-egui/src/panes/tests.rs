@@ -309,6 +309,78 @@ fn pane_bodies_fit_the_narrowest_pane() {
     assert!(wide.is_empty(), "wider than the pane: {wide:?}");
 }
 
+/// #4482: at the 200 pt minimum width every Navigation tab is whole, in the longest labels. The
+/// fixture puts the longest translation of each tab in craft-i18n (at `craft-i18n.rev`) side by
+/// side; with the catalogs built in, every interface language is checked too, and none may have
+/// a wider tab than the fixture (else the fixture needs the new longest label).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn navigation_tabs_fit_the_narrowest_pane_in_every_language() {
+    use egui_kittest::kittest::Queryable;
+    // The language is thread-local: put English back even when an assertion fails.
+    struct English;
+    impl Drop for English {
+        fn drop(&mut self) {
+            crate::i18n::set_current(crate::i18n::Lang::EN);
+        }
+    }
+    let _english = English;
+    // 200 pt less the 10 pt body margins and the frame's 1 pt strokes.
+    const BODY: f32 = 178.0;
+    let longest = crate::i18n::fixture_lang("x-fixture", "\tHeadings\tÜberschriften\n\tPages\tСтраницы\n\tResults\tEredmények\n");
+    let mut widest = Vec::new();
+    let mut langs = vec![longest];
+    if crate::i18n::catalogs_embedded() {
+        // Chinese, Japanese and Korean need a craft-fonts build (their labels are short anyway).
+        let cjk = !wordcraft_fonts::ui_cjk_fonts(false).is_empty();
+        langs.extend(crate::i18n::Lang::all().filter(|l| cjk || !l.uses_cjk()));
+    }
+    for (n, lang) in langs.into_iter().enumerate() {
+        let app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+        let body = std::rc::Rc::new(std::cell::Cell::new(egui::Rect::NOTHING));
+        let seen = body.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 600.0)).build_ui_state(
+            move |ui, app: &mut crate::WordApp| {
+                crate::i18n::set_current(lang);
+                // Fonts take effect the frame after they are installed.
+                if !fonts {
+                    crate::theme::apply(ui.ctx(), crate::theme::Appearance::Light);
+                    crate::theme::install_fonts_language(ui.ctx(), lang.prefers_hans(), lang.prefers_korean());
+                    fonts = true;
+                    return;
+                }
+                let r = ui.allocate_ui_with_layout(vec2(BODY, 600.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_max_width(BODY);
+                    Content { app: &mut *app }.body(ui, &Pane::Navigation);
+                });
+                seen.set(egui::Rect::from_min_size(r.response.rect.min, vec2(BODY, 600.0)));
+            },
+            app,
+        );
+        h.run_steps(3);
+        for (i, tab) in ["Headings", "Pages", "Results"].into_iter().enumerate() {
+            let label = crate::i18n::tr(lang, tab);
+            let r = h.get_by_label(label).rect();
+            assert!(body.get().expand(0.5).contains_rect(r), "{}: {label} at {r:?} is cut off by the {BODY} pt body", lang.code());
+            let font = egui::TextStyle::Button.resolve(&h.ctx.global_style());
+            let text = h.ctx.fonts_mut(|f| f.layout_no_wrap(label.to_string(), font, egui::Color32::WHITE).size().x);
+            // A tab that shrank to fit would have elided or wrapped its label inside a rect that
+            // still fits the body.
+            assert!(r.width() + 0.5 >= text, "{}: {label} is {:.1} pt wide, narrower than its {text:.1} pt label", lang.code(), r.width());
+            if n == 0 {
+                widest.push(text);
+            } else {
+                assert!(
+                    text <= widest[i] + 0.5,
+                    "{}: {label} is wider than the fixture's {tab} label; put {label:?} in the fixture as the longest {tab}",
+                    lang.code()
+                );
+            }
+        }
+    }
+}
+
 /// A pane other than Styles floated from its menu comes back floating, at the same rect, after
 /// a restart; junk in `panePlaces` reads as the defaults (#1756).
 #[test]
@@ -378,6 +450,37 @@ fn pane_dock_command_docks_floats_and_reads_each_pane() {
     assert_eq!(super::pane_state(&app, Pane::Navigation).place, Place::Floating, "junk changed nothing");
 }
 
+/// Explicit `left` / `right` stay on the physical window sides in an Arabic (RTL) interface;
+/// defaults still flip to the reading-start side. Covers `ui.paneDock` and `view.stylesPaneDock`.
+#[test]
+fn pane_dock_left_and_right_are_physical_in_rtl() {
+    use craft_ui::panes::{Edge, Place};
+    use serde_json::json;
+    let arabic = crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n");
+    crate::i18n::set_current(arabic);
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    // Defaults: Navigation's Start opens on the physical right (reading start) until set.
+    assert_eq!(super::pane_state(&app, Pane::Navigation).place, Place::Docked(Edge::End));
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "navigation"})).unwrap()["dock"], "right");
+    // Explicit left stays physical left and is reported as left.
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "navigation", "dock": "left"})).unwrap()["dock"], "left");
+    assert_eq!(super::pane_state(&app, Pane::Navigation).place, Place::Docked(Edge::Start));
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "navigation"})).unwrap()["dock"], "left");
+    assert_eq!(app.run("ui.paneDock", json!({"pane": "comments", "dock": "right"})).unwrap()["dock"], "right");
+    assert_eq!(super::pane_state(&app, Pane::Comments).place, Place::Docked(Edge::End));
+    // Styles through view.stylesPaneDock — same physical contract.
+    assert_eq!(app.run("view.stylesPaneDock", json!({"dock": "left"})).unwrap()["dock"], "left");
+    assert_eq!(super::pane_state(&app, Pane::Styles).place, Place::Docked(Edge::Start));
+    assert_eq!(app.run("view.stylesPaneDock", json!({})).unwrap()["dock"], "left");
+    assert_eq!(app.run("view.stylesPaneDock", json!({"dock": "right"})).unwrap()["dock"], "right");
+    assert_eq!(super::pane_state(&app, Pane::Styles).place, Place::Docked(Edge::End));
+    // A host Place request (Dock Left menu / drag) saves physical left without flipping.
+    super::apply(&mut app, craft_ui::panes::PaneRequest::Place(Pane::Clipboard, Place::Docked(Edge::Start)));
+    assert_eq!(app.ui.pane_places.get("clipboard").and_then(|p| p.dock), Some(super::SavedDock::Left));
+    assert_eq!(super::pane_state(&app, Pane::Clipboard).place, Place::Docked(Edge::Start));
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+}
+
 /// #3032: Delete is greyed out for built-in styles in the Styles pane (the engine refuses
 /// them — `crates/engine/src/cmd/para.rs`), while custom styles keep it enabled.
 #[test]
@@ -413,4 +516,83 @@ fn built_in_styles_grey_out_delete_in_the_styles_pane() {
     }
     assert!(delete_is_disabled("Normal"), "the built-in style's Delete is greyed out");
     assert!(!delete_is_disabled("Callout"), "the custom style's Delete stays enabled");
+}
+
+/// #3382: a long comment's card in the Comments pane stops at ten lines of text, so its buttons
+/// and the card after it stay in view.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn a_long_comment_card_keeps_its_buttons_and_the_next_card_in_view() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = crate::WordApp::new(
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.")),
+        crate::Services::default(),
+    );
+    app.run("select.text", serde_json::json!({"text": "Alpha"})).unwrap();
+    let long = (1..=200).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    app.run("review.newComment", serde_json::json!({"text": long})).unwrap();
+    app.run("select.text", serde_json::json!({"text": "Beta"})).unwrap();
+    app.run("review.newComment", serde_json::json!({"text": "Short note."})).unwrap();
+    app.run("view.commentsPane", serde_json::json!({"value": true})).unwrap();
+    let h = pane_harness(app);
+    let go_to: Vec<egui::Rect> = h.get_all_by_label("Go to").map(|n| n.rect()).collect();
+    assert_eq!(go_to.len(), 2, "one Go to button per card");
+    assert!(go_to.iter().all(|r| r.max.y < 900.0), "both cards' buttons are in view: {go_to:?}");
+}
+
+/// #4753: the Styles pane's scroll bar has a column of its own, so with the pointer over it the
+/// "a" and "¶" markers at the right of each row stay clear of it; its handle still shows, light
+/// or dark.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn the_styles_pane_scroll_bar_leaves_the_style_markers_clear() {
+    use egui_kittest::kittest::Queryable;
+    for appearance in [crate::theme::Appearance::Light, crate::theme::Appearance::Dark] {
+        let app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+        let size = egui::vec2(240.0, 400.0);
+        let right = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let edge = right.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(
+            move |ui, app: &mut crate::WordApp| {
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    crate::theme::apply(ui.ctx(), appearance);
+                    fonts = true;
+                    return;
+                }
+                edge.set(ui.max_rect().right());
+                super::styles(app, ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        // On the bar, along the pane's right edge, where it is at its widest.
+        h.hover_at(egui::pos2(right.get() - 3.0, size.y - 60.0));
+        h.run_steps(20);
+        let markers: Vec<egui::Rect> = h.get_all_by_label("¶").chain(h.get_all_by_label("a")).map(|n| n.rect()).collect();
+        assert!(markers.len() > 5, "{appearance:?}: the list shows its markers: {markers:?}");
+        // Only a scroll bar is a narrow, tall filled rectangle along the list's right edge.
+        let bars: Vec<(egui::Rect, egui::Color32)> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill.a() > 0 && r.rect.width() < 20.0 && r.rect.height() > 3.0 * r.rect.width() => {
+                    Some((r.rect.intersect(c.clip_rect), r.fill))
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(bars.iter().any(|(b, _)| b.x_range().contains(right.get() - 3.0)), "{appearance:?}: the pointer is on the bar: {bars:?}");
+        let covered: Vec<_> = markers.iter().filter(|m| bars.iter().any(|(b, _)| b.intersects(**m))).collect();
+        assert!(covered.is_empty(), "{appearance:?}: the scroll bar {bars:?} covers markers {covered:?}");
+        // The track is the pane's field colour; the handle stands out from it.
+        let track = h.ctx.global_style().visuals.extreme_bg_color;
+        assert!(
+            bars.iter().any(|(_, fill)| fill.r().abs_diff(track.r()) > 60),
+            "{appearance:?}: the handle shows against the track {track:?}: {bars:?}"
+        );
+    }
 }

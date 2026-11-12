@@ -25,11 +25,23 @@ pub fn read(root: &El) -> Vec<CustomProp> {
         let Some(v) = p.els().next() else { continue };
         let kind = v.local();
         let prop = if SIMPLE.contains(&kind) {
-            CustomProp { name: name.to_string(), kind: kind.to_string(), value: v.text(), link_target: p.attr("linkTarget").map(str::to_string) }
+            CustomProp {
+                name: name.to_string(),
+                kind: kind.to_string(),
+                value: v.text(),
+                link_target: p.attr("linkTarget").map(str::to_string),
+                odf_user_field: false,
+            }
         } else {
             let mut xml = String::new();
             el_xml(v, &mut xml, 0);
-            CustomProp { name: name.to_string(), kind: "raw".into(), value: xml, link_target: p.attr("linkTarget").map(str::to_string) }
+            CustomProp {
+                name: name.to_string(),
+                kind: "raw".into(),
+                value: xml,
+                link_target: p.attr("linkTarget").map(str::to_string),
+                odf_user_field: false,
+            }
         };
         out.push(prop);
     }
