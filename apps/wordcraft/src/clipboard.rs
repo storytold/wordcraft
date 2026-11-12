@@ -18,6 +18,11 @@
 //! they paste math (learn.microsoft.com/office/math/mathml, "Clipboard support"). Pasting into
 //! Word and LibreOffice is not yet verified. Linux and the BSDs have no Word, and arboard can't
 //! add MIME types of other names, so there the HTML carries the MathML alone.
+//!
+//! RTF goes beside them where we can add it: Windows ("Rich Text Format") and macOS
+//! (`public.rtf`) after arboard's HTML, Wayland (`text/rtf`) in one offer with the text and HTML.
+//! On X11 arboard owns the selection and serves only its own targets, so a copy there carries text
+//! and HTML only; reading another program's RTF works on all four.
 
 use wordcraft_engine::cmd::paste::MAX_PASTE_BYTES;
 use wordcraft_ui_egui::paste_picture::ClipboardPicture;
@@ -31,31 +36,43 @@ thread_local! {
     static WRITER: std::cell::RefCell<Option<arboard::Clipboard>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Put `html` on the clipboard with `text` as its plain-text alternative, and `mathml` (a copy of
-/// one equation alone; empty for any other copy) in the platform's MathML formats. `false` when
-/// the HTML and text couldn't be set (the caller copies the text alone), including a Wayland
-/// session without the data-control protocol, where arboard would fall back to X11 and native
-/// Wayland programs might not see it. MathML that can't be added is logged: the HTML still
-/// carries it.
-pub fn set_html(html: &str, text: &str, mathml: &str) -> bool {
+/// Put a copy on the clipboard: `text`, with `html` and `rtf` beside it where the platform takes
+/// them (an empty one isn't offered), and `mathml` (a copy of one equation alone; empty for any
+/// other copy) in the platform's MathML formats. `false` when the text and HTML couldn't be set
+/// (the caller copies the text alone), including a Wayland session without the data-control
+/// protocol, where arboard would fall back to X11 and native Wayland programs might not see it.
+/// RTF or MathML that can't be added is logged: the HTML still carries the copy.
+pub fn set_rich(text: &str, html: &str, rtf: &str, mathml: &str) -> bool {
+    // Wayland: one offer with the text, HTML and RTF (no MathML formats there; see above).
+    if platform::set_rich(text, html, rtf) {
+        return true;
+    }
     if !platform::can_set() {
         return false;
     }
     let set = set_html_text(html, text);
+    if set && !rtf.is_empty() {
+        platform::add_rtf(rtf);
+    }
     if set && !mathml.is_empty() && mathml.len() <= MAX_PASTE_BYTES {
         platform::add_mathml(mathml);
     }
     set
 }
 
+/// Write HTML and plain text to the system clipboard via the cached writer slot, recording ownership.
 fn set_html_text(html: &str, text: &str) -> bool {
     WRITER.with(|w| {
         let Ok(mut slot) = w.try_borrow_mut() else { return false };
         if slot.is_none() {
             *slot = open();
         }
-        match slot.as_mut().map(|c| c.set().html(html, Some(text))) {
-            Some(Ok(())) => true,
+        let set = slot.as_mut().map(|c| if html.is_empty() { c.set_text(text) } else { c.set().html(html, Some(text)) });
+        match set {
+            Some(Ok(())) => {
+                platform::record_own();
+                true
+            }
             Some(Err(e)) => {
                 log::warn!("clipboard: {e}");
                 *slot = None;
@@ -64,6 +81,74 @@ fn set_html_text(html: &str, text: &str) -> bool {
             None => false,
         }
     })
+}
+
+/// Put a copied picture on the clipboard: its pixels, with HTML and text beside it where the
+/// platform takes them. `false` when it couldn't be set.
+pub fn set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, text: &str) -> bool {
+    if platform::set_image(image, html, text) {
+        return true;
+    }
+    if !platform::can_set() {
+        return false;
+    }
+    let set = set_image_arboard(image);
+    if set {
+        platform::after_set_image(image, html, text);
+    }
+    set
+}
+
+/// Write image pixels to the clipboard through arboard.
+fn set_image_arboard(image: &wordcraft_ui_egui::system_clipboard::CopyImage) -> bool {
+    WRITER.with(|w| {
+        let Ok(mut slot) = w.try_borrow_mut() else { return false };
+        if slot.is_none() {
+            *slot = open();
+        }
+        let img = arboard::ImageData { width: image.width, height: image.height, bytes: std::borrow::Cow::Borrowed(&image.rgba) };
+        let set = slot.as_mut().map(|c| c.set().image(img));
+        match set {
+            Some(Ok(())) => {
+                platform::record_own();
+                true
+            }
+            Some(Err(e)) => {
+                log::warn!("clipboard image: {e}");
+                *slot = None;
+                false
+            }
+            None => false,
+        }
+    })
+}
+
+/// Whether the system clipboard still holds WordCraft's last copy.
+pub fn is_own() -> bool {
+    platform::is_own()
+}
+
+/// Wrap HTML in the Windows CF_HTML header format required by clipboard readers.
+///
+/// Offsets are byte offsets from the start of the payload; `EndHTML` excludes the trailing NUL.
+#[cfg(any(target_os = "windows", test))]
+fn wrap_cf_html(ctn: &str) -> Vec<u8> {
+    let h_version = "Version:0.9";
+    let h_start_html = "\r\nStartHTML:";
+    let h_end_html = "\r\nEndHTML:";
+    let h_start_frag = "\r\nStartFragment:";
+    let h_end_frag = "\r\nEndFragment:";
+    let c_start_frag = "\r\n<html>\r\n<body>\r\n<!--StartFragment-->\r\n";
+    let c_end_frag = "\r\n<!--EndFragment-->\r\n</body>\r\n</html>\0";
+    let h_len = h_version.len() + h_start_html.len() + 10 + h_end_html.len() + 10 + h_start_frag.len() + 10 + h_end_frag.len() + 10;
+    let n_start_html = h_len + 2;
+    let n_start_frag = h_len + c_start_frag.len();
+    let n_end_frag = n_start_frag + ctn.len();
+    let n_end_html = n_end_frag + c_end_frag.len() - 1;
+    let header = format!(
+        "{h_version}{h_start_html}{n_start_html:010}{h_end_html}{n_end_html:010}{h_start_frag}{n_start_frag:010}{h_end_frag}{n_end_frag:010}{c_start_frag}{ctn}{c_end_frag}"
+    );
+    header.into_bytes()
 }
 
 /// The clipboard's text.
@@ -76,8 +161,8 @@ pub fn html() -> Option<String> {
     open()?.get().html().ok().filter(|h| h.len() <= MAX_PASTE_BYTES)
 }
 
-/// The clipboard's RTF: Windows ("Rich Text Format") and Wayland (`text/rtf`); not offered by
-/// arboard, so read here.
+/// The clipboard's RTF: Windows ("Rich Text Format"), macOS (`public.rtf`), Wayland and X11
+/// (`text/rtf`); not offered by arboard, so read here.
 pub fn rtf() -> Option<String> {
     let bytes = platform::rtf()?;
     if bytes.len() > MAX_PASTE_BYTES {
@@ -95,7 +180,8 @@ pub fn formats() -> Vec<String> {
 
 /// The picture on the clipboard: copied files, else image pixels, else (Wayland) an encoded
 /// picture in a format arboard doesn't decode. A picture that is there but can't be read says
-/// why (#833). The UI checks the sizes before inserting anything.
+/// why (#833). The UI checks the sizes before inserting anything; on Windows and Wayland they are
+/// checked from the header before anything is decoded (#3623).
 pub fn picture() -> Option<ClipboardPicture> {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
@@ -108,6 +194,23 @@ pub fn picture() -> Option<ClipboardPicture> {
         && !files.is_empty()
     {
         return Some(ClipboardPicture::Files(files));
+    }
+    decoded_picture(&mut clipboard)
+}
+
+/// The clipboard's picture on Windows, read past arboard, which decodes the PNG and DIB formats
+/// with no size limits (#3623).
+#[cfg(target_os = "windows")]
+fn decoded_picture(_: &mut arboard::Clipboard) -> Option<ClipboardPicture> {
+    platform::picture()
+}
+
+/// The picture arboard decodes from the clipboard, else an encoded one read past it.
+#[cfg(not(target_os = "windows"))]
+fn decoded_picture(clipboard: &mut arboard::Clipboard) -> Option<ClipboardPicture> {
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))]
+    if let Some(picture) = platform::picture() {
+        return Some(picture);
     }
     match clipboard.get_image() {
         Ok(image) => Some(ClipboardPicture::Pixels { width: image.width, height: image.height, rgba: image.bytes.into_owned() }),
@@ -133,6 +236,7 @@ mod platform {
     use std::io::Read;
 
     use wl_clipboard_rs::paste::{ClipboardType, MimeType, Seat, get_contents, get_mime_types_ordered};
+    use wordcraft_ui_egui::paste_picture::ClipboardPicture;
 
     fn wayland() -> bool {
         std::env::var_os("WAYLAND_DISPLAY").is_some()
@@ -153,6 +257,39 @@ mod platform {
         get_mime_types_ordered(ClipboardType::Regular, Seat::Unspecified).unwrap_or_default()
     }
 
+    const OWNER_MIME: &str = "application/x-wordcraft-owner";
+
+    /// Process-unique ownership token placed into Wayland clipboard offers.
+    fn owner_token() -> [u8; 16] {
+        static TOKEN: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+        *TOKEN.get_or_init(|| {
+            let mut b = [0u8; 16];
+            let _ = getrandom::fill(&mut b);
+            b
+        })
+    }
+
+    static X11_OWNER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    /// Record clipboard ownership for X11 selection tracking.
+    pub fn record_own() {
+        if !wayland() {
+            let win = x11::owner_window().unwrap_or(0);
+            X11_OWNER.store(win, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    /// Whether WordCraft still owns the Wayland offer or X11 selection.
+    pub fn is_own() -> bool {
+        if wayland() {
+            if formats().iter().any(|m| m == OWNER_MIME) { read(OWNER_MIME, 16).is_some_and(|b| b == owner_token()) } else { false }
+        } else {
+            let current = x11::owner_window().unwrap_or(0);
+            let recorded = X11_OWNER.load(std::sync::atomic::Ordering::Relaxed);
+            recorded != 0 && current == recorded
+        }
+    }
+
     /// Whether arboard sets the clipboard natively: X11, or Wayland with data-control.
     pub fn can_set() -> bool {
         !wayland()
@@ -162,15 +299,83 @@ mod platform {
             )
     }
 
+    /// Put the copy on a Wayland clipboard in one offer: the text (with the usual plain-text
+    /// aliases), HTML and RTF, served from a background thread until something else is copied.
+    /// `false` outside Wayland (X11 goes through arboard) or without the data-control protocol.
+    pub fn set_rich(text: &str, html: &str, rtf: &str) -> bool {
+        use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
+
+        if !wayland() {
+            return false;
+        }
+        let offer = |mime: &str, data: &str| MimeSource { source: Source::Bytes(data.as_bytes().into()), mime_type: MimeType::Specific(mime.into()) };
+        // The text first: the plain-text aliases serve the first text type offered.
+        let mut sources = vec![offer("text/plain;charset=utf-8", text)];
+        for (mime, data) in [("text/html", html), ("text/rtf", rtf)] {
+            if !data.is_empty() {
+                sources.push(offer(mime, data));
+            }
+        }
+        sources.push(MimeSource { source: Source::Bytes(owner_token().to_vec().into()), mime_type: MimeType::Specific(OWNER_MIME.into()) });
+        match Options::new().copy_multi(sources) {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("clipboard: {e}");
+                false
+            }
+        }
+    }
+
+    /// Put a copied picture on the Wayland clipboard alongside HTML, text, and ownership token.
+    pub fn set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, text: &str) -> bool {
+        use wl_clipboard_rs::copy::{MimeSource, MimeType, Options, Source};
+
+        if !wayland() {
+            return false;
+        }
+        let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) else {
+            return false;
+        };
+        let offer = |mime: &str, data: &str| MimeSource { source: Source::Bytes(data.as_bytes().into()), mime_type: MimeType::Specific(mime.into()) };
+        let mut sources = vec![MimeSource { source: Source::Bytes(png.into()), mime_type: MimeType::Specific("image/png".into()) }];
+        if !text.is_empty() {
+            sources.push(offer("text/plain;charset=utf-8", text));
+        }
+        if !html.is_empty() {
+            sources.push(offer("text/html", html));
+        }
+        sources.push(MimeSource { source: Source::Bytes(owner_token().to_vec().into()), mime_type: MimeType::Specific(OWNER_MIME.into()) });
+        match Options::new().copy_multi(sources) {
+            Ok(()) => true,
+            Err(e) => {
+                log::warn!("clipboard image: {e}");
+                false
+            }
+        }
+    }
+
+    /// Additional formats to register after setting image via arboard on Unix.
+    pub fn after_set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) {}
+
+    /// Wayland copies carry their RTF already; X11 ones can't (see the module docs).
+    pub fn add_rtf(_rtf: &str) {}
+
+    /// RTF types a clipboard may offer, best first.
+    const RTF_MIMES: [&str; 3] = ["text/rtf", "application/rtf", "text/richtext"];
+
+    /// The RTF type to ask for among those `offered`.
+    fn rtf_target(offered: &[String]) -> Option<&'static str> {
+        RTF_MIMES.into_iter().find(|m| offered.iter().any(|o| o == m))
+    }
+
     /// arboard serves its own MIME types only; Word, which reads the MathML formats, isn't here.
     pub fn add_mathml(_mathml: &str) {}
 
     pub fn rtf() -> Option<Vec<u8>> {
         if !wayland() {
-            return None;
+            return std::env::var_os("DISPLAY").is_some().then(|| x11::rtf(super::MAX_PASTE_BYTES)).flatten();
         }
-        let offered = formats();
-        let mime = ["text/rtf", "application/rtf", "text/richtext"].into_iter().find(|m| offered.iter().any(|o| o == m))?;
+        let mime = rtf_target(&formats())?;
         read(mime, super::MAX_PASTE_BYTES as u64)
     }
 
@@ -182,11 +387,155 @@ mod platform {
         let mime = super::PICTURE_MIMES.into_iter().find(|m| offered.iter().any(|o| o == m))?;
         read(mime, wordcraft_ui_egui::paste_picture::MAX_FILE_BYTES)
     }
+
+    /// Whether a property read of `len` bytes, with `bytes_after` left unread, is the whole value
+    /// and at most `cap` bytes.
+    fn complete(len: usize, bytes_after: u32, cap: usize) -> bool {
+        bytes_after == 0 && len <= cap
+    }
+
+    /// Reading another program's RTF on X11, which arboard doesn't offer: ask the CLIPBOARD
+    /// selection's owner for its targets, then for its RTF, into a property of a hidden window.
+    mod x11 {
+        use std::time::{Duration, Instant};
+
+        use x11rb::connection::Connection;
+        use x11rb::protocol::Event;
+        use x11rb::protocol::xproto::{Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, GetPropertyReply, Window, WindowClass};
+        use x11rb::rust_connection::RustConnection;
+
+        /// How long a paste waits for the selection's owner, in all.
+        const TIMEOUT: Duration = Duration::from_secs(1);
+        /// Most targets looked at.
+        const MAX_TARGETS: usize = 128;
+
+        struct Reader {
+            conn: RustConnection,
+            win: Window,
+            clipboard: Atom,
+            prop: Atom,
+            deadline: Instant,
+        }
+
+        fn atom(conn: &RustConnection, name: &str) -> Option<Atom> {
+            conn.intern_atom(false, name.as_bytes()).ok()?.reply().ok().map(|r| r.atom)
+        }
+
+        impl Reader {
+            fn new() -> Option<Self> {
+                let (conn, screen) = x11rb::connect(None).ok()?;
+                let root = conn.setup().roots.get(screen)?.root;
+                let win = conn.generate_id().ok()?;
+                conn.create_window(0, win, root, 0, 0, 1, 1, 0, WindowClass::INPUT_ONLY, x11rb::COPY_FROM_PARENT, &CreateWindowAux::new()).ok()?;
+                let clipboard = atom(&conn, "CLIPBOARD")?;
+                let prop = atom(&conn, "WORDCRAFT_PASTE")?;
+                Some(Self { conn, win, clipboard, prop, deadline: Instant::now() + TIMEOUT })
+            }
+
+            /// The selection converted to `target`, at most `cap` bytes; `None` when the owner
+            /// refuses or doesn't answer in time. A longer value is `None` when `whole`, else
+            /// its first `cap` bytes.
+            fn convert(&self, target: Atom, cap: usize, whole: bool) -> Option<GetPropertyReply> {
+                self.conn.convert_selection(self.win, self.clipboard, target, self.prop, x11rb::CURRENT_TIME).ok()?;
+                self.conn.flush().ok()?;
+                loop {
+                    // Checked every time round, so a stream of other events can't keep us here.
+                    if Instant::now() >= self.deadline {
+                        return None;
+                    }
+                    match self.conn.poll_for_event().ok()? {
+                        Some(Event::SelectionNotify(e)) if e.requestor == self.win => {
+                            if e.property == x11rb::NONE {
+                                return None;
+                            }
+                            break;
+                        }
+                        Some(_) => {}
+                        None => std::thread::sleep(Duration::from_millis(5)),
+                    }
+                }
+                // In 32-bit units; for a whole value one more than the cap, so a larger one shows
+                // as `bytes_after`.
+                let units = u32::try_from(cap / 4 + usize::from(whole)).unwrap_or(u32::MAX);
+                let r = self.conn.get_property(true, self.win, self.prop, AtomEnum::ANY, 0, units).ok()?.reply().ok()?;
+                (!whole || super::complete(r.value.len(), r.bytes_after, cap)).then_some(r)
+            }
+        }
+
+        impl Drop for Reader {
+            fn drop(&mut self) {
+                let _ = self.conn.destroy_window(self.win);
+                let _ = self.conn.flush();
+            }
+        }
+
+        /// The CLIPBOARD selection's RTF, at most `cap` bytes. Copies too large to send at once
+        /// arrive in pieces (INCR), which aren't read: `None` then.
+        pub fn rtf(cap: usize) -> Option<Vec<u8>> {
+            let r = Reader::new()?;
+            // The first targets only: a longer list is cut short, not refused.
+            let targets = r.convert(atom(&r.conn, "TARGETS")?, MAX_TARGETS.saturating_mul(4), false)?;
+            let cookies: Vec<_> = targets.value32()?.take(MAX_TARGETS).filter_map(|a| r.conn.get_atom_name(a).ok()).collect();
+            let names: Vec<String> =
+                cookies.into_iter().filter_map(|c| c.reply().ok()).map(|n| String::from_utf8_lossy(&n.name).into_owned()).collect();
+            let target = atom(&r.conn, super::rtf_target(&names)?)?;
+            let incr = atom(&r.conn, "INCR")?;
+            let reply = r.convert(target, cap, true)?;
+            (reply.type_ != incr).then_some(reply.value)
+        }
+
+        /// Query X11 for the current window id owning the CLIPBOARD selection.
+        pub fn owner_window() -> Option<Window> {
+            let (conn, _) = x11rb::connect(None).ok()?;
+            let clipboard = atom(&conn, "CLIPBOARD")?;
+            let reply = conn.get_selection_owner(clipboard).ok()?.reply().ok()?;
+            (reply.owner != x11rb::NONE).then_some(reply.owner)
+        }
+    }
+
+    /// The Wayland clipboard's picture, read encoded under the paste's byte cap and refused from
+    /// its header when a paste can't take its size, before anything decodes it. arboard decodes
+    /// and converts the PNG to RGBA with no size limits. `None` when Wayland offers no picture
+    /// (or isn't reachable): arboard is asked then, which also covers X11.
+    pub fn picture() -> Option<ClipboardPicture> {
+        if !wayland() {
+            return None;
+        }
+        let offered = formats();
+        let mime = super::PICTURE_MIMES.into_iter().find(|m| offered.iter().any(|o| o == m))?;
+        Some(match read(mime, wordcraft_ui_egui::paste_picture::MAX_FILE_BYTES) {
+            Some(bytes) => wordcraft_ui_egui::paste_picture::encoded_picture(bytes),
+            None => ClipboardPicture::Unreadable("the clipboard picture is larger than 200 MB, or couldn't be read".into()),
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn rtf_target_prefers_text_rtf() {
+            let names = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+            assert_eq!(rtf_target(&names(&["TARGETS", "text/richtext", "application/rtf", "text/rtf"])), Some("text/rtf"));
+            assert_eq!(rtf_target(&names(&["text/richtext", "UTF8_STRING"])), Some("text/richtext"));
+            assert_eq!(rtf_target(&names(&["text/html", "text/rtf;charset=x"])), None);
+            assert_eq!(rtf_target(&[]), None);
+        }
+
+        #[test]
+        fn property_reads_must_be_whole_and_capped() {
+            assert!(complete(10, 0, 10));
+            assert!(!complete(11, 0, 10), "over the cap");
+            assert!(!complete(8, 4, 10), "more left to read");
+            assert!(complete(0, 0, 0));
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
 mod platform {
     use clipboard_win::{Clipboard, EnumFormats, raw};
+    use wordcraft_ui_egui::paste_picture::{self, ClipboardPicture};
 
     pub fn formats() -> Vec<String> {
         let Ok(_open) = Clipboard::new_attempts(10) else { return Vec::new() };
@@ -205,12 +554,109 @@ mod platform {
         Some(out)
     }
 
-    pub fn encoded_picture() -> Option<Vec<u8>> {
-        None
+    /// The clipboard's picture, read without arboard: its "PNG" format as it is, else a DIB as
+    /// pixels, each refused from its header when a paste can't take its size (#3623). None when
+    /// it holds neither.
+    pub fn picture() -> Option<ClipboardPicture> {
+        use clipboard_win::formats::{CF_DIB, CF_DIBV5};
+        let Ok(_open) = Clipboard::new_attempts(10) else {
+            return Some(ClipboardPicture::Unreadable("the system clipboard couldn't be opened".into()));
+        };
+        if let Some(png) = raw::register_format("PNG").map(|f| f.get()).filter(|&f| raw::is_format_avail(f)) {
+            return Some(read(png).map_or_else(ClipboardPicture::Unreadable, paste_picture::encoded_picture));
+        }
+        let dib = [CF_DIBV5, CF_DIB].into_iter().find(|&f| raw::is_format_avail(f))?;
+        Some(read(dib).map_or_else(ClipboardPicture::Unreadable, paste_picture::dib_picture))
     }
 
+    /// A clipboard format's bytes, refused past the largest picture a paste takes.
+    fn read(format: u32) -> Result<Vec<u8>, String> {
+        match raw::size(format) {
+            Some(n) if n.get() as u64 <= paste_picture::MAX_FILE_BYTES => {}
+            Some(_) => return Err("the clipboard picture is larger than 200 MB".into()),
+            None => return Err("the clipboard picture is empty".into()),
+        }
+        let mut out = Vec::new();
+        raw::get_vec(format, &mut out).map_err(|e| e.to_string())?;
+        Ok(out)
+    }
+
+    const OWNER_FORMAT: &str = "WordCraft Copy Owner";
+
+    /// Process-unique ownership token placed into Windows clipboard marker.
+    fn owner_token() -> [u8; 16] {
+        static TOKEN: std::sync::OnceLock<[u8; 16]> = std::sync::OnceLock::new();
+        *TOKEN.get_or_init(|| {
+            let mut b = [0u8; 16];
+            let _ = getrandom::fill(&mut b);
+            b
+        })
+    }
+
+    /// Record clipboard ownership for Windows clipboard.
+    pub fn record_own() {
+        let Some(format) = raw::register_format(OWNER_FORMAT) else { return };
+        let Ok(_open) = Clipboard::new_attempts(10) else { return };
+        let _ = raw::set_without_clear(format.get(), &owner_token());
+    }
+
+    /// Whether WordCraft still owns the Windows clipboard contents.
+    pub fn is_own() -> bool {
+        let Some(format) = raw::register_format(OWNER_FORMAT) else { return false };
+        let Ok(_open) = Clipboard::new_attempts(10) else { return false };
+        if !raw::is_format_avail(format.get()) {
+            return false;
+        }
+        let mut out = Vec::new();
+        if raw::get_vec(format.get(), &mut out).is_err() {
+            return false;
+        }
+        out == owner_token()
+    }
+
+    /// Windows supports clipboard setting via arboard and clipboard_win.
     pub fn can_set() -> bool {
         true
+    }
+
+    /// arboard sets the text and HTML.
+    pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
+        false
+    }
+
+    /// Windows sets the primary image through arboard and supplements via [`after_set_image`].
+    pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
+        false
+    }
+
+    /// Add PNG and CF_HTML formats alongside arboard's image, then mark ownership.
+    pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
+        if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone())
+            && let Some(format) = raw::register_format("PNG")
+            && let Ok(_open) = Clipboard::new_attempts(10)
+        {
+            let _ = raw::set_without_clear(format.get(), &png);
+        }
+        if !html.is_empty()
+            && let Some(format) = raw::register_format("HTML Format")
+            && let Ok(_open) = Clipboard::new_attempts(10)
+        {
+            let cf = super::wrap_cf_html(html);
+            let _ = raw::set_without_clear(format.get(), &cf);
+        }
+        record_own();
+    }
+
+    /// Add "Rich Text Format" to what arboard just set, NUL-terminated as is usual.
+    pub fn add_rtf(rtf: &str) {
+        let Some(format) = raw::register_format("Rich Text Format") else { return };
+        let Ok(_open) = Clipboard::new_attempts(10) else { return };
+        let mut bytes = Vec::with_capacity(rtf.len().saturating_add(1));
+        bytes.extend_from_slice(rtf.as_bytes());
+        bytes.push(0);
+        if let Err(e) = raw::set_without_clear(format.get(), &bytes) {
+            log::warn!("clipboard RTF: {e}");
+        }
     }
 
     /// Add the MathML to what arboard just set, as "MathML" and "MathML Presentation": UTF-16LE
@@ -238,22 +684,74 @@ const MATHML_FORMATS: [&str; 2] = ["MathML", "MathML Presentation"];
 #[cfg(target_os = "macos")]
 mod platform {
     use objc2_app_kit::NSPasteboard;
-    use objc2_foundation::NSString;
+    use objc2_foundation::{NSData, NSString};
 
+    /// RTF's pasteboard type (`NSPasteboardTypeRTF`, whose extern static needs unsafe to read).
+    const RTF: &str = "public.rtf";
+
+    /// Formats offered on macOS pasteboard.
     pub fn formats() -> Vec<String> {
         Vec::new()
     }
 
+    /// Read RTF data from macOS pasteboard.
     pub fn rtf() -> Option<Vec<u8>> {
-        None
+        let data = NSPasteboard::generalPasteboard().dataForType(&NSString::from_str(RTF))?;
+        (data.len() <= super::MAX_PASTE_BYTES).then(|| data.to_vec())
     }
 
+    /// Read encoded picture data from macOS pasteboard.
     pub fn encoded_picture() -> Option<Vec<u8>> {
         None
     }
 
+    static LAST_CHANGE_COUNT: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(-1);
+
+    /// Record pasteboard changeCount on macOS to verify ownership.
+    pub fn record_own() {
+        let count = NSPasteboard::generalPasteboard().changeCount();
+        LAST_CHANGE_COUNT.store(count, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether WordCraft still owns the macOS pasteboard.
+    pub fn is_own() -> bool {
+        let count = NSPasteboard::generalPasteboard().changeCount();
+        let recorded = LAST_CHANGE_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        recorded >= 0 && count == recorded
+    }
+
+    /// Whether macOS supports setting the pasteboard.
     pub fn can_set() -> bool {
         true
+    }
+
+    /// arboard sets the text and HTML.
+    pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
+        false
+    }
+
+    /// macOS sets the primary image through arboard and supplements via [`after_set_image`].
+    pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
+        false
+    }
+
+    /// Set supplemental PNG and HTML representations on macOS pasteboard.
+    pub fn after_set_image(image: &wordcraft_ui_egui::system_clipboard::CopyImage, html: &str, _text: &str) {
+        let board = NSPasteboard::generalPasteboard();
+        if let Ok(png) = wordcraft_ui_egui::paste_picture::png_from_rgba(image.width, image.height, image.rgba.clone()) {
+            let _ = board.setData_forType(Some(&NSData::with_bytes(&png)), &NSString::from_str("public.png"));
+        }
+        if !html.is_empty() {
+            let _ = board.setString_forType(&NSString::from_str(html), &NSString::from_str("public.html"));
+        }
+        record_own();
+    }
+
+    /// Add RTF to the pasteboard item arboard just wrote (it cleared the pasteboard first).
+    pub fn add_rtf(rtf: &str) {
+        if !NSPasteboard::generalPasteboard().setData_forType(Some(&NSData::with_bytes(rtf.as_bytes())), &NSString::from_str(RTF)) {
+            log::warn!("clipboard: the RTF couldn't be added");
+        }
     }
 
     /// Add the MathML to the pasteboard item arboard just wrote, as the MathML types (W3C MathML 3
@@ -275,21 +773,80 @@ mod platform {
     all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten")))
 )))]
 mod platform {
+    /// Formats on the clipboard.
     pub fn formats() -> Vec<String> {
         Vec::new()
     }
 
+    /// The RTF bytes on the clipboard.
     pub fn rtf() -> Option<Vec<u8>> {
         None
     }
 
+    /// Encoded picture bytes on the clipboard.
     pub fn encoded_picture() -> Option<Vec<u8>> {
         None
     }
 
+    /// Whether the fallback platform can set the clipboard.
     pub fn can_set() -> bool {
         true
     }
 
+    /// Record clipboard ownership on the fallback platform.
+    pub fn record_own() {}
+
+    /// Whether WordCraft owns the clipboard on the fallback platform.
+    pub fn is_own() -> bool {
+        false
+    }
+
+    /// Set rich text on the fallback platform.
+    pub fn set_rich(_text: &str, _html: &str, _rtf: &str) -> bool {
+        false
+    }
+
+    /// Set image on the fallback platform.
+    pub fn set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) -> bool {
+        false
+    }
+
+    /// Post-image set hook on the fallback platform.
+    pub fn after_set_image(_image: &wordcraft_ui_egui::system_clipboard::CopyImage, _html: &str, _text: &str) {}
+
+    /// Add RTF to the clipboard on the fallback platform.
+    pub fn add_rtf(_rtf: &str) {}
+
+    /// Add MathML to the clipboard on the fallback platform.
     pub fn add_mathml(_mathml: &str) {}
+}
+
+#[cfg(test)]
+mod cf_html_tests {
+    use super::wrap_cf_html;
+
+    fn field(data: &[u8], name: &str) -> usize {
+        let at = data.windows(name.len()).position(|w| w == name.as_bytes()).expect("field") + name.len();
+        std::str::from_utf8(&data[at..at + 10]).expect("offset digits").parse().expect("offset")
+    }
+
+    #[test]
+    fn cf_html_offsets_delimit_the_fragment_bytes() {
+        let fragment = "<p>Olá, 世界 — café</p>";
+        let data = wrap_cf_html(fragment);
+
+        let start_html = field(&data, "StartHTML:");
+        let end_html = field(&data, "EndHTML:");
+        let start_fragment = field(&data, "StartFragment:");
+        let end_fragment = field(&data, "EndFragment:");
+
+        assert!(start_html < start_fragment, "HTML starts before its fragment");
+        assert!(start_fragment < end_fragment, "fragment has a positive length");
+        assert!(end_fragment < end_html, "fragment ends inside the document");
+        assert_eq!(&data[start_html..start_html + "<html>".len()], b"<html>");
+        assert_eq!(&data[start_fragment..end_fragment], fragment.as_bytes());
+        assert_eq!(end_fragment - start_fragment, fragment.len(), "offsets count UTF-8 bytes");
+        assert_eq!(&data[end_html..], b"\0", "EndHTML excludes the trailing NUL");
+        assert_eq!(end_html, data.len() - 1);
+    }
 }
