@@ -123,37 +123,11 @@ fn kept_omml_ok(omml: &str) -> bool {
         && crate::flat::one_element(omml)
         // Parsed names are canonical by namespace: an `m:` bound to another URI isn't `m:oMath`.
         && crate::xml::parse_strict(wrap_ns(omml).as_bytes()).is_ok_and(|root| root.child("m:oMath").is_some())
-        && prefixes_declared(omml)
-}
-
-/// Whether every element and attribute prefix in the kept XML is declared, by the document's
-/// namespaces or in the XML itself. The reader keeps an undeclared prefix's local name, so
-/// `<m:oMath missing:x="1">` passes the checks above, and would be written with a prefix nothing
-/// declares.
-fn prefixes_declared(omml: &str) -> bool {
-    use quick_xml::events::Event;
-    use quick_xml::name::ResolveResult;
-    let wrapped = wrap_ns(omml);
-    let mut r = quick_xml::reader::NsReader::from_str(&wrapped);
-    loop {
-        let (unknown, ev) = match r.read_resolved_event() {
-            Ok((res, ev)) => (matches!(res, ResolveResult::Unknown(_)), ev),
-            Err(_) => return false,
-        };
-        if unknown {
-            return false;
-        }
-        match ev {
-            Event::Start(e) | Event::Empty(e) => {
-                let declared = e.attributes().all(|a| a.is_ok_and(|a| !matches!(r.resolver().resolve_attribute(a.key).0, ResolveResult::Unknown(_))));
-                if !declared {
-                    return false;
-                }
-            }
-            Event::Eof => return true,
-            _ => {}
-        }
-    }
+        // Both readers above are lenient about the rest of XML: undeclared prefixes, two attributes
+        // with one expanded name, a `<` in an attribute value, `]]>` in text, characters XML 1.0
+        // doesn't allow (also as references). A conforming parser rejects all of those. It runs
+        // last, after `parse_strict` has bounded the nesting depth.
+        && roxmltree::Document::parse(&wrap_ns(omml)).is_ok()
 }
 
 /// The kept XML with namespace declarations, for validating it on its own.

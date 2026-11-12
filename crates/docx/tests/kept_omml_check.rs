@@ -71,6 +71,17 @@ fn malformed_kept_omml_is_written_from_the_nodes() {
         "<m:oMath><m:r><m:t>INJECTED</m:t></m:r><m:r?/></m:oMath>",
         "<m:oMath missing:x=\"1\"><m:r><m:t>INJECTED</m:t></m:r></m:oMath>",
         "<m:oMath><missing:r><m:t>INJECTED</m:t></missing:r></m:oMath>",
+        // Two attributes with one expanded name (Namespaces in XML §6.3).
+        "<m:oMath xmlns:p=\"urn:x\" xmlns:q=\"urn:x\" p:a=\"1\" q:a=\"2\"><m:r><m:t>INJECTED</m:t></m:r></m:oMath>",
+        // A `<` in an attribute value, `]]>` in text.
+        "<m:oMath bad=\"<\"><m:r><m:t>INJECTED</m:t></m:r></m:oMath>",
+        "<m:oMath><m:r><m:t>INJECTED]]></m:t></m:r></m:oMath>",
+        // Characters XML 1.0 doesn't allow, as references or as they are.
+        "<m:oMath bad=\"&#1;\"><m:r><m:t>INJECTED</m:t></m:r></m:oMath>",
+        "<m:oMath><m:r><m:t>INJECTED&#1;</m:t></m:r></m:oMath>",
+        "<m:oMath><m:r><m:t>INJECTED&#xFFFF;</m:t></m:r></m:oMath>",
+        "<m:oMath bad=\"\u{1}\"><m:r><m:t>INJECTED</m:t></m:r></m:oMath>",
+        "<m:oMath><m:r><m:t>INJECTED\u{1}</m:t></m:r></m:oMath>",
     ] {
         let (xml, back) = save(kept, false);
         assert!(!xml.contains("INJECTED") && !xml.contains("&bad;"), "{kept:?} was written: {xml}");
