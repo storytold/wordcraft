@@ -12,6 +12,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod changes;
 mod comments;
 mod proofing;
+mod reviewers;
 
 pub use changes::{
     DELETION_TEXT_CHARS, DeletionBalloon, deletion_balloons, format_changes, has_deletions, has_format_changes, move_changes, tracking_json,
@@ -22,6 +23,7 @@ use comments::{
 };
 pub use comments::{comment_list, comment_range_at_caret};
 use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_count};
+pub use reviewers::{MAX_REVIEWERS, reviewers};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -78,6 +80,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .key(super::non_mac("Mod+Shift+G"))
             .pure(),
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
+        CommandSpec::new("review.showReviewer", "Specific People", "Review › Tracking › Show Markup", reviewers::show_reviewer)
+            .params(r#"{"author"?: string (a reviewer of this document), "value"?: bool (show their markup; omit to toggle), "all"?: bool (All Reviewers: show everyone's, or hide everyone's)} → {"reviewers": [{"name", "shown"}], "allShown": bool} (omit all to read them). A hidden reviewer's insertions and deletions show as plain text, without their comments, formatting balloons or change bars"#)
+            .pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue)
             .key(super::mac_or("F7 / Alt+F7 / Mod+Alt+L", "F7 / Alt+F7"))
             .params(r#"{"wrap"?: bool (default true; false stops at the end of the current story)}"#)

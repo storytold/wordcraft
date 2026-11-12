@@ -1121,3 +1121,113 @@ mod spelling_navigation_tests {
         }
     }
 }
+
+/// Two reviewers: Ana inserted "new " in the first paragraph and commented on "keep"; Bo deleted
+/// "gone" in the second, made "bold" bold in the third (a tracked formatting change) and
+/// commented on "stay".
+fn two_reviewers() -> Session {
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run("document.setText", &json!({"text": "keep\ngone stay\nbold"})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.author = "Ana".into();
+    s.run("caret.docStart", &json!({})).unwrap();
+    s.run("text.insert", &json!({"text": "new "})).unwrap();
+    s.run("select.range", &json!({"anchor": {"block": 0, "off": 4}, "focus": {"block": 0, "off": 8}})).unwrap();
+    s.run("review.newComment", &json!({"text": "Ana's note"})).unwrap();
+    s.author = "Bo".into();
+    s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 4}})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+    s.run("select.range", &json!({"anchor": {"block": 1, "off": 5}, "focus": {"block": 1, "off": 9}})).unwrap();
+    s.run("review.newComment", &json!({"text": "Bo's note"})).unwrap();
+    s.run("select.range", &json!({"anchor": {"block": 2, "off": 0}, "focus": {"block": 2, "off": 4}})).unwrap();
+    s.run("format.bold", &json!({})).unwrap();
+    s
+}
+
+/// What the first page draws with the session's Track Changes Options and the reviewers it shows.
+fn draws_shown(s: &mut Session) -> (Vec<Draw>, f32) {
+    let l = s.layout();
+    let page = &l.pages[0];
+    let opts = DisplayOptions { revisions: s.prefs.markup.clone(), hidden_reviewers: s.view.hidden_reviewers.clone(), ..Default::default() };
+    (page_display(&s.doc, page, &opts), page.body.x)
+}
+
+/// The comment highlights a page draws.
+fn comment_fills(d: &[Draw]) -> usize {
+    d.iter().filter(|x| matches!(x, Draw::Fill { color: wordcraft_doc::Rgb(0xEF, 0xE3, 0xF7), .. })).count()
+}
+
+/// #3363: Show Markup › Specific People lists the document's reviewers, all shown at first; one
+/// can be hidden and shown again, or everyone at once. It's a view change: the document, its
+/// revisions and the undo history stay as they are.
+#[test]
+fn show_reviewer_hides_and_shows_reviewers() {
+    let mut s = two_reviewers();
+    let (depth, revisions) = (s.undo_depth(), s.doc.revisions.clone());
+    let names = |r: &serde_json::Value| -> Vec<(String, bool)> {
+        r["reviewers"].as_array().unwrap().iter().map(|x| (x["name"].as_str().unwrap().to_string(), x["shown"].as_bool().unwrap())).collect()
+    };
+    let r = s.run("review.showReviewer", &json!({})).unwrap();
+    assert_eq!(names(&r), [("Ana".to_string(), true), ("Bo".to_string(), true)]);
+    assert_eq!(r["allShown"], true);
+    assert!(s.view.hidden_reviewers.is_empty(), "everyone's markup shows by default");
+
+    let r = s.run("review.showReviewer", &json!({"author": "Bo"})).unwrap();
+    assert_eq!(names(&r), [("Ana".to_string(), true), ("Bo".to_string(), false)], "omitting `value` toggles");
+    assert_eq!(r["allShown"], false);
+    s.run("review.showReviewer", &json!({"author": "Bo", "value": false})).unwrap();
+    assert_eq!(s.view.hidden_reviewers, ["Bo"], "hiding twice hides once");
+    s.run("review.showReviewer", &json!({"author": "Bo", "value": true})).unwrap();
+    assert!(s.view.hidden_reviewers.is_empty());
+
+    let r = s.run("review.showReviewer", &json!({"all": false})).unwrap();
+    assert_eq!(names(&r), [("Ana".to_string(), false), ("Bo".to_string(), false)]);
+    let r = s.run("review.showReviewer", &json!({"all": true})).unwrap();
+    assert_eq!(r["allShown"], true);
+    assert!(s.view.hidden_reviewers.is_empty());
+
+    // Hostile or mistaken params change nothing.
+    for bad in [
+        json!({"author": "Cy"}),
+        json!({"author": 7}),
+        json!({"author": "x".repeat(5000)}),
+        json!({"author": "Bo", "value": "no"}),
+        json!({"all": "yes"}),
+        json!({"author": "Bo", "all": true}),
+    ] {
+        assert!(s.run("review.showReviewer", &bad).is_err(), "{bad}");
+        assert!(s.view.hidden_reviewers.is_empty(), "{bad}");
+    }
+    assert_eq!((s.undo_depth(), &s.doc.revisions), (depth, &revisions), "no document change, no undo step");
+}
+
+/// #3363, as Word draws it: a reviewer whose markup is hidden has their insertion and deletion
+/// drawn as plain text (the deletion keeps its place), their comment no highlight, and their
+/// changed lines (text or formatting) no bar. The other reviewer's markup is unchanged.
+#[test]
+fn a_hidden_reviewers_changes_are_drawn_as_plain_text() {
+    let mut s = two_reviewers();
+    let author = |d: &[Draw]| glyph_colors(d).iter().filter(|(c, _)| *c != wordcraft_doc::Rgb::BLACK).count();
+    let horizontal = |d: &[Draw]| lines(d).into_iter().filter(|(_, y0, _, y1)| y0 == y1).count();
+
+    let (d, body_x) = draws_shown(&mut s);
+    assert!(glyph_text(&d).contains("gone"));
+    assert_eq!(bars(&d, body_x), 3, "Ana's line, Bo's deletion and Bo's formatting");
+    assert_eq!(horizontal(&d), 2, "Ana's underline and Bo's strikethrough: {:?}", lines(&d));
+    assert_eq!(comment_fills(&d), 2);
+    let both = author(&d);
+
+    s.run("review.showReviewer", &json!({"author": "Bo", "value": false})).unwrap();
+    let (d, body_x) = draws_shown(&mut s);
+    assert!(glyph_text(&d).contains("gone"), "Bo's deletion stays in the text: {:?}", glyph_text(&d));
+    assert_eq!(bars(&d, body_x), 1, "only Ana's line has a bar");
+    assert_eq!(horizontal(&d), 1, "Ana's underline alone: {:?}", lines(&d));
+    assert_eq!(comment_fills(&d), 1, "Ana's comment alone is highlighted");
+    assert!(author(&d) > 0 && author(&d) < both, "Ana's insertion keeps her colour, Bo's deletion is plain");
+
+    s.run("review.showReviewer", &json!({"all": false})).unwrap();
+    let (d, body_x) = draws_shown(&mut s);
+    assert_eq!((bars(&d, body_x), horizontal(&d), comment_fills(&d), author(&d)), (0, 0, 0, 0), "no markup at all");
+    assert!(glyph_text(&d).contains("new") && glyph_text(&d).contains("gone"));
+}

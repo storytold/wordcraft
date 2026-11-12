@@ -209,8 +209,9 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             continue;
         }
         let shown = opts.markup && m.insertions_deletions;
-        let del = rc.del.filter(|_| shown);
-        let ins = rc.ins.filter(|_| shown && del.is_none());
+        // A reviewer whose markup is hidden (Show Markup › Specific People) has plain text.
+        let del = opts.shown_revision(doc, rc.del).filter(|_| shown);
+        let ins = opts.shown_revision(doc, rc.ins).filter(|_| shown && del.is_none());
         let author = |r: u32| authors.color(r);
         // Moved text: the Moves marks and colours (by default green, double strikethrough
         // where it was, double underline where it went).
@@ -409,8 +410,9 @@ fn comment_backgrounds(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let mut ranges = Vec::new();
     for off in para.object_offsets() {
         match para.object_at(off) {
-            Some(InlineObject::CommentStart { .. }) => open = open.or(Some(off)),
-            Some(InlineObject::CommentEnd { .. }) => ranges.push((open.take().unwrap_or(0), off)),
+            // A comment by a reviewer whose markup is hidden gets no highlight.
+            Some(InlineObject::CommentStart { id }) if ctx.opts.shows_comment(ctx.doc, *id) => open = open.or(Some(off)),
+            Some(InlineObject::CommentEnd { id }) if ctx.opts.shows_comment(ctx.doc, *id) => ranges.push((open.take().unwrap_or(0), off)),
             _ => {}
         }
     }
@@ -570,7 +572,9 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
             // A tracked (inserted or deleted) paragraph mark is drawn in its author's colour.
             let m = &opts.revisions;
             let by_author = |r: u32| authors.color(r);
-            let color = para.filter(|_| opts.markup && m.insertions_deletions).and_then(|p| match (p.mark.ins, p.mark.del) {
+            // A mark changed by a reviewer whose markup is hidden is an ordinary one.
+            let mark = |p: &Paragraph| (opts.shown_revision(doc, p.mark.ins), opts.shown_revision(doc, p.mark.del));
+            let color = para.filter(|_| opts.markup && m.insertions_deletions).and_then(|p| match mark(p) {
                 (_, Some(r)) if doc.move_name(Some(r)).is_some() => Some(m.move_from_color.unwrap_or_else(|| by_author(r))),
                 (Some(r), None) if doc.move_name(Some(r)).is_some() => Some(m.move_to_color.unwrap_or_else(|| by_author(r))),
                 (_, Some(r)) => Some(m.delete_color.unwrap_or_else(|| by_author(r))),

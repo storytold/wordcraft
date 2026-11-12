@@ -1,7 +1,7 @@
 use super::glyphs::{Authors, upright_east_asian};
 use super::lines::{LineRender, lines};
 use super::objects::{ShapeLook, effects_in, graphic_draws, object_draws, shape_draws, spun};
-use super::options::{DisplayOptions, Hidden, MarkupOptions};
+use super::options::{DisplayOptions, Hidden};
 use super::paint::Stroke;
 use super::{
     BezPath, Border, BorderStyle, ChangeBar, Document, Draw, HashMap, InlineObject, LineEnd, Page, Placed, Rect, Rgb, Spin, StoryRef, TextDirection,
@@ -99,7 +99,7 @@ fn dimming(opts: &DisplayOptions) -> (f32, f32) {
 
 fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
     if opts.markup && (opts.revisions.insertions_deletions || opts.revisions.formatting) && opts.revisions.changed_lines != ChangeBar::None {
-        change_bars(doc, page, items, &opts.revisions, alpha, out);
+        change_bars(doc, page, items, opts, alpha, out);
     }
 }
 
@@ -365,7 +365,10 @@ pub const CHANGE_BAR: Rgb = Rgb(0x50, 0x50, 0x50);
 
 /// Bars in the margin beside body lines with tracked insertions or deletions, or (when shown)
 /// tracked formatting changes of their text, paragraph or paragraph mark.
-fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions, alpha: f32, out: &mut Vec<Draw>) {
+/// A reviewer whose markup is hidden (Show Markup › Specific People) marks no line.
+fn change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
+    let m = &opts.revisions;
+    let shown = |r: Option<u32>| opts.shown_revision(doc, r).is_some();
     // Outside: the left margin, or the outer one of a right-hand page with mirrored margins.
     let right = match m.changed_lines {
         ChangeBar::Right => true,
@@ -382,15 +385,16 @@ fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions,
         let Some(first) = pl.lines.get(*l0) else { continue };
         let (text, fmt) = (m.insertions_deletions, m.formatting);
         let para = doc.para(*story, path);
-        let mark_rev = para.is_some_and(|p| (text && (p.mark.ins.is_some() || p.mark.del.is_some())) || (fmt && p.mark.fmt_change.is_some()));
+        let mark_rev =
+            para.is_some_and(|p| (text && (shown(p.mark.ins) || shown(p.mark.del))) || (fmt && shown(p.mark.fmt_change.as_ref().map(|c| c.rev))));
         // A paragraph whose own formatting changed is marked on every line.
-        let para_fmt = fmt && para.is_some_and(|p| p.props.fmt_change.is_some());
+        let para_fmt = fmt && para.is_some_and(|p| shown(p.props.fmt_change.as_ref().map(|c| c.rev)));
         for li in *l0..*l1 {
             let Some(line) = pl.lines.get(li) else { continue };
             let changed = para_fmt
                 || (line.c0..line.c1)
                     .filter_map(|k| pl.clusters.get(k).and_then(|c| pl.styles.get(c.style as usize)))
-                    .any(|st| (text && (st.rc.ins.is_some() || st.rc.del.is_some())) || (fmt && st.rc.fmt.is_some()))
+                    .any(|st| (text && (shown(st.rc.ins) || shown(st.rc.del))) || (fmt && shown(st.rc.fmt)))
                 || (mark_rev && line.end == LineEnd::Para);
             if changed {
                 let top = y + (line.top - first.top);

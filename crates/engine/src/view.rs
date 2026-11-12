@@ -104,6 +104,18 @@ pub struct ViewState {
     /// carries it to the window.
     #[serde(default)]
     pub full_screen: bool,
+    /// Review › Show Markup › Specific People (`review.showReviewer`): the reviewers whose markup
+    /// this window doesn't show; empty shows everyone's. Not kept between sessions: Word starts
+    /// each document with every reviewer shown.
+    #[serde(skip)]
+    pub hidden_reviewers: Vec<String>,
+}
+
+impl ViewState {
+    /// Whether `author`'s markup shows (Review › Show Markup › Specific People).
+    pub fn shows_reviewer(&self, author: &str) -> bool {
+        !self.hidden_reviewers.iter().any(|h| h == author)
+    }
 }
 
 /// Where the Styles pane sits (`view.stylesPaneDock`, #1756).
@@ -216,6 +228,7 @@ impl Default for ViewState {
             outline: Default::default(),
             design_mode: false,
             full_screen: false,
+            hidden_reviewers: Vec::new(),
         }
     }
 }
