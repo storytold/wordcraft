@@ -384,7 +384,7 @@ pub(crate) fn layout_box(ctx: &mut Ctx, input: BoxInput<'_>) -> BoxLayout {
                     items.splice(at..at, back);
                     items.extend(front);
                     // Each goes with its paragraph's first line when a row splits.
-                    on_top.extend(top.into_iter().map(|item| OnTop { cell: 0, anchor: y + lead, item }));
+                    on_top.extend(top.into_iter().map(|item| OnTop { cell: 0, anchor: y + lead, para: path.clone(), turned: None, item }));
                 }
                 // Automatic space after: none after the last paragraph of a cell or box. Nor
                 // contextual spacing after a cell's last paragraph in the default style (or an

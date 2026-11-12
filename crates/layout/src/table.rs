@@ -42,12 +42,20 @@ pub struct OnTop {
     /// The top of its paragraph's first line, placed like the object: when the row splits, the
     /// object goes with that line.
     pub(crate) anchor: f32,
+    /// Its paragraph's path (that of the paragraph's `Placed::Lines`).
+    pub(crate) para: Vec<u32>,
+    /// In a turned cell, the bottom of its paragraph's turned lines instead: they move on as a
+    /// whole when the row splits, like a picture, and the object with them.
+    pub(crate) turned: Option<f32>,
     pub(crate) item: Placed,
 }
 
 impl OnTop {
     pub(crate) fn translate(&mut self, dx: f32, dy: f32) {
         self.anchor += dy;
+        if let Some(bottom) = &mut self.turned {
+            *bottom += dy;
+        }
         self.item.translate(dx, dy);
     }
 }
@@ -858,13 +866,14 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                     it.turn(tn.turn, ox, oy);
                 }
                 // Its In Front of Text objects turn with it and stay on top of the page (#1993).
-                // Turned text moves on as a whole when the row splits (`split_row_with`): they go
-                // with its top.
-                let top = cell_items.iter().filter_map(Placed::turned_bounds).map(|r| r.y).fold(f32::MAX, f32::min);
-                let anchor = if top < f32::MAX { top } else { tn.top };
+                // Each turned paragraph moves on as a whole when the row splits
+                // (`split_row_with`): each object goes with its own paragraph.
                 for t in &mut cell_top {
                     t.item.turn(tn.turn, ox, oy);
-                    t.anchor = anchor;
+                    let own =
+                        cell_items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == t.para)).and_then(Placed::turned_bounds);
+                    t.anchor = own.map_or(tn.top, |r| r.y);
+                    t.turned = own.map(|r| r.bottom());
                 }
             }
             let content = items.len();
@@ -1196,7 +1205,7 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
         }
         parts.push(CellPart { top: c.top, items: start..b.len(), end: end.map(|e| e - shift), align: None });
     }
-    let (top_a, top_b) = split_on_top(row, &ends, &moved, &shifts);
+    let (top_a, top_b) = split_on_top(row, &ends, &moved, &shifts, limit);
     // The part left on the page is placed and never split again.
     Some((
         RowLayout { height: cut, items: a, bottom: row.bottom, edge: 0.0, cells: Vec::new(), on_top: top_a },
@@ -1207,7 +1216,8 @@ fn split_row_with(row: &RowLayout, cut: f32, whole_cells: bool) -> Option<(RowLa
 /// A splitting row's In Front of Text objects: each goes with its paragraph's first line, on to
 /// the continuation when that moves on, with the rest of its cell (#1993). A cell aligned to the
 /// middle or bottom that the split ran from its top (`ends`, against the row's) takes them along.
-fn split_on_top(row: &RowLayout, ends: &[Option<f32>], moved: &[f32], shifts: &[f32]) -> (Vec<OnTop>, Vec<OnTop>) {
+/// One in turned text stays when its paragraph's turned lines end above `limit`, as they do.
+fn split_on_top(row: &RowLayout, ends: &[Option<f32>], moved: &[f32], shifts: &[f32], limit: f32) -> (Vec<OnTop>, Vec<OnTop>) {
     let (mut top_a, mut top_b) = (Vec::new(), Vec::new());
     for t in &row.on_top {
         let mut t = t.clone();
@@ -1216,7 +1226,11 @@ fn split_on_top(row: &RowLayout, ends: &[Option<f32>], moved: &[f32], shifts: &[
             _ => 0.0,
         };
         t.translate(0.0, realigned);
-        if t.anchor < moved.get(t.cell).copied().unwrap_or(f32::MAX) - 0.01 {
+        let stays = match t.turned {
+            Some(bottom) => bottom <= limit + 0.01,
+            None => t.anchor < moved.get(t.cell).copied().unwrap_or(f32::MAX) - 0.01,
+        };
+        if stays {
             top_a.push(t);
         } else {
             t.translate(0.0, -shifts.get(t.cell).copied().unwrap_or(0.0));

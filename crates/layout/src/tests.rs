@@ -6613,6 +6613,32 @@ fn in_front_of_text_goes_with_its_paragraph_when_a_row_splits() {
     assert!((r.y - anchor.top).abs() < 5.0, "at its paragraph: {r:?} {anchor:?}");
 }
 
+/// #1993 review: a turned cell's paragraphs move on separately when its row splits; each In
+/// Front of Text object goes with its own paragraph, not with the cell's first.
+#[test]
+fn in_front_of_text_in_a_turned_cell_goes_with_its_paragraph_when_the_row_splits() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = turned_table(TextDirection::Down, "Short", None);
+    let Some(Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) else { panic!("table") };
+    let long = "Row text that keeps going and going so the cell grows taller than a page. ".repeat(120);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&long, Default::default()))];
+    // Turned text runs the row's whole height, past the page, but the first paragraph's right
+    // indent ends it on the first page; the second paragraph moves on.
+    let Some(Block::Para(p)) = t.rows[0].cells[1].blocks.first_mut().map(Arc::make_mut) else { panic!("paragraph") };
+    p.props.indent_right = Some(1450.0);
+    let turned = "Turned text that runs along the cell. ".repeat(60);
+    t.rows[0].cells[1].blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&turned, Default::default())));
+    let f = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path(vec![1, 0, 1, 0]), off: 0 }, rect_shape(20.0, 20.0, f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert!(l.pages.len() > 1, "the row splits");
+    let page =
+        |k: u32| l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0 == [1, 0, 1, k]))).unwrap();
+    assert_eq!(page(0), 0, "the short paragraph stays on the first page");
+    assert!(page(1) > 0, "the long one moves on");
+    assert_eq!(shapes(&l.pages[0].items).len(), 1, "the short paragraph's shape stays with it");
+}
+
 /// #1993: a cell aligned to the middle of a row that splits runs from its top on the page; its In
 /// Front of Text object goes with its text there.
 #[test]
