@@ -512,6 +512,14 @@ fn template_field_names_the_attached_template() {
     let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
     assert_eq!(got[..2], ["Letter.dotm", r"D:\Shared\Letter.dotm"]);
 
+    // On a Unix host a backslash in the file name stays part of the name.
+    if cfg!(not(windows)) {
+        s.doc.settings.attached_template = Some(r"/docs/weird\name.dotx".into());
+        s.run("references.updateFields", &json!({})).unwrap();
+        let got: Vec<String> = story_fields(&s, StoryRef::Part(hdr)).into_iter().map(|(_, r)| r).collect();
+        assert_eq!(got[..2], [r"weird\name.dotx", r"/docs/weird\name.dotx"]);
+    }
+
     // A `file:` URL on another machine is shown decoded, without being opened.
     s.doc.settings.attached_template = Some("file://server/share/Report%20Template.dotx".into());
     s.run("references.updateFields", &json!({})).unwrap();

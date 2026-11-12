@@ -379,7 +379,11 @@ fn template_text(doc: &wordcraft_doc::Document, base: Option<&std::path::Path>, 
     if path {
         return full;
     }
-    full.rsplit(['/', '\\']).next().unwrap_or(&full).to_string()
+    // A backslash separates names in a Windows-style reference or on a Windows host; in a Unix
+    // path it is part of the file name.
+    let backslash_separates = cfg!(windows) || is_windows_absolute(&full) || is_network_path(&full);
+    let last = if backslash_separates { full.rsplit(['/', '\\']).next() } else { full.rsplit('/').next() };
+    last.unwrap_or(&full).to_string()
 }
 
 /// Update fields of the story being edited, as Word's F9 does: dates, REF/PAGEREF, the document
