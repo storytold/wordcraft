@@ -10,23 +10,47 @@ pub(super) struct DrawingInfo<'a> {
     pub docpr: &'a str,
     pub name: &'a str,
     pub alt: &'a str,
+    /// The relationship id of the drawing's hyperlink (`a:hlinkClick`), see [`Writer::drawing_link`].
+    pub link: Option<&'a str>,
 }
 
 impl Writer<'_> {
+    /// The relationship of the hyperlink a drawing in a run with `props` carries on itself, as
+    /// Word writes a picture's link (`wp:docPr/a:hlinkClick`, #5267): a web or file address. A
+    /// link to a place in the document (`#name`) is only the `w:hyperlink` around the run.
+    pub(super) fn drawing_link(props: &wordcraft_doc::CharProps, rels: &mut PartRels) -> Option<String> {
+        let url = props.link.as_deref().filter(|l| !l.is_empty() && !l.starts_with('#'))?;
+        Some(rels.add(rt::HYPERLINK, url, true))
+    }
+
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, float.hidden);
+        nv_props(w, "pic:cNvPr", ("0", file), alt, &float.alt, float.hidden, None);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
-        w.empty("a:blip", &[("r:embed", &rid)]);
+        // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
+        // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
+        let fx = fx.clamped();
+        if fx.is_identity() {
+            w.empty("a:blip", &[("r:embed", &rid)]);
+        } else {
+            w.open("a:blip", &[("r:embed", &rid)]);
+            if fx.transparency != 0 {
+                w.empty("a:alphaModFix", &[("amt", &n(i64::from(100_000 - fx.transparency)))]);
+            }
+            if fx.bright != 0 || fx.contrast != 0 {
+                w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
+            }
+            w.close("a:blip");
+        }
         if crop.iter().any(|c| *c > 0.0) {
             let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
@@ -52,7 +76,7 @@ impl Writer<'_> {
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = shape_name(*kind, freeform.as_deref(), id);
-            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt, float.hidden);
+            nv_props(w, "wps:cNvPr", (id, &name), &float.alt.text, &float.alt, float.hidden, None);
         }
         if kind.is_connector() {
             // A connector's glued ends (ECMA-376 §20.1.2.2.8 `cNvCxnSpPr`).
@@ -221,7 +245,7 @@ impl Writer<'_> {
     }
 
     pub(super) fn drawing_open(&mut self, w: &mut W, info: DrawingInfo<'_>) {
-        let DrawingInfo { float, size: (iw, ih), docpr, name, alt } = info;
+        let DrawingInfo { float, size: (iw, ih), docpr, name, alt, link } = info;
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
         if float.wrap == Wrap::Inline {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);
@@ -274,8 +298,9 @@ impl Writer<'_> {
             }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        // Word's effect extent also covers a rotated object's overhang (its rotated bounds).
-        let (px, py) = float.spin_pad(iw, ih);
+        // Word's effect extent also covers a rotated object's overhang (its rotated bounds), unless
+        // the file it came from kept none.
+        let (px, py) = if float.is_bare_turn() { (0.0, 0.0) } else { float.spin_pad(iw, ih) };
         let [el, et, er, eb] = float.effect_extent();
         let [el, et, er, eb] = [el + px, et + py, er + px, eb + py].map(emu);
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
@@ -302,7 +327,7 @@ impl Writer<'_> {
             Wrap::TopAndBottom => w.empty("wp:wrapTopAndBottom", &[]),
             Wrap::BehindText | Wrap::InFrontOfText => w.empty("wp:wrapNone", &[]),
         }
-        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt, float.hidden);
+        nv_props(w, "wp:docPr", (docpr, name), alt, &float.alt, float.hidden, link);
     }
 }
 
@@ -488,8 +513,9 @@ pub(in super::super) fn spin_attrs(spin: wordcraft_geom::Spin) -> Vec<(&'static 
 /// A drawing's `wp:docPr` (or a group member's `pic:cNvPr`/`wps:cNvPr`, ECMA-376
 /// `CT_NonVisualDrawingProps`) with its alt text `descr`, its title, and the decorative mark as
 /// the `adec:decorative` extension ([MS-ODRAWXML]). A description that is only the title (read
-/// from a file with no description) is not written twice.
-pub(in super::super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText, hidden: bool) {
+/// from a file with no description) is not written twice. `link` is the relationship id of the
+/// drawing's hyperlink (`a:hlinkClick`, the first child the schema allows).
+pub(in super::super) fn nv_props(w: &mut W, tag: &str, (id, name): (&str, &str), descr: &str, alt: &AltText, hidden: bool, link: Option<&str>) {
     let mut attrs = vec![("id", id), ("name", name)];
     if descr != alt.title || descr.is_empty() {
         attrs.push(("descr", descr));
@@ -500,16 +526,21 @@ pub(in super::super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, des
     if hidden {
         attrs.push(("hidden", "1"));
     }
-    if !alt.decorative {
+    if !alt.decorative && link.is_none() {
         w.empty(tag, &attrs);
         return;
     }
     w.open(tag, &attrs);
-    w.open("a:extLst", &[]);
-    w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
-    w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
-    w.close("a:ext");
-    w.close("a:extLst");
+    if let Some(rid) = link {
+        w.empty("a:hlinkClick", &[("r:id", rid)]);
+    }
+    if alt.decorative {
+        w.open("a:extLst", &[]);
+        w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
+        w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
+        w.close("a:ext");
+        w.close("a:extLst");
+    }
     w.close(tag);
 }
 

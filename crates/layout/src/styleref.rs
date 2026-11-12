@@ -125,9 +125,11 @@ struct Entry {
     runs: Vec<(String, String)>,
     /// The list label as shown (`Chapter 2.`).
     label: Option<String>,
-    /// Each level's value up to the paragraph's, formatted; and whether the label's own
-    /// template shows that level.
-    levels: Vec<(String, bool)>,
+    /// Each level up to the paragraph's that has a number (not a bullet, nor a "none" level):
+    /// its index, its value formatted, and whether the label's own template shows it.
+    levels: Vec<(u8, String, bool)>,
+    /// The paragraph's own list level.
+    level: u8,
     /// How many paragraphs of its style there are up to this one.
     ordinal: u32,
 }
@@ -149,6 +151,10 @@ pub struct StyleIndex {
     by_path: HashMap<Path, usize>,
     /// Lower-cased style id or name → (id, character style).
     styles: HashMap<String, (String, bool)>,
+    /// Paragraph style id → the entries of that style, in order.
+    para_entries: HashMap<String, Vec<usize>>,
+    /// Character style id → the entries with a run of that style, in order.
+    char_entries: HashMap<String, Vec<usize>>,
 }
 
 fn clean(s: &str) -> String {
@@ -167,6 +173,8 @@ impl StyleIndex {
         let mut ordinals: HashMap<String, u32> = HashMap::new();
         let mut entries = Vec::new();
         let mut by_path = HashMap::new();
+        let mut para_entries: HashMap<String, Vec<usize>> = HashMap::new();
+        let mut char_entries: HashMap<String, Vec<usize>> = HashMap::new();
         for path in doc.para_paths(StoryRef::Body) {
             let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
             let style = p.props.style.clone().unwrap_or_else(|| "Normal".to_string());
@@ -174,7 +182,7 @@ impl StyleIndex {
             *ord = ord.saturating_add(1);
             let ordinal = *ord;
             let num = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
-            let (mut label, mut levels) = (None, Vec::new());
+            let (mut label, mut levels, mut level) = (None, Vec::new(), 0u8);
             if let Some(n) = num
                 && let Some((l, def)) = counters.next_label(&doc.numbering, n.num, n.level)
                 && def.format != NumFormat::Bullet
@@ -187,9 +195,10 @@ impl StyleIndex {
                     }
                     let v = if *v == 0 { lv.start } else { *v };
                     let fmt = if def.legal && lv.format != NumFormat::DecimalZero { NumFormat::Decimal } else { lv.format };
-                    levels.push((fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
+                    levels.push((k as u8, fmt.format(v), def.text.contains(&format!("%{}", k + 1))));
                 }
                 label = Some(l);
+                level = n.level.min(8);
             }
             let mut runs: Vec<(String, String)> = Vec::new();
             let mut off = 0usize;
@@ -206,10 +215,18 @@ impl StyleIndex {
                 }
                 off = end;
             }
-            by_path.insert(path.clone(), entries.len());
-            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal });
+            let i = entries.len();
+            by_path.insert(path.clone(), i);
+            para_entries.entry(style.clone()).or_default().push(i);
+            for (cs, _) in &runs {
+                let list = char_entries.entry(cs.clone()).or_default();
+                if list.last() != Some(&i) {
+                    list.push(i);
+                }
+            }
+            entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, level, ordinal });
         }
-        StyleIndex { entries, by_path, styles }
+        StyleIndex { entries, by_path, styles, para_entries, char_entries }
     }
 
     /// The entry of the body paragraph at `path`.
@@ -261,44 +278,80 @@ impl StyleIndex {
         }
     }
 
+    /// The entries `t` matches, in order.
+    fn matches(&self, t: &Target) -> &[usize] {
+        let list = match t {
+            Target::Para(id) => self.para_entries.get(id),
+            Target::Char(id) => self.char_entries.get(id),
+        };
+        list.map_or(&[], Vec::as_slice)
+    }
+
+    /// The first entry of `found` (the entries a target matches, in order) in a STYLEREF's search
+    /// order from `at`, with whether it counts as below the field. From a body paragraph: that
+    /// paragraph and back to the start, then on from it. From a header or footer: the page's
+    /// paragraphs (from the last when `last`), then back from the page, then on from it. A binary
+    /// search over `found`, so a target few or no paragraphs have costs no walk over the body.
+    fn first_in_order(found: &[usize], n: usize, at: At, last_first: bool) -> Option<(usize, bool)> {
+        let at_or_before = |k: usize| found.partition_point(|&p| p <= k).checked_sub(1).and_then(|j| found.get(j)).copied();
+        let from = |k: usize| found.get(found.partition_point(|&p| p < k)).copied().filter(|&p| p < n);
+        match at {
+            At::Body(i) => {
+                let i = i.min(n.checked_sub(1)?);
+                at_or_before(i).map(|p| (p, false)).or_else(|| from(i.saturating_add(1)).map(|p| (p, true)))
+            }
+            At::Page { first, last } => {
+                if let Some(l) = last.filter(|&l| first <= l).map(|l| l.min(n.saturating_sub(1))) {
+                    let on = if last_first { at_or_before(l).filter(|&p| p >= first) } else { from(first).filter(|&p| p <= l) };
+                    if let Some(p) = on {
+                        return Some((p, true));
+                    }
+                }
+                let before = first.min(n).checked_sub(1).and_then(at_or_before);
+                let after = last.map_or(first, |l| l.saturating_add(1));
+                before.map(|p| (p, false)).or_else(|| from(after).map(|p| (p, true)))
+            }
+        }
+    }
+
     /// The field's result.
     pub fn eval(&self, instr: &str, at: At) -> String {
         let code = parse(instr);
         let Some(target) = self.target(&code.style) else { return NO_TEXT.to_string() };
-        let n = self.entries.len();
-        // Candidates in search order, with whether each one counts as below the field (lazy:
-        // headers evaluate this for every page on every pass).
-        let order: Box<dyn Iterator<Item = (usize, bool)>> = match at {
-            At::Page { first, last } => {
-                let on = match last {
-                    Some(l) if first <= l => first..l.min(n.saturating_sub(1)).saturating_add(1),
-                    _ => 0..0,
-                };
-                let after = last.map_or(first, |l| l.saturating_add(1));
-                let page: Box<dyn Iterator<Item = usize>> = if code.last { Box::new(on.rev()) } else { Box::new(on) };
-                Box::new(page.map(|i| (i, true)).chain((0..first.min(n)).rev().map(|i| (i, false))).chain((after..n).map(|i| (i, true))))
-            }
-            At::Body(i) => Box::new((0..=i.min(n.saturating_sub(1))).rev().map(|k| (k, false)).chain((i.saturating_add(1)..n).map(|k| (k, true)))),
-        };
-        let Some((i, text, below)) = order.into_iter().find_map(|(i, below)| self.text_of(i, &target).map(|t| (i, t, below))) else {
+        let Some((i, below)) = Self::first_in_order(self.matches(&target), self.entries.len(), at, code.last) else {
             return NO_TEXT.to_string();
         };
+        let Some(text) = self.text_of(i, &target) else { return NO_TEXT.to_string() };
         let Some(e) = self.entries.get(i) else { return NO_TEXT.to_string() };
         let mut out = match code.number {
             Number::Text if code.position => String::new(),
             Number::Text => text,
-            Number::Chapter => e.label.as_deref().map(chapter_number).filter(|s| !s.is_empty()).unwrap_or_else(|| e.ordinal.to_string()),
+            // The last number the label shows (`3` of `3 Response`, or of a "none" level's `%1`);
+            // a label of the paragraph's own number that shows none recognisably, its last word;
+            // else, as for an unnumbered heading or a "none" level's `Note`, the heading's count.
+            Number::Chapter => {
+                let own = e.levels.iter().any(|(k, ..)| *k == e.level);
+                e.label
+                    .as_deref()
+                    .and_then(|l| {
+                        let shown = l.split_whitespace().rev().find_map(|w| number_span(w, &e.levels));
+                        shown.map(|n| n.trim_matches(|c: char| !c.is_alphanumeric()).to_string()).or_else(|| own.then(|| chapter_number(l)))
+                    })
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| e.ordinal.to_string())
+            }
             Number::Plain | Number::Full => {
                 let own = match &e.label {
-                    Some(l) if code.suppress => suppress(l, &e.levels),
+                    Some(l) if code.suppress => suppress(l, &e.levels, e.level),
                     Some(l) => l.trim().trim_end_matches('.').to_string(),
                     None => e.ordinal.to_string(),
                 };
                 if code.number == Number::Full && e.label.is_some() {
-                    // Levels above that the label's own template doesn't show.
-                    let above: Vec<&str> =
-                        e.levels.iter().take(e.levels.len().saturating_sub(1)).filter(|(_, shown)| !shown).map(|(v, _)| v.as_str()).collect();
-                    if above.is_empty() { own } else { format!("{}.{own}", above.join(".")) }
+                    // Levels above the paragraph's that the label's own template doesn't show. By
+                    // level, not position: a "none" level has no entry, its own (#4985) included.
+                    let above: Vec<&str> = e.levels.iter().filter(|(k, _, shown)| *k < e.level && !shown).map(|(_, v, _)| v.as_str()).collect();
+                    // An empty label of its own (a "none" level with no text) adds no part: `3`, not `3.`.
+                    above.into_iter().chain(Some(own.as_str()).filter(|o| !o.is_empty())).collect::<Vec<_>>().join(".")
                 } else {
                     own
                 }
@@ -320,11 +373,44 @@ fn chapter_number(label: &str) -> String {
     word.trim_matches(|c: char| !c.is_alphanumeric()).to_string()
 }
 
-/// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`).
-fn suppress(label: &str, levels: &[(String, bool)]) -> String {
-    let kept: Vec<&str> = label.split_whitespace().filter(|w| levels.iter().any(|(v, _)| !v.is_empty() && w.contains(v.as_str()))).collect();
-    let s = if kept.is_empty() { label.trim().to_string() } else { kept.join(" ") };
+/// `\t`: the label without its words that hold no number (`Chapter 2.` → `2`). A "none" level's
+/// label (`level` has no number of its own) holding none is left with nothing (`Note`, #4985);
+/// any other label that holds none is kept whole.
+fn suppress(label: &str, levels: &[(u8, String, bool)], level: u8) -> String {
+    // Each word's numbers, without the text attached to them (`Section3` → `3`).
+    let kept: Vec<&str> = label.split_whitespace().filter_map(|w| number_span(w, levels)).collect();
+    let none = !levels.iter().any(|(k, ..)| *k == level);
+    let s = match kept.is_empty() {
+        true if none => String::new(),
+        true => label.trim().to_string(),
+        false => kept.join(" "),
+    };
     s.trim_end_matches('.').to_string()
+}
+
+/// The part of `word` that holds the numbers the label's template shows (`levels` flagged shown),
+/// with the delimiters around it (`(3)`, `1.1`, `2.`), without the text attached (`Section3` →
+/// `3`); `None` when it holds none. A number written in letters (`a`, `iv`) counts only standing
+/// apart from other letters: the `a` of `Chapter` isn't one.
+fn number_span<'w>(word: &'w str, levels: &[(u8, String, bool)]) -> Option<&'w str> {
+    let alpha = |c: Option<char>| c.is_some_and(char::is_alphabetic);
+    let mut span: Option<(usize, usize)> = None;
+    for (_, v, _) in levels.iter().filter(|(_, v, shown)| *shown && !v.is_empty()) {
+        let letters = v.chars().any(char::is_alphabetic);
+        for (i, _) in word.match_indices(v.as_str()) {
+            let end = i.saturating_add(v.len());
+            let before = word.get(..i).and_then(|s| s.chars().next_back());
+            let after = word.get(end..).and_then(|s| s.chars().next());
+            if letters && (alpha(before) || alpha(after)) {
+                continue;
+            }
+            span = Some(span.map_or((i, end), |(a, b)| (a.min(i), b.max(end))));
+        }
+    }
+    let (a, b) = span?;
+    let lead: usize = word.get(..a)?.chars().rev().take_while(|c| !c.is_alphanumeric()).map(char::len_utf8).sum();
+    let trail: usize = word.get(b..)?.chars().take_while(|c| !c.is_alphanumeric()).map(char::len_utf8).sum();
+    word.get(a.saturating_sub(lead)..b.saturating_add(trail))
 }
 
 /// Does `p` hold a STYLEREF field?
@@ -347,6 +433,7 @@ mod tests {
 
     #[test]
     fn parses_names_levels_and_switches() {
+        crate::test_fonts();
         let c = parse(r#"STYLEREF "Heading 1" \l \n \t \* MERGEFORMAT"#);
         assert_eq!(c.style, "Heading 1");
         assert!(c.last && c.suppress && !c.position);
@@ -357,9 +444,63 @@ mod tests {
         assert_eq!(parse("STYLEREF").style, "");
     }
 
+    /// The search order the index's binary search follows, walked entry by entry as it was before
+    /// the index: the body paragraph and back, then on; or the page (from its last paragraph when
+    /// `last_first`), back from it, then on.
+    fn first_by_walk(found: &[usize], n: usize, at: At, last_first: bool) -> Option<(usize, bool)> {
+        let order: Vec<(usize, bool)> = match at {
+            At::Page { first, last } => {
+                let on: Vec<usize> = match last {
+                    Some(l) if first <= l => (first..l.min(n.saturating_sub(1)).saturating_add(1)).collect(),
+                    _ => Vec::new(),
+                };
+                let after = last.map_or(first, |l| l.saturating_add(1));
+                let page: Vec<usize> = if last_first { on.into_iter().rev().collect() } else { on };
+                page.into_iter().map(|i| (i, true)).chain((0..first.min(n)).rev().map(|i| (i, false))).chain((after..n).map(|i| (i, true))).collect()
+            }
+            At::Body(i) => (0..=i.min(n.saturating_sub(1))).rev().map(|k| (k, false)).chain((i.saturating_add(1)..n).map(|k| (k, true))).collect(),
+        };
+        order.into_iter().find(|(i, _)| *i < n && found.contains(i))
+    }
+
+    #[test]
+    fn the_index_finds_what_walking_the_body_finds() {
+        // Every placement of matches among up to 7 paragraphs, from every body paragraph and every
+        // page range (in and past the body), both ways round.
+        for n in 0..=7usize {
+            for mask in 0u32..(1 << n) {
+                let found: Vec<usize> = (0..n).filter(|i| mask & (1 << i) != 0).collect();
+                let mut ats: Vec<At> = (0..=n + 1).map(At::Body).collect();
+                for first in 0..=n + 1 {
+                    ats.push(At::Page { first, last: None });
+                    for last in 0..=n + 1 {
+                        ats.push(At::Page { first, last: Some(last) });
+                    }
+                }
+                for at in ats {
+                    for last_first in [false, true] {
+                        assert_eq!(
+                            StyleIndex::first_in_order(&found, n, at, last_first),
+                            first_by_walk(&found, n, at, last_first),
+                            "n {n}, found {found:?}, {at:?}, last {last_first}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn suppress_keeps_the_number() {
-        assert_eq!(suppress("Chapter 2.", &[("2".into(), true)]), "2");
+        crate::test_fonts();
+        assert_eq!(suppress("Chapter 2.", &[(0, "2".into(), true)], 0), "2");
+        assert_eq!(suppress("Chapter", &[(0, "a".into(), false)], 1), "", "an ancestor's number the label doesn't show");
+        assert_eq!(suppress("Section3", &[(0, "3".into(), true)], 1), "3", "the text attached to the number");
+        assert_eq!(suppress("Chapter a.", &[(0, "a".into(), true)], 0), "a", "a letter number standing apart, not Chapter's a");
+        assert_eq!(suppress("(iv)", &[(0, "iv".into(), true)], 0), "(iv)", "delimiters stay");
+        assert_eq!(suppress("1.2", &[(0, "1".into(), true), (1, "2".into(), true)], 1), "1.2");
+        assert_eq!(suppress("Note", &[(0, "3".into(), false)], 1), "", "a none level's label");
+        assert_eq!(suppress("Appendix", &[(0, "3".into(), false)], 0), "Appendix", "kept whole when the level has a number");
         assert_eq!(chapter_number("Chapter IV."), "IV");
     }
 }

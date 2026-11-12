@@ -109,12 +109,13 @@ pub(crate) fn ico(i: u8) -> Option<Rgb> {
     ICO.get(i as usize).copied()
 }
 
-/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType). Types the model
-/// doesn't carry (the gap variants, 3-D, inset/outset) draw as single lines, as the DOCX
-/// reader maps them.
+/// The model border style a `brcType` stands for ([MS-DOC] §2.9.22 BrcType; 0x02, thick, is in
+/// the BRC of Microsoft's Word 97-2007 specification). Types the model doesn't carry (the gap
+/// variants, 3-D, inset/outset) draw as single lines, as the DOCX reader maps them.
 fn brc_style(t: u8) -> BorderStyle {
     match t {
         0x00 => BorderStyle::None,
+        0x02 => BorderStyle::Thick,
         0x03 => BorderStyle::Double,
         0x06 => BorderStyle::Dotted,
         0x07 | 0x16 => BorderStyle::Dashed,
@@ -125,15 +126,15 @@ fn brc_style(t: u8) -> BorderStyle {
     }
 }
 
-/// The border width in points: `dptLineWidth` in 1/8-point steps (values below 2 count as 2;
-/// 1-point steps for page borders, which never reach a paragraph property).
+/// The border width in points: `dptLineWidth` in 1/8-point steps from 2 to 96, as DOCX `w:sz`
+/// reads (1-point steps for page borders, which never reach a paragraph property).
 fn brc_width(t: u8, dpt: u8) -> f32 {
-    if t >= 0x40 { f32::from(dpt) } else { f32::from(dpt.max(2)) / 8.0 }
+    if t >= 0x40 { f32::from(dpt) } else { (f32::from(dpt.max(2)) / 8.0).min(12.0) }
 }
 
 /// One border from a Brc80 operand ([MS-DOC] §2.9.18). All bits set means "no border"; a
 /// truncated operand is ignored.
-fn brc80(op: &[u8]) -> Option<Border> {
+pub(crate) fn brc80(op: &[u8]) -> Option<Border> {
     let [dpt, ty, ico_index, tail, ..] = op else { return None };
     if [*dpt, *ty, *ico_index, *tail] == [0xFF; 4] {
         return Some(Border::default());

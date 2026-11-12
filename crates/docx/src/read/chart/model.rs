@@ -66,6 +66,9 @@ pub(super) struct Axis {
 
 pub(super) struct Series {
     pub(super) name: String,
+    /// The series' `c:idx` (an `xsd:unsignedInt`), which picks its automatic colour; `None`
+    /// when missing or not a valid number.
+    pub(super) idx: Option<usize>,
     pub(super) color: Option<Rgb>,
     pub(super) line_w: f32,
     /// Whether the series is drawn as a line (scatter series without one get markers).
