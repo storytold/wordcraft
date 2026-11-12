@@ -1,5 +1,6 @@
 use super::parts::push_part;
 use super::{CT_WML, Document, PartRels, W, Writer, math, rt, story, xml};
+use wordcraft_doc::section::MultiplePages;
 
 /// The file id of the first footnote or endnote: after the separators (-1, 0) and the
 /// continuation notice (1), when the document has one.
@@ -50,6 +51,18 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }
+    // §17.15.1.47. Word for Mac writes it for 2 pages per sheet on a portrait sheet (user-checked),
+    // not on a landscape one nor for Book fold; with Normal pages it is Page Setup's own choice.
+    // "Portrait" is the sheet's orientation flag, the same rule that cuts it in two
+    // (`MultiplePages::page_size`), so the gutter sits on the cut whatever the sheet's shape.
+    let gutter_at_top = match s.multiple_pages() {
+        MultiplePages::Normal => s.gutter_at_top,
+        MultiplePages::TwoPerSheet => !doc.last_section.landscape,
+        _ => false,
+    };
+    if gutter_at_top {
+        w.empty("w:gutterAtTop", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }
@@ -96,12 +109,26 @@ pub(super) fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, temp
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
     }
+    // §17.15.1.9, .8, .10: a booklet, its direction (right to left) and its sheets.
+    // Word's "Reverse book fold" is its own choice: it saves the reverse flag instead of the plain
+    // one (Word for Mac 16.114, with a right-to-left input source), and reads back as a book fold.
+    if s.book_fold && s.book_fold_reverse {
+        w.empty("w:bookFoldRevPrinting", &[]);
+    } else if s.book_fold {
+        w.empty("w:bookFoldPrinting", &[]);
+    }
+    if s.book_fold && s.book_fold_sheets > 0 {
+        w.val("w:bookFoldPrintingSheets", &s.book_fold_sheets.min(wordcraft_doc::MAX_BOOKLET_SHEETS).to_string());
+    }
     for (tag, v) in [("w:drawingGridHorizontalSpacing", s.grid_h), ("w:drawingGridVerticalSpacing", s.grid_v)] {
         if v.is_finite() && (v - wordcraft_doc::DEFAULT_GRID).abs() > 0.01 {
             w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
         }
     }
     w.val("w:characterSpacingControl", "doNotCompress");
+    if s.two_per_sheet {
+        w.empty("w:printTwoOnOne", &[]);
+    }
     write_note_settings(&mut w, s, s_notes, footnotes, endnotes);
     write_compatibility_settings(&mut w, doc);
     if let Some(m) = &s.math {

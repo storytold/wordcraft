@@ -89,8 +89,8 @@ pub use missing::{MAX_MISSING_PICTURES, MissingPicture, MissingPictureReason, Mi
 pub use parts::{MAX_LINKED_BOXES, MAX_TEXT_BOX_INSET, NoteSeparators, Part, PartKind, PermRange, TEXT_BOX_INSET, TextBody, free_id};
 pub use position::{Path, Pos, StoryRef};
 pub use settings::{
-    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, OdfLayout, PagePicture, Settings, Source,
-    THEME_COLORS, Watermark, Zoom, ZoomFit,
+    COMPAT_MODE_CURRENT, CoreProps, CustomProp, DEFAULT_GRID, DEFAULT_HYPHENATION_ZONE, LEGACY_COMPAT_MODE, MAX_BOOKLET_SHEETS, OdfLayout,
+    PagePicture, Settings, Source, THEME_COLORS, Watermark, Zoom, ZoomFit,
 };
 pub(crate) use text_walk::{PARA_WALK_DEPTH, walk_between};
 pub use text_walk::{count_chars, count_chars_no_spaces, count_words};
