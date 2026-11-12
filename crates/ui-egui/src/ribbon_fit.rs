@@ -573,8 +573,14 @@ mod ui_tests {
             .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l == "Equation options")))
             .find(|n| n.rect().min.y >= 0.0)
             .expect("the two-row Equation split button has an arrow");
+        arrow.scroll_to_me();
+        h.run_steps(2);
+        let arrow = h
+            .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l == "Equation options")))
+            .find(|n| n.rect().min.y >= 0.0)
+            .expect("the two-row Equation split button has an arrow");
         arrow.click();
-        h.run_steps(3);
+        h.run_steps(6);
         assert!(shown(&h, "Built-In"), "the two-row Equation button opens the built-in gallery");
     }
 
