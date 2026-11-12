@@ -34,10 +34,14 @@ use bookmarks::bookmark_at_caret;
 #[cfg(test)]
 use bookmarks::bookmark_names;
 pub use chrome::show;
-pub(crate) use chrome::{buttons, cancel_key_pressed, color_menu, ok_cancel_responses};
+pub(crate) use chrome::{
+    block_behind, buttons, cancel_key_pressed, color_menu, drag_by_title_bar, forget_nudge, ok_cancel_responses, release_keyboard,
+};
+pub(crate) use dispatch::search_results;
+pub(crate) use find::swallow_shortcut_text;
 pub use find::{FindExtra, FindTab, GoToWhat};
 #[cfg(test)]
-use find::{command_matches, goto_page, swallow_shortcut_text};
+use find::{command_matches, goto_page};
 #[cfg(test)]
 use font::{apply_font, preview_size};
 use font::{east_asian_char, font_props};
@@ -278,6 +282,10 @@ pub enum Dialog {
         /// The line the border choices draw.
         pen: crate::dialogs_table_style::BorderPen,
     },
+    /// View › Macros: the recorded macros to run or delete, and Record (#4327).
+    Macros {
+        name: String,
+    },
     Commands {
         query: String,
         /// Opened by a shortcut that may also send its key's text (Alt+Q's "q", in the same frame
@@ -410,10 +418,12 @@ pub enum Dialog {
         #[serde(skip)]
         basis: Box<CellMarginsForm>,
     },
-    /// Opening a password-protected document (#55): the password, then `file.open` with
-    /// `params` again. The password is never serialised or printed.
+    /// Opening a password-protected document (#55): the password, then the command that asked
+    /// for it (`then`: `file.open`, or `file.newFromTemplate` for a protected template, #3433)
+    /// with `params` again. The password is never serialised or printed.
     Password {
         name: String,
+        then: String,
         #[serde(skip)]
         params: Value,
         #[serde(skip)]
@@ -478,6 +488,19 @@ pub enum Dialog {
 }
 
 impl Dialog {
+    /// Whether the dialog blocks the rest of the window while it is open. As in Word for Mac
+    /// (16.114.1, #3859), all are but those you keep working beside.
+    pub fn is_modal(&self) -> bool {
+        use crate::dialogs_insert::InsertDialog;
+        use crate::dialogs_refs::RefsDialog;
+        match self {
+            Dialog::Find { .. } | Dialog::InsertMergeField { .. } => false,
+            Dialog::Insert(d) => !matches!(**d, InsertDialog::Symbol(_)),
+            Dialog::Refs(d) => !matches!(**d, RefsDialog::MarkEntry(_) | RefsDialog::CrossRef(_)),
+            _ => true,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Dialog::RenameDocument { .. } => "renameDocument",
@@ -502,6 +525,7 @@ impl Dialog {
             Dialog::TableStyle { id: None, .. } => "newTableStyle",
             Dialog::TableStyle { .. } => "modifyTableStyle",
             Dialog::Commands { .. } => "commands",
+            Dialog::Macros { .. } => "macros",
             Dialog::Insert(d) => d.name(),
             Dialog::Refs(d) => d.name(),
             Dialog::Icons { .. } => "icons",
@@ -557,6 +581,10 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        // Search opens in the title bar's box when the window shows it (#5398).
+        if name == "commands" && crate::chrome::open_title_search(app) {
+            return None;
+        }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
         }
@@ -732,6 +760,7 @@ impl Dialog {
             "manageStyles" => Dialog::ManageStyles { alphabetical: false, selected: s("style") },
             "newTableStyle" | "modifyTableStyle" => crate::dialogs_table_style::open(app, name)?,
             "commands" => Dialog::Commands { query: String::new(), swallow: true },
+            "macros" => Dialog::Macros { name: String::new() },
             "icons" => Dialog::Icons { query: String::new(), category: String::new(), selected: String::new() },
             "tableProperties" => {
                 let form = Box::new(TableForm::read(app)?);
@@ -756,6 +785,7 @@ impl Dialog {
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
+            "languageData" => Dialog::About { tab: 3 },
             // The current list to edit, or a new one to type.
             "recipientList" | "newRecipientList" => {
                 let m = &app.session.merge;

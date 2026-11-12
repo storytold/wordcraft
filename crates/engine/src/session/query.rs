@@ -268,6 +268,18 @@ impl Session {
         if self.prefs.count_notes { self.doc.word_count_including_notes() } else { self.doc.word_count() }
     }
 
+    /// The stories the Word Count dialog and the status bar count: the body plus notes and text
+    /// boxes when [`Prefs::count_notes`] is on ([`Document::counted_stories`]).
+    pub fn counted_stories(&self) -> Vec<StoryRef> {
+        if self.prefs.count_notes { self.doc.counted_stories() } else { vec![StoryRef::Body] }
+    }
+
+    /// The whole document's text the counts cover (#2797): the stories [`Session::counted_stories`]
+    /// names, joined with paragraph breaks, as the Word Count dialog counts them.
+    pub fn counted_text(&self) -> String {
+        self.counted_stories().iter().map(|st| self.doc.plain_text(*st)).collect::<Vec<_>>().join("\n")
+    }
+
     /// Selected plain text.
     pub fn selected_text(&self) -> String {
         // A column block or whole cells that aren't one run of the text: each piece's own text,

@@ -1,5 +1,20 @@
 use super::*;
 
+/// #3619: a huge finite width can't make a tall picture's height infinite, which a `.json` save
+/// writes as `null` and can't read back.
+#[test]
+fn a_huge_picture_width_keeps_the_size_finite() {
+    let img = image::RgbaImage::from_pixel(2, 400, image::Rgba([10, 20, 30, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let r = s.run("insert.picture", &json!({"data": base64_encode(&png), "width": 3e38})).unwrap();
+    let (w, h) = (r["width"].as_f64().unwrap(), r["height"].as_f64().unwrap());
+    assert!(w.is_finite() && h.is_finite() && (h / w - 200.0).abs() < 0.01, "{w} x {h}");
+    let saved = crate::io::save_bytes("a.json", &s.doc).unwrap();
+    assert!(crate::io::open_bytes("a.json", &saved).is_ok());
+}
+
 /// A 4 × 4 RGB TIFF that says its strips are JPEG (they aren't): its header still reads.
 fn jpeg_strip_tiff() -> Vec<u8> {
     let mut t = Vec::new();
@@ -335,6 +350,18 @@ fn symbol_takes_its_own_font() {
 }
 
 #[test]
+fn date_pictures_keep_quoted_text() {
+    // Text in single quotes is shown as it is (Word's date-time picture); two quotes are one.
+    assert_eq!(format_date_parts("H' o''clock'", 2026, 10, 21, (8, 0, 0), 0), "8 o'clock");
+    assert_eq!(format_date_parts("'Day' d 'at' h", 2026, 10, 21, (17, 0, 0), 0), "Day 21 at 5");
+    // An unclosed quote runs to the end.
+    assert_eq!(format_date_parts("yyyy 'and so", 2026, 10, 21, (0, 0, 0), 0), "2026 and so");
+    // Two quotes outside quoted text are one too (an apostrophe), not an empty quoted text.
+    assert_eq!(format_date_parts("yyyy '' MM", 2026, 10, 21, (0, 0, 0), 0), "2026 ' 10");
+    assert_eq!(format_date_parts("d''MM", 2026, 10, 21, (0, 0, 0), 0), "21'10");
+}
+
+#[test]
 fn date_pictures() {
     // Word accepts either case for the day and year instructions.
     assert_eq!(format_date_parts("MM/DD/YYYY", 2026, 10, 21, (17, 27, 3), 0), "10/21/2026");
@@ -353,4 +380,39 @@ fn date_pictures() {
     assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
     assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
     assert_eq!(date_picture("DATE"), None);
+}
+
+/// #1707: Insert ▸ Date & Time and DATE/TIME fields use the local civil date, time and
+/// weekday, not UTC's.
+#[test]
+fn format_date_uses_the_local_offset() {
+    // Noon on Saturday 31 October in New Zealand (UTC+13) is 2026-10-30T23:00:00Z.
+    assert_eq!(format_date_at("dddd, MMMM d, yyyy h:mm am/pm", 1_793_401_200, 13 * 3600), "Saturday, October 31, 2026 12:00 PM");
+    assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_498_400, -5 * 3600), "10/31/2026 21:00");
+    assert_eq!(format_date_at("M/d/yyyy H:mm", 1_793_401_200, 0), "10/30/2026 23:00");
+}
+
+#[test]
+fn local_civil_date_follows_the_utc_offset() {
+    let pic = "dddd d MMMM yyyy HH:mm";
+    let show = |unix: u64, off: i64| {
+        let (y, m, d, hms, days) = crate::cmd::local_civil(unix, off);
+        format_date_parts(pic, y, m as usize, d, hms, days)
+    };
+    // 2026-10-30T23:00:00Z in New Zealand (UTC+13) is Saturday 31 October, noon.
+    assert_eq!(show(1_793_401_200, 13 * 3600), "Saturday 31 October 2026 12:00");
+    // 2026-11-01T02:00:00Z at UTC-5 is still Saturday 31 October, 21:00.
+    assert_eq!(show(1_793_498_400, -5 * 3600), "Saturday 31 October 2026 21:00");
+    // Offset 0 is UTC.
+    assert_eq!(show(1_793_401_200, 0), "Friday 30 October 2026 23:00");
+    // Near the epoch with a negative offset: the day before 1970, no overflow.
+    assert_eq!(show(0, -3600), "Wednesday 31 December 1969 23:00");
+    // Hostile values never panic.
+    let _ = crate::cmd::local_civil(u64::MAX, i64::MAX);
+    let _ = crate::cmd::local_civil(u64::MAX, i64::MIN);
+    let _ = crate::cmd::local_civil(0, i64::MIN);
+    // The machine's zone is a real offset (within ±26 h) and asking never panics.
+    for unix in [0, 1_793_401_200, u64::MAX] {
+        assert!(crate::cmd::local_offset_secs(unix).abs() <= 26 * 3600);
+    }
 }

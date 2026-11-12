@@ -48,10 +48,10 @@ fn scan(s: &Session) -> (HashMap<u32, Pos>, Vec<Pos>, Vec<Pos>) {
     let (mut ids, mut conns, mut groups) = (HashMap::new(), Vec::new(), Vec::new());
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for off in para.object_offsets() {
+        for (off, obj) in para.objects_with_offsets() {
             let pos = Pos { story: StoryRef::Body, path: path.clone(), off };
-            match para.object_at(off) {
-                Some(InlineObject::Shape { kind, extra, float, .. }) => {
+            match obj {
+                InlineObject::Shape { kind, extra, float, .. } => {
                     if extra.id != 0 {
                         ids.entry(extra.id).or_insert(pos.clone());
                     }
@@ -59,7 +59,7 @@ fn scan(s: &Session) -> (HashMap<u32, Pos>, Vec<Pos>, Vec<Pos>) {
                         conns.push(pos);
                     }
                 }
-                Some(InlineObject::Group { children, .. })
+                InlineObject::Group { children, .. }
                     if children.iter().any(|c| matches!(&c.obj, InlineObject::Shape { kind, extra, .. } if kind.is_connector() && (extra.start.is_some() || extra.end.is_some()))) =>
                 {
                     groups.push(pos)
@@ -91,10 +91,11 @@ pub fn reroute(s: &mut Session) -> bool {
         s.touch();
     }
     let layout = s.layout();
+    let objects = layout.object_index();
     let site = |e: Option<ConnEnd>, page: usize| -> Option<(f32, f32)> {
         let e = e?;
         let target = ids.get(&e.id)?;
-        let hit = layout.object(target, page)?;
+        let hit = objects.object(target, page)?;
         let kind = match s.doc.para_at(target)?.object_at(target.off)? {
             InlineObject::Shape { kind, .. } => *kind,
             _ => return None,
@@ -103,7 +104,7 @@ pub fn reroute(s: &mut Session) -> bool {
     };
     let mut plans = Vec::new();
     for pos in conns {
-        let Some(hit) = layout.object(&pos, s.page_hint) else { continue };
+        let Some(hit) = objects.object(&pos, s.page_hint) else { continue };
         let Some(InlineObject::Shape { extra, float, .. }) = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)) else { continue };
         let r = hit.rect;
         let (s0, e0) = ends(r.x, r.y, r.w, r.h, float.flip_h, float.flip_v);
@@ -311,6 +312,49 @@ mod tests {
             effects: Default::default(),
             extra,
         }
+    }
+
+    /// Drawing commands must not search every page again for each glued connector.
+    #[test]
+    fn rerouting_many_pages_does_not_rescan_all_objects_per_connector() {
+        use wordcraft_doc::{Document, Paragraph, para_block};
+        let mut doc = Document::new();
+        doc.body = (0..8000u32)
+            .map(|i| {
+                let mut p = Paragraph::default();
+                p.props.page_break_before = Some(i > 0);
+                let id = i * 2 + 1;
+                for (kind, x, extra) in [
+                    (ShapeKind::Rectangle, 100.0, ShapeExtra { id, ..Default::default() }),
+                    (ShapeKind::Ellipse, 300.0, ShapeExtra { id: id + 1, ..Default::default() }),
+                    (
+                        ShapeKind::ElbowConnector,
+                        0.0,
+                        ShapeExtra { start: Some(ConnEnd { id, site: 3 }), end: Some(ConnEnd { id: id + 1, site: 2 }), ..Default::default() },
+                    ),
+                ] {
+                    let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 200.0, ..Default::default() };
+                    p.insert_object(p.len(), shape(kind, extra, float), &Default::default()).unwrap();
+                }
+                para_block(p)
+            })
+            .collect();
+        let mut s = Session::new(doc);
+        s.view.proofing = false;
+        s.page_hint = 0;
+        assert_eq!(s.layout().pages.len(), 8000);
+        let started = std::time::Instant::now();
+        assert!(reroute(&mut s));
+        let elapsed = started.elapsed();
+        eprintln!("8000-page reroute: {elapsed:?}");
+        assert!(elapsed < std::time::Duration::from_secs(5), "reroute took {elapsed:?}");
+        for path in s.doc.para_paths(StoryRef::Body) {
+            let para = s.doc.para(StoryRef::Body, &path).unwrap();
+            let InlineObject::Shape { w, h, float, .. } = para.object_at(6).unwrap() else { panic!("connector") };
+            assert_eq!((*w, *h, float.x, float.y), (160.0, 0.0, 140.0, 210.0));
+        }
+        s.touch();
+        assert!(!reroute(&mut s), "rerouting must settle after refreshing the layout");
     }
 
     /// The per-case shape/geometry of one scaled-group reroute case.

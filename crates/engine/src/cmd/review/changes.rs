@@ -54,11 +54,20 @@ fn resolve_para(
     // An inserted paragraph mark that is rejected, or a deleted one that is accepted, goes away:
     // the next paragraph joins this one (the split is undone). A paragraph left empty goes away
     // whole, so the next one keeps its own style and numbering, as in Word. The mark at the end
-    // of a story or cell can't go, so it just stops being a revision.
-    if ((del.is_some() && accept) || (ins.is_some() && !accept))
-        && (crate::cmd::remove_empty_para(s, story, path)? || crate::cmd::join_next_para(s, story, path)?)
-    {
-        return Ok(());
+    // of a story or cell can't go, so it just stops being a revision. An empty paragraph whose
+    // mark carries a section break goes whole too: its section joins the following one, as when
+    // the break is deleted (#5667). Joining instead gave the next paragraph its properties.
+    if (del.is_some() && accept) || (ins.is_some() && !accept) {
+        let sectioned = story == StoryRef::Body
+            && path.0.len() == 1
+            && s.doc.para(story, path).is_some_and(|p| p.is_empty() && p.section.is_some())
+            && crate::cmd::has_next_para(s, story, path);
+        if sectioned {
+            s.doc.remove_section_break(path.last());
+        }
+        if crate::cmd::remove_empty_para(s, story, path)? || crate::cmd::join_next_para(s, story, path)? {
+            return Ok(());
+        }
     }
     let para = s.doc.para_mut(story, path)?;
     para.mark.ins = None;

@@ -1,5 +1,76 @@
+use super::arrange::group_menu_command;
 use super::*;
 use wordcraft_engine::Session;
+
+/// #2601: Dropped / In margin send just the position and `keep`, so every selected paragraph keeps
+/// its own lines, distance and font; None sends only the position.
+#[test]
+fn drop_cap_menu_keeps_the_options() {
+    use super::insert::drop_cap_payload;
+    assert_eq!(drop_cap_payload("dropped"), json!({"position": "dropped", "keep": true}));
+    assert_eq!(drop_cap_payload("margin"), json!({"position": "margin", "keep": true}));
+    assert_eq!(drop_cap_payload("none"), json!({"position": "none"}), "None takes it all away");
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Once")), crate::Services::default());
+    app.run("insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"})).unwrap();
+    app.run("insert.dropCap", drop_cap_payload("margin")).unwrap();
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
+    assert_eq!((state.position, state.lines, state.distance, state.font.as_deref()), ("margin", 5, 7.0, Some("Liberation Mono")));
+}
+
+/// #4349: Insert › Shapes offers the basic shapes as a grid of drawn tiles, each named for
+/// screen readers and by its tooltip; a click inserts that shape.
+#[test]
+fn the_shapes_menu_offers_its_basic_shapes_as_a_grid_of_tiles() {
+    use egui_kittest::kittest::Queryable;
+    let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(400.0, 300.0))
+        .build_ui_state(|ui, app: &mut WordApp| super::insert::shape_gallery(ui, app), app);
+    h.run_steps(2);
+    let rects: Vec<Rect> = super::insert::SHAPE_TILES.iter().map(|(label, _)| h.get_by_label(label).rect()).collect();
+    // A grid, not a list: tiles sit side by side, wrapping into rows.
+    assert_eq!(rects[0].top(), rects[1].top(), "the first two shapes share a row");
+    assert!(rects[0].right() <= rects[1].left(), "side by side");
+    let rows = rects.iter().map(|r| r.top().round() as i32).collect::<std::collections::BTreeSet<_>>().len();
+    assert!(rows >= 2 && rows < super::insert::SHAPE_TILES.len(), "{rows} rows for {} shapes", super::insert::SHAPE_TILES.len());
+    assert!(rects.iter().all(|r| r.width() >= 24.0 && r.height() >= 24.0), "tiles are big enough to read and hit");
+    // Every tile inserts its own shape.
+    for (label, kind) in super::insert::SHAPE_TILES {
+        let before = h.state().session.undo_depth();
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert_eq!(h.state().session.undo_depth(), before + 1, "{label} inserts a shape");
+        let doc = serde_json::to_string(&h.state().session.doc).unwrap();
+        assert!(doc.contains(&format!("\"{kind}\"")), "{label} inserts a {kind}");
+        assert!(h.state_mut().session.undo());
+    }
+}
+
+/// #4412: the Shading button's bar is the colour a click applies (the last one picked), as
+/// the Font Color and Text Highlight Color buttons' bars are, not always the icon's yellow.
+#[test]
+fn the_shading_button_shows_the_last_picked_colour() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    let ribbon_bars = |h: &egui_kittest::Harness<'_, WordApp>, hex: &str| {
+        let want = crate::theme::c32(wordcraft_doc::Rgb::parse(hex).unwrap());
+        h.output().shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == want && r.rect.height() < 4.0 && r.rect.width() > 10.0))
+    };
+    h.run_steps(6);
+    assert!(ribbon_bars(&h, "FFF2CC"), "the default colour");
+    h.state_mut().canvas.last_shading = "00B0F0".into();
+    h.run_steps(3);
+    assert!(ribbon_bars(&h, "00B0F0"), "the picked colour");
+    assert!(!ribbon_bars(&h, "FFF2CC"), "and not the old one");
+}
 
 /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
 #[test]
@@ -40,6 +111,93 @@ fn design_style_set_gallery_stays_in_its_box() {
     assert!((gallery.width() - crate::previews::STYLE_SET_GALLERY_W).abs() < 0.01);
     assert!(used.right() <= gallery.right() + 0.01, "{used:?} {gallery:?}");
     assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
+}
+
+/// #5043: Home › Paragraph Tools: the drop-down's entries each run their own command over the
+/// selection; "in the Whole Document" entries run the same command with `scope: "all"`.
+#[test]
+fn paragraph_tools_menu_entries_run_their_commands() {
+    use egui_kittest::kittest::Queryable;
+    let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("a  b\n\nc   d")), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(vec2(900.0, 300.0))
+        .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+        .build_ui_state(|ui, app: &mut WordApp| super::home::home(app, ui), a);
+    h.run_steps(2);
+    // The accessible label is the menu button's tip, "Paragraph Tools".
+    h.get_by_label("Paragraph Tools").click();
+    h.run_steps(2);
+    // Items carry their (empty) shortcut text in the label, so match by containment.
+    for name in [
+        "Split Lines into Paragraphs",
+        "Add Blank Paragraphs Between",
+        "Separate Paragraphs",
+        "Delete Blank Paragraphs",
+        "Remove Leading Spaces",
+        "Remove Extra Spaces",
+        "Indent Leading Spaces",
+        "Indents to Leading Spaces",
+        "Join Lines",
+        "Delete Blank Paragraphs in the Whole Document",
+        "Remove Leading Spaces in the Whole Document",
+        "Remove Extra Spaces in the Whole Document",
+    ] {
+        assert!(!h.query_all_by_label_contains(name).collect::<Vec<_>>().is_empty(), "{name} is a named entry");
+    }
+    // A caret, not a selection: the whole-document entries cover both paragraphs.
+    h.get_by_label_contains("Remove Extra Spaces in the Whole Document").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "a b\n\nc d");
+    // The menu closed with the click; open it again for the next entry.
+    h.get_by_label("Paragraph Tools").click();
+    h.run_steps(2);
+    // Both entries match by containment; the plain one is first in the menu.
+    h.query_all_by_label_contains("Delete Blank Paragraphs").min_by(|a, b| a.rect().min.y.total_cmp(&b.rect().min.y)).unwrap().click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.undo_depth(), 2, "the second entry is its own undo step");
+}
+
+/// #5750: in a right-to-left interface, the Design tab's style-set gallery lays out from the
+/// right: the first style set ("default") is at the right edge, the remaining thumbnails read to
+/// the left, and the next controls start after a gap to the left of the gallery.
+#[test]
+fn design_style_set_gallery_reads_from_the_right_in_rtl() {
+    crate::i18n::set_current(crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n"));
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut seen = None;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 200.0)).build_ui(|ui| {
+        crate::rtl::root(ui, |ui| {
+            crate::rtl::horizontal_top(ui, |ui| {
+                let (gallery, used) = style_set_box(&mut app, ui);
+                seen = Some((gallery, used, ui.cursor().max.x));
+            });
+        });
+    });
+    h.run_steps(2);
+    let tiles: Vec<Rect> = h.ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, w)| w.iter())
+            .filter(|w| (w.rect.width() - crate::previews::STYLE_SET_W).abs() < 0.1 && (w.rect.height() - CONTENT_H).abs() < 0.1)
+            .map(|w| w.rect)
+            .collect()
+    });
+    drop(h);
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+
+    let (gallery, used, next_x) = seen.unwrap();
+    assert!((gallery.width() - crate::previews::STYLE_SET_GALLERY_W).abs() < 0.01);
+    assert!(used.left() >= gallery.left() - 0.01, "{used:?} {gallery:?}");
+    assert!(used.right() <= gallery.right() + 0.01, "{used:?} {gallery:?}");
+    assert!(next_x <= gallery.left() - 8.0 + 0.01, "{next_x} {gallery:?}");
+
+    assert_eq!(tiles.len(), 7, "7 style set tiles");
+    assert!((tiles[0].right() - gallery.right()).abs() < 0.01, "default tile at the right edge: {tiles:?} {gallery:?}");
+    assert!((tiles[6].left() - gallery.left()).abs() < 0.01, "minimalist tile at the left edge: {tiles:?} {gallery:?}");
+    for i in 1..tiles.len() {
+        assert!(tiles[i].right() <= tiles[i - 1].left(), "tile {i} is to the left of tile {}", i - 1);
+    }
 }
 
 /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
@@ -117,6 +275,34 @@ fn menu_buttons_follow_their_command() {
     }
 }
 
+/// #4229: with a group selected the Group button stays on, so Ungroup in its menu can be
+/// reached; with nothing selected it is off, and with two objects it offers Group.
+#[test]
+fn the_group_menu_stays_on_for_a_selected_group() {
+    use crate::widgets::{enabled, menu_enabled};
+    let mut a = crate::WordApp::new(
+        Session::new(wordcraft_doc::Document::from_text(
+            "one
+two
+three",
+        )),
+        crate::Services::default(),
+    );
+    assert!(!menu_enabled(&a, group_menu_command(&a)), "nothing selected");
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 80, "height": 40})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 100, "y": 150})).unwrap();
+    a.run("select.collapse", json!({"end": true})).unwrap();
+    a.run("insert.shape", json!({"kind": "ellipse", "width": 80, "height": 40})).unwrap();
+    a.run("arrange.bounds", json!({"page": 0, "x": 300, "y": 150})).unwrap();
+    a.run("select.addObject", json!({"index": 0})).unwrap();
+    assert_eq!(group_menu_command(&a), "arrange.group");
+    assert!(menu_enabled(&a, group_menu_command(&a)), "two objects to group");
+    a.run("arrange.group", json!({})).unwrap();
+    assert!(!enabled(&a, "arrange.group"), "one group: nothing to group");
+    assert_eq!(group_menu_command(&a), "arrange.ungroup");
+    assert!(menu_enabled(&a, group_menu_command(&a)), "the menu reaches Ungroup");
+}
+
 /// #1206: Margins, Orientation, Size and Columns mark the caret section's setting, as Word
 /// does. Every value differs from a new document's, so a default can't satisfy it.
 #[test]
@@ -145,6 +331,111 @@ fn page_setup_menus_mark_the_current_setting() {
     assert_eq!(first_words, ["Narrow", "Landscape", "A4", "Right"], "{checked:?}");
 }
 
+/// The Language menu's built-in short list, as `language_checks` takes it.
+fn short() -> Vec<(String, String)> {
+    PROOFING_LANGUAGES.iter().map(|(t, n)| ((*t).to_string(), (*n).to_string())).collect()
+}
+
+/// Check marks with only `tag` checked.
+fn listed_only(tag: &str) -> Vec<bool> {
+    PROOFING_LANGUAGES.iter().map(|(t, _)| *t == tag).collect()
+}
+
+/// CP4.3: the menu's check marks are worked out one way (the tag, or the same proofing language
+/// named alike), not by a case per language: a bare or ISO 639-2 tag checks its language, and a
+/// region WordCraft proofs like another (New Zealand like the UK) doesn't check that one.
+#[test]
+fn language_menu_checks_by_tag_or_proofing_language() {
+    for (current, tag) in [
+        ("pl", "pl-PL"),
+        ("pt", "pt-BR"),
+        ("it", "it-IT"),
+        ("hr", "hr-HR"),
+        ("tr", "tr-TR"),
+        ("ces", "cs-CZ"),
+        ("in", "id-ID"),
+        ("es", "es-ES"),
+        ("en", "en-US"),
+        ("RU-ru", "ru-RU"),
+    ] {
+        let c = language_checks(current, &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{current}");
+    }
+    let c = language_checks("en-NZ", &short());
+    assert_eq!(c.extra.as_deref(), Some("English (New Zealand)"));
+    assert!(!c.listed.contains(&true), "English (New Zealand) doesn't check English (United Kingdom)");
+    // A pack language in the list (once installed) is checked for its bare tag too.
+    let mut entries = short();
+    entries.push(("bg-BG".into(), "Bulgarian".into()));
+    let c = language_checks("bg", &entries);
+    assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)));
+    // CP4.3 review: a bare pack-language tag checks the regioned row of the same pack, however
+    // the packs are known (`nl` and `nl-NL` are both the `nl` pack's), and shows no second Dutch.
+    entries.push(("nl-NL".into(), "Dutch".into()));
+    for current in ["nl", "NL-nl"] {
+        let c = language_checks(current, &entries);
+        assert_eq!((c.extra, c.listed.last().copied()), (None, Some(true)), "{current}");
+    }
+    let c = language_checks("nl-BE", &entries);
+    assert_eq!((c.extra.as_deref(), c.listed.last().copied()), (Some("Dutch (Belgium)"), Some(false)));
+    assert!(super::language::same_language("sv", "sv-SE") && !super::language::same_language("sv-FI", "sv-SE"));
+    // Nothing set (mixed selection): nothing checked, nothing above.
+    let c = language_checks("", &entries);
+    assert_eq!((c.extra, c.listed.contains(&true)), (None, false));
+}
+
+/// CP4.3 review: rows are matched by tag, never by the name shown. Serbian in Latin and in
+/// Cyrillic letters of Bosnia show under the same name but are two languages, so neither checks
+/// the other's row; a name that is translated or different doesn't matter to the match.
+#[test]
+fn rows_are_matched_by_tag_not_by_display_name() {
+    use super::language::same_language;
+    assert_eq!(language_name(Some("sr-Latn-BA")), language_name(Some("sr-Cyrl-BA")), "same display name");
+    assert!(!same_language("sr-Latn-BA", "sr-Cyrl-BA"));
+    let entries = vec![("sr-Latn-BA".to_string(), "Serbian".to_string()), ("sr-Cyrl-BA".to_string(), "Serbian".to_string())];
+    assert_eq!(language_checks("sr-Cyrl-BA", &entries).listed, [false, true]);
+    // A variant on an otherwise equal tag is the row without it, unless a pack or the lists name
+    // the variant (Valencian is not Catalan); a language WordCraft has nothing for keeps its regions apart.
+    assert!(same_language("de-DE-1996", "de-DE") && same_language("de-DE", "de-DE-1996"));
+    assert!(!same_language("ca-ES-valencia", "ca-ES"));
+    assert!(!same_language("xx", "xx-AA"), "xx vs xx-AA");
+    assert!(same_language("xx-AA", "XX_aa"), "xx-AA vs XX_aa");
+    assert_eq!(language_checks("de-DE-1996", &[("de-DE".to_string(), "German (Germany)".to_string())]).listed, [true]);
+    // Two unknown languages never merge, though neither has a name but its tag.
+    assert!(!same_language("xx", "yy") && !same_language("xx-AA", "yy-AA"));
+    // The row's name can be anything (translated): the tag decides.
+    let renamed = vec![("pl-PL".to_string(), "Polski".to_string())];
+    assert_eq!(language_checks("pl", &renamed).listed, [true]);
+    assert_eq!(language_checks("PL_pl", &renamed).listed, [true]);
+    assert_eq!(language_checks("pt", &[("pt-PT".to_string(), "Portuguese (Brazil)".to_string())]).listed, [false]);
+}
+
+/// CP4.3 review: a name built from a language and a region (`Swedish (Finland)`) has no catalog row
+/// of its own, so the language, the region and the `{language} ({region})` template are looked up
+/// separately and joined. English stays as `language_name` builds it.
+#[test]
+fn a_language_and_region_name_is_translated_in_parts() {
+    use super::language::display_name_with;
+    let fake = |s: &str| -> String {
+        match s {
+            "Swedish" => "X".into(),
+            "Finland" => "Y".into(),
+            "{language} ({region})" => "{language} \u{2013} {region}".into(),
+            other => other.to_string(),
+        }
+    };
+    assert_eq!(display_name_with(Some("sv-FI"), &fake), "X \u{2013} Y");
+    // A whole name is looked up as it is; the template isn't used for it.
+    assert_eq!(display_name_with(Some("sv-SE"), &fake), "X");
+    // Without a catalogue (English) the name is byte-identical to the English name.
+    for tag in ["sv-FI", "es-CU", "fr-CA", "de-CH", "pt-AO", "en-SG", "sr-Latn-BA", "pl-PL", "nl", "xx-YY", "xx", "ca-valencia"] {
+        assert_eq!(super::language::display_name(Some(tag)), language_name(Some(tag)), "{tag}");
+    }
+    assert_eq!(language_name(Some("sv-FI")), "Swedish (Finland)");
+    // Matching never uses a translated name: Finnish Swedish and Swedish of Sweden stay two rows.
+    assert!(!super::language::same_language("sv-FI", "sv-SE"));
+}
+
 /// #860 review: a tag the language list doesn't have shows by language and region, not as
 /// the tag; Portuguese (Angola) isn't Brazil's, and no name shows twice in the menu.
 #[test]
@@ -156,17 +447,16 @@ fn other_regions_show_by_name_once() {
     assert_eq!(language_name(Some("sr-Latn-BA")), "Serbian (Bosnia and Herzegovina)");
     assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
     assert_eq!(language_name(Some("xx-YY")), "xx-YY");
-    let exact = |cur: &'static str| move |t: &str| t.eq_ignore_ascii_case(cur);
     for tag in ["fr-CA", "pt-AO", "en-SG"] {
-        let c = language_checks(tag, exact(tag));
+        let c = language_checks(tag, &short());
         let name = c.extra.expect("shown above the list");
         assert!(!PROOFING_LANGUAGES.iter().any(|(_, n)| *n == name), "{name} is listed once");
         assert!(!c.listed.contains(&true), "{tag}: nothing in the list checked");
     }
     // A tag named like a list entry checks that entry instead of showing it again.
-    let c = language_checks("PT-br-x-test", |_| false);
+    let c = language_checks("PT-br-x-test", &short());
     assert_eq!(c.extra, None);
-    assert_eq!(c.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "pt-BR"));
+    assert_eq!(c.listed, listed_only("pt-BR"));
 }
 
 /// The Englishes WordCraft proofs differently are in the menu, checked by their tags, and
@@ -178,8 +468,8 @@ fn english_dialects_are_in_the_language_menu() {
     {
         assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
         assert_eq!(language_name(Some(tag)), name);
-        let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
-        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        let c = language_checks(&tag.to_ascii_lowercase(), &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{tag}");
     }
     for (tag, name) in
         [("en-NZ", "English (New Zealand)"), ("en-IE", "English (Ireland)"), ("en-ZA", "English (South Africa)"), ("en-IN", "English (India)")]
@@ -208,12 +498,12 @@ fn spanish_varieties_are_in_the_language_menu() {
         assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
         assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)), "{tag}");
         assert_eq!(language_name(Some(tag)), name);
-        let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
-        assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        let c = language_checks(&tag.to_ascii_lowercase(), &short());
+        assert_eq!((c.extra, c.listed), (None, listed_only(tag)), "{tag}");
     }
     assert_eq!(language_name(Some("es")), "Spanish (Spain)");
     assert_eq!(language_name(Some("es-AR")), "Spanish (Argentina)");
-    let c = language_checks("es-AR", |t| t.eq_ignore_ascii_case("es-AR"));
+    let c = language_checks("es-AR", &short());
     assert_eq!(c.extra.as_deref(), Some("Spanish (Argentina)"));
     assert!(!c.listed.contains(&true));
 }
@@ -597,6 +887,111 @@ fn picture_width_typed_in_pixels_keeps_the_proportions() {
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert_eq!(size(h.state()), Some((15.0, 7.5)), "Esc cancels the typing");
+}
+
+/// #4196: Shape Format › Size shows the interface unit, in every unit, and takes a size typed in
+/// any unit once typed (Enter, Tab), each side on its own, as one undo step; Esc throws it away.
+/// A field focused and left without typing changes nothing, in Picture Format too, where the
+/// size it shows is rounded.
+#[test]
+fn shape_size_fields_use_the_interface_unit() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let size = |a: &crate::WordApp| wordcraft_engine::cmd::objects::selected(&a.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h)));
+    let harness = |units: &str, picture: Option<&str>, wh: Option<(f32, f32)>| {
+        let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("file.options", json!({"units": units})).unwrap();
+        if let Some(data) = picture {
+            a.run("insert.picture", json!({"data": data})).unwrap();
+        } else {
+            a.run("insert.shape", json!({"kind": "rectangle"})).unwrap();
+        }
+        if let Some((w, h)) = wh {
+            a.run("picture.size", json!({"width": w, "height": h, "lockAspect": false})).unwrap();
+        }
+        a.run("ui.tab", json!({"tab": if picture.is_some() { "Picture Format" } else { "Shape Format" }})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h
+    };
+    for (units, suffix) in [("centimeters", " cm"), ("inches", "\""), ("millimeters", " mm"), ("points", " pt"), ("picas", " pi")] {
+        let h = harness(units, None, None);
+        for side in ["W:", "H:"] {
+            let shown = h.get_by_role_and_label(Role::SpinButton, side).value().unwrap_or_default();
+            assert!(shown.ends_with(suffix), "{units}, {side} {shown:?}");
+        }
+    }
+    // Sizes the fields show rounded: 100×50 pt is 1.39"×0.69", a 3000×1 pt line's height
+    // shows 0.01" (below the fields' 1 pt), a 20×10 px picture is 0.21"×0.1".
+    for units in ["inches", "centimeters", "picas"] {
+        for (picture, wh) in [(false, Some((100.0, 50.0))), (false, Some((3000.0, 1.0))), (true, None)] {
+            let mut h = harness(units, picture.then(png_data).as_deref(), wh);
+            let (before, undo) = (size(h.state()), h.state().session.undo_depth());
+            assert!(wh.is_none() || before == wh, "showing the tab changes nothing: {before:?}");
+            for (side, key) in [("W:", egui::Key::Enter), ("H:", egui::Key::Tab)] {
+                h.get_by_role_and_label(Role::SpinButton, side).click();
+                h.run_steps(2);
+                h.key_press(key);
+                h.run_steps(3);
+            }
+            let after = (size(h.state()), h.state().session.undo_depth());
+            assert_eq!(after, (before, undo), "{units}, picture {picture}, {wh:?}: left without typing");
+        }
+    }
+    let mut h = harness("centimeters", None, None);
+    let (w0, h0) = size(h.state()).unwrap();
+    let undo = h.state().session.undo_depth();
+    for (side, typed, key, want) in [("W:", "3 cm", egui::Key::Enter, (85.04, h0)), ("H:", "300 px", egui::Key::Tab, (85.04, 225.0))] {
+        let before = size(h.state());
+        h.get_by_role_and_label(Role::SpinButton, side).click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::SpinButton, side).type_text(typed);
+        h.run_steps(2);
+        assert_eq!(size(h.state()), before, "{side}: nothing applies while typing");
+        h.key_press(key);
+        h.run_steps(2);
+        let (w, ht) = size(h.state()).unwrap();
+        assert!((w - want.0).abs() < 0.01 && (ht - want.1).abs() < 0.01, "{side} {typed}: {w}×{ht}, want {want:?}");
+    }
+    assert_eq!(h.state().session.undo_depth(), undo + 2, "one undo step a side");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(size(h.state()), Some((w0, h0)));
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, "W:").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, "W:").type_text("10 cm");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(size(h.state()), Some((w0, h0)), "Esc cancels the typing");
+    // A size typed at the range's bound applies although the field shows that bound: a 1×1 px
+    // picture (0.75 pt, below the fields' 1 pt) typed to 1 pt.
+    let img = image::RgbaImage::from_pixel(1, 1, image::Rgba([0, 0, 0, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let mut h = harness("points", Some(&wordcraft_engine::cmd::insert::base64_encode(&png)), None);
+    assert_eq!(size(h.state()), Some((0.75, 0.75)));
+    h.get_by_role_and_label(Role::SpinButton, "W:").click();
+    h.run_steps(2);
+    h.get_by_role_and_label(Role::SpinButton, "W:").type_text("1");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(size(h.state()), Some((1.0, 1.0)), "1 pt typed at the bound");
+    // A character and Enter in one frame (a slow frame, a paste and Enter) still apply.
+    h.get_by_role_and_label(Role::SpinButton, "H:").click();
+    h.run_steps(2);
+    let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+    h.input_mut().events.extend([egui::Event::Text("2".into()), enter]);
+    h.step();
+    h.run_steps(2);
+    assert_eq!(size(h.state()), Some((2.0, 2.0)), "typed and confirmed in one frame");
 }
 
 /// #2573 review: showing Picture Format never resizes a picture whose size is outside the

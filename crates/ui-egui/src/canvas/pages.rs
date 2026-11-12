@@ -4,11 +4,13 @@ use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, Wo
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
-pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
+pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
+    // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
+    hinted.hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
-    (v.read_mode, v.read_page_color).hash(&mut h);
+    (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
@@ -22,7 +24,7 @@ pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u
 
 /// Fingerprint of a page's laid-out content. A layout never changes once made, so this is
 /// taken once per page and layout ([`PageKeys`]), not every frame.
-fn page_content_key(page: &Page) -> u64 {
+pub(super) fn page_content_key(page: &Page) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
     for list in [&page.items, &page.header, &page.footer] {
@@ -34,7 +36,7 @@ fn page_content_key(page: &Page) -> u64 {
                 }
                 Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
                 Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
-                Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
+                Placed::Image { rect, media, crop, spin, fx, .. } => format!("{rect:?}{media}{crop:?}{spin:?}{fx:?}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
                     format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
                     freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
@@ -80,6 +82,14 @@ impl PageKeys {
         }
         k
     }
+}
+
+/// What page `i` shows, whatever its size: its content and the view (`view_key` with the
+/// hinting fixed). A raster that showed this may be stretched to stand in for the page.
+pub(super) fn page_shows(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (view, app.canvas.page_keys.content(layout, i)).hash(&mut h);
+    h.finish()
 }
 
 /// The texture cache key of page `i`: its content, the view, and the raster scale.
@@ -184,20 +194,23 @@ pub(super) fn drawing_grid_step(spacing: f32, scale: f32) -> f32 {
 /// hovering over (#3931). The preview is laid out on a copy, so the document and its undo history
 /// change only when a square is clicked.
 pub(super) fn shown_layout(app: &mut WordApp) -> std::sync::Arc<DocLayout> {
-    let Some((rows, cols)) = app.canvas.table_preview.take() else {
+    let table = app.canvas.table_preview.take().map(|(rows, cols)| ("insert.table".to_string(), json!({"rows": rows, "cols": cols})));
+    let command = app.canvas.command_preview.take();
+    app.canvas.command_previewed = command.clone().filter(|_| table.is_none());
+    let Some((id, params)) = table.or(command) else {
         app.canvas.table_preview_layout = None;
         return app.session.layout();
     };
     // The caret can move, or the view change, with the grid still hovered: the table then goes
     // somewhere else, or the page is laid out to another width.
-    let key = ((rows, cols, app.session.document_id(), app.session.rev(), app.session.sel.clone()), app.session.layout());
+    let key = ((id.clone(), params.clone(), app.session.document_id(), app.session.rev(), app.session.sel.clone()), app.session.layout());
     if let Some((k, _, _, l)) = &app.canvas.table_preview_layout
         && k.0 == key.0
         && std::sync::Arc::ptr_eq(&k.1, &key.1)
     {
         return l.clone();
     }
-    match app.session.preview_layout("insert.table", &json!({"rows": rows, "cols": cols})) {
+    match app.session.preview_layout(&id, &params) {
         Some((doc, sel, l)) => {
             app.canvas.table_preview_layout = Some((key, doc, sel, l.clone()));
             l
@@ -221,6 +234,14 @@ pub(crate) fn preview_sel(app: &WordApp) -> Option<&wordcraft_engine::Selection>
     app.canvas.table_preview_layout.as_ref().map(|(_, _, sel, _)| sel)
 }
 
+/// Whether the pages are drawn dark: View › Switch Modes, or in Read Mode the Page color's
+/// Inverse (Switch Modes is ignored there). Drawing over the pages (ink, drag previews) follows it.
+pub(crate) fn dark_page(app: &WordApp) -> bool {
+    use wordcraft_engine::cmd::view::ReadPageColor;
+    let v = &app.session.view;
+    if v.read_mode { v.read_page_color == ReadPageColor::Inverse } else { v.dark_mode }
+}
+
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
@@ -231,22 +252,36 @@ pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_re
     // Ink Replay draws the ink itself, stroke by stroke, over pages without it.
     opts.display.hide_ink = app.session.view.hide_ink || app.session.view.draw.replay;
     opts.display.revisions = app.session.prefs.markup.clone();
-    opts.dark = app.session.view.dark_mode;
+    opts.dark = dark_page(app);
     opts.dark_paper = wordcraft_render::DARK_PAPER;
-    // In Read Mode the Page color sets the paper and the dark page, and Switch Modes is ignored.
+    // A screen tint (View › Paper color) paints the page, unless the page is drawn dark.
+    if !opts.dark {
+        opts.paper = app.session.prefs.paper_color.color();
+    }
+    // In Read Mode the Page color sets the paper: Sepia and Inverse as before, None the
+    // selected screen tint (white without one).
     if app.session.view.read_mode {
         use wordcraft_engine::cmd::view::ReadPageColor;
-        let color = app.session.view.read_page_color;
-        opts.read_paper = Some(if color == ReadPageColor::Sepia { wordcraft_render::SEPIA_PAPER } else { wordcraft_doc::props::Rgb::WHITE });
-        opts.dark = color == ReadPageColor::Inverse;
+        opts.read_paper = Some(match app.session.view.read_page_color {
+            ReadPageColor::None => app.session.prefs.paper_color.color(),
+            ReadPageColor::Sepia => wordcraft_render::SEPIA_PAPER,
+            ReadPageColor::Inverse => wordcraft_doc::props::Rgb::WHITE,
+        });
     }
     opts.display.dim_header = !dim_body;
     opts.display.dim_body = dim_body;
     opts
 }
 
-/// Render options for page rasters shown on screen: on macOS, text is darkened the way the system
-/// draws it, so a page looks as it does in other Mac apps (exports never are).
+/// Render options for page rasters shown on screen, so a page looks as text does in the
+/// platform's other apps (exports never change): on macOS, text is darkened the way the system
+/// draws it; on Linux and the BSDs it is hinted lightly, as FreeType's `hintslight` draws it
+/// there (not darkened: hinted text already has FreeType's weight, and darkening made it
+/// look semi-bold).
 pub(crate) fn screen_render_options() -> wordcraft_render::RenderOptions {
-    wordcraft_render::RenderOptions { text_darkening: cfg!(target_os = "macos"), ..Default::default() }
+    wordcraft_render::RenderOptions {
+        text_darkening: cfg!(target_os = "macos"),
+        hinting: cfg!(all(unix, not(target_os = "macos"))),
+        ..Default::default()
+    }
 }

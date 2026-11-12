@@ -12,7 +12,7 @@ mod canvas;
 mod ime;
 mod shortcuts;
 
-pub(crate) use alt_code::AltCodeEcho;
+pub(crate) use alt_code::{AltCodeEcho, FieldAltCode, field_alt_codes};
 pub use canvas::canvas_events;
 pub(crate) use ime::observe_ime;
 #[cfg(test)]

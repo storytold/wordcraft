@@ -374,6 +374,9 @@ fn line_numbering_options() {
 /// there breaks the word.
 #[test]
 fn hyphenation_options_and_manual_hyphenation() {
+    if crate::tests::no_language_data("hyphenation_options_and_manual_hyphenation") {
+        return;
+    }
     let mut s =
         Session::new(wordcraft_doc::Document::from_text(&"a extraordinarily be uncharacteristic of responsibilities the considerations ".repeat(12)));
     let r = s.run("layout.hyphenation", &json!({"zone": 36, "caps": false, "limit": 3})).unwrap();

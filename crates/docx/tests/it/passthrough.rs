@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -272,7 +273,7 @@ fn comment_references_use_the_documents_annotation_reference_style() {
     assert!(!body.contains(r#"w:val="CommentReference""#), "{body}");
     // A document without that style keeps the English id.
     let mut doc = wordcraft_doc::Document::new();
-    doc.styles.styles.retain(|s| !s.name.eq_ignore_ascii_case("annotation reference"));
+    Arc::make_mut(&mut doc.styles).styles.retain(|s| !s.name.eq_ignore_ascii_case("annotation reference"));
     let rebuilt = wordcraft_docx::read(&comments_package(true)).unwrap();
     doc.body = rebuilt.body.clone();
     doc.parts = rebuilt.parts.clone();
@@ -314,7 +315,7 @@ fn list_identities_survive_and_a_copied_definition_gets_none() {
     // A copy of the definition (as the engine makes when restarting a list) doesn't reuse the nsid.
     let mut copy = doc.numbering.abstracts[0].clone();
     copy.id = 7;
-    doc.numbering.abstracts.push(copy);
+    Arc::make_mut(&mut doc.numbering).abstracts.push(copy);
     let n = text(&save(&doc), "word/numbering.xml");
     assert_eq!(n.matches("1F2E3D4C").count(), 1, "{n}");
 }
@@ -442,4 +443,52 @@ fn embedded_fonts_load_and_save_when_the_package_spells_the_font_table_in_capita
     let fonts = wordcraft_docx::embedded_fonts(&again);
     assert_eq!(fonts.len(), 1, "the font survives a save: {:?}", files.keys());
     assert_eq!(fonts[0].data, font_bytes);
+}
+
+#[test]
+fn comment_ids_keep_sparse_threads_reservations_and_missing_parts() {
+    use wordcraft_doc::{Comment, Document, Paragraph, Part, PartKind, para_block};
+    let mut doc = Document::from_text("Original thread fixture.");
+    // New IDs must skip the exact durable ID reserved by a later comment, even one whose
+    // missing part keeps it out of commentsIds.xml. Duplicate imported IDs are reassigned.
+    let rows = [
+        (3, None, Some(90), false, true),
+        (11, Some("5a1b2c3d"), Some(90), true, true),
+        (25, Some("5A1B2C3D"), Some(999), false, true),
+        (90, Some("10000001"), None, true, true),
+        (999, Some("10000002"), None, false, false),
+        (u32::MAX, Some("not-hex"), Some(3), false, true),
+    ];
+    for (id, durable, parent, resolved, has_part) in rows {
+        let part = id;
+        if has_part {
+            doc.parts.insert(
+                part,
+                Part {
+                    kind: PartKind::Comment,
+                    blocks: vec![para_block(Paragraph::with_text(&format!("Comment {id} β"), Default::default()))],
+                    ..Default::default()
+                },
+            );
+        }
+        doc.comments.insert(id, Comment { part, parent, resolved, durable_id: durable.map(str::to_string), ..Default::default() });
+    }
+    let files = save(&doc);
+    let (ids, _) = written_ids(&files);
+    assert_eq!(ids.iter().map(|(_, id)| id.as_str()).collect::<Vec<_>>(), ["10000003", "5A1B2C3D", "10000004", "10000001", "10000005"]);
+    let ex = text(&files, "word/commentsExtended.xml");
+    assert_eq!(ex.matches("<w15:commentEx ").count(), 5);
+    assert!(ex.contains(r#"w15:paraId="10000001" w15:paraIdParent="10000004" w15:done="0""#));
+    assert!(ex.contains(r#"w15:paraId="10000002" w15:paraIdParent="10000004" w15:done="1""#));
+    assert!(ex.contains(r#"w15:paraId="10000003" w15:done="0""#), "a missing parent part has no paragraph ID");
+    assert!(ex.contains(r#"w15:paraId="10000006" w15:paraIdParent="10000001" w15:done="0""#));
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    // Reader IDs need not match the sparse input IDs. Check the thread by authored text.
+    let comment = |text: &str| back.comments.iter().find(|(_, c)| back.plain_text(wordcraft_doc::StoryRef::Part(c.part)).trim() == text).unwrap();
+    let (root, _) = comment("Comment 90 β");
+    assert_eq!(comment("Comment 3 β").1.parent, Some(*root));
+    assert_eq!(comment("Comment 11 β").1.parent, Some(*root));
+    assert!(comment("Comment 11 β").1.resolved);
+    let (first, _) = comment("Comment 3 β");
+    assert_eq!(comment(&format!("Comment {} β", u32::MAX)).1.parent, Some(*first));
 }

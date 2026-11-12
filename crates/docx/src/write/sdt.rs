@@ -86,11 +86,28 @@ pub fn plan(bl: &Blocks) -> Plan<'_> {
                 && (0..off).step_by(OBJ.len_utf8()).all(|o| matches!(p.object_at(o), Some(wordcraft_doc::InlineObject::ControlStart { .. })))
         })
     };
+    // Bookmark, comment and permission markers after the end may stay there: a body-level
+    // bookmark after a block control (Word's `_GoBack`) is read onto the end of its paragraph,
+    // and the control still covers the whole paragraph.
     let at_end = |b: usize, off: usize| {
+        use wordcraft_doc::InlineObject as O;
         para(b).is_some_and(|p| {
             let from = off + OBJ.len_utf8();
             p.text.get(from..).is_some_and(|t| t.chars().all(|c| c == OBJ))
-                && (from..p.len()).step_by(OBJ.len_utf8()).all(|o| matches!(p.object_at(o), Some(wordcraft_doc::InlineObject::ControlEnd)))
+                && (from..p.len()).step_by(OBJ.len_utf8()).all(|o| {
+                    matches!(
+                        p.object_at(o),
+                        Some(
+                            O::ControlEnd
+                                | O::BookmarkStart { .. }
+                                | O::BookmarkEnd { .. }
+                                | O::CommentStart { .. }
+                                | O::CommentEnd { .. }
+                                | O::PermStart { .. }
+                                | O::PermEnd { .. }
+                        )
+                    )
+                })
         })
     };
     let mut mode = vec![Mode::Inline; ranges.len()];
