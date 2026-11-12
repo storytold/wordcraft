@@ -8640,8 +8640,8 @@ fn picture_row(room: f32, min: f32, pic_h: f32, lines: usize) -> (DocLayout, Vec
         t.rows[1].props.height = Some(min);
         t.rows[1].props.height_rule = HeightRule::AtLeast;
     }
-    for c in 1..3 {
-        t.rows[1].cells[c].blocks = lines_in_cell(lines, "N/A");
+    for cell in &mut t.rows[1].cells[1..3] {
+        cell.blocks = lines_in_cell(lines, "N/A");
     }
     set_at_least_row_spacing(&mut t);
     let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
@@ -10327,8 +10327,8 @@ fn a_hidden_cell_mark_takes_no_room() {
         let mut d = Document::from_text("Above");
         let mut t = Table::new(3, 2, 300.0);
         for (r, text) in [(0, "R1"), (2, "R3")] {
-            for c in 0..2 {
-                t.rows[r].cells[c].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+            for cell in &mut t.rows[r].cells {
+                cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
             }
         }
         for (cell, hide) in t.rows[1].cells.iter_mut().zip(hide) {
