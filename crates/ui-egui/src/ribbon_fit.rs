@@ -629,9 +629,12 @@ mod ui_tests {
         );
         // Measure, plan, measure the planned levels, plan again.
         h.run_steps(8);
+        let wins: Vec<(String, f32, f32)> =
+            h.query_all_by_role_and_label(Role::Button, "Window").map(|n| (format!("{:?}", n.rect()), n.rect().min.x, n.rect().max.x)).collect();
+        let lvl = crate::ribbon_fit::planned(&h.ctx, "Window");
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(3);
-        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
+        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group: wins={wins:?} level={lvl:?}");
         let full = h.state().session.view.full_screen;
         let disabled = h.state().session.why_disabled("view.fullScreen").is_some();
         click_shown(&h, "Full Screen");
