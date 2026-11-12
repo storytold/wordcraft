@@ -23,6 +23,8 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::mpsc::{Receiver, Sender, channel};
+#[cfg(all(unix, not(target_os = "macos")))]
+use std::sync::{Arc, Mutex};
 
 use wordcraft_ui_egui::{FileDialogAnswer, FileDialogRequest};
 
@@ -32,6 +34,45 @@ type Request = (FileDialogRequest, Sender<FileDialogAnswer>);
 /// The `Services::file_dialog` hook.
 pub type Hook = Box<dyn Fn(FileDialogRequest) -> Receiver<FileDialogAnswer>>;
 
+/// Cancels the portal Save dialog the launcher is waiting on, if any.
+///
+/// The portal's dialog lives outside the app's window, so a portal that stops answering cannot be
+/// dismissed from WordCraft. Giving the dialog up (File › Open › Browse in WordCraft…) cancels the
+/// request: the waiting thread closes it and reports a cancellation, and the built-in browser
+/// opens instead. A no-op where Save As doesn't ask the portal (macOS and Windows).
+#[derive(Clone, Default)]
+pub struct CancelHandle {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    token: Arc<Mutex<Option<crate::portal_save::CancelToken>>>,
+}
+
+impl CancelHandle {
+    /// Cancels the pending portal request, if there is one.
+    pub fn cancel(&self) {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let mut slot = self.token.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(token) = slot.take() {
+                token.cancel();
+            }
+        }
+    }
+
+    /// Arms the handle for the portal request about to wait, returning its token.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn arm(&self) -> crate::portal_save::CancelToken {
+        let token = crate::portal_save::CancelToken::new();
+        *self.token.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.clone());
+        token
+    }
+
+    /// Disarms the handle once the request has answered.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn disarm(&self) {
+        *self.token.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
 /// A picker's answer, waited for off the UI thread.
 type Picking = Pin<Box<dyn Future<Output = Vec<rfd::FileHandle>> + Send>>;
 
@@ -39,6 +80,7 @@ type Picking = Pin<Box<dyn Future<Output = Vec<rfd::FileHandle>> + Send>>;
 pub struct Launcher {
     queue: Receiver<Request>,
     ctx: egui::Context,
+    cancel: CancelHandle,
 }
 
 /// The hook for [`Services::file_dialog`](wordcraft_ui_egui::Services::file_dialog) and the
@@ -51,10 +93,15 @@ pub fn hook(ctx: &egui::Context) -> (Hook, Launcher) {
         let _ = queue_tx.send((req, answer));
         rx
     });
-    (hook, Launcher { queue, ctx: ctx.clone() })
+    (hook, Launcher { queue, ctx: ctx.clone(), cancel: CancelHandle::default() })
 }
 
 impl Launcher {
+    /// A handle that cancels the portal Save dialog the launcher is waiting on, if any.
+    pub fn cancel_handle(&self) -> CancelHandle {
+        self.cancel.clone()
+    }
+
     /// Show the queued dialogs with the window as their parent, so the portal (or the system)
     /// keeps them on top of it. Call after every pass that may ask for one.
     pub fn show(&self, parent: &eframe::Frame) {
@@ -68,6 +115,11 @@ impl Launcher {
                 use eframe::wgpu::rwh::HasWindowHandle;
                 crate::portal_save::parent_id(parent.window_handle().ok().map(|h| h.as_raw()))
             };
+            // Armed before the thread starts, so giving the dialog up cannot race its start.
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let portal_cancel = matches!(&req, FileDialogRequest::Save { .. }).then(|| self.cancel.arm());
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let cancel_handle = self.cancel.clone();
             let ctx = self.ctx.clone();
             let waiting = std::thread::Builder::new().name("file dialog".into()).spawn(move || {
                 // The pickers only start when first polled: without a system dialog they never do.
@@ -84,7 +136,7 @@ impl Launcher {
                                     folder: dir.clone().map(std::path::PathBuf::from),
                                     filters: save_filters(name),
                                     current: Some(0),
-                                    cancel: None,
+                                    cancel: portal_cancel,
                                     timeout: None,
                                 };
                                 let portal_res = zbus::blocking::Connection::session()
@@ -93,6 +145,7 @@ impl Launcher {
                                 match portal_res {
                                     Ok(Some(path)) => Ok(vec![path.to_string_lossy().into_owned()]),
                                     Ok(None) => Ok(Vec::new()),
+                                    Err(e) if crate::portal_save::is_cancelled_error(&e) => Ok(Vec::new()),
                                     Err(e) if crate::portal_save::is_ambiguous_filter_error(&e) => {
                                         log::warn!("portal save format ambiguous ({e}); cancelling save without explicit format choice");
                                         Ok(Vec::new())
@@ -116,12 +169,16 @@ impl Launcher {
                         }
                     }
                 };
+                #[cfg(all(unix, not(target_os = "macos")))]
+                cancel_handle.disarm();
                 let _ = answer.send(picked);
                 ctx.request_repaint();
             });
             // The answer's sender went with the closure, so the app sees the dialog as cancelled.
             if let Err(e) = waiting {
                 log::error!("couldn't wait for the file dialog: {e}");
+                #[cfg(all(unix, not(target_os = "macos")))]
+                self.cancel.disarm();
             }
         }
     }
@@ -310,6 +367,23 @@ mod tests {
         assert!(pick(async { Vec::<u8>::new() }, async { vec![] }, quick).is_err(), "the built-in browser");
         assert_eq!(pick(slow_cancel(), async { vec![2u8] }, quick), Ok(vec![]), "a real cancel isn't asked again");
         assert_eq!(pick(async { vec![] }, slow_cancel(), quick), Ok(vec![]), "the second dialog cancelled for real");
+    }
+
+    /// Giving the portal Save dialog up cancels the request the launcher armed, and a request
+    /// that has already answered is not affected by a later cancel.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn cancelling_a_pending_portal_request_marks_its_token() {
+        let handle = super::CancelHandle::default();
+        let token = handle.arm();
+        assert!(!token.is_cancelled());
+        handle.cancel();
+        assert!(token.is_cancelled());
+
+        let answered = handle.arm();
+        handle.disarm();
+        handle.cancel();
+        assert!(!answered.is_cancelled(), "an answered request is no longer cancelled");
     }
 
     /// #1399: the Save dialog's type list has one named entry per format, the suggested one first,

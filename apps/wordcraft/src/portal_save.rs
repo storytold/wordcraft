@@ -31,13 +31,11 @@ pub struct CancelToken(std::sync::Arc<std::sync::atomic::AtomicBool>);
 
 impl CancelToken {
     /// Creates a new cancellation token in the active (not cancelled) state.
-    #[allow(dead_code)]
     pub fn new() -> Self {
         Self(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
     }
 
     /// Signals that the active save request should be cancelled.
-    #[allow(dead_code)]
     pub fn cancel(&self) {
         self.0.store(true, std::sync::atomic::Ordering::Relaxed);
     }
@@ -357,7 +355,7 @@ pub fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest) -> Result
 
     let reply = loop {
         if req.cancel.as_ref().is_some_and(CancelToken::is_cancelled) {
-            return Err("the save dialog request was cancelled".to_string());
+            return Err(ERR_CANCELLED.to_string());
         }
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(m) => {
@@ -397,10 +395,20 @@ pub fn save_file(conn: &zbus::blocking::Connection, req: &SaveRequest) -> Result
     answer(code, &results, elapsed)
 }
 
-/// Returns true if `path` is located in the XDG document portal (`/run/user/<uid>/doc/…`).
+/// Returns true if `path` is located in the XDG document portal (`/run/user/<uid>/doc/…`, or
+/// `/run/flatpak/doc/…` inside a Flatpak sandbox).
 fn is_document_portal(path: &Path) -> bool {
     let s = path.to_string_lossy();
-    (s.starts_with("/run/user/") || s.starts_with("/var/run/user/")) && s.contains("/doc/")
+    ((s.starts_with("/run/user/") || s.starts_with("/var/run/user/")) && s.contains("/doc/")) || s.starts_with("/run/flatpak/doc/")
+}
+
+/// Error message returned when a pending save request was cancelled by the caller.
+pub const ERR_CANCELLED: &str = "the save dialog request was cancelled";
+
+/// Returns true if `err` represents a save request cancelled by the caller (not a cancel in the
+/// dialog itself, which is `Ok(None)`).
+pub fn is_cancelled_error(err: &str) -> bool {
+    err == ERR_CANCELLED
 }
 
 /// Error message returned when the portal dialog does not report the selected filter and
@@ -838,13 +846,16 @@ mod tests {
         assert!(!entry_exists(&target), "nonexistent file does not exist");
     }
 
-    /// `is_document_portal` identifies paths within the XDG document portal mount.
+    /// `is_document_portal` identifies paths within the XDG document portal mount, including the
+    /// `/run/flatpak/doc` mount a Flatpak sandbox sees.
     #[test]
     fn is_document_portal_detects_portal_fuse_paths() {
         assert!(is_document_portal(Path::new("/run/user/1000/doc/1234abcd/test.docx")));
         assert!(is_document_portal(Path::new("/var/run/user/1000/doc/by-app/app/test.docx")));
+        assert!(is_document_portal(Path::new("/run/flatpak/doc/1234abcd/test.docx")));
         assert!(!is_document_portal(Path::new("/home/user/Documents/test.docx")));
         assert!(!is_document_portal(Path::new("/tmp/doc/test.docx")));
+        assert!(!is_document_portal(Path::new("/run/flatpak/other/test.docx")));
     }
 
     /// When the portal omits `current_filter`, ambiguous saves (unchanged suggested extension or bare name)
