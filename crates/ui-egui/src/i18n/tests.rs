@@ -817,6 +817,11 @@ fn french_editing_region_uses_the_locale_not_extension_keys() {
     for tag in ["fr_CA.UTF-8", "fr-Latn-CA", "FR_ca", "fr_CA@euro", "fr-CA-u-ca-gregory"] {
         assert_eq!(resolve(&["en-US", tag]).as_deref(), Some("fr-CA"), "{tag}");
     }
+    for tag in ["fr-419", "fr_Latn_419.UTF-8", "fr-419-u-ca-gregory", "fr-419-x-ca"] {
+        assert_eq!(resolve(&[tag]).as_deref(), Some("fr-419"), "{tag}");
+    }
+    assert_eq!(resolve(&["fr-419", "fr-CA"]).as_deref(), Some("fr-419"));
+    assert_eq!(resolve(&["fr-u-ca-gregory", "fr-CA"]).as_deref(), Some("fr-CA"));
     assert_eq!(resolve(&["fr_BE.UTF-8@euro"]).as_deref(), Some("fr-BE"));
     assert_eq!(resolve(&["fr-CA", "fr-FR"]).as_deref(), Some("fr-CA"));
     for tag in ["fr", "fr-u-ca-gregory", "fr-Latn-u-ca-gregory", "fr-x-ca", "en-CA"] {

@@ -223,12 +223,7 @@ fn name_parts(tag: Option<&str>) -> NameParts {
     // French is a pack locale. Its actual region follows the language and optional script;
     // calendar/private-use extension data never selects Canada. Keep other labels unchanged.
     if let Some(locale) = wordcraft_engine::proof::ProofLang::from_tag(Some(tag)).pack_locale().filter(|l| l.primary() == "fr") {
-        let mut parts = locale.as_str().split('-').skip(1);
-        let first = parts.next().unwrap_or("");
-        let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next().unwrap_or("") } else { first };
-        let is_region = (region.len() == 2 && region.bytes().all(|b| b.is_ascii_alphabetic()))
-            || (region.len() == 3 && region.bytes().all(|b| b.is_ascii_digit()));
-        return if is_region {
+        return if let Some(region) = wordcraft_engine::packs::pack_region(&locale) {
             NameParts::Regioned { language: "French".into(), region: region_name(region) }
         } else {
             NameParts::Whole("French (France)".into())
@@ -494,9 +489,9 @@ pub(crate) fn same_language(a: &str, b: &str) -> bool {
             if parts.get(1) == Some(&"latn") {
                 parts.remove(1);
             }
-            let region = if parts.get(1).is_some_and(|p| p.len() == 4 && p.bytes().all(|b| b.is_ascii_alphabetic())) { 2 } else { 1 };
-            if !parts.get(region).is_some_and(|p| wordcraft_engine::packs::is_region(p)) {
-                parts.insert(region, "fr");
+            if wordcraft_engine::packs::pack_region(&locale).is_none() {
+                let at = if parts.get(1).is_some_and(|p| p.len() == 4 && p.bytes().all(|b| b.is_ascii_alphabetic())) { 2 } else { 1 };
+                parts.insert(at, "fr");
             }
             parts.join("-")
         })

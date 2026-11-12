@@ -214,12 +214,7 @@ impl Lang {
             if locale.primary() != "fr" {
                 return None;
             }
-            let mut parts = locale.as_str().split('-').skip(1);
-            let first = parts.next()?;
-            let region = if first.len() == 4 && first.bytes().all(|b| b.is_ascii_alphabetic()) { parts.next()? } else { first };
-            if region.len() != 2 || !region.bytes().all(|b| b.is_ascii_alphabetic()) {
-                return None;
-            }
+            let region = wordcraft_engine::packs::pack_region(&locale)?;
             wordcraft_engine::proof::lang::normalize_tag(&format!("fr-{region}"))
         });
         Some(regional.unwrap_or_else(|| default.to_string()))

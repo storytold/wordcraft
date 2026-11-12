@@ -379,6 +379,17 @@ fn french_regions_are_in_both_language_pickers() {
         assert_eq!((checks.extra, checks.listed), (None, listed_only(tag)));
     }
     assert_eq!(language_name(Some("fr-BE")), "French (Belgium)");
+    for tag in ["fr-419", "fr_419.UTF-8", "fr-Latn-419-u-ca-gregory", "fr-419-x-ca"] {
+        assert_eq!(language_name(Some(tag)), "French (419)", "{tag}");
+        assert!(super::language::same_language(tag, "fr-419"), "{tag}");
+        assert!(!super::language::same_language(tag, "fr-FR"), "{tag}");
+        assert!(!super::language::same_language(tag, "fr-CA"), "{tag}");
+        let checks = language_checks(tag, &short());
+        assert_eq!(checks.extra.as_deref(), Some("French (419)"), "{tag}");
+        assert!(checks.listed.iter().all(|on| !on), "{tag}");
+    }
+    assert!(super::language::same_language("fr-CA-1996-u-nu-latn", "fr-CA"));
+    assert!(!super::language::same_language("fr-Cyrl-419", "fr-419"));
     // The shared dynamic entries keep the two regions separate, including encoded locales.
     for (current, expected) in [("fr_FR.UTF-8", "fr-FR"), ("fr_CA.UTF-8", "fr-CA")] {
         let checks = language_checks(current, &entries);
