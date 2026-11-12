@@ -187,6 +187,39 @@ fn a_header_without_a_stated_height_has_no_band() {
 }
 
 #[test]
+fn a_header_band_as_tall_as_the_page_leaves_the_text_room() {
+    // #5806: a header's min-height raised to the page height (to fit a full-page picture) made
+    // the text's top margin the page's bottom edge, so each page drew one line off the paper and
+    // the rest of the text was lost. The bands grow the margins only while the text keeps half an
+    // inch, as Page Setup's margins must.
+    let content = format!(
+        r#"<office:document-content {}><office:body><office:text><text:p>a</text:p><text:p>b</text:p></office:text></office:body></office:document-content>"#,
+        crate::odt::tests::NS_T
+    );
+    let hf = "<style:header><text:p>H</text:p></style:header><style:footer><text:p>F</text:p></style:footer>";
+    let room = |styles: &str| {
+        let s = import(&crate::odt::tests::package(&content, Some(styles))).unwrap().last_section;
+        (s.page_h - s.margin_top - s.margin_bottom, s)
+    };
+    let tall_header = styles_with_header(hf).replace(r#"fo:min-height="0.5cm""#, r#"fo:min-height="29.7cm""#);
+    let (left, s) = room(&tall_header);
+    assert!(left >= 36.0 - 0.05, "text room {left}: {s:?}");
+    // The header still starts at the page margin; the text right after as much band as fits.
+    let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+    assert!(near(s.header, cm(2.0)) && near(s.margin_top, s.page_h - cm(3.0) - 36.0), "{s:?}");
+    // A footer as tall as the page leaves it too, and so do both at once.
+    let tall_footer = styles_with_header(hf).replace(r#"fo:min-height="1cm""#, r#"fo:min-height="29.7cm""#);
+    let (left, s) = room(&tall_footer);
+    assert!(left >= 36.0 - 0.05 && near(s.margin_top, cm(2.75)), "text room {left}: {s:?}");
+    let both = tall_header.replace(r#"fo:min-height="1cm""#, r#"fo:min-height="29.7cm""#);
+    let (left, s) = room(&both);
+    assert!(left >= 36.0 - 0.05, "text room {left}: {s:?}");
+    // Bands that fit are as stated.
+    let (_, s) = room(&styles_with_header(hf));
+    assert!(near(s.margin_top, cm(2.75)) && near(s.margin_bottom, cm(3.0)), "{s:?}");
+}
+
+#[test]
 fn header_and_footer_distances_round_trip() {
     let mut d = Document::new();
     d.body = vec![text_para("Body", Default::default())];

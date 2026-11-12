@@ -1213,6 +1213,9 @@ fn line_numbering(a: &Attrs) -> Option<wordcraft_doc::section::LineNumbering> {
     Some(LineNumbering { count_by, start: 1, distance, restart })
 }
 
+/// Text room, points, that header and footer bands leave on a page (as Page Setup's margins must).
+const MIN_TEXT_ROOM: f32 = 36.0;
+
 /// A page layout's header or footer area (`style:header-style`/`style:footer-style`, ODF 1.3
 /// §16.6–16.7): its minimum height and its spacing from the text, in points.
 #[derive(Clone, Copy, Default)]
@@ -1390,19 +1393,31 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
         // measures the header's distance and the text's margin from the edge. How the band's
         // height and spacing add up, and what an unstated height or spacing rule is, the
         // standard leaves open (see `Band::room`).
-        let limit = sec.page_w.max(sec.page_h);
+        // The bands grow the margins only while the text keeps half an inch (Page Setup's rule for
+        // margins), or what the page's margins leave: a band as tall as the page (to fit a
+        // full-page picture, #5806) would put the text below the paper. The smaller band is kept
+        // whole and the other takes the rest.
+        let fit = (sec.page_h - sec.margin_top - sec.margin_bottom - MIN_TEXT_ROOM).max(0.0);
+        let (h_room, h_gap) = if header { hb.room() } else { (0.0, 0.0) };
+        let (f_room, f_gap) = if footer { fb.room() } else { (0.0, 0.0) };
+        let (h_room, f_room) = (h_room.max(0.0), f_room.max(0.0));
+        let (h_room, f_room) = if h_room <= f_room {
+            let h = h_room.min(fit);
+            (h, f_room.min(fit - h))
+        } else {
+            let f = f_room.min(fit);
+            (h_room.min(fit - f), f)
+        };
         if header {
-            let (room, gap) = hb.room();
             sec.header = sec.margin_top;
-            sec.margin_top = (sec.margin_top + room).min(limit);
+            sec.margin_top += h_room;
             // Content taller than the band pushes the text down, the spacing below it kept or not.
-            sec.header_gap = gap;
+            sec.header_gap = h_gap;
         }
         if footer {
-            let (room, gap) = fb.room();
             sec.footer = sec.margin_bottom;
-            sec.margin_bottom = (sec.margin_bottom + room).min(limit);
-            sec.footer_gap = gap;
+            sec.margin_bottom += f_room;
+            sec.footer_gap = f_gap;
         }
         // A one-column layout keeps the default columns (and their gap).
         if let Some(c) = cols.as_ref().filter(|c| c.count > 1) {
