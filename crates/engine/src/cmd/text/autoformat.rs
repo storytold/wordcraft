@@ -378,6 +378,24 @@ fn para_look(r: &wordcraft_doc::resolve::ResolvedPara) -> wordcraft_doc::resolve
     r
 }
 
+/// [`para_look`] of a paragraph with the properties `props` and the paragraph mark `mark`, its
+/// indents in characters measured in the mark's size, as layout measures them.
+fn laid_out(s: &Session, props: &wordcraft_doc::props::ParaProps, mark: &wordcraft_doc::props::CharProps) -> wordcraft_doc::resolve::ResolvedPara {
+    let mut r = s.doc.styles.resolve_para(props);
+    if r.indent_chars.iter().any(|c| *c != 0.0) {
+        r.set_char_unit(char_look(s, props.style.as_deref(), mark).size);
+    }
+    para_look(&r)
+}
+
+/// The paragraph mark of `para` once it has the heading style `id`: it loses only the formatting
+/// the style gives it in the same way.
+fn heading_mark(s: &Session, id: &str, para: &wordcraft_doc::Paragraph) -> wordcraft_doc::props::CharProps {
+    let mut mark = para.mark.clone();
+    consume_char_formatting(&mut mark);
+    if char_look(s, Some(id), &mark) == char_look(s, None, &para.mark) { mark } else { para.mark.clone() }
+}
+
 /// How text in a paragraph of style `style` with the run properties `c` looks: its resolved
 /// formatting without revision marks, links and proofing language.
 fn char_look(s: &Session, style: Option<&str>, c: &wordcraft_doc::props::CharProps) -> wordcraft_doc::resolve::ResolvedChar {
@@ -453,6 +471,7 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
     if para.run_ranges().any(|(_, c)| char_look(s, None, c) != look) {
         return None;
     }
+    let before = laid_out(s, &para.props, &para.mark);
     let mut found = None;
     for level in DEFINED_HEADINGS {
         let id = format!("Heading{level}");
@@ -460,7 +479,7 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
             continue;
         }
         let props = wordcraft_doc::props::ParaProps { style: Some(id.clone()), ..Default::default() };
-        if char_look(s, Some(&id), &Default::default()) == look && para_look(&styles.resolve_para(&props)) == para_look(&resolved) {
+        if char_look(s, Some(&id), &Default::default()) == look && laid_out(s, &props, &heading_mark(s, &id, para)) == before {
             if found.is_some() {
                 return None;
             }
@@ -472,16 +491,11 @@ pub(super) fn defined_style(s: &Session, at: &Pos) -> Option<wordcraft_doc::Para
     styled.props.style = Some(id.clone());
     consume_para_formatting(&mut styled.props);
     styled.format(0, styled.len(), &consume_char_formatting).ok()?;
-    // The paragraph mark loses only the formatting the style gives it in the same way.
-    let mut mark = styled.mark.clone();
-    consume_char_formatting(&mut mark);
-    if char_look(s, Some(&id), &mark) == char_look(s, None, &para.mark) {
-        styled.mark = mark;
-    }
+    styled.mark = heading_mark(s, &id, para);
     styled.normalize();
     // The paragraph must look as it did before, without a number from the style's list.
     let after = styles.resolve_para(&styled.props);
-    let same = para_look(&after) == para_look(&resolved)
+    let same = laid_out(s, &styled.props, &styled.mark) == before
         && after.numbering.is_none_or(|n| n.num == 0)
         && styled.text == para.text
         && styled.run_ranges().all(|(_, c)| char_look(s, Some(&id), c) == look);

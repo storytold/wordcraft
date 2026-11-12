@@ -1349,6 +1349,18 @@ fn text_that_does_not_look_exactly_like_a_heading_stays_as_typed() {
     s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().format(0, 7, &|c| c.link = Some("https://example.com".into())).unwrap();
     typ(&mut s, "\n");
     assert!(normal(&s), "a link: {:?}", styled(&s));
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"defineStyles": true}));
+    typ(&mut s, "Res\tults");
+    format_like_heading(&mut s, 0, 1);
+    typ(&mut s, "\n");
+    assert!(normal(&s), "a tab: {:?}", styled(&s));
+    let mut s = typed_like_heading("Results", 1);
+    s.doc.insert_object(&Pos::body(0, 3), wordcraft_doc::InlineObject::BookmarkStart { name: "mark".into() }, &Default::default()).unwrap();
+    let end = s.doc.para_at(&Pos::body(0, 0)).map_or(0, |p| p.len());
+    s.sel = crate::Selection::caret(Pos::body(0, end));
+    typ(&mut s, "\n");
+    assert!(normal(&s), "an object: {:?}", styled(&s));
     let mut s = typed_like_heading("Results", 1);
     s.sel = crate::Selection::caret(Pos::body(0, 3));
     typ(&mut s, "\n");
@@ -1474,27 +1486,66 @@ fn text_without_direct_formatting_stays_normal_when_a_heading_looks_like_normal(
 }
 
 #[test]
-fn shading_the_heading_gives_is_removed() {
-    use wordcraft_doc::props::Rgb;
+fn shading_and_borders_the_heading_gives_are_removed() {
+    use wordcraft_doc::props::{Border, Borders, Rgb};
     let mut s = typed_like_heading("Results", 1);
     let teal = Some(Rgb(0, 128, 128));
+    let box_border = Some(Border::single(1.0));
+    let bottom = Some(Borders { bottom: Some(Border::single(2.0)), ..Default::default() });
     if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
         one.para.shading = teal;
+        one.para.borders = bottom;
         one.chr.highlight = None;
         one.chr.shading = teal;
+        one.chr.border = box_border;
     }
     let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
     p.props.shading = teal;
-    p.format(0, 7, &|c| c.shading = teal).unwrap();
+    p.props.borders = bottom;
+    p.format(0, 7, &|c| (c.shading, c.border) = (teal, box_border)).unwrap();
     // The paragraph mark's own shading differs from the heading's and stays.
     p.mark.shading = Some(Rgb(255, 0, 0));
     p.touch();
     typ(&mut s, "\n");
     let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
     assert_eq!(p.props.style.as_deref(), Some("Heading1"));
-    assert_eq!(p.props.shading, None);
-    assert!(p.run_ranges().all(|(_, c)| c.shading.is_none()), "{:?}", p.runs);
+    assert_eq!((p.props.shading, p.props.borders), (None, None));
+    assert!(p.run_ranges().all(|(_, c)| c.shading.is_none() && c.border.is_none()), "{:?}", p.runs);
     assert_eq!(p.mark.shading, Some(Rgb(255, 0, 0)));
+}
+
+#[test]
+fn indents_in_characters_are_compared_in_the_paragraph_mark_size() {
+    // Indents in characters are measured in the paragraph mark's size, as layout measures them.
+    let first_indent = |s: &Session| {
+        let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+        let mut r = s.doc.styles.resolve_para(&p.props);
+        r.set_char_unit(s.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark).size);
+        r.indent_first
+    };
+    let heading_with_indent = || {
+        let mut s = typed_like_heading("Results", 1);
+        if let Some(one) = std::sync::Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+            one.para.indent_first_chars = Some(2.0);
+        }
+        s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.indent_first_chars = Some(2.0);
+        s
+    };
+    // The mark has no direct size: the heading style would make it larger and move the indent.
+    let mut s = heading_with_indent();
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&s));
+    // The mark is formatted at the heading's size: it keeps that size, the indent stays where it
+    // was, and the style is applied.
+    let mut s = heading_with_indent();
+    let size = s.doc.styles.resolve_char(Some("Heading1"), &Default::default()).size;
+    let p = s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap();
+    p.mark.size = Some(size);
+    p.touch();
+    let before = first_indent(&s);
+    typ(&mut s, "\n");
+    assert_eq!(styled(&s).first().and_then(|(_, st)| st.as_deref()), Some("Heading1"));
+    assert_eq!(first_indent(&s), before);
 }
 
 #[test]
