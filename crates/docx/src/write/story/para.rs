@@ -266,7 +266,7 @@ impl Writer<'_> {
         }
     }
 
-    fn rev_kind(&self, idx: Option<u32>) -> Option<RevisionKind> {
+    pub(super) fn rev_kind(&self, idx: Option<u32>) -> Option<RevisionKind> {
         idx.and_then(|i| self.doc.revisions.get(i as usize)).map(|r| r.kind)
     }
 

@@ -56,7 +56,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 return fix_caret(s, &tp, r, 0);
             }
             let spans = text_spans(s, story, &[cell_prefix(&tp, r, c)]);
-            if let Some(done) = guard_delete(s, &spans)? {
+            if let Some(done) = guard_delete(s, &spans, &[])? {
                 return Ok(done);
             }
             if let Some(row) = s.doc.table_mut(story, &tp)?.rows.get_mut(r)
