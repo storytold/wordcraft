@@ -628,11 +628,16 @@ mod ui_tests {
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(5);
         let labels: Vec<String> = h.query_all_by(|n| n.label().is_some()).filter_map(|n| n.accesskit_node().label()).take(100).collect();
-        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group: {labels:?}");
+        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
         let full = h.state().session.view.full_screen;
+        let disabled = h.state().session.why_disabled("view.fullScreen").is_some();
         click_shown(&h, "Full Screen");
         h.run_steps(3);
-        assert_ne!(h.state().session.view.full_screen, full, "Full Screen still toggles from the compact group");
+        if disabled {
+            assert_eq!(h.state().session.view.full_screen, full, "a disabled Full Screen stays off");
+        } else {
+            assert_ne!(h.state().session.view.full_screen, full, "Full Screen still toggles from the compact group");
+        }
     }
 
     /// #1285: a one-row section's drop-down stays open while its controls are used, and they run
