@@ -94,7 +94,7 @@ impl Reader {
             let list = self.overrides.get(&ls).and_then(|id| self.lists.get(id));
             let lv = st.ilvl.min(8);
             let ordered = list.and_then(|l| l.get(lv as usize).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv, start: 1 });
+            p.list = Some(ListInfo { ordered, level: lv, start: 1, ..Default::default() });
         }
         p
     }
@@ -261,5 +261,13 @@ fn spacing(st: &St) -> model::Spacing {
     } else {
         Some(LineSpacing::AtLeast(pt(sl)))
     };
-    model::Spacing { before: gap(st.sb), after: gap(st.sa), line, left: st.li.map(pt), right: st.ri.map(pt), first: st.fi.map(pt) }
+    model::Spacing {
+        before: gap(st.sb),
+        after: gap(st.sa),
+        line,
+        left: st.li.map(pt),
+        right: st.ri.map(pt),
+        first: st.fi.map(pt),
+        ..Default::default()
+    }
 }

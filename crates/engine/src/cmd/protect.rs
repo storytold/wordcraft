@@ -9,6 +9,7 @@
 
 use serde_json::{Value, json};
 use std::collections::HashSet;
+use std::sync::Arc;
 use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::props::{CellProps, CharProps, RowProps, TableProps};
 use wordcraft_doc::{Block, Blocks, Document, Path, PermRange, Pos, StoryRef};
@@ -78,7 +79,7 @@ fn restrict(s: &mut Session, v: &Value) -> CmdResult {
             return Err(CmdError::Disabled("stop protection before changing the formatting restrictions".into()));
         }
         let names: Vec<&str> = list.iter().filter_map(Value::as_str).take(10_000).collect();
-        for st in &mut s.doc.styles.styles {
+        for st in &mut Arc::make_mut(&mut s.doc.styles).styles {
             st.locked = names.iter().any(|n| *n == st.id || n.eq_ignore_ascii_case(&st.name));
         }
     }
@@ -651,19 +652,33 @@ pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
     if para.objects.is_empty() {
         return p.clone();
     }
-    let editable: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
-    let is_start = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermStart { id, .. }) if editable.contains(id));
-    let is_end = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermEnd { id }) if editable.contains(id));
+    let Some(before) = para.text.get(..p.off) else { return p.clone() };
+    let Some(after) = para.text.get(p.off..) else { return p.clone() };
+    if !before.ends_with(OBJ) && !after.starts_with(OBJ) {
+        return p.clone();
+    }
+    let editable: HashSet<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
+    // Count the preceding objects once. Each adjacent marker can then use the matching
+    // object directly, forwards for starts and backwards for ends, even with short storage.
+    let index = before.chars().filter(|c| *c == OBJ).count();
     let w = OBJ.len_utf8();
     let mut off = p.off;
-    if is_start(off) {
-        while is_start(off) {
-            off += w;
+    for (ch, object) in after.chars().zip(para.objects.iter().skip(index)) {
+        if ch != OBJ || !matches!(object, InlineObject::PermStart { id, .. } if editable.contains(id)) {
+            break;
         }
+        off += w;
+    }
+    if off > p.off {
         return Pos { off, ..p.clone() };
     }
-    while off >= w && is_end(off - w) {
-        off -= w;
+    if let Some(objects) = para.objects.get(..index) {
+        for (ch, object) in before.chars().rev().zip(objects.iter().rev()) {
+            if ch != OBJ || !matches!(object, InlineObject::PermEnd { id } if editable.contains(id)) {
+                break;
+            }
+            off -= w;
+        }
     }
     Pos { off, ..p.clone() }
 }
