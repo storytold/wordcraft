@@ -270,10 +270,8 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.path = Some(path.into());
     // A Markdown file's own text, for the view to show and Save to write back as it is.
-    #[cfg(not(target_arch = "wasm32"))]
-    if p::str(v, "data").is_none() && super::md_source::is_markdown_file(std::path::Path::new(path)) {
-        let max = u64::try_from(super::md_source::MAX_SOURCE_BYTES).unwrap_or(u64::MAX).saturating_add(1);
-        s.md_file = crate::io::read_file_head(path, max).map(|bytes| super::md_source::FileText::from_bytes(&bytes)).unwrap_or_default();
+    if super::md_source::is_markdown_file(std::path::Path::new(path)) {
+        s.md_file = markdown_file_text(path, v);
     }
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
@@ -282,6 +280,28 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     Ok(
         json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
     )
+}
+
+/// A Markdown file's own text as `file.open` finds it: the bytes the caller hands over (base64 in
+/// `data`, the same ones `read_document` decodes), else the head of the file at `path`.
+/// `FileText::from_bytes` keeps it only when it can be written back as it is.
+fn markdown_file_text(path: &str, v: &Value) -> super::md_source::FileText {
+    if let Some(data) = p::str(v, "data") {
+        // `read_document` has already refused a text it cannot decode.
+        return super::insert::base64_decode(data).map(|bytes| super::md_source::FileText::from_bytes(&bytes)).unwrap_or_default();
+    }
+    // Without `data`, the file's own bytes; not reachable on the web, where a file only arrives
+    // as `data`.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let max = u64::try_from(super::md_source::MAX_SOURCE_BYTES).unwrap_or(u64::MAX).saturating_add(1);
+        crate::io::read_file_head(path, max).map(|bytes| super::md_source::FileText::from_bytes(&bytes)).unwrap_or_default()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = path;
+        super::md_source::FileText::default()
+    }
 }
 
 /// The document the file at `path` holds (or its bytes, base64 in `data`, with `path` only

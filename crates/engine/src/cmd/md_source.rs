@@ -691,6 +691,34 @@ mod tests {
         s.run("file.save", &json!({})).unwrap()
     }
 
+    /// A scratch folder holding `name`, opened from the bytes `file.open` is handed (`data`, as a
+    /// platform hands a file over). The path holds other bytes, so a save that left them alone
+    /// would show.
+    fn open_handed_over(dir: &str, name: &str, text: &[u8]) -> (Session, PathBuf) {
+        let dir = unique_temp_dir(&format!("handed-{dir}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, b"not the opened text").unwrap();
+        let mut s = Session::new(Document::from_text(""));
+        let data = crate::cmd::insert::base64_encode(text);
+        s.run("file.open", &json!({"path": path.to_string_lossy(), "data": data})).unwrap();
+        (s, path)
+    }
+
+    /// Verifies a Markdown file opened from handed-over bytes keeps its own text and saves it back
+    /// byte-for-byte, as one opened from its path does.
+    #[test]
+    fn a_file_opened_from_handed_over_bytes_keeps_its_own_text() {
+        for (dir, text) in [("plain", OWN.to_string()), ("crlf", OWN.replace('\n', "\r\n"))] {
+            let (mut s, path) = open_handed_over(dir, "own.md", text.as_bytes());
+            assert!(!s.md_file.is_empty(), "{dir}: the opened text must be kept");
+            assert_eq!(save(&mut s)["rewritten"], false, "{dir}");
+            assert_eq!(std::fs::read(&path).unwrap(), text.as_bytes(), "{dir}");
+            done(&path);
+        }
+    }
+
     /// Removes the temporary test folder created for `path`.
     fn done(path: &std::path::Path) {
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
