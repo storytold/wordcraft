@@ -364,7 +364,15 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         if crate::ribbon_fit::rows_for(ui.ctx(), "Insert", "Symbols", 1) >= 2 {
             stack(ui, |ui| {
                 crate::widgets::row(ui, |ui| {
-                    small(ui, app, "equation", Some("Equation"), "Equation", crate::widgets::ButtonAction::new("insert.equation", json!({}), false));
+                    crate::widgets::split(
+                        ui,
+                        app,
+                        "equation",
+                        "Equation",
+                        crate::widgets::ButtonAction::new("insert.equation", json!({}), false),
+                        None,
+                        crate::equation_tab::builtin_menu,
+                    );
                 });
                 crate::widgets::row(ui, |ui| symbol(ui, app, false));
             });

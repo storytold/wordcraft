@@ -66,19 +66,31 @@ struct Frame {
     tab: String,
     /// Whether the card is wide enough for the two-row Home forms.
     wide: bool,
+    /// The card width this frame's measured forms belong to.
+    card_w: f32,
     /// The plan, by position, and the titles it was made for.
     titles: Vec<String>,
     levels: Vec<u8>,
     drawn: Vec<String>,
 }
 
-/// Widths measured so far: (tab, position, group, level) → width, and each tab's group order.
+/// Widths measured so far: (tab, position, group, level, layout form) → width, and each
+/// tab's group order. The form is the section's measured row count at the width it drew at
+/// (plus the wide-Home flag): a section's natural layout changes at width breakpoints, so a
+/// FULL width stored on one side of a breakpoint must not plan the other side.
 #[derive(Clone, Default)]
 struct Measured {
     /// The interface language and scale the widths were measured at.
     signature: String,
-    widths: HashMap<(String, usize, String, u8), f32>,
+    widths: HashMap<(String, usize, String, u8, String), f32>,
     order: HashMap<String, Vec<String>>,
+}
+
+/// The layout form a section's measured width belongs to: its row count from the measured
+/// table at this card width, and whether the wide Home form is on (`WIDE_MIN`, which
+/// `begin` has not stored in the frame yet, so compare the width directly).
+fn form_key(card_w: f32, tab: &str, section: &str) -> String {
+    format!("{}:{}", rows_in(tab, section, card_w, 0), card_w >= WIDE_MIN)
 }
 
 /// Stable storage id for the ribbon fit plan of the current frame.
@@ -125,6 +137,10 @@ fn signature(ctx: &Context) -> String {
 /// Start drawing `tab` in a row `avail` points wide: plan the groups' levels.
 pub fn begin(ctx: &Context, tab: &str, avail: f32) {
     let sig = signature(ctx);
+    // The card width this frame's forms belong to. Read once here: inside a group's row
+    // the content rect is the group's remainder, not the card.
+    let card_w = ctx.content_rect().width();
+    let wide_now = card_w >= WIDE_MIN;
     let (titles, groups) = ctx.data_mut(|d| {
         let m = d.get_temp_mut_or_default::<Measured>(measured_id());
         if m.signature != sig {
@@ -137,7 +153,7 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
             .enumerate()
             .map(|(i, t)| GroupWidths {
                 title: t.clone(),
-                widths: [FULL, COMPACT].map(|l| m.widths.get(&(tab.to_string(), i, t.clone(), l)).copied()),
+                widths: [FULL, COMPACT].map(|l| m.widths.get(&(tab.to_string(), i, t.clone(), l, form_key(card_w, tab, t))).copied()),
             })
             .collect();
         (titles, groups)
@@ -149,10 +165,8 @@ pub fn begin(ctx: &Context, tab: &str, avail: f32) {
     } else {
         Vec::new()
     };
-    // Read before taking the data lock: the context lock is not re-entrant.
-    let wide = ctx.content_rect().width() >= WIDE_MIN;
     ctx.data_mut(|d| {
-        d.insert_temp(frame_id(), Frame { tab: tab.to_string(), wide, titles, levels, drawn: Vec::new() });
+        d.insert_temp(frame_id(), Frame { tab: tab.to_string(), wide: wide_now, card_w, titles, levels, drawn: Vec::new() });
         d.insert_temp(active_id(), true);
     });
 }
@@ -255,8 +269,9 @@ pub fn record(ctx: &Context, title: &str, level: u8, width: f32) {
         if !(width.is_finite() && width > 0.0) {
             return;
         }
+        let card_w = d.get_temp::<Frame>(frame_id()).map(|f| f.card_w).unwrap_or(0.0);
         let m = d.get_temp_mut_or_default::<Measured>(measured_id());
-        m.widths.insert((tab.clone(), i, title.to_string(), level), width);
+        m.widths.insert((tab.clone(), i, title.to_string(), level, form_key(card_w, &tab, title)), width);
     });
 }
 
@@ -391,6 +406,28 @@ mod tests {
         assert_eq!(rows_in("Home", "Font", 2000.0, 3), 2, "the Home wide form");
     }
 
+    /// Stored FULL widths belong to a layout form: the form key changes when a section's
+    /// row count changes at its measured breakpoint, and when the card crosses the wide-Home
+    /// threshold, so a width measured on one side never plans the other side.
+    #[test]
+    fn measured_widths_are_keyed_by_layout_form() {
+        // The form key is the section's measured row count at a width plus the wide-Home
+        // flag: no egui context needed, only the measured table and WIDE_MIN.
+        fn form_at(width: f32, tab: &str, section: &str) -> String {
+            format!("{}:{}", rows_in(tab, section, width, 0), width >= WIDE_MIN)
+        }
+        // Design › Document Formatting is 1 row below 520 pt and 3 rows from there.
+        assert_ne!(
+            form_at(400.0, "Design", "Document Formatting"),
+            form_at(600.0, "Design", "Document Formatting"),
+            "the 520-pt breakpoint is a new form"
+        );
+        // Home's wide form starts at 1520 pt of card.
+        assert_ne!(form_at(1400.0, "Home", "Font"), form_at(1600.0, "Home", "Font"), "the wide threshold is a new form");
+        // A section with no breakpoint keeps its form across widths.
+        assert_eq!(form_at(900.0, "Home", "Clipboard"), form_at(1200.0, "Home", "Clipboard"), "Clipboard has no breakpoint");
+    }
+
     /// The ribbon sections and the parity doc name the same reference: Word for Windows
     /// 16.0.20527 at 125 % DPI. A version/platform relabel in either place must land in both.
     #[test]
@@ -509,6 +546,77 @@ mod ui_tests {
         if let Some(i) = first_compact {
             assert!(levels[i..].iter().all(|(_, level)| *level == COMPACT), "natural after one row: {levels:?}");
         }
+    }
+
+    /// The two-row Insert › Symbols section (1400 px at 125 % = 1120 pt) offers the
+    /// ready-made equation gallery, as the split button does outside the two-row form.
+    #[test]
+    fn two_row_symbols_keep_the_equation_gallery() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.tab", json!({"tab": "Insert"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1120.0, 614.0)).with_pixels_per_point(1.25).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(8);
+        // The split button's arrow opens Built-In; the plain insert would show no menu.
+        let arrow =
+            h.query_all_by_label_contains("Equation").find(|n| n.rect().width() < 20.0).expect("the two-row Equation split button has an arrow");
+        arrow.click();
+        h.run_steps(3);
+        assert!(shown(&h, "Built-In"), "the two-row Equation button opens the built-in gallery");
+    }
+
+    /// The two-row Review › Tracking section shows whether Track Changes is on.
+    #[test]
+    fn two_row_tracking_shows_the_track_changes_state() {
+        use egui_kittest::kittest::Queryable;
+        for on in [false, true] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+            app.run("ui.tab", json!({"tab": "Review"})).unwrap();
+            app.session.doc.settings.track_changes = on;
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1520.0, 614.0)).with_pixels_per_point(1.0).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(8);
+            let node = h.get_by_label("Track Changes");
+            let dump = format!("{node:?}");
+            assert_eq!(dump.contains("toggled: True"), on, "Track Changes reports {on} in the two-row form: {dump}");
+        }
+    }
+
+    /// The one-row View › Window section keeps every control reachable at 420 pt: opening
+    /// the compact drop-down shows Full Screen inside the window, and it still toggles.
+    #[test]
+    fn compact_window_keeps_full_screen_reachable() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.tab", json!({"tab": "View"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 700.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(8);
+        click_shown(&h, "Window");
+        h.run_steps(3);
+        assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
+        let full = h.state().session.view.full_screen;
+        click_shown(&h, "Full Screen");
+        h.run_steps(3);
+        assert_ne!(h.state().session.view.full_screen, full, "Full Screen still toggles from the compact group");
     }
 
     /// #1285: a one-row section's drop-down stays open while its controls are used, and they run

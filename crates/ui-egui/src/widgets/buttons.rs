@@ -171,7 +171,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, checked, tip));
     resp
 }
 

@@ -260,14 +260,18 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
                 });
             });
         } else {
-            top_row(ui, |ui| {
-                new_window(ui, app, true);
-                arrange_all(ui, app, true);
-                split(ui, app, true);
-                side_by_side(ui, app);
-                sync_scroll(ui, app);
-                switch_windows(ui, app, true);
-                full_screen(ui, app, true);
+            // Seven controls in one row can run past a narrow popup: scroll instead of
+            // clipping the trailing ones (Full Screen) out of reach.
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                top_row(ui, |ui| {
+                    new_window(ui, app, true);
+                    arrange_all(ui, app, true);
+                    split(ui, app, true);
+                    side_by_side(ui, app);
+                    sync_scroll(ui, app);
+                    switch_windows(ui, app, true);
+                    full_screen(ui, app, true);
+                });
             });
         }
     });

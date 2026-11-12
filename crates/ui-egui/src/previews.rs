@@ -604,7 +604,11 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let ppp = ui.ctx().pixels_per_point();
     let start_id = app.window_id("gallery_start");
     let start = ui.data(|d| d.get_temp::<usize>(start_id)).unwrap_or(0).min(styles.len().saturating_sub(1));
-    let visible = STYLE_TILES;
+    // In a compact group's popup the window edge can sit closer than six tiles plus the
+    // arrows: show the tiles that fit instead of painting past it (360-pt window).
+    let room = ui.available_width();
+    let fit = ((room - 18.0) / 76.0).floor() as usize;
+    let visible = STYLE_TILES.min(fit.max(1));
     // A mirrored interface (#5566) starts the tiles at the right and puts the arrows at the left.
     let rtl = crate::rtl::flows(ui);
     let (area, _) = ui.allocate_exact_size(vec2(visible as f32 * 76.0 + 18.0, crate::widgets::CONTENT_H), Sense::hover());

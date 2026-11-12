@@ -172,7 +172,7 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                         "trackChanges",
                         Some("Track Changes"),
                         "Track Changes",
-                        crate::widgets::ButtonAction::new("review.trackChanges", json!({}), false),
+                        crate::widgets::ButtonAction::new("review.trackChanges", json!({}), on),
                     );
                 });
                 crate::widgets::row(ui, |ui| options(ui, app));
