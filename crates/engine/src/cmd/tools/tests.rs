@@ -1176,6 +1176,127 @@ fn compare_style_remaps_same_id_with_different_list_definition() {
     let _ = std::fs::remove_file(rev_path);
 }
 
+/// #5841: an unchanged matching style and a revised-only style that share a list keep sharing it
+/// after the import, so their counters stay one sequence.
+#[test]
+fn compare_style_reuses_a_shared_list_for_a_revised_only_style() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-shared-list-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    assert_eq!(revised.numbering.abstract_of(revised_num), original.numbering.abstract_of(num), "same list definition");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 });
+    }
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "RevisedOnly".into(),
+        name: "Revised Only".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-shared-list-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["changes"], 0, "the shared list itself is not a formatting difference");
+
+    let numberings = |doc: &wordcraft_doc::Document| {
+        let h = doc.styles.get("Heading1").and_then(|st| st.para.numbering);
+        let ro = doc.styles.get("RevisedOnly").and_then(|st| st.para.numbering);
+        (h, ro)
+    };
+    let (h1, ro) = numberings(&s.doc);
+    assert_eq!(h1, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert_eq!(ro, Some(wordcraft_doc::props::NumRef { num, level: 0 }), "the revised-only style reuses the shared list");
+    let h1_aid = s.doc.numbering.num(num).expect("shared list exists").abstract_id;
+    let ro_aid = s.doc.numbering.num(num).expect("shared list exists").abstract_id;
+    assert_eq!(h1_aid, ro_aid, "both styles count on one abstract list");
+
+    let accepted = s.doc.clone();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(numberings(&s.doc), numberings(&accepted));
+
+    let mut acc = Session::new(accepted);
+    acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(numberings(&acc.doc), numberings(&s.doc));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: importing into a document whose largest numbering IDs are `u32::MAX` allocates unused
+/// IDs instead of saturating onto an occupied one.
+#[test]
+fn compare_style_import_allocates_free_ids_past_saturation() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    Arc::make_mut(&mut original.numbering).abstracts.push(wordcraft_doc::numbering::AbstractNum { id: u32::MAX, ..Default::default() });
+    Arc::make_mut(&mut original.numbering).nums.push(wordcraft_doc::numbering::Num {
+        id: u32::MAX,
+        abstract_id: num,
+        start_overrides: Vec::new(),
+        level_overrides: Vec::new(),
+    });
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-free-id-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 });
+    }
+    let new_levels = revised.numbering.abstract_of(revised_num).expect("revised list definition").levels.clone();
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-free-id-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["changes"], 1, "the differing list is a style change");
+
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    let imported = h1.para.numbering.expect("style still numbered").num;
+    assert_ne!(imported, u32::MAX, "the imported instance must not reuse the occupied maximum ID");
+    assert_eq!(s.doc.numbering.nums.iter().filter(|n| n.id == imported).count(), 1, "the imported instance ID is unique");
+    let aid = s.doc.numbering.num(imported).expect("imported list exists").abstract_id;
+    assert_ne!(aid, u32::MAX, "the imported abstract must not reuse the occupied maximum ID");
+    assert_eq!(s.doc.numbering.abstracts.iter().filter(|a| a.id == aid).count(), 1, "the imported abstract ID is unique");
+    assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_levels));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
 /// #5841: carried-forward fmt_change markers do not increment the change count when formatting is identical.
 #[test]
 fn compare_style_carried_forward_fmt_change_no_extra_count() {

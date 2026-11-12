@@ -211,6 +211,17 @@ fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, fo
     let mut changes = 0usize;
     let mut num_map = std::collections::BTreeMap::new();
     let mut abs_map = std::collections::BTreeMap::new();
+    // Both documents can hold the same list under the same ID. Counters live on the abstract
+    // list, so register those lists before importing any style: a revised-only style that shares
+    // one must keep sharing it instead of getting a clone with its own counter.
+    for src in &revised.numbering.nums {
+        if same_numbering(&s.doc, revised, src.id) {
+            num_map.insert(src.id, src.id);
+            if let Some(src_abs) = revised.numbering.abstract_of(src.id) {
+                abs_map.insert(src_abs.id, src_abs.id);
+            }
+        }
+    }
     if formatting {
         // The author's existing changes must stay recognizable while the loop appends new ones.
         let revisions_before = s.doc.revisions.clone();
@@ -296,18 +307,32 @@ fn remap_style_numbering(
         *num_ref = None;
         return;
     };
-    let target_numbering = Arc::make_mut(&mut doc.numbering);
-    let aid = if let Some(&mapped_aid) = abs_map.get(&src_abs.id) {
-        mapped_aid
-    } else {
-        let new_aid = target_numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
-        let mut new_abs = src_abs.clone();
-        new_abs.id = new_aid;
-        target_numbering.abstracts.push(new_abs);
-        abs_map.insert(src_abs.id, new_aid);
-        new_aid
+    let mapped_aid = abs_map.get(&src_abs.id).copied();
+    let aid = match mapped_aid {
+        Some(aid) => aid,
+        None => {
+            let Some(new_aid) =
+                wordcraft_doc::free_id(doc.numbering.abstracts.iter().map(|a| a.id).max(), doc.numbering.abstracts.iter().map(|a| a.id), 0)
+            else {
+                // Every abstract-list identifier is in use: the list cannot be imported safely.
+                *num_ref = None;
+                return;
+            };
+            new_aid
+        }
     };
-    let new_nid = target_numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
+    let Some(new_nid) = wordcraft_doc::free_id(doc.numbering.nums.iter().map(|n| n.id).max(), doc.numbering.nums.iter().map(|n| n.id), 1) else {
+        // Every list identifier is in use: the list cannot be imported safely.
+        *num_ref = None;
+        return;
+    };
+    let target_numbering = Arc::make_mut(&mut doc.numbering);
+    if mapped_aid.is_none() {
+        let mut new_abs = src_abs.clone();
+        new_abs.id = aid;
+        target_numbering.abstracts.push(new_abs);
+        abs_map.insert(src_abs.id, aid);
+    }
     let mut new_n = src_num.clone();
     new_n.id = new_nid;
     new_n.abstract_id = aid;
