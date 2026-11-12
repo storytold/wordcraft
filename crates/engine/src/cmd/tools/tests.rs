@@ -1015,13 +1015,7 @@ fn compare_emits_numbering_change_for_numbering_only_differences() {
     assert!(read_p.props.numbering.is_none(), "read paragraph has no active numbering");
     let read_ch = read_p.props.num_change.as_ref().expect("read paragraph preserves num_change");
     assert_eq!(read_ch.original, "1.", "read paragraph preserves original numbering string");
-    assert_eq!(read_ch.snapshot, None, "arbitrary original string does not create snapshot");
-
-    // parse_original strictly accepts <digits>:<0-8> and rejects legacy Word formats
-    assert_eq!(wordcraft_doc::props::NumChange::parse_original("42:3"), Some(NumRef { num: 42, level: 3 }));
-    assert_eq!(wordcraft_doc::props::NumChange::parse_original("%1:1:0:."), None, "rejects legacy Word level format");
-    assert_eq!(wordcraft_doc::props::NumChange::parse_original("12:%1:1:0:."), None, "rejects Word string starting with list id");
-    assert_eq!(wordcraft_doc::props::NumChange::parse_original("1."), None, "rejects plain formatted number string");
+    assert_eq!(read_ch.snapshot, None, "an original naming no list here creates no snapshot");
 }
 
 /// Review checks: numbering changes interact cleanly with format changes, unnumbered baselines,
@@ -1268,9 +1262,9 @@ fn numbering_change_snapshot_persistence_and_imported_ppr_change() {
         date: "2026-01-01T00:00:00Z".into(),
         move_name: None,
     });
-    let prior_num = NumRef { num: 42, level: 3 };
-    let nc = wordcraft_doc::props::NumChange::for_numbering(0, Some(prior_num));
-    assert_eq!(nc.original, "42:3", "for_numbering populates original with digits:level");
+    let prior_num = NumRef { num: Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered), level: 3 };
+    let nc = NumChange::for_numbering(0, Some(prior_num));
+    assert!(nc.original.is_empty(), "the writer caches the previous definition when saving");
     doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change = Some(Box::new(nc));
 
     let bytes = wordcraft_docx::write(&doc).expect("docx writes successfully");
@@ -1278,8 +1272,12 @@ fn numbering_change_snapshot_persistence_and_imported_ppr_change() {
     let reloaded_p = reloaded.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
     assert!(reloaded_p.props.numbering.is_none(), "reloaded paragraph is unnumbered");
     let reloaded_nc = reloaded_p.props.num_change.as_ref().expect("num_change preserved after reload");
-    assert_eq!(reloaded_nc.original, "42:3");
-    assert_eq!(reloaded_nc.snapshot, Some(prior_num), "snapshot recovered from original across reload");
+    assert_eq!(
+        reloaded_nc.original,
+        reloaded.numbering.change_original(prior_num.num, prior_num.level).unwrap(),
+        "the cache holds the previous list's definitions, not its id"
+    );
+    assert_eq!(reloaded_nc.snapshot, Some(prior_num), "snapshot recovered from the previous definitions across reload");
 
     let mut session = Session::new(reloaded);
     session.run("review.rejectAll", &json!({})).unwrap();
@@ -1296,13 +1294,14 @@ fn numbering_change_snapshot_persistence_and_imported_ppr_change() {
         date: "2026-01-01T00:00:00Z".into(),
         move_name: None,
     });
+    let empty_num = NumRef { num: Arc::make_mut(&mut doc_empty_orig.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered), level: 3 };
     doc_empty_orig.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change =
-        Some(Box::new(NumChange { rev: 0, original: String::new(), snapshot: Some(prior_num) }));
+        Some(Box::new(NumChange { rev: 0, original: String::new(), snapshot: Some(empty_num) }));
     let bytes_empty = wordcraft_docx::write(&doc_empty_orig).expect("docx writes empty orig");
     let reloaded_empty = wordcraft_docx::read(&bytes_empty).expect("docx reads empty orig");
     let reloaded_empty_nc = reloaded_empty.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change.as_ref().unwrap();
-    assert_eq!(reloaded_empty_nc.original, "42:3");
-    assert_eq!(reloaded_empty_nc.snapshot, Some(prior_num));
+    assert_eq!(reloaded_empty_nc.original, reloaded_empty.numbering.change_original(empty_num.num, empty_num.level).unwrap());
+    assert_eq!(reloaded_empty_nc.snapshot, Some(empty_num));
 
     // 2. Imported w:pPrChange with prior numbering and no num_change restores numbering on reject.
     let mut p_imported = ParaProps {

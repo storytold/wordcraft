@@ -1,11 +1,11 @@
 //! Lists: abstract numbering definitions (9 levels each), numbering instances, and the counter
 //! state used to compute list labels.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::props::{Align, CharProps};
+use crate::props::{Align, CharProps, NumRef};
 use crate::section::NumFormat;
 use crate::{DocError, free_id};
 
@@ -235,6 +235,70 @@ impl Numbering {
             return Some(l);
         }
         self.abstract_of(num)?.levels.get(level as usize)
+    }
+    /// The previous numbering definition cached in `w:numberingChange`'s `w:original`
+    /// (ECMA-376 §17.3.1.20): one `%level:value:format:text` segment per level the label shows.
+    /// The value is the level's start; Word caches the item's current number there, which the
+    /// model does not keep.
+    pub fn change_original(&self, num: u32, level: u8) -> Option<String> {
+        let level = level.min(8);
+        let lvl = self.level(num, level)?;
+        let chars: Vec<char> = lvl.text.chars().collect();
+        let is_token = |i: usize| chars.get(i) == Some(&'%') && chars.get(i + 1).is_some_and(|c| ('1'..='9').contains(c));
+        let mut out = String::new();
+        let mut complete = true;
+        let mut i = 0;
+        while i + 1 < chars.len() {
+            if !is_token(i) {
+                i += 1;
+                continue;
+            }
+            let Some(k) = chars[i + 1].to_digit(10) else {
+                complete = false;
+                break;
+            };
+            // A template naming a level the list doesn't define has no faithful cache.
+            let Some(l) = self.level(num, (k - 1) as u8) else {
+                complete = false;
+                break;
+            };
+            let mut j = i + 2;
+            while j < chars.len() && !is_token(j) {
+                j += 1;
+            }
+            let suffix: String = chars[i + 2..j].iter().collect();
+            out.push_str(&format!("%{k}:{}:{}:{suffix}", self.start_of(num, (k - 1) as u8), l.format.nfc()));
+            i = j;
+        }
+        if !complete || out.is_empty() {
+            out = format!("%{}:{}:{}:{}", level + 1, self.start_of(num, level), lvl.format.nfc(), lvl.text);
+        }
+        Some(out)
+    }
+    /// The list level whose [`Numbering::change_original`] cache is `original`, for reopening a
+    /// document this app wrote. Definitions several lists or levels share answer with the first,
+    /// which draws the same label.
+    pub fn change_originals(&self) -> BTreeMap<String, NumRef> {
+        let mut map = BTreeMap::new();
+        for n in &self.nums {
+            for level in 0..=8u8 {
+                if map.len() >= MAX_ORIGINAL_CACHES {
+                    return map;
+                }
+                if let Some(s) = self.change_original(n.id, level) {
+                    map.entry(s).or_insert(NumRef { num: n.id, level });
+                }
+            }
+        }
+        map
+    }
+    /// The start `num`'s level uses, including its start override.
+    fn start_of(&self, num: u32, level: u8) -> u32 {
+        let level = level.min(8);
+        if let Some((_, start)) = self.num(num).and_then(|n| n.start_overrides.iter().find(|(l, _)| (*l).min(8) == level)) {
+            return *start;
+        }
+        self.level(num, level).map_or(1, |l| l.start)
     }
     /// Create a new list of `kind`; returns the `num` id. List ids run out only past `u32::MAX`
     /// lists, more than memory holds; then nothing is added and the id is 0, "no list".
@@ -480,10 +544,32 @@ fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], s
 const MAX_LEVEL_TEXT: usize = 64;
 /// Labels stop growing once they pass this many bytes.
 const MAX_LABEL_BYTES: usize = 256;
+/// Most list levels indexed for reopening `w:numberingChange` caches (hostile files).
+const MAX_ORIGINAL_CACHES: usize = 50_000;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `w:original` caches the previous level definitions in ECMA-376 §17.3.1.20's format, and
+    /// those caches name their list back when a file is reopened.
+    #[test]
+    fn change_original_caches_the_previous_definitions() {
+        let mut n = Numbering::default();
+        let numbered = n.add_list(ListKind::Numbered);
+        assert_eq!(n.change_original(numbered, 0).as_deref(), Some("%1:1:0:."));
+        assert_eq!(n.change_original(numbered, 1).as_deref(), Some("%2:1:4:."));
+        let bullet = n.add_list(ListKind::Bullet);
+        assert_eq!(n.change_original(bullet, 0).as_deref(), Some("%1:1:23:•"));
+        let legal = n.add_list(ListKind::Legal);
+        assert_eq!(n.change_original(legal, 2).as_deref(), Some("%1:1:0:.%2:1:0:.%3:1:0:."));
+        assert_eq!(n.change_original(u32::MAX, 0), None, "no such list");
+
+        let caches = n.change_originals();
+        assert_eq!(caches.get("%1:1:0:."), Some(&NumRef { num: numbered, level: 0 }), "a shared definition answers with the first list");
+        assert_eq!(caches.get("%1:1:23:•"), Some(&NumRef { num: bullet, level: 0 }));
+        assert_eq!(caches.get("%3:1:0:."), None, "a mid-level segment is not a whole cache");
+    }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.
     #[test]

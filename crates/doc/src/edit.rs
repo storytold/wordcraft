@@ -508,13 +508,12 @@ impl Relink<'_> {
         match (p.props.num_change.as_ref().and_then(|c| self.rev_id(c.rev)), p.props.num_change.as_mut()) {
             (Some(v), Some(c)) => {
                 c.rev = v;
+                // `original` caches the list's level definitions, not its id, so it stays valid
+                // when the id is remapped; the snapshot carries the id.
                 if let Some(prev) = c.snapshot {
                     let mut opt = Some(prev);
                     self.num(&mut opt);
                     c.snapshot = opt;
-                    if let Some(remapped) = opt {
-                        c.original = format!("{}:{}", remapped.num, remapped.level);
-                    }
                 }
             }
             _ => p.props.num_change = None,

@@ -860,9 +860,10 @@ fn an_adopted_paragraph_with_numbering_change_remaps_previous_numbering() {
     assert_eq!(prev.level, 2, "nonzero level preserved after adoption");
     assert_ne!(prev.num, our_list, "source ID was remapped to avoid collision with our list");
     assert!(ours.numbering.nums.iter().any(|n| n.id == prev.num), "remapped to target list");
-    assert_eq!(nc.original, format!("{}:{}", prev.num, prev.level), "parseable original remapped in sync with snapshot");
+    assert!(nc.original.is_empty(), "the cache names definitions, not ids, and is written at save");
 
-    // Unparseable legacy original string is rewritten to match the remapped snapshot so DOCX round trip preserves it
+    // An imported original names the previous definitions, so remapping the list id leaves it
+    // valid and it is kept as the file wrote it.
     let mut theirs_legacy = doc(&["theirs_legacy"]);
     theirs_legacy.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
     let p_leg = theirs_legacy.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
@@ -872,7 +873,8 @@ fn an_adopted_paragraph_with_numbering_change_remaps_previous_numbering() {
     let Some(Block::Para(p_leg_res)) = frag_leg.blocks.first() else { panic!() };
     let nc_leg = p_leg_res.props.num_change.as_ref().unwrap();
     let prev_leg = nc_leg.previous_numbering().expect("previous numbering preserved and remapped");
-    assert_eq!(nc_leg.original, format!("{}:{}", prev_leg.num, prev_leg.level), "original updated to match remapped snapshot");
+    assert_ne!(prev_leg.num, their_list, "snapshot remapped");
+    assert_eq!(nc_leg.original, "1.", "imported cache kept as written");
 }
 
 #[test]

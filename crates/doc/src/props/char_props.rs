@@ -468,15 +468,17 @@ impl<T> PropChange<T> {
     }
 }
 
-/// A tracked change of a paragraph's list numbering (`w:numberingChange`, kept for round trip):
-/// `original` is the number as it was shown before the change.
+/// A tracked change of a paragraph's list numbering (`w:numberingChange`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct NumChange {
     /// Index into `Document::revisions`.
     pub rev: u32,
+    /// The previous numbering definition as `w:original` caches it (ECMA-376 §17.3.1.20), or an
+    /// imported file's value. Empty for a change this app records; the DOCX writer fills it from
+    /// `snapshot` and the document's list definitions.
     pub original: String,
-    /// Preserved numbering reference before the change, for clean rejection within the app.
+    /// The previous numbering reference, for rejection within the app.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<NumRef>,
 }
@@ -487,13 +489,10 @@ impl NumChange {
         Some(Box::new(Self::for_numbering(rev, prev)))
     }
 
-    /// Construct a `NumChange` preserving `prev` as the numbering snapshot and formatted original.
+    /// Construct a `NumChange` preserving `prev` as the numbering snapshot. `original` is filled
+    /// when the document is saved, where the list definitions are known.
     pub fn for_numbering(rev: u32, prev: Option<NumRef>) -> Self {
-        let original = match prev {
-            Some(nr) => format!("{}:{}", nr.num, nr.level),
-            None => String::new(),
-        };
-        NumChange { rev, original, snapshot: prev }
+        NumChange { rev, original: String::new(), snapshot: prev }
     }
 
     /// The previous numbering recorded in this change.
@@ -504,15 +503,6 @@ impl NumChange {
     /// The numbering snapshot preserved by this change.
     pub fn snapshot(&self) -> Option<NumRef> {
         self.snapshot
-    }
-
-    /// Parse an `original` string into a [`NumRef`] if it strictly encodes `digits:0-8`.
-    pub fn parse_original(s: &str) -> Option<NumRef> {
-        let trimmed = s.trim();
-        let (num_str, lvl_str) = trimmed.split_once(':')?;
-        let num = num_str.trim().parse::<u32>().ok()?;
-        let lvl = lvl_str.trim().parse::<u8>().ok()?;
-        if lvl <= 8 { Some(NumRef { num, level: lvl }) } else { None }
     }
 
     /// Whether this change has a preserved snapshot or an explicit unnumbered original.

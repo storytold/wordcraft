@@ -252,7 +252,7 @@ impl Reader<'_> {
             }
             if let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange")) {
                 let original: String = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
-                let snapshot = NumChange::parse_original(&original);
+                let snapshot = self.previous_numbering(&original);
                 para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original, snapshot }));
             }
             if let Some(s) = ppr.child("w:sectPr") {

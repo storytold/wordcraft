@@ -74,10 +74,12 @@ impl Writer<'_> {
             w.open("w:pPr", &[]);
             let num_change = pp.num_change.as_ref().map(|c| {
                 let mut a = self.change_attrs(c.rev);
+                // An imported value is kept as written; one this app recorded is cached from the
+                // previous list's definitions, in the format ECMA-376 §17.3.1.20 gives.
                 let orig = if !c.original.is_empty() {
                     c.original.clone()
                 } else if let Some(nr) = c.snapshot {
-                    format!("{}:{}", nr.num, nr.level)
+                    self.doc.numbering.change_original(nr.num, nr.level).unwrap_or_default()
                 } else {
                     String::new()
                 };
