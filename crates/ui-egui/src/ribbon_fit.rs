@@ -565,11 +565,15 @@ mod ui_tests {
         );
         h.run_steps(8);
         // The split button's arrow opens Built-In; the plain insert would show no menu.
-        let arrow =
-            h.query_all_by_label_contains("Equation").find(|n| n.rect().width() < 20.0).expect("the two-row Equation split button has an arrow");
+        let eq: Vec<(String, f32, f32)> =
+            h.query_all_by_label_contains("Equation").map(|n| (format!("{:?}", n.rect()), n.rect().width(), n.rect().min.y)).collect();
+        let arrow = h
+            .query_all_by_label_contains("Equation")
+            .find(|n| n.rect().width() < 20.0 && n.rect().min.y >= 0.0)
+            .expect("the two-row Equation split button has an arrow");
         arrow.click();
         h.run_steps(3);
-        assert!(shown(&h, "Built-In"), "the two-row Equation button opens the built-in gallery");
+        assert!(shown(&h, "Built-In"), "the two-row Equation button opens the built-in gallery: {eq:?}");
     }
 
     /// The two-row Review › Tracking section shows whether Track Changes is on.
@@ -610,8 +614,9 @@ mod ui_tests {
             app,
         );
         h.run_steps(8);
-        click_shown(&h, "Window");
-        h.run_steps(3);
+        use egui_kittest::kittest::Queryable;
+        h.get_by_role_and_label(Role::Button, "Window").click();
+        h.run_steps(5);
         assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
         let full = h.state().session.view.full_screen;
         click_shown(&h, "Full Screen");
