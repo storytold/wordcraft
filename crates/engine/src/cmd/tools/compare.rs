@@ -167,70 +167,8 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.ensure_nonempty();
     s.note_body_replaced();
     s.math = None;
-    // Synchronize style definitions between original and revised documents when comparing files:
-    // When the revised input comes from plain `text`, revised style definitions are omitted to keep
-    // the original document's customized styles intact.
-    // - Unpartnered original styles: Existing styles in `s.doc` without a match in `revised`
-    //   are preserved untouched in `result_styles`.
-    // - Formatting tracked changes (`opts.formatting == true`): For matching styles, pre-existing
-    //   `fmt_change` revisions on the revised style are cleared before calling `compare_style` so
-    //   that only the formatting delta between original and revised definitions is tracked.
-    //   If numbering references changed or are missing in `s.doc`, `remap_style_numbering` imports
-    //   and remaps them to prevent dangling IDs or collision. Styles appearing only in `revised`
-    //   are imported with pre-existing tracked changes stripped and numbering remapped.
-    // - Formatting ignored (`opts.formatting == false`): Original style definitions remain
-    //   untouched (no formatting changes are tracked), and only brand-new styles from `revised`
-    //   are appended to `result_styles` with remapped numbering.
-    if !is_text {
-        let mut num_map = std::collections::BTreeMap::new();
-        let mut abs_map = std::collections::BTreeMap::new();
-        if opts.formatting {
-            // The author's existing changes must stay recognizable while the loop appends new ones.
-            let revisions_before = s.doc.revisions.clone();
-            let mut result_styles = (*s.doc.styles).clone();
-            for new_st in &revised.styles.styles {
-                if let Some(target) = result_styles.styles.iter_mut().find(|st| st.id == new_st.id) {
-                    let old_st = target.clone();
-                    let mut updated = new_st.clone();
-                    updated.para.fmt_change = None;
-                    updated.chr.fmt_change = None;
-                    let needs_remapping = updated
-                        .para
-                        .numbering
-                        .is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || s.doc.numbering.num(n.num).is_none()));
-                    if needs_remapping {
-                        remap_style_numbering(&mut s.doc, &revised, &mut updated.para.numbering, &mut num_map, &mut abs_map);
-                    }
-                    let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character && old_st.para.formatting() != updated.para.formatting())
-                        || (updated.kind != wordcraft_doc::StyleKind::Numbering && old_st.chr.formatting() != updated.chr.formatting());
-                    let _ = crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &revisions_before, &mut s.doc.revisions, &author, &date);
-                    if fmt_differs {
-                        changes += 1;
-                    }
-                    *target = updated;
-                } else {
-                    let mut added = new_st.clone();
-                    added.para.fmt_change = None;
-                    added.chr.fmt_change = None;
-                    remap_style_numbering(&mut s.doc, &revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
-                    result_styles.styles.push(added);
-                }
-            }
-            s.doc.styles = Arc::new(result_styles);
-        } else {
-            let mut result_styles = (*s.doc.styles).clone();
-            for new_st in &revised.styles.styles {
-                if !result_styles.styles.iter().any(|st| st.id == new_st.id) {
-                    let mut added = new_st.clone();
-                    added.para.fmt_change = None;
-                    added.chr.fmt_change = None;
-                    remap_style_numbering(&mut s.doc, &revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
-                    result_styles.styles.push(added);
-                }
-            }
-            s.doc.styles = Arc::new(result_styles);
-        }
-    }
+    // Style definitions follow the revised document when comparing files.
+    changes += sync_style_definitions(s, &revised, is_text, opts.formatting, &author, &date);
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
@@ -254,6 +192,70 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         "notHonoured": not_honoured,
         "characterFallback": char_fallbacks,
     }))
+}
+
+/// Synchronize style definitions between the original document in `s` and the revised one, and
+/// return how many differed.
+///
+/// Styles only in the original are preserved untouched. With `formatting`, matching styles get the
+/// formatting delta recorded as tracked changes (pre-existing `fmt_change` revisions on the revised
+/// style are cleared first, and an author's earlier change is recognized), and styles only in the
+/// revised document are imported with their tracked changes stripped. Without `formatting`, only
+/// the new styles are appended. Numbering references that changed or are missing are imported and
+/// remapped in every case. A plain `text` input has no meaningful style sheet of its own, so its
+/// definitions are not applied and the original document's customized styles stay intact.
+fn sync_style_definitions(s: &mut Session, revised: &Document, is_text: bool, formatting: bool, author: &str, date: &str) -> usize {
+    if is_text {
+        return 0;
+    }
+    let mut changes = 0usize;
+    let mut num_map = std::collections::BTreeMap::new();
+    let mut abs_map = std::collections::BTreeMap::new();
+    if formatting {
+        // The author's existing changes must stay recognizable while the loop appends new ones.
+        let revisions_before = s.doc.revisions.clone();
+        let mut result_styles = (*s.doc.styles).clone();
+        for new_st in &revised.styles.styles {
+            if let Some(target) = result_styles.styles.iter_mut().find(|st| st.id == new_st.id) {
+                let old_st = target.clone();
+                let mut updated = new_st.clone();
+                updated.para.fmt_change = None;
+                updated.chr.fmt_change = None;
+                let needs_remapping =
+                    updated.para.numbering.is_some_and(|n| n.num != 0 && (old_st.para.numbering != Some(n) || s.doc.numbering.num(n.num).is_none()));
+                if needs_remapping {
+                    remap_style_numbering(&mut s.doc, revised, &mut updated.para.numbering, &mut num_map, &mut abs_map);
+                }
+                let fmt_differs = (updated.kind != wordcraft_doc::StyleKind::Character && old_st.para.formatting() != updated.para.formatting())
+                    || (updated.kind != wordcraft_doc::StyleKind::Numbering && old_st.chr.formatting() != updated.chr.formatting());
+                let _ = crate::cmd::fmt_revisions::compare_style(&old_st, &mut updated, &revisions_before, &mut s.doc.revisions, author, date);
+                if fmt_differs {
+                    changes += 1;
+                }
+                *target = updated;
+            } else {
+                let mut added = new_st.clone();
+                added.para.fmt_change = None;
+                added.chr.fmt_change = None;
+                remap_style_numbering(&mut s.doc, revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
+                result_styles.styles.push(added);
+            }
+        }
+        s.doc.styles = Arc::new(result_styles);
+    } else {
+        let mut result_styles = (*s.doc.styles).clone();
+        for new_st in &revised.styles.styles {
+            if !result_styles.styles.iter().any(|st| st.id == new_st.id) {
+                let mut added = new_st.clone();
+                added.para.fmt_change = None;
+                added.chr.fmt_change = None;
+                remap_style_numbering(&mut s.doc, revised, &mut added.para.numbering, &mut num_map, &mut abs_map);
+                result_styles.styles.push(added);
+            }
+        }
+        s.doc.styles = Arc::new(result_styles);
+    }
+    changes
 }
 
 /// Import any numbering definition referenced by `num_ref` from `revised` into `doc` and remap
