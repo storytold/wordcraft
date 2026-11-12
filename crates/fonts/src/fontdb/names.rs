@@ -208,12 +208,44 @@ pub(super) fn mini_font(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
 /// The platform's font folders (the system's and the user's), scanned by [`FontDb::global`].
 /// Empty on wasm.
 pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
-    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     if cfg!(target_arch = "wasm32") {
-        return dirs;
+        return Vec::new();
     }
+    let os = if cfg!(target_os = "macos") {
+        FontOs::Macos
+    } else if cfg!(windows) {
+        FontOs::Windows
+    } else if cfg!(target_os = "android") {
+        FontOs::Android
+    } else {
+        FontOs::Unix
+    };
+    font_dirs_for(os)
+}
+
+/// The platform families [`system_font_dirs`] knows the font folders of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FontOs {
+    Macos,
+    Windows,
+    /// Android's fonts are in its own system folders, not the Linux/XDG ones.
+    Android,
+    /// Linux and the other Unix systems (XDG folders, Flatpak).
+    Unix,
+}
+
+/// Android's font folders: the system fonts (`/system/fonts`, listed by `/system/etc/fonts.xml`),
+/// the product partition's (`/product/fonts`, Android 10+) and the updatable fonts the system
+/// installs under `/data/fonts/files` (Android 12+).
+const ANDROID_FONT_DIRS: [&str; 3] = ["/system/fonts", "/product/fonts", "/data/fonts"];
+
+/// The font folders of `os`.
+pub(super) fn font_dirs_for(os: FontOs) -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-    if cfg!(target_os = "macos") {
+    if os == FontOs::Android {
+        dirs.extend(ANDROID_FONT_DIRS.map(Into::into));
+    } else if os == FontOs::Macos {
         dirs.extend(["/System/Library/Fonts", "/Library/Fonts"].map(Into::into));
         if let Some(h) = &home {
             dirs.push(h.join("Library/Fonts"));
@@ -228,7 +260,7 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
                 }
             }
         }
-    } else if cfg!(windows) {
+    } else if os == FontOs::Windows {
         let root = std::env::var_os("WINDIR").map(std::path::PathBuf::from).unwrap_or_else(|| "C:\\Windows".into());
         dirs.push(root.join("Fonts"));
         if let Some(l) = std::env::var_os("LOCALAPPDATA") {

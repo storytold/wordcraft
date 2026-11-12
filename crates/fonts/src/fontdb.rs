@@ -34,10 +34,10 @@ use fallback_data::{RUN_FALLBACK_CACHE_CHARS, coverage_ranges, ranges_hold};
 #[cfg(not(target_arch = "wasm32"))]
 use names::CatalogEntry;
 pub(crate) use names::face_names;
+#[cfg(test)]
+use names::{FontOs, MAX_NAME_CHARS, file_face_names, font_dirs_for, font_faces, mini_font, name};
 pub use names::{LocalName, base_style, name_language_matches, system_font_dirs};
 use names::{MAX_FILE_FACES, enumerate_faces, make_face};
-#[cfg(test)]
-use names::{MAX_NAME_CHARS, file_face_names, font_faces, mini_font, name};
 #[cfg(test)]
 pub(crate) use names::{last_resort_face, legacy_family};
 

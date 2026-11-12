@@ -52,6 +52,16 @@ fn system_font_dirs_include_the_flatpak_host_folders() {
 }
 
 #[test]
+fn android_font_dirs_are_its_system_font_folders_only() {
+    // No Linux, XDG or Flatpak folders: Android has none of them.
+    let p = std::path::PathBuf::from;
+    assert_eq!(font_dirs_for(FontOs::Android), [p("/system/fonts"), p("/product/fonts"), p("/data/fonts")]);
+    for os in [FontOs::Macos, FontOs::Windows, FontOs::Unix] {
+        assert!(!font_dirs_for(os).contains(&p("/system/fonts")), "{os:?}");
+    }
+}
+
+#[test]
 fn a_capped_outline_is_refused_while_it_is_drawn() {
     // #3716 review: a colour glyph's clip outline stops growing at the payload left.
     let db = FontDb::with_font_dirs(Vec::new());
