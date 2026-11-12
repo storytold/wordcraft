@@ -44,6 +44,7 @@ pub(super) fn shape_gallery(ui: &mut Ui, app: &mut WordApp) {
     });
 }
 
+/// Render the Insert ribbon tab controls.
 pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Pages", None, app, |ui, app| {
         stack(ui, |ui| {
@@ -189,7 +190,7 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             small(ui, app, "signature", None, "Signature Line", crate::widgets::ButtonAction::new("insert.signatureLine", json!({}), false));
-            small(ui, app, "dateTime", None, "Date & Time", crate::widgets::ButtonAction::new("insert.dateTime", json!({}), false));
+            small(ui, app, "dateTime", None, "Date & Time", crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "dateTime"}), false));
             small(ui, app, "object", None, "Object", crate::widgets::ButtonAction::new("insert.object", json!({}), false));
         });
     });
@@ -229,12 +230,18 @@ pub(super) fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What a Drop Cap menu choice sends: the position, and `keep` so each selected paragraph that has
+/// a drop cap keeps its own lines, distance and font (None takes it all away).
+pub(super) fn drop_cap_payload(position: &str) -> serde_json::Value {
+    if position == "none" { json!({"position": position}) } else { json!({"position": position, "keep": true}) }
+}
+
 /// Insert › Drop Cap's menu (#2601): None, Dropped and In margin (the current one checked),
 /// then the Drop Cap dialog.
 fn drop_cap_items(ui: &mut Ui, app: &mut WordApp) {
-    let current = wordcraft_engine::cmd::insert::drop_cap_state(&app.session).position;
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
     for (label, v) in [("None", "none"), ("Dropped", "dropped"), ("In margin", "margin")] {
-        mi_check(ui, app, label, current == v, "insert.dropCap", json!({"position": v}));
+        mi_check(ui, app, label, state.position == v, "insert.dropCap", drop_cap_payload(v));
     }
     ui.separator();
     mi(ui, app, "Drop Cap Options…", "ui.dialog", json!({"name": "dropCap"}));

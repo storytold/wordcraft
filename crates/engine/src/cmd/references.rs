@@ -12,11 +12,14 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 mod fields;
 mod notes;
+mod numbers;
 mod properties;
 mod toc;
 
 use fields::caption;
-pub use fields::{CHAPTER_SEPARATORS, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq};
+pub use fields::{
+    CHAPTER_SEPARATORS, REFERENCE_NOT_FOUND, output_fields, refresh_date_fields, seq_format, update_fields, update_fields_in, update_seq,
+};
 pub(super) use notes::note_options;
 use notes::{note, note_refs};
 pub use properties::{bookmark_text, date_picture};
@@ -100,8 +103,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// A field instruction split into its name, positional arguments and switches (ECMA-376
 /// §17.16.1): `TOC \o "1-3" \h` → name `TOC`, switches `o` = `1-3` and `h`. Quoted text stays
-/// whole (without the quotes; `\"` and `\\` inside it are a quote and a backslash). A switch
-/// takes the word after it as its argument unless that word is another switch.
+/// whole (without the quotes; a backslash inside it makes the next character literal, as in Word:
+/// `\"` is a quote, `\\` a backslash, `\*` an asterisk). A switch takes the word after it as its
+/// argument unless that word is another switch.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldCode {
     pub name: String,
@@ -123,7 +127,7 @@ pub fn field_words(instr: &str) -> Vec<(String, bool)> {
             while let Some(c) = chars.next() {
                 match c {
                     '"' => break,
-                    '\\' if matches!(chars.peek(), Some('"' | '\\')) => w.extend(chars.next()),
+                    '\\' if chars.peek().is_some() => w.extend(chars.next()),
                     c => w.push(c),
                 }
             }

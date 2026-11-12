@@ -69,7 +69,16 @@ fn sample() -> Document {
     let mut img = Paragraph::new();
     img.insert_object(
         0,
-        InlineObject::Image { media: key, w: 30.0, h: 20.0, alt: "dot".into(), float: Default::default(), crop: [0.0; 4], ole: None },
+        InlineObject::Image {
+            media: key,
+            w: 30.0,
+            h: 20.0,
+            alt: "dot".into(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        },
         &CharProps::default(),
     )
     .unwrap();
@@ -177,6 +186,48 @@ fn big_and_deep_documents_write() {
     d.body = inner.blocks;
     if let Ok(xml) = write_wordml2003(&d) {
         let _ = read_xml(&xml);
+    }
+}
+
+/// Picture brightness and contrast (#1711) survive a Word 2003 XML save as VML `gain` and
+/// `blacklevel`; transparency has no place on `v:imagedata` and is dropped.
+#[test]
+fn picture_brightness_and_contrast_round_trip() {
+    use wordcraft_doc::picfx::PicFx;
+    let cases = [PicFx::new(70_000, -70_000, 0), PicFx::new(-30_000, 50_000, 40_000), PicFx::default()];
+    let mut d = Document::new();
+    let key = d.add_media(tiny_png(), "png");
+    d.body = cases
+        .iter()
+        .map(|fx| {
+            let mut p = Paragraph::new();
+            let pic = InlineObject::Image {
+                media: key.clone(),
+                w: 30.0,
+                h: 20.0,
+                alt: "dot".into(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: *fx,
+                ole: None,
+            };
+            p.insert_object(0, pic, &CharProps::default()).unwrap();
+            para_block(p)
+        })
+        .collect();
+    let xml = write_wordml2003(&d).expect("write");
+    let text = String::from_utf8_lossy(&xml);
+    assert!(text.contains(r#"gain="19661f""#) && text.contains(r#"blacklevel="22938f""#), "Word's Washout values");
+    let back = read_xml(&xml).expect("read");
+    let got: Vec<PicFx> = paras(&back)
+        .iter()
+        .flat_map(|p| p.objects.iter())
+        .filter_map(|o| if let InlineObject::Image { fx, .. } = o { Some(*fx) } else { None })
+        .collect();
+    assert_eq!(got.len(), cases.len());
+    for (g, want) in got.iter().zip(cases) {
+        let near = |a: i32, b: i32| (a - b).abs() <= 2;
+        assert!(near(g.bright, want.bright) && near(g.contrast, want.contrast) && g.transparency == 0, "{g:?} vs {want:?}");
     }
 }
 

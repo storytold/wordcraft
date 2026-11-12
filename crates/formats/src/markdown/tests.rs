@@ -479,8 +479,8 @@ fn code_span_line_endings_stay_literal_on_export() {
     ];
     let shapes = [
         (Kind::Normal, None),
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
-        (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1 })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() })),
+        (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() })),
     ];
     for (source, expected) in cases {
         for (kind, list) in shapes {
@@ -656,10 +656,10 @@ fn lines_after_line_break_stay_in_paragraph() {
 fn lines_after_line_break_stay_in_list_item_and_quote() {
     let cases = ["a\n- x", "a\n# h", "a\n1. x", "a\n--", "a\n---", "a\n==", "a\n> q"];
     let shapes: [(Kind, Option<ListInfo>); 5] = [
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1 })),
-        (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1 })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1, ..Default::default() })),
+        (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1, ..Default::default() })),
         (Kind::Quote, None),
     ];
     for s in cases {
@@ -667,7 +667,7 @@ fn lines_after_line_break_stay_in_list_item_and_quote() {
             let mut blocks = Vec::new();
             if let Some(li) = list.filter(|l| l.level > 0) {
                 let mut parent = Para::new(Kind::Normal);
-                parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1 });
+                parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1, ..Default::default() });
                 parent.push_text("top", &Fmt::default());
                 blocks.push(FBlock::Para(parent));
             }
@@ -774,4 +774,76 @@ fn exported_link_destinations_read_back_unchanged() {
     assert_eq!(md("https://example.com/a?b=1&c=2"), "[x](https://example.com/a?b=1&c=2)");
     assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
     assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
+}
+
+/// Verifies that trailing escaped hashes on headings survive round-trip export.
+#[test]
+fn heading_trailing_hash_survives_round_trip() {
+    let heading = |md: &str| {
+        let f = parse(md);
+        let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("no paragraph in {md:?}") };
+        assert_eq!(p.kind, Kind::Heading(2), "{md:?}");
+        p.text()
+    };
+    for (src, text, want) in [
+        ("## Item \\#\n", "Item #", "## Item \\#\n"),
+        ("## Issue \\##\n", "Issue ##", "## Issue \\##\n"),
+        ("## \\#\n", "#", "## \\#\n"),
+        ("## C#\n", "C#", "## C#\n"),
+    ] {
+        assert_eq!(heading(src), text, "{src:?}");
+        let md = export(&import(src));
+        assert_eq!(md, want, "first export of {src:?}");
+        assert_eq!(heading(&md), text, "md was {md:?}");
+        assert_eq!(export(&import(&md)), want, "second export of {src:?}");
+    }
+}
+
+/// Verifies that block line mapping tracks source-line indexes accurately across definitions.
+#[test]
+fn block_line_mapping() {
+    let md = "# Title\n\nFirst paragraph.\n\n## Second\n\n- one\n- two\n\n```\ncode\n```\n\nLast paragraph.\n";
+    let (flow, lines) = parse_with_lines(md);
+    assert_eq!(flow.blocks.len(), lines.len());
+    let (doc, doc_lines) = import_on_with_lines(md, &wordcraft_doc::SectionProps::default());
+    assert_eq!(doc.body.len(), doc_lines.len());
+    assert_eq!(lines, doc_lines);
+    assert_eq!(lines[0], 0);
+    assert_eq!(lines[1], 2);
+    assert_eq!(lines[2], 4);
+
+    // Reference definitions are removed from blocks, but block line numbers must match original source lines.
+    let md_refs = "[link]: https://example.com\n# Title\n\n[other]: https://example.org\nParagraph with [link][].\n";
+    let (flow, lines) = parse_with_lines(md_refs);
+    assert_eq!(flow.blocks.len(), lines.len());
+    assert_eq!(lines[0], 1, "heading on line 1 after definition on line 0");
+    assert_eq!(lines[1], 4, "paragraph on line 4 after definition on line 3");
+}
+
+/// Verifies linear remapping of original lines after removing definitions.
+#[test]
+fn remap_original_lines_cases() {
+    let mut lines = vec![0, 1, 2, 3, 4];
+    remap_original_lines(&mut lines, &[2, 5]);
+    assert_eq!(lines, vec![0, 1, 3, 4, 6]);
+
+    let mut lines = vec![0, 1];
+    remap_original_lines(&mut lines, &[1, 2, 3]);
+    assert_eq!(lines, vec![0, 4]);
+
+    let mut lines = vec![0];
+    remap_original_lines(&mut lines, &[0]);
+    assert_eq!(lines, vec![1]);
+
+    let mut lines = vec![1, 1, 2];
+    remap_original_lines(&mut lines, &[1]);
+    assert_eq!(lines, vec![2, 2, 3]);
+
+    let mut lines = vec![0, 2];
+    remap_original_lines(&mut lines, &[]);
+    assert_eq!(lines, vec![0, 2]);
+
+    let mut empty: Vec<usize> = Vec::new();
+    remap_original_lines(&mut empty, &[1, 2]);
+    assert!(empty.is_empty());
 }

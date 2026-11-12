@@ -22,10 +22,29 @@ pub fn decimal_separator(lang: Option<&str>) -> char {
 
 const SPACES: &[char] = &[' ', '\u{a0}', '\u{202f}', '\u{2009}'];
 const CURRENCY: &[char] = &['$', '€', '£', '¥', '¢', '₽', '₴', '₺', '₹', '₩', '₪', '₫', '฿', '₱', '₸', '₼', '₾'];
+/// Currency signs spelled with more than one character: the Panamanian balboa (`B/.`).
+const CURRENCY_SYMBOLS: &[&str] = &["B/."];
 
-/// Strip a currency symbol or a short currency word (`zł`, `kr`, `PLN`) from either end.
+/// Trim spaces and single-character currency signs from either end.
+fn trim_currency(s: &str) -> &str {
+    s.trim_matches(|c: char| c.is_whitespace() || CURRENCY.contains(&c))
+}
+
+/// Strip a currency symbol or a short currency word (`zł`, `kr`, `PLN`, `B/.`) from either end.
+/// As Word does, a multi-character sign is a word of its own (`B/. 1,250.50`, `1,250.50 B/.`);
+/// `B/.1,250.50` and `B/ 1,250.50` are not numbers.
 fn strip_currency(s: &str) -> &str {
-    let mut s = s.trim_matches(|c: char| c.is_whitespace() || CURRENCY.contains(&c));
+    let mut s = trim_currency(s);
+    if let Some(rest) =
+        CURRENCY_SYMBOLS.iter().find_map(|sym| s.strip_prefix(sym).filter(|rest| rest.chars().next().is_some_and(char::is_whitespace)))
+    {
+        s = trim_currency(rest);
+    }
+    if let Some(rest) =
+        CURRENCY_SYMBOLS.iter().find_map(|sym| s.strip_suffix(sym).filter(|rest| rest.chars().next_back().is_some_and(char::is_whitespace)))
+    {
+        s = trim_currency(rest);
+    }
     if let Some((head, word)) = s.rsplit_once(SPACES)
         && (1..=3).contains(&word.chars().count())
         && word.chars().all(|c| c.is_alphabetic() || c == '.')
@@ -137,6 +156,7 @@ mod tests {
         assert_eq!(parse_number("1.5", pl), Some(1.5));
         assert_eq!(parse_number("-2,25", pl), Some(-2.25));
         assert_eq!(parse_number("PLN 12", pl), Some(12.0));
+        assert_eq!(parse_number("-B/. 1 250,50", pl), Some(-1250.5));
         assert_eq!(parse_number("abc", pl), None);
         assert_eq!(parse_number("1,2,3", pl), None);
         // From review: ordinals, a leading zero, percentages and an en dash minus.
@@ -175,10 +195,39 @@ mod tests {
     }
 
     #[test]
+    fn balboa_numbers() {
+        let en = Some("en-US");
+        // Word 16.0 reads `B/.` as a word of its own, before or after the number.
+        assert_eq!(parse_number("B/. 1,234.50", en), Some(1234.5));
+        assert_eq!(parse_number("1,234.50 B/.", en), Some(1234.5));
+        assert_eq!(parse_number("B/.\u{a0}1,234.50", en), Some(1234.5), "a no-break space after the sign");
+        assert_eq!(parse_number("B/. 1,234.50 B/.", en), Some(1234.5), "the sign at both ends");
+        assert_eq!(parse_number("-B/. 1,234.50", en), Some(-1234.5), "a minus before the sign");
+        assert_eq!(parse_number("B/. 1,234.50", Some("es-PA")), Some(1234.5), "the balboa's own region");
+        // The sign has no space of its own in Word: touching the number is text.
+        assert_eq!(parse_number("B/.1,234.50", en), None);
+        assert_eq!(parse_number("1,234.50B/.", en), None);
+        assert_eq!(parse_number("B/ 1,234.50", en), None, "the balboa is B/. in Word");
+        assert_eq!(parse_number("B/.", en), None);
+        // The slash and the full stop make `B/.` ambiguous with a fraction: the sign is matched at
+        // the ends of the text only, so a fraction is never read as a balboa amount and a sign in
+        // the middle is not a sign.
+        assert_eq!(parse_number("1/.5", en), None, "a fraction is not a price");
+        assert_eq!(parse_number("1/.5", Some("es-PA")), None);
+        assert_eq!(parse_number("1/.5 B/.", en), None, "the sign at the end does not rescue a fraction");
+        assert_eq!(parse_number("B/. 1/.5", en), None);
+        assert_eq!(parse_number("2 B/. 1,234.50", en), None, "the sign sits before the number");
+        assert_eq!(parse_number("1,234.50 B/. 1,234.50", en), None, "the sign sits between two numbers");
+        assert_eq!(parse_number("1,234.50/2", en), None, "a division is not a balboa amount");
+        assert_eq!(parse_number("B/. 1,234.50,50", en), None, "a second decimal separator");
+    }
+
+    #[test]
     fn english_numbers() {
         let en = Some("en-US");
         assert_eq!(parse_number("1,250.50", en), Some(1250.5));
         assert_eq!(parse_number("$1,250", en), Some(1250.0));
+        assert_eq!(parse_number("PAB 1,250.50", en), Some(1250.5), "the ISO code");
         assert_eq!(parse_number("1.5", en), Some(1.5));
         assert_eq!(parse_number("12", None), Some(12.0));
         assert_eq!(parse_number(".5", None), Some(0.5));

@@ -1034,6 +1034,15 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
         }
         "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // A heading mark, then lines of text.
+        "markdownSource" => {
+            pen.line_c(&[(4.0, 3.0), (4.0, 9.0)], a);
+            pen.line_c(&[(7.5, 3.0), (7.5, 9.0)], a);
+            pen.line_c(&[(2.5, 5.0), (9.0, 5.0)], a);
+            pen.line_c(&[(2.5, 7.0), (9.0, 7.0)], a);
+            pen.lines(3.0, 17.0, &[12.0, 15.0]);
+            pen.lines(11.0, 17.0, &[4.0, 7.0]);
+        }
         "focus" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
@@ -1129,9 +1138,25 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line_c(&[(15.0, 14.0), (12.0, 11.5)], a);
             pen.line_c(&[(5.0, 14.0), (8.0, 11.5)], a);
         }
-        "sideBySide" | "syncScroll" | "switchWindows" => {
+        "sideBySide" => {
             pen.rect(2.0, 4.0, 9.5, 16.0, c);
             pen.rect(10.5, 4.0, 18.0, 16.0, a);
+        }
+        "syncScroll" => {
+            // Two windows side by side, both scrolling down.
+            pen.rect(2.0, 3.0, 9.5, 17.0, c);
+            pen.rect(10.5, 3.0, 18.0, 17.0, c);
+            for x in [5.75, 14.25] {
+                pen.line_c(&[(x, 6.0), (x, 12.0)], a);
+                pen.fill(&[(x - 2.0, 11.0), (x + 2.0, 11.0), (x, 14.0)], a);
+            }
+        }
+        "switchWindows" => {
+            // A window behind another, with a title bar each.
+            pen.rect(2.5, 7.0, 13.0, 17.5, c);
+            pen.line_c(&[(2.5, 9.5), (13.0, 9.5)], c);
+            pen.rect(7.0, 2.5, 17.5, 13.0, a);
+            pen.line_c(&[(7.0, 5.0), (17.5, 5.0)], a);
         }
         "macros" => {
             pen.rect(3.0, 3.0, 17.0, 17.0, c);

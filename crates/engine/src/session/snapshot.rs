@@ -7,6 +7,8 @@ impl Session {
     pub fn set_document(&mut self, doc: Document) {
         self.autocap = None;
         let replaced = self.document_id;
+        self.md_source = None;
+        self.md_file = Default::default();
         self.document_id = next_document_id();
         if let Some(at) = self.order.iter_mut().find(|d| **d == replaced) {
             *at = self.document_id;
@@ -23,6 +25,7 @@ impl Session {
         self.pending = None;
         self.typing = None;
         self.also_selected.clear();
+        self.member = None;
         self.column = None;
         self.column_mode = false;
         self.widened = None;
@@ -31,7 +34,7 @@ impl Session {
         self.hf_return = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
-        self.view.read_page_color = self.prefs.read_page_color;
+        self.view.follow_prefs(&self.prefs);
         // A copy the replaced document kept stays in the recovery list.
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -80,6 +83,7 @@ impl Session {
             pending_move: _,
             clipboard_text: _,
             clipboard_html: _,
+            clipboard_rtf: _,
             clip_history: _,
             find: _,
             goal_x: _,
@@ -108,6 +112,8 @@ impl Session {
             // The word being typed, like `column`: valid only while `sel` is where typing left it.
             typing: _,
             originals: _,
+            md_source: _,
+            md_file: _,
             picture_looks: _,
             last_command: _,
             recording: _,
@@ -137,6 +143,8 @@ impl Session {
             pending_ime_application_change: _,
             ime_origin: _,
             read_aloud: _,
+            // The other windows, like `view`: not part of the document or its history.
+            windows: _,
             prefs: _,
             system_region: _,
             keymap: _,
@@ -154,6 +162,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
                 recovery_slot: _,
             also_selected: _,
+            member: _,
             // Column selection and a widened selection's ends, like `sel`'s shape: valid only while
             // `sel` matches them.
             column: _,
@@ -210,6 +219,7 @@ impl Session {
         self.doc = doc;
         self.sel = sel;
         self.also_selected.clear();
+        self.member = None;
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;
@@ -247,7 +257,9 @@ impl Session {
     /// Restrict Editing refuses outright. `None` when it can run (or doesn't exist).
     pub fn why_disabled(&self, id: &str) -> Option<&'static str> {
         let spec = self.registry.get(id)?;
-        (spec.enabled)(self).or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
+        (spec.enabled)(self)
+            .or_else(|| crate::cmd::md_source::refusal(self, id, spec.mutates))
+            .or_else(|| if spec.mutates { crate::cmd::protect::greyed_out(self, id, || self.protect_facts()) } else { None })
     }
 
     /// Put the revision back to `rev` after a command that changed nothing or failed. What the

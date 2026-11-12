@@ -117,12 +117,6 @@ impl PieceTable {
         }
     }
 
-    /// The raw Prm of the piece holding `cp` (0, no properties, when there is none): two CPs
-    /// with the same value get the same [`PrmRef`].
-    pub(crate) fn prm_of(&self, cp: u32) -> u16 {
-        self.piece_of(cp).map_or(0, |p| p.prm)
-    }
-
     fn piece_of(&self, cp: u32) -> Option<&Pcd> {
         let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
         if i >= self.pieces.len() {
@@ -141,6 +135,17 @@ impl PieceTable {
         let cp0 = *self.cps.get(i)?;
         let step = cp.checked_sub(cp0)?.checked_mul(2)?;
         if p.compressed { p.fc.checked_add(step)?.checked_div(2) } else { p.fc.checked_add(step) }
+    }
+
+    /// The piece holding `cp`, with the CP range it covers: for every CP in that range the
+    /// answers of [`PieceTable::fc_of_cp`] and the piece's Prm come from this span alone,
+    /// so a sequential walk searches the piece table once per piece.
+    pub(crate) fn span(&self, cp: u32) -> Option<PieceSpan<'_>> {
+        let i = self.cps.partition_point(|&c| c <= cp).checked_sub(1)?;
+        let pcd = self.pieces.get(i)?;
+        let cp_lo = *self.cps.get(i)?;
+        let cp_hi = *self.cps.get(i + 1)?;
+        Some(PieceSpan { cp_lo, cp_hi, pcd })
     }
 
     /// The CP just past the last piece: no text exists at or beyond it.
@@ -184,6 +189,31 @@ impl PieceTable {
             return Ok((c, 2));
         }
         Ok((char::from_u32(u as u32).unwrap_or('\u{FFFD}'), 1))
+    }
+}
+
+/// One piece and the CPs `[cp_lo, cp_hi)` it covers ([`PieceTable::span`]).
+#[derive(Clone, Copy)]
+pub(crate) struct PieceSpan<'a> {
+    cp_lo: u32,
+    cp_hi: u32,
+    pcd: &'a Pcd,
+}
+
+impl PieceSpan<'_> {
+    pub(crate) fn contains(&self, cp: u32) -> bool {
+        self.cp_lo <= cp && cp < self.cp_hi
+    }
+
+    /// [`PieceTable::fc_of_cp`] for a CP inside the span.
+    pub(crate) fn fc_at(&self, cp: u32) -> Option<u32> {
+        let step = cp.checked_sub(self.cp_lo)?.checked_mul(2)?;
+        if self.pcd.compressed { self.pcd.fc.checked_add(step)?.checked_div(2) } else { self.pcd.fc.checked_add(step) }
+    }
+
+    /// The raw Prm of the piece: two CPs with the same value get the same [`PrmRef`].
+    pub(crate) fn prm(&self) -> u16 {
+        self.pcd.prm
     }
 }
 
