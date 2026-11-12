@@ -138,7 +138,11 @@ pub fn move_blocks_tracked(s: &mut Session, start: usize, end: usize, before: us
             run.props.fmt_change = None;
         }
         d.mark.ins = Some(to);
-        d.mark.del = None;
+        // So is a paragraph break deleted there, except the last one: in the copy it leads to
+        // the block the section was dropped before, which it would join.
+        if k + 1 == n {
+            d.mark.del = None;
+        }
         d.mark.fmt_change = None;
         d.touch();
     }

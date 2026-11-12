@@ -10391,6 +10391,49 @@ fn moving_a_heading_under_track_changes_is_a_tracked_move() {
     assert_eq!(text(&s), "Four\nd\nOne\na\nTwo\nb\nThree\nc");
 }
 
+/// A paragraph break another author deleted inside the moved section stays deleted in the copy,
+/// as deleted text does: accepting everything joins the two paragraphs there too. The break after
+/// the section's last paragraph isn't carried over: in the copy it leads to the drop target.
+#[test]
+fn a_tracked_move_keeps_a_deleted_paragraph_break_inside_the_section() {
+    let tracked = |deleted: u64| {
+        let mut s = sections_doc();
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "file.setAuthor", json!({"name": "Bob"}));
+        let end = s.doc.body[deleted as usize].as_para().unwrap().len();
+        run(&mut s, "caret.set", json!({"pos": {"block": deleted, "off": end}}));
+        run(&mut s, "text.delete", json!({}));
+        run(&mut s, "file.setAuthor", json!({"name": "Ana"}));
+        run(&mut s, "outline.moveSubtree", json!({"block": 0, "before": 6}));
+        s
+    };
+    let mut s = tracked(0);
+    assert_eq!(text(&s), "One\na\nTwo\nb\nThree\nc\nOne\na\nTwo\nb\nFour\nd");
+    let mark = |s: &Session, i: usize| s.doc.body[i].as_para().unwrap().mark.clone();
+    let del = mark(&s, 6).del.expect("the copy's break is still deleted");
+    assert_eq!(s.doc.revisions[del as usize].author, "Bob");
+    assert_eq!(mark(&s, 6).del, mark(&s, 0).del, "the same deletion at both ends");
+    let mut all = tracked(0);
+    run(&mut all, "review.acceptAll", json!({}));
+    assert_eq!(text(&all), "Three\nc\nOnea\nTwo\nb\nFour\nd");
+    let mut all = tracked(0);
+    run(&mut all, "review.rejectAll", json!({}));
+    assert_eq!(text(&all), text(&sections_doc()));
+    // Accepting the move leaves Bob's deletion to accept or reject.
+    s.sel = crate::Selection::caret(Pos::body(6, 1));
+    run(&mut s, "review.accept", json!({}));
+    let changes = run(&mut s, "review.changes", json!({}));
+    let changes = changes.as_array().unwrap();
+    assert!(!changes.is_empty() && changes.iter().all(|c| c["kind"] == "delete" && c["author"] == "Bob"), "{changes:?}");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "Three\nc\nOnea\nTwo\nb\nFour\nd");
+    // The section's last break: the copy keeps it, so "b" doesn't join the heading it lands before.
+    let mut s = tracked(3);
+    assert_eq!(mark(&s, 9).del, None);
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "Three\nc\nOne\na\nTwo\nb\nFour\nd");
+}
+
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
 /// finds them again without scanning the document once per heading, and a caret move doesn't
 /// redo the matching.
