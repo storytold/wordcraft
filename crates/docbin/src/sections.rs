@@ -25,6 +25,7 @@ const S_DXA_RIGHT: u16 = 0xB022;
 const S_DYA_TOP: u16 = 0x9023;
 const S_DYA_BOTTOM: u16 = 0x9024;
 const S_DXA_GUTTER: u16 = 0xB025;
+const S_BIDI: u16 = 0x3228; // sprmSFBiDi
 
 /// One section: covers paragraphs up to (excluding) `end_cp`, with its properties.
 pub(crate) struct Section {
@@ -101,6 +102,8 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
             };
         }
         S_TITLE_PAGE => s.title_page = prl.operand.first().is_some_and(|&v| v != 0),
+        // A Bool8: the section is laid out right to left.
+        S_BIDI => s.rtl = prl.operand.first().is_some_and(|&v| v != 0),
         S_CCOLUMNS => {
             if let Some(c) = s16(prl) {
                 s.columns = Columns { count: (c as u32).saturating_add(1).min(44), ..Default::default() };

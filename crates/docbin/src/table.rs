@@ -18,9 +18,13 @@ const P_TTP: u16 = 0x2417;
 /// `sprmPItap`: table depth (we only model depth 1; deeper rows fall back to paragraphs).
 const P_ITAP: u16 = 0x6649;
 
-// Table sprms ([MS-DOC] §2.6.3).
-const T_JC: u16 = 0x5400;
-const T_JC_90: u16 = 0x548A;
+// Table sprms ([MS-DOC] §2.6.3). Justification: sprmTJc90 is physical (left or right on
+// the page), sprmTJc logical (start or end).
+const T_JC_90: u16 = 0x5400;
+const T_JC: u16 = 0x548A;
+// Right-to-left table: the last of either sprm ([MS-DOC] sprmTFBiDi, sprmTFBiDi90).
+const T_BIDI: u16 = 0x560B;
+const T_BIDI_90: u16 = 0x5664;
 const T_DXA_LEFT: u16 = 0x9601;
 const T_DXA_GAP_HALF: u16 = 0x9602;
 const T_TABLE_HEADER: u16 = 0x3404;
@@ -66,7 +70,10 @@ pub(crate) struct RowInfo {
     height_rule: HeightRule,
     header: bool,
     cant_split: bool,
+    /// Logical alignment (start = `Left`), as the model keeps it.
     align: Option<Align>,
+    /// The table reads right to left (`w:bidiVisual`).
+    pub(crate) bidi: bool,
     indent: Option<f32>,
     borders: Option<Borders>,
     /// Horizontal merges: (itcFirst, itcLim) cell-index ranges.
@@ -98,6 +105,12 @@ impl RowInfo {
     #[cfg(test)]
     pub(crate) fn shading_of(&self, i: u8) -> Option<Rgb> {
         self.shading.iter().rfind(|(k, _)| *k == i).and_then(|(_, s)| *s)
+    }
+
+    /// The table's logical alignment, for tests.
+    #[cfg(test)]
+    pub(crate) fn align(&self) -> Option<Align> {
+        self.align
     }
 
     /// The width cell `i` ends up with, for tests.
@@ -132,6 +145,7 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
     let mut r = RowInfo::default();
     let mut gap_half: Option<i16> = None;
     let mut dxa_left: Option<i16> = None;
+    let (mut jc, mut jc90) = (None, None);
     for prl in sprm::iter(papx) {
         // The membership sprms are paragraph sprms (sgc 1); the rest here are table sprms
         // (sgc 5), so match opcodes directly.
@@ -153,13 +167,10 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
                     }
                 }
             }
-            T_JC | T_JC_90 => {
-                r.align = match u16_of(&prl).unwrap_or(0) {
-                    1 => Some(Align::Center),
-                    2 => Some(Align::Right),
-                    _ => Some(Align::Left),
-                };
-            }
+            T_JC => jc = Some(jc_align(&prl)),
+            T_JC_90 => jc90 = Some(jc_align(&prl)),
+            // Either sprm sets the direction; a later one overrides an earlier one, false too.
+            T_BIDI | T_BIDI_90 => r.bidi = u16_of(&prl).map_or(r.bidi, |v| v != 0),
             T_DXA_LEFT => dxa_left = s16(&prl),
             T_DXA_GAP_HALF => gap_half = s16(&prl),
             T_TABLE_BORDERS_80 => r.borders = table_borders(prl.operand),
@@ -255,12 +266,24 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
             _ => {}
         }
     }
+    // The logical sprmTJc wins; the physical sprmTJc90 swaps left and right in a right-to-left
+    // table (a physically right table starts at the right margin).
+    r.align = jc.or_else(|| jc90.map(|a: Align| a.visual(r.bidi)));
     // The table indent is the row origin minus half the cell gap.
     if let Some(l) = dxa_left {
         let gap = gap_half.unwrap_or(0) as f32 / 20.0;
         r.indent = Some(((l as f32 / 20.0) - gap).clamp(-1584.0, 1584.0));
     }
     r
+}
+
+/// The alignment a table justification operand names: 0 left, 1 centre, 2 right.
+fn jc_align(prl: &Prl) -> Align {
+    match u16_of(prl).unwrap_or(0) {
+        1 => Align::Center,
+        2 => Align::Right,
+        _ => Align::Left,
+    }
 }
 
 /// A finished paragraph plus the bookkeeping the block assembly needs.
@@ -283,7 +306,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut grid: Vec<f32> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
+    // Deepest nesting among the table's completed rows, and among the paragraphs of the row
+    // still being gathered. They are kept apart so a direction split closes the earlier rows
+    // at their own depth, not at the depth of a nested table inside the incoming row.
     let mut depth_seen = 0u32;
+    let mut row_depth = 0u32;
 
     fn flush_cell(cells: &mut Vec<Cell>, cell: &mut Blocks) {
         let mut blocks = std::mem::take(cell);
@@ -376,7 +403,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     for p in paras {
         let Some(info) = p.row else {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen.max(row_depth) > 1);
                 grid.clear();
                 // Table props are per-table (first row carrying the sprm wins within the
                 // table): reset the accumulator so one table's borders, align, indent and
@@ -386,6 +413,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 props = TableProps::default();
                 open = false;
                 depth_seen = 0;
+                row_depth = 0;
             }
             out.push(para_block(p.para));
             continue;
@@ -393,7 +421,17 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if !open {
             open = true;
         }
-        depth_seen = depth_seen.max(info.depth);
+        // Adjacent rows whose direction differs are different tables ([MS-DOC] §2.4.3). A
+        // row's direction is on its row-end mark, so the rows before it close as their own
+        // table and this row (its cells already gathered) starts the next one.
+        if info.ttp && !rows.is_empty() && info.bidi != props.bidi_visual {
+            let (mut no_cells, mut no_cell) = (Vec::new(), Vec::new());
+            flush_table(&mut out, &mut rows, &mut no_cells, &mut no_cell, &grid, &props, depth_seen > 1);
+            grid.clear();
+            props = TableProps::default();
+            depth_seen = 0;
+        }
+        row_depth = row_depth.max(info.depth);
         if grid.is_empty() {
             // Column widths from the table's first `sprmTDefTable`.
             grid = info.edges.windows(2).take(MAX_COLS).map(|w| (w[1] - w[0]).max(0.0)).collect();
@@ -403,6 +441,12 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         }
         if props.align.is_none() {
             props.align = info.align;
+        }
+        // Direction from this table's own (depth-1) row-end marks only: a nested table's
+        // row-end mark carries the nested table's sprmTFBiDi, and its `ttp` is false
+        // (sprmPFInnerTtp isn't read), so it must not mirror the outer table.
+        if info.ttp {
+            props.bidi_visual |= info.bidi;
         }
         if props.indent.is_none() {
             props.indent = info.indent;
@@ -430,13 +474,15 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             if info.ttp {
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
+                depth_seen = depth_seen.max(row_depth);
+                row_depth = 0;
             }
         } else {
             cell.push(para_block(p.para));
         }
     }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen.max(row_depth) > 1);
     }
     out
 }

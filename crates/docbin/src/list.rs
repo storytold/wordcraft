@@ -263,9 +263,10 @@ fn level_of(l: &RawLvl, lvl_index: usize, fonts: &[String]) -> Level {
     }
     // Indents from the level's grpprlPapx.
     let mut props = ParaProps::default();
+    let sides = fmt::ParaSides::of(&l.papx, false);
     for prl in sprm::iter(&l.papx) {
         if prl.sgc() == 1 {
-            fmt::apply_para(&mut props, &prl);
+            fmt::apply_para(&mut props, &prl, &sides);
         }
     }
     let indent = props.indent_left.unwrap_or(18.0 * (lvl_index as f32 + 1.0)).clamp(0.0, 1000.0);

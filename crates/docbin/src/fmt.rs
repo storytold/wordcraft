@@ -25,6 +25,7 @@ const C_FTC1: u16 = 0x4A50; // East Asian font index (sprmCRgFtc1)
 const C_FTC_BI: u16 = 0x4A5E; // complex-script font index (sprmCFtcBi)
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
+const C_BIDI: u16 = 0x085A; // sprmCFBiDi: the run reads right to left
 
 // Paragraph sprms ([MS-DOC] §2.6.2).
 const P_JC: u16 = 0x2461;
@@ -46,6 +47,7 @@ const P_KEEP: u16 = 0x2405; // keep lines together
 const P_KEEP_FOLLOW: u16 = 0x2406; // keep with next
 const P_PAGE_BREAK_BEFORE: u16 = 0x2407;
 const P_OUTLVL: u16 = 0x2640;
+const P_BIDI: u16 = 0x2441; // sprmPFBiDi: right-to-left paragraph
 // Paragraph borders ([MS-DOC] §2.6.2). The 80 forms carry a Brc80 (palette colour), the
 // newer ones a BrcOperand: cb(1) + Brc(8, with a full COLORREF).
 const P_BRC_TOP80: u16 = 0x6424;
@@ -204,6 +206,11 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_SMALL_CAPS => set(&mut p.small_caps, sprm::toggle(prl), base.small_caps.unwrap_or(false)),
         C_CAPS => set(&mut p.caps, sprm::toggle(prl), base.caps.unwrap_or(false)),
         C_HIDDEN => set(&mut p.hidden, sprm::toggle(prl), base.hidden.unwrap_or(false)),
+        // 0x80 is the style's value: it restores it over an earlier sprmCFBiDi, as a PRM does.
+        C_BIDI => match sprm::toggle(prl) {
+            sprm::Toggle::Keep => p.rtl = base.rtl,
+            t => set(&mut p.rtl, t, base.rtl.unwrap_or(false)),
+        },
         C_KUL => {
             p.underline = match prl.operand.first().copied().unwrap_or(0) {
                 0x00 => Some(Underline::None),
@@ -328,29 +335,90 @@ fn change_tabs(p: &mut ParaProps, prl: &Prl) {
     p.tabs = Some(tabs);
 }
 
-/// Apply a paragraph-property sprm.
-pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
+/// What one grpprl of paragraph sprms says about its sides ([MS-DOC] §2.6.2). Word 97's
+/// `sprmPDxaLeft80`, `sprmPDxaRight80` and `sprmPJc80` are physical (the page's left and right);
+/// the later `sprmPDxaLeft`, `sprmPDxaRight` and `sprmPJc` are logical (start and end, which
+/// swap in a right-to-left paragraph). Word writes both forms; the logical one wins, and a
+/// physical one alone is turned to the logical side by the paragraph's direction.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct ParaSides {
+    /// The paragraph reads right to left: the grpprl's own `sprmPFBiDi`, else the inherited one.
+    rtl: bool,
+    /// The grpprl has the logical `sprmPDxaLeft` (start), `sprmPDxaRight` (end) or `sprmPJc`.
+    start: bool,
+    end: bool,
+    jc: bool,
+}
+
+impl ParaSides {
+    /// Scan `grpprl` first, so a logical sprm or `sprmPFBiDi` after the physical one still counts.
+    /// `inherited_rtl` is the direction of what the grpprl applies over (its style, its base).
+    pub(crate) fn of(grpprl: &[u8], inherited_rtl: bool) -> ParaSides {
+        let mut sides = ParaSides { rtl: inherited_rtl, ..ParaSides::default() };
+        for prl in sprm::iter(grpprl) {
+            match prl.op {
+                P_DXA_LEFT => sides.start = true,
+                P_DXA_RIGHT => sides.end = true,
+                P_JC => sides.jc = true,
+                P_BIDI => {
+                    if let Some(&v) = prl.operand.first() {
+                        sides.rtl = v != 0;
+                    }
+                }
+                _ => {}
+            }
+        }
+        sides
+    }
+}
+
+/// Apply a paragraph-property sprm of a grpprl described by `sides` ([`ParaSides::of`]).
+pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl, sides: &ParaSides) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(-1000.0, 1000.0);
     let s16 = |prl: &Prl| -> Option<i16> { u16_of(prl).map(|v| v as i16) };
     match prl.op {
         sprm::P_CHG_TABS | sprm::P_CHG_TABS_PAPX => change_tabs(p, prl),
         P_JC | P_JC80 => {
-            p.align = match prl.operand.first().copied().unwrap_or(0) {
-                1 => Some(Align::Center),
-                2 => Some(Align::Right),
-                3 => Some(Align::Justify),
-                4 => Some(Align::Distribute),
-                _ => Some(Align::Left),
+            if prl.op == P_JC80 && sides.jc {
+                return;
+            }
+            // 5, 7 and 8 are the medium, high and low kashida justifications Arabic documents
+            // use, and 9 Thai distribution: read as the DOCX reader reads them (#5933).
+            let align = match prl.operand.first().copied().unwrap_or(0) {
+                1 => Align::Center,
+                2 => Align::Right,
+                3 | 5 | 7 | 8 => Align::Justify,
+                4 | 9 => Align::Distribute,
+                _ => Align::Left,
             };
+            // The physical form names the page's side: the logical side it is depends on the
+            // direction (`visual` is its own inverse).
+            p.align = Some(if prl.op == P_JC80 { align.visual(sides.rtl) } else { align });
         }
-        P_DXA_LEFT | P_DXA_LEFT80 => {
+        P_DXA_LEFT | P_DXA_RIGHT => {
             if let Some(v) = s16(prl) {
-                p.indent_left = Some(tw(v as i32));
+                let v = Some(tw(v as i32));
+                if prl.op == P_DXA_LEFT {
+                    p.indent_left = v;
+                } else {
+                    p.indent_right = v;
+                }
             }
         }
-        P_DXA_RIGHT | P_DXA_RIGHT80 => {
+        // Physical: in a right-to-left paragraph the page's left is the end and its right the
+        // start. Skipped where the grpprl also gives that logical side.
+        P_DXA_LEFT80 | P_DXA_RIGHT80 => {
+            let to_start = (prl.op == P_DXA_LEFT80) != sides.rtl;
+            if (to_start && sides.start) || (!to_start && sides.end) {
+                return;
+            }
             if let Some(v) = s16(prl) {
-                p.indent_right = Some(tw(v as i32));
+                let v = Some(tw(v as i32));
+                if to_start {
+                    p.indent_left = v;
+                } else {
+                    p.indent_right = v;
+                }
             }
         }
         // A two-byte operand, like the other indents (spra 4).
@@ -412,6 +480,12 @@ pub(crate) fn apply_para(p: &mut ParaProps, prl: &Prl) {
         P_OUTLVL => {
             if let Some(&l) = prl.operand.first() {
                 p.outline_level = Some(l.min(8));
+            }
+        }
+        // A Bool8: the paragraph reads right to left ([`ParaSides`] turns the physical sprms by it).
+        P_BIDI => {
+            if let Some(&v) = prl.operand.first() {
+                p.bidi = Some(v != 0);
             }
         }
         P_BRC_TOP80 | P_BRC_LEFT80 | P_BRC_BOTTOM80 | P_BRC_RIGHT80 | P_BRC_BETWEEN80 => {
@@ -564,9 +638,11 @@ fn apply_chain(chr: &mut CharProps, grpprl: &[u8], fonts: &[String]) {
 
 /// Apply a grpprl of paragraph sprms.
 fn apply_chain_para(para: &mut ParaProps, grpprl: &[u8]) {
+    // A style's direction comes down its base chain, applied before it.
+    let sides = ParaSides::of(grpprl, para.bidi.unwrap_or(false));
     for prl in sprm::iter(grpprl) {
         if prl.sgc() == 1 {
-            apply_para(para, &prl);
+            apply_para(para, &prl, &sides);
         }
     }
 }
