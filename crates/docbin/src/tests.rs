@@ -2655,6 +2655,46 @@ fn a_logical_table_justification_wins_over_the_physical_one() {
 }
 
 #[test]
+fn physical_paragraph_indents_and_alignment_turn_with_the_direction() {
+    // [MS-DOC] §2.6.2: sprmPDxaLeft80/Right80 and sprmPJc80 are physical, sprmPDxaLeft/Right
+    // and sprmPJc logical. Normal reads right to left (sprmPFBiDi in the style), as in an Arabic
+    // Word 2003 file (#6384): its centred author line stores one 3.5" indent on the page's right
+    // both ways, Right80 = 5040 and Left = 5040. Read as two indents, the line had no width left.
+    use wordcraft_doc::props::Align;
+    let tw = |v: i16| v.to_le_bytes();
+    let spec = RichSpec {
+        text: "name\rphys\rltr\r",
+        styles: vec![
+            (1, 0x0FFF, "Normal", grpprl(&[(0x2441, &[0x01])]), Vec::new()),
+            // Based on Normal, physical only: the page's left is its end.
+            (1, 0, "Indented", grpprl(&[(0x840F, &tw(720))]), Vec::new()),
+        ],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (4, 0, grpprl(&[(0x2403, &[0x01]), (0x840E, &tw(5040)), (0x840F, &tw(0)), (0x845E, &tw(5040)), (0x2461, &[0x01])])),
+            // Physical only, right to left from the style: right is the start, left the end.
+            (9, 0, grpprl(&[(0x840E, &tw(720)), (0x840F, &tw(1440)), (0x2403, &[0x00])])),
+            // The paragraph's own sprmPFBiDi = 0, after the physical sprms, makes them logical.
+            (13, 0, grpprl(&[(0x840E, &tw(720)), (0x2403, &[0x02]), (0x2441, &[0x00])])),
+        ],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let para = |t: &str| doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.text == t).expect("paragraph");
+    let name = para("name");
+    assert_eq!((name.props.indent_left, name.props.indent_right), (Some(252.0), Some(0.0)), "one start indent, as Word writes it twice");
+    assert_eq!(name.props.align, Some(Align::Center));
+    let phys = para("phys");
+    assert_eq!((phys.props.indent_left, phys.props.indent_right), (Some(36.0), Some(72.0)), "physical right is the start");
+    assert_eq!(phys.props.align, Some(Align::Right), "physically left is the end of a right-to-left paragraph");
+    let ltr = para("ltr");
+    assert_eq!((ltr.props.indent_left, ltr.props.indent_right), (None, Some(36.0)), "left to right: physical is logical");
+    assert_eq!(ltr.props.align, Some(Align::Right));
+    let indented = doc.styles.styles.iter().find(|s| s.name == "Indented").expect("style");
+    assert_eq!((indented.para.indent_left, indented.para.indent_right), (None, Some(36.0)), "a style's direction comes from its base");
+}
+
+#[test]
 fn rows_of_different_directions_are_different_tables() {
     // [MS-DOC] §2.4.3: adjacent rows that differ in sprmTFBiDi belong to different tables, so a
     // right-to-left row doesn't turn the left-to-right table above it right to left.
