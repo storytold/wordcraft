@@ -46,13 +46,28 @@ impl Session {
     /// A command that changes nothing is not an edit: it adds no undo step, marks no
     /// unsaved changes, forces no relayout and leaves the redo stack alone (#23).
     fn unchanged(&self, doc: &Document, sel: &Selection, column: &Option<ColumnBlock>, pending: &Option<CharProps>) -> bool {
-        doc.same_content(&self.doc) && *sel == self.sel && *column == self.column && *pending == self.pending
+        doc.same_content(&self.doc)
+            && *sel == self.sel
+            && *column == self.column
+            && *pending == self.pending
+            && !self.md_source.as_ref().is_some_and(|src| src.is_pending())
     }
 
     /// Run a command by id with JSON params (the single entry point for the UI, CLI, MCP and
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        if self.md_source.is_some()
+            && let Some(mutates) = self.registry.get(id).map(|spec| spec.mutates)
+        {
+            crate::cmd::md_source::before_command(self, id, mutates)?;
+        }
+        self.run_command(id, params)
+    }
+
+    /// Dispatches `id` through the command registry with transactional rollback on failure,
+    /// tracking history, undo checkpoints, and IME outcomes.
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         // The document the command starts in, and the first id a document it opens can have.
         let home = self.document_id;
         let mark = document_id_mark();
@@ -160,7 +175,7 @@ impl Session {
         // Whether this command pushed an undo step (a no-op command's step is dropped below,
         // leaving its undo group without one).
         let mut pushed = false;
-        if spec.mutates {
+        if spec.mutates && spec.id != "view.markdownSourceText" {
             let label = if typing { "Typing" } else { spec.label };
             // A joined command merges into its group's step; a group whose first command
             // changed nothing has none, so the next command in it starts one (#4001).
