@@ -529,6 +529,16 @@ fn the_styles_gallery_fits_a_narrow_window() {
         app,
     );
     h.run_steps(8);
+    // The Styles group is folded at 360 pt: open its drop-down, then read the tiles.
+    for _ in 0..10 {
+        if h.query_all_by_label("Styles").any(|n| n.rect().max.x <= 360.0 && n.rect().min.x >= 0.0) {
+            break;
+        }
+        h.get_by_label("Scroll ribbon right").click();
+        h.run_steps(3);
+    }
+    h.get_by_label("Styles").click();
+    h.run_steps(3);
     let tiles: Vec<egui::Rect> = names.iter().filter_map(|s| h.query_by_label(s.as_str()).map(|n| n.rect())).collect();
     assert!(!tiles.is_empty(), "a narrow window still shows style tiles");
     for r in &tiles {
