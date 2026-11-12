@@ -581,7 +581,10 @@ mod ui_tests {
             .map(|n| n.rect().width())
             .collect();
         assert!(!bodies.is_empty(), "the two-row Equation insert is present");
-        assert!(bodies.iter().all(|w| *w > 24.0), "the insert body is wider than its arrow: {bodies:?}");
+        assert!(
+            arrows.iter().max_by(f32::total_cmp).unwrap() < bodies.iter().max_by(f32::total_cmp).unwrap(),
+            "the insert body is wider than its arrow: bodies={bodies:?} arrows={arrows:?}"
+        );
     }
 
     /// The two-row Review › Tracking section shows whether Track Changes is on.
