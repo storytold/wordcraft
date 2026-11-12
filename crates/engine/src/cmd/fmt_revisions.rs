@@ -402,25 +402,36 @@ pub fn resolve_styles(sheet: &mut wordcraft_doc::styles::StyleSheet, accept: boo
         resolve_char(&mut s.chr, accept);
     }
     // An unchanged style whose list came from its based-on style follows it again now that the
-    // base's change is resolved: rejecting must restore the old list for everything inheriting it.
-    let inherited: Vec<Option<Option<NumRef>>> = sheet
-        .styles
-        .iter()
-        .zip(&changed)
-        .map(|(s, had_change)| {
-            if *had_change || !s.numbering_from_base {
-                return None;
-            }
-            let level = s.para.numbering?.level;
-            let base = s.based_on.as_deref()?;
-            Some(inherited_list(sheet, base).map(|num| NumRef { num, level }))
-        })
-        .collect();
-    for (s, n) in sheet.styles.iter_mut().zip(inherited) {
-        if let Some(n) = n {
-            s.para.numbering = n;
-        }
+    // base's change is resolved. Process bases before children: on a chain Base -> Mid -> Leaf,
+    // Leaf must read Mid's restored list, not the value Mid had before this pass.
+    let mut inheriting: Vec<usize> =
+        (0..sheet.styles.len()).filter(|&i| !changed[i] && sheet.styles[i].numbering_from_base && sheet.styles[i].para.numbering.is_some()).collect();
+    inheriting.sort_by_key(|&i| style_depth(sheet, &sheet.styles[i].id).unwrap_or(usize::MAX));
+    for i in inheriting {
+        let (level, base) = {
+            let s = &sheet.styles[i];
+            let Some(level) = s.para.numbering.map(|n| n.level) else { continue };
+            let Some(base) = s.based_on.clone() else { continue };
+            (level, base)
+        };
+        let list = inherited_list(sheet, &base);
+        sheet.styles[i].para.numbering = list.map(|num| NumRef { num, level });
     }
+}
+
+/// How many `based_on` hops `id` is from its root; a cycle or an over-deep chain sorts last.
+fn style_depth(sheet: &wordcraft_doc::styles::StyleSheet, id: &str) -> Option<usize> {
+    let mut id = Some(id);
+    let mut depth = 0;
+    while let Some(style_id) = id {
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        depth += 1;
+        let st = sheet.styles.iter().find(|s| s.id == style_id)?;
+        id = st.based_on.as_deref();
+    }
+    Some(depth)
 }
 
 /// The nearest list a based-on chain names, in the sheet's current (possibly restored) state.

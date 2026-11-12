@@ -3106,6 +3106,12 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
         Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }),
         "old level-only list comes from the base style's old numbering"
     );
+
+    // Saving writes inherited styles with level-only numbering; reloading derives the flag again.
+    let reloaded = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).expect("reload");
+    let mid = reloaded.styles.get("CustomMid").expect("CustomMid after reload");
+    assert!(mid.numbering_from_base, "the inheritance survives a DOCX round trip");
+    assert_eq!(mid.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
 }
 
 /// Tracked change `w:id` values in `styles.xml` continue from the document's revision sequence

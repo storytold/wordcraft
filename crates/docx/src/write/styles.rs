@@ -65,7 +65,7 @@ fn write_style_ppr(w: &mut W, doc: &Document, rev_id: &mut u32, st: &Style) {
     let has_ppr_change = st.para.fmt_change.is_some();
     if (!st.para.is_empty() || has_ppr_change) && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
+        props::ppr_inner_style(w, &st.para, false, None, st.numbering_from_base);
         if let Some(ch) = &st.para.fmt_change {
             let a = props::change_attrs(doc, rev_id, ch.rev);
             props::open_change(w, "w:pPrChange", &a);

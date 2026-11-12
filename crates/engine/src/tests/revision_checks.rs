@@ -501,6 +501,15 @@ fn resolving_a_base_style_change_updates_inherited_numbering() {
             numbering_from_base: true,
             ..Default::default()
         });
+        sheet.styles.push(Style {
+            id: "Leaf".into(),
+            name: "Leaf".into(),
+            kind: StyleKind::Paragraph,
+            based_on: Some("Mid".into()),
+            para: ParaProps { numbering: Some(NumRef { num: 99, level: 2 }), ..Default::default() },
+            numbering_from_base: true,
+            ..Default::default()
+        });
         sheet
     }
 
@@ -512,8 +521,14 @@ fn resolving_a_base_style_change_updates_inherited_numbering() {
         Some(NumRef { num: 42, level: 1 }),
         "rejecting restores the base's old list for the inherited style"
     );
+    assert_eq!(
+        rejected.styles.iter().find(|s| s.id == "Leaf").expect("Leaf style").para.numbering,
+        Some(NumRef { num: 42, level: 2 }),
+        "a grandchild reads the corrected parent, not its stale list"
+    );
 
     let mut accepted = sheet();
     crate::cmd::fmt_revisions::resolve_styles(&mut accepted, true);
     assert_eq!(accepted.styles.iter().find(|s| s.id == "Mid").expect("Mid style").para.numbering, Some(NumRef { num: 99, level: 1 }));
+    assert_eq!(accepted.styles.iter().find(|s| s.id == "Leaf").expect("Leaf style").para.numbering, Some(NumRef { num: 99, level: 2 }));
 }

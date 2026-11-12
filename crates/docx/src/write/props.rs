@@ -277,6 +277,16 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
 /// `w:pPr` content (without the wrapper); `num_change` are the attributes of a tracked list
 /// numbering change (`w:numberingChange`, written in `w:numPr`).
 pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>) {
+    ppr_inner_with(w, p, framed, num_change, false);
+}
+
+/// `w:pPr` content for a style definition. `inherit_numbering` omits `w:numId`, keeping only
+/// `w:ilvl`, so reloading restores the list from the style's based-on chain.
+pub fn ppr_inner_style(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>, inherit_numbering: bool) {
+    ppr_inner_with(w, p, framed, num_change, inherit_numbering);
+}
+
+fn ppr_inner_with(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>, inherit_numbering: bool) {
     if let Some(s) = &p.style {
         w.val("w:pStyle", s);
     }
@@ -288,7 +298,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     if let Some(nr) = p.numbering {
         w.open("w:numPr", &[]);
         w.val("w:ilvl", &n(nr.level.min(8) as i64));
-        w.val("w:numId", &n(nr.num as i64));
+        if !inherit_numbering {
+            w.val("w:numId", &n(nr.num as i64));
+        }
         if let Some(a) = num_change {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:numberingChange", &refs);
