@@ -43,7 +43,16 @@ pub type Hook = Box<dyn Fn(FileDialogRequest) -> Receiver<FileDialogAnswer>>;
 #[derive(Clone, Default)]
 pub struct CancelHandle {
     #[cfg(all(unix, not(target_os = "macos")))]
-    token: Arc<Mutex<Option<crate::portal_save::CancelToken>>>,
+    armed: Arc<Mutex<Option<Armed>>>,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    next_id: Arc<std::sync::atomic::AtomicU64>,
+}
+
+/// The token a request installed in [`CancelHandle`], with the identity that owns it.
+#[cfg(all(unix, not(target_os = "macos")))]
+struct Armed {
+    id: u64,
+    token: crate::portal_save::CancelToken,
 }
 
 impl CancelHandle {
@@ -51,25 +60,30 @@ impl CancelHandle {
     pub fn cancel(&self) {
         #[cfg(all(unix, not(target_os = "macos")))]
         {
-            let mut slot = self.token.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(token) = slot.take() {
-                token.cancel();
+            let mut slot = self.armed.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(armed) = slot.take() {
+                armed.token.cancel();
             }
         }
     }
 
-    /// Arms the handle for the portal request about to wait, returning its token.
+    /// Arms the handle for the portal request about to wait, returning its token and identity.
     #[cfg(all(unix, not(target_os = "macos")))]
-    fn arm(&self) -> crate::portal_save::CancelToken {
+    fn arm(&self) -> Armed {
+        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed).wrapping_add(1);
         let token = crate::portal_save::CancelToken::new();
-        *self.token.lock().unwrap_or_else(|e| e.into_inner()) = Some(token.clone());
-        token
+        *self.armed.lock().unwrap_or_else(|e| e.into_inner()) = Some(Armed { id, token: token.clone() });
+        Armed { id, token }
     }
 
-    /// Disarms the handle once the request has answered.
+    /// Disarms the handle once the request with `id` has answered, leaving a newer request's
+    /// token alone: an abandoned request finishing late must not make the next one uncancellable.
     #[cfg(all(unix, not(target_os = "macos")))]
-    fn disarm(&self) {
-        *self.token.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    fn disarm(&self, id: u64) {
+        let mut slot = self.armed.lock().unwrap_or_else(|e| e.into_inner());
+        if slot.as_ref().is_some_and(|armed| armed.id == id) {
+            *slot = None;
+        }
     }
 }
 
@@ -117,7 +131,9 @@ impl Launcher {
             };
             // Armed before the thread starts, so giving the dialog up cannot race its start.
             #[cfg(all(unix, not(target_os = "macos")))]
-            let portal_cancel = matches!(&req, FileDialogRequest::Save { .. }).then(|| self.cancel.arm());
+            let portal_arm = matches!(&req, FileDialogRequest::Save { .. }).then(|| self.cancel.arm());
+            #[cfg(all(unix, not(target_os = "macos")))]
+            let portal_id = portal_arm.as_ref().map(|armed| armed.id);
             #[cfg(all(unix, not(target_os = "macos")))]
             let cancel_handle = self.cancel.clone();
             let ctx = self.ctx.clone();
@@ -129,6 +145,7 @@ impl Launcher {
                         #[cfg(all(unix, not(target_os = "macos")))]
                         {
                             if let FileDialogRequest::Save { name, dir } = &req {
+                                let cancel = portal_arm.as_ref().map(|armed| armed.token.clone());
                                 let portal_req = crate::portal_save::SaveRequest {
                                     parent: parent_id,
                                     name: Some(name.clone()),
@@ -136,7 +153,7 @@ impl Launcher {
                                     folder: dir.clone().map(std::path::PathBuf::from),
                                     filters: save_filters(name),
                                     current: Some(0),
-                                    cancel: portal_cancel,
+                                    cancel,
                                     timeout: None,
                                 };
                                 let portal_res = zbus::blocking::Connection::session()
@@ -170,7 +187,9 @@ impl Launcher {
                     }
                 };
                 #[cfg(all(unix, not(target_os = "macos")))]
-                cancel_handle.disarm();
+                if let Some(armed) = &portal_arm {
+                    cancel_handle.disarm(armed.id);
+                }
                 let _ = answer.send(picked);
                 ctx.request_repaint();
             });
@@ -178,7 +197,9 @@ impl Launcher {
             if let Err(e) = waiting {
                 log::error!("couldn't wait for the file dialog: {e}");
                 #[cfg(all(unix, not(target_os = "macos")))]
-                self.cancel.disarm();
+                if let Some(id) = portal_id {
+                    self.cancel.disarm(id);
+                }
             }
         }
     }
@@ -375,15 +396,29 @@ mod tests {
     #[test]
     fn cancelling_a_pending_portal_request_marks_its_token() {
         let handle = super::CancelHandle::default();
-        let token = handle.arm();
-        assert!(!token.is_cancelled());
+        let armed = handle.arm();
+        assert!(!armed.token.is_cancelled());
         handle.cancel();
-        assert!(token.is_cancelled());
+        assert!(armed.token.is_cancelled());
 
         let answered = handle.arm();
-        handle.disarm();
+        handle.disarm(answered.id);
         handle.cancel();
-        assert!(!answered.is_cancelled(), "an answered request is no longer cancelled");
+        assert!(!answered.token.is_cancelled(), "an answered request is no longer cancelled");
+    }
+
+    /// A request that finishes late must not disarm the token of a request started after it:
+    /// otherwise the newer Save dialog would become uncancellable.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn a_late_answer_keeps_the_newer_requests_token() {
+        let handle = super::CancelHandle::default();
+        let abandoned = handle.arm();
+        let newer = handle.arm();
+        handle.disarm(abandoned.id);
+        handle.cancel();
+        assert!(newer.token.is_cancelled(), "the newer request is still armed");
+        assert!(!abandoned.token.is_cancelled(), "only the armed request is cancelled");
     }
 
     /// #1399: the Save dialog's type list has one named entry per format, the suggested one first,
