@@ -1541,3 +1541,39 @@ fn a_refusal_that_reads_in_sync_does_not_clear_the_pause() {
     divergence.snapshot();
     assert_eq!(divergence.status_after_refusal(status), Status::InSync, "only the snapshot that repairs the edit reopens the session");
 }
+
+/// An ordinary handshake takes nothing off the queue: no restore notice, and the
+/// session is `InSync` unless it was already paused (ADR WC-0008).
+#[test]
+fn a_welcome_without_dropped_operations_reports_nothing() {
+    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 5, Vec::new());
+    assert_eq!(welcome.status, Status::InSync, "an empty dropped vector is the ordinary handshake");
+    assert!(welcome.restore.is_none());
+}
+
+/// A restored room answers below the base: the welcome names the head and the
+/// operations it took, and the session reads `Resyncing` until the snapshot
+/// lands, so the author sees the cost instead of an `InSync` session whose text
+/// changed (ADR WC-0008).
+#[test]
+fn a_welcome_with_dropped_operations_names_them_and_leaves_in_sync() {
+    let dropped = vec![OpId::new("alice", 1), OpId::new("alice", 2)];
+    let welcome = crate::WelcomeState::after_welcome(Divergence::default(), 3, dropped);
+    assert_eq!(welcome.status, Status::Resyncing, "the document those edits were in is about to be replaced");
+    let restore = welcome.restore.expect("the queue was taken");
+    assert_eq!(restore.head(), 3, "the line names the room's head");
+    assert_eq!(restore.count(), 2);
+    assert_eq!(restore.dropped(), [OpId::new("alice", 1), OpId::new("alice", 2)], "the ids are the author's evidence");
+}
+
+/// A session paused by ADR WC-0006 keeps the stronger reason: an edit that never
+/// reached the room is still in this document, and a restore is not the snapshot
+/// that repairs it.
+#[test]
+fn a_restore_does_not_clear_a_paused_session() {
+    let mut divergence = Divergence::default();
+    divergence.pause();
+    let welcome = crate::WelcomeState::after_welcome(divergence, 2, vec![OpId::new("alice", 3)]);
+    assert_eq!(welcome.status, Status::Diverged);
+    assert!(welcome.restore.is_some(), "the restore's ids are shown alongside the pause");
+}

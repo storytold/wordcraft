@@ -19,8 +19,8 @@ use serde_json::{Value, json};
 
 use wordcraft_collab::room::Role;
 use wordcraft_collab::wire::{ClientMsg, OpKind, ServerMsg, Target, Version};
-pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Status};
-use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, SyncState, apply_presence};
+pub use wordcraft_collab_app::{Commit, CommitCopy, Cursor, ParticipantView, Restore, Status};
+use wordcraft_collab_app::{CopyBuffer, Divergence, Outcome, SyncState, WelcomeState, apply_presence};
 /// An id for one editing session: two apps on the same document must not share
 /// an operation id space (`wordcraft_collab_client::session_client_id`).
 pub use wordcraft_collab_client::session_client_id;
@@ -221,6 +221,10 @@ pub struct Collab {
     seed: Vec<u8>,
     last_presence_ms: f64,
     last_error: Option<String>,
+    /// The queue a restored room took from this tab (ADR WC-0008). The snapshot
+    /// that follows clears the status and not this: the author keeps seeing what
+    /// the restore cost until the session ends.
+    restore: Option<Restore>,
     /// Operations planned before `welcome`; replayed through [`Client::op`] so
     /// their ids stay ordered.
     waiting: VecDeque<(OpKind, Target, Value)>,
@@ -254,6 +258,7 @@ impl Collab {
             seed,
             last_presence_ms: 0.0,
             last_error: None,
+            restore: None,
             waiting: VecDeque::new(),
             transport,
         })
@@ -297,6 +302,12 @@ impl Collab {
 
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// The queue a restored room took from this tab (ADR WC-0008), for the
+    /// panel's line about the edits that are no longer in the document.
+    pub fn restore(&self) -> Option<&Restore> {
+        self.restore.as_ref()
     }
 
     /// Why the cabinet refused the last commit (`409`), while the panel may
@@ -370,14 +381,24 @@ impl Collab {
 
     fn on_event(&mut self, event: Event, session: &mut Session) {
         match event {
-            Event::Welcome { version, role, participants, .. } => {
-                self.state.version = self.state.version.max(version);
+            Event::Welcome { version, role, participants, dropped, .. } => {
+                // The room's head is this base, in both directions (ADR
+                // WC-0008): a restored room answers below it, and keeping the
+                // higher number would plan the next operation on a document the
+                // room no longer has.
+                self.state.version = version;
                 self.state.role = Role::parse(&role).unwrap_or(self.state.role);
                 self.set_participants(&participants);
                 // A handshake is not a snapshot: `Offline`, a renewal or a
                 // closed socket never cleared the divergence, so this reads the
                 // flag, not the status (review 5853542478).
-                self.status = self.divergence.status_after_welcome();
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped);
+                self.status = welcome.status;
+                if let Some(restore) = welcome.restore {
+                    // The panel draws the count and the ids; the session reads
+                    // `Resyncing` until the snapshot lands (ADR WC-0008).
+                    self.restore = Some(restore);
+                }
                 if self.divergence.is_paused() {
                     // Reconnecting does not replace this document: the edit the
                     // room never received is still in it. Stay paused and ask
@@ -668,6 +689,7 @@ fn parse_selection(value: &Value) -> Option<(wordcraft_collab_app::Cursor, wordc
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wordcraft_collab::wire::OpId;
 
     #[test]
     fn a_session_message_starts_a_connection_and_keeps_the_token_out_of_debug() {
@@ -704,6 +726,7 @@ mod tests {
             seed: Vec::new(),
             last_presence_ms: 0.0,
             last_error: None,
+            restore: None,
             waiting: VecDeque::new(),
         }
     }
@@ -871,6 +894,103 @@ mod tests {
         let text = serde_json::to_string(&snapshot).expect("json");
         collab.on_text(&text, &mut session);
         assert_eq!(*collab.status(), Status::InSync, "the room's document is this document again");
+    }
+
+    /// A room restored from an older snapshot answers below this tab's base and
+    /// takes its unconfirmed queue with it (ADR WC-0008). The panel needs the
+    /// head and the ids, and the session must not read `InSync` until the
+    /// snapshot replaces the document the edits were in.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_restored_room_is_named_with_its_count_and_ids_and_leaves_in_sync() {
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let mut collab = test_collab(&opened, "c1");
+        let mut session = Session::new(wordcraft_doc::Document::new());
+        let welcome = |version: u64, resync: bool| {
+            serde_json::to_string(&ServerMsg::Welcome {
+                session_id: "s1".into(),
+                role: "editor".into(),
+                version,
+                epoch: 0,
+                participants: Vec::new(),
+                resync,
+            })
+            .expect("json")
+        };
+        // The tab joins at 3 and plans two edits the room has not answered yet.
+        collab.on_text(&welcome(3, true), &mut session);
+        collab.client.op(OpKind::Primitive, Target::new("body", 7, 0), json!({"replaceRange": {"text": "a"}}));
+        collab.client.op(OpKind::Primitive, Target::new("body", 7, 0), json!({"replaceRange": {"text": "b"}}));
+        assert_eq!(collab.client.pending().len(), 2);
+
+        // The room comes back from an older snapshot: head 1, below the base.
+        collab.on_text(&welcome(1, true), &mut session);
+        assert_eq!(*collab.status(), Status::Resyncing, "the snapshot that replaces the document has not landed");
+        assert!(!collab.can_write(), "an edit would be planned on a document the room no longer has");
+        assert_eq!(collab.version(), 1, "the base follows the head, as the client's did");
+        let restore = collab.restore().cloned().expect("the queue was taken and is reported");
+        assert_eq!(restore.head(), 1);
+        assert_eq!(restore.count(), 2);
+        assert_eq!(restore.dropped(), [OpId::new("c1", 1), OpId::new("c1", 2)], "the ids the panel draws");
+
+        // The snapshot lands: the session is usable again, the notice stays.
+        let bytes = serde_json::to_vec(&wordcraft_doc::Document::new()).expect("model");
+        let snapshot = serde_json::to_string(&ServerMsg::Snapshot { version: 1, bytes, last: true }).expect("json");
+        collab.on_text(&snapshot, &mut session);
+        assert_eq!(*collab.status(), Status::InSync);
+        assert!(collab.can_write());
+        assert_eq!(collab.restore().map(Restore::count), Some(2), "the cost does not disappear with the status");
+    }
+
+    /// An ordinary handshake takes nothing: no notice, no paused session.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_welcome_without_dropped_operations_reports_nothing() {
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let mut collab = test_collab(&opened, "c1");
+        let mut session = Session::new(wordcraft_doc::Document::new());
+        let welcome = serde_json::to_string(&ServerMsg::Welcome {
+            session_id: "s1".into(),
+            role: "editor".into(),
+            version: 0,
+            epoch: 0,
+            participants: Vec::new(),
+            resync: false,
+        })
+        .expect("json");
+        collab.on_text(&welcome, &mut session);
+        assert!(collab.restore().is_none(), "nothing was taken");
+        assert_eq!(*collab.status(), Status::InSync);
+        assert_eq!(collab.last_error(), None, "an ordinary handshake is not an error");
+    }
+
+    /// A head below the base with no snapshot promised cannot be joined: the
+    /// client asks for the document and the host shows its reason instead of
+    /// pretending the session is synchronized (ADR WC-0008, defensive branch).
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_welcome_below_the_base_without_a_snapshot_shows_the_reason() {
+        let opened = HostSession::new("s1", "wss://collab.example/ws", "jwt-1", "editor");
+        let mut collab = test_collab(&opened, "c1");
+        let mut session = Session::new(wordcraft_doc::Document::new());
+        let frame = |version: u64, resync: bool| {
+            serde_json::to_string(&ServerMsg::Welcome {
+                session_id: "s1".into(),
+                role: "editor".into(),
+                version,
+                epoch: 0,
+                participants: Vec::new(),
+                resync,
+            })
+            .expect("json")
+        };
+        collab.on_text(&frame(5, false), &mut session);
+        collab.client.op(OpKind::Primitive, Target::new("body", 7, 0), json!({"replaceRange": {"text": "a"}}));
+        collab.on_text(&frame(2, false), &mut session);
+        assert_eq!(*collab.status(), Status::Resyncing);
+        let reason = collab.last_error().unwrap_or_default();
+        assert!(reason.contains("below this document's base"), "{reason}");
+        assert!(collab.restore().is_none(), "the client answered with `Resync`, not a welcome");
     }
 
     /// The outstanding undo of a paused session is refused `undo-conflict` when

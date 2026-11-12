@@ -20,7 +20,7 @@ use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
 use wordcraft_collab::room::Role;
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab::wire::Participant;
-use wordcraft_collab::wire::{Applied, CabinetCommit, NodeRef, OpKind, Reject, RejectCode, Target, Version, may_allocate_ids};
+use wordcraft_collab::wire::{Applied, CabinetCommit, NodeRef, OpId, OpKind, Reject, RejectCode, Target, Version, may_allocate_ids};
 #[cfg(not(target_arch = "wasm32"))]
 use wordcraft_collab_client::Event;
 #[cfg(not(target_arch = "wasm32"))]
@@ -194,6 +194,66 @@ impl Divergence {
     /// with the document it was in.
     pub fn snapshot(&mut self) {
         self.paused = false;
+    }
+}
+
+/// What a room restored from an older snapshot took from this replica (ADR
+/// WC-0008): the head its welcome answered with, and the unconfirmed
+/// operations that left the queue because the document they were computed on
+/// no longer exists.
+///
+/// Kept on the session after the handshake: the snapshot that follows moves the
+/// status back, but the author still has to see what the restore cost, so the
+/// participants panel draws this notice for the rest of the session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restore {
+    head: Version,
+    dropped: Vec<OpId>,
+}
+
+impl Restore {
+    /// `None` for an ordinary handshake: the room took nothing off the queue.
+    pub fn from_welcome(head: Version, dropped: Vec<OpId>) -> Option<Restore> {
+        if dropped.is_empty() {
+            return None;
+        }
+        Some(Restore { head, dropped })
+    }
+
+    /// The room's version after the restore: the base this session adopted.
+    pub fn head(&self) -> Version {
+        self.head
+    }
+
+    /// The operations whose edits are not in the room, oldest first.
+    pub fn dropped(&self) -> &[OpId] {
+        &self.dropped
+    }
+
+    /// How many edits the restore took.
+    pub fn count(&self) -> usize {
+        self.dropped.len()
+    }
+}
+
+/// The visible state a `welcome` leaves, shared by both hosts (desktop and web)
+/// so the two cannot word or gate a restore differently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WelcomeState {
+    /// What the panel and the two gates read. A room that took the queue never
+    /// leaves the session `InSync`: the document those edits were in is about to
+    /// be replaced, so it reads `Resyncing` until the snapshot lands. A session
+    /// already paused by ADR WC-0006 stays `Diverged`: the stronger reason wins.
+    pub status: Status,
+    /// The queue the room took, `None` for an ordinary handshake.
+    pub restore: Option<Restore>,
+}
+
+impl WelcomeState {
+    pub fn after_welcome(divergence: Divergence, head: Version, dropped: Vec<OpId>) -> WelcomeState {
+        let restore = Restore::from_welcome(head, dropped);
+        let status = if restore.is_some() && !divergence.is_paused() { Status::Resyncing } else { divergence.status_after_welcome() };
+        WelcomeState { status, restore }
     }
 }
 
@@ -402,6 +462,10 @@ pub struct Collab {
     snapshot_version: Version,
     last_presence: Option<Instant>,
     last_error: Option<String>,
+    /// The queue a restored room took from this session (ADR WC-0008). The
+    /// snapshot that follows clears the status and not this: the author keeps
+    /// seeing what the restore cost until the session ends.
+    restore: Option<Restore>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -438,6 +502,7 @@ impl Collab {
             snapshot_version: 0,
             last_presence: None,
             last_error: None,
+            restore: None,
         })
     }
 
@@ -475,6 +540,12 @@ impl Collab {
 
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
+    }
+
+    /// The queue a restored room took from this session (ADR WC-0008), for the
+    /// panel's line about the edits that are no longer in the document.
+    pub fn restore(&self) -> Option<&Restore> {
+        self.restore.as_ref()
     }
 
     /// Why the cabinet refused the last commit (`409`), while the panel may
@@ -521,14 +592,25 @@ impl Collab {
 
     fn on_event(&mut self, event: Event, session: &mut Session) {
         match event {
-            Event::Welcome { version, role, participants, .. } => {
-                self.state.version = self.state.version.max(version);
+            Event::Welcome { version, role, participants, dropped, .. } => {
+                // The room's head is this base, in both directions (ADR
+                // WC-0008): a restored room answers below it, and keeping the
+                // higher number would plan the next operation on a document the
+                // room no longer has.
+                self.state.version = version;
                 self.state.role = Role::parse(&role).unwrap_or(Role::Editor);
                 self.set_participants(&participants);
                 // A handshake is not a snapshot: `Offline` or `Connecting` never
                 // cleared the divergence, so this reads the flag, not the status
                 // (review 5853542478).
-                self.status = self.divergence.status_after_welcome();
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped);
+                self.status = welcome.status;
+                if let Some(restore) = welcome.restore {
+                    // A writer whose in-flight edits a restore took must see it:
+                    // the panel draws the count and the ids, and the session
+                    // reads `Resyncing` until the snapshot lands (ADR WC-0008).
+                    self.restore = Some(restore);
+                }
                 if self.divergence.is_paused() {
                     // The edit the room never received is still in the
                     // document: ask again for the snapshot that repairs it

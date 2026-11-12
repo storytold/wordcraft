@@ -46,6 +46,18 @@ pub(crate) fn after_command(app: &mut WordApp, before: &Document, id: &str, para
     }
 }
 
+/// The line the panel shows after a restored room took this session's
+/// unconfirmed edits (ADR WC-0008): the head it answered with, how many edits
+/// left the queue and their operation ids, so the author can see which work the
+/// restore cost instead of finding the document silently different.
+fn restore_line(head: u64, dropped: &[String]) -> String {
+    let count = crate::i18n::tn(dropped.len() as u64, "{n} unconfirmed edit was dropped", "{n} unconfirmed edits were dropped");
+    crate::i18n::fmt(
+        tl!("The room was restored to version {version}; {count}: {ids}"),
+        &[("version", &head.to_string()), ("count", &count), ("ids", &dropped.join(", "))],
+    )
+}
+
 /// Why editing pauses right now, in words the writer can act on.
 pub(crate) fn pause_message(status: &crate::collab_session::Status) -> &'static str {
     match status {
@@ -166,6 +178,12 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
     // shows it and the owner gets the copy action (TASK.md §6).
     let conflict = collab.conflict().map(str::to_string);
     let error = conflict.clone().or_else(|| collab.last_error().map(str::to_string));
+    // A restored room cleared this session's queue: the notice outlives the
+    // snapshot that moves the status back (ADR WC-0008).
+    let restored = collab.restore().map(|restore| {
+        let dropped: Vec<String> = restore.dropped().iter().map(ToString::to_string).collect();
+        (restore.head(), dropped)
+    });
     let can_save_copy = collab.role().can_commit();
     let last_commit = collab.last_commit().cloned();
     let mut commit_clicked = false;
@@ -185,6 +203,10 @@ pub(crate) fn panel(app: &mut WordApp, ctx: &egui::Context) {
                 ui.add_enabled(false, egui::Button::new("Commit")).on_hover_text(commit_blocked_message(collab.status()));
             }
         });
+        if let Some((head, dropped)) = &restored {
+            ui.separator();
+            ui.colored_label(ui.visuals().warn_fg_color, restore_line(*head, dropped));
+        }
         ui.separator();
         for (index, (client, participant_role, color)) in participants.iter().enumerate() {
             ui.horizontal(|ui| {
@@ -375,6 +397,20 @@ fn participant_color(color: Option<&str>, index: usize) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A restore's line carries what the author needs to judge the loss: the
+    /// room's head, the count and the ids of the dropped operations, with the
+    /// count worded once or many (ADR WC-0008).
+    #[test]
+    fn a_restore_line_names_the_head_the_count_and_the_operations() {
+        let line = restore_line(3, &["c1:1".to_string(), "c1:2".to_string()]);
+        assert!(line.contains("version 3"), "{line}");
+        assert!(line.contains("2 unconfirmed edits were dropped"), "{line}");
+        assert!(line.contains("c1:1, c1:2"), "{line}");
+
+        let one = restore_line(7, &["c2:4".to_string()]);
+        assert!(one.contains("1 unconfirmed edit was dropped"), "{one}");
+    }
 
     /// An `editor` writes but cannot commit: the refusal must name the real
     /// restriction instead of calling the session read-only (CodeRabbit
