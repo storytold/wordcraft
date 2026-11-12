@@ -36,8 +36,9 @@ pub fn css_len_pt(v: &str) -> Option<f32> {
 }
 
 /// Whether a colour states alpha 0 (`rgba(0, 0, 0, 0)`, `hsl(0 0% 0% / 0%)`, `#00000000`): what a
-/// browser writes for a run with no background. A partly transparent colour (alpha above 0) is
-/// kept, as the opaque colour.
+/// browser writes for a run with no background. Compositing it over the white page would give
+/// white shading, not none; a partly transparent colour (alpha above 0) is composited by
+/// `parse_color`.
 fn fully_transparent(color: &str) -> bool {
     let c = color.trim().to_ascii_lowercase();
     if let Some(h) = c.strip_prefix('#') {

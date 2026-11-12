@@ -173,7 +173,8 @@ fn background_colour_functions_and_shorthands_become_character_shading() {
 }
 
 /// A browser writes `rgba(0, 0, 0, 0)` for a run with no background: that is no shading, not
-/// black. A partly transparent colour is kept as the opaque colour.
+/// black (nor the white that compositing it over the page would give). A partly transparent
+/// colour is composited over the white page by `parse_color`.
 #[test]
 fn transparent_backgrounds_are_no_shading() {
     let shade = |css: &str| {
@@ -193,7 +194,7 @@ fn transparent_backgrounds_are_no_shading() {
     ] {
         assert_eq!(shade(css), None, "{css}");
     }
-    assert_eq!(shade("background-color: rgba(255, 255, 0, 0.5)"), Some(wordcraft_doc::Rgb(255, 255, 0)), "partial alpha keeps the colour");
+    assert_eq!(shade("background-color: rgba(255, 255, 0, 0.5)"), Some(wordcraft_doc::Rgb(255, 255, 128)), "partial alpha is composited over white");
     assert_eq!(shade("background-color: rgba(255, 255, 0, 1)"), Some(wordcraft_doc::Rgb(255, 255, 0)));
 }
 
