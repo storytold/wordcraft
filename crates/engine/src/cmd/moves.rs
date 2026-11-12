@@ -6,7 +6,7 @@
 use std::collections::BTreeSet;
 
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Pos, Revision, RevisionKind, StoryRef};
+use wordcraft_doc::{Block, Paragraph, Path, Pos, Revision, RevisionKind, StoryRef};
 
 use super::{now_iso, track_delete_as};
 use crate::{CmdError, Selection, Session};
@@ -83,6 +83,87 @@ pub fn take_paste(s: &mut Session, frag: &Fragment) -> Option<u32> {
     }
     s.doc.revisions.push(Revision { kind: RevisionKind::Insert, author: s.author.clone(), date, move_name: Some(name) });
     Some((s.doc.revisions.len() - 1) as u32)
+}
+
+/// Under Track Changes, moves body paragraphs `start..end` before body block `before` (or to the
+/// end, `before` = the number of blocks), as Word records a heading dragged in the Navigation
+/// pane: the paragraphs stay where they were, marked moved away (`w:moveFrom`), and a copy of
+/// them lands at `before`, marked moved there (`w:moveTo`); with Track moves off, a deletion and
+/// an insertion. Returns the body index the copy starts at. Sections holding a table are refused.
+pub fn move_blocks_tracked(s: &mut Session, start: usize, end: usize, before: usize) -> Result<usize, CmdError> {
+    let len = s.doc.body.len();
+    let n = end.saturating_sub(start);
+    if n == 0 || end > len || before > len || (start..=end).contains(&before) {
+        return Err(CmdError::Failed("nothing to move there".into()));
+    }
+    let src: Vec<Paragraph> = s
+        .doc
+        .body
+        .get(start..end)
+        .and_then(|bl| bl.iter().map(|b| b.as_para().cloned()).collect())
+        .ok_or_else(|| CmdError::Failed("with Track Changes on, a heading whose content holds a table doesn't move".into()))?;
+    let last_len = src.last().map(Paragraph::len).unwrap_or(0);
+    let frag = s.doc.copy_range(&Pos::body(start, 0), &Pos::body(end - 1, last_len));
+    if frag.blocks.len() != n || !frag.blocks.iter().all(|b| matches!(b, Block::Para(_))) {
+        return Err(CmdError::Failed("this content can't be moved with Track Changes on".into()));
+    }
+    // The two ends of the move, linked by a name no other move has.
+    let (from, to) = if s.doc.settings.track_moves {
+        let taken: BTreeSet<&str> = s.doc.revisions.iter().filter_map(|r| r.move_name.as_deref()).collect();
+        let name = (1..).map(|k: u64| format!("move{k}")).find(|k| !taken.contains(k.as_str()));
+        let date = now_iso();
+        let mut push = |kind| {
+            s.doc.revisions.push(Revision { kind, author: s.author.clone(), date: date.clone(), move_name: name.clone() });
+            (s.doc.revisions.len() - 1) as u32
+        };
+        (push(RevisionKind::Delete), push(RevisionKind::Insert))
+    } else {
+        (super::new_revision(s, RevisionKind::Delete), super::new_revision(s, RevisionKind::Insert))
+    };
+    // The copy goes into a new empty paragraph, so each moved paragraph lands with its own mark
+    // and nothing merges into the paragraphs around it; text boxes get stories of their own.
+    s.doc.insert_block(StoryRef::Body, &Path::top(before), Block::Para(Paragraph::new()))?;
+    s.doc.insert_fragment(&Pos::body(before, 0), &frag)?;
+    if s.doc.body.len() != len + n {
+        return Err(CmdError::Failed("this content can't be moved with Track Changes on".into()));
+    }
+    for (k, p) in src.iter().enumerate() {
+        let d = s.doc.para_mut(StoryRef::Body, &Path::top(before + k))?;
+        d.props = p.props.clone();
+        d.mark = p.mark.clone();
+        d.section = None;
+        // Text deleted where it came from stays deleted: moved there, then deleted.
+        for run in &mut d.runs {
+            run.props.ins = Some(to);
+            run.props.fmt_change = None;
+        }
+        d.mark.ins = Some(to);
+        d.mark.del = None;
+        d.mark.fmt_change = None;
+        d.touch();
+    }
+    // The paragraphs where they were, now after or before the copy.
+    let (src_start, after) = if before < start { (start + n, true) } else { (start, false) };
+    let src_end = src_start + n;
+    let (a, b) = if src_end < s.doc.body.len() {
+        (Pos::body(src_start, 0), Pos::body(src_end, 0))
+    } else {
+        // At the end of the document the last paragraph mark can't go: the mark before the
+        // paragraphs goes instead, so accepting leaves no empty paragraph behind (as in Word).
+        let prev = src_start.checked_sub(1).and_then(|i| s.doc.body.get(i).and_then(|b| b.as_para()).map(|p| Pos::body(i, p.len())));
+        (prev.unwrap_or_else(|| Pos::body(src_start, 0)), Pos::body(src_end - 1, last_len))
+    };
+    let blocks = s.doc.body.len();
+    track_delete_as(s, &a, &b, from)?;
+    // Removing this author's own insertions there may have joined paragraphs before the copy.
+    let at = if after { before } else { before.saturating_sub(blocks.saturating_sub(s.doc.body.len())) };
+    // Nothing was left to move away (it was all this author's own insertion): an insertion.
+    if !in_use(s, from)
+        && let Some(r) = s.doc.revisions.get_mut(to as usize)
+    {
+        r.move_name = None;
+    }
+    Ok(at)
 }
 
 /// The move names of the insertions and deletions in `a..b` (and of the paragraph marks it
