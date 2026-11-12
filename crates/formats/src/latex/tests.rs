@@ -241,6 +241,71 @@ fn fragments_without_a_document_environment() {
 }
 
 #[test]
+fn a_blank_line_after_a_comment_ends_the_paragraph() {
+    // The comment took its line end with it, so the blank line after it read as a single line
+    // end: the paragraphs ran together with two spaces between them.
+    let two = ["first", "second"];
+    assert_eq!(texts("\\begin{document}first % note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n\nsecond\\end{document}"), two);
+    assert_eq!(texts("\\begin{document}first\n% note\n  \t\n\nsecond\\end{document}"), two);
+    // A comment still joins its line to a next line that is not blank.
+    assert_eq!(texts("\\begin{document}first%\nsecond\\end{document}"), ["firstsecond"]);
+    assert_eq!(texts("\\begin{document}first % note\n   second\\end{document}"), ["first second"]);
+}
+
+#[test]
+fn a_blank_line_after_a_control_word_at_a_line_end_ends_the_paragraph() {
+    // The control word took the line end after it, so the blank line read as a single line end.
+    assert_eq!(texts("\\begin{document}first \\relax\n\nsecond\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax  \n \n second\\end{document}"), ["first", "second"]);
+    assert_eq!(texts("\\begin{document}first \\relax\nsecond\\end{document}"), ["first second"]);
+}
+
+/// Wraps `body` in a document whose line ends are all `nl`.
+fn with_line_ends(body: &str, nl: &str) -> String {
+    format!("\\begin{{document}}{nl}{}{nl}\\end{{document}}{nl}", body.replace('\n', nl))
+}
+
+#[test]
+fn a_blank_line_ends_the_paragraph_with_cr_and_crlf_line_ends() {
+    // #6365: only LF counted as a line end, so with CR line ends every paragraph break was lost.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first\nsecond", nl)), ["first second"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first \\relax\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+    }
+}
+
+#[test]
+fn a_comment_ends_at_a_cr_line_end() {
+    // #6373: a comment ran to the next LF, so with CR line ends it took the rest of the file.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first\n% note\nsecond\n\nthird", nl)), ["first second", "third"], "{nl:?}");
+        assert_eq!(texts(&with_line_ends("first\n% note\n\nsecond", nl)), ["first", "second"], "{nl:?}");
+    }
+}
+
+#[test]
+fn a_verbatim_environment_starts_after_a_cr_line_end() {
+    // #6374: the rest of the `\begin{verbatim}` line ran to the next LF, so with CR line ends it took the rest of the file.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(
+            texts(&with_line_ends("before\n\n\\begin{verbatim}\ncode one\ncode two\n\\end{verbatim}\n\nafter", nl)),
+            ["before", "code one", "code two", "after"],
+            "{nl:?}"
+        );
+    }
+}
+
+#[test]
+fn the_line_end_after_a_control_word_reads_as_nothing_with_cr_and_crlf_line_ends() {
+    // #6375: the control word took only an LF after it, so a CR there read as a space.
+    for nl in ["\r", "\r\n"] {
+        assert_eq!(texts(&with_line_ends("first \\TeX\nis", nl)), ["first TeXis"], "{nl:?}");
+    }
+}
+
+#[test]
 fn math_conversions() {
     for (tex, linear) in [
         (r"\frac{1}{2}", "1/2"),
