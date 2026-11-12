@@ -903,7 +903,7 @@ fn the_page_at_the_top_of_the_window() {
     // Hide White Space: the rects overlap in the hidden margins. Just past the seam the next
     // page's text shows, so that page is at the top, though the previous rect reaches further.
     let sizes = [(612.0, 792.0); 3];
-    let (full, _) = place_pages(&sizes, 0.0, 1.0, 1, vec2(800.0, 600.0));
+    let (full, _) = place_pages(&sizes, 0.0, 1.0, 1, vec2(800.0, 600.0), false);
     let (moved, bands, _) = collapse_white_space(&full, &[(72.0, 720.0); 3], 1.0, 600.0);
     let seam = moved[0].min.y + bands[0].1;
     assert!(moved[0].max.y > seam + SEAM + 2.0, "the rects overlap past the seam");
@@ -3211,7 +3211,7 @@ fn pages_flow_into_rows_when_they_fit() {
     // Mixed sizes: a landscape page among portrait ones, three per row.
     let sizes = [(612.0, 792.0), (792.0, 612.0), (612.0, 792.0), (612.0, 792.0)];
     let scale = 0.25;
-    let (rects, size) = place_pages(&sizes, 0.0, scale, 3, vec2(1000.0, 600.0));
+    let (rects, size) = place_pages(&sizes, 0.0, scale, 3, vec2(1000.0, 600.0), false);
     assert_eq!(rects.len(), 4);
     assert_eq!(rects[0].top(), rects[1].top());
     assert_eq!(rects[1].top(), rects[2].top());
@@ -3227,11 +3227,53 @@ fn pages_flow_into_rows_when_they_fit() {
     // Hostile page sizes and scales stay finite.
     let bad = [(f32::NAN, f32::INFINITY), (-1.0, 0.0), (1e30, 1e30)];
     for scale in [f32::NAN, 0.0, -1.0, 1e9] {
-        let (rects, size) = place_pages(&bad, f32::NAN, scale, 0, vec2(f32::NAN, -1.0));
+        let (rects, size) = place_pages(&bad, f32::NAN, scale, 0, vec2(f32::NAN, -1.0), false);
         assert_eq!(rects.len(), 3);
         assert!(size.x.is_finite() && size.y.is_finite());
         assert!(rects.iter().all(|r| r.min.x.is_finite() && r.max.y.is_finite()), "{rects:?}");
     }
+}
+
+/// #5586: in a right-to-left interface (Arabic) pages side by side run from the right, as in
+/// Word's right-to-left document view: the first page on the right, a short last row under the
+/// right-hand column, and a click on a page still puts the caret on that page.
+#[test]
+fn pages_side_by_side_run_from_the_right_in_a_right_to_left_interface() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+    for text in ["One", "Two"] {
+        app.run("text.insert", json!({"text": text})).unwrap();
+        app.run("insert.pageBreak", json!({})).unwrap();
+    }
+    app.run("text.insert", json!({"text": "Three"})).unwrap();
+    app.run("view.zoom", json!({"value": "multiplePages"})).unwrap();
+    let layout = app.session.layout();
+    assert_eq!(layout.pages.len(), 3);
+    let avail = vec2(1300.0, 700.0);
+    let ltr = geometry(&app, &layout, avail);
+    assert_eq!(ltr.cols, 2, "{:?}", ltr.rects);
+    assert!(ltr.rects[0].right() < ltr.rects[1].left(), "an English interface starts at the left: {:?}", ltr.rects);
+    crate::i18n::set_current(crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n"));
+    let geo = geometry(&app, &layout, avail);
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    let r = &geo.rects;
+    assert_eq!(geo.cols, 2);
+    assert_eq!(r[0].top(), r[1].top());
+    assert!(r[0].left() > r[1].right(), "the first page is on the right: {r:?}");
+    assert_eq!((r[0].left(), r[1].left()), (ltr.rects[1].left(), ltr.rects[0].left()), "the row is mirrored");
+    assert!(r[2].top() > r[0].bottom() && r[2].left() == r[0].left(), "the third page starts the next row on the right: {r:?}");
+    assert_eq!(geo.size, ltr.size);
+    // Clicking a page puts the caret on it.
+    app.canvas.page_rects = r.clone();
+    app.canvas.scale = geo.scale;
+    for (page, rect) in r.iter().enumerate() {
+        let p = page_to_screen(&mut app, page, 100.0, 80.0).unwrap();
+        assert!(rect.contains(p), "{p:?} in {rect:?}");
+        let pos = pos_from_screen(&mut app, p).unwrap();
+        assert_eq!(app.session.layout().caret_on(&pos, page).unwrap().page, page);
+    }
+    // Hostile numbers stay finite from the right too.
+    let (rects, size) = place_pages(&[(f32::NAN, f32::INFINITY), (-1.0, 0.0)], f32::NAN, f32::NAN, 0, vec2(f32::NAN, -1.0), true);
+    assert!(size.x.is_finite() && rects.iter().all(|r| r.min.x.is_finite()), "{rects:?}");
 }
 
 #[test]
@@ -3942,7 +3984,7 @@ fn ruler_tab_stops_are_set_moved_and_cleared_with_the_pointer() {
 fn hiding_white_space_stacks_page_bands_and_keeps_hit_testing() {
     let scale = 1.0;
     let sizes = [(612.0, 792.0); 3];
-    let (rects, _) = place_pages(&sizes, 0.0, scale, 1, vec2(800.0, 600.0));
+    let (rects, _) = place_pages(&sizes, 0.0, scale, 1, vec2(800.0, 600.0), false);
     // Body from 72 to 720 pt on every page.
     let bodies = [(72.0, 720.0); 3];
     let (moved, bands, h) = collapse_white_space(&rects, &bodies, scale, 600.0);
