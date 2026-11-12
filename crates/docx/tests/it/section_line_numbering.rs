@@ -39,13 +39,18 @@ fn section_line_numbering_without_count_by_is_off() {
     assert!(!xml.contains("w:lnNumType"), "expected no lnNumType when line numbering is off: {xml}");
 }
 
-/// #6209: `w:countBy="0"` is invalid and leaves line numbering off.
+/// #6209: `w:countBy="0"` counts no lines, so line numbering stays off. Word was observed with
+/// the attribute absent; an interval of 0 counts nothing either.
 #[test]
 fn section_line_numbering_with_zero_count_by_is_off() {
     let body = r#"<w:p><w:r><w:t>Hello</w:t></w:r></w:p><w:sectPr><w:lnNumType w:countBy="0" w:distance="0"/></w:sectPr>"#;
     let d = wordcraft_docx::read(&docx(body)).unwrap();
     let sect = &d.last_section;
     assert_eq!(sect.line_numbers, None);
+
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&out);
+    assert!(!xml.contains("w:lnNumType"), "expected no lnNumType when line numbering is off: {xml}");
 }
 
 /// #6209: `w:countBy >= 1` enables line numbering.

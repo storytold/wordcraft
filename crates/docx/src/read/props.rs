@@ -820,6 +820,10 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                 s.footnote_columns = k.attr("w:val").and_then(u32_of).filter(|v| (1..=45).contains(v));
             }
             "w:lnNumType" => {
+                // Word leaves line numbering off unless `w:countBy` gives an interval above 0,
+                // whatever `w:start`, `w:distance` and `w:restart` say (#6209, observed in Word;
+                // the RTF-to-DOCX converter there writes the element without `w:countBy`).
+                // Falling back to `LineNumbering::default()` would number every line instead.
                 if let Some(count_by) = k.attr("w:countBy").and_then(u32_of).filter(|&v| v > 0) {
                     let mut l = LineNumbering { count_by: count_by.clamp(1, 100), ..LineNumbering::default() };
                     if let Some(v) = k.attr("w:start").and_then(int) {
