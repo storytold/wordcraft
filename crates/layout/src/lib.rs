@@ -312,6 +312,9 @@ pub struct Page {
     /// The top-level body tables placed on this page as floating tables (`w:tblpPr`): a click
     /// outside one doesn't land in its cells ([`DocLayout::hit`]).
     pub float_tables: Vec<Path>,
+    /// A blank page inserted so the next section starts on the side its break asks for (an odd- or
+    /// even-page break); Word draws no header or footer on it.
+    pub blank: bool,
 }
 
 /// The whole layout.

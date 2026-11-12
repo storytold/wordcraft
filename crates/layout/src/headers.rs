@@ -333,6 +333,13 @@ pub(crate) fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(us
         } else {
             HfSlot::Default
         };
+        // The blank page putting the next section on its side shows no header or footer.
+        if page.blank {
+            page.header.clear();
+            page.footer.clear();
+            (page.header_story, page.footer_story) = (None, None);
+            continue;
+        }
         ctx.fields.page = page.number;
         ctx.fields.page_format = sect.page_num_format;
         ctx.fields.pages = total;
