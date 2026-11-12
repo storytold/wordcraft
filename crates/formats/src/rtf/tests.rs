@@ -2020,6 +2020,20 @@ fn section_and_table_revisions_read_as_the_spec_writes_them() {
     assert_eq!(c, Some(Some("Alice".to_string())));
 }
 
+/// A file that ends inside an old-formatting group keeps the section's and the row's own
+/// formatting, not the incomplete old formatting the group was reading.
+#[test]
+fn a_file_ending_in_old_formatting_keeps_the_current_formatting() {
+    let doc = import(br"{\rtf1\sectd\pgwsxn12240\pghsxn15840 Text\par{\*\oldsprops \sectd\lndscpsxn\pgwsxn15840\pghsxn12240").unwrap();
+    let s = &doc.last_section;
+    assert!(!s.landscape && (s.page_w - 612.0).abs() < 0.1 && s.fmt_change.is_none(), "{} {}", s.landscape, s.page_w);
+    let doc = import(br"{\rtf1\trowd\trqc\clcbpat0\cellx2000\pard\intbl a\cell{\*\oldtprops \trowd\trql\cellx4000").unwrap();
+    let t = first_table(&doc);
+    assert_eq!(t.props.align, Some(wordcraft_doc::Align::Center));
+    assert!(t.props.fmt_change.is_none());
+    assert!((t.grid.iter().sum::<f32>() - 100.0).abs() < 0.1, "{:?}", t.grid);
+}
+
 #[test]
 fn hostile_section_and_table_revisions_never_panic() {
     let text = |rtf: &[u8]| import(rtf).map(|d| d.plain_text(wordcraft_doc::StoryRef::Body)).unwrap_or_default();

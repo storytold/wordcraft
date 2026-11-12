@@ -193,6 +193,18 @@ impl Reader {
         self.sec.old = Some(Box::new(old));
     }
 
+    /// A file that ends inside an `\oldsprops` or `\oldtprops` group: the section's and the row's
+    /// own formatting come back, and what the group read is no change (it may be incomplete).
+    pub(super) fn drop_open_old_groups(&mut self) {
+        if let Some(saved) = self.sec_saved.take() {
+            self.sec = *saved;
+        }
+        if let Some(saved) = self.old_saved.take() {
+            let saved = *saved;
+            (self.row_fmt, self.defs, self.def_cur, self.cell_side) = (saved.fmt, saved.defs, saved.def_cur, saved.cell_side);
+        }
+    }
+
     /// The tracked change of the current section: who made it, and its properties before.
     pub(super) fn section_change(&self) -> Option<(model::RevMark, wordcraft_doc::SectionProps)> {
         let old = self.sec.old.as_deref()?;

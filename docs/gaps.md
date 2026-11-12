@@ -181,7 +181,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 ## Revision history
 
-> 2026-11-11 · Gap 19: RTF section, table, row and cell formatting revisions read and written (#6334); RTF revisions are done; readiness unchanged.
+> 2026-11-11 · Gap 19: RTF section, table, row and cell formatting revisions read and written (#6334); of RTF revisions, only formatting changes on paragraph marks are still dropped; readiness unchanged.
 
 > 2026-11-03 · Section `w:chapStyle` values now preserve the complete unsigned-byte range, including 10; values above 255 are rejected.
 
