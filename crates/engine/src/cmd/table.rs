@@ -12,6 +12,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod cells;
 mod clear;
 mod convert;
+mod join;
 mod layout;
 mod select;
 mod structure;
@@ -25,6 +26,7 @@ pub(crate) use clear::{backspace_cells, clear_cells};
 use clear::{cell_prefix, guard_delete, text_spans};
 use convert::{formula, from_text, quick_table, sort_table, to_text};
 pub use convert::{text_table_cells, text_table_lines};
+pub use join::join_next_unavailable;
 use layout::{autofit, borders, fix_caret, properties, set_column_widths};
 pub(crate) use layout::{sync_cell_widths, text_direction, touch_cells};
 pub(crate) use select::{extend_selection, grow_select_all, select_cell_first, select_range};
@@ -70,6 +72,8 @@ pub fn specs() -> Vec<CommandSpec> {
         t(CommandSpec::new("table.split", "Split Cells", "Table Layout › Merge", split)
             .params(r#"{"columns"?: n (2), "rows"?: n (1), "mergeFirst"?: bool (true: several selected cells are merged first)}"#)),
         t(CommandSpec::new("table.splitTable", "Split Table", "Table Layout › Merge", split_table)),
+        CommandSpec::new("table.joinNext", "Join with Next Table", "Table Layout › Merge", join::join_next).when(join_next_unavailable),
+        CommandSpec::new("table.joinNextStatus", "Join Tables Availability", "", join::status).pure(),
         t(CommandSpec::new("table.style", "Table Styles", "Table Design › Table Styles", |s, v| {
             let st = p::req_str(v, "style")?;
             let id = super::table_style::table_style_id(s, st).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
