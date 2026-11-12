@@ -616,14 +616,23 @@ mod ui_tests {
     fn compact_window_keeps_full_screen_reachable() {
         // 900 pt: the card is below the 1040-pt three-row breakpoint (Window is one row)
         // but wide enough to show the Window group without scrolling to it.
-        let mut h = harness(900.0, 700.0, 1.0);
-        h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+        app.run("ui.tab", json!({"tab": "View"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        // Measure, plan, measure the planned levels, plan again.
         h.run_steps(8);
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(3);
         assert!(shown(&h, "Full Screen"), "Full Screen is reachable in the compact Window group");
         let full = h.state().session.view.full_screen;
-        h.state_mut().run("ui.tab", json!({"tab": "View"})).unwrap();
         let disabled = h.state().session.why_disabled("view.fullScreen").is_some();
         click_shown(&h, "Full Screen");
         h.run_steps(3);
