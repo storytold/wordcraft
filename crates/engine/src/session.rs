@@ -20,6 +20,9 @@ mod ime;
 mod layout;
 mod lifecycle;
 mod query;
+mod revisions;
+#[cfg(test)]
+mod revisions_tests;
 mod run;
 mod snapshot;
 
@@ -104,6 +107,10 @@ pub struct Session {
     redo: Vec<Arc<Undo>>,
     /// Typing is coalesced into one undo step until something else happens.
     typing_open: bool,
+    /// Revision identities belong to the current continuous edit, never to wall-clock seconds.
+    revision_group: Option<revisions::RevisionGroup>,
+    /// Nested commands share their outer command's revision allocation.
+    revision_depth: usize,
     /// The next mutating command joins the previous undo step (later frames of a drag).
     join_next: bool,
     /// The next equation typing command joins a successful equation `deleteSurrounding`'s undo

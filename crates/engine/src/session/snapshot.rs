@@ -66,6 +66,8 @@ impl Session {
     /// whether a snapshot must cover it.
     pub fn edit_snapshot(&self) -> EditSnapshot {
         let Session {
+            revision_group: _,
+            revision_depth: _,
             doc,
             sel,
             view: _,
