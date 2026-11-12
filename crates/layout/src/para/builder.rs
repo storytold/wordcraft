@@ -750,7 +750,8 @@ impl Builder<'_> {
 }
 
 /// Whether text with this formatting is left out of the layout: hidden text unless it is shown, and
-/// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
+/// tracked deletions in the final text (tracked insertions in the original). It takes no room,
+/// draws nothing and is no place to break.
 pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hide_deleted: crate::HideDeleted) -> bool {
-    (rc.hidden && !show_hidden) || hide_deleted.hides(doc, rc.del)
+    (rc.hidden && !show_hidden) || hide_deleted.hides_change(doc, rc.ins, rc.del)
 }

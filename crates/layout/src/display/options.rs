@@ -40,6 +40,12 @@ pub struct DisplayOptions {
     pub dim_body: bool,
     /// Show tracked changes as markup (coloured, underlined/struck).
     pub markup: bool,
+    /// Simple Markup (with `markup` off): the text is drawn as without markup, and red bars
+    /// beside the page mark the lines with changes ([`MarkupOptions::changed_lines`] says where).
+    pub simple_markup: bool,
+    /// Original (with `markup` off): tracked deletions are drawn as plain text. The layout left
+    /// the insertions out ([`crate::LayoutOptions::hide_inserted`]).
+    pub original: bool,
     /// Show on-screen-only marks: equation placeholders and prompts (never in print or PDF).
     pub placeholders: bool,
     /// Review › Hide Ink: leave ink strokes out (they stay in the document).
@@ -59,6 +65,8 @@ impl Default for DisplayOptions {
             dim_header: true,
             dim_body: false,
             markup: true,
+            simple_markup: false,
+            original: false,
             placeholders: false,
             hide_ink: false,
             revisions: MarkupOptions::default(),
@@ -259,6 +267,6 @@ impl MarkupOptions {
 
     /// The deletions the layout leaves out with markup shown ([`crate::LayoutOptions::hide_marked`]).
     pub fn hidden_deletions(&self) -> crate::HideDeleted {
-        crate::HideDeleted { plain: self.hides_deletion(false), moved_from: self.hides_deletion(true) }
+        crate::HideDeleted { plain: self.hides_deletion(false), moved_from: self.hides_deletion(true), inserted: false }
     }
 }

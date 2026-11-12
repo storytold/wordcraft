@@ -4,11 +4,12 @@ use wordcraft_layout::display::{DisplayOptions, Draw, page_display};
 
 use crate::Session;
 
-/// What the first page draws with the session's Track Changes Options.
+/// What the first page draws with the session's Track Changes Options and Display for Review.
 fn draws(s: &mut Session) -> (Vec<Draw>, f32) {
     let l = s.layout();
     let page = &l.pages[0];
-    let opts = DisplayOptions { revisions: s.prefs.markup.clone(), ..Default::default() };
+    let mut opts = DisplayOptions { revisions: s.prefs.markup.clone(), ..Default::default() };
+    s.view.review_display.apply(&mut opts);
     (page_display(&s.doc, page, &opts), page.body.x)
 }
 
@@ -61,6 +62,87 @@ fn tracking_options_change_how_revisions_are_drawn() {
     // Unknown choices are refused; reading changes nothing.
     assert!(s.run("review.trackingOptions", &json!({"deleteMark": "sparkles"})).is_err());
     assert_eq!(s.run("review.trackingOptions", &json!({})).unwrap()["insertColor"], "00AA00");
+}
+
+/// #5626: Display for Review offers Word's four choices. Simple Markup shows the text as if the
+/// changes were accepted with a red bar beside each changed line and only the comments beside
+/// the page; Original shows it as if they were rejected, unmarked. The document never changes.
+#[test]
+fn display_for_review_shows_simple_markup_and_the_original() {
+    use wordcraft_layout::display::{CHANGE_BAR, SIMPLE_CHANGE_BAR};
+    let mut s = Session::new(Document::new());
+    s.view.proofing = false;
+    s.run(
+        "document.setText",
+        &json!({"text": "Plain line.
+Some text here.
+Other words here.
+Last line."}),
+    )
+    .unwrap();
+    s.run("review.newComment", &json!({"text": "Note"})).unwrap();
+    // Comments in balloons beside the page, not in the pane a new comment opens.
+    s.run("view.commentsPane", &json!({"value": false})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("caret.set", &json!({"pos": {"block": 1, "off": 5}})).unwrap();
+    s.run("text.insert", &json!({"text": "fresh "})).unwrap();
+    s.run("select.range", &json!({"anchor": {"block": 2, "off": 6}, "focus": {"block": 2, "off": 12}})).unwrap();
+    s.run("text.delete", &json!({})).unwrap();
+    let doc = s.doc.clone();
+    let changes = s.run("review.changes", &json!({})).unwrap();
+    let text =
+        |d: &[Draw]| -> String { d.iter().filter_map(|x| if let Draw::Glyphs { text, .. } = x { Some(text.as_str()) } else { None }).collect() };
+    let bars = |d: &[Draw], body_x: f32| -> Vec<wordcraft_doc::Rgb> {
+        d.iter().filter_map(|x| if let Draw::Line { x0, x1, color, .. } = x { (x0 == x1 && *x0 < body_x).then_some(*color) } else { None }).collect()
+    };
+    let struck = |d: &[Draw]| lines(d).into_iter().filter(|(x0, y0, x1, y1)| y0 == y1 && x1 > x0).count();
+    let plain = |d: &[Draw]| glyph_colors(d).iter().all(|(c, _)| *c == wordcraft_doc::Rgb::BLACK);
+
+    // All Markup, the default: marked text, grey bars, revisions beside the page.
+    assert_eq!(s.view.review_display, crate::ReviewDisplay::AllMarkup);
+    let (d, x) = draws(&mut s);
+    assert!(text(&d).contains("fresh") && text(&d).contains("words"));
+    assert_eq!(bars(&d, x), vec![CHANGE_BAR; 2]);
+    assert_eq!(struck(&d), 2, "an underline and a strikethrough");
+    assert!(s.balloons_shown() && s.revision_balloons_shown());
+
+    let r = s.run("review.markup", &json!({"value": "simpleMarkup"})).unwrap();
+    assert_eq!(r, json!({"value": "simpleMarkup", "showMarkup": true}));
+    let (d, x) = draws(&mut s);
+    assert!(text(&d).contains("fresh") && !text(&d).contains("words"), "as if accepted: {:?}", text(&d));
+    assert_eq!(bars(&d, x), vec![SIMPLE_CHANGE_BAR; 2], "a red bar beside the insertion's line and the deletion's");
+    assert_eq!(struck(&d), 0);
+    assert!(plain(&d), "no change is coloured");
+    assert!(s.balloons_shown() && !s.revision_balloons_shown(), "the comment alone beside the page");
+
+    let r = s.run("review.markup", &json!({"value": "original"})).unwrap();
+    assert_eq!(r, json!({"value": "original", "showMarkup": false}));
+    let (d, x) = draws(&mut s);
+    assert!(!text(&d).contains("fresh") && text(&d).contains("words"), "as if rejected: {:?}", text(&d));
+    assert!(bars(&d, x).is_empty() && struck(&d) == 0 && plain(&d), "no marks");
+    assert!(!s.balloons_shown());
+
+    let r = s.run("review.markup", &json!({"value": "noMarkup"})).unwrap();
+    assert_eq!(r, json!({"value": "noMarkup", "showMarkup": false}));
+    let (d, x) = draws(&mut s);
+    assert!(text(&d).contains("fresh") && !text(&d).contains("words"));
+    assert!(bars(&d, x).is_empty() && struck(&d) == 0 && plain(&d));
+
+    // Without a value it switches between All Markup and No Markup, as before; Show Markup turns
+    // markup on as All Markup and keeps Simple Markup.
+    assert_eq!(s.run("review.markup", &json!({})).unwrap()["value"], "allMarkup");
+    assert_eq!(s.run("review.markup", &json!({})).unwrap()["value"], "noMarkup");
+    assert_eq!(s.run("review.markup", &json!({"value": "all"})).unwrap()["value"], "allMarkup", "the ribbon's old name");
+    s.run("review.markup", &json!({"value": "simpleMarkup"})).unwrap();
+    s.run("review.showMarkup", &json!({"value": true})).unwrap();
+    assert_eq!(s.view.review_display, crate::ReviewDisplay::SimpleMarkup);
+    assert_eq!(s.run("review.showMarkup", &json!({})).unwrap()["value"], false);
+    assert_eq!(s.view.review_display, crate::ReviewDisplay::NoMarkup);
+    assert!(s.run("review.markup", &json!({"value": "finalShowingMarkup"})).is_err(), "an unknown choice is refused");
+    assert_eq!(s.view.review_display, crate::ReviewDisplay::NoMarkup, "and changes nothing");
+
+    assert!(s.doc == doc, "the document is untouched");
+    assert_eq!(s.run("review.changes", &json!({})).unwrap(), changes, "and so are its revisions");
 }
 
 /// #1055: comments show in the margin as in Word unless the option says otherwise.
