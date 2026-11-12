@@ -372,3 +372,74 @@ fn hostile_chunks_never_panic() {
     let bytes = package(&format!(r#"<w:altChunk r:id="nope"/><w:altChunk/>{}"#, p("y")), None);
     assert_eq!(body_lines(&read(&bytes).unwrap()), ["y"]);
 }
+
+/// A DOCX whose only picture names a part the package lacks (`media/gone.png`), or sits outside it.
+fn inner_with_dropped_picture(external: bool) -> Vec<u8> {
+    inner_with_dropped_pictures(1, external)
+}
+
+/// As [`inner_with_dropped_picture`], with `n` pictures each naming its own missing part.
+fn inner_with_dropped_pictures(n: usize, external: bool) -> Vec<u8> {
+    let drawing = r#"<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><wp:extent cx="254000" cy="254000"/><wp:docPr id="1" name="P"/><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="p"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdP{i}"/></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="254000" cy="254000"/></a:xfrm><a:prstGeom prst="rect"/></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#;
+    let body: String = (0..n).map(|i| drawing.replace("{i}", &i.to_string())).collect();
+    let doc = format!(r#"<w:document {NS}><w:body><w:p>{body}</w:p><w:sectPr/></w:body></w:document>"#);
+    let mode = if external { r#" TargetMode="External""# } else { "" };
+    let image = |i: usize| {
+        let target = if external { format!("http://127.0.0.1:9/never-fetched{i}.png") } else { format!("media/gone{i}.png") };
+        format!(
+            r#"<Relationship Id="rIdP{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{target}"{mode}/>"#
+        )
+    };
+    let rels = format!(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{}</Relationships>"#,
+        (0..n).map(image).collect::<String>()
+    );
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#;
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, bytes) in [
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", rels.as_bytes()),
+    ] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(bytes).unwrap();
+    }
+    zw.finish().unwrap().into_inner()
+}
+
+/// A picture the chunk's own reader dropped is the file's too (#6005), named by the chunk part.
+#[test]
+fn a_picture_dropped_inside_a_chunk_is_recorded_against_the_chunk() {
+    for (external, reason) in [(false, wordcraft_doc::MissingPictureReason::MissingPart), (true, wordcraft_doc::MissingPictureReason::ExternalTarget)]
+    {
+        let inner = inner_with_dropped_picture(external);
+        let bytes = package(&format!("{}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)));
+        let d = read(&bytes).unwrap();
+        let got: Vec<(&str, &str, _)> = d.missing_pictures.list.iter().map(|m| (m.part.as_str(), m.story.as_str(), m.reason)).collect();
+        assert_eq!(got.len(), 1, "{got:?}");
+        assert_eq!(got[0].1, "word/afchunk.docx > word/document.xml");
+        assert_eq!(got[0].2, reason);
+    }
+}
+
+/// A chunk with more dropped pictures than the list holds still counts them all (#6005).
+#[test]
+fn a_chunks_total_of_dropped_pictures_counts_past_the_list() {
+    let n = wordcraft_doc::MAX_MISSING_PICTURES + 44;
+    let inner = inner_with_dropped_pictures(n, false);
+    let d = read(&package(&format!("{}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)))).unwrap();
+    assert_eq!(d.missing_pictures.list.len(), wordcraft_doc::MAX_MISSING_PICTURES);
+    assert!(d.missing_pictures.truncated);
+    assert_eq!(d.missing_pictures.total, n as u64);
+}
+
+/// The same chunk imported twice counts its unlisted pictures once, as it dedupes its listed ones.
+#[test]
+fn a_chunk_imported_twice_counts_its_dropped_pictures_past_the_list_once() {
+    let n = wordcraft_doc::MAX_MISSING_PICTURES + 44;
+    let inner = inner_with_dropped_pictures(n, false);
+    let d = read(&package(&format!("{}{CHUNK}{CHUNK}", p("Before")), Some(("docx", DOCX_MAIN, &inner)))).unwrap();
+    assert_eq!(d.missing_pictures.list.len(), wordcraft_doc::MAX_MISSING_PICTURES);
+    assert_eq!(d.missing_pictures.total, n as u64);
+}
