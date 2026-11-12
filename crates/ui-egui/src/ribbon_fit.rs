@@ -616,6 +616,9 @@ mod ui_tests {
         );
         h.run_steps(8);
         use egui_kittest::kittest::Queryable;
+        let win = h.get_by_role_and_label(Role::Button, "Window");
+        win.scroll_to_me();
+        h.run_steps(2);
         h.get_by_role_and_label(Role::Button, "Window").click();
         h.run_steps(5);
         let labels: Vec<String> = h.query_all_by(|n| n.label().is_some()).filter_map(|n| n.accesskit_node().label()).take(100).collect();
