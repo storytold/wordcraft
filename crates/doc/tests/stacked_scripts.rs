@@ -46,6 +46,11 @@ fn stacked_scripts_on_a_function_name_nest_to_the_right() {
     // Mixed scripts on a name are still one sub-superscript.
     let subsup = MNode::Script { kind: ScriptKind::SubSup, base: name("log"), sub: a("2"), sup: a("3") };
     assert_eq!(parse_linear("log_2^3 x"), func(vec![subsup]));
+    // The other script nests too, as `x^2_a_b` does, and `x` is still the operand.
+    let subsup = MNode::Script { kind: ScriptKind::SubSup, base: name("sin"), sub: vec![sub(a("a"), a("b"))], sup: a("2") };
+    assert_eq!(parse_linear("sin^2_a_b x"), func(vec![subsup]));
+    let subsup = MNode::Script { kind: ScriptKind::SubSup, base: name("sin"), sub: a("a"), sup: vec![sup(a("2"), a("3"))] };
+    assert_eq!(parse_linear("sin_a^2^3 x"), func(vec![subsup]));
 }
 
 /// The whole chain stays within the parsers' depth cap (#1456), also when every operand is itself a

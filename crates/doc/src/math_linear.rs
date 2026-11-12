@@ -454,11 +454,11 @@ impl P {
                 // `sin^2^3` nests to the right like any other script (#6074).
                 let s = self.script_chain(c, stops, 0);
                 let mut n = attach_script(Some(MNode::Run(MRun::plain(word.clone()))), c == '^', s);
-                // Only the other script joins it (`log_2^3`); the same one again is what the chain
-                // left at its depth cap.
+                // Only the other script joins it, and it nests the same way (`log_2^3`, `sin^2_a_b`);
+                // the same one again is what the chain left at its depth cap.
                 if let Some(c2 @ ('^' | '_')) = self.peek().filter(|&c2| c2 != c) {
                     self.i += 1;
-                    let s2 = self.script_operand(stops);
+                    let s2 = self.script_chain(c2, stops, 0);
                     n = attach_script(Some(n), c2 == '^', s2);
                 }
                 vec![n]
