@@ -1299,3 +1299,21 @@ fn a_path_in_a_message_is_isolated_in_a_right_to_left_interface() {
     set_current(Lang::EN);
     assert_eq!(msg, "تعذر فتح \u{2066}C:\\\u{200E}ملفات\\\u{200E}تقرير\u{200E}.docx\u{2069}: \u{2068}bad\u{2069}");
 }
+
+/// Shortening a raw document name closes its bidi isolate before the protected suffix.
+#[test]
+fn title_shortening_keeps_the_rtl_name_isolate_balanced() {
+    let ar = arabic_fixture("\tHome\tالرئيسية\n");
+    set_current(ar);
+    let width = |s: &str| s.chars().filter(|c| !matches!(c, '\u{2068}' | '\u{2069}' | '\u{200e}')).count() as f32;
+    let name = "مستند تجريبي طويل ".repeat(30);
+    let shown = crate::chrome::fitted_document_title(&name, " — Saved", " (Preview)", 40.0, width);
+    let empty = crate::chrome::fitted_document_title("WordCraft", "", " (Preview)", 18.0, width);
+    set_current(Lang::EN);
+    assert!(ar.rtl());
+    assert_eq!(shown.chars().filter(|c| *c == '\u{2068}').count(), 1);
+    assert_eq!(shown.chars().filter(|c| *c == '\u{2069}').count(), 1);
+    assert!(shown.ends_with("\u{2069} — Saved (Preview)"));
+    assert!(width(&shown) <= 40.0);
+    assert!(empty.ends_with("\u{2069} (Preview)"));
+}
