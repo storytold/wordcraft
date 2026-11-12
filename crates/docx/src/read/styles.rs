@@ -173,24 +173,10 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
-        // Styles that give only a list level take the list from the style they are based on
-        // (Heading 3: level 3 of Heading 2's outline list).
-        let fixed: Vec<Option<wordcraft_doc::props::NumRef>> = sheet
-            .styles
-            .iter()
-            .map(|s| match s.para.numbering {
-                Some(n) if n.num == props::LEVEL_ONLY => {
-                    let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
-                    base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level })
-                }
-                other => other,
-            })
-            .collect();
-        for (s, n) in sheet.styles.iter_mut().zip(fixed) {
-            s.para.numbering = n;
-        }
         // Old style formatting revisions that give only a list level take the list from the style
-        // they are based on, rather than the revised style's own list.
+        // they are based on, rather than the revised style's own list. This runs before the
+        // current-numbering pass below normalizes level-only values: an unchanged intermediate
+        // style's level would otherwise point at the base's current list instead of its old one.
         let fixed_old_num: Vec<Option<Option<wordcraft_doc::props::NumRef>>> = sheet
             .styles
             .iter()
@@ -211,6 +197,22 @@ impl Reader<'_> {
             {
                 ch.old.numbering = new_num;
             }
+        }
+        // Styles that give only a list level take the list from the style they are based on
+        // (Heading 3: level 3 of Heading 2's outline list).
+        let fixed: Vec<Option<wordcraft_doc::props::NumRef>> = sheet
+            .styles
+            .iter()
+            .map(|s| match s.para.numbering {
+                Some(n) if n.num == props::LEVEL_ONLY => {
+                    let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
+                    base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level })
+                }
+                other => other,
+            })
+            .collect();
+        for (s, n) in sheet.styles.iter_mut().zip(fixed) {
+            s.para.numbering = n;
         }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;

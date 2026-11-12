@@ -281,20 +281,22 @@ fn remap_style_numbering(
         *num_ref = None;
         return;
     };
+    let Some(src_abs) = revised.numbering.abstract_of(nr.num) else {
+        // An instance without its abstract list has no formatting to import; keeping its
+        // abstract ID could bind to `doc`'s unrelated definition or dangle.
+        *num_ref = None;
+        return;
+    };
     let target_numbering = Arc::make_mut(&mut doc.numbering);
-    let aid = if let Some(src_abs) = revised.numbering.abstract_of(nr.num) {
-        if let Some(&mapped_aid) = abs_map.get(&src_abs.id) {
-            mapped_aid
-        } else {
-            let new_aid = target_numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
-            let mut new_abs = src_abs.clone();
-            new_abs.id = new_aid;
-            target_numbering.abstracts.push(new_abs);
-            abs_map.insert(src_abs.id, new_aid);
-            new_aid
-        }
+    let aid = if let Some(&mapped_aid) = abs_map.get(&src_abs.id) {
+        mapped_aid
     } else {
-        src_num.abstract_id
+        let new_aid = target_numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
+        let mut new_abs = src_abs.clone();
+        new_abs.id = new_aid;
+        target_numbering.abstracts.push(new_abs);
+        abs_map.insert(src_abs.id, new_aid);
+        new_aid
     };
     let new_nid = target_numbering.nums.iter().map(|n| n.id.saturating_add(1)).max().unwrap_or(1).max(1);
     let mut new_n = src_num.clone();

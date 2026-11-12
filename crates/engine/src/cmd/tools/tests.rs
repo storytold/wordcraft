@@ -1072,6 +1072,50 @@ fn compare_style_drops_numbering_missing_from_the_revised_document() {
     let _ = std::fs::remove_file(rev_path);
 }
 
+/// #5841: a revised numbering instance whose abstract definition is missing imports without a
+/// numbering reference, rather than reusing an unrelated abstract with that ID or dangling.
+#[test]
+fn compare_style_drops_numbering_with_missing_abstract() {
+    let original = Document::from_text("Original text");
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-orphan-abs-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Original text");
+    Arc::make_mut(&mut revised.numbering).nums.push(wordcraft_doc::numbering::Num {
+        id: 9999,
+        abstract_id: 8888,
+        start_overrides: Vec::new(),
+        level_overrides: Vec::new(),
+    });
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "OrphanAbstract".into(),
+        name: "Orphan Abstract".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9999, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-orphan-abs-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let _ = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    let st = s.doc.styles.get("OrphanAbstract").expect("OrphanAbstract style imported");
+    assert_eq!(st.para.numbering, None, "an instance without its abstract list is not kept");
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
 /// #5841: carried-forward fmt_change markers do not increment the change count when formatting is identical.
 #[test]
 fn compare_style_carried_forward_fmt_change_no_extra_count() {

@@ -3054,9 +3054,14 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
                 </w:pPrChange>
             </w:pPr>
         </w:style>
+        <w:style w:type="paragraph" w:styleId="CustomMid">
+            <w:name w:val="Custom Mid"/>
+            <w:basedOn w:val="CustomBase"/>
+            <w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>
+        </w:style>
         <w:style w:type="paragraph" w:styleId="CustomChild">
             <w:name w:val="Custom Child"/>
-            <w:basedOn w:val="CustomBase"/>
+            <w:basedOn w:val="CustomMid"/>
             <w:pPr>
                 <w:numPr><w:ilvl w:val="1"/><w:numId w:val="99"/></w:numPr>
                 <w:pPrChange w:id="2" w:author="Editor" w:date="2026-11-07T00:00:00Z">
@@ -3083,6 +3088,11 @@ fn style_definition_child_old_list_uses_base_old_numbering() {
     assert_eq!(base.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 0 }));
     let bch = base.para.fmt_change.as_deref().expect("base pPrChange preserved");
     assert_eq!(bch.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 0 }));
+
+    // The unchanged middle style's level-only numbering is normalized to the base's current
+    // list; its old value must not be what the child resolves against.
+    let mid = doc.styles.get("CustomMid").expect("CustomMid style exists");
+    assert_eq!(mid.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
 
     let child = doc.styles.get("CustomChild").expect("CustomChild style exists");
     assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
