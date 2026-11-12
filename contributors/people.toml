@@ -1,13 +1,10 @@
-# Contributor names for the About window (craftrules standards/contributors.md).
+# Contributor names for the About window.
 #
 # Everyone who contributes is credited by GitHub username automatically. Anything more is up to
 # you: add YOUR OWN entry below, in your own PR (commit it yourself). Never add someone else; a
 # maintainer may add a person only when that person asked, recording where in consent_source.
 #
-# Easiest: python3 ../../craftrules/scripts/contributors.py --add-me . \
-#            [--real-name "Ada Lovelace"] [--display-name "Ada"] [--sync-github-name]
-#
-# Or copy this block, replacing your-github-username (every field is optional):
+# Copy this block, replacing your-github-username (every field is optional):
 #
 #   [people.your-github-username]
 #   real_name = "Your Name"        # shown when the viewer picks "Real name"
@@ -16,6 +13,10 @@
 #
 # To remove your names, delete your entry (or set fields empty) in a PR. The next
 # contributors.py run, and the next build, drop them.
+
+[people.SenuraMalaka]
+real_name = "Senura Dissanayake"
+sync_github_name = true
 
 [people.divyanshu2074]
 real_name = "Divyanshu Gupta"
@@ -38,7 +39,9 @@ sync_github_name = false
 real_name = "Saeed Azarehgar"
 
 [people.vangel76]
-sync_github_name = true
+real_name = "Valentin Klein"
+display_name = "vangel76"
+sync_github_name = false
 
 [people.dkhlapov]
 real_name = "Dmitrii Khlapov"
@@ -163,6 +166,8 @@ sync_github_name = true
 
 [people.maxm11]
 real_name = "Max Murphy"
+display_name = "Max Murphy"
+sync_github_name = false
 
 [people.SlavenDj]
 sync_github_name = true
@@ -181,3 +186,24 @@ sync_github_name = true
 
 [people.pakiat]
 display_name = "OtorO"
+
+[people.TobyWu666]
+display_name = "tobywu"
+
+[people.Bra1nZ]
+sync_github_name = true
+
+[people.dylanmtaylor]
+sync_github_name = true
+
+[people.entropybeater]
+display_name = "entropybeater"
+
+[people.helenkwok]
+real_name = "Helen Kwok"
+
+[people.ashokram-si]
+real_name = "Ashok Ram"
+
+[people.benandez]
+sync_github_name = true

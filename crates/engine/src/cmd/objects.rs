@@ -31,7 +31,7 @@ use picture::{clear_background, grown, picture_style};
 pub(crate) use select::all_objects;
 pub(crate) use select::{edit_obj, has_shape_or_canvas};
 #[cfg(test)]
-use select::{has_group, holds_ink, obj_size};
+use select::{has_group, holds_ink, obj_size, with_obj};
 pub use select::{min_size, object_selection, picked_objects, selected, selected_all};
 #[cfg(test)]
 use shape::can_link;

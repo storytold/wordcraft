@@ -75,11 +75,15 @@ fn scan_tables<R: std::io::Read>(
     Ok(rows)
 }
 
-/// The uids found for the two rows of one connection.
+/// The uids found for the two rows of one connection, and of the socket listening on the
+/// listener's address (which speaks for a connection it hasn't accepted yet).
 #[derive(Default)]
 struct Rows {
     ours: Option<u32>,
     theirs: Option<u32>,
+    listener: Option<u32>,
+    /// Listening rows on that address with different uids.
+    listeners_differ: bool,
 }
 
 impl Rows {
@@ -109,11 +113,27 @@ fn scan_table(mut table: impl std::io::BufRead, local: SocketAddr, peer: SocketA
         }
         let line = String::from_utf8_lossy(&line);
         let mut f = line.split_whitespace();
-        let (Some(l), Some(r), Some(uid)) = (f.nth(1).and_then(parse_addr), f.next().and_then(parse_addr), f.nth(4)) else {
+        let (Some(l), Some(r), Some(state), Some(uid), Some(inode)) =
+            (f.nth(1).and_then(parse_addr), f.next().and_then(parse_addr), f.next(), f.nth(3), f.nth(1))
+        else {
             continue;
         };
         let Ok(uid) = uid.parse::<u32>() else { continue };
         let (l, r) = (key(l), key(r));
+        // The listening socket (`0A`) on the listener's port, at its address or every address.
+        if state == "0A" {
+            if l.1 == peer.1 && (l.0 == peer.0 || l.0.is_unspecified()) {
+                rows.listeners_differ |= rows.listener.is_some_and(|u| u != uid);
+                rows.listener = Some(uid);
+            }
+            continue;
+        }
+        // A row with no socket file (inode 0) belongs to no program: a connection still waiting
+        // to be accepted, or one that ended (TIME_WAIT). Its uid column reads 0 whoever
+        // listens, so it says nothing about the owner; the listening row speaks for it.
+        if inode == "0" {
+            continue;
+        }
         if l == local && r == peer {
             rows.ours = Some(uid);
         } else if l == peer && r == local {
@@ -156,7 +176,10 @@ fn read_line_capped(r: &mut impl std::io::BufRead, out: &mut Vec<u8>) -> std::io
 /// `me` (this process's). When the listener isn't listed in a table that was read in full (WSL2,
 /// a proxy) or our uid is unknown, its owner is unknown and the loopback rule decides.
 fn decide(rows: &Rows, peer: SocketAddr, me: Option<u32>) -> Result<(), ZoteroError> {
-    match (rows.ours.or(me), rows.theirs) {
+    if rows.listeners_differ && rows.theirs.is_none() {
+        return Err(ZoteroError::Refused(format!("more than one user listens on port {}, so the program there may not be your Zotero", peer.port())));
+    }
+    match (rows.ours.or(me), rows.theirs.or(rows.listener)) {
         (Some(a), Some(b)) if a == b => Ok(()),
         (Some(_), Some(b)) => {
             Err(ZoteroError::Refused(format!("the program on port {} runs as another user (uid {b}), so it isn't your Zotero", peer.port())))
@@ -247,6 +270,41 @@ mod tests {
         // Junk lines are skipped.
         let junk = format!("{HEADER}garbage\n 1: zz:zz yy:yy 01 x x x x\n{}{}", row(local, peer, 7), row(peer, local, 7));
         assert_eq!(same_owner(&junk, local, peer, None), Ok(()));
+    }
+
+    /// A connection the listener hasn't accepted yet (or one that ended, TIME_WAIT) has no
+    /// socket file: its row reads uid 0 whoever listens. The listening row speaks for it, so a
+    /// busy Zotero isn't taken for another user's program, and another user's still is.
+    #[test]
+    fn an_unaccepted_connection_is_judged_by_its_listening_socket() {
+        let (local, peer) = addrs();
+        let unowned =
+            |l: SocketAddr, r: SocketAddr, state: &str| row(l, r, 0).replacen(" 01 ", &format!(" {state} "), 1).replacen(" 12345 ", " 0 ", 1);
+        let listening = |uid: u32, any: bool| {
+            let at: SocketAddr = if any { SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), peer.port()) } else { peer };
+            row(at, "0.0.0.0:0".parse().unwrap(), uid).replacen(" 01 ", " 0A ", 1)
+        };
+        for state in ["01", "06"] {
+            let mine = format!("{HEADER}{}{}{}", listening(1000, false), row(local, peer, 1000), unowned(peer, local, state));
+            assert_eq!(same_owner(&mine, local, peer, None), Ok(()), "{state}");
+            let mine_any = format!("{HEADER}{}{}{}", row(local, peer, 1000), unowned(peer, local, state), listening(1000, true));
+            assert_eq!(same_owner(&mine_any, local, peer, None), Ok(()), "{state}");
+            let other = format!("{HEADER}{}{}{}", row(local, peer, 1000), unowned(peer, local, state), listening(1001, false));
+            assert!(matches!(same_owner(&other, local, peer, None), Err(ZoteroError::Refused(e)) if e.contains("another user")), "{state}");
+            // No listening row: unknown, so the loopback rule decides.
+            let unlisted = format!("{HEADER}{}{}", row(local, peer, 1000), unowned(peer, local, state));
+            assert_eq!(same_owner(&unlisted, local, peer, None), Ok(()), "{state}");
+        }
+        // An accepted connection's own row wins over the listening row.
+        let accepted = format!("{HEADER}{}{}{}", listening(1000, false), row(local, peer, 1000), row(peer, local, 1001));
+        assert!(matches!(same_owner(&accepted, local, peer, None), Err(ZoteroError::Refused(e)) if e.contains("another user")));
+        // A listening row on another port is not the listener.
+        let elsewhere = row("127.0.0.1:9".parse().unwrap(), "0.0.0.0:0".parse().unwrap(), 1001).replacen(" 01 ", " 0A ", 1);
+        let table = format!("{HEADER}{elsewhere}{}{}", row(local, peer, 1000), unowned(peer, local, "01"));
+        assert_eq!(same_owner(&table, local, peer, None), Ok(()));
+        // Two users listening on the address: refused.
+        let both = format!("{HEADER}{}{}{}{}", listening(1000, false), listening(1001, true), row(local, peer, 1000), unowned(peer, local, "01"));
+        assert!(matches!(same_owner(&both, local, peer, None), Err(ZoteroError::Refused(_))));
     }
 
     /// WSL2 mirrored networking (Zotero on Windows) or a local proxy: the listener

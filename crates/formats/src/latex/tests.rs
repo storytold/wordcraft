@@ -151,8 +151,8 @@ fn assert_article_blocks(ps: &[Para]) {
     assert_eq!(find("On Sample Documents").kind, Kind::Title);
     assert_eq!(find("Introduction").kind, Kind::Heading(1));
     assert_eq!(find("Lists").kind, Kind::Heading(2));
-    assert_eq!(find("First").list, Some(ListInfo { ordered: false, level: 0, start: 1 }));
-    assert_eq!(find("Nested one").list, Some(ListInfo { ordered: true, level: 1, start: 1 }));
+    assert_eq!(find("First").list, Some(ListInfo { ordered: false, level: 0, start: 1, ..Default::default() }));
+    assert_eq!(find("Nested one").list, Some(ListInfo { ordered: true, level: 1, start: 1, ..Default::default() }));
     assert!(ps.iter().any(|p| p.text().trim() == "b) Nested two" && p.list.is_some()), "{:?}", texts(ARTICLE));
     assert_eq!(find("Quoted text.").kind, Kind::Quote);
     assert_eq!(find("Centered.").align, Some(Align::Center));
@@ -324,7 +324,7 @@ fn special_characters_round_trip() {
 
 #[test]
 fn exported_tables_size_their_columns() {
-    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false };
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: false, extra: None, kept: None, wrap: None };
     let cell = |s: &str| Cell {
         blocks: vec![FBlock::Para({
             let mut p = Para::default();
@@ -359,7 +359,7 @@ fn urls_preserve_tildes() {
 
 #[test]
 fn exported_borderless_tables_omit_rules() {
-    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true };
+    let mut t = FTable { rows: Vec::new(), widths: vec![100.0, 200.0], borderless: true, extra: None, kept: None, wrap: None };
     let cell = |s: &str| Cell {
         blocks: vec![FBlock::Para({
             let mut p = Para::default();
@@ -391,9 +391,9 @@ fn table_borders_and_borderless_round_trip() {
     let mut doc = Document::new();
     let mut t_borderless = Table::new(2, 2, 400.0);
     t_borderless.props.style = None;
-    for r in 0..2 {
-        for c in 0..2 {
-            t_borderless.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+    for row in &mut t_borderless.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
         }
     }
     doc.body = vec![Arc::new(Block::Table(t_borderless))];
@@ -407,9 +407,9 @@ fn table_borders_and_borderless_round_trip() {
     let mut doc_bordered = Document::new();
     let mut t_bordered = Table::new(2, 2, 400.0);
     t_bordered.props.style = Some("TableGrid".to_string());
-    for r in 0..2 {
-        for c in 0..2 {
-            t_bordered.rows[r].cells[c].blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+    for row in &mut t_bordered.rows {
+        for cell in &mut row.cells {
+            cell.blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
         }
     }
     doc_bordered.body = vec![Arc::new(Block::Table(t_bordered))];
@@ -448,4 +448,26 @@ fn nested_multicolumn_wrappers_are_bounded() {
     let Some(FBlock::Table(t)) = f.blocks.first() else { panic!("{:?}", f.blocks) };
     assert_eq!((t.rows[0][0].colspan, t.rows[0][0].rowspan), (2, 2));
     assert_eq!(t.rows[0][0].text(), "Both");
+}
+
+#[test]
+fn ligature_characters_split_across_runs_stay_apart() {
+    let d = crate::html::import(
+        "<p><span style=\"font-family:Arial\">a-</span><span style=\"font-family:Georgia\">-b '</span><span style=\"font-family:Arial\">'x</span></p>",
+    );
+    let tex = export(&d);
+    assert!(tex.contains("a-{}-b '{}'x"), "{tex}");
+    let back = import(tex.as_bytes());
+    assert_eq!(back.plain_text(Default::default()).trim(), "a--b ''x", "{tex}");
+}
+
+#[test]
+fn a_tabular_row_keeps_the_cells_a_table_row_holds() {
+    // A 5,000-cell row with spans widened the multirow tracking every later row walks; the
+    // document keeps MAX_COLS cells a row, so the rest are left out while parsing.
+    let wide = vec!["\\multicolumn{63}{c}{x}"; 5000].join("&");
+    let toks = tokenize(&format!("{wide}\\\\ a & b \\\\"));
+    let t = table::table(&toks, "", 0);
+    assert_eq!(t.rows.first().map(Vec::len), Some(wordcraft_doc::table::MAX_COLS));
+    assert_eq!(t.rows.get(1).map(Vec::len), Some(2));
 }

@@ -18,6 +18,49 @@ fn citations_and_bibliography() {
     assert!(s.doc.plain_text(StoryRef::Body).contains("[1]"));
 }
 
+/// #4848: a corporate author is cited and listed as written, in every style: never turned into
+/// a surname and initials ("Organization, W. H."), never left out for the title. Its tag and its
+/// place in an author-sorted list come from the name too.
+#[test]
+fn a_corporate_author_is_cited_and_listed_as_written() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("text.insert", &json!({"text": "Hearing loss is common "})).unwrap();
+    let who = "World Health Organization";
+    s.run("references.citation", &json!({"source": {"kind": "report", "corporate": who, "title": "World report on hearing", "year": "2021", "publisher": "WHO Press", "city": "Geneva"}}))
+        .unwrap();
+    s.run("text.insert", &json!({"text": " and rising "})).unwrap();
+    s.run("references.citation", &json!({"source": {"author": "Adams, Kim", "title": "Quiet Rooms", "year": "2019"}})).unwrap();
+    s.run("text.newParagraph", &json!({})).unwrap();
+    s.run("references.bibliography", &json!({})).unwrap();
+    assert_eq!(s.doc.sources[0].tag, "Wor21", "the tag starts with the corporate name");
+    let t = s.doc.plain_text(StoryRef::Body);
+    assert!(t.contains(&format!("({who}, 2021)")), "{t}");
+    assert!(t.contains(&format!("{who}. (2021). World report on hearing. WHO Press.")), "{t}");
+    // Sorted by the corporate name: Adams before World.
+    let adams = t.find("Adams, K. (2019)").unwrap_or(usize::MAX);
+    let world = t.find(&format!("{who}. (2021)")).unwrap_or(0);
+    assert!(adams < world, "{t}");
+    for style in [
+        "MLA",
+        "Chicago",
+        "GB/T 7714",
+        "GOST (name sort)",
+        "GOST (title sort)",
+        "ISO 690 (author-date)",
+        "ISO 690 (numerical)",
+        "Harvard (Anglia)",
+        "Turabian",
+        "IEEE",
+        "SIST02",
+    ] {
+        s.run("references.citationStyle", &json!({"style": style})).unwrap();
+        let t = s.doc.plain_text(StoryRef::Body);
+        let entry = t.lines().find(|l| l.contains("World report on hearing")).unwrap_or_default();
+        assert!(entry.contains(who), "{style}: {entry}");
+        assert!(!entry.contains("Organization, W") && !entry.contains("ORGANIZATION, W"), "{style}: {entry}");
+    }
+}
+
 /// Updating fields in a document without generated lists leaves its styles alone: a new
 /// style would make the next layout start over from nothing.
 #[test]
@@ -160,6 +203,49 @@ fn caption_labels_do_not_need_a_digit() {
     s.run("caret.docEnd", &json!({})).unwrap();
     s.run("insert.crossReference", &json!({"to": "label:Photo Plate", "target": "Photo Plate I", "show": "number"})).unwrap();
     assert!(s.doc.plain_text(StoryRef::Body).ends_with("See Photo Plate I"), "{}", s.doc.plain_text(StoryRef::Body));
+}
+
+/// #4411: captions restyled with a style based on Caption, directly (`Caption Table`) or through
+/// another (`Caption Table Wide`), are still captions after a DOCX save and reopen: every `tableX`
+/// caption is a cross-reference target and in the table of figures, and a Table caption is a
+/// Table target. Captions in a style not based on Caption are not, nor are their labels.
+#[test]
+fn captions_in_a_style_based_on_caption() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("T1\nT2\nT3\nT4\nT5\nNote\nGrid\nStone\nSee "));
+    let caption = |s: &mut Session, text: &str, label: &str, title: &str| {
+        s.run("select.text", &json!({"text": text})).unwrap();
+        s.run("references.caption", &json!({"label": label, "text": title})).unwrap();
+    };
+    for k in 1..=5 {
+        caption(&mut s, &format!("T{k}"), "tableX", &format!("Row {k}"));
+    }
+    caption(&mut s, "Note", "tableX", "Aside");
+    caption(&mut s, "Grid", "Table", "Grid");
+    caption(&mut s, "Stone", "Plate", "Stone");
+    s.run("styles.create", &json!({"name": "Caption Table", "basedOn": "Caption", "fromSelection": false})).unwrap();
+    s.run("styles.create", &json!({"name": "Caption Table Wide", "basedOn": "Caption Table", "fromSelection": false})).unwrap();
+    s.run("styles.create", &json!({"name": "Aside", "fromSelection": false})).unwrap();
+    let style = |s: &Session, name: &str| s.doc.styles.find(name).map(|st| st.id.clone());
+    let (table, wide, aside) = (style(&s, "Caption Table"), style(&s, "Caption Table Wide"), style(&s, "Aside"));
+    for path in s.doc.para_paths(StoryRef::Body) {
+        let p = s.doc.para_mut(StoryRef::Body, &path).unwrap();
+        let text = p.plain_text();
+        p.props.style = match text.get(..8).unwrap_or_default() {
+            "tableX 1" | "tableX 2" => table.clone(),
+            "tableX 3" | "Table 1:" => wide.clone(),
+            "tableX 6" | "Plate 1:" => aside.clone(),
+            _ => continue,
+        };
+    }
+    let bytes = wordcraft_docx::write(&s.doc).expect("docx write");
+    let mut s = Session::new(wordcraft_docx::read(&bytes).expect("docx read"));
+    let want: Vec<String> = (1..=5).map(|k| format!("tableX {k}: Row {k}")).collect();
+    assert_eq!(s.run("insert.crossReference", &json!({"to": "label:tableX"})).unwrap(), json!(want));
+    assert_eq!(s.run("insert.crossReference", &json!({"to": "table"})).unwrap(), json!(["Table 1: Grid"]));
+    assert_eq!(caption_labels(&s), ["tableX", "Table"]);
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("references.tableOfFigures", &json!({"label": "tableX", "pageNumbers": false})).unwrap();
+    assert_eq!(list_entries(&s).into_iter().map(|(t, _)| t).collect::<Vec<_>>(), want);
 }
 
 /// The entries of every generated list, in order, with their last tab stop's leader.
@@ -698,4 +784,119 @@ fn gost_numbers_follow_its_name_or_title_sort() {
     assert_eq!(find_style("ISO 690 - Numerical Reference").map(|x| x.name), Some("ISO 690 (numerical)"));
     assert_eq!(find_style("Harvard - Anglia 2008").map(|x| x.name), Some("Harvard (Anglia)"));
     assert!(find_style("").is_none() && find_style("Vancouver").is_none());
+}
+
+fn lookup_session(tags: &[&str]) -> Session {
+    let mut p = Paragraph::new();
+    for tag in tags {
+        p.insert_object(
+            p.len(),
+            InlineObject::Field {
+                instr: format!("CITATION {tag}"),
+                result: "Original cache".into(),
+                locked: false,
+                dirty: true,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+    }
+    let mut doc = Document::new();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    Session::new(doc)
+}
+
+#[test]
+fn citation_source_lookups_keep_first_duplicates_case_and_style_order() {
+    let mut s = lookup_session(&["A", "B", "missing", "a", "B"]);
+    s.doc.sources = [
+        ("B", "Zed, Zo", "Zulu"),
+        ("A", "Able, Ann", "Alpha"),
+        ("B", "Baker, Ben", "Beta duplicate"),
+        ("a", "Middle, May", "Middle"),
+        ("unused", "Other, One", "Unused"),
+    ]
+    .into_iter()
+    .map(|(tag, author, title)| Source { tag: tag.into(), author: author.into(), title: title.into(), year: "2024".into(), ..Default::default() })
+    .collect();
+    let original = s.doc.clone();
+    for st in &STYLES {
+        s.bib_style = st.name.into();
+        let expected = if st.order == Order::Cited { vec![1, 0, 3] } else { vec![1, 2, 3, 0] };
+        assert_eq!(sources::bib_order(&s.doc, st, None), expected, "{}", st.name);
+        update_citations(&mut s).unwrap();
+        let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        for (k, (source, number)) in [(1, 1), (0, 2), (usize::MAX, 0), (3, 3), (0, 2)].into_iter().enumerate() {
+            let InlineObject::Field { instr, result, locked, dirty, code, form } = &p.objects[k] else { panic!() };
+            let InlineObject::Field { instr: before, .. } = &original.para(StoryRef::Body, &Path::top(0)).unwrap().objects[k] else { panic!() };
+            assert_eq!(instr, before);
+            let expected = original.sources.get(source).map(|x| cite(x, st.name, number, "")).unwrap_or_else(|| "Original cache".into());
+            assert_eq!(result, &expected, "{}: {instr}", st.name);
+            assert!(!locked && *dirty && !code && form.is_empty());
+        }
+        assert_eq!(s.doc.sources, original.sources);
+    }
+    // Without citations even duplicate and unused source records remain in the bibliography.
+    s.doc.body.clear();
+    assert_eq!(sources::bib_order(&s.doc, style("IEEE"), None), vec![0, 1, 2, 3, 4]);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn citation_refresh_source_lookup_work_scales_with_document_size() {
+    fn doc(n: usize) -> Session {
+        let mut p = Paragraph::new();
+        p.text = wordcraft_doc::para::OBJ.to_string().repeat(n);
+        p.runs = vec![wordcraft_doc::Run { len: p.text.len(), props: CharProps::default() }];
+        p.objects = (0..n)
+            .rev()
+            .map(|i| InlineObject::Field {
+                instr: format!("CITATION T{i}"),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            })
+            .collect();
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d.sources = (0..n).map(|i| Source { tag: format!("T{i}"), ..Default::default() }).collect();
+        let mut s = Session::new(d);
+        s.bib_style = "IEEE".into();
+        s
+    }
+    // Use the running thread's CPU time on Linux; scheduler pauses are not lookup work.
+    fn cost(f: &mut impl FnMut()) -> f64 {
+        let ran = || std::fs::read_to_string("/proc/thread-self/schedstat").ok()?.split_whitespace().next()?.parse::<u64>().ok();
+        let (t, before) = (std::time::Instant::now(), ran());
+        f();
+        match (before, ran()) {
+            (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+            _ => t.elapsed().as_secs_f64(),
+        }
+    }
+    const SCALE: usize = 8;
+    let (mut small, mut big) = (doc(2_000), doc(SCALE * 2_000));
+    update_citations(&mut small).unwrap();
+    update_citations(&mut big).unwrap();
+    let (mut a, mut b) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        a = a.min(
+            cost(&mut || {
+                for _ in 0..SCALE {
+                    update_citations(&mut small).unwrap();
+                }
+            }) / SCALE as f64,
+        );
+        b = b.min(cost(&mut || {
+            update_citations(&mut big).unwrap();
+        }));
+    }
+    let ratio = b / a.max(1e-9);
+    assert!(ratio < 32.0, "citation refresh: {a:.6}s -> {b:.6}s, {ratio:.1}x for {SCALE}x input");
+    let p = big.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert!(p.objects.iter().enumerate().all(|(i, o)| matches!(o, InlineObject::Field { result, .. } if result == &format!("[{}]", i + 1))));
 }
