@@ -374,6 +374,7 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Read Mode", "view.readMode"),
             c("Print Layout", "view.printLayout"),
             c("Web Layout", "view.webLayout"),
+            c("Markdown Source", "view.markdownSource"),
             c("Outline", "view.outline"),
             c("Draft", "view.draft"),
             c("Focus", "view.focus"),
