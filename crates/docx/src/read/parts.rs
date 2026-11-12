@@ -1,6 +1,6 @@
 use super::{
-    Arc, Blocks, ContentTypes, DocxError, El, MAX_FONT_NAME, MAX_HF_DEPTH, MAX_PARTS, MAX_TABLE_FONTS, MAX_VBA_RELATED, PartKind, Reader, Rels,
-    Revision, RevisionKind, Rgb, StoryCtx, VBA_PROJECT_PART, VBA_RELATED, props, shape_style,
+    Arc, Blocks, ContentTypes, DocxError, El, MAX_FONT_NAME, MAX_HF_DEPTH, MAX_PARTS, MAX_TABLE_FONTS, MAX_VBA_RELATED, MissingPicture,
+    MissingPictureReason, PartKind, Reader, Rels, Revision, RevisionKind, Rgb, StoryCtx, VBA_PROJECT_PART, VBA_RELATED, props, shape_style,
 };
 
 impl Reader<'_> {
@@ -91,14 +91,22 @@ impl Reader<'_> {
 
     /// Media key for an image relationship (loads the bytes once).
     pub fn media_for(&mut self, rels: &Rels, id: &str) -> Option<String> {
-        let rel = rels.by_id(id)?;
+        let Some(rel) = rels.by_id(id) else {
+            self.note_missing_picture(id, MissingPictureReason::MissingPart);
+            return None;
+        };
         if rel.external {
+            // Never fetched: a picture whose target is outside the file is dropped (and reported).
+            self.note_missing_picture(&rel.target, MissingPictureReason::ExternalTarget);
             return None;
         }
         if let Some(k) = self.media_by_path.get(&rel.target) {
             return Some(k.clone());
         }
-        let bytes = self.pkg.get_shared(&rel.target)?;
+        let Some(bytes) = self.pkg.get_shared(&rel.target) else {
+            self.note_missing_picture(&rel.target, MissingPictureReason::MissingPart);
+            return None;
+        };
         let base: String =
             rel.target.rsplit('/').next().unwrap_or("image").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')).collect();
         let base = if base.is_empty() || base.starts_with('.') { format!("image{base}") } else { base };
@@ -112,8 +120,16 @@ impl Reader<'_> {
             };
         }
         self.doc.media.insert(key.clone(), bytes.clone());
+        self.doc.missing_pictures.media_parts.insert(key.clone(), rel.target.clone());
         self.media_by_path.insert(rel.target.clone(), key.clone());
         Some(key)
+    }
+
+    /// Remember a picture that was dropped at open, in the story being read.
+    pub(super) fn note_missing_picture(&mut self, part: &str, reason: MissingPictureReason) {
+        let part: String = part.chars().take(1024).collect();
+        let story = self.story.to_string();
+        self.doc.missing_pictures.push(MissingPicture { part, story, reason });
     }
 
     /// A chart or diagram part, parsed once however often it's referenced (`None` when unreadable).
@@ -137,6 +153,8 @@ impl Reader<'_> {
         let kind = if footer { PartKind::Footer } else { PartKind::Header };
         let id = self.doc.add_part(kind, Blocks::new());
         self.hf_by_path.insert(path.to_string(), id);
+        let name: Arc<str> = path.into();
+        self.doc.missing_pictures.part_names.insert(id, Arc::clone(&name));
         let root = match self.xml(path) {
             Ok(Some(r)) => r,
             _ => return Some(id),
@@ -146,7 +164,9 @@ impl Reader<'_> {
         sc.in_hf = true;
         let mut blocks = Blocks::new();
         self.hf_depth += 1;
+        let outer = std::mem::replace(&mut self.story, name);
         self.read_blocks(&mut sc, &root, &rels, &mut blocks, self.chunks.depth);
+        self.story = outer;
         self.hf_depth = self.hf_depth.saturating_sub(1);
         self.flush_pending(&mut sc, &mut blocks);
         if let Some(p) = self.doc.parts.get_mut(&id)
