@@ -7469,6 +7469,61 @@ fn a_floating_table_ignores_a_paragraphs_empty_lines() {
     );
 }
 
+/// A table anchored to the paragraph after a column-wide wrapping drawing goes below the drawing
+/// with that paragraph, as in Word (a form's "intervals" table under its "requirements" group).
+/// WordCraft placed it where the paragraph would start without the drawing, over it.
+#[test]
+fn a_paragraph_anchored_table_goes_below_a_wrapping_drawing() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::from_text("Drawing\nAfter the table.");
+    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 20.0, ..Default::default() };
+    let mut p = d.body[0].as_para().unwrap().clone();
+    p.insert_object(0, rect_shape(468.0, 200.0, float), &Default::default()).unwrap();
+    d.body[0] = wordcraft_doc::para_block(p);
+    let mut t = Table::new(1, 1, 400.0);
+    t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, overlap: false, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let shape = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Shape { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let cell = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Cell { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let (shape, cell) = (shape.unwrap(), cell.unwrap());
+    assert!(cell.y >= shape.bottom() - 0.5, "the table at {} overlaps the drawing ending at {}", cell.y, shape.bottom());
+}
+
+/// A wrapping drawing that starts below the anchor paragraph but within the table's height also
+/// pushes the table below it.
+#[test]
+fn a_paragraph_anchored_table_goes_below_a_drawing_within_its_height() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::from_text("Drawing\nAfter the table.");
+    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, y: 40.0, ..Default::default() };
+    let mut p = d.body[0].as_para().unwrap().clone();
+    p.insert_object(0, rect_shape(468.0, 200.0, float), &Default::default()).unwrap();
+    d.body[0] = wordcraft_doc::para_block(p);
+    let mut t = Table::new(5, 1, 400.0);
+    t.props.float = Some(TableFloat { h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, overlap: false, ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let shape = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Shape { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let cell = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Cell { rect, .. } => Some(*rect),
+        _ => None,
+    });
+    let (shape, cell) = (shape.unwrap(), cell.unwrap());
+    assert!(cell.y >= shape.bottom() - 0.5, "the table at {} overlaps the drawing ending at {}", cell.y, shape.bottom());
+}
+
 #[test]
 fn a_floating_table_taller_than_a_page_runs_across_pages() {
     crate::test_fonts();
