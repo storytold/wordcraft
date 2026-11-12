@@ -125,6 +125,8 @@ pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
     let mut entries = 0usize;
     let mut elements = 0usize;
     let mut files: BTreeMap<String, Vec<u8>> = BTreeMap::new();
+    let mut seen_names = std::collections::HashSet::new();
+    let mut ambiguous = false;
     let mut types: Vec<(String, String)> = Vec::new();
     let mut total: u64 = 0;
     let mut part: Option<Part> = None;
@@ -160,6 +162,10 @@ pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
                     }
                     2 if in_pkg && local == b"part" => {
                         let name = attr(e, b"name").unwrap_or_default();
+                        let normalized = name.trim_start_matches('/');
+                        if normalized.is_empty() || !seen_names.insert(normalized.to_string()) {
+                            ambiguous = true;
+                        }
                         let content_type = attr(e, b"contentType").unwrap_or_default();
                         part = Some(Part { name, content_type, data: None });
                     }
@@ -248,7 +254,7 @@ pub(crate) fn unpack(bytes: &[u8]) -> Result<Package, DocxError> {
         w.close("Types");
         files.insert("[Content_Types].xml".into(), w.into_bytes());
     }
-    Ok(Package::from_parts(files))
+    Ok(Package::from_parts_with_ambiguity(files, ambiguous))
 }
 
 /// End of a `pkg:part`: store its binary data (inline XML was stored when it ended).
@@ -387,6 +393,9 @@ fn root_tag_start(frag: &[u8]) -> Option<usize> {
 
 /// Write `doc` as a Word XML Document (Flat OPC).
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
+    if doc.passthrough.contains_key(crate::write::REQUIRED_SOURCE_GUARD) || crate::required::has(doc) {
+        return Err(DocxError::Preservation("Flat OPC cannot replay required source content types".into()));
+    }
     let parts = crate::write::write_parts(doc, Flavor::Document)?;
     let types = parts
         .iter()

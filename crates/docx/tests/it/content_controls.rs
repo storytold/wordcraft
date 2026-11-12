@@ -11,8 +11,14 @@ use wordcraft_docx::{read, write};
 const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml""#;
 const ROOT_RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
 
+/// Builds a minimal DOCX package containing the supplied WordprocessingML body.
 fn package(body: &str) -> Vec<u8> {
-    let doc = format!(r#"<w:document {NS}><w:body>{body}</w:body></w:document>"#);
+    package_ns(body, "")
+}
+
+/// Builds a minimal DOCX package with extra namespace declarations on the document root.
+fn package_ns(body: &str, extra_ns: &str) -> Vec<u8> {
+    let doc = format!(r#"<w:document {NS} {extra_ns}><w:body>{body}</w:body></w:document>"#);
     let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     for (name, bytes) in [("_rels/.rels", ROOT_RELS.as_bytes()), ("word/document.xml", doc.as_bytes())] {
         zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
@@ -255,6 +261,67 @@ fn a_controls_run_properties_are_read_and_kept() {
     assert_eq!((rp.style.as_deref(), rp.size), (Some("Eingabe"), Some(10.0)));
     let out = document_xml(&write(&d).unwrap());
     assert!(out.contains(r#"<w:rPr><w:rStyle w:val="Eingabe"/><w:sz w:val="20"/></w:rPr>"#), "{out}");
+}
+
+/// Retained InkML and MathML properties preserve namespace declarations across saves.
+#[test]
+fn retained_ink_and_mathml_properties_keep_declared_namespaces() {
+    let pr = r#"<w:id w:val="42"/><pen:annotation mc:Ignorable="math pen" mc:MustUnderstand="formula nib" mc:ProcessContent="formula:math pen:trace" mc:PreserveElements="math:* nib:trace" mc:PreserveAttributes="formula:id pen:*"><math:math math:id="formula" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><math:cn>2</math:cn></math:math><d:creator xmlns:d="http://purl.org/dc/elements/1.1/">Study</d:creator></pen:annotation>"#;
+    let ns = r#"xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:pen="http://www.w3.org/2003/InkML" xmlns:nib="http://www.w3.org/2003/InkML" xmlns:math="http://www.w3.org/1998/Math/MathML" xmlns:formula="http://www.w3.org/1998/Math/MathML" mc:Ignorable="pen math""#;
+    let source = package_ns(&p(&sdt(pr, &t("Note"))), ns);
+    let original = document_xml(&source);
+    let expanded_property_names = |xml: &str| {
+        use quick_xml::events::Event;
+        use quick_xml::name::ResolveResult;
+        let mut reader = quick_xml::reader::NsReader::from_str(xml);
+        let mut names = Vec::new();
+        loop {
+            match reader.read_event().unwrap() {
+                Event::Start(e) | Event::Empty(e) => {
+                    let name = e.name();
+                    let (ns, local) = reader.resolver().resolve_element(name);
+                    if let ResolveResult::Bound(ns) = ns {
+                        let uri = std::str::from_utf8(ns.as_ref()).unwrap();
+                        if ["http://www.w3.org/2003/InkML", "http://www.w3.org/1998/Math/MathML", "http://purl.org/dc/elements/1.1/"].contains(&uri) {
+                            names.push((uri.to_string(), String::from_utf8(local.as_ref().to_vec()).unwrap()));
+                        }
+                    }
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        names
+    };
+    let expanded_names = vec![
+        ("http://www.w3.org/2003/InkML".to_string(), "annotation".to_string()),
+        ("http://www.w3.org/1998/Math/MathML".to_string(), "math".to_string()),
+        ("http://www.w3.org/1998/Math/MathML".to_string(), "cn".to_string()),
+        ("http://purl.org/dc/elements/1.1/".to_string(), "creator".to_string()),
+    ];
+    assert_eq!(expanded_property_names(&original), expanded_names);
+    // The normal writer still declares every canonical namespace used by retained properties.
+    let canonical_decls = document_xml(&write(&Document::new()).unwrap());
+    assert!(canonical_decls.contains(r#"xmlns:ink="http://www.w3.org/2003/InkML""#));
+    assert!(canonical_decls.contains(r#"xmlns:mml="http://www.w3.org/1998/Math/MathML""#));
+    let ignorable = canonical_decls.split_once("mc:Ignorable=\"").unwrap().1.split('"').next().unwrap();
+    assert!(ignorable.split_whitespace().any(|p| p == "ink") && ignorable.split_whitespace().any(|p| p == "mml"), "{ignorable}");
+    assert!(canonical_decls.contains(r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#));
+    assert!(canonical_decls.contains(r#"xmlns:dc="http://purl.org/dc/elements/1.1/""#));
+    let mut d = read(&source).unwrap();
+    for _ in 0..2 {
+        // The parser still canonicalizes the complete property exactly as before. Saving the
+        // required property instead replays the original scopes, including arbitrary QNames.
+        assert!(by_id(&d, 42).extra.iter().any(|x| x.contains(r#"<ink:annotation mc:Ignorable="mml ink" mc:MustUnderstand="mml ink" mc:ProcessContent="mml:math ink:trace" mc:PreserveElements="mml:* ink:trace" mc:PreserveAttributes="mml:id ink:*"><mml:math mml:id="formula" xsi:schemaLocation="http://www.w3.org/1998/Math/MathML mathml.xsd"><mml:cn>2</mml:cn></mml:math><dc:creator>Study</dc:creator></ink:annotation>"#)));
+        let saved = write(&d).unwrap();
+        let saved_xml = document_xml(&saved);
+        assert_eq!(saved_xml, original, "protected namespace scopes must be replayed");
+        assert_eq!(expanded_property_names(&saved_xml), expanded_names);
+        d = read(&saved).unwrap();
+        assert!(by_id(&d, 42).extra.iter().any(|x| {
+            x.contains(r#"<ink:annotation mc:Ignorable="mml ink" mc:MustUnderstand="mml ink" mc:ProcessContent="mml:math ink:trace" mc:PreserveElements="mml:* ink:trace" mc:PreserveAttributes="mml:id ink:*"><mml:math"#)
+        }));
+    }
 }
 
 /// Word's Table of Contents control (`w:docPartObj`, #2427) around a TOC the engine's
