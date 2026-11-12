@@ -5,6 +5,7 @@ use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small, vec2}
 /// and Templates groups.
 pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
     let v = app.session.view.clone();
+    let v_source = app.session.md_source.is_some();
     group(ui, "Views", None, app, |ui, app| {
         big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
         big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
@@ -12,6 +13,8 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             small(ui, app, "outline", Some("Outline"), "Outline", crate::widgets::ButtonAction::new("view.outline", json!({}), false));
             small(ui, app, "draft", Some("Draft"), "Draft", crate::widgets::ButtonAction::new("view.draft", json!({}), false));
+            let source = crate::widgets::ButtonAction::new("view.markdownSource", json!({}), v_source);
+            small(ui, app, "markdownSource", Some("Markdown"), "Markdown Source", source);
         });
     });
     group(ui, "Immersive", None, app, |ui, app| {
