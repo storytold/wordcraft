@@ -64,7 +64,7 @@ impl Session {
             self.revision_group = None;
         }
         if outer {
-            self.finish_revision_command(result.is_ok());
+            self.finish_revision_command(id, result.is_ok());
         }
         result
     }

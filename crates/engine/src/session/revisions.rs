@@ -53,7 +53,7 @@ impl Session {
         });
     }
 
-    pub(super) fn finish_revision_command(&mut self, success: bool) {
+    pub(super) fn finish_revision_command(&mut self, id: &str, success: bool) {
         let Some(g) = self.revision_group.as_mut() else { return };
         // Replacements, another target, failed transactions and automatic transformations
         // cannot leave an old identity eligible for the next ordinary keystroke.
@@ -65,6 +65,9 @@ impl Session {
             || !self.sel.is_collapsed()
             || g.selection.focus.story != self.sel.focus.story
             || g.selection.focus.path != self.sel.focus.path
+            // A query such as Go To can move within the same paragraph. Only an editing
+            // command may advance the insertion point of the current revision group.
+            || (continuous_command(id).is_none() && g.selection != self.sel)
             || self.ime_edit_outcome.transformed
         {
             self.revision_group = None;
@@ -77,6 +80,11 @@ impl Session {
     /// Allocate at most one insertion/deletion identity per command, or reuse the one from
     /// this continuous edit. Called outside dispatch, each allocation starts a fresh edit.
     pub(crate) fn edit_revision(&mut self, kind: RevisionKind) -> u32 {
+        // Direct callers are outside the transaction that established this group. Forget it
+        // so neither this allocation nor a later dispatched edit can resume its identity.
+        if self.revision_depth == 0 {
+            self.revision_group = None;
+        }
         let held = self.pending_move.as_ref().map(|m| m.rev);
         let slot = self.revision_group.as_mut().and_then(|g| match kind {
             RevisionKind::Insert => Some(&mut g.insert),

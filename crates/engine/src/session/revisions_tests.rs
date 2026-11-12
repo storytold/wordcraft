@@ -85,6 +85,59 @@ fn continuous_revision_caret_away_and_back_ends_the_group() {
 }
 
 #[test]
+fn continuous_revision_query_caret_movement_ends_the_group() {
+    let mut s = tracked("");
+    insert(&mut s, "abc");
+    run(&mut s, "edit.goto", json!({"paragraph": 1}));
+    assert_eq!(s.sel, Selection::caret(Pos::body(0, 0)));
+    insert(&mut s, "def");
+    assert_eq!(ids(&s, RevisionKind::Insert), [0, 1]);
+    assert_eq!(text(&s), "defabc");
+    // Resolving the second identity must leave the first insertion untouched.
+    s.sel = Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 3) };
+    run(&mut s, "review.accept", json!({}));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), "def");
+}
+
+#[test]
+fn continuous_revision_queries_without_caret_movement_keep_the_group() {
+    let mut s = tracked("");
+    insert(&mut s, "first");
+    let before = s.sel.clone();
+    run(&mut s, "edit.goto", json!({}));
+    run(&mut s, "review.changes", json!({}));
+    assert_eq!(s.sel, before);
+    insert(&mut s, "second");
+    assert_eq!(ids(&s, RevisionKind::Insert), [0]);
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(text(&s), "");
+}
+
+#[test]
+fn continuous_revision_allocations_outside_dispatch_end_the_group() {
+    for kind in [RevisionKind::Insert, RevisionKind::Delete] {
+        let mut s = tracked("abc");
+        if kind == RevisionKind::Insert {
+            insert(&mut s, "first");
+        } else {
+            s.sel = Selection::caret(Pos::body(0, 3));
+            run(&mut s, "text.backspace", json!({}));
+        }
+        let before = s.sel.clone();
+        assert_eq!(crate::cmd::new_revision(&mut s, kind), 1);
+        assert_eq!(crate::cmd::new_revision(&mut s, kind), 2);
+        assert_eq!(s.sel, before);
+        if kind == RevisionKind::Insert {
+            insert(&mut s, "second");
+        } else {
+            run(&mut s, "text.backspace", json!({}));
+        }
+        assert_eq!(ids(&s, kind), [0, 1, 2, 3]);
+    }
+}
+
+#[test]
 fn continuous_revision_undo_redo_restore_and_document_switch_end_the_group() {
     let mut s = tracked("");
     insert(&mut s, "first");
