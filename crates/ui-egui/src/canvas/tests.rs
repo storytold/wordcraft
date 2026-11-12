@@ -5558,3 +5558,110 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// #5911: typing with a shape selected types into the shape (it gets a text story); the shape
+/// stays in the document instead of being replaced by the typed text.
+#[test]
+fn typing_with_a_shape_selected_types_into_it() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 200, "height": 100})).unwrap();
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    let Some(wordcraft_doc::InlineObject::Shape { story: Some(id), .. }) = doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.object_at(0))
+    else {
+        panic!("the shape is gone or has no text; the body reads {:?}", doc.plain_text(StoryRef::Body));
+    };
+    assert_eq!(doc.plain_text(StoryRef::Part(*id)), "Hallo");
+
+    // A line holds no text: typing with it selected does nothing, as in Word.
+    h.state_mut().run("document.setText", json!({"text": ""})).unwrap();
+    h.state_mut().run("insert.shape", json!({"kind": "line", "width": 200})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    assert!(
+        matches!(doc.para_at(&wordcraft_doc::Pos::body(0, 0)).and_then(|p| p.object_at(0)), Some(wordcraft_doc::InlineObject::Shape { .. })),
+        "the line must stay; the body reads {:?}",
+        doc.plain_text(StoryRef::Body)
+    );
+    assert!(!doc.plain_text(StoryRef::Body).contains("Hallo"), "nothing was typed");
+
+    // A line with text (a file can give it some) is typed into, as before.
+    let app = h.state_mut();
+    let id = app.session.doc.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())]);
+    app.session.doc.objects_mut(&|o| matches!(o, wordcraft_doc::InlineObject::Shape { .. }), &mut |o| {
+        if let wordcraft_doc::InlineObject::Shape { story, .. } = o {
+            *story = Some(id);
+        }
+    });
+    app.run("select.objects", json!({"index": 0})).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    assert_eq!(doc.plain_text(StoryRef::Part(id)), "Hallo", "the body reads {:?}", doc.plain_text(StoryRef::Body));
+}
+
+/// #5911: when the shape can't take text (here: read-only protection whose exception covers only
+/// the shape, so its new story would be outside it), typing is dropped instead of replacing it.
+#[test]
+fn typing_is_dropped_when_a_shape_cannot_take_text() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 200, "height": 100})).unwrap();
+    a.run("review.restrict", json!({"exception": "add"})).unwrap();
+    a.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+    a.run("select.objects", json!({"index": 0})).unwrap();
+    assert!(a.run("shape.addText", json!({})).is_err(), "protection refuses the new story");
+    a.run("select.objects", json!({"index": 0})).unwrap();
+    a.canvas.want_focus = true;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    type_in(&mut h, "Hallo");
+    let doc = &h.state().session.doc;
+    // The exception's markers come before and after the shape, which is still selected.
+    let at = h.state().session.sel.ordered().0;
+    let shape = doc.para_at(&at).and_then(|p| p.object_at(at.off));
+    assert!(
+        matches!(shape, Some(wordcraft_doc::InlineObject::Shape { .. })),
+        "the shape must stay; the body reads {:?}",
+        doc.plain_text(StoryRef::Body)
+    );
+    assert!(!doc.plain_text(StoryRef::Body).contains("Hallo"), "nothing was typed");
+
+    // A picture is left as before: typing still replaces it (Word's behaviour there is unchecked).
+    let png = {
+        let mut b = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::new(8, 8)).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+        b
+    };
+    h.state_mut().run("review.restrict", json!({"stop": true})).unwrap();
+    h.state_mut().run("document.setText", json!({"text": ""})).unwrap();
+    h.state_mut().run("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png), "width": 40})).unwrap();
+    h.state_mut().run("select.objects", json!({"index": 0})).unwrap();
+    type_in(&mut h, "Hallo");
+    assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "Hallo");
+}

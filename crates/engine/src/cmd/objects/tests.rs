@@ -1537,3 +1537,30 @@ fn only_ink_members_pin_a_group() {
     }
     assert!(!holds_ink(&group), "a group of charts is not pinned");
 }
+
+/// #5911: Add Text gives a selected shape without text an empty story, centred both ways like a
+/// Word shape's, with the caret in it, so typed text goes into the shape instead of replacing
+/// it. A second Add Text goes back into the same story; lines hold no text.
+#[test]
+fn add_text_types_into_a_shape_instead_of_replacing_it() {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "rectangle", "width": 200, "height": 100})).unwrap();
+    let id = s.run("shape.addText", &json!({})).unwrap()["story"].as_u64().unwrap() as u32;
+    s.run("text.insert", &json!({"text": "Hallo"})).unwrap();
+    assert!(matches!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.object_at(0)), Some(InlineObject::Shape { story: Some(i), .. }) if *i == id));
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Hallo");
+    assert_eq!(s.doc.parts.get(&id).unwrap().body.anchor, VAlign::Center);
+    assert_eq!(s.doc.parts.get(&id).unwrap().blocks[0].as_para().unwrap().props.align, Some(wordcraft_doc::Align::Center));
+
+    s.run("select.objects", &json!({"index": 0})).unwrap();
+    assert_eq!(s.run("shape.addText", &json!({})).unwrap()["story"], json!(id), "the shape keeps its story");
+    s.run("text.insert", &json!({"text": "!"})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Part(id)), "Hallo!");
+
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("insert.shape", &json!({"kind": "line"})).unwrap();
+    assert!(matches!(s.run("shape.addText", &json!({})), Err(CmdError::Disabled(_))));
+    s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+    s.run("caret.set", &json!({"pos": s.doc.end_of(StoryRef::Body)})).unwrap();
+    assert!(s.run("shape.addText", &json!({})).is_err(), "a caret just after a shape is no shape selection");
+}
