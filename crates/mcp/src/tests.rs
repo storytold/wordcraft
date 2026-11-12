@@ -432,6 +432,27 @@ fn render_page_rejects_a_page_number_that_does_not_fit() {
     assert_eq!(r["result"]["isError"], false, "page 1 still renders: {r}");
 }
 
+/// #6266: `render_page` draws tracked changes in the Track Changes Options colours, as the page
+/// on screen does, not always in the default by-author colours.
+#[test]
+fn render_page_uses_the_track_changes_colours() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    tool(&mut s, "type_text", json!({"text": "Plain "}));
+    tool(&mut s, "execute", json!({"command": "review.trackChanges", "params": {"value": true}}));
+    tool(&mut s, "type_text", json!({"text": "Inserted while tracking"}));
+    let render = |s: &mut Server, colour: &str| {
+        tool(s, "execute", json!({"command": "review.trackingOptions", "params": {"insertColor": colour}}));
+        let r = call(s, 40, "tools/call", json!({"name": "render_page", "arguments": {"page": 1, "scale": 1.0}}));
+        assert_eq!(r["result"]["isError"], false, "{r}");
+        r["result"]["content"][0]["data"].as_str().unwrap().to_string()
+    };
+    let green = render(&mut s, "00A000");
+    let red = render(&mut s, "C00000");
+    assert!(green != red, "the insertion colour reaches the rendered page");
+    assert!(render(&mut s, "00A000") == green, "the same colour renders the same page");
+}
+
 #[test]
 fn invalid_utf8_does_not_change_arguments_or_stop_later_requests() {
     let mut s = Server::new(Box::new(Headless::default()));
