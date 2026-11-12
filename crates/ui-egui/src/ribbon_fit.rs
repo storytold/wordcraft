@@ -582,7 +582,7 @@ mod ui_tests {
             .collect();
         assert!(!bodies.is_empty(), "the two-row Equation insert is present");
         assert!(
-            arrows.iter().max_by(f32::total_cmp).unwrap() < bodies.iter().max_by(f32::total_cmp).unwrap(),
+            arrows.iter().max_by(|a, b| a.total_cmp(b)).unwrap() < bodies.iter().max_by(|a, b| a.total_cmp(b)).unwrap(),
             "the insert body is wider than its arrow: bodies={bodies:?} arrows={arrows:?}"
         );
     }
