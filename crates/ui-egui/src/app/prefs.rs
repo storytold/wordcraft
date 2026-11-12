@@ -54,10 +54,16 @@ impl WordApp {
             self.session.author = author;
         }
         self.session.initials = std::mem::take(&mut self.ui.initials).chars().take(wordcraft_engine::cmd::options::MAX_INITIALS_CHARS).collect();
-        for w in std::mem::take(&mut self.ui.dictionary).iter().take(MAX_DICTIONARY) {
-            let w = w.trim();
-            if !w.is_empty() && w.chars().count() <= wordcraft_engine::cmd::options::MAX_WORD_CHARS {
-                wordcraft_engine::proof::add_word(w);
+        // A bound custom dictionary file is the source of truth: `load_user_dictionary` reads it
+        // at start-up. Restoring the `ui.json` copy first would let a missing or unreadable file's
+        // words reach the default `custom-dictionary.txt` on the next Add to Dictionary (#5840).
+        let saved_words = std::mem::take(&mut self.ui.dictionary);
+        if self.ui.editing.custom_dictionary.is_none() {
+            for w in saved_words.iter().take(MAX_DICTIONARY) {
+                let w = w.trim();
+                if !w.is_empty() && w.chars().count() <= wordcraft_engine::cmd::options::MAX_WORD_CHARS {
+                    wordcraft_engine::proof::add_word(w);
+                }
             }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
