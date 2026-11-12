@@ -388,7 +388,8 @@ fn french_regions_are_in_both_language_pickers() {
         assert_eq!(checks.extra.as_deref(), Some("French (419)"), "{tag}");
         assert!(checks.listed.iter().all(|on| !on), "{tag}");
     }
-    assert!(super::language::same_language("fr-CA-1996-u-nu-latn", "fr-CA"));
+    assert!(super::language::same_language("fr-CA-u-nu-latn", "fr-CA"));
+    assert!(!super::language::same_language("fr-CA-1996-u-nu-latn", "fr-CA"));
     assert!(!super::language::same_language("fr-Cyrl-419", "fr-419"));
     // The shared dynamic entries keep the two regions separate, including encoded locales.
     for (current, expected) in [("fr_FR.UTF-8", "fr-FR"), ("fr_CA.UTF-8", "fr-CA")] {
