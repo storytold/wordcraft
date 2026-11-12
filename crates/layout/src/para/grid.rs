@@ -137,6 +137,9 @@ pub struct Exclusion {
     pub side: WrapText,
     /// A floating table counts a line touching its top as overlapping; shapes do not (#3977).
     pub table: bool,
+    /// Tight and Through wrapping: before Word 2013 layout text goes in a narrower gap beside
+    /// it (#6316).
+    pub tight: bool,
 }
 
 impl Exclusion {
