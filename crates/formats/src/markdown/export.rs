@@ -421,11 +421,14 @@ fn write_blocks_labelled(blocks: &[FBlock], out: &mut Vec<String>, mut labels: O
                     {
                         prev_list = false;
                         let hashes = "#".repeat(n.clamp(1, 6) as usize);
-                        let text = heading_text(&body);
-                        out.push(match label {
-                            Some(label) if !label.is_empty() => format!("{hashes} {label} {text}"),
-                            _ => format!("{hashes} {text}"),
-                        });
+                        // The label is the page's text, not Markdown (`*%1*` is no emphasis), and a
+                        // label ending in '#' over an empty heading is no closing sequence.
+                        let text = match label {
+                            Some(label) if !label.is_empty() && body.is_empty() => heading_text(&escape(label)),
+                            Some(label) if !label.is_empty() => heading_text(&format!("{} {body}", escape(label))),
+                            _ => heading_text(&body),
+                        };
+                        out.push(format!("{hashes} {text}"));
                         out.push(String::new());
                     }
                     Some(li) => {

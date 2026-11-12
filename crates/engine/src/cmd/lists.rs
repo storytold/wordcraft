@@ -539,6 +539,23 @@ mod tests {
         assert_eq!(md.last().map(String::as_str), Some("## 1.2 Terms"), "{md:?}");
     }
 
+    /// A heading's number is text, not Markdown: a level whose text is `*%1*` exports as `\*1\*`,
+    /// not as emphasis.
+    #[test]
+    fn markdown_escapes_a_numbered_headings_label() {
+        let mut s = headings("Heading1");
+        let levels = json!([
+            {"format": "decimal", "text": "*%1*", "style": "Heading1"},
+            {"format": "decimal", "text": "[%1.%2]", "style": "Heading2"},
+        ]);
+        s.run("list.define", &json!({"levels": levels})).unwrap();
+        let page: Vec<Option<String>> = numbered(&mut s).into_iter().map(|x| x.0).collect();
+        assert_eq!(page, [Some("*1*".to_string()), Some("[1.1]".to_string()), Some("*2*".to_string())], "the page's labels");
+        assert_eq!(md_lines(&s), [r"# \*1\* One", r"## \[1.1\] Two", r"# \*2\* Three"]);
+        // The plain-text export keeps the label as it is.
+        assert_eq!(txt_labels(&s), page);
+    }
+
     /// The plain-text export's labels are the page's for an ordinary numbered list too, a
     /// paragraph outside it in between included.
     #[test]
