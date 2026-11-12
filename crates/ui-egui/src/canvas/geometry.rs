@@ -99,13 +99,30 @@ pub fn markup_width(app: &WordApp) -> f32 {
         return 0.0;
     }
     let m = &s.prefs.markup;
-    let comments = m.comments && !s.doc.comments.is_empty() && m.comment_display == CommentDisplay::Margin;
+    // Show Markup › Specific People: only the shown reviewers' comments and changes need room.
+    let shows = |author: &str| s.view.shows_reviewer(author);
+    let comments = m.comments && s.doc.comments.values().any(|c| shows(&c.author)) && m.comment_display == CommentDisplay::Margin;
+    let hidden = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        s.view.hidden_reviewers.hash(&mut h);
+        h.finish()
+    };
+    let key = (s.document_id(), s.rev(), hidden);
     let [has_formats, has_moves, has_deletions] = match app.canvas.markup_facts.get() {
-        Some((rev, facts)) if rev == (s.document_id(), s.rev()) => facts,
+        Some((at, facts)) if at == key => facts,
         _ => {
             use wordcraft_engine::cmd::{moves, review};
-            let facts = [review::has_format_changes(&s.doc), moves::has_moves(&s.doc), review::has_deletions(&s.doc)];
-            app.canvas.markup_facts.set(Some(((s.document_id(), s.rev()), facts)));
+            let facts = if s.view.hidden_reviewers.is_empty() {
+                [review::has_format_changes(&s.doc), moves::has_moves(&s.doc), review::has_deletions(&s.doc)]
+            } else {
+                [
+                    review::format_changes(s).iter().any(|c| shows(&c.1)),
+                    review::move_changes(s).iter().any(|c| shows(&c.1)),
+                    review::deletion_balloons(s).iter().any(|d| shows(&d.author)),
+                ]
+            };
+            app.canvas.markup_facts.set(Some((key, facts)));
             facts
         }
     };
