@@ -20,6 +20,9 @@ pub struct Fragment {
     /// gives each box a new story made from these.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parts: BTreeMap<u32, Part>,
+    /// Media items referenced by objects in this fragment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::byte_store")]
+    pub media: BTreeMap<String, Arc<Vec<u8>>>,
 }
 
 impl Fragment {
@@ -30,6 +33,8 @@ impl Fragment {
     pub fn to_document(&self) -> Document {
         let mut d = Document::new();
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
+        d.parts = self.parts.clone();
+        d.media = self.media.clone();
         d
     }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
@@ -560,6 +565,44 @@ fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
     p.objects.iter().flat_map(InlineObject::text_boxes)
 }
 
+/// Remap media references in an inline object.
+fn remap_media_object(o: &mut InlineObject, map: &BTreeMap<String, String>, depth: usize) {
+    match o {
+        InlineObject::Image { media, .. } => {
+            if let Some(k) = map.get(media.as_str()) {
+                *media = k.clone();
+            }
+        }
+        InlineObject::Graphic { graphic, .. } => {
+            let mapped = |m: &str| map.get(m).filter(|k| k.as_str() != m);
+            if graphic.items.iter().any(|i| matches!(i, crate::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                for i in &mut Arc::make_mut(graphic).items {
+                    if let crate::graphic::GraphicItem::Image { media, .. } = i
+                        && let Some(k) = map.get(media.as_str())
+                    {
+                        *media = k.clone();
+                    }
+                }
+            }
+        }
+        InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => {
+            for child in children {
+                remap_media_object(&mut child.obj, map, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remap media references in a block.
+fn remap_media_block(b: &mut Block, map: &BTreeMap<String, String>) {
+    each_para_mut(b, 0, &mut |p| {
+        for o in &mut p.objects {
+            remap_media_object(o, map, 0);
+        }
+    });
+}
+
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -974,7 +1017,8 @@ impl Document {
         // Half a content control (one marker without the other) isn't copied.
         crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
-        Fragment { blocks, parts }
+        let media = self.media_of_blocks(&blocks);
+        Fragment { blocks, parts, media }
     }
 
     /// A copy of the block at `path` (a whole table, say) as a fragment, with its text boxes.
@@ -996,7 +1040,8 @@ impl Document {
     fn fragment_of(&self, mut blocks: Vec<Block>) -> Fragment {
         crate::control::balance_blocks(&mut blocks);
         let parts = self.text_box_parts(&blocks);
-        Fragment { blocks, parts }
+        let media = self.media_of_blocks(&blocks);
+        Fragment { blocks, parts, media }
     }
 
     /// The table whose whole text `a..b` covers when the range runs across its cells: from the
@@ -1038,7 +1083,8 @@ impl Document {
     pub fn body_fragment(&self) -> Fragment {
         let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();
         let parts = self.text_box_parts(&blocks);
-        Fragment { blocks, parts }
+        let media = self.media_of_blocks(&blocks);
+        Fragment { blocks, parts, media }
     }
 
     /// Another document's body as a fragment of this one, to insert: the media, lists, styles,
@@ -1207,7 +1253,7 @@ impl Document {
         }
         let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
         blocks.iter_mut().for_each(|b| link.block(b));
-        Fragment { blocks, parts }
+        Fragment { blocks, parts, media: self.media.clone() }
     }
 
     /// [`Self::adopt_with`] as blocks to place in a story directly (a reader building one): its
@@ -1215,7 +1261,7 @@ impl Document {
     /// id the reader hasn't given out (ranges it holds aren't in this document yet); it moves past
     /// the adopted ones.
     pub fn adopt_blocks(&mut self, src: Document, keep_styles: bool, perms: &mut u32) -> Vec<Block> {
-        let Fragment { mut blocks, parts } = self.adopt_in(src, keep_styles, perms);
+        let Fragment { mut blocks, parts, .. } = self.adopt_in(src, keep_styles, perms);
         let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         blocks
@@ -1237,6 +1283,52 @@ impl Document {
                 each_para(b, 0, &mut |p| todo.extend(box_ids(p)));
             }
             out.insert(id, part.clone());
+        }
+        out
+    }
+
+    /// Media items referenced by objects in `blocks`, nested text box stories included.
+    pub fn media_of_blocks(&self, blocks: &[Block]) -> BTreeMap<String, Arc<Vec<u8>>> {
+        let mut keys = std::collections::BTreeSet::new();
+        /// Collect media keys from an inline object recursively.
+        fn collect_object(o: &InlineObject, keys: &mut std::collections::BTreeSet<String>, depth: usize) {
+            match o {
+                InlineObject::Image { media, .. } => {
+                    keys.insert(media.clone());
+                }
+                InlineObject::Graphic { graphic, .. } => {
+                    for item in &graphic.items {
+                        if let crate::graphic::GraphicItem::Image { media, .. } = item {
+                            keys.insert(media.clone());
+                        }
+                    }
+                }
+                InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => {
+                    for child in children {
+                        collect_object(&child.obj, keys, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut collect_para = |p: &Paragraph| {
+            for o in &p.objects {
+                collect_object(o, &mut keys, 0);
+            }
+        };
+        for b in blocks {
+            each_para(b, 0, &mut collect_para);
+        }
+        for part in self.text_box_parts(blocks).values() {
+            for b in &part.blocks {
+                each_para(b, 0, &mut collect_para);
+            }
+        }
+        let mut out = BTreeMap::new();
+        for k in keys {
+            if let Some(data) = self.media.get(&k) {
+                out.insert(k, data.clone());
+            }
         }
         out
     }
@@ -1389,6 +1481,18 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
+        let mut media_remap = BTreeMap::new();
+        for (k, v) in &frag.media {
+            if let Some(existing) = self.media.get(k) {
+                if existing.as_slice() != v.as_slice() {
+                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let new_key = self.add_media((**v).clone(), ext);
+                    media_remap.insert(k.clone(), new_key);
+                }
+            } else {
+                self.media.insert(k.clone(), v.clone());
+            }
+        }
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).
         let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
         let mut blocks = Vec::with_capacity(frag.blocks.len());
@@ -1401,9 +1505,20 @@ impl Document {
         if self.para_at(pos).is_none() {
             return Err(DocError::BadPath(pos.path.to_string()));
         }
+        let mut parts = frag.parts.clone();
+        if !media_remap.is_empty() {
+            for b in &mut blocks {
+                remap_media_block(b, &media_remap);
+            }
+            for part in parts.values_mut() {
+                for b in &mut part.blocks {
+                    remap_media_block(Arc::make_mut(b), &media_remap);
+                }
+            }
+        }
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         if budget.skipped > 0 {
             // Once per paste, not once per box (review of #3874).
             log::warn!(
