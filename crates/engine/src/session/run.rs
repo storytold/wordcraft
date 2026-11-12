@@ -215,6 +215,8 @@ impl Session {
         {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
         }
+        // A refused insertion leaves a waiting accent for the next character.
+        self.accent_typed(id, result.is_ok(), params);
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
                 id,

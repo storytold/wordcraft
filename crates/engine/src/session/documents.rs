@@ -250,7 +250,6 @@ impl Session {
             author: _,
             initials: _,
             painter: _,
-            accent_prefix: _,
             // What the drawn window knows of the others: its front end sets it as it draws.
             windows: _,
             status: _,
@@ -279,8 +278,10 @@ impl Session {
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
             ime_origin: _,
-            // A picked Drawing Canvas member is cleared by a switch, not kept per document.
+            // A picked Drawing Canvas member and a waiting accent key are cleared by a switch,
+            // not kept per document.
             member: _,
+            accent_prefix: _,
             others: _,
             order: _,
             untitled_count: _,
@@ -381,8 +382,10 @@ impl Session {
         swap(&mut self.widened, widened);
         swap(&mut self.edit_marks, edit_marks);
         swap(&mut self.go_back_step, go_back_step);
-        // A picked Drawing Canvas member (#2637) belongs to the document left behind.
+        // A picked Drawing Canvas member (#2637) belongs to the document left behind, and so
+        // does a waiting accent key (#6328): its letter is typed in the document it was pressed in.
         self.member = None;
+        self.accent_prefix = None;
     }
 
     /// Make document `id` active without anything else a switch by the user does.

@@ -24,6 +24,7 @@ impl Session {
         self.typing = None;
         self.also_selected.clear();
         self.member = None;
+        self.accent_prefix = None;
         self.column = None;
         self.column_mode = false;
         self.widened = None;

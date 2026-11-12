@@ -128,26 +128,37 @@ impl Session {
         self.accent_prefix = None;
     }
 
-    /// The params command `id` runs with, given a waiting accent key: `text.insert` takes it and
-    /// accents its first character; any other edit, caret move or selection forgets it.
+    /// The params command `id` runs with, given a waiting accent key: `text.insert` accents its
+    /// first character; any other edit, caret move or selection forgets it. The accent is used up
+    /// only once a `text.insert` that types a character succeeds ([`Self::accent_typed`]).
     pub(crate) fn accent_params<'a>(&mut self, id: &str, mutates: bool, params: &'a Value) -> Cow<'a, Value> {
-        if id == "text.insert" {
-            return self.take_accent_for(params).map_or(Cow::Borrowed(params), Cow::Owned);
+        if id != "text.insert" {
+            if mutates || id.starts_with("caret.") || id.starts_with("select.") {
+                self.accent_prefix = None;
+            }
+            return Cow::Borrowed(params);
         }
-        if mutates || id.starts_with("caret.") || id.starts_with("select.") {
+        // The selection moved since the accent key (a click, another window): it is forgotten.
+        if self.accent_prefix.as_ref().is_some_and(|(_, at)| *at != self.sel) {
             self.accent_prefix = None;
         }
-        Cow::Borrowed(params)
+        self.accent_for(params).map_or(Cow::Borrowed(params), Cow::Owned)
     }
 
-    /// `text.insert`'s params with a waiting accent applied to the first character typed (taken
-    /// either way). `None` when nothing changes: no accent waits, the selection moved since the
-    /// accent key (a click, another window), or the accent doesn't apply to the character.
-    fn take_accent_for(&mut self, params: &Value) -> Option<Value> {
-        let (accent, at) = self.accent_prefix.take()?;
-        if at != self.sel {
-            return None;
+    /// Command `id` ran with `params`, and succeeded if `ok`: a successful `text.insert` uses up
+    /// a waiting accent if it typed a character (accented or, where the accent doesn't apply, as
+    /// it is).
+    pub(crate) fn accent_typed(&mut self, id: &str, ok: bool, params: &Value) {
+        if id == "text.insert" && ok && params.get("text").and_then(Value::as_str).is_some_and(|t| !t.is_empty()) {
+            self.accent_prefix = None;
         }
+    }
+
+    /// `text.insert`'s params with a waiting accent applied to the first character typed. `None`
+    /// when nothing changes: no accent waits, no character is typed, or the accent doesn't apply
+    /// to it.
+    fn accent_for(&self, params: &Value) -> Option<Value> {
+        let (accent, _) = self.accent_prefix.as_ref()?;
         let text = accent.compose_text(params.get("text")?.as_str()?)?;
         let mut composed = params.clone();
         composed.as_object_mut()?.insert("text".into(), Value::String(text));

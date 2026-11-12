@@ -2116,6 +2116,46 @@ fn an_accent_key_waits_for_one_character_only() {
     assert_eq!(raw_texts(&s), ["aXe 1aaaè"]);
 }
 
+/// #6328 review: a `text.insert` that types nothing, or is refused, leaves the accent waiting for
+/// the next character; switching documents forgets it, there and in the document it was pressed in.
+#[test]
+fn an_accent_waits_through_an_empty_or_refused_insertion_and_not_across_documents() {
+    let mut s = s();
+    run(&mut s, "text.accentAcute", json!({}));
+    run(&mut s, "text.insert", json!({"text": ""}));
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute), "nothing was typed");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["é"]);
+
+    // A protected document whose editable region is elsewhere: the insertion runs, then is
+    // refused as a change outside the region.
+    let mut s = typed("Free locked");
+    s.run("select.text", &json!({"text": "Free"})).unwrap();
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.accentAcute", json!({}));
+    let e = s.run("text.insert", &json!({"text": "e"})).unwrap_err().to_string();
+    assert!(e.contains("only the editable regions"), "{e}");
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute), "the insertion was refused");
+    s.doc.settings.protection = None;
+    typ(&mut s, "e");
+    // The editable region's start and end marks stand around "Free".
+    assert!(raw_texts(&s)[0].ends_with(" lockedé"), "{:?}", raw_texts(&s));
+
+    // Another document, its caret at the start as this one's was.
+    let mut s = self::s();
+    let first = s.document_id();
+    run(&mut s, "text.accentAcute", json!({}));
+    s.add_document(wordcraft_doc::Document::new());
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"], "the new document");
+    run(&mut s, "text.accentAcute", json!({}));
+    s.activate(first).unwrap();
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["e"], "back in the first document");
+}
+
 /// #6328: the accented letter is typing: it joins the typing undo step around it, takes
 /// AutoCorrect, and Repeat and macros replay the accented letter, not the plain one.
 #[test]
