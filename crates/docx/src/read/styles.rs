@@ -198,7 +198,7 @@ impl Reader<'_> {
                 s.para.fmt_change.as_ref().and_then(|ch| match ch.old.numbering {
                     Some(n) if n.num == props::LEVEL_ONLY => {
                         let base_style = ch.old.style.as_deref().or(s.based_on.as_deref());
-                        let base = base_style.and_then(|b| props::chain_list(&sheet, b));
+                        let base = base_style.and_then(|b| props::chain_list_before(&sheet, b));
                         Some(base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }))
                     }
                     _ => None,

@@ -275,7 +275,12 @@ fn remap_style_numbering(
         nr.num = mapped;
         return;
     }
-    let Some(src_num) = revised.numbering.num(nr.num) else { return };
+    let Some(src_num) = revised.numbering.num(nr.num) else {
+        // The revised style names a list its document doesn't have: leaving the ID would bind
+        // the style to `doc`'s unrelated list with the same number, or dangle.
+        *num_ref = None;
+        return;
+    };
     let target_numbering = Arc::make_mut(&mut doc.numbering);
     let aid = if let Some(src_abs) = revised.numbering.abstract_of(nr.num) {
         if let Some(&mapped_aid) = abs_map.get(&src_abs.id) {

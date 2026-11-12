@@ -3031,6 +3031,69 @@ fn style_definition_level_only_numbering_resolves_from_based_on_chain() {
     assert_eq!(pch.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }));
 }
 
+/// A child's old level-only numbering takes the list its base style had *before* the base's own
+/// tracked change, so rejecting restores the old list rather than the base's current one.
+#[test]
+fn style_definition_child_old_list_uses_base_old_numbering() {
+    use std::io::Write;
+    const W_XML: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    let root = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+    let doc_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_XML}"><w:body><w:p><w:r><w:t>Sample</w:t></w:r></w:p></w:body></w:document>"#
+    );
+    let styles_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="{W_XML}">
+        <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+        <w:style w:type="paragraph" w:styleId="CustomBase">
+            <w:name w:val="Custom Base"/>
+            <w:pPr>
+                <w:numPr><w:ilvl w:val="0"/><w:numId w:val="99"/></w:numPr>
+                <w:pPrChange w:id="1" w:author="Editor" w:date="2026-11-07T00:00:00Z">
+                    <w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="42"/></w:numPr></w:pPr>
+                </w:pPrChange>
+            </w:pPr>
+        </w:style>
+        <w:style w:type="paragraph" w:styleId="CustomChild">
+            <w:name w:val="Custom Child"/>
+            <w:basedOn w:val="CustomBase"/>
+            <w:pPr>
+                <w:numPr><w:ilvl w:val="1"/><w:numId w:val="99"/></w:numPr>
+                <w:pPrChange w:id="2" w:author="Editor" w:date="2026-11-07T00:00:00Z">
+                    <w:pPr><w:numPr><w:ilvl w:val="2"/></w:numPr></w:pPr>
+                </w:pPrChange>
+            </w:pPr>
+        </w:style>
+        </w:styles>"#
+    );
+    let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, content) in [
+        ("_rels/.rels", root),
+        ("word/document.xml", doc_xml.as_str()),
+        ("word/_rels/document.xml.rels", rels),
+        ("word/styles.xml", styles_xml.as_str()),
+    ] {
+        zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zw.write_all(content.as_bytes()).unwrap();
+    }
+    let bytes = zw.finish().unwrap().into_inner();
+    let doc = wordcraft_docx::read(&bytes).expect("read");
+
+    let base = doc.styles.get("CustomBase").expect("CustomBase style exists");
+    assert_eq!(base.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 0 }));
+    let bch = base.para.fmt_change.as_deref().expect("base pPrChange preserved");
+    assert_eq!(bch.old.numbering, Some(wordcraft_doc::props::NumRef { num: 42, level: 0 }));
+
+    let child = doc.styles.get("CustomChild").expect("CustomChild style exists");
+    assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num: 99, level: 1 }));
+    let cch = child.para.fmt_change.as_deref().expect("child pPrChange preserved");
+    assert_eq!(
+        cch.old.numbering,
+        Some(wordcraft_doc::props::NumRef { num: 42, level: 2 }),
+        "old level-only list comes from the base style's old numbering"
+    );
+}
+
 /// Tracked change `w:id` values in `styles.xml` continue from the document's revision sequence
 /// instead of restarting at 1 when the body contains revisions.
 #[test]
