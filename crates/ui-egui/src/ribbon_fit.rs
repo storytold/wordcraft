@@ -456,7 +456,7 @@ mod ui_tests {
     use super::*;
     use crate::WordApp;
     use egui::accesskit::Role;
-    use egui_kittest::kittest::Queryable;
+    use egui_kittest::kittest::{By, NodeT, Queryable};
     use serde_json::json;
 
     fn harness(width: f32, height: f32, ppp: f32) -> egui_kittest::Harness<'static, WordApp> {
@@ -567,8 +567,9 @@ mod ui_tests {
         // The split button's arrow opens Built-In; the plain insert would show no menu.
         let eq: Vec<(String, f32, f32)> =
             h.query_all_by_label_contains("Equation").map(|n| (format!("{:?}", n.rect()), n.rect().width(), n.rect().min.y)).collect();
+        let _ = eq;
         let arrow = h
-            .query_all_by_label_contains("Equation")
+            .query_all(By::new().predicate(|n| n.label().is_some_and(|l| l.contains("Equation"))))
             .find(|n| n.rect().width() < 20.0 && n.rect().min.y >= 0.0)
             .expect("the two-row Equation split button has an arrow");
         arrow.click();
