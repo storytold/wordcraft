@@ -461,9 +461,7 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
 }
 
 fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
-    let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
-    let face = r.face;
-    let glyphs = wordcraft_fonts::shape(&face, &wm.text, &[], |c| c);
+    let Some((face, _, glyphs)) = wordcraft_layout::watermark_run(wm, usize::MAX) else { return };
     let upem = face.upem.max(1.0);
     let raw_w: f64 = glyphs.iter().map(|g| g.x_advance as f64).sum::<f64>() / upem;
     if raw_w <= 0.0 {

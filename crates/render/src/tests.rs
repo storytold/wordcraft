@@ -1512,3 +1512,41 @@ fn rules_of_one_width_cover_the_same_whole_pixels_at_every_zoom() {
     assert!(snap_rule(Affine::rotate(0.3), (0.0, 0.0, 9.0, 0.0), 0.5).is_none());
     assert!(snap_rule(Affine::scale(2.0), (0.0, 0.0, 9.0, 4.0), 0.5).is_none());
 }
+
+/// The same three pictures that don't draw as in the PDF test: each stays a grey box, and the page's
+/// pixels are what they were before strict export existed (#6005).
+#[test]
+fn undecodable_pictures_keep_their_grey_box_pixels() {
+    let mut whole = Vec::new();
+    image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut whole), image::ImageFormat::Png)
+        .unwrap();
+    let cut = whole.len() - 24;
+    whole.truncate(cut);
+    let mut d = Document::new();
+    let mut p = wordcraft_doc::Paragraph::new();
+    for (bytes, ext) in [(b"this is not a picture at all".to_vec(), "bin"), (whole, "png"), (vec![1, 0, 0, 0, 88, 0, 0, 0], "emf")] {
+        let media = d.add_media(bytes, ext);
+        let n = p.len();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 60.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            fx: Default::default(),
+            ole: None,
+        };
+        p.insert_object(n, obj, &Default::default()).unwrap();
+    }
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let opts = RenderOptions::default();
+    let img = render_page(&d, &l.pages[0], 1.0, &opts);
+    let boxes = page_display(&d, &l.pages[0], &opts.display).iter().filter(|i| matches!(i, Draw::Image { .. })).count();
+    assert_eq!(boxes, 3);
+    // FNV-1a of the pixels, recorded before the shared decode check existed.
+    let h = img.pixels.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x100000001b3));
+    assert_eq!(h, 0x79f9f1d3602a9925, "{h:#x}");
+}

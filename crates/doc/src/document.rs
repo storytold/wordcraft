@@ -77,6 +77,7 @@ impl Document {
             glossary: Vec::new(),
             media_index: MediaIndex::default(),
             kept: Default::default(),
+            missing_pictures: Default::default(),
         }
     }
 
@@ -154,6 +155,7 @@ impl Document {
             glossary,
             media_index: _,
             kept: _,
+            missing_pictures: _,
         } = self;
         let Document {
             body: other_body,
@@ -174,6 +176,7 @@ impl Document {
             glossary: other_glossary,
             media_index: _,
             kept: _,
+            missing_pictures: _,
         } = other;
         same_blocks(body, other_body)
             && same_parts(parts, other_parts)
