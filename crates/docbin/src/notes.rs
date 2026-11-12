@@ -58,10 +58,13 @@ fn plc_of(table: &[u8], fc: u32, lcb: u32, data_size: usize) -> Option<Vec<u32>>
     Some(cps)
 }
 
-/// A bookmark boundary to insert while walking.
+/// A bookmark or comment boundary to insert while walking.
 pub(crate) enum Mark {
     Start(String),
     End(String),
+    /// The start and the end of the range a comment (by its id) is on.
+    CommentStart(u32),
+    CommentEnd(u32),
 }
 
 /// Parse `SttbfBkmk` + `Plcfbkf` + `Plcfbkl` into (cp, event) pairs sorted for a sequential

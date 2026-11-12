@@ -24,6 +24,9 @@ pub(crate) mod pair {
     pub(crate) const STSHF: usize = 1;
     pub(crate) const PLCF_FND_REF: usize = 2;
     pub(crate) const PLCF_FND_TXT: usize = 3;
+    /// `fcPlcfandRef` / `fcPlcfandTxt`: comment references and comment texts.
+    pub(crate) const PLCF_AND_REF: usize = 4;
+    pub(crate) const PLCF_AND_TXT: usize = 5;
     pub(crate) const PLCF_SED: usize = 6;
     pub(crate) const PLCF_HDD: usize = 11;
     pub(crate) const PLCF_BTE_CHPX: usize = 12;
@@ -33,9 +36,15 @@ pub(crate) mod pair {
     pub(crate) const PLCF_BKF: usize = 22;
     pub(crate) const PLCF_BKL: usize = 23;
     pub(crate) const CLX: usize = 33;
+    /// `fcGrpXstAtnOwners`: comment author names. `fcSttbfAtnBkmk`: the annotation bookmarks'
+    /// tags, parallel to `fcPlcfAtnBkf` / `fcPlcfAtnBkl` (their starts and ends).
+    pub(crate) const GRP_XST_ATN_OWNERS: usize = 36;
+    pub(crate) const STTBF_ATN_BKMK: usize = 37;
     /// `fcPlcSpaMom` / `fcPlcSpaHdr`: floating shape anchors of the main document / headers.
     pub(crate) const PLC_SPA_MOM: usize = 40;
     pub(crate) const PLC_SPA_HDR: usize = 41;
+    pub(crate) const PLCF_ATN_BKF: usize = 42;
+    pub(crate) const PLCF_ATN_BKL: usize = 43;
     pub(crate) const PLCF_END_REF: usize = 46;
     pub(crate) const PLCF_END_TXT: usize = 47;
     /// `fcDggInfo`: the OfficeArt drawing content (BLIP store, shapes).

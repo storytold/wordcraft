@@ -151,6 +151,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-07: `.doc` import: comments are read instead of dropped. Each comment keeps its author, initials and text, and is anchored on the text it comments on (or at its reference mark when it covers no text), the way DOCX comments are (#5934). Dates and reply threads are not read yet. Readiness unchanged.
 - 2026-11-04: Three behaviours lost in the #4501 refactor are back (#4683). From the second section on, headers, footers and note separators are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's. An ODT paragraph default style that names no font no longer clears the document's default font. A press the canvas handles itself (Ctrl+click on a link, switching into a header or footer, equation entry) no longer also shows the link tooltip in that frame. Readiness unchanged.
 - 2026-11-08: `wordcraft-cli convert --strict` (#6005) and `render --strict` (#6008): a PDF or PNG export (render: the page it writes) refuses, exit 3 and nothing written, when it would draw a character no font has or leave out a picture (missing part, external target, link only, undecodable or unsupported format); the report is on stderr with one JSON line. Engine: `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and `file.exportPng`, and the pure `file.strictReport`. External picture targets are never fetched. The result depends on the host's installed fonts (#5624); readiness estimates unchanged.
 - 2026-11-05: ODT tables with a usable width keep their column proportions when the file gives only shares (gap 19): LibreOffice's CV template opened and saved with equal columns.
@@ -911,6 +912,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | trivial | Progress log: .doc comments are read (#5934); readiness unchanged |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |

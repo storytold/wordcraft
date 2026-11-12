@@ -197,6 +197,7 @@ Page Setup's margin, paper-size and document-grid number boxes scroll long text 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | trivial | The .doc reader reads comments (author, initials, text, range) instead of dropping them (#5934); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-04 | trivial | #4501 refactor regressions restored: per-section header/footer grid, ODT default font, link tooltip (#4683); no ranked gap changed; readiness estimates unchanged |
 | 2026-11-08 | trivial | #10 narrowed: a turned inline picture with no recorded effect extent keeps its line to its frame (exchanged near a quarter turn in Word 2013+ layout), cut at the line; gap stays open |
 | 2026-11-08 | trivial | #4 narrowed: a cell's last Normal paragraph drops its contextual space after, the end-of-cell mark counting as a Normal paragraph (#5450) |
