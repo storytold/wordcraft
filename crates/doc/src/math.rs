@@ -514,7 +514,7 @@ fn lin_arg(a: &[MNode], s: &mut String, depth: usize) {
             }
         }
         if let MNode::Frac { den, .. } = n {
-            bare_den = simple_operand(den);
+            bare_den = bare_denominator(den);
         }
         // A bare script or limit ends at a space: a letter, digit or period after it is its own item.
         if matches!(n, MNode::Script { kind, .. } if *kind != ScriptKind::Pre) || matches!(n, MNode::Lim { .. }) {
@@ -551,6 +551,12 @@ fn simple_operand(a: &[MNode]) -> bool {
         [MNode::Delim { .. }] => true,
         _ => false,
     }
+}
+
+/// Whether a fraction writes its denominator `a` bare: a simple operand, but not a function name
+/// alone, which would be applied to what follows it (`3/sin x`); that one is bracketed, `3/(sin)x`.
+fn bare_denominator(a: &[MNode]) -> bool {
+    simple_operand(a) && !matches!(a, [MNode::Run(r)] if crate::math_linear::FUNCTION_NAMES.contains(&r.text.as_str()))
 }
 
 /// An argument as an operand: bare when it's a single simple atom, parenthesised otherwise.
@@ -598,7 +604,13 @@ fn lin_node(n: &MNode, s: &mut String, depth: usize) {
                 FracKind::NoBar => '¦',
                 FracKind::Bar => '/',
             });
-            lin_operand(den, s, depth);
+            if simple_operand(den) && !bare_denominator(den) {
+                s.push('(');
+                lin_arg(den, s, depth);
+                s.push(')');
+            } else {
+                lin_operand(den, s, depth);
+            }
         }
         MNode::Script { kind, base, sub, sup } => {
             if *kind == ScriptKind::Pre {
@@ -984,6 +996,11 @@ mod tests {
         let n = parse_linear("3/(2x)");
         assert!(matches!(n.as_slice(), [MNode::Frac { den, .. }] if den == &vec![run("2x")]), "{n:#?}");
         assert_eq!(parse_linear(&to_linear(&n)), n);
+        // A function name alone as the denominator isn't applied to what follows (review): `3/sin x`
+        // read back as 3 over sin x.
+        let name = vec![MNode::Frac { kind: FracKind::Bar, num: vec![run("3")], den: vec![MNode::Run(MRun::plain("sin"))] }, run("x")];
+        assert_eq!(to_linear(&name), "3/(sin)x");
+        assert_eq!(parse_linear(&to_linear(&name)), name, "{}", to_linear(&name));
     }
 
     //T1
