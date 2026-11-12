@@ -431,6 +431,63 @@ fn contextual_spacing_applies_across_a_continuous_section_break() {
     }
 }
 
+/// A framed empty mark of another style closing a continuous section is still the paragraph
+/// above: the same-style paragraph after it keeps its contextual space before (docxide-pdf
+/// `continuous-context-frame1-same0-ctx1`, 12 pt kept in Word). Guards the framed path too: a mark
+/// that skips the flow as a frame must still become the paragraph above (#2523 with #5455).
+#[test]
+fn a_framed_closing_mark_of_another_style_keeps_the_space_before_below_it() {
+    use wordcraft_doc::props::{LineSpacing, TextFrame};
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    // From the first paragraph's baseline to the last's, less one 24 pt line.
+    let gap = |contextual: bool| {
+        let mut d = Document::new();
+        for id in ["SpacingA", "SpacingB"] {
+            Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
+        }
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+        let props = ParaProps {
+            style: Some("SpacingA".into()),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            line_spacing: Some(LineSpacing::Exactly(24.0)),
+            ..Default::default()
+        };
+        let mut above = wordcraft_doc::Paragraph::with_text("Above marker", chr.clone());
+        above.props = props.clone();
+        let mut mark = wordcraft_doc::Paragraph::with_text("", chr.clone());
+        mark.props = ParaProps {
+            style: Some("SpacingB".into()),
+            frame: Some(TextFrame {
+                w: Some(150.0),
+                x: 85.05,
+                h_anchor: "text".into(),
+                v_anchor: "text".into(),
+                wrap: "auto".into(),
+                ..Default::default()
+            }),
+            ..props.clone()
+        };
+        mark.section = Some(Box::new(SectionProps::default()));
+        let mut below = wordcraft_doc::Paragraph::with_text("Below marker", chr);
+        below.props = ParaProps { space_before: Some(12.0), contextual_spacing: Some(contextual), ..props };
+        d.body = vec![wordcraft_doc::para_block(above), wordcraft_doc::para_block(mark), wordcraft_doc::para_block(below)];
+        d.last_section.start = SectionStart::Continuous;
+        let l = lay(&d);
+        let baseline = |block: u32| {
+            l.pages[0].items.iter().find_map(|i| match i {
+                Placed::Lines { story: StoryRef::Body, path, para, y, .. } if path.0 == [block] => para.lines.first().map(|line| y + line.baseline),
+                _ => None,
+            })
+        };
+        let (Some(first), Some(last)) = (baseline(0), baseline(2)) else { panic!("no lines") };
+        last - first - 24.0
+    };
+    let (with, without) = (gap(true), gap(false));
+    assert!((with - without).abs() < 0.01, "contextual spacing dropped the space before: {with} with it, {without} without");
+    assert!(without >= 12.0 - 0.01, "the 12 pt space before is kept: gap {without}");
+}
+
 /// Paragraphs of style `SpacingA` (exactly 24 pt lines), each `(space before, space after,
 /// contextual spacing, section it closes, lines)`, then laid out: each one's first piece's (page,
 /// x, top, bottom).
