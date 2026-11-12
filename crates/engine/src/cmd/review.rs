@@ -27,10 +27,12 @@ use proofing::{all_issues, issue_at, next_issue, suggestions, thesaurus, word_co
 /// change only: the document and its revisions stay as they are.
 fn display_for_review(s: &mut Session, v: &Value) -> CmdResult {
     use crate::ReviewDisplay;
-    let display = match p::str(v, "value") {
-        Some(name) => ReviewDisplay::parse(name).ok_or_else(|| CmdError::Params(format!("unknown `value` {name:?}")))?,
-        None if s.view.review_display.shows_markup() => ReviewDisplay::NoMarkup,
-        None => ReviewDisplay::AllMarkup,
+    // Only an omitted (or null) `value` toggles; a number or a bool is refused, not taken as one.
+    let display = match v.get("value") {
+        Some(Value::String(name)) => ReviewDisplay::parse(name).ok_or_else(|| CmdError::Params(format!("unknown `value` {name:?}")))?,
+        Some(Value::Null) | None if s.view.review_display.shows_markup() => ReviewDisplay::NoMarkup,
+        Some(Value::Null) | None => ReviewDisplay::AllMarkup,
+        Some(_) => return Err(CmdError::Params("`value` must be a string".into())),
     };
     if display != s.view.review_display {
         s.view.review_display = display;

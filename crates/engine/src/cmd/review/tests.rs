@@ -145,6 +145,17 @@ Last line."}),
     assert_eq!(s.run("review.changes", &json!({})).unwrap(), changes, "and so are its revisions");
 }
 
+/// A `value` that isn't a string is refused, not taken as an omitted one (which toggles).
+#[test]
+fn display_for_review_refuses_a_value_that_is_not_a_string() {
+    let mut s = Session::new(Document::new());
+    for junk in [json!(42), json!(false), json!(["original"]), json!({"value": "original"})] {
+        assert!(s.run("review.markup", &json!({"value": junk})).is_err(), "a non-string `value` {junk} is refused");
+        assert_eq!(s.view.review_display, crate::ReviewDisplay::AllMarkup, "and changes nothing");
+    }
+    assert_eq!(s.run("review.markup", &json!({"value": null})).unwrap()["value"], "noMarkup", "null toggles, as an omitted value does");
+}
+
 /// #1055: comments show in the margin as in Word unless the option says otherwise.
 #[test]
 fn comment_display_defaults_to_margin_and_is_validated() {
