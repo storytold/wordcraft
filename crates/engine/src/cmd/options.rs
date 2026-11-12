@@ -127,6 +127,13 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         Some(Value::String(f)) => Some(file_setting("customDictionary", f)?),
         Some(_) => return Err(CmdError::Params("`customDictionary` must be a file path, or auto".into())),
     };
+    // Decode the requested dictionary while still only validating: a file that passes the
+    // metadata and access checks but can't be decoded refuses the call before `author`, `units`,
+    // `region` or any other setting changes.
+    let custom_dictionary_state = match custom_dictionary {
+        None => None,
+        Some(ref f) => Some((prepare_custom_dictionary(s, f.as_deref())?, f.clone())),
+    };
     let templates_folder = match v.get("userTemplatesFolder") {
         None | Some(Value::Null) => None,
         // Never a folder on another machine (#2852): listing it would make Windows authenticate there.
@@ -183,23 +190,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         use_dictionaries_folder(f.as_deref());
         s.prefs.dictionaries_folder = f;
     }
-    if let Some(f) = custom_dictionary {
-        let (new_path, new_words) = match f {
-            Some(ref path_str) => {
-                let path = std::path::PathBuf::from(path_str);
-                let words = crate::custom_dict::read_custom_dictionary_words_checked(&path).map_err(CmdError::Failed)?;
-                (Some(path), words)
-            }
-            None => {
-                let words = if let Some(ref def) = s.default_user_dict_path {
-                    if def.exists() { crate::custom_dict::read_custom_dictionary_words_checked(def).map_err(CmdError::Failed)? } else { Vec::new() }
-                } else {
-                    Vec::new()
-                };
-                (s.default_user_dict_path.clone(), words)
-            }
-        };
-
+    if let Some(((new_path, new_words), setting)) = custom_dictionary_state {
         if s.user_dict_path.as_ref() != new_path.as_ref() {
             crate::custom_dict::clear_user_dictionary();
             for w in new_words {
@@ -207,7 +198,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
             }
             s.user_dict_path = new_path;
         }
-        s.prefs.custom_dictionary = f;
+        s.prefs.custom_dictionary = setting;
     }
     if let Some(f) = templates_folder {
         s.prefs.user_templates_folder = f;
@@ -273,6 +264,27 @@ pub fn current(s: &Session) -> Value {
             .map(|(lang, dic)| json!({"language": lang.tag(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
             .collect::<Vec<_>>(),
     })
+}
+
+/// The path the custom dictionary becomes and the words it holds, read before any setting is
+/// applied. `None` (`auto`) means the default `custom-dictionary.txt` in the settings folder;
+/// a missing default file is an empty dictionary, as it was before the setting was bound.
+fn prepare_custom_dictionary(s: &Session, setting: Option<&str>) -> Result<(Option<std::path::PathBuf>, Vec<String>), CmdError> {
+    match setting {
+        Some(path_str) => {
+            let path = std::path::PathBuf::from(path_str);
+            let words = crate::custom_dict::read_custom_dictionary_words_checked(&path).map_err(CmdError::Failed)?;
+            Ok((Some(path), words))
+        }
+        None => {
+            let path = s.default_user_dict_path.clone();
+            let words = match path.as_deref() {
+                Some(def) if def.exists() => crate::custom_dict::read_custom_dictionary_words_checked(def).map_err(CmdError::Failed)?,
+                _ => Vec::new(),
+            };
+            Ok((path, words))
+        }
+    }
 }
 
 /// A folder setting (`dictionariesFolder`, `userTemplatesFolder`): `auto` (or nothing) forgets
