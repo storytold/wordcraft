@@ -364,6 +364,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         chunks,
         chunk_package_candidates: HashMap::new(),
     };
+    r.inspect_all_typed_ink()?;
     r.doc.missing_pictures.main = main.clone();
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();

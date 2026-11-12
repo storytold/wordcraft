@@ -44,8 +44,9 @@ const MAX_VALUE: f64 = 1_000_000_000.0;
 /// Before bypassing the WordprocessingML bibliography probe for a typed InkML part, prove that
 /// its bytes cannot contain compatibility directives. A positive result is checked by the
 /// namespace-aware DOCX parser; undecidable encodings are refused rather than silently skipped.
-/// This does not parse or expand DTDs: the InkML preview decoder rejects them independently.
-pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<Option<bool>, crate::DocxError> {
+/// Returns (check visible MC directives, require unchanged source replay). These decisions are
+/// independent: a DTD can have visible directives as well as an uninspectable external subset.
+pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<(bool, bool), crate::DocxError> {
     use std::borrow::Cow;
 
     if bytes.len() > wordcraft_doc::kept::MAX_KEPT_BYTES {
@@ -58,7 +59,10 @@ pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<Option<bool>, crate::D
     // this reader. Keep such binary ink opaque, and require exact source replay on save. A visible
     // compatibility name is still sent to the strict parser and causes refusal.
     if matches!(bytes.first(), Some(0xff | 0xfe)) && !bytes.starts_with(&[0xff, 0xfe]) && !bytes.starts_with(&[0xfe, 0xff]) {
-        return Ok(if compatibility_name(bytes) { Some(true) } else { None });
+        if contains_ascii(bytes, b"<!ENTITY") {
+            return Err(crate::DocxError::Xml("InkML entity declarations cannot be inspected safely".into()));
+        }
+        return Ok((compatibility_name(bytes), true));
     }
     let (text, utf16) = if bytes.starts_with(&[0xff, 0xfe]) || bytes.starts_with(&[0xfe, 0xff]) {
         let le = bytes.starts_with(&[0xff, 0xfe]);
@@ -102,7 +106,14 @@ pub(super) fn compatibility_hints(bytes: &[u8]) -> Result<Option<bool>, crate::D
             _ => return Err(crate::DocxError::Xml("cannot inspect the declared InkML encoding".into())),
         }
     }
-    Ok(Some(compatibility_name(text.as_bytes())))
+    // Entity replacement text can construct compatibility names with character references.
+    // Do not rely on the general DOCX XML parser to reject or expand declarations.
+    if contains_ascii(text.as_bytes(), b"<!ENTITY") {
+        return Err(crate::DocxError::Xml("InkML entity declarations cannot be inspected safely".into()));
+    }
+    // A DTD may contribute markup from an external subset even when no directive is visible in
+    // these bytes. Never interpret it or drop it: only an unchanged source-package replay is safe.
+    Ok((compatibility_name(text.as_bytes()), contains_ascii(text.as_bytes(), b"<!DOCTYPE")))
 }
 
 fn compatibility_name(bytes: &[u8]) -> bool {
@@ -117,7 +128,11 @@ fn compatibility_name(bytes: &[u8]) -> bool {
         b"Fallback",
         b"Requires",
     ];
-    NAMES.iter().any(|name| bytes.windows(name.len()).any(|window| window.eq_ignore_ascii_case(name)))
+    NAMES.iter().any(|name| contains_ascii(bytes, name))
+}
+
+fn contains_ascii(bytes: &[u8], needle: &[u8]) -> bool {
+    bytes.windows(needle.len()).any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 /// Decode a supported native ink preview under the document's shared ink-work allowance.

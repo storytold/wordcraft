@@ -295,11 +295,11 @@ impl Reader<'_> {
         }
         let Some(bytes) = self.pkg.get(part) else { return true };
         let result = match crate::read::ink::compatibility_hints(bytes) {
-            Ok(Some(true)) => self.xml(part).map(|_| ()),
-            Ok(Some(false)) => Ok(()),
-            Ok(None) => {
-                self.required_source.set(true);
-                Ok(())
+            Ok((check_directives, require_source)) => {
+                if require_source {
+                    self.required_source.set(true);
+                }
+                if check_directives { self.xml(part).map(|_| ()) } else { Ok(()) }
             }
             Err(error) => Err(error),
         };

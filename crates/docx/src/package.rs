@@ -299,6 +299,11 @@ impl Package {
         Ok(self.files.clone())
     }
 
+    /// Names of all bounded package parts, including parts not reached from the main story.
+    pub(crate) fn part_names(&self) -> impl Iterator<Item = &str> {
+        self.files.keys().map(String::as_str)
+    }
+
     /// OPC metadata is rewritten on save, even when no modeled content refers to a part.
     pub(crate) fn metadata_parts(&self) -> impl Iterator<Item = (&str, &[u8])> {
         self.files

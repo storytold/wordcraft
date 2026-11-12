@@ -80,6 +80,55 @@ fn native_ink_markup_compatibility_requirements_remain_fatal() {
     assert!(matches!(wordcraft_docx::read(&replace_xml(&frames(true)[0].0, encoded.as_bytes())), Err(wordcraft_docx::DocxError::Xml(_))));
 }
 
+/// A related, unreferenced InkML part remains subject to MC even beyond the bibliography cap.
+#[test]
+fn unreferenced_ink_past_bibliography_limit_cannot_hide_must_understand() {
+    let mut files = unzip(&frames(true)[0].0);
+    let extra: String = (0..64)
+        .map(|i| format!(r#"<Relationship Id="unused{i}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="unused{i}.xml"/>"#))
+        .collect();
+    let hidden = r#"<Relationship Id="hiddenInk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml" Target="ink/hidden.xml"/>"#;
+    let rels = text(&files, "word/_rels/document.xml.rels").replace("</Relationships>", &format!("{extra}{hidden}</Relationships>"));
+    files.insert("word/_rels/document.xml.rels".into(), rels.into_bytes());
+    let types = text(&files, "[Content_Types].xml")
+        .replace("</Types>", r#"<Override PartName="/word/ink/hidden.xml" ContentType="application/inkml+xml"/></Types>"#);
+    files.insert("[Content_Types].xml".into(), types.into_bytes());
+    for payload in [
+        br#"<ink xmlns="http://www.w3.org/2003/InkML" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:unsupported" mc:MustUnderstand="f"/>"#.as_slice(),
+        br#"<!DOCTYPE ink [<!ENTITY hidden "&#60;x xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' xmlns:f='urn:unsupported' mc:Must&#85;nderstand='f'/>">]><ink xmlns="http://www.w3.org/2003/InkML">&hidden;</ink>"#.as_slice(),
+    ] {
+        files.insert("word/ink/hidden.xml".into(), payload.to_vec());
+        let entries: Vec<_> = files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
+        assert!(matches!(wordcraft_docx::read(&zip(&entries)), Err(wordcraft_docx::DocxError::Xml(_))));
+    }
+}
+
+/// An opaque external DTD is never evaluated or dropped; only the original package can be replayed.
+#[test]
+fn external_ink_dtd_requires_unchanged_source() {
+    for system_id in ["ink.dtd", "Choice.dtd"] {
+        let ink = format!(r#"<!DOCTYPE ink SYSTEM "https://example.invalid/{system_id}">{INK_XML}"#);
+        let source = replace_xml(&frames(true)[0].0, ink.as_bytes());
+        let mut doc = wordcraft_docx::read(&source).unwrap();
+        let saved = wordcraft_docx::write(&doc).unwrap();
+        assert!(unzip(&saved).values().any(|b| b == ink.as_bytes()));
+        doc.core.title = "changed".into();
+        assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))), "{system_id}");
+    }
+    // An unreferenced typed part is equally protected from orphan cleanup.
+    let mut files = unzip(&frames(true)[0].0);
+    let ink = format!(r#"<!DOCTYPE ink SYSTEM "https://example.invalid/Choice.dtd">{INK_XML}"#);
+    files.insert("word/ink/hidden.xml".into(), ink.as_bytes().to_vec());
+    let types = text(&files, "[Content_Types].xml")
+        .replace("</Types>", r#"<Override PartName="/word/ink/hidden.xml" ContentType="application/inkml+xml"/></Types>"#);
+    files.insert("[Content_Types].xml".into(), types.into_bytes());
+    let entries: Vec<_> = files.iter().map(|(path, bytes)| (path.as_str(), bytes.as_slice())).collect();
+    let mut doc = wordcraft_docx::read(&zip(&entries)).unwrap();
+    assert_eq!(unzip(&wordcraft_docx::write(&doc).unwrap()).get("word/ink/hidden.xml"), Some(&ink.as_bytes().to_vec()));
+    doc.core.title = "changed".into();
+    assert!(matches!(wordcraft_docx::write(&doc), Err(wordcraft_docx::DocxError::Preservation(_))));
+}
+
 /// An unambiguously non-XML binary part may be replayed but must not be lost on edits.
 #[test]
 fn binary_native_ink_requires_unchanged_source_and_cannot_hide_mc() {
