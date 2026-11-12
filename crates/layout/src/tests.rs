@@ -14768,6 +14768,83 @@ fn kept_lines_below_a_tall_first_page_header_move_whole_to_page_two() {
     assert_eq!((first.page, last.page), (1, 1), "kept paragraph whole on page 2: {first:?} .. {last:?}");
 }
 
+/// A section with a different first page that starts continuously part-way down a page has no
+/// first page of its own: Word shows the earlier section's header on the page where it starts
+/// (the section at the page's top) and the section's default header from the next page on, so
+/// its first-page header is never seen. One that starts on a new page shows it there.
+#[test]
+fn continuous_section_first_page_header_is_not_shown_on_its_second_page() {
+    use wordcraft_doc::section::SectionStart;
+    for start in [SectionStart::Continuous, SectionStart::NextPage] {
+        let text = (0..140).map(|i| format!("Paragraph {i}")).collect::<Vec<_>>().join("\n");
+        let mut d = Document::from_text(&text);
+        let part = |d: &mut Document, t: &str| {
+            d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(Paragraph::with_text(t, Default::default()))])
+        };
+        let (one, first, two) = (part(&mut d, "ONE"), part(&mut d, "FIRST"), part(&mut d, "TWO"));
+        let mut s1 = d.last_section.clone();
+        s1.headers.default = Some(one);
+        d.para_mut(StoryRef::Body, &Path::top(19)).unwrap().section = Some(Box::new(s1));
+        d.last_section.start = start;
+        d.last_section.title_page = true;
+        d.last_section.headers.first = Some(first);
+        d.last_section.headers.default = Some(two);
+        let l = lay(&d);
+        let begins = l.caret(&Pos::body(20, 0)).unwrap().page;
+        let shown: Vec<_> = l.pages.iter().map(|p| p.header_story).collect();
+        assert!(l.pages.len() > begins + 2, "{start:?}: the second section runs over several pages");
+        match start {
+            SectionStart::Continuous => {
+                assert!(l.caret(&Pos::body(19, 0)).unwrap().page == begins, "the second section starts part-way down a page");
+                assert_eq!(shown[begins], Some(one), "{start:?}: the page where it starts keeps the first section's header");
+                assert!(
+                    shown[begins + 1..].iter().all(|h| *h == Some(two)),
+                    "{start:?}: then its default header, never its first-page one: {shown:?}"
+                );
+                assert!(l.pages[begins + 1..].iter().all(|p| p.hf_slot == crate::HfSlot::Default), "{start:?}");
+            }
+            _ => {
+                assert_eq!(shown[begins], Some(first), "{start:?}: a section on a new page shows its first-page header there");
+                assert_eq!(l.pages[begins].hf_slot, crate::HfSlot::First);
+                assert!(shown[begins + 1..].iter().all(|h| *h == Some(two)), "{start:?}: {shown:?}");
+            }
+        }
+    }
+}
+
+/// The same when the continuous section's first paragraph begins part-way down a page and runs
+/// over onto the next: the section began on the page before, so the next shows its default
+/// header, not its first-page one.
+#[test]
+fn continuous_section_first_paragraph_running_over_keeps_first_page_header_hidden() {
+    use wordcraft_doc::section::SectionStart;
+    let mut paras: Vec<String> = (0..44).map(|i| format!("Paragraph {i}")).collect();
+    // Section 2's first paragraph: long enough to start low on page 1 and run onto page 2.
+    paras.push("word ".repeat(1200));
+    paras.extend((0..60).map(|i| format!("After {i}")));
+    let mut d = Document::from_text(&paras.join("\n"));
+    let part = |d: &mut Document, t: &str| {
+        d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(Paragraph::with_text(t, Default::default()))])
+    };
+    let (one, first, two) = (part(&mut d, "ONE"), part(&mut d, "FIRST"), part(&mut d, "TWO"));
+    let mut s1 = d.last_section.clone();
+    s1.headers.default = Some(one);
+    d.para_mut(StoryRef::Body, &Path::top(43)).unwrap().section = Some(Box::new(s1));
+    d.last_section.start = SectionStart::Continuous;
+    d.last_section.title_page = true;
+    d.last_section.headers.first = Some(first);
+    d.last_section.headers.default = Some(two);
+    let l = lay(&d);
+    let begins = l.caret(&Pos::body(44, 0)).unwrap().page;
+    assert_eq!(l.caret(&Pos::body(43, 0)).unwrap().page, begins, "the second section starts part-way down a page");
+    let next = begins + 1;
+    assert!(l.pages.get(next).is_some_and(|p| p.first_block == 44), "its first paragraph runs over onto the next page");
+    let shown: Vec<_> = l.pages.iter().map(|p| p.header_story).collect();
+    assert_eq!(shown[begins], Some(one));
+    assert!(shown[next..].iter().all(|h| *h == Some(two)), "{shown:?}");
+    assert!(l.pages[next..].iter().all(|p| p.hf_slot == crate::HfSlot::Default));
+}
+
 /// Sections starting continuously one after another still go onto new pages: a paragraph that
 /// doesn't fit below the text above it moves on rather than running off the page (#3907). A
 /// hundred one-line sections lay out like a hundred plain paragraphs.
