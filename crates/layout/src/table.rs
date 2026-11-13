@@ -1369,6 +1369,10 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
     let mut cols = vec![(0.0f32, 0.0f32); ncols.max(1)];
     let mut spanning = Vec::new();
     let mut any = false;
+    let mut tborders = style.and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = row.first_grid();
         for cell in &row.cells {
@@ -1381,19 +1385,22 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
                 let need = (lo + m[1] + m[3], hi + m[1] + m[3]);
                 match cols.get_mut(g) {
                     Some(col) if span == 1 => *col = (col.0.max(need.0), col.1.max(need.1)),
-                    _ => spanning.push((g, span, need)),
+                    _ => {
+                        let edges = (g == row.first_grid(), g + span >= ncols.saturating_sub(row.grid_after()));
+                        spanning.push((g, span, need, side_borders(cell, &tborders, edges)));
+                    }
                 }
             }
             g += span;
         }
-        spanning.extend(row_gaps(row, g).map(|(g, span, w)| (g, span, (w, w))));
+        spanning.extend(row_gaps(row, g).map(|(g, span, w)| (g, span, (w, w), 0.0)));
     }
-    for (g, span, need) in spanning {
+    for (g, span, need, borders) in spanning {
         let Some(cs) = cols.get_mut(g..g.saturating_add(span).min(ncols)) else { continue };
         let n = cs.len().max(1) as f32;
         let have_hi: f32 = cs.iter().map(|c| c.1).sum();
         let preferred = (!is_automatic(t)).then(|| grid.get(g..g + cs.len())).flatten();
-        share_span_min(cs, preferred, need.0);
+        share_span_min(cs, preferred, need.0, borders);
         for c in cs {
             c.1 += (need.1 - have_hi).max(0.0) / n;
         }
@@ -1403,14 +1410,22 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
 
 // Share a span's extra minimum in preferred-column proportions. Each column keeps
 // its own text minimum; automatic tables share the extra equally.
-fn share_span_min(cols: &mut [(f32, f32)], grid: Option<&[f32]>, need: f32) {
+//
+// A cell that fits its columns' preferred widths leaves them alone, as in Word: no column then
+// needs more than its share of the cell's minimum, or than it needs for itself. `borders` is the
+// room the cell's side borders take from it ([`side_borders`]). Measured in Word for Windows with
+// a 300 pt table of 150, 100, 25 and 25 pt columns under a cell spanning them all: with a picture
+// up to 300 pt wide in that cell the columns keep their widths, with one 300.5 pt wide the first
+// three come out 144.2, 98.2 and 29.1 pt.
+fn share_span_min(cols: &mut [(f32, f32)], grid: Option<&[f32]>, need: f32, borders: f32) {
     let extra = (need - cols.iter().map(|c| c.0).sum::<f32>()).max(0.0);
     let weight = |w: &f32| if w.is_finite() { w.clamp(0.0, UNBOUNDED) } else { 0.0 };
     let total = grid.map_or(0.0, |grid| grid.iter().take(cols.len()).map(weight).sum::<f32>());
     if total > 0.0 {
         if let Some(grid) = grid {
+            let fits = need + borders <= total + 0.01;
             for (c, w) in cols.iter_mut().zip(grid) {
-                c.0 += extra * weight(w) / total;
+                c.0 = if fits { c.0.max(need * weight(w) / total) } else { c.0 + extra * weight(w) / total };
             }
         }
         return;
@@ -1430,6 +1445,20 @@ fn row_gaps(row: &Row, end: usize) -> impl Iterator<Item = (usize, usize, f32)> 
         .into_iter()
         .filter(|&(_, n, _)| n > 0)
         .filter_map(|(g, n, w)| w.filter(|w| w.is_finite() && *w > 0.0).map(|w| (g, n, w.min(1584.0))))
+}
+
+/// The room a cell's left and right borders take from its width when Word decides whether the
+/// cell fits its columns: half of each border, less a quarter of a point. `edges` tells whether
+/// the cell is the first and the last of its row. Measured in Word for Windows with a picture in a
+/// cell spanning a 300 pt table: with borders of 0.5, 1.5, 3 and 6 pt all round, the widest
+/// picture that leaves the columns alone is 299.7, 298.7, 297.2 and 294.1 pt (the next ones tried,
+/// 299.8, 298.9, 297.3 and 294.5 pt, move them).
+fn side_borders(cell: &wordcraft_doc::Cell, table: &Borders, (first, last): (bool, bool)) -> f32 {
+    let own = cell.props.borders.unwrap_or_default();
+    let half = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0);
+    let left = half(own.left.or(if first { table.left } else { table.inside_v }));
+    let right = half(own.right.or(if last { table.right } else { table.inside_v }));
+    (left + right - 0.25).max(0.0)
 }
 
 /// The narrowest and widest a block list can be laid out.
