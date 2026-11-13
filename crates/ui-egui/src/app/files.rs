@@ -42,7 +42,8 @@ impl WordApp {
                 // with the reason, as a failed save does (#1445), instead of closing and leaving
                 // only a status-bar line the user has already stopped looking at.
                 Ok(PromptSave::NotSaved) => {
-                    let message = tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.");
+                    let message =
+                        tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.");
                     self.prompt_again(message, then, params, document);
                     return Ok(json!({"done": false}));
                 }
