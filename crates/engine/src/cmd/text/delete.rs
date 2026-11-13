@@ -1,9 +1,16 @@
 use super::enter_tab::tab_indent_on;
-use super::{Block, CmdResult, NumRef, OBJ, Pos, Selection, Session, StoryRef, Value, delete_selection, delete_selection_effect, sel_result};
+use super::{
+    Block, COLUMN_BREAK, CmdResult, NumRef, OBJ, PAGE_BREAK, Pos, Selection, Session, StoryRef, Value, delete_selection, delete_selection_effect,
+    sel_result,
+};
 
 pub(super) fn backspace(s: &mut Session, v: &Value) -> CmdResult {
     let r = backspace_inner(s, v)?;
     crate::cmd::controls::restore_placeholder(s)?;
+    // A content control's placeholder is back: typing replaces it, so nothing is carried.
+    if s.doc.control_at(&s.sel.focus).is_some_and(|r| r.control.showing_placeholder) {
+        s.pending = None;
+    }
     Ok(r)
 }
 
@@ -29,9 +36,33 @@ fn remove_number(s: &mut Session, f: &Pos, n: NumRef) -> CmdResult {
     sel_result(s)
 }
 
+/// The formatting Backspace carries over from the character between `a` and `f` (#6518): only an
+/// ordinary character, not an object, field or anchor marker or a page or column break, and not
+/// with Track Changes on (the character stays, marked deleted). Cleaned up the way the caret's
+/// own formatting is: no hyperlink, symbol font, note-number style or revision marks.
+fn deleted_char_props(s: &Session, a: &Pos, f: &Pos) -> Option<wordcraft_doc::props::CharProps> {
+    if s.doc.settings.track_changes {
+        return None;
+    }
+    let p = s.doc.para_at(f)?;
+    let text = p.text.get(a.off..f.off).filter(|t| !t.is_empty())?;
+    if text.contains([OBJ, PAGE_BREAK, COLUMN_BREAK]) {
+        return None;
+    }
+    let mut props = p.props_of_char(a.off).unlinked().without_symbol();
+    if matches!(props.style.as_deref(), Some("FootnoteReference" | "EndnoteReference")) {
+        props.style = None;
+    }
+    props.ins = None;
+    props.del = None;
+    props.fmt_change = None;
+    Some(props)
+}
+
 fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
-    s.pending = None;
+    // Kept for a Backspace that changes nothing, which leaves Word's carried formatting alone.
+    let kept = s.pending.take();
     if !s.sel.is_collapsed() {
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
@@ -59,7 +90,8 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         if let Some(c) = s.autocap.as_mut() {
             c.note_backspace(&a, &f);
         }
-        s.sel = Selection { anchor: a, focus: f };
+        let carried = deleted_char_props(s, &a, &f);
+        s.sel = Selection { anchor: a.clone(), focus: f };
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
             classified: true,
@@ -68,6 +100,11 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
             transformed: false,
             selection_changed: false,
         });
+        // As in Word, text typed next takes the deleted character's formatting until the caret
+        // moves (#6518); the caret commands clear `pending`.
+        if effect.content_changed && s.sel.is_collapsed() && s.sel.focus == a {
+            s.pending = carried;
+        }
         return sel_result(s);
     }
     // At the start of a paragraph.
@@ -93,7 +130,10 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     let i = f.path.last();
     if i == 0 {
-        return sel_result(s); // start of a story or cell
+        // Start of a story or cell: nothing changes, so formatting waiting at the caret (carried
+        // from a deleted character, or set there) still applies to the next typed text (Word).
+        s.pending = kept;
+        return sel_result(s);
     }
     let prev_path = f.path.with_last(i - 1);
     match s.doc.block(f.story, &prev_path) {
@@ -216,6 +256,8 @@ pub(super) fn delete_word_back(s: &mut Session, v: &Value) -> CmdResult {
         return backspace(s, v);
     }
     let a = Pos { off: para.word_start(f.off), ..f.clone() };
+    // Formatting a Backspace just carried over belongs to that deletion, not this one.
+    s.pending = None;
     s.sel = Selection { anchor: a, focus: f };
     delete_selection(s)?;
     crate::cmd::controls::restore_placeholder(s)?;

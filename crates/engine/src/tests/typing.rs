@@ -1711,6 +1711,117 @@ fn undoing_bold_at_the_caret_turns_bold_typing_off_again() {
     assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0).bold, Some(true));
 }
 
+/// `text` with the characters from `from` to `to` bold, the caret at `caret`.
+fn with_bold(text: &str, from: usize, to: usize, caret: usize) -> Session {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": from}, "focus": {"block": 0, "off": to}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": caret}}));
+    s
+}
+
+/// Whether the character at `off` of the first paragraph is bold.
+fn bold_at(s: &Session, off: usize) -> bool {
+    s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(off).bold == Some(true)
+}
+
+/// #6518: after Backspace, Word types with the deleted character's formatting, not the one to
+/// the left of the caret, and the Bold button shows it.
+#[test]
+fn typing_after_backspace_takes_the_deleted_characters_formatting() {
+    // "Abc abc", "Abc" bold: Backspace after the plain space, then X is plain.
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbcXabc");
+    assert!(!bold_at(&s, 3));
+    // "abc Abc", "Abc" bold: Backspace after the bold A, then X is bold beside a plain space.
+    let mut s = with_bold("abc Abc", 4, 7, 5);
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "XY");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "abc XYbc");
+    assert!(bold_at(&s, 4) && bold_at(&s, 5));
+    // Several Backspaces: the last character deleted wins ("c", then the plain space).
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbXabc");
+    assert!(bold_at(&s, 2));
+    // Inside a word the Bold button shows the deleted character too, not the word: in "Ab c"
+    // with all but the space bold, Backspace after the space leaves the caret in a bold "Abc".
+    let mut s = with_bold("Ab c", 0, 2, 3);
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 4}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(false));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbXc");
+    assert!(!bold_at(&s, 2));
+}
+
+/// #6518: the carried formatting goes once the caret moves, and Delete never carries it.
+#[test]
+fn backspace_formatting_is_dropped_by_a_caret_move_and_delete_does_not_carry() {
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "caret.right", json!({}));
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.typing_props().bold, Some(true));
+    typ(&mut s, "X");
+    assert!(bold_at(&s, 3));
+    // Delete after the bold "Abc" removes the plain space: X takes the bold to its left.
+    let mut s = with_bold("Abc abc", 0, 3, 3);
+    run(&mut s, "text.delete", json!({}));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "AbcXabc");
+    assert!(bold_at(&s, 3));
+    // Deleting a plain selection with Delete or Backspace carries nothing either.
+    for key in ["text.delete", "text.backspace"] {
+        let mut s = with_bold("Abc abc", 0, 3, 3);
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 3}, "focus": {"block": 0, "off": 5}}));
+        run(&mut s, key, json!({}));
+        typ(&mut s, "X");
+        assert!(bold_at(&s, 3), "{key}");
+    }
+    // Undo takes the Backspace back, and with it the carried formatting.
+    let mut s = with_bold("Abc abc", 0, 3, 4);
+    typ(&mut s, "\u{8}");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, 4));
+    assert_eq!(s.pending, None);
+}
+
+/// #6518: a Backspace that changes nothing, at the start of the document, keeps formatting waiting
+/// at the caret; one that joins paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Abc def", "Abc" bold: Backspace deletes the bold A, the second one does nothing, X is bold.
+    let mut s = with_bold("Abc def", 0, 3, 1);
+    typ(&mut s, "\u{8}\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xbc def");
+    assert!(bold_at(&s, 0));
+    // Bold at the caret before plain "abc", then a Backspace that does nothing: X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "xyz" then bold "Abc": Backspace deletes the bold A, the second joins the paragraphs, and X
+    // takes the plain z to its left.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xyz\nAbc"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xyzXbc");
+    assert!(!bold_at(&s, 3) && bold_at(&s, 4));
+}
+
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
 /// before it), the caret steps over whole syllables and Backspace removes one sign at a time.
 #[test]
