@@ -466,9 +466,11 @@ impl FontDb {
     /// with the name the document's font table gives it, which its faces answer to as well: Word
     /// embeds a subset ("embed only the characters used") under a made-up family
     /// (`___WRD_EMBED_SUB_46`), and the text asks for it by the table's name (#2240). Returns how
-    /// many faces were added.
-    pub fn add_document_fonts(&self, files: Vec<(Vec<u8>, String)>) -> usize {
-        let added = self.add_fonts(files.into_iter().map(|(data, name)| (data, Some(name))).collect());
+    /// many faces were added. The faces belong to the document `owner`
+    /// ([`crate::DocumentFonts::new_owner`]): lookups see them only while it is laid out
+    /// ([`crate::DocumentFonts::enter`]), and they are never fallbacks for other text.
+    pub fn add_document_fonts(&self, files: Vec<(Vec<u8>, String)>, owner: u64) -> usize {
+        let added = self.add_owned_fonts(files.into_iter().map(|(data, name)| (data, Some(name))).collect(), owner);
         if added > 0 {
             self.fonts_changed();
         }

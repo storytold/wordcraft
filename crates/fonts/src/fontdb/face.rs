@@ -38,6 +38,10 @@ pub(super) enum FontBytes {
 /// One loaded font face.
 pub struct FontFace {
     pub(super) id: u32,
+    /// The document that embedded the face ([`FontDb::add_document_fonts`]), or 0 for a face
+    /// every document sees. A document's faces are found by name only while that document is
+    /// laid out ([`crate::DocumentFonts`]) and never chosen as fallbacks.
+    pub owner: u64,
     /// Typographic family name (e.g. "Source Sans 3").
     pub family: String,
     /// Typographic style name (e.g. "Semibold", "Italic").

@@ -23,6 +23,7 @@ mod fallback;
 mod fallback_data;
 mod lookup;
 mod names;
+mod scope;
 
 use face::{BUNDLED, FontBytes};
 pub use face::{FALLBACK_FAMILY, FaceRef, FontFace, bundled};
@@ -40,6 +41,7 @@ use names::{MAX_FILE_FACES, enumerate_faces, make_face};
 use names::{MAX_NAME_CHARS, file_face_names, font_faces, mini_font, name};
 #[cfg(test)]
 pub(crate) use names::{last_resort_face, legacy_family};
+pub use scope::DocumentFonts;
 
 static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
 

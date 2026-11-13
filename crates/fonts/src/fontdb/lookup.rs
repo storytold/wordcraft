@@ -129,7 +129,7 @@ impl FontDb {
 
     /// Is a face named `family` (typographic, legacy, full or PostScript) loaded?
     pub fn is_loaded(&self, family: &str) -> bool {
-        self.read_faces().iter().any(|f| f.named(family))
+        self.read_faces().iter().any(|f| f.visible() && f.named(family))
     }
 
     /// A variable font's axes: (tag, name, min, default, max), empty for static fonts.
@@ -178,24 +178,25 @@ impl FontDb {
         if style.contains('{') {
             {
                 let faces = self.read_faces();
-                if let Some(f) = faces.iter().find(|f| f.named(family) && f.style == style) {
+                if let Some(f) = faces.iter().find(|f| f.visible() && f.named(family) && f.style == style) {
                     return Some(f.clone());
                 }
             }
             return self.instance(family, style);
         }
         let faces = self.read_faces();
-        let mut cands: Vec<&Arc<FontFace>> = faces.iter().filter(|f| f.family.eq_ignore_ascii_case(family)).collect();
+        // Shared faces, and the faces of the document being laid out.
+        let visible = || faces.iter().filter(|f| f.visible());
+        let mut cands: Vec<&Arc<FontFace>> = visible().filter(|f| f.family.eq_ignore_ascii_case(family)).collect();
         if cands.is_empty() {
             // A legacy family name: choose among the faces it names (bold and italic as usual).
-            cands = faces.iter().filter(|f| f.legacy_family.eq_ignore_ascii_case(family)).collect();
+            cands = visible().filter(|f| f.legacy_family.eq_ignore_ascii_case(family)).collect();
         }
         if cands.is_empty() {
             // Exact full names keep precedence over PostScript aliases; either selects one face.
-            return faces
-                .iter()
+            return visible()
                 .find(|f| f.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family)))
-                .or_else(|| faces.iter().find(|f| f.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))))
+                .or_else(|| visible().find(|f| f.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))))
                 .cloned();
         }
         let ns = norm(style);
