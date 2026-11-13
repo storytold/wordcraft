@@ -22,6 +22,7 @@ mod pictures;
 mod prefs;
 
 pub(crate) use commands::works_without_document;
+pub(crate) use frame::STATUS_MS;
 pub(crate) use input::control_click_as_secondary;
 
 impl WordApp {
@@ -100,6 +101,7 @@ impl WordApp {
                 ..UiState::default()
             },
             services,
+            clipboard_published: false,
             printing: Default::default(),
             print_feedback_seen: None,
             integrated_titlebar: false,
@@ -114,6 +116,8 @@ impl WordApp {
             synthetic: Vec::new(),
             synthetic_pending: false,
             synthetic_injected: 0,
+            raw_scroll_events_scaled: 0,
+            last_scaled_scroll_events: Vec::new(),
             styled: false,
             fonts_hans: false,
             fonts_korean: false,
@@ -301,6 +305,12 @@ impl WordApp {
         if ctx.zoom_factor() != zoom {
             ctx.set_zoom_factor(zoom);
         }
+        // Mouse-wheel line scroll speed (#6146): scales egui's own scroll areas.
+        let base_line_speed = egui::InputOptions::default().line_scroll_speed;
+        let target_line_speed = base_line_speed * self.ui.scroll_speed.wheel_factor();
+        if (ctx.options(|o| o.input_options.line_scroll_speed) - target_line_speed).abs() > 1e-4 {
+            ctx.options_mut(|o| o.input_options.line_scroll_speed = target_line_speed);
+        }
         // Animation effects: the host is asked every frame what the system says (it answers from
         // memory), so a change made in the system's settings is followed without a restart.
         self.read_system_animations();
@@ -349,6 +359,7 @@ impl WordApp {
         if !native {
             self.window_input(ctx);
         }
+        self.sync_viewport_input(ctx);
         self.send_control_input(ctx);
         // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
         // callback command belongs to `ui` (`flush_shot_and_synthetic`). A queued/settling capture
@@ -413,6 +424,7 @@ impl WordApp {
     /// Lay out the windows: on the desktop each open document's in its own native window
     /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        self.clear_raw_scroll_replay();
         if self.windows.native() {
             self.windows_ui(ui);
         } else {
