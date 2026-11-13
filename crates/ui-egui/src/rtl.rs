@@ -48,7 +48,14 @@ pub fn root<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     if !on() || flows(ui) {
         return add(ui);
     }
-    ui.scope_builder(UiBuilder::new().layout(Layout::top_down(Align::Max)), add).inner
+    // A submenu's body stays justified, as egui lays out every menu, so each item fills its row
+    // and a click anywhere on the row runs it (#6441). Other containers keep their own widths.
+    let menu = ui.stack().contained_in(egui::UiKind::Menu);
+    let justify = menu && ui.layout().horizontal_justify();
+    // egui measures a new menu in a sizing pass. Items set against the right edge then reach the
+    // whole width it offers (its 600 pt default), so a submenu was that wide: measure from the left.
+    let align = if menu && ui.is_sizing_pass() { Align::Min } else { Align::Max };
+    ui.scope_builder(UiBuilder::new().layout(Layout::top_down(align).with_cross_justify(justify)), add).inner
 }
 
 /// `ui.vertical`, aligned to the side rows start from: a column inside a right-to-left area keeps
@@ -129,10 +136,12 @@ pub fn menu(response: &egui::Response) -> egui::Popup<'_> {
     if on() { popup.layout(menu_layout()) } else { popup }
 }
 
-/// A right-to-left menu's layout: items against the right edge. Not justified, because egui
-/// starts a full-width button's text at its left.
+/// A right-to-left menu's layout: items against the right edge. Justified, as egui's own menus
+/// are, so each item fills its row and a click beside its text still runs it (#6441); a
+/// full-width button keeps its text at the right, because it places its content by the layout's
+/// alignment.
 fn menu_layout() -> Layout {
-    Layout::top_down(Align::Max)
+    Layout::top_down_justified(Align::Max)
 }
 
 /// A menu item: `text`, with its keyboard shortcut at the far side. `min_width` keeps a menu's

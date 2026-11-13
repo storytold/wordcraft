@@ -2841,6 +2841,62 @@ fn context_menu_offers_the_ribbons_paste_items() {
     }
 }
 
+/// #6441: in a right-to-left interface each context-menu item fills its row, as it does in a
+/// left-to-right one, so a click at the far end of the row, away from the label at the right,
+/// runs the item. The items of a submenu (a table's Insert) fill theirs too, and the submenu is
+/// as wide as its items.
+#[test]
+fn rtl_context_menu_items_fill_their_rows() {
+    use egui_kittest::kittest::Queryable;
+    let arabic = crate::i18n::fixture_lang("ar", "\tHome\tالرئيسية\n");
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("insert.table", json!({"rows": 1, "cols": 2})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 900.0)).build_ui_state(
+        move |ui, app: &mut WordApp| {
+            crate::i18n::set_current(arabic);
+            crate::rtl::sync(ui.ctx());
+            let anchor = ui.allocate_response(egui::vec2(10.0, 10.0), egui::Sense::click());
+            crate::rtl::menu(&anchor).open(true).at_position(egui::pos2(600.0, 20.0)).show(|ui| context_menu(app, ui));
+        },
+        a,
+    );
+    h.run_steps(4);
+    let row = |h: &egui_kittest::Harness<'_, WordApp>, label: &str| h.get_by_label_contains(label).rect();
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, at: egui::Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.run_steps(2);
+    };
+    let same = |rows: &[egui::Rect]| rows.windows(2).all(|w| (w[0].left() - w[1].left()).abs() < 0.5 && (w[0].right() - w[1].right()).abs() < 0.5);
+
+    // Short labels and long ones, with and without a shortcut: one width, the menu's.
+    let rows: Vec<egui::Rect> = ["Cut", "Copy", "Paragraph…", "Table Properties…"].iter().map(|l| row(&h, l)).collect();
+    assert!(same(&rows), "every row spans the menu: {rows:?}");
+    assert!(rows.iter().all(|r| r.width() >= 220.0), "the menu is at least 220 pt wide: {rows:?}");
+
+    // The Insert submenu: its rows span it too, and a click at a row's left end runs the item.
+    h.get_by_label("Insert").hover();
+    h.run_steps(4);
+    let rows: Vec<egui::Rect> = ["Insert Columns to the Left", "Insert Rows Above", "Insert Rows Below"].iter().map(|l| row(&h, l)).collect();
+    assert!(same(&rows), "every submenu row spans the submenu: {rows:?}");
+    assert!(rows.iter().all(|r| r.width() < 400.0), "the submenu is as wide as its items, not egui's 600 pt default: {rows:?}");
+    let below = row(&h, "Insert Rows Below");
+    click(&mut h, egui::pos2(below.left() + 3.0, below.center().y));
+    let table_rows = h.state().session.doc.body.iter().find_map(|b| b.as_table()).map(|t| t.rows.len());
+
+    let paragraph = row(&h, "Paragraph…");
+    click(&mut h, egui::pos2(paragraph.left() + 3.0, paragraph.center().y));
+    let dialog = matches!(h.state().dialog, Some(crate::dialogs::Dialog::Paragraph { .. }));
+    drop(h);
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    assert_eq!(table_rows, Some(2), "a click at the far end of Insert Rows Below adds a row");
+    assert!(dialog, "a click at the far end of Paragraph… opens the Paragraph dialog");
+}
+
 /// Word's frame around the equation being edited: as wide as the equation plus the options
 /// strip at its right, as tall as its line, with the grip over its top-left corner. The
 /// strip and grip keep their screen size at every zoom.
