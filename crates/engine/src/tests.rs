@@ -19,6 +19,7 @@ mod fonts;
 mod ime_noop;
 mod para_tools;
 mod revision_checks;
+mod symbol_field_update;
 mod typing;
 mod wordart;
 

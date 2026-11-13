@@ -99,6 +99,8 @@ Weights are the share of a Word user's file traffic (estimate). Read/write: ✅ 
 
 ## DOCX in depth
 
+SYMBOL fields evaluate their character even with a stale stored result; F9 stores that character. Missing, nonnumeric or above-255 codes without `\u` show `###`; locked fields retain stored text. Symbol-font mapping, ANSI decoding and drawing remain unchanged (P0078).
+
 Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elements (2026-10-10).
 
 | Feature | Read | Write | Notes |
@@ -321,6 +323,8 @@ CSL and library import are separate work.
 ## Field arguments
 
 For field results, the engine parser treats a backslash in quoted arguments as escaping the next character, as Word does. The DOCX HYPERLINK target reader applies the same rule; escaped asterisks remain argument text instead of starting a format switch. Engine parser and DOCX import tests cover these cases.
+| 2026-11-06 | trivial | P0082: `.doc` tables whose paragraphs or TAP carry positioning sprms open as floating tables (`TableProps.float`, saved as `w:tblpPr`) instead of a frame per cell paragraph, so positioned forms keep Word's page count. Readiness estimates unchanged |
+| 2026-11-06 | trivial | P0078: unlocked SYMBOL fields show their evaluated character despite stale stored results; F9 refreshes the result; missing, nonnumeric and non-Unicode codes above 255 show `###`. Locked fields keep their stored result; readiness estimates unchanged. |
 
 ## Revision history
 
