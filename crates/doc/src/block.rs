@@ -35,7 +35,7 @@ pub const MAX_TEXT_BOX_DEPTH: usize = 4;
 /// shapes all show that same box, or chains of boxes each showing the next many times, would
 /// otherwise grow exponentially.) Outermost boxes aren't capped: their number is the document's
 /// (or its pages', for headers), so the work stays linear and no box is left blank for budget.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BoxBudget {
     open: Vec<u32>,
     nested: usize,

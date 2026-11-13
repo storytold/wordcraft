@@ -12,6 +12,9 @@ use super::{
 const LINE_NUMBER_STYLE: &str = "LineNumber";
 const LINE_NUMBER_STYLE_NAME: &str = "line number";
 
+/// A fitted text box height's key: story, width and the page fields ([`FieldCtx::page_key`]).
+pub(crate) type FittedKey = (u32, u32, (u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat));
+
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
 pub(crate) enum Pass {
@@ -64,9 +67,17 @@ pub(crate) struct Ctx<'a> {
     pub(crate) pin: Option<Pin>,
     pub(crate) footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     pub(crate) header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
+    /// Extents of source-stable outer floating boxes for this pass.
+    pub(super) frames: textbox::FrameCache,
     /// Heights of text boxes that resize to fit their text, by story, width and page fields,
     /// worked out once per matching layout context ([`textbox::fitted_height`]).
-    pub(crate) fitted: HashMap<(u32, u32, (u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat)), Option<f32>>,
+    pub(crate) fitted: HashMap<FittedKey, Option<f32>>,
+    /// Insertion order permits rolling back speculative fitted heights without copying the cache.
+    pub(super) fitted_order: Vec<FittedKey>,
+    /// Monotonic speculative work within one outer box, independent of placement allowance.
+    pub(super) measure_left: usize,
+    pub(super) measure_depth: usize,
+    pub(super) measure_exhausted: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -358,18 +369,14 @@ impl Ctx<'_> {
         if let Some(h) = self.fitted.get(&key) {
             return *h;
         }
+        let fresh = self.measure_depth == 0 && !self.boxes.inside();
         let h = textbox::fitted_height(self, id, w);
-        self.fitted.insert(key, h);
-        h
-    }
-
-    /// The height floating object `o`, `w` wide and `h` tall, takes: a text box that resizes to
-    /// fit its text is as tall as its text, anything else its own height.
-    pub(crate) fn float_height(&mut self, o: &InlineObject, w: f32, h: f32) -> f32 {
-        match o {
-            InlineObject::Shape { story: Some(id), .. } => self.fitted_height(*id, w).unwrap_or(h),
-            _ => h,
+        // A height measured inside a probe that ran out of its work allowance isn't kept.
+        if fresh || !self.measure_exhausted {
+            self.fitted.insert(key, h);
+            self.fitted_order.push(key);
         }
+        h
     }
 
     /// The cache key of `p` laid out with these inputs, and its first automatic equation number
@@ -467,6 +474,9 @@ pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(
 }
 
 #[cfg(test)]
+#[path = "tests/ctx_textbox.rs"]
+mod textbox_tests;
+#[cfg(test)]
 mod tests {
     use super::*;
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
@@ -531,7 +541,12 @@ mod tests {
             pin: None,
             footer_wraps: Default::default(),
             header_tables: Default::default(),
+            frames: Default::default(),
             fitted: Default::default(),
+            fitted_order: Vec::new(),
+            measure_left: 0,
+            measure_depth: 0,
+            measure_exhausted: false,
             floats_above: Default::default(),
             hf: Arc::new(HfLinks::new(doc.sections())),
             alphas: Default::default(),

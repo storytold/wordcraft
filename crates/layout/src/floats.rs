@@ -422,7 +422,7 @@ pub(crate) fn fitting(pl: &ParaLayout, l0: usize, top: f32, bottom: f32, (mut mo
 pub(crate) fn place_late(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, oi: usize, top: f32, late: &mut LateFloats) {
     let Some(o) = p.objects.get(oi) else { return };
     let Some((w, h, float)) = floating(o) else { return };
-    let h = ctx.float_height(o, w, h);
+    let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
     let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
     let rect = float_rect(Some(frame), (pb.col_x(), pb.col_w()), top, w, h, float);
     let outline = ctx.wrap_outline(o);
@@ -498,7 +498,7 @@ fn anchor_floats_but(
                 ctx.floats_above.remove(&(block, oi));
                 continue;
             }
-            let h = ctx.float_height(o, w, h);
+            let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -755,7 +755,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 match floats.get(&oi) {
                     Some(r) => *r,
                     None => {
-                        let h = ctx.float_height(obj, w, h);
+                        let (w, h) = textbox::fit_size(ctx, obj, w, h, depth);
                         float_rect(at.page, at.col, at.para_y, w, h, float)
                     }
                 }
@@ -813,7 +813,8 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 group_boxes,
             });
             for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+                let parent = if text_box == Some(id) { Some(obj) } else { None };
+                let items = textbox::box_items(ctx, id, rect, depth, parent);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }
