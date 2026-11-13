@@ -151,6 +151,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-11-13: Find in the Navigation pane marks every match on the page while the pane is open, as Word does, and the match the selection is on in a stronger colour, so it is clear which result is shown (#5275). Closing the pane or emptying the search box takes the marks away; Advanced Find's Reading Highlight is unchanged.
+
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
 
