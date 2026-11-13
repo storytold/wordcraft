@@ -713,6 +713,16 @@ pub(crate) fn save_as_error_id() -> egui::Id {
     egui::Id::unique("backstage_save_as_error")
 }
 
+/// The Info page's cached `file.info` report's key: which document, its revision, the password
+/// state (which `file.encrypt` changes without a document edit), and the path and dirty state
+/// (which `file.save` and `file.rename` change without one either).
+type InfoKey = (u64, u64, bool, Option<String>, bool);
+
+/// The Info page's cached `file.info` report.
+fn info_id() -> egui::Id {
+    egui::Id::unique("backstage_info")
+}
+
 /// Drop the Save As page's error once File is closed or a later save succeeds, so it doesn't
 /// come back next time.
 pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
@@ -772,7 +782,26 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
 
 fn info_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Info");
-    let info = app.session.run("file.info", &json!({})).unwrap_or_default();
+    // The report is read when the document changes, not every frame: `file.info` walks the
+    // document for hidden text, which a frame has no business repeating while nothing changed.
+    // The key keeps the password state, which `file.encrypt` changes without a document edit,
+    // and the path and dirty state, which `file.save` and `file.rename` change without one
+    // either. The document id comes first: two documents can share a revision.
+    let key = (
+        app.session.document_id(),
+        app.session.rev(),
+        app.session.password.is_some(),
+        app.session.path.as_ref().map(|p| p.to_string_lossy().to_string()),
+        app.session.dirty,
+    );
+    let info = ui.ctx().data_mut(|d| match d.get_temp::<(InfoKey, serde_json::Value)>(info_id()) {
+        Some((k, v)) if k == key => v,
+        _ => {
+            let v = app.session.run("file.info", &json!({})).unwrap_or_default();
+            d.insert_temp(info_id(), (key.clone(), v.clone()));
+            v
+        }
+    });
     // Properties at the reading start, so at the right in a mirrored interface, Statistics after.
     let (first, second) = if crate::rtl::on() { (1, 0) } else { (0, 1) };
     ui.columns(2, |cols| {
@@ -828,6 +857,16 @@ fn info_properties(app: &mut WordApp, ui: &mut Ui, info: &serde_json::Value) {
         .clicked()
     {
         let _ = app.run("ui.dialog", json!({"name": "customProperties"}));
+    }
+    // Check for Issues › Inspect Document, as Word's: the Document Inspector finds comments,
+    // tracked changes, hidden text and other content you may want to remove before sharing.
+    ui.add_space(6.0);
+    if ui
+        .button(egui::RichText::new(tl!("Check for Issues…")).font(medium(13.5)))
+        .on_hover_text(tl!("Find comments, tracked changes, hidden text and other content you may want to remove before sharing the document."))
+        .clicked()
+    {
+        let _ = app.run("ui.dialog", json!({"name": "inspectDocument"}));
     }
     // Protect Document › Encrypt with Password (#55).
     ui.add_space(18.0);

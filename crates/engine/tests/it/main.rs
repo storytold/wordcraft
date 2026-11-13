@@ -10,6 +10,7 @@ mod odt_password;
 mod odt_sections;
 mod odt_toc;
 mod recovery_format;
+mod remove_headers;
 #[cfg(not(target_arch = "wasm32"))]
 mod rtf_sections;
 #[cfg(not(target_arch = "wasm32"))]

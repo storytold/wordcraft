@@ -19,7 +19,14 @@ pub(super) fn inspect_doc(s: &mut Session, v: &Value) -> CmdResult {
     let report = json!({
         "comments": s.doc.comments.len(),
         "revisions": s.doc.para_paths(StoryRef::Body).iter().filter(|p| s.doc.para(StoryRef::Body, p).is_some_and(|x| x.runs.iter().any(|r| r.props.ins.is_some() || r.props.del.is_some()))).count(),
-        "properties": !s.doc.core.creator.is_empty() || !s.doc.core.last_modified_by.is_empty(),
+        // Everything the properties removal clears, not just the authors: subject, keywords,
+        // description and category go too.
+        "properties": !s.doc.core.subject.is_empty()
+            || !s.doc.core.creator.is_empty()
+            || !s.doc.core.keywords.is_empty()
+            || !s.doc.core.description.is_empty()
+            || !s.doc.core.category.is_empty()
+            || !s.doc.core.last_modified_by.is_empty(),
         "hiddenText": !hidden.is_empty(),
         "hiddenCount": hidden.len(),
         "hidden": hidden.iter().take(MAX_HIDDEN_LISTED).map(|h| h.report(&s.doc)).collect::<Vec<_>>(),
@@ -195,6 +202,16 @@ fn all_stories(doc: &Document) -> Vec<StoryRef> {
     std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k))).collect()
 }
 
+/// How much hidden text the document holds: pieces (the count `file.inspect` reports, always
+/// exact) and the characters they cover, plus how many places hold hidden text the inspector
+/// can't remove (inside objects or table styles). A file with either warns on open (`file.open`).
+pub(crate) fn hidden_text_counts(doc: &Document) -> (usize, usize, usize) {
+    let hidden = hidden_text(doc);
+    // Characters, not the byte offsets the ranges are: a hidden é🙂 is two.
+    let chars = hidden.iter().filter_map(|h| doc.para(h.story, &h.path).map(|p| p.text.get(h.range.clone()).unwrap_or("").chars().count())).sum();
+    (hidden.len(), chars, unsupported_hidden(doc).len())
+}
+
 /// What the inspector calls a story.
 fn story_kind(doc: &Document, st: StoryRef) -> &'static str {
     use wordcraft_doc::PartKind;
@@ -279,7 +296,8 @@ fn unsupported_hidden(doc: &Document) -> Vec<Value> {
 }
 
 /// Tables whose table style (or one of its conditional parts: header row, bands, first or last
-/// column, total row) hides text. The inspector doesn't resolve table styles, so it lists them.
+/// column, total row) hides text. The inspector doesn't resolve table styles, so it lists them —
+/// but only tables that hold text: an empty table hides nothing, whatever its style says.
 fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::Blocks, depth: usize, out: &mut Vec<Value>) {
     if depth > 32 {
         return;
@@ -288,6 +306,7 @@ fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::B
         let Block::Table(t) = &**b else { continue };
         if let Some(id) = t.props.style.as_deref()
             && let Some(ts) = doc.styles.table_style(id)
+            && table_has_text(t)
         {
             let q = &ts.parts;
             if [&ts.chr, &q.header_chr, &q.band_chr, &q.col_band_chr, &q.first_col_chr, &q.last_col_chr, &q.total_chr]
@@ -303,4 +322,16 @@ fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::B
             }
         }
     }
+}
+
+/// Whether the table holds any text at all: a paragraph with text, in a cell or in a nested table.
+fn table_has_text(t: &wordcraft_doc::table::Table) -> bool {
+    t.rows.iter().any(|r| {
+        r.cells.iter().any(|c| {
+            c.blocks.iter().any(|b| match &**b {
+                Block::Para(p) => !p.text.is_empty(),
+                Block::Table(t) => table_has_text(t),
+            })
+        })
+    })
 }

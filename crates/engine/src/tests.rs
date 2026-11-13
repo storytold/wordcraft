@@ -11829,6 +11829,105 @@ fn inspect_document_hidden_text_in_every_story_and_from_styles() {
     assert!(reopened.contains("keep-endnote-2") && reopened.contains("keep-cell-4"), "{reopened}");
 }
 
+/// `file.open` warns about hidden text (the fact and what to do about it: an agent reading the
+/// file would see words the human doesn't see on screen), `file.info` reports it, and the
+/// Document Inspector's cleanup (also offered through MCP) takes it out.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_open_warns_about_hidden_text_and_the_cleanup_takes_it_out() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Paragraph, para_block};
+    // A document without hidden text reports none.
+    assert_eq!(run(&mut s(), "file.info", json!({}))["hasHidden"], json!(false));
+    let mut doc = s();
+    doc.doc.body =
+        vec![para_block(Paragraph::with_text("keep-visible ", CharProps::default())), para_block(Paragraph::with_text("привет", hidden_props()))];
+    assert_eq!(run(&mut doc, "file.info", json!({}))["hasHidden"], json!(true));
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-hidden-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hidden.docx");
+    run(&mut doc, "file.saveAs", json!({"path": path.to_string_lossy()}));
+
+    // The reply warns: the fact, the counts, tell the human, and what removes it.
+    let mut t = s();
+    let reply = run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
+    let hidden = reply.get("hiddenText").unwrap_or_else(|| panic!("no hiddenText: {reply}"));
+    // Characters, not the byte offsets the ranges are: "привет" is 6 characters, 12 bytes.
+    assert_eq!(hidden["pieces"], json!(1), "{reply}");
+    assert_eq!(hidden["chars"], json!(6), "{reply}");
+    let warning = reply["warning"].as_str().unwrap_or_else(|| panic!("no warning: {reply}"));
+    assert!(warning.contains("hidden text") && warning.contains("tell the human") && warning.contains("file.inspect"), "{warning}");
+    // An already open document warns again.
+    let again = run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
+    assert_eq!(again["alreadyOpen"], json!(true));
+    assert!(again.get("hiddenText").is_some(), "{again}");
+    // A document without hidden text doesn't warn.
+    let mut c = s();
+    run(&mut c, "text.insert", json!({"text": "plain words"}));
+    let clean = dir.join("clean.docx");
+    run(&mut c, "file.saveAs", json!({"path": clean.to_string_lossy()}));
+    let reply = run(&mut t, "file.open", json!({"path": clean.to_string_lossy()}));
+    assert!(reply.get("hiddenText").is_none(), "{reply}");
+    assert!(reply.get("warning").is_none(), "{reply}");
+    // The cleanup takes the hidden text out; file.info stops reporting it.
+    run(&mut t, "file.open", json!({"path": path.to_string_lossy()}));
+    let out = run(&mut t, "file.inspect", json!({"remove": ["hidden"]}));
+    assert_eq!(out["residual"], json!([]), "{out}");
+    assert_eq!(run(&mut t, "file.info", json!({}))["hasHidden"], json!(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// found.properties covers everything the properties removal clears, not just the authors:
+/// a document with only the subject set offers Remove All, and the removal clears it.
+#[test]
+fn file_inspect_reports_properties_when_only_subject_is_set() {
+    let mut s = s();
+    s.doc.core.subject = "Hidden metadata".into();
+    let found = run(&mut s, "file.inspect", json!({}))["found"].clone();
+    assert_eq!(found["properties"], json!(true), "{found}");
+    let out = run(&mut s, "file.inspect", json!({"remove": ["properties"]}));
+    assert_eq!(out["residual"], json!([]), "{out}");
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["properties"], json!(false));
+    assert_eq!(s.doc.core.subject, "", "the removal cleared the subject");
+}
+
+/// A document whose hidden content is only where the inspector can't remove it (a table style
+/// that hides its header) still warns on open and reports hasHidden: the text is invisible, and
+/// the warning says `file.inspect` cannot remove it.
+#[test]
+fn file_open_warns_when_only_unsupported_hidden_content_is_present() {
+    use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
+    let mut doc = s();
+    Arc::make_mut(&mut doc.doc.styles).upsert(Style {
+        id: "HideHeader".into(),
+        name: "Hide Header".into(),
+        kind: StyleKind::Table,
+        table: Some(TableStyleParts { header_chr: hidden_props(), ..Default::default() }),
+        ..Default::default()
+    });
+    let mut table = wordcraft_doc::table::Table::new(2, 2, 200.0);
+    table.props.style = Some("HideHeader".into());
+    table.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text(
+        "secret header text",
+        wordcraft_doc::props::CharProps::default(),
+    )))];
+    doc.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
+    assert_eq!(run(&mut doc, "file.info", json!({}))["hasHidden"], json!(true));
+
+    let dir = std::env::temp_dir().join(format!("wordcraft-hidden-unsupported-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("unsupported.docx");
+    run(&mut doc, "file.saveAs", json!({"path": path.to_string_lossy()}));
+    let reply = run(&mut doc, "file.open", json!({"path": path.to_string_lossy()}));
+    let warning = reply["warning"].as_str().unwrap_or_else(|| panic!("no warning: {reply}"));
+    assert!(warning.contains("cannot remove"), "{warning}");
+    assert!(reply.get("hiddenText").is_none(), "no removable pieces, no hiddenText: {reply}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn hidden_props() -> wordcraft_doc::props::CharProps {
     wordcraft_doc::props::CharProps { hidden: Some(true), ..Default::default() }
 }
@@ -11877,7 +11976,8 @@ fn inspect_document_keeps_content_control_markers() {
 }
 
 /// #1344: text hidden by a table style isn't resolved by the inspector, so it says so: the table
-/// is listed as unsupported and the removal's residual isn't empty.
+/// is listed as unsupported and the removal's residual isn't empty. An empty table hides nothing,
+/// whatever its style says — it takes text in a cell.
 #[test]
 fn inspect_document_lists_tables_whose_style_hides_text() {
     use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
@@ -11891,7 +11991,14 @@ fn inspect_document_lists_tables_whose_style_hides_text() {
     });
     let mut table = wordcraft_doc::table::Table::new(2, 2, 200.0);
     table.props.style = Some("HideHeader".into());
-    s.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table)));
+    // An empty table hides nothing: no text in any cell, no finding.
+    s.doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(table.clone())));
+    assert_eq!(run(&mut s, "file.inspect", json!({}))["found"]["unsupported"], json!([]), "an empty table is not a finding");
+    table.rows[0].cells[0].blocks = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text(
+        "secret header text",
+        wordcraft_doc::props::CharProps::default(),
+    )))];
+    s.doc.body[0] = std::sync::Arc::new(wordcraft_doc::Block::Table(table));
     let found = run(&mut s, "file.inspect", json!({}))["found"].clone();
     let unsupported = found["unsupported"].as_array().cloned().unwrap_or_default();
     assert!(unsupported.iter().any(|u| u["object"] == "table" && u["story"] == "body" && u["style"] == "HideHeader"), "{found}");

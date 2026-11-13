@@ -53,8 +53,9 @@ impl Headless {
 }
 
 /// The methods that work on one document, and so take `doc`: the id of the open document to work
-/// on (`view.switchWindows` lists them), the active one when absent.
-pub const DOC_METHODS: &[&str] = &["engine.execute", "command", "document.inspect", "ui.render", "render.page"];
+/// on (`view.switchWindows` lists them), the active one when absent. `file.inspect` cleans one
+/// document (the Document Inspector's removals), so it is addressed too.
+pub const DOC_METHODS: &[&str] = &["engine.execute", "command", "document.inspect", "file.inspect", "ui.render", "render.page"];
 
 /// The document a request addresses with `doc`: `None` (absent or null) is the active document.
 /// Anything but a whole number from 0 up is an error; whether it names an open document is for

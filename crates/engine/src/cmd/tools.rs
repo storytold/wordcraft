@@ -15,7 +15,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod actions;
 mod autocorrect;
 mod compare;
-mod inspect;
+pub(crate) mod inspect;
 mod specs;
 mod typing;
 

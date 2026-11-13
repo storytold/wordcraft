@@ -58,6 +58,9 @@ fn with_doc(mut schema: Value) -> Value {
 
 const DOC_DESC: &str = "Id of the open document to work on (list_documents); the active document when left out. The active document stays active.";
 
+/// The content categories the Document Inspector removes (`inspect_document` with `remove`).
+const REMOVE_CATEGORIES: &[&str] = &["comments", "revisions", "properties", "hidden", "headers"];
+
 fn tool(name: &str, title: &str, desc: &str, schema: Value, ro: bool) -> Value {
     json!({"name": name, "title": title, "description": desc, "inputSchema": schema, "annotations": {"title": title, "readOnlyHint": ro, "openWorldHint": false}})
 }
@@ -145,9 +148,16 @@ pub fn tool_definitions() -> Value {
         tool(
             "inspect_document",
             "Inspect document",
-            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages.",
-            with_doc(obj(json!({}), &[])),
-            true
+            "Structure: blocks with text, styles, formatting runs, lists, tables, sections, parts, selection, pages. With `remove`, cleans the document instead (the Document Inspector's Remove All): \"comments\", \"revisions\", \"properties\", \"hidden\" (hidden text: whole hidden paragraphs with their marks, notes whose hidden references were removed go too) or \"headers\". Removals are refused while the document tracks changes. `file.open` warns about hidden text.",
+            with_doc(obj(
+                json!({"remove": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["comments", "revisions", "properties", "hidden", "headers"]},
+                    "description": "Remove the listed content"
+                }}),
+                &[]
+            )),
+            false
         ),
         tool(
             "render_page",
@@ -324,7 +334,26 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
             doc,
         )),
         "get_text" => wrap(exec(b, "document.text", json!({}), doc)),
-        "inspect_document" => wrap(b.call("document.inspect", addressed(json!({}), doc))),
+        "inspect_document" => match a.get("remove") {
+            // With `remove`, the Document Inspector's cleanup (file.inspect) instead of the read.
+            // A present value that isn't an array is refused, not read as absent: a caller that
+            // sent one meant to clean the document, and a successful read would say otherwise.
+            // The items are checked against the categories the inspector removes: an unknown one
+            // ("hiddenText" for "hidden") is ignored by the inspector but reported as removed,
+            // though the content stays.
+            Some(Value::Array(remove)) if !remove.is_empty() => {
+                if remove.iter().all(|c| REMOVE_CATEGORIES.contains(&c.as_str().unwrap_or(""))) {
+                    wrap(b.call("file.inspect", addressed(json!({"remove": remove}), doc)))
+                } else {
+                    ToolResult::error("`remove` items must be \"comments\", \"revisions\", \"properties\", \"hidden\" or \"headers\"")
+                }
+            }
+            Some(Value::Array(_)) => wrap(b.call("document.inspect", addressed(json!({}), doc))),
+            Some(_) => {
+                ToolResult::error("`remove` must be an array of categories: [\"comments\", \"revisions\", \"properties\", \"hidden\", \"headers\"]")
+            }
+            None => wrap(b.call("document.inspect", addressed(json!({}), doc))),
+        },
         "parity" => wrap(b.call("ui.parity", json!({}))),
         // Pictures travel inside the reply (`png`), headless or through the app: no file with a
         // predictable name in the shared temporary folder.
@@ -418,5 +447,55 @@ mod tests {
         let schema = &open["inputSchema"];
         assert!(schema["properties"]["password"].is_object(), "the schema offers no password");
         assert_eq!(schema["required"], json!(["path"]), "the password stays optional");
+    }
+
+    /// `inspect_document` with `remove` is the Document Inspector's cleanup: the backend gets
+    /// `file.inspect` with the listed categories beside the `doc`, not the structure read.
+    #[test]
+    fn inspect_document_with_remove_calls_file_inspect() {
+        let mut b = Recording { seen: None };
+        let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hidden"], "doc": 3}));
+        assert!(!r.is_error, "inspect_document failed: {:?}", r);
+        let (method, call) = b.seen.take().expect("the backend was called");
+        // A direct `file.inspect`, addressed: both backends list it among the doc methods, so a
+        // cleanup addressed to a background document cleans that one.
+        assert_eq!(method, "file.inspect");
+        assert_eq!(call["remove"], json!(["hidden"]));
+        assert_eq!(call["doc"], json!(3));
+    }
+
+    /// A `remove` item the inspector doesn't know is refused, not forwarded: the inspector would
+    /// ignore it and report it as removed, though the content stays.
+    #[test]
+    fn inspect_document_refuses_an_unknown_remove_category() {
+        let mut b = Recording { seen: None };
+        let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hiddenText"]}));
+        assert!(r.is_error, "an unknown category must be refused: {:?}", r);
+        assert!(b.seen.take().is_none(), "the backend is not called");
+        // A mix of known and unknown is refused too.
+        let r = call_tool(&mut b, "inspect_document", &json!({"remove": ["hidden", "comments2"]}));
+        assert!(r.is_error, "{:?}", r);
+        assert!(b.seen.take().is_none(), "the backend is not called");
+    }
+
+    /// Without `remove` the call reads, as before: the structure command, nothing to remove.
+    #[test]
+    fn inspect_document_without_remove_still_reads() {
+        let mut b = Recording { seen: None };
+        let r = call_tool(&mut b, "inspect_document", &json!({}));
+        assert!(!r.is_error, "inspect_document failed: {:?}", r);
+        let (method, call) = b.seen.take().expect("the backend was called");
+        assert_eq!(method, "document.inspect");
+        assert!(call.get("remove").is_none(), "{call}");
+    }
+
+    /// The remove values have to be in the schema, or a client has no way to know it can clean.
+    #[test]
+    fn the_schema_advertises_the_remove_values() {
+        let tools = tool_definitions();
+        let inspect =
+            tools.as_array().expect("the tools are a list").iter().find(|t| t["name"] == "inspect_document").expect("inspect_document is offered");
+        let items = &inspect["inputSchema"]["properties"]["remove"]["items"];
+        assert_eq!(items["enum"], json!(["comments", "revisions", "properties", "hidden", "headers"]), "{items}");
     }
 }

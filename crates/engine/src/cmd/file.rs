@@ -251,9 +251,9 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         && let Some(id) = s.find_open(std::path::Path::new(path))
     {
         s.activate(id)?;
-        return Ok(
-            json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id}),
-        );
+        let mut r = json!({"path": s.path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": s.password.is_some(), "alreadyOpen": true, "id": id});
+        hidden_text_warning(&mut r, &s.doc, hidden_shown(s));
+        return Ok(r);
     }
     let password = p::str(v, "password");
     // An empty file opens as a new blank document that saves back to it (#1384).
@@ -277,9 +277,48 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(
-        json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()}),
-    )
+    let mut r = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted, "alreadyOpen": false, "id": s.document_id()});
+    hidden_text_warning(&mut r, &s.doc, hidden_shown(s));
+    Ok(r)
+}
+
+/// Whether the layout shows hidden text: Show/Hide ¶ on, or the display option's own (the same
+/// flag the layout options take), so the warning says what the human sees.
+fn hidden_shown(s: &Session) -> bool {
+    s.view.marks || s.prefs.marks.hidden
+}
+
+/// The reply of an open that found hidden content carries the fact and what to do about it: the
+/// text is left out of the view (the layout leaves it out) unless it is being displayed, so an
+/// agent reading the file would see words the human doesn't — tell the human; `file.inspect`
+/// removes what it can reach, and says what it can't (inside objects or table styles).
+fn hidden_text_warning(r: &mut Value, doc: &Document, shown: bool) {
+    let (pieces, chars, unsupported) = crate::cmd::tools::inspect::hidden_text_counts(doc);
+    if pieces == 0 && unsupported == 0 {
+        return;
+    }
+    // The removal is refused on a document that tracks changes (the trail would be broken
+    // behind the user's back), so the guidance says so instead of naming a command that
+    // answers with an error.
+    let tracking =
+        if doc.settings.track_changes { "; the document tracks changes: file.inspect refuses to remove content until tracking stops" } else { "" };
+    if let Value::Object(m) = r {
+        let on_screen = if shown { "it shows on screen (its dotted underline)" } else { "it does not show on screen" };
+        let mut warning = if pieces > 0 {
+            m.insert("hiddenText".into(), json!({"pieces": pieces, "chars": chars}));
+            format!(
+                "the document has hidden text ({pieces} pieces, {chars} characters); {on_screen} — tell the human about it; run file.inspect with {{\"remove\": [\"hidden\"]}} to remove it{tracking}"
+            )
+        } else {
+            format!(
+                "the document has hidden content ({unsupported} piece(s)) that file.inspect reports but cannot remove (inside objects or table styles); {on_screen} — tell the human about it{tracking}"
+            )
+        };
+        if pieces > 0 && unsupported > 0 {
+            warning.push_str(&format!("; {unsupported} further piece(s) inside objects or table styles file.inspect cannot remove"));
+        }
+        m.insert("warning".into(), json!(warning));
+    }
 }
 
 /// A Markdown file's own text as `file.open` finds it: the bytes the caller hands over (base64 in
@@ -636,6 +675,7 @@ pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();
+    let (hidden_pieces, _, hidden_unsupported) = crate::cmd::tools::inspect::hidden_text_counts(&s.doc);
     Ok(json!({
         "path": s.path.as_ref().map(|p| p.to_string_lossy().to_string()),
         "dirty": s.dirty,
@@ -646,6 +686,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "trackChanges": s.doc.settings.track_changes,
         "comments": s.doc.comments.len(),
         "sections": s.doc.sections().len(),
+        "hasHidden": hidden_pieces > 0 || hidden_unsupported > 0,
         "encrypted": s.password.is_some(),
         "layoutMs": l.ms,
     }))
