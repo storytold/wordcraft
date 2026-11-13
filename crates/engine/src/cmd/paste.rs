@@ -284,23 +284,18 @@ pub enum Pasted {
 /// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
- fix/5785-copy-paste-text-box
     let html = p::str(v, "html");
     let rtf = p::str(v, "rtf");
     let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
     let html_matches = html.is_none_or(|h| h == s.clipboard_html);
     let rtf_matches = rtf.is_none_or(|r| r == s.clipboard_rtf);
 
-    if let Some(f) = &s.clipboard
+    if owns_clipboard(v)
+        && let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
         && html_matches
         && rtf_matches
-
-    if owns_clipboard(v)
-        && let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
- main
+        && (text.is_some() || has_rich || (html.is_none() && rtf.is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));
     }

@@ -51,10 +51,7 @@ impl Fragment {
         let mut d = Document::new();
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
         d.parts = self.parts.clone();
- fix/5785-copy-paste-text-box
-
         d.media = self.media.clone();
- main
         d
     }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
