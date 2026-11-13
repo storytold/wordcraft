@@ -3,7 +3,7 @@ use super::glyphs::{baseline, cluster_ends, glyph_id, glyph_outlines, left_to_ri
 use super::options::{PdfError, PdfOptions};
 use super::paint::{append_path, fill, grown, norm, ok, paint_fill, pdf_line_cap, rect_path, shape_effects, shape_path};
 use super::picture::{Vector, build_vector, load_image, paint_of, vector_picture};
-use super::tags::{Role, TagEntry, figure_alt, graphic_alt, holds_picture, holds_text};
+use super::tags::{Role, TagEntry, build_tag_tree, figure_alt, graphic_alt, holds_picture, holds_text};
 use super::{
     Annotation, Arc, Artifact, ArtifactType, ClKind, ContentTag, DocLayout, DocPath, Document, Draw, FaceRef, Fill, FillRule, Font, HashMap, HashSet,
     Identifier, Image, InlineObject, ItemDisplay, KrillaGlyph, LineCap, LineEnd, LineJoin, LineStyle, LinkAnnotation, Node, NonZeroU16, Outline,
@@ -139,13 +139,14 @@ impl Exporter<'_> {
                     e.children.push(Node::Leaf(id));
                 }
             }
-            Role::Figure => {
+            Role::Figure(source) => {
                 let id: Identifier = s.start_tagged(ContentTag::Other);
                 f(self, s);
                 s.end_tagged();
                 let alt = alt.map(str::to_string).filter(|a| !a.is_empty()).or_else(|| Some("picture".to_string()));
                 let g = TagGroup::with_children(Tag::Figure(alt), vec![Node::Leaf(id)]);
-                self.tags.push(TagEntry { kind: Tag::Div.into(), children: vec![Node::Group(g)] });
+                let source = source.filter(|(_, p)| p.0.len() >= 4).map(|(st, p)| (st, p.clone()));
+                self.tags.push(TagEntry { kind: Tag::Div.into(), children: vec![Node::Group(g)], source });
             }
         }
     }
@@ -153,7 +154,7 @@ impl Exporter<'_> {
     /// A rotated inline picture or group: turned as a whole, with each picture in it tagged on its
     /// own, so a decorative picture is an artifact while the others stay figures with their alt
     /// text. A described shape's figure keeps its description; anything else is an artifact.
-    fn rotated_pictures(&mut self, s: &mut Surface, d: &Draw) {
+    fn rotated_pictures(&mut self, s: &mut Surface, d: &Draw, source: Option<(StoryRef, &DocPath)>) {
         match d {
             Draw::Rotated { cx, cy, spin, items } => {
                 if !ok(*cx) || !ok(*cy) {
@@ -162,7 +163,7 @@ impl Exporter<'_> {
                 let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
                 for it in items {
-                    self.rotated_pictures(s, it);
+                    self.rotated_pictures(s, it, source);
                 }
                 s.pop();
             }
@@ -171,13 +172,13 @@ impl Exporter<'_> {
                 let Some(clip) = rect_path(rect) else { return };
                 s.push_clip_path(&clip, &FillRule::NonZero);
                 for it in items {
-                    self.rotated_pictures(s, it);
+                    self.rotated_pictures(s, it, source);
                 }
                 s.pop();
             }
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
-            Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
-            Draw::Figure { alt, draws, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| {
+            Draw::Image { alt, .. } => self.tagged(s, Role::Figure(source), Some(alt), |me, s| me.draw(s, d)),
+            Draw::Figure { alt, draws, .. } => self.tagged(s, Role::Figure(source), Some(alt), |me, s| {
                 for d in draws {
                     me.draw(s, d);
                 }
@@ -188,22 +189,22 @@ impl Exporter<'_> {
 
     /// One draw of a paragraph's line, tagged for what it is: text as the paragraph's content
     /// (structure entry `idx`), pictures and figures on their own, anything else an artifact.
-    fn line_item(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
+    fn line_item(&mut self, s: &mut Surface, d: &Draw, idx: usize, story: StoryRef, path: &DocPath) {
         match d {
             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
             // A picture marked decorative: an artifact screen readers skip.
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
-            Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
+            Draw::Image { alt, .. } => self.tagged(s, Role::Figure(Some((story, path))), Some(alt), |me, s| me.draw(s, d)),
             // A rotated inline picture, or a rotated group holding pictures: turned as a
             // whole, each picture tagged on its own (see `rotated_pictures`).
-            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
+            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d, Some((story, path))),
             // A clip (a turned picture cut at its line, an exact-height cell's lines, a canvas's
             // members): each draw in it tagged as it would be outside it.
             Draw::Clip { rect, items } => {
                 let Some(clip) = rect_path(rect) else { return };
                 s.push_clip_path(&clip, &FillRule::NonZero);
                 for it in items {
-                    self.line_item(s, it, idx);
+                    self.line_item(s, it, idx, story, path);
                 }
                 s.pop();
             }
@@ -211,7 +212,7 @@ impl Exporter<'_> {
             // without text falls to the artifacts below.
             Draw::Rotated { items, .. } if items.iter().any(holds_text) => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
             // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
-            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
+            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure(Some((story, path))), Some(figure_alt(alt, *kind)), |me, s| {
                 for d in inner {
                     me.draw(s, d);
                 }
@@ -257,7 +258,7 @@ impl Exporter<'_> {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
-                        self.line_item(s, d, idx);
+                        self.line_item(s, d, idx, *story, path);
                     }
                 }
                 Placed::Image { story, path, off, .. } => {
@@ -266,7 +267,7 @@ impl Exporter<'_> {
                     let role = if obj.is_some_and(InlineObject::is_decorative) || *off == usize::MAX {
                         Role::Artifact(ArtifactType::Other)
                     } else {
-                        Role::Figure
+                        Role::Figure(Some((*story, path)))
                     };
                     let alt = match obj {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
@@ -279,7 +280,7 @@ impl Exporter<'_> {
                     });
                 }
                 // A floating shape with a description: a figure (see `shape_figure_alt`).
-                Placed::Shape { alt, .. } if !alt.is_empty() => self.tagged(s, Role::Figure, Some(alt), |me, s| {
+                Placed::Shape { alt, .. } if !alt.is_empty() => self.tagged(s, Role::Figure(None), Some(alt), |me, s| {
                     for d in &draws {
                         me.draw(s, d);
                     }
@@ -289,7 +290,7 @@ impl Exporter<'_> {
                         Some(InlineObject::Graphic { alt, .. }) => graphic_alt(alt, graphic.kind).to_string(),
                         _ => graphic.kind.noun().to_string(),
                     };
-                    self.tagged(s, Role::Figure, Some(&alt), |me, s| {
+                    self.tagged(s, Role::Figure(Some((*story, path))), Some(&alt), |me, s| {
                         for d in &draws {
                             me.draw(s, d);
                         }
@@ -327,21 +328,14 @@ impl Exporter<'_> {
             }
             _ => Tag::P.into(),
         };
-        self.tags.push(TagEntry { kind, children: Vec::new() });
+        self.tags.push(TagEntry { kind, children: Vec::new(), source: Some((story, path.clone())) });
         let i = self.tags.len() - 1;
         self.tag_index.insert((story, path.clone()), i);
         i
     }
 
     pub(crate) fn tag_tree(&mut self) -> TagTree {
-        let mut tree = TagTree::new().with_lang(self.doc.styles.default_chr.lang.clone());
-        for e in std::mem::take(&mut self.tags) {
-            if e.children.is_empty() {
-                continue;
-            }
-            tree.push(TagGroup::with_children(e.kind, e.children));
-        }
-        tree
+        build_tag_tree(self.doc, std::mem::take(&mut self.tags))
     }
 
     /// The watermark text stretched over its box (Word's `v:textpath fitshape`): its advance across

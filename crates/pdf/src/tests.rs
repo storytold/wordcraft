@@ -3000,3 +3000,23 @@ fn chart_and_equation_text_keep_their_pdf_bytes() {
         ["B", "o", "d", "y", " ", "t", "e", "x", "R", "v", "n", "u", "2", "0", "4", "+", "1", "\u{1D465}"].into_iter().map(String::from).collect();
     assert_eq!(shown, expected);
 }
+
+#[test]
+fn tables_are_tagged_with_table_tr_th_and_td() {
+    use wordcraft_doc::{Cell, Row, Table, props::RowProps};
+    let mut d = Document::from_text("A table.");
+    let header = Row {
+        props: RowProps { header: true, ..Default::default() },
+        cells: vec![Cell::with_text("Head"), Cell::with_text("Col2")],
+        ..Default::default()
+    };
+    let body = Row { cells: vec![Cell::with_text("Cell10"), Cell::with_text("Cell11")], ..Default::default() };
+    let t = Table { grid: vec![120.0, 120.0], rows: vec![header, body], ..Default::default() };
+    d.body.push(Arc::new(wordcraft_doc::Block::Table(t)));
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { tagged: true, compress: false, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/S/Table") || raw.contains("/S /Table"), "missing /S /Table in:\n{raw}");
+    assert!(raw.contains("/S/TR") || raw.contains("/S /TR"), "missing /S /TR in:\n{raw}");
+    assert!(raw.contains("/S/TH") || raw.contains("/S /TH"), "missing /S /TH in:\n{raw}");
+    assert!(raw.contains("/S/TD") || raw.contains("/S /TD"), "missing /S /TD in:\n{raw}");
+    assert!(raw.contains("/Scope/Column") || raw.contains("/Scope /Column"), "missing /Scope /Column on TH");
+}
