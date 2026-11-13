@@ -161,6 +161,13 @@ impl WordApp {
         let WordApp {
             // App-wide.
             session: _,
+            collab: _,
+            #[cfg(target_arch = "wasm32")]
+                host_session: _,
+            #[cfg(target_arch = "wasm32")]
+                host_commit: _,
+            #[cfg(target_arch = "wasm32")]
+                host_committed: _,
             services: _,
             printing: _,
             print_feedback_seen: _,

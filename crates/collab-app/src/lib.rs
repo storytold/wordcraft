@@ -1,0 +1,870 @@
+//! App-side collaboration session.
+//!
+//! Wiring layer between the engine's `Session` and the transport: it keeps the
+//! session node map, applies authoritative deltas (including command replays),
+//! turns a local command into the operations the server expects, publishes
+//! presence and exposes participants to the UI.
+//!
+//! The transport-free half ([`SyncState`], [`Status`], cursors and the
+//! participant view) builds for both targets, so the web session in
+//! `wordcraft-collab-web` reuses it. Only [`Collab`] — the native socket
+//! session — is desktop-only (`docs/collab/host-bridge.md`).
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::{Duration, Instant};
+
+use serde_json::{Value, json};
+
+use wordcraft_collab::ids::{NodeId, NodeIds, NodeKey};
+use wordcraft_collab::room::Role;
+#[cfg(not(target_arch = "wasm32"))]
+use wordcraft_collab::wire::Participant;
+use wordcraft_collab::wire::{Applied, CabinetCommit, NodeRef, OpId, OpKind, Reject, RejectCode, Target, Version, may_allocate_ids};
+#[cfg(not(target_arch = "wasm32"))]
+use wordcraft_collab_client::Event;
+#[cfg(not(target_arch = "wasm32"))]
+use wordcraft_collab_ws::{Handle, TransportEvent};
+use wordcraft_doc::Pos as DocPos;
+use wordcraft_doc::{Document, Path, StoryRef};
+use wordcraft_engine::Session;
+
+/// An id for one editing session: two apps on the same document must not share
+/// an operation id space (`wordcraft_collab_client::session_client_id`).
+#[cfg(not(target_arch = "wasm32"))]
+pub use wordcraft_collab_client::session_client_id;
+
+/// Where the session is in its handshake.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Status {
+    Connecting,
+    InSync,
+    Resyncing,
+    /// A local edit stayed in this window while the room moved on: planning it
+    /// or handing it to the transport failed, so this document and the room's
+    /// confirmed version have parted. Writing and committing pause until a
+    /// snapshot replaces the document with the room's state (finding 8,
+    /// `docs/collab/STATUS.md` §5.33).
+    Diverged,
+    Offline,
+    Failed(String),
+}
+
+/// The last commit the room accepted, as the panel shows it. `cabinet` is set
+/// when the room posted the file to the cabinet itself (M87): its version and
+/// the etag the next commit is checked against.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Commit {
+    /// The room's document version the commit was taken at.
+    pub version: Version,
+    /// SHA-256 of the built `.docx`.
+    pub sha256: String,
+    /// What the file could not keep (ADR-0011).
+    pub warnings: Vec<String>,
+    /// The cabinet's copy, when the room published the file.
+    pub cabinet: Option<CabinetCommit>,
+}
+
+/// The file the room built for a commit the cabinet refused with `409`:
+/// saving it creates a copy without overwriting the cabinet (TASK.md §6).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CommitCopy {
+    /// The room's document version the refused commit was taken at.
+    pub version: Version,
+    /// SHA-256 of the built `.docx`.
+    pub sha256: String,
+    /// What the file could not keep (ADR-0011).
+    pub warnings: Vec<String>,
+    /// The `.docx` bytes the room built.
+    pub bytes: Vec<u8>,
+}
+
+/// Accumulates the chunks of a refused commit's file. A new version starts a
+/// new copy, so a chunk from an older answer cannot be joined to a newer one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CopyBuffer {
+    version: Version,
+    sha256: String,
+    warnings: Vec<String>,
+    bytes: Vec<u8>,
+    started: bool,
+}
+
+impl CopyBuffer {
+    /// Add one chunk; `Some` when `last` completes the copy.
+    pub fn push(&mut self, version: Version, sha256: String, warnings: Vec<String>, bytes: &[u8], last: bool) -> Option<CommitCopy> {
+        if !self.started || self.version != version {
+            self.version = version;
+            self.sha256 = sha256;
+            self.warnings = warnings;
+            self.bytes.clear();
+            self.started = true;
+        }
+        self.bytes.extend_from_slice(bytes);
+        if !last {
+            return None;
+        }
+        self.started = false;
+        Some(CommitCopy {
+            version: self.version,
+            sha256: std::mem::take(&mut self.sha256),
+            warnings: std::mem::take(&mut self.warnings),
+            bytes: std::mem::take(&mut self.bytes),
+        })
+    }
+}
+
+/// What a refusal means for the session. The room refuses before changing the
+/// document, so a refused undo (`undo-conflict`) is not a broken session: it is
+/// shown as an error and editing continues with its stack intact (ADR-0010). A
+/// refusal that asks for a snapshot (`stale`, `gone`, an expired lease or
+/// token) resyncs instead.
+pub fn refusal_status(reject: &Reject) -> (Status, bool) {
+    match reject.code {
+        RejectCode::Stale | RejectCode::Lease | RejectCode::TokenExpired | RejectCode::Gone => (Status::Resyncing, true),
+        RejectCode::UndoConflict | RejectCode::Unsupported => (Status::InSync, false),
+        _ => (Status::Failed(reject.message.clone()), false),
+    }
+}
+
+/// A local command the session could not hand to the room, and what the session
+/// must show instead of `InSync` (finding 8).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Pause {
+    /// Always [`Status::Diverged`]. Both gates read the status, so the next edit
+    /// and a commit are refused while it stands.
+    pub status: Status,
+    /// What the status bar and the participants panel show.
+    pub message: String,
+}
+
+impl Pause {
+    /// A command whose planning or submission failed left an edit in this
+    /// document that the room does not have. A commit builds the room's
+    /// version, so it would silently omit that edit; the session leaves
+    /// `InSync` until a resync lands.
+    pub fn after_failed_command(reason: &str) -> Pause {
+        Pause {
+            status: Status::Diverged,
+            message: format!("An edit did not reach the room ({reason}); editing pauses and a commit is blocked until the session is synchronized"),
+        }
+    }
+}
+
+/// Whether this window holds an edit the room never received (finding 8).
+///
+/// Kept apart from [`Status`] on purpose: `Offline` and `Connecting` describe the
+/// socket, not the document, and a reconnect or a token renewal moves the status
+/// through them. Only a snapshot replacing this document clears a divergence
+/// (review 5853542478, findings 5 and 6).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Divergence {
+    paused: bool,
+}
+
+impl Divergence {
+    /// A command that did not reach the room left its edit in this document.
+    pub fn pause(&mut self) {
+        self.paused = true;
+    }
+
+    pub fn is_paused(self) -> bool {
+        self.paused
+    }
+
+    /// What a `welcome` leaves the session in. A handshake does not replace the
+    /// document, so a paused session stays paused and asks for the snapshot that
+    /// repairs it.
+    pub fn status_after_welcome(self) -> Status {
+        if self.paused { Status::Diverged } else { Status::InSync }
+    }
+
+    /// What a refusal leaves the session in.
+    ///
+    /// A refused undo is not a broken session and reads `InSync`, but a paused
+    /// session is still paused: the status is what both gates read, so writing
+    /// `InSync` over `Diverged` would enable editing and an owner commit while
+    /// the document still holds an edit the room never received (review
+    /// 5855379673).
+    pub fn status_after_refusal(self, status: Status) -> Status {
+        if self.paused && status == Status::InSync { Status::Diverged } else { status }
+    }
+
+    /// A snapshot replaced the document: the edit the room never received went
+    /// with the document it was in.
+    pub fn snapshot(&mut self) {
+        self.paused = false;
+    }
+}
+
+/// What a room restored from an older snapshot took from this replica (ADR
+/// WC-0008): the head its welcome answered with, and the unconfirmed
+/// operations that left the queue because the document they were computed on
+/// no longer exists.
+///
+/// Kept on the session after the handshake: the snapshot that follows moves the
+/// status back, but the author still has to see what the restore cost, so the
+/// participants panel draws this notice for the rest of the session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Restore {
+    head: Version,
+    dropped: Vec<OpId>,
+}
+
+impl Restore {
+    /// `None` for an ordinary handshake: the room took nothing off the queue.
+    pub fn from_welcome(head: Version, dropped: Vec<OpId>) -> Option<Restore> {
+        if dropped.is_empty() {
+            return None;
+        }
+        Some(Restore { head, dropped })
+    }
+
+    /// The room's version after the restore: the base this session adopted.
+    pub fn head(&self) -> Version {
+        self.head
+    }
+
+    /// The operations whose edits are not in the room, oldest first.
+    pub fn dropped(&self) -> &[OpId] {
+        &self.dropped
+    }
+
+    /// How many edits the restore took.
+    pub fn count(&self) -> usize {
+        self.dropped.len()
+    }
+}
+
+/// The visible state a `welcome` leaves, shared by both hosts (desktop and web)
+/// so the two cannot word or gate a restore differently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WelcomeState {
+    /// What the panel and the two gates read. A room that took the queue never
+    /// leaves the session `InSync`: the document those edits were in is about to
+    /// be replaced, so it reads `Resyncing` until the snapshot lands. A session
+    /// already paused by ADR WC-0006 stays `Diverged`: the stronger reason wins.
+    pub status: Status,
+    /// The queue the room took, `None` for an ordinary handshake.
+    pub restore: Option<Restore>,
+}
+
+impl WelcomeState {
+    pub fn after_welcome(divergence: Divergence, head: Version, dropped: Vec<OpId>) -> WelcomeState {
+        let restore = Restore::from_welcome(head, dropped);
+        let status = if restore.is_some() && !divergence.is_paused() { Status::Resyncing } else { divergence.status_after_welcome() };
+        WelcomeState { status, restore }
+    }
+}
+
+/// Turn a local command into the operations the room expects, mapping a
+/// planning failure to the pause it causes. A diff that cannot address this
+/// document (a paragraph the server issued no id for, or a selection it cannot
+/// name) has already left the edit in the local document.
+pub fn plan_command(state: &SyncState, before: &Document, session: &Session, command: &str, params: &Value) -> Result<Vec<Outgoing>, Pause> {
+    state.plan(before, session, command, params).map_err(|reason| Pause::after_failed_command(&reason))
+}
+
+/// Hand every planned operation to `submit`, stopping at the first refusal: an
+/// operation the transport did not accept is an edit the room does not have,
+/// and anything planned after it would sit on a base the room never saw.
+pub fn submit_plans<F>(plans: Vec<Outgoing>, mut submit: F) -> Result<(), Pause>
+where
+    F: FnMut(Outgoing) -> Result<(), String>,
+{
+    for plan in plans {
+        submit(plan).map_err(|reason| Pause::after_failed_command(&reason))?;
+    }
+    Ok(())
+}
+
+/// A participant's cursor: a session node and a byte offset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cursor {
+    pub story: String,
+    pub node_id: u32,
+    pub off: usize,
+}
+
+/// What the UI shows in the participants list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParticipantView {
+    pub client_id: String,
+    pub role: String,
+    pub color: Option<String>,
+    pub cursor: Option<Cursor>,
+    pub selection: Option<(Cursor, Cursor)>,
+    pub active: bool,
+}
+
+/// What applying one authoritative answer requires from the app.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The replica is in sync.
+    Quiet,
+    /// The operation allocated ids the replica cannot derive; fetch a snapshot.
+    Resync,
+}
+
+/// One operation the app should send for a local command.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Outgoing {
+    pub kind: OpKind,
+    pub target: Target,
+    pub payload: Value,
+}
+
+/// The protocol state of one app session, without a socket. The transport
+/// owns the socket; this half is testable on its own.
+pub struct SyncState {
+    pub ids: NodeIds,
+    pub client_id: String,
+    pub actor: String,
+    pub version: Version,
+    pub role: Role,
+}
+
+impl SyncState {
+    pub fn new(client_id: impl Into<String>, actor: impl Into<String>, role: Role) -> SyncState {
+        SyncState { ids: NodeIds::new(), client_id: client_id.into(), actor: actor.into(), version: 0, role }
+    }
+
+    /// Replace the map with the server's session ids. Ids that disappeared are
+    /// left alone: the delta path tombstones them when the removal is applied.
+    pub fn set_nodes(&mut self, nodes: &[NodeRef]) {
+        // The map may reorder ids (a move, a sort): replace all paths in one
+        // pass so one id's new key cannot erase another's old one.
+        self.ids.rebase_many(nodes.iter().map(|node| (NodeId(node.id), NodeKey::new(node.story.clone(), node.path.clone()))));
+    }
+
+    /// Apply an authoritative answer. Our own operations are already in the
+    /// document (the UI applied them optimistically); their delta is skipped so
+    /// the edit does not land twice. An undo/redo answer is the exception: its
+    /// inverse is never applied optimistically (the caller sends the operation
+    /// and the engine does not run), so this delta is the only copy and is
+    /// applied exactly once (ADR-0010). Everything else is replayed.
+    pub fn apply(&mut self, applied: &Applied, session: &mut Session) -> Result<Outcome, String> {
+        self.version = self.version.max(applied.version);
+        // A delta that passed the wire bound is not applied: the snapshot that
+        // follows replaces both the document and the map.
+        if applied.nodes.as_ref().is_some_and(|nodes| nodes.overflow) {
+            return Ok(Outcome::Resync);
+        }
+        let command = applied.delta.as_ref().and_then(|delta| delta.get("command")).and_then(Value::as_str);
+        if applied.op_id.client == self.client_id && applied.history.is_none() {
+            // Our own command already ran in this document; only its node ids
+            // are new here. A duplicate answer from the retry window carries no
+            // node list, but the join that preceded the retry sent the whole map.
+            return self.apply_nodes(applied);
+        }
+        // A command that allocates ids carries the server's node delta: those
+        // ids cannot be derived from the replica's own state. Without the delta
+        // there is nothing to address the new nodes with, so the replica takes
+        // the snapshot path instead.
+        if command.is_some_and(may_allocate_ids) && applied.nodes.is_none() {
+            return Ok(Outcome::Resync);
+        }
+        if let Some(delta) = &applied.delta {
+            wordcraft_collab_engine::apply_delta(session, &mut self.ids, delta)?;
+        }
+        self.apply_nodes(applied)
+    }
+
+    /// Adopt the ids an accepted operation issued, moved or retired. A delta
+    /// that overflows the wire bound is not applied: the replica asks for a
+    /// snapshot instead of trusting a map that was cut short.
+    fn apply_nodes(&mut self, applied: &Applied) -> Result<Outcome, String> {
+        let Some(nodes) = &applied.nodes else { return Ok(Outcome::Quiet) };
+        if nodes.overflow {
+            return Ok(Outcome::Resync);
+        }
+        self.ids.rebase_many(nodes.changed.iter().map(|node| (NodeId(node.id), NodeKey::new(node.story.clone(), node.path.clone()))));
+        for id in &nodes.removed {
+            self.ids.remove(NodeId(*id), applied.version);
+        }
+        Ok(Outcome::Quiet)
+    }
+
+    /// Turn a local command into the operations the server expects: primitives
+    /// derived from the document difference, or the command itself when the
+    /// difference is not expressible as primitives (formatting, tables,
+    /// several moves). `command` is only sent with an explicit selection, so
+    /// the server never reads a caret from its own window.
+    pub fn plan(&self, before: &Document, session: &Session, command: &str, params: &Value) -> Result<Vec<Outgoing>, String> {
+        let as_command = || -> Result<Vec<Outgoing>, String> {
+            let anchor = self.address(&session.sel.anchor).ok_or_else(|| format!("{command} needs a session id for its selection"))?;
+            let focus = self.address(&session.sel.focus).unwrap_or_else(|| anchor.clone());
+            let pending = serde_json::to_value(session.pending.clone()).unwrap_or(Value::Null);
+            Ok(vec![Outgoing {
+                kind: OpKind::Command,
+                target: Target::new(anchor.0.clone(), anchor.1, anchor.2),
+                payload: json!({
+                    "command": command,
+                    "params": params,
+                    "pending": pending,
+                    "selection": {
+                        "anchor": {"nodeId": anchor.1, "off": anchor.2},
+                        "focus": {"nodeId": focus.1, "off": focus.2},
+                    },
+                }),
+            }])
+        };
+        // Track changes lives in the session, not in the text: a primitive would
+        // lose the revision and its author, so every edit goes through the engine
+        // command on the server.
+        if session.doc.settings.track_changes {
+            return as_command();
+        }
+        match wordcraft_collab_doc::diff(before, &session.doc, &self.ids) {
+            Ok(changes) => {
+                Ok(changes.into_iter().map(|change| Outgoing { kind: change.kind, target: change.target, payload: change.payload }).collect())
+            }
+            Err(wordcraft_collab_doc::DiffError::Unsupported(_)) => as_command(),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    /// Resolve a document position to `(story, nodeId, off)`.
+    pub fn address(&self, pos: &DocPos) -> Option<(String, u32, usize)> {
+        let story = story_name(pos.story);
+        let key = NodeKey::new(story.clone(), pos.path.0.clone());
+        self.ids.get(&key).map(|id| (story, id.0, pos.off))
+    }
+
+    /// The document position of a participant's cursor, if the id is still live.
+    pub fn position(&self, cursor: &Cursor) -> Option<DocPos> {
+        let key = self.ids.resolve(NodeId(cursor.node_id)).ok()?;
+        let story = parse_story(&key.story)?;
+        Some(DocPos { story, path: Path(key.path.clone()), off: cursor.off })
+    }
+}
+
+/// A live collaboration session: transport plus the state above.
+#[cfg(not(target_arch = "wasm32"))]
+pub struct Collab {
+    _runtime: tokio::runtime::Runtime,
+    handle: Handle,
+    state: SyncState,
+    server: String,
+    status: Status,
+    /// An edit the room never received: tracked apart from `status`, which a
+    /// reconnect or a renewal moves through `Offline`/`Connecting`.
+    divergence: Divergence,
+    participants: Vec<ParticipantView>,
+    commit: Option<Commit>,
+    /// The cabinet refused the last commit (`409`): the reason, until a commit
+    /// is accepted. The panel offers "save a copy" while it is set.
+    conflict: Option<String>,
+    /// The last refused file the owner asked for (TASK.md §6).
+    copy: Option<CommitCopy>,
+    copy_buffer: CopyBuffer,
+    snapshot: Vec<u8>,
+    snapshot_version: Version,
+    last_presence: Option<Instant>,
+    last_error: Option<String>,
+    /// The queue a restored room took from this session (ADR WC-0008). The
+    /// snapshot that follows clears the status and not this: the author keeps
+    /// seeing what the restore cost until the session ends.
+    restore: Option<Restore>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Collab {
+    /// Connect to `server` with a cabinet JWT. The token is kept by the
+    /// transport and never logged, stored in preferences or put in the URL.
+    pub fn connect(server: &str, token: &str, actor: &str, client_id: &str, document: &Document) -> Result<Collab, String> {
+        // The document this window has open is what the server builds a room it
+        // has never snapshotted from (ADR WC-0004); a room that exists ignores
+        // it and answers with its snapshot instead.
+        let seed = serde_json::to_vec(document).map_err(|err| format!("cannot encode the open document: {err}"))?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .map_err(|err| format!("cannot start the collaboration runtime: {err}"))?;
+        let handle = {
+            let _entered = runtime.enter();
+            wordcraft_collab_ws::spawn(server.to_string(), token.to_string(), client_id.to_string(), Some(seed))
+        };
+        Ok(Collab {
+            _runtime: runtime,
+            handle,
+            state: SyncState::new(client_id, actor, Role::Editor),
+            server: server.to_string(),
+            status: Status::Connecting,
+            divergence: Divergence::default(),
+            participants: Vec::new(),
+            commit: None,
+            conflict: None,
+            copy: None,
+            copy_buffer: CopyBuffer::default(),
+            snapshot: Vec::new(),
+            snapshot_version: 0,
+            last_presence: None,
+            last_error: None,
+            restore: None,
+        })
+    }
+
+    pub fn status(&self) -> &Status {
+        &self.status
+    }
+
+    pub fn role(&self) -> Role {
+        self.state.role
+    }
+
+    pub fn can_write(&self) -> bool {
+        self.state.role.can_write() && self.status == Status::InSync
+    }
+
+    pub fn can_commit(&self) -> bool {
+        self.state.role.can_commit() && self.status == Status::InSync
+    }
+
+    pub fn version(&self) -> Version {
+        self.state.version
+    }
+
+    pub fn server(&self) -> &str {
+        &self.server
+    }
+
+    pub fn participants(&self) -> &[ParticipantView] {
+        &self.participants
+    }
+
+    pub fn last_commit(&self) -> Option<&Commit> {
+        self.commit.as_ref()
+    }
+
+    pub fn last_error(&self) -> Option<&str> {
+        self.last_error.as_deref()
+    }
+
+    /// The queue a restored room took from this session (ADR WC-0008), for the
+    /// panel's line about the edits that are no longer in the document.
+    pub fn restore(&self) -> Option<&Restore> {
+        self.restore.as_ref()
+    }
+
+    /// Why the cabinet refused the last commit (`409`), while the panel may
+    /// still offer its file as a copy (TASK.md §6).
+    pub fn conflict(&self) -> Option<&str> {
+        self.conflict.as_deref()
+    }
+
+    /// The refused file, once it has fully arrived; taken so the UI saves it
+    /// exactly once.
+    pub fn take_copy(&mut self) -> Option<CommitCopy> {
+        self.copy.take()
+    }
+
+    /// Resolve a remote cursor for drawing.
+    pub fn cursor_position(&self, cursor: &Cursor) -> Option<DocPos> {
+        self.state.position(cursor)
+    }
+
+    /// Drain transport events and apply authoritative results to `session`.
+    /// Returns whether the UI-visible state changed.
+    pub fn poll(&mut self, session: &mut Session) -> bool {
+        let mut changed = false;
+        loop {
+            match self.handle.events.try_recv() {
+                Ok(TransportEvent::Event(event)) => {
+                    changed = true;
+                    self.on_event(event, session);
+                }
+                Ok(TransportEvent::Disconnected { reason }) => {
+                    self.status = Status::Offline;
+                    self.last_error = Some(reason);
+                    changed = true;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    self.status = Status::Failed("the collaboration task ended".into());
+                    break;
+                }
+            }
+        }
+        changed
+    }
+
+    fn on_event(&mut self, event: Event, session: &mut Session) {
+        match event {
+            Event::Welcome { version, role, participants, dropped, .. } => {
+                // The room's head is this base, in both directions (ADR
+                // WC-0008): a restored room answers below it, and keeping the
+                // higher number would plan the next operation on a document the
+                // room no longer has.
+                self.state.version = version;
+                self.state.role = Role::parse(&role).unwrap_or(Role::Editor);
+                self.set_participants(&participants);
+                // A handshake is not a snapshot: `Offline` or `Connecting` never
+                // cleared the divergence, so this reads the flag, not the status
+                // (review 5853542478).
+                let welcome = WelcomeState::after_welcome(self.divergence, version, dropped);
+                self.status = welcome.status;
+                if let Some(restore) = welcome.restore {
+                    // A writer whose in-flight edits a restore took must see it:
+                    // the panel draws the count and the ids, and the session
+                    // reads `Resyncing` until the snapshot lands (ADR WC-0008).
+                    self.restore = Some(restore);
+                }
+                if self.divergence.is_paused() {
+                    // The edit the room never received is still in the
+                    // document: ask again for the snapshot that repairs it
+                    // (finding 8).
+                    let _ = self.handle.resync();
+                }
+            }
+            Event::Nodes { nodes } => self.state.set_nodes(&nodes),
+            Event::Applied { applied } => match self.state.apply(&applied, session) {
+                Ok(Outcome::Quiet) => {}
+                Ok(Outcome::Resync) => {
+                    self.status = Status::Resyncing;
+                    let _ = self.handle.resync();
+                }
+                Err(message) => self.status = Status::Failed(message),
+            },
+            Event::Rejected { reject } => {
+                let (status, resync) = refusal_status(&reject);
+                // A refusal that reads `InSync` does not undo the pause: only a
+                // snapshot does (review 5855379673).
+                self.status = self.divergence.status_after_refusal(status);
+                // The panel shows the reason; a refused undo must be visible at
+                // its author, not silent.
+                self.last_error = Some(reject.message.clone());
+                if resync {
+                    let _ = self.handle.resync();
+                }
+            }
+            Event::Presence { client_id, role, state } => self.presence_of(&client_id, &role, &state),
+            Event::Left { client_id } => self.participants.retain(|participant| participant.client_id != client_id),
+            Event::Snapshot { version, bytes, last } => {
+                if last && let Ok(version) = self.take_snapshot(version, &bytes, session) {
+                    self.state.version = version;
+                    // The document is the room's now: no local edit is missing
+                    // from it anymore.
+                    self.divergence.snapshot();
+                    self.status = Status::InSync;
+                    self.last_error = None;
+                }
+            }
+            Event::Committed { version, sha256, warnings, cabinet } => {
+                self.state.version = self.state.version.max(version);
+                self.commit = Some(Commit { version, sha256, warnings, cabinet });
+                self.conflict = None;
+            }
+            Event::Conflict { reason } => {
+                // The room built the file but the cabinet refused it (409):
+                // every replica resyncs, and the panel offers the file as a
+                // copy instead of pretending the save happened (TASK.md §6).
+                self.status = Status::Resyncing;
+                self.last_error = Some(reason.clone());
+                self.conflict = Some(reason);
+                let _ = self.handle.resync();
+            }
+            Event::SaveCopy { version, sha256, warnings, bytes, last } => {
+                if let Some(copy) = self.copy_buffer.push(version, sha256, warnings, &bytes, last) {
+                    self.copy = Some(copy);
+                }
+            }
+            Event::Resync { reason } => {
+                self.status = Status::Resyncing;
+                self.last_error = Some(reason);
+                let _ = self.handle.resync();
+            }
+            Event::None => {}
+        }
+    }
+
+    /// Accumulate snapshot chunks; the last one replaces the document.
+    fn take_snapshot(&mut self, version: Version, bytes: &[u8], session: &mut Session) -> Result<Version, String> {
+        if self.snapshot_version != version {
+            self.snapshot_version = version;
+            self.snapshot.clear();
+        }
+        self.snapshot.extend_from_slice(bytes);
+        let doc: Document = serde_json::from_slice(&self.snapshot).map_err(|err| format!("bad snapshot: {err}"))?;
+        session.set_document(doc);
+        self.snapshot.clear();
+        Ok(version)
+    }
+
+    fn presence_of(&mut self, client_id: &str, role: &str, state: &Value) {
+        apply_presence(&mut self.participants, client_id, role, state);
+    }
+
+    /// Apply a local command: the caller hands the document from before the
+    /// command; the session sends the primitives or the command itself.
+    ///
+    /// A command that cannot be planned or submitted has already changed this
+    /// document and never reached the room. The session then leaves `InSync`
+    /// ([`Pause`]) instead of reporting a synchronized document whose newest
+    /// edit a commit would omit, and asks for a snapshot (finding 8).
+    pub fn after_command(&mut self, before: &Document, session: &Session, command: &str, params: &Value) -> Result<(), String> {
+        if !self.can_write() {
+            return Ok(());
+        }
+        let plans = match plan_command(&self.state, before, session, command, params) {
+            Ok(plans) => plans,
+            Err(pause) => return Err(self.pause(pause)),
+        };
+        let result = {
+            let handle = &self.handle;
+            submit_plans(plans, |plan| handle.submit(plan.kind, plan.target, plan.payload))
+        };
+        match result {
+            Ok(()) => Ok(()),
+            Err(pause) => Err(self.pause(pause)),
+        }
+    }
+
+    /// Show the pause and resynchronize: the snapshot that follows replaces
+    /// this document with the room's confirmed version, so what the room never
+    /// received stops being shown as synchronized (ADR-0002's price, taken
+    /// rather than a commit that would leave it out).
+    fn pause(&mut self, pause: Pause) -> String {
+        self.last_error = Some(pause.message.clone());
+        self.divergence.pause();
+        self.status = pause.status;
+        if self.handle.resync().is_err() {
+            // The session task is gone: nothing will bring the room's state
+            // back, so the pause is final.
+            self.status = Status::Failed(pause.message.clone());
+        }
+        pause.message
+    }
+
+    /// Publish the caret and selection at most every 100 ms.
+    pub fn publish_presence(&mut self, session: &Session, now: Instant) {
+        if self.status != Status::InSync {
+            return;
+        }
+        if self.last_presence.is_some_and(|at| now.duration_since(at) < Duration::from_millis(100)) {
+            return;
+        }
+        let Some(cursor) = self.state.address(&session.sel.focus) else { return };
+        let anchor = self.state.address(&session.sel.anchor).unwrap_or_else(|| cursor.clone());
+        self.last_presence = Some(now);
+        let state = json!({
+            "cursor": {"story": cursor.0, "nodeId": cursor.1, "off": cursor.2},
+            "selection": {
+                "anchor": {"story": anchor.0, "nodeId": anchor.1, "off": anchor.2},
+                "focus": {"story": cursor.0, "nodeId": cursor.1, "off": cursor.2},
+            },
+            "active": true,
+        });
+        let _ = self.handle.presence(state);
+    }
+
+    pub fn undo(&self) {
+        let _ = self.handle.undo();
+    }
+
+    pub fn redo(&self) {
+        let _ = self.handle.redo();
+    }
+
+    pub fn commit(&self) {
+        let _ = self.handle.commit();
+    }
+
+    /// Ask the room for the file of a commit the cabinet refused (`409`), to
+    /// save it as a copy (TASK.md §6).
+    pub fn request_copy(&self) {
+        let _ = self.handle.save_copy();
+    }
+
+    /// Replace the JWT (the cabinet pushes a fresh one before `exp`) and
+    /// reconnect. Queued operations survive and are resent with their ids.
+    pub fn renew_token(&mut self, token: &str) {
+        if self.handle.renew_token(token.to_string()).is_ok() {
+            self.status = Status::Connecting;
+        }
+    }
+
+    /// The client id this session sends to the server and receives its own
+    /// answers under.
+    pub fn client_id(&self) -> &str {
+        &self.state.client_id
+    }
+
+    /// Add the server's own view of the participants after `welcome`.
+    pub fn set_participants(&mut self, participants: &[Participant]) {
+        for participant in participants {
+            let view = ParticipantView {
+                client_id: participant.client_id.clone(),
+                role: participant.role.clone(),
+                color: participant.color.clone(),
+                cursor: participant.presence.as_ref().and_then(|state| state.get("cursor")).and_then(parse_cursor),
+                selection: participant.presence.as_ref().and_then(|state| state.get("selection")).and_then(parse_selection),
+                active: true,
+            };
+            match self.participants.iter_mut().find(|existing| existing.client_id == view.client_id) {
+                Some(existing) => *existing = view,
+                None => self.participants.push(view),
+            }
+        }
+    }
+}
+
+/// Fold one presence frame into the participant list.
+///
+/// The role comes from the server, which takes it from the JWT claim
+/// (ADR-0008) — never from the presence payload — so a peer that joined the
+/// room earlier learns a newcomer's role with the newcomer's first frame
+/// instead of showing a placeholder. An empty role means an older server: an
+/// existing participant keeps the role it already had, a new one stays
+/// `participant`.
+pub fn apply_presence(participants: &mut Vec<ParticipantView>, client_id: &str, role: &str, state: &Value) {
+    let cursor = state.get("cursor").and_then(parse_cursor);
+    let selection = state.get("selection").and_then(parse_selection);
+    if let Some(participant) = participants.iter_mut().find(|participant| participant.client_id == client_id) {
+        participant.cursor = cursor.or(participant.cursor.take());
+        participant.selection = selection.or(participant.selection.take());
+        participant.active = state.get("active").and_then(Value::as_bool).unwrap_or(true);
+        if !role.is_empty() {
+            participant.role = role.to_string();
+        }
+        return;
+    }
+    participants.push(ParticipantView {
+        client_id: client_id.to_string(),
+        role: if role.is_empty() { "participant".into() } else { role.to_string() },
+        color: None,
+        cursor,
+        selection,
+        active: true,
+    });
+}
+
+fn parse_cursor(value: &Value) -> Option<Cursor> {
+    Some(Cursor {
+        story: value.get("story")?.as_str()?.to_string(),
+        node_id: u32::try_from(value.get("nodeId")?.as_u64()?).ok()?,
+        off: usize::try_from(value.get("off")?.as_u64()?).ok()?,
+    })
+}
+
+fn parse_selection(value: &Value) -> Option<(Cursor, Cursor)> {
+    Some((parse_cursor(value.get("anchor")?)?, parse_cursor(value.get("focus")?)?))
+}
+
+fn story_name(story: StoryRef) -> String {
+    match story {
+        StoryRef::Body => "body".to_string(),
+        StoryRef::Part(id) => format!("part:{id}"),
+    }
+}
+
+fn parse_story(name: &str) -> Option<StoryRef> {
+    match name {
+        "body" => Some(StoryRef::Body),
+        other => other.strip_prefix("part:").and_then(|id| id.parse().ok()).map(StoryRef::Part),
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests;

@@ -1,0 +1,16 @@
+[package]
+name = "wordcraft-collab-doc"
+description = "WordCraft document adapter for the collaboration protocol: positional primitives over wordcraft-doc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[dependencies]
+wordcraft-collab = { path = "../collab" }
+wordcraft-doc = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true
