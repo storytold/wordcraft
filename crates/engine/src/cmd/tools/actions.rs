@@ -201,7 +201,14 @@ pub(super) fn select_similar(s: &mut Session, _: &Value) -> CmdResult {
 /// Without params it opens the dialog; with any, it only does what they ask (no dialog).
 pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     let reg = s.registry.clone();
-    let pair = |x: &Value| -> Result<(String, String), CmdError> { Ok((p::req_str(x, "command")?.to_string(), p::req_str(x, "key")?.to_string())) };
+    let pair = |x: &Value| -> Result<(crate::KeyTarget, String), CmdError> {
+        let target = match (x.get("command"), x.get("style")) {
+            (Some(_), None) => crate::KeyTarget::Command(p::req_str(x, "command")?.to_string()),
+            (None, Some(_)) => crate::KeyTarget::Style(p::req_str(x, "style")?.to_string()),
+            _ => return Err(CmdError::Params("provide exactly one of command or style".into())),
+        };
+        Ok((target, p::req_str(x, "key")?.to_string()))
+    };
     let mut out = serde_json::Map::new();
     let mut asked = false;
     if p::bool(v, "reset") == Some(true) {
@@ -210,14 +217,26 @@ pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
     }
     if let Some(a) = v.get("assign") {
         asked = true;
-        let (id, key) = pair(a)?;
-        let previous = s.keymap.assign(&reg, &id, &key).map_err(CmdError::Params)?;
-        out.insert("replaced".into(), json!(previous));
+        let (target, key) = pair(a)?;
+        let previous = match target {
+            crate::KeyTarget::Command(id) => json!(s.keymap.assign(&reg, &id, &key).map_err(CmdError::Params)?),
+            crate::KeyTarget::Style(style) => match s.keymap.assign_style(&reg, &style, &key).map_err(CmdError::Params)? {
+                Some(crate::KeyTarget::Command(id)) => json!({"command": id}),
+                Some(crate::KeyTarget::Style(name)) => json!({"style": name}),
+                None => Value::Null,
+            },
+        };
+        out.insert("replaced".into(), previous);
     }
     if let Some(r) = v.get("remove") {
         asked = true;
-        let (id, key) = pair(r)?;
-        out.insert("removed".into(), json!(s.keymap.remove(&reg, &id, &key).map_err(CmdError::Params)?));
+        let (target, key) = pair(r)?;
+        let removed = match target {
+            crate::KeyTarget::Command(id) => s.keymap.remove(&reg, &id, &key),
+            crate::KeyTarget::Style(style) => s.keymap.remove_style(&reg, &style, &key),
+        }
+        .map_err(CmdError::Params)?;
+        out.insert("removed".into(), json!(removed));
     }
     if let Some(id) = p::str(v, "command") {
         asked = true;
@@ -226,10 +245,19 @@ pub(super) fn customize_keyboard(s: &mut Session, v: &Value) -> CmdResult {
         }
         out.insert("keys".into(), json!(s.keymap.keys_for(&reg, id)));
     }
+    if let Some(style) = p::str(v, "style") {
+        asked = true;
+        out.insert("keys".into(), json!(s.keymap.keys_for_style(style)));
+    }
     if let Some(key) = p::str(v, "key") {
         asked = true;
         let key = crate::keymap::normalize(key).ok_or_else(|| CmdError::Params(format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)")))?;
         out.insert("assignedTo".into(), json!(s.keymap.resolve(&reg, &key).map(|c| c.id)));
+        let style = match s.keymap.resolve_target(&reg, &key) {
+            Some(crate::KeyTarget::Style(style)) => Some(style),
+            _ => None,
+        };
+        out.insert("assignedToStyle".into(), json!(style));
         out.insert("key".into(), json!(key));
     }
     out.insert("custom".into(), serde_json::to_value(&s.keymap).unwrap_or(Value::Null));

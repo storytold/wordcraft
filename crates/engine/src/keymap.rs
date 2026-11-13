@@ -30,6 +30,15 @@ const NAMED: &[&str] =
 pub struct KeyMap {
     pub assigned: BTreeMap<String, String>,
     pub removed: BTreeSet<String>,
+    /// Canonical key to style name or id, preserved even when no document defines the style.
+    pub styles: BTreeMap<String, String>,
+}
+
+/// What a key does: run a command, or apply a style (#3910).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeyTarget {
+    Command(String),
+    Style(String),
 }
 
 /// A key in canonical form: modifiers in the order `Mod+Ctrl+Alt+Shift+`, then the key (a single
@@ -105,12 +114,19 @@ impl KeyMap {
         if let Some(r) = v.get("removed").and_then(Value::as_array) {
             map.removed.extend(r.iter().take(MAX_ENTRIES).filter_map(Value::as_str).filter_map(normalize));
         }
+        if let Some(styles) = v.get("styles").and_then(Value::as_object) {
+            for (key, style) in styles.iter().take(MAX_ENTRIES) {
+                if let (Some(key), Some(style)) = (normalize(key), style.as_str().filter(|s| !s.trim().is_empty() && s.chars().count() <= 253)) {
+                    map.styles.insert(key, style.to_string());
+                }
+            }
+        }
         map
     }
 
     /// Whether nothing is customized.
     pub fn is_empty(&self) -> bool {
-        self.assigned.is_empty() && self.removed.is_empty()
+        self.assigned.is_empty() && self.removed.is_empty() && self.styles.is_empty()
     }
 
     /// Drop entries for commands that don't exist and removals of keys that aren't built in.
@@ -122,6 +138,9 @@ impl KeyMap {
     /// The command a key runs: the user's assignment, else the built-in one unless removed.
     pub fn resolve<'a>(&self, reg: &'a Registry, key: &str) -> Option<&'a CommandSpec> {
         let key = normalize(key)?;
+        if self.styles.contains_key(&key) {
+            return None;
+        }
         if let Some(spec) = self.assigned.get(&key).and_then(|id| reg.get(id)) {
             return Some(spec);
         }
@@ -143,7 +162,7 @@ impl KeyMap {
             }
         }
         for (k, owner) in &self.assigned {
-            if owner == id && !keys.contains(k) {
+            if owner == id && !self.styles.contains_key(k) && !keys.contains(k) {
                 keys.push(k.clone());
             }
         }
@@ -157,6 +176,7 @@ impl KeyMap {
         }
         let key = normalize(key).ok_or_else(|| format!("`{key}` isn't a key (e.g. Mod+Shift+K, Alt+F7, F2)"))?;
         let previous = self.resolve(reg, &key).map(|s| s.id.to_string()).filter(|p| p != id);
+        self.styles.remove(&key);
         match builtin(reg, &key) {
             // Back to its own built-in key: no custom entry needed.
             Some(b) if b.id == id => {
@@ -186,6 +206,48 @@ impl KeyMap {
             self.removed.insert(key);
         }
         Ok(true)
+    }
+
+    /// What a key does now: a style bound to it, else the command [`KeyMap::resolve`] gives.
+    pub fn resolve_target(&self, reg: &Registry, key: &str) -> Option<KeyTarget> {
+        let key = normalize(key)?;
+        if let Some(style) = self.styles.get(&key) {
+            return Some(KeyTarget::Style(style.clone()));
+        }
+        self.resolve(reg, &key).map(|spec| KeyTarget::Command(spec.id.to_string()))
+    }
+
+    /// Bind `key` to `style`; returns the key's previous owner.
+    pub fn assign_style(&mut self, reg: &Registry, style: &str, key: &str) -> Result<Option<KeyTarget>, String> {
+        if style.trim().is_empty() {
+            return Err("style must not be blank".to_string());
+        }
+        let key = normalize(key).ok_or_else(|| format!("`{key}` isn't a key"))?;
+        let previous = self.resolve_target(reg, &key).filter(|target| *target != KeyTarget::Style(style.to_string()));
+        self.assigned.remove(&key);
+        if builtin(reg, &key).is_some() {
+            self.removed.insert(key.clone());
+        }
+        self.styles.insert(key, style.to_string());
+        Ok(previous)
+    }
+
+    /// Take `key` away from `style`. Returns whether it had the key.
+    pub fn remove_style(&mut self, reg: &Registry, style: &str, key: &str) -> Result<bool, String> {
+        let key = normalize(key).ok_or_else(|| format!("`{key}` isn't a key"))?;
+        if self.styles.get(&key).is_none_or(|owner| owner != style) {
+            return Ok(false);
+        }
+        self.styles.remove(&key);
+        if builtin(reg, &key).is_some() {
+            self.removed.insert(key);
+        }
+        Ok(true)
+    }
+
+    /// The keys bound to `style`.
+    pub fn keys_for_style(&self, style: &str) -> Vec<String> {
+        self.styles.iter().filter(|(_, owner)| owner.as_str() == style).map(|(key, _)| key.clone()).collect()
     }
 
     /// Back to the built-in keys only.

@@ -3,6 +3,7 @@ use super::ime_state::ImeCaretState;
 use super::snapshot_types::RunSnapshot;
 use super::{CharProps, CmdError, Document, Fragment, ImeEditOutcome, Pos, Session, StoryRef, Value, document_id_mark};
 use crate::CommandSpec;
+use serde_json::json;
 
 struct SuccessContext<'a> {
     id: &'a str,
@@ -58,6 +59,15 @@ impl Session {
     fn forget_review_style(&mut self, id: &str, mutates: bool) {
         if (mutates && !matches!(id, "review.accept" | "review.reject")) || id.starts_with("caret.") || id.starts_with("select.") {
             self.review_style = None;
+        }
+    }
+
+    /// Run what a pressed key does (#3910): a style key applies the style (`styles.apply`), a
+    /// command key runs its command. `None` when the key does nothing.
+    pub fn press_key(&mut self, key: &str) -> Option<crate::CmdResult> {
+        match self.keymap.resolve_target(&self.registry, key)? {
+            crate::KeyTarget::Command(id) => Some(self.run(&id, &json!({}))),
+            crate::KeyTarget::Style(style) => Some(self.run("styles.apply", &json!({"style": style}))),
         }
     }
 

@@ -120,9 +120,13 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let reg = app.session.registry.clone();
     let name = key_name(key);
     let bound = name.and_then(|n| app.session.keymap.resolve(&reg, &combo(m, n, true)));
+    let style = name.and_then(|n| match app.session.keymap.resolve_target(&reg, &combo(m, n, true)) {
+        Some(wordcraft_engine::KeyTarget::Style(style)) => Some(style),
+        _ => None,
+    });
     // Ctrl+F1 collapses the ribbon only when the user hasn't given it to a command (#1678); the
     // other interface shortcuts (Alt+Q, ⌘⌥R) keep their place ahead of the keymap.
-    if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || bound.is_none()) {
+    if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || (bound.is_none() && style.is_none())) {
         let _ = app.run(id, params);
         return true;
     }
@@ -133,6 +137,10 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
             return false;
         }
         let _ = app.run(spec.id, json!({}));
+        return true;
+    }
+    if let Some(style) = style {
+        let _ = app.run("styles.apply", json!({"style": style}));
         return true;
     }
     let Some(name) = name else { return false };

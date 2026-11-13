@@ -254,6 +254,9 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         }
     }
     if close {
+        if let Dialog::CustomizeKeyboard { resume: Some(resume), .. } = d {
+            app.dialog = Some(*resume);
+        }
         forget_nudge(ctx, id);
         // Not from a browser it opened as it closed (Save As): that one keeps the keyboard.
         if !app.file_browser_open() {
