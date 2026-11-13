@@ -116,8 +116,8 @@ pub(crate) struct Writer<'d> {
     current_note: Option<(bool, u32)>,
     /// Writing a TOC heading: its TOC field is held back so the entries become the field's result.
     toc_hold_end: bool,
-    /// The held TOC field (instruction, locked, props), opened in the first entry as Word does.
-    toc_field: Option<(String, bool, bool, wordcraft_doc::props::CharProps)>,
+    /// The held TOC field (instruction, locked, dirty, form, props), opened in the first entry as Word does.
+    toc_field: Option<(String, bool, bool, String, wordcraft_doc::props::CharProps)>,
     /// Open the held TOC field at the start of the paragraph being written.
     toc_begin_here: bool,
     /// Close the open TOC field at the end of the paragraph being written.

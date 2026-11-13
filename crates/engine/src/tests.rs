@@ -4174,7 +4174,12 @@ fn imported_range_toc_is_refreshed_in_place() {
             let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
             let n = p.len();
             p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false }, &CharProps::default()).unwrap();
+            p.insert_object(
+                0,
+                InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked, dirty: false, form: String::new() },
+                &CharProps::default(),
+            )
+            .unwrap();
         }
         let mut s = Session::new(d);
         for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -4223,8 +4228,12 @@ fn toc_menu_offers_update_field_after_save_and_reopen() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
     }
     let mut s = Session::new(d);
     for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
@@ -4617,7 +4626,8 @@ fn toc_menu_targets_the_toc_update_table_refreshes() {
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(para)).unwrap();
         let n = p.len();
         p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false }, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false, form: String::new() }, &CharProps::default())
+            .unwrap();
     }
     let mut s = Session::new(d);
     let at = |s: &mut Session, block: usize| {
@@ -4734,7 +4744,7 @@ fn imported_dirty_toc_updates_in_place_and_clears() {
         p.insert_object(n, wordcraft_doc::InlineObject::FieldEnd, &wordcraft_doc::props::CharProps::default()).unwrap();
         p.insert_object(
             0,
-            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true },
+            wordcraft_doc::InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: true, form: String::new() },
             &wordcraft_doc::props::CharProps::default(),
         )
         .unwrap();
@@ -4793,8 +4803,12 @@ fn toc_page_numbers_reach_the_right_margin() {
         toc2.para.indent_left = Some(36.9);
         toc2.para.indent_first = Some(-22.7);
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
-        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false }, &CharProps::default())
-            .unwrap();
+        p.insert_object(
+            0,
+            InlineObject::FieldStart { instr: r#"TOC \o "1-3" \h \z \u"#.into(), locked: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
         let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(3)).unwrap();
         p.insert_object(0, InlineObject::FieldEnd, &CharProps::default()).unwrap();
     }
@@ -13492,4 +13506,191 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.sections().len(), 1, "{cmd}");
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
+}
+
+#[test]
+fn range_field_update_and_tracked_changes_preserved_on_open() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Revision, RevisionKind};
+
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "Updated", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), "Stale", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    run(&mut s, "references.updateFields", json!({"all": true}));
+    let para = s.doc.body[0].as_para().unwrap();
+    assert_eq!(para.plain_text(), "UpdatedUpdated");
+    assert!(matches!(&para.objects[2], InlineObject::FieldStart { dirty: false, .. }));
+
+    // Range DATE field with tracked insertion and deletion in its result: refresh_date_fields on
+    // open (and fields.updateAll) must not wipe the tracked revisions.
+    let mut dp = wordcraft_doc::Paragraph::new();
+    dp.insert_object(
+        0,
+        InlineObject::FieldStart { instr: r#" DATE \@ "yyyy" "#.into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    dp.insert_text(dp.len(), "2025", &CharProps { ins: Some(0), ..Default::default() }).unwrap();
+    dp.insert_text(dp.len(), "2024", &CharProps { del: Some(1), ..Default::default() }).unwrap();
+    dp.insert_object(dp.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    let mut d2 = wordcraft_doc::Document::new();
+    d2.revisions.push(Revision { kind: RevisionKind::Insert, author: "Alice".into(), date: String::new(), move_name: None });
+    d2.revisions.push(Revision { kind: RevisionKind::Delete, author: "Bob".into(), date: String::new(), move_name: None });
+    d2.body = vec![wordcraft_doc::para_block(dp)];
+    crate::cmd::references::refresh_date_fields(&mut d2);
+    let mut s2 = Session::new(d2);
+    run(&mut s2, "references.updateFields", json!({"all": true}));
+    let para2 = s2.doc.body[0].as_para().unwrap();
+    assert!(para2.run_ranges().any(|(rng, p)| p.ins == Some(0) && &para2.text[rng] == "2025"));
+    assert!(para2.run_ranges().any(|(rng, p)| p.del == Some(1) && &para2.text[rng] == "2024"));
+}
+
+#[test]
+fn range_field_update_preserves_anchors_and_first_run_formatting_and_handles_seq_page_and_malformed_spans() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+
+    // 1. Bookmark/comment anchors inside a range-field result span survive, and the updated text
+    // inherits the first non-deleted result run's CharProps (with ins/del cleared).
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "Fresh", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    p.insert_object(p.len(), InlineObject::BookmarkStart { name: "inner_bm".into() }, &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::CommentStart { id: 1 }, &bold).unwrap();
+    p.insert_text(p.len(), "Old", &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::CommentEnd { id: 1 }, &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "inner_bm".into() }, &bold).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+
+    // 2. Range SEQ and AUTHOR fields in a second paragraph also update.
+    let mut p2 = wordcraft_doc::Paragraph::new();
+    for instr in [" SEQ Fig ", " AUTHOR "] {
+        p2.insert_object(
+            p2.len(),
+            InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: true, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
+        p2.insert_text(p2.len(), "0", &CharProps::default()).unwrap();
+        p2.insert_object(p2.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    }
+
+    // 3. Unclosed FieldStart and nested FieldStart..FieldStart..FieldEnd..FieldEnd stay untouched.
+    let mut p3 = wordcraft_doc::Paragraph::new();
+    p3.insert_object(
+        0,
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p3.insert_object(
+        p3.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p3.insert_text(p3.len(), "Nested", &CharProps::default()).unwrap();
+    p3.insert_object(p3.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    p3.insert_object(p3.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    p3.insert_object(
+        p3.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p3.insert_text(p3.len(), "Unclosed", &CharProps::default()).unwrap();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.core.creator = "Ada".into();
+    d.body = vec![wordcraft_doc::para_block(p), wordcraft_doc::para_block(p2), wordcraft_doc::para_block(p3)];
+    let mut s = Session::new(d);
+    run(&mut s, "references.updateFields", json!({"all": true}));
+
+    let para0 = s.doc.body[0].as_para().unwrap();
+    assert_eq!(para0.plain_text(), "FreshFresh");
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::BookmarkStart { name } if name == "inner_bm")));
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::BookmarkEnd { name } if name == "inner_bm")));
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::CommentStart { id: 1 })));
+    assert!(para0.objects.iter().any(|o| matches!(o, InlineObject::CommentEnd { id: 1 })));
+    assert!(para0.run_ranges().any(|(rng, pr)| pr.bold == Some(true) && para0.text[rng].contains("Fresh")));
+
+    let para1 = s.doc.body[1].as_para().unwrap();
+    assert_eq!(para1.plain_text(), "1Ada");
+
+    let para2 = s.doc.body[2].as_para().unwrap();
+    assert_eq!(para2.plain_text(), "NestedUnclosed", "nested and unclosed range fields stay untouched");
+}
+
+#[test]
+fn range_field_update_remaps_caret_and_skips_mixed_fmt_change_runs() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::{CharProps, PropChange};
+
+    // 1. Caret placed after a range field stays at the same logical character after F9 lengthens the result.
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.insert_object(0, InlineObject::BookmarkStart { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "LongerText", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::BookmarkEnd { name: "bm".into() }, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "a", &CharProps::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::FieldStart { instr: " REF bm ".into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), "X", &CharProps::default()).unwrap();
+    p.insert_object(p.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), "b", &CharProps::default()).unwrap();
+    let caret_at_end = p.len();
+
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut s = Session::new(d);
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0]), off: caret_at_end });
+    run(&mut s, "references.updateFields", json!({"all": false}));
+    let updated = s.doc.body[0].as_para().unwrap();
+    assert_eq!(updated.plain_text(), "LongerTextaLongerTextb");
+    assert_eq!(s.sel.focus.off, updated.len(), "caret at end of paragraph shifts with range-field result growth");
+
+    // 2. Range field whose result runs carry differing fmt_change revisions is not overwritten.
+    let mut fp = wordcraft_doc::Paragraph::new();
+    fp.insert_object(
+        0,
+        InlineObject::FieldStart { instr: r#" DATE \@ "yyyy" "#.into(), locked: false, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let fmt_run = CharProps { bold: Some(true), fmt_change: Some(Box::new(PropChange { rev: 0, old: CharProps::default() })), ..Default::default() };
+    fp.insert_text(fp.len(), "20", &fmt_run).unwrap();
+    fp.insert_text(fp.len(), "25", &CharProps::default()).unwrap();
+    fp.insert_object(fp.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
+    let mut d2 = wordcraft_doc::Document::new();
+    d2.body = vec![wordcraft_doc::para_block(fp)];
+    crate::cmd::references::refresh_date_fields(&mut d2);
+    let para2 = d2.body[0].as_para().unwrap();
+    assert_eq!(para2.plain_text(), "2025");
+    assert!(para2.run_ranges().any(|(_, pr)| pr.fmt_change.is_some()));
 }

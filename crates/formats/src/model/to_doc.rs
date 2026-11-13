@@ -571,7 +571,7 @@ impl<'a> Builder<'a> {
                     append(&mut out, &t, &cp, None);
                 }
                 Inline::FieldStart(instr) => {
-                    let obj = InlineObject::FieldStart { instr: clean_text(instr), locked: false, dirty: false };
+                    let obj = InlineObject::FieldStart { instr: clean_text(instr), locked: false, dirty: false, form: String::new() };
                     append(&mut out, "", &CharProps::default(), Some(obj));
                 }
                 Inline::FieldEnd => append(&mut out, "", &CharProps::default(), Some(InlineObject::FieldEnd)),

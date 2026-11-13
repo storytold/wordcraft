@@ -346,7 +346,7 @@ fn toc_gallery_around_a_toc_whose_heading_is_in_a_block_control_round_trips() {
 #[test]
 fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
     let style = |s: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{s}"/></w:pPr>{inner}</w:p>"#);
-    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="TocForm1"/><w:enabled/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
     let content = format!(
         "{}{}{}<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
         style("TOCHeading", &t("Contents")),
@@ -361,6 +361,7 @@ fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
         let xml = document_xml(&bytes);
         assert_eq!(xml.matches("<w:sdt>").count(), 1, "pass {pass}: {xml}");
         assert!(xml.contains(r#"<w:docPartGallery w:val="Table of Contents"/>"#), "pass {pass}: {xml}");
+        assert!(xml.contains(r#"<w:name w:val="TocForm1"/>"#), "pass {pass}: {xml}");
         assert!(xml.find("</w:sdt>").unwrap() < xml.rfind(">Chapter One<").unwrap(), "pass {pass}: {xml}");
     }
 }
@@ -395,4 +396,15 @@ fn range_toc_without_control_stays_unwrapped_and_section_break_toc_control_hands
     assert!(d_sect.body[0].as_para().unwrap().section.is_some());
     let xml_sect = document_xml(&write(&d_sect).unwrap());
     assert!(xml_sect.contains("Chapter One") && xml_sect.contains("Section"), "{xml_sect}");
+}
+
+#[test]
+fn field_result_rpr_change_and_form_field_round_trip() {
+    let fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF _Ref1 \h </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:color w:val="auto"/><w:rPrChange w:id="582" w:author="Author"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:t>Section </w:t></w:r><w:r><w:rPr><w:i/><w:rPrChange w:id="583" w:author="Author"><w:rPr/></w:rPrChange></w:rPr><w:t>3.1(s)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let form_fld = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="Field1"/><w:enabled/><w:textInput/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> FORMTEXT </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:ins w:id="10" w:author="Alice"><w:r><w:t>Added </w:t></w:r></w:ins><w:r><w:rPr><w:b/><w:rPrChange w:id="11" w:author="Bob"><w:rPr/></w:rPrChange></w:rPr><w:t>Tail</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    let d = read(&package(&format!("{fld}{form_fld}"))).unwrap();
+    let xml = document_xml(&write(&d).unwrap());
+    assert!(xml.contains(r#"<w:name w:val="Field1"/>"#), "{xml}");
+    assert!(xml.contains("Added ") && xml.contains("<w:ins "), "{xml}");
+    assert_eq!(xml.matches("<w:rPrChange ").count(), 3, "{xml}");
 }

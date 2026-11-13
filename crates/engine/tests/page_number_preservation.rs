@@ -94,7 +94,12 @@ fn existing_range_page_field_is_not_duplicated() {
     let id = s.run("insert.header", &json!({"text": "Keep header"})).unwrap()["story"].as_u64().unwrap() as u32;
     let story = StoryRef::Part(id);
     let para = s.doc.para_mut(story, &Path::top(0)).unwrap();
-    para.insert_object(para.len(), InlineObject::FieldStart { instr: "PAGE".into(), locked: true, dirty: true }, &CharProps::default()).unwrap();
+    para.insert_object(
+        para.len(),
+        InlineObject::FieldStart { instr: "PAGE".into(), locked: true, dirty: true, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
     para.insert_text(para.len(), "7", &CharProps::default()).unwrap();
     para.insert_object(para.len(), InlineObject::FieldEnd, &CharProps::default()).unwrap();
     let before = s.doc.clone();

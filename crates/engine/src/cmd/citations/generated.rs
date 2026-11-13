@@ -441,9 +441,10 @@ mod tests {
         let mut d = Document::from_text("Old one\nOld two\nAfter");
         let props = CharProps::default();
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(0)) {
-            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false, form: String::new() }, &props)
+                .unwrap();
             p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false, form: String::new() }, &props).unwrap();
         }
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(1)) {
             let n = p.len();
@@ -462,7 +463,8 @@ mod tests {
             p.insert_object(at, InlineObject::FieldEnd, &props).unwrap();
         }
         if let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(first)) {
-            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "BIBLIOGRAPHY".into(), locked: false, dirty: false, form: String::new() }, &props)
+                .unwrap();
         }
         Session::new(d)
     }
@@ -514,7 +516,7 @@ mod tests {
         let props = CharProps::default();
         if let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(0)) {
             p.insert_object(0, InlineObject::FieldEnd, &props).unwrap();
-            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false }, &props).unwrap();
+            p.insert_object(0, InlineObject::FieldStart { instr: "PAGE".into(), locked: false, dirty: false, form: String::new() }, &props).unwrap();
             p.insert_object(0, InlineObject::BookmarkStart { name: "Sources".into() }, &props).unwrap();
         }
         update_generated(&mut s).unwrap();
