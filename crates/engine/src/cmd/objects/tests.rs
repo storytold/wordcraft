@@ -469,6 +469,41 @@ fn picture_styles_and_borders_check_the_size_they_draw() {
     assert_eq!(grown(u32::MAX, 1, 1), None);
 }
 
+/// #6444: a border or a frame style goes around a picture with a transparent background and does
+/// not fill it. The clear pixels stay clear.
+#[test]
+fn picture_borders_and_frames_keep_a_transparent_background() {
+    // A 20 x 10 cutout: an opaque red block in the middle of clear pixels.
+    let cutout = image::RgbaImage::from_fn(20, 10, |x, y| {
+        if (8..12).contains(&x) && (3..7).contains(&y) { image::Rgba([200, 30, 30, 255]) } else { image::Rgba([0, 0, 0, 0]) }
+    });
+    let mut data = Vec::new();
+    image::DynamicImage::ImageRgba8(cutout).write_to(&mut std::io::Cursor::new(&mut data), image::ImageFormat::Png).unwrap();
+    let drawn = |id: &str, v: Value| {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.picture", &json!({"data": super::super::insert::base64_encode(&data)})).unwrap();
+        s.run(id, &v).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        let InlineObject::Image { media, .. } = o else { panic!("a picture") };
+        image::load_from_memory(&s.doc.media.get(&media).cloned().unwrap()).unwrap().to_rgba8()
+    };
+    // The border is black by default, which is what filled the background.
+    let out = drawn("picture.border", json!({"width": 4}));
+    assert_eq!(out.dimensions(), (28, 18));
+    assert_eq!(out.get_pixel(0, 0).0, [0, 0, 0, 255], "the border");
+    assert_eq!(out.get_pixel(4, 4).0[3], 0, "the clear corner inside the border");
+    assert_eq!(out.get_pixel(13, 8).0, [200, 30, 30, 255], "the picture");
+    for style in ["simpleFrame", "thickFrame"] {
+        let out = drawn("picture.style", json!({"style": style}));
+        let (w, h) = out.dimensions();
+        assert_eq!(out.get_pixel(0, 0).0[3], 255, "{style}: the frame");
+        // The cutout sits in the middle with the frame around it: its corner is still clear.
+        let (bx, by) = ((w - 20) / 2, (h - 10) / 2);
+        assert_eq!(out.get_pixel(bx, by).0[3], 0, "{style}: the clear corner inside the frame");
+        assert_eq!(out.get_pixel(bx + 9, by + 4).0, [200, 30, 30, 255], "{style}: the picture");
+    }
+}
+
 #[test]
 fn picture_pipeline() {
     let mut s = Session::new(wordcraft_doc::Document::new());
