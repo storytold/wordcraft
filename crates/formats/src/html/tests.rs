@@ -75,6 +75,17 @@ fn borderless_tables_export_without_cell_borders() {
 }
 
 #[test]
+fn a_blank_paragraph_with_a_width_0_bottom_border_is_still_a_rule() {
+    // #5065: a DOCX bottom border without `w:sz` is width 0, and Word draws it at its thinnest
+    // line. An empty paragraph carrying one is the horizontal rule HTML has.
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.props.borders = Some(wordcraft_doc::props::Borders { bottom: Some(wordcraft_doc::props::Border::single(0.0)), ..Default::default() });
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    assert!(export(&d).contains("<hr>"), "{}", export(&d));
+}
+
+#[test]
 fn input_newlines_preserve_preformatted_lines() {
     for newline in ["\n", "\r\n", "\r"] {
         let f = parse(&format!("<pre>{newline}  Alpha{newline}  <b>Beta</b>{newline}{newline}  Gamma</pre>"));

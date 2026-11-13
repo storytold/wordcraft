@@ -604,6 +604,11 @@ pub(super) fn parse_border(v: &str) -> Option<Border> {
         }
         any = true;
     }
+    // ODF follows XSL/CSS here: no line at no width, whatever style it names. Without this a
+    // `0pt solid` side would read as a width-0 border, which is a line Word draws (#5065).
+    if b.width <= 0.0 {
+        b.style = BorderStyle::None;
+    }
     any.then_some(b)
 }
 

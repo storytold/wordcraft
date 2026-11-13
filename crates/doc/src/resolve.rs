@@ -91,7 +91,7 @@ impl ResolvedChar {
             color: c.color.unwrap_or_default(),
             highlight: c.highlight.and_then(Highlight::rgb),
             shading: c.shading,
-            border: c.border.filter(Border::is_visible),
+            border: c.border.filter(Border::is_drawn),
             vert_align: c.vert_align.unwrap_or_default(),
             caps: c.caps.unwrap_or(false),
             small_caps: c.small_caps.unwrap_or(false),
@@ -283,10 +283,10 @@ impl ResolvedPara {
             numbering: p.numbering.filter(|n| n.num != 0),
             tabs,
             shading: p.shading,
-            borders: p.borders.filter(Borders::any_visible),
+            borders: p.borders.filter(|b| [b.top, b.left, b.bottom, b.right, b.between, b.inside_v].iter().flatten().any(Border::is_drawn)),
             padding: p.borders.map_or([0.0; 4], |b| {
                 [b.top, b.left, b.bottom, b.right]
-                    .map(|s| s.filter(|l| !l.is_visible() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
+                    .map(|s| s.filter(|l| !l.is_drawn() && l.space.is_finite() && l.space > 0.0).map_or(0.0, |l| l.space.min(1584.0)))
             }),
             bidi: p.bidi.unwrap_or(false),
             drop_cap: p.drop_cap.unwrap_or(0).min(10),

@@ -79,7 +79,9 @@ pub(in crate::odt) fn props_text(cp: &wordcraft_doc::props::CharProps) -> String
         },
         size: cp.size,
         font: cp.font.as_deref().map(std::sync::Arc::from),
-        extra: Some(Box::new(cp.clone())),
+        // A style's own properties, with its text border at the width it is drawn at: the flow
+        // model does that for direct formatting, and a style does not go through it (#5065).
+        extra: Some(Box::new(wordcraft_doc::props::CharProps { border: cp.border.map(|b| b.as_drawn()), ..cp.clone() })),
         ..Default::default()
     };
     text_props(&f)
