@@ -600,7 +600,7 @@ fn hungarian_locales_and_saved_preference_work_without_changing_the_document() {
     for tag in ["hu", "hu-HU", "hu_HU.UTF-8", "HU_hu.UTF-8@euro", "hu-Latn-HU"] {
         assert_eq!(lang_from_tag(tag), Some(hu), "{tag}");
     }
-    assert_eq!(first_supported(["fi-FI", "hu-HU", "en-US"]), Some(hu));
+    assert_eq!(first_supported([UNSUPPORTED, "hu-HU", "en-US"]), Some(hu));
     assert_eq!(normalize_pref("HU"), Some("hu"));
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
     let before = serde_json::to_value(&app.session.doc).unwrap();
