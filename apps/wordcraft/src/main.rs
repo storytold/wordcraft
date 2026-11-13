@@ -573,6 +573,8 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    graphics::configure_memory_hints(&mut options);
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 only, or OpenGL when
     // DirectX 12 has no GPU driver or this is a 32-bit build, and compile DirectX 12 shaders with
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
