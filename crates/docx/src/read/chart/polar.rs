@@ -5,7 +5,8 @@ use super::plot::{Axes, has_values};
 use super::{Chart, FRAC_PI_2, GAP, GRID, GraphicItem, LINE, PathSeg, Rgb, ShapeKind, TAU, TEXT, TextAlign};
 
 pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
-    let Some(s) = c.series.first() else { return };
+    let Some(grp) = c.groups.first() else { return };
+    let Some(s) = grp.series.first() else { return };
     let vals: Vec<f64> = s.values.iter().map(|v| v.unwrap_or(0.0).max(0.0)).collect();
     let total: f64 = vals.iter().sum();
     let r = (area.w.min(area.h) / 2.0 - 2.0) as f64;
@@ -33,7 +34,7 @@ pub(super) fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             arc(&mut segs, (cx, cy, r), a, b);
         }
         segs.push(PathSeg::Close);
-        fill(out, segs, c.point_colour(0, i));
+        fill(out, segs, c.point_colour(grp, 0, i));
         if let Some(text) = label_of(s, i) {
             // Halfway across the ring (pie: two thirds out from the centre).
             let at = if inner > 0.0 { (r + inner) / 2.0 } else { r * 0.65 };
@@ -83,8 +84,9 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         stroke(out, vec![pt((cx, cy)), line_to(end)], GRID, 0.75);
     }
     let mut labels = Vec::new();
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
-        let col = c.series_colour(j);
+    let Some(grp) = c.groups.first() else { return };
+    for (j, s) in grp.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
+        let col = c.series_colour(grp, j);
         // A missing value counts as the centre, as Word draws it.
         let ring: Vec<(f64, f64)> = (0..c.n).map(|i| at(s.values.get(i).copied().flatten().unwrap_or(vs.lo), i)).collect();
         let mut segs: Vec<PathSeg> = ring.iter().enumerate().map(|(i, p)| if i == 0 { pt(*p) } else { line_to(*p) }).collect();

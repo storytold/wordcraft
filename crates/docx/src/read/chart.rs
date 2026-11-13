@@ -1,10 +1,14 @@
 //! Charts (ECMA-376 Part 1 §21.2): the cached data of a `c:chartSpace` drawn as items in points.
 //!
-//! Bar and column (clustered, stacked or 100% stacked), line, area, pie, doughnut and scatter
-//! charts are drawn from the first supported chart type of the plot area, with their values as
-//! data labels where `c:dLbls` shows them (`c:showVal`). Radar charts (standard, with markers or
-//! filled) draw as spokes, concentric grid polygons and one polygon per series. A chart of only other types (stock, bubble…)
-//! draws a placeholder: its frame, its title and the type it is. Text widths are estimated ([`CHAR_W`] em a character), so label places are approximate.
+//! Bar and column (clustered, stacked or 100% stacked), line, area, stock, pie, doughnut and scatter
+//! charts, with their values as data labels where `c:dLbls` shows them (`c:showVal`). The chart
+//! types of a plot area (§21.2.2.145) share one frame (combo charts): areas drawn first, then bars,
+//! lines and scatters, each on the primary value axis or a secondary one on the right. Stock charts
+//! draw hi-low lines and up/down bars. Pie, doughnut and radar charts draw their first chart type
+//! alone; radar charts (standard, with markers or filled) as spokes, concentric grid polygons and
+//! one polygon per series. A chart of only other types (bubble, surface, 3-D…) draws a
+//! placeholder: its frame, its title and the type it is. Text widths are estimated ([`CHAR_W`] em
+//! a character), so label places are approximate.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 
@@ -22,6 +26,7 @@ mod model;
 mod parse;
 mod plot;
 mod polar;
+mod stock;
 
 #[cfg(test)]
 use canvas::SWATCH;
@@ -29,7 +34,7 @@ pub(super) use canvas::text_w;
 use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
-use model::{Axis, Grouping, Kind, Pos, Series};
+use model::{Axis, Group, Kind, Pos};
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
 use parse::{read_series, text_size, title_of};
@@ -93,7 +98,8 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
         // and for stacked columns with a vertical legend.
         let vertical = matches!(pos, Pos::Left | Pos::Right);
-        let reverse = chart.kind == Kind::Bar && if chart.horizontal { !chart.stacked() } else { chart.stacked() && vertical };
+        let reverse =
+            chart.kind == Kind::Bar && chart.groups.len() == 1 && if chart.horizontal { !chart.stacked() } else { chart.stacked() && vertical };
         let mut entries = chart.legend_entries();
         if reverse {
             entries.reverse();
@@ -115,7 +121,7 @@ fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect) -> Rect {
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
-/// A chart whose plot area holds only chart types WordCraft doesn't draw (stock, bubble…): its
+/// A chart whose plot area holds only chart types WordCraft doesn't draw (bubble, surface…): its
 /// frame with a light border, its title and a line saying which type it is, so it isn't blank
 /// space. Nothing when the plot area has no chart type at all, or a supported one with nothing
 /// to draw.
@@ -142,7 +148,6 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
 /// What a placeholder calls a chart type element WordCraft doesn't draw.
 fn unsupported_name(name: &str) -> &'static str {
     match name {
-        "c:stockChart" => "Stock chart",
         "c:bubbleChart" => "Bubble chart",
         "c:surfaceChart" | "c:surface3DChart" => "Surface chart",
         "c:ofPieChart" => "Pie of pie chart",
@@ -155,13 +160,12 @@ fn unsupported_name(name: &str) -> &'static str {
 }
 
 struct Chart {
+    /// The first chart type of the plot area: it picks the frame (pie, radar, scatter or bars
+    /// across).
     kind: Kind,
     horizontal: bool,
-    grouping: Grouping,
-    /// Gap between groups as a fraction of a bar's width.
-    gap: f32,
-    /// Overlap of clustered bars, -1..1 (1 = all on top of each other).
-    overlap: f32,
+    /// The chart types drawn, in file order (one for pie, doughnut and radar charts).
+    groups: Vec<Group>,
     /// Doughnut hole, fraction of the outer radius.
     hole: f32,
     first_angle: f64,
@@ -173,20 +177,24 @@ struct Chart {
     /// Number of categories (scatter: points per series at most).
     n: usize,
     cats: Vec<String>,
-    series: Vec<Series>,
     accents: Vec<Rgb>,
     title: Option<String>,
     legend: Option<Pos>,
     /// Category axis (scatter: the x axis).
     cat: Axis,
     val: Axis,
+    /// Secondary value axis, when a group is plotted on one.
+    sec: Option<Axis>,
     text_size: f32,
     val_fmt: String,
+    sec_fmt: String,
     /// Serial days count from 1904 (`c:date1904`), not 1900.
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
 }
 
+#[cfg(test)]
+mod combo_tests;
 #[cfg(test)]
 mod tests;

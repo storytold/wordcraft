@@ -157,7 +157,8 @@ fn unsupported_chart_types_draw_a_placeholder() {
     assert!(framed, "a light border marks the chart's frame: {bubble:?}");
 
     let stock = chart_items(&space(&format!("<c:stockChart>{ser}{ser}{ser}</c:stockChart>")), &theme(), 300.0, 200.0);
-    assert_eq!(texts(&stock), ["Stock chart (not supported yet)"]);
+    // Stock charts are drawn (hi-low lines, up/down bars), not a placeholder.
+    assert!(!texts(&stock).iter().any(|t| t.contains("not supported")), "{stock:?}");
     let other = chart_items(&space(&format!("<c:fancyChart>{ser}</c:fancyChart>")), &theme(), 300.0, 200.0);
     assert_eq!(texts(&other), ["Chart (not supported yet)"]);
     // A supported type in the plot area is drawn, an unsupported one beside it is skipped.
