@@ -482,30 +482,65 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     v
 }
 
-/// The formatting of the source run a token came from: the run holding the token's first byte,
-/// with the revision metadata stripped. `ins`, `del` and `fmt_change` are indices into the
-/// *source* document's own revision table, and the rebuilt paragraph lives in the result document,
-/// whose table is a different one, so a source mark can never be carried across; `word_diff`
-/// stamps the compare's own `ins`/`del` on the segments it marks. The consequence is plain: a
-/// pre-existing pending revision inside a changed paragraph (say another author's deletion) is
-/// superseded by the compare result rather than preserved. The hyperlink is kept, because Reject
-/// restores it on a deleted run (at token granularity: the link is taken from the token's first
-/// byte, so a token that starts unlinked can lose a mid-token link).
-fn source_props(p: &Paragraph, t: &Tok<'_>) -> CharProps {
-    let off = match t {
-        Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
-    };
-    let c = p.props_of_char(off);
-    CharProps { ins: None, del: None, fmt_change: None, ..c.clone() }
+/// One side's run formatting for `word_diff`: the paragraph's run ranges (from
+/// [`Paragraph::run_ranges`]), walked with a forward cursor. `word_diff` consumes each side's
+/// tokens in increasing offset order, so the cursor makes a token's lookup amortised O(1)
+/// instead of rescanning the runs from the start for every token; an out-of-order offset falls
+/// back to a binary search, so the lookup stays correct for any offset.
+struct SideProps<'a> {
+    ranges: Vec<(std::ops::Range<usize>, &'a CharProps)>,
+    mark: &'a CharProps,
+    cursor: usize,
+}
+
+impl<'a> SideProps<'a> {
+    fn new(p: &'a Paragraph) -> Self {
+        SideProps { ranges: p.run_ranges().collect(), mark: &p.mark, cursor: 0 }
+    }
+
+    /// The props of the run holding byte `off`: that run's props, or the paragraph mark when
+    /// `off` is past the last run — the same answer `Paragraph::props_of_char` gives.
+    fn run_props(&mut self, off: usize) -> &'a CharProps {
+        while self.cursor < self.ranges.len() && self.ranges[self.cursor].0.end <= off {
+            self.cursor += 1;
+        }
+        if let Some((range, props)) = self.ranges.get(self.cursor) {
+            if range.contains(&off) {
+                return props;
+            }
+        }
+        let idx = self.ranges.partition_point(|(r, _)| r.start <= off);
+        match idx.checked_sub(1).and_then(|i| self.ranges.get(i)) {
+            Some((range, props)) if range.contains(&off) => props,
+            _ => self.mark,
+        }
+    }
+
+    /// The formatting of the source run a token came from: the run holding the token's first
+    /// byte, with the revision metadata stripped. `ins`, `del` and `fmt_change` are indices into
+    /// the *source* document's own revision table, and the rebuilt paragraph lives in the result
+    /// document, whose table is a different one, so a source mark can never be carried across;
+    /// `word_diff` stamps the compare's own `ins`/`del` on the segments it marks. The consequence
+    /// is plain: a pre-existing pending revision inside a changed paragraph (say another author's
+    /// deletion) is superseded by the compare result rather than preserved. The hyperlink is
+    /// kept, because Reject restores it on a deleted run (at token granularity: the link is taken
+    /// from the token's first byte, so a token that starts unlinked can lose a mid-token link).
+    fn props_of(&mut self, t: &Tok<'_>) -> CharProps {
+        let off = match t {
+            Tok::Text(_, range) | Tok::Obj(_, range) => range.start,
+        };
+        let c = self.run_props(off);
+        CharProps { ins: None, del: None, fmt_change: None, ..c.clone() }
+    }
 }
 
 /// The props of an output token: those of the source run it came from, or — never expected, since
 /// [`tokens`] and [`lcs_ops`] consume both sides in step — the given fallback. A miss is loud.
-fn output_props(p: &Paragraph, t: Option<&Tok<'_>>, fallback: &CharProps) -> CharProps {
+fn output_props(side: &mut SideProps<'_>, t: Option<&Tok<'_>>, fallback: &CharProps) -> CharProps {
     if t.is_none() {
         log::warn!("compare: a token range lookup missed; `tokens` and `lcs_ops` are out of step");
     }
-    t.map(|t| source_props(p, t)).unwrap_or_else(|| fallback.clone())
+    t.map(|t| side.props_of(t)).unwrap_or_else(|| fallback.clone())
 }
 
 /// Add a token at the end of `p` with `props`.
@@ -551,6 +586,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     };
     let plain_revised = ctx.plain_revised;
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
+    let (mut a_props, mut b_props) = (SideProps::new(a), SideProps::new(b));
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t, _) => Key::Text(ctx.opts.key(t)),
         Tok::Obj(o, _) => obj_key(doc, o),
@@ -562,7 +598,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
     // The revised paragraph's properties are used with its revision bookkeeping stripped, like runs
-    // (`source_props`) and the mark, because `fmt_change`/`num_change` are indices into the revised
+    // (`SideProps::props_of`) and the mark, because `fmt_change`/`num_change` are indices into the revised
     // document's own revision table and are meaningless in the result document. A plain-text
     // revised side, which carries no paragraph properties of its own, falls back to the original's,
     // stripped the same way, so pre-existing revision state never leaks into the rebuilt paragraph.
@@ -587,18 +623,19 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
                 // revised run, as issue #3749 prescribes ("Copy unchanged tokens from the revised
                 // paragraph with their own properties"); a plain-text revised side has no runs to
                 // speak of, so the original run's formatting is kept instead.
-                let props = if plain_revised { output_props(a, ta.get(i), &fallback) } else { output_props(b, tb.get(j), &fallback_b) };
+                let props =
+                    if plain_revised { output_props(&mut a_props, ta.get(i), &fallback) } else { output_props(&mut b_props, tb.get(j), &fallback_b) };
                 put(&mut p, tb.get(j), &props);
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                let props = output_props(a, ta.get(i), &fallback);
+                let props = output_props(&mut a_props, ta.get(i), &fallback);
                 put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..props });
                 i += 1;
             }
             Op::Ins => {
-                let props = tb.get(j).map(|t| source_props(b, t)).unwrap_or_else(|| fallback.clone());
+                let props = tb.get(j).map(|t| b_props.props_of(t)).unwrap_or_else(|| fallback.clone());
                 put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..props });
                 j += 1;
             }
