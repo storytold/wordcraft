@@ -144,6 +144,21 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
             para.props.indent_right = Some(x);
         }
         para.touch();
+        // An indent given in points wins over one in characters, the paragraph's own or its
+        // style's, unless `props` gives the characters too: Word's dialog writes
+        // `w:firstLineChars="0"` (and the like) for it. Paragraphs without one stay as they are.
+        let points = |pt: bool, chars: Option<f32>| pt && chars.is_none();
+        let set = [
+            points(props.indent_left.is_some() || start.is_some(), props.indent_left_chars),
+            points(props.indent_right.is_some() || end.is_some(), props.indent_right_chars),
+            points(props.indent_first.is_some(), props.indent_first_chars),
+        ];
+        let Some(para) = s.doc.para(story, &path) else { continue };
+        let chars = s.doc.styles.resolve_para(&para.props).indent_chars;
+        let [l, r, f] = [0, 1, 2].map(|i| set[i] && chars[i] != 0.0);
+        if l || r || f {
+            s.doc.para_mut(story, &path)?.props.cancel_char_indents(l, r, f);
+        }
     }
     sel_result(s)
 }
