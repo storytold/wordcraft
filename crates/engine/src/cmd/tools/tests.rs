@@ -1780,10 +1780,13 @@ fn compare_paragraph_section_change_keeps_live_revised_and_record_base() {
 }
 
 /// Hostile input: the REVISED table already carries another author's `w:tblPrChange` on a property
-/// the comparison does not change. The pre-existing record must survive untouched (neither dropped
-/// nor re-stamped), and the comparison records nothing new.
+/// the comparison does not change. What this test claims is snapshot preservation only: the
+/// pre-existing record's stored properties survive the compare neither dropped nor re-stamped,
+/// and the comparison records nothing new. It does not claim the record still belongs to the
+/// prior author: the result's revision list is the compare's own, so the record's `rev` index
+/// denotes a compare revision there. Remapping revision indices on adoption is #5571's scope.
 #[test]
-fn compare_keeps_a_prior_authors_record_the_compare_does_not_touch() {
+fn compare_keeps_a_prior_change_records_snapshot_untouched() {
     use wordcraft_doc::props::{PropChange, TableProps};
     let original = || table_doc(|_| {});
     let revised = || {
@@ -1801,17 +1804,18 @@ fn compare_keeps_a_prior_authors_record_the_compare_does_not_touch() {
     let (s, r) = compare_saved("hostileprior", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 0, "an already-tracked change the compare does not alter is not a new change: {r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
-    let ch = t.props.fmt_change.as_ref().expect("the revised table's prior w:tblPrChange survives the compare");
-    assert_eq!(ch.old.style.as_deref(), Some("PriorStyle"), "the prior record's stored original is untouched (not re-stamped)");
+    let ch = t.props.fmt_change.as_ref().expect("the revised table's pre-existing w:tblPrChange snapshot survives the compare");
+    assert_eq!(ch.old.style.as_deref(), Some("PriorStyle"), "the prior snapshot's stored original is untouched (not re-stamped)");
     assert!(t.props.style.is_none(), "the live props are the revised ones");
 }
 
 /// Hostile input: the revised table carries another author's `w:tblPrChange` while a DIFFERENT
-/// property (a cell's shading) is the real difference. The prior record survives untouched and the
-/// compare's own new `w:tcPrChange` is non-vacuous: its stored original is the BASE, the live cell
-/// is the revised shading.
+/// property (a cell's shading) is the real difference. The prior record's snapshot survives
+/// untouched (its attribution in the result's revision list is #5571's concern, not claimed
+/// here), and the compare's own new `w:tcPrChange` is non-vacuous: its stored original is the
+/// BASE, the live cell is the revised shading.
 #[test]
-fn compare_new_change_beside_a_prior_authors_record_stays_non_vacuous() {
+fn compare_new_change_beside_a_prior_change_record_stays_non_vacuous() {
     use wordcraft_doc::props::{PropChange, Rgb, TableProps};
     let original = || table_doc(|_| {});
     let revised = || {
@@ -1830,8 +1834,8 @@ fn compare_new_change_beside_a_prior_authors_record_stays_non_vacuous() {
     let (s, r) = compare_saved("hostilenew", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "the cell shading is the one new change: {r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
-    let prior = t.props.fmt_change.as_ref().expect("the revised table's prior w:tblPrChange survives");
-    assert_eq!(prior.old.style.as_deref(), Some("PriorStyle"), "the prior record is not re-stamped");
+    let prior = t.props.fmt_change.as_ref().expect("the revised table's pre-existing w:tblPrChange snapshot survives");
+    assert_eq!(prior.old.style.as_deref(), Some("PriorStyle"), "the prior snapshot is not re-stamped");
     let ch = t.rows[0].cells[1].props.fmt_change.as_ref().expect("the new cell shading yields w:tcPrChange");
     assert_eq!(ch.old.shading, None, "the new record holds the BASE shading, not the live revised one");
     assert_eq!(t.rows[0].cells[1].props.shading, Some(Rgb(0, 128, 0)), "the live cell carries the revised shading");
