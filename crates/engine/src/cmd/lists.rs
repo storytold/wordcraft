@@ -133,9 +133,17 @@ pub fn define_number(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     let id = Arc::make_mut(&mut s.doc.numbering).try_add_levels(None, levels)?;
+    // As the Numbering button: a paragraph in its own style (a heading) keeps it, and the list's
+    // indents replace direct ones.
     super::para::fmt(s, &|pp| {
         pp.numbering = Some(NumRef { num: id, level: 0 });
-        pp.style = Some("ListParagraph".into());
+        pp.indent_left = None;
+        pp.indent_first = None;
+        pp.indent_left_chars = None;
+        pp.indent_first_chars = None;
+        if pp.style.is_none() || pp.style.as_deref() == Some("Normal") {
+            pp.style = Some("ListParagraph".into());
+        }
     })
 }
 
@@ -872,6 +880,15 @@ mod tests {
         let chr = s.doc.numbering.abstract_of(num).unwrap().levels[0].chr.clone();
         assert_eq!((chr.size, chr.underline, chr.caps), (Some(14.0), Some(wordcraft_doc::props::Underline::Single), Some(true)));
         assert!(s.run("para.defineNumber", &json!({"props": {"size": "big"}})).is_err());
+    }
+
+    /// #2787: Define New Number Format, like the Numbering button, leaves a heading in its style
+    /// (outline level, table of contents) and gives only a Normal paragraph List Paragraph.
+    #[test]
+    fn define_new_number_format_keeps_a_heading_style() {
+        let mut s = doc(&[("One", "Heading1"), ("Body", "Normal")], 0, 1);
+        s.run("para.defineNumber", &json!({"format": "upperRoman", "text": "%1."})).unwrap();
+        assert_eq!(numbered(&mut s), [n(Some("I."), "Heading1"), n(Some("II."), "ListParagraph")]);
     }
 
     /// Paragraphs "One", "Two", "Three", all selected.
