@@ -544,10 +544,17 @@ pub fn resolve_para_fmt(p: &mut ParaProps, accept: bool) {
 }
 
 /// Accept (drop the record) or reject (restore previous numbering) a paragraph's list numbering change.
+/// If an imported formatting change is also present on the paragraph with its own numbering baseline,
+/// updates that baseline to match the resolved numbering so subsequent rejection of formatting does not clobber it.
 pub fn resolve_para_num(p: &mut ParaProps, accept: bool) {
     let Some(ch) = p.num_change.take() else { return };
     if !accept && ch.is_parseable() {
         p.numbering = ch.snapshot;
+    }
+    if let Some(fc) = p.fmt_change.as_mut()
+        && fc.old.numbering.is_some()
+    {
+        fc.old.numbering = p.numbering;
     }
 }
 

@@ -8,12 +8,12 @@ fn resolve_runs(
     (props_num, props_fmt): (bool, bool),
     accept: bool,
 ) -> Result<(), CmdError> {
-    if props_num && para.props.num_change.is_some() {
-        fmt_revisions::resolve_para_num(&mut para.props, accept);
-        para.touch();
-    }
     if props_fmt && para.props.fmt_change.is_some() {
         fmt_revisions::resolve_para_fmt(&mut para.props, accept);
+        para.touch();
+    }
+    if props_num && para.props.num_change.is_some() {
+        fmt_revisions::resolve_para_num(&mut para.props, accept);
         para.touch();
     }
     let ranges: Vec<(usize, usize, bool, bool, bool)> = para
@@ -138,9 +138,49 @@ pub(crate) struct StyleTarget {
     rev: u32,
 }
 
+/// The paragraph-formatting change Next / Previous Change selected, distinguishing it from an
+/// explicit whole-body or range selection.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParaFmtTarget {
+    document: u64,
+    sel: Selection,
+    path: wordcraft_doc::Path,
+}
+
+/// The paragraph-numbering change Next / Previous Change selected, distinguishing it from an
+/// explicit whole-body or range selection.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ParaNumTarget {
+    document: u64,
+    sel: Selection,
+    path: wordcraft_doc::Path,
+}
+
+/// A navigated change marker, distinguishing it from an explicit whole-body or caret selection.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct NavigatedTarget {
+    pub(crate) document: u64,
+    pub(crate) sel: Selection,
+}
+
 /// The navigated style change, when the selection is still the one navigation made.
 fn navigated_style(s: &Session) -> Option<StyleTarget> {
     s.review_style.clone().filter(|t| t.document == s.document_id() && t.sel == s.sel)
+}
+
+/// The navigated paragraph formatting change, when the selection is still the one navigation made.
+fn navigated_para_fmt(s: &Session) -> Option<ParaFmtTarget> {
+    s.review_para_fmt.clone().filter(|t| t.document == s.document_id() && t.sel == s.sel)
+}
+
+/// The navigated paragraph numbering change, when the selection is still the one navigation made.
+fn navigated_para_num(s: &Session) -> Option<ParaNumTarget> {
+    s.review_para_num.clone().filter(|t| t.document == s.document_id() && t.sel == s.sel)
+}
+
+/// Whether the current selection matches the active navigation target for this document.
+fn is_navigated(s: &Session) -> bool {
+    s.review_navigated.as_ref().is_some_and(|t| t.document == s.document_id() && t.sel == s.sel)
 }
 
 /// Accept or reject the navigated style change alone: that revision in that style. Returns whether
@@ -156,15 +196,19 @@ fn resolve_style_change(s: &mut Session, t: &StyleTarget, accept: bool) -> bool 
     true
 }
 
-/// Select change `c` and remember which style change it is, if it is one.
+/// Select change `c` and remember which style, numbering or paragraph format change it is, if it is one.
 fn select_change(s: &mut Session, c: &Change) {
     s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
     s.review_style = c.style.clone().zip(c.rev).map(|(style, rev)| StyleTarget { document: s.document_id(), sel: s.sel.clone(), style, rev });
+    s.review_para_fmt = if c.para_fmt { Some(ParaFmtTarget { document: s.document_id(), sel: s.sel.clone(), path: c.a.path.clone() }) } else { None };
+    s.review_para_num = if c.para_num { Some(ParaNumTarget { document: s.document_id(), sel: s.sel.clone(), path: c.a.path.clone() }) } else { None };
+    s.review_navigated = Some(NavigatedTarget { document: s.document_id(), sel: s.sel.clone() });
 }
 
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
 /// `delete`, `format`), revision, and for a formatting change the properties it set; for a
-/// style-definition change, the style's id.
+/// style-definition change, the style's id; for a paragraph-formatting change, whether it targets
+/// paragraph properties rather than run, mark or section formatting.
 struct Change {
     a: Pos,
     b: Pos,
@@ -172,11 +216,25 @@ struct Change {
     rev: Option<u32>,
     props: Vec<Value>,
     style: Option<String>,
+    para_fmt: bool,
+    para_num: bool,
 }
 
 impl Change {
+    /// A formatting change across range `a..b` at revision `rev`.
     fn format(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
-        Change { a, b, kind: "format", rev: Some(rev), props, style: None }
+        Change { a, b, kind: "format", rev: Some(rev), props, style: None, para_fmt: false, para_num: false }
+    }
+
+    /// A paragraph-formatting change across range `a..b` at revision `rev`, targeting paragraph
+    /// properties rather than character or section formatting.
+    fn para_format(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
+        Change { a, b, kind: "format", rev: Some(rev), props, style: None, para_fmt: true, para_num: false }
+    }
+
+    /// A paragraph-numbering change across range `a..b` at revision `rev`.
+    fn para_num(a: Pos, b: Pos, rev: u32, props: Vec<Value>) -> Change {
+        Change { a, b, kind: "format", rev: Some(rev), props, style: None, para_fmt: false, para_num: true }
     }
 }
 
@@ -194,7 +252,7 @@ fn mark_change(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Opti
     } else {
         a.clone()
     };
-    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), style: None })
+    Some(Change { a, b, kind, rev: p.mark.ins.or(p.mark.del), props: Vec::new(), style: None, para_fmt: false, para_num: false })
 }
 
 /// The kind of an insertion / deletion change: `insert`, `delete`, or for one end of a move
@@ -340,8 +398,14 @@ fn revision_span(p: &Paragraph, off: usize) -> Option<std::ops::Range<usize>> {
 fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     // The style change Next / Previous Change selected: that one alone. A caret put at the
     // document start any other way resolves no style change.
+    let navigated_any = is_navigated(s);
     let navigated = navigated_style(s);
+    let navigated_para = navigated_para_fmt(s);
+    let navigated_num = navigated_para_num(s);
     s.review_style = None;
+    s.review_para_fmt = None;
+    s.review_para_num = None;
+    s.review_navigated = None;
     if let Some(t) = navigated
         && resolve_style_change(s, &t, accept)
     {
@@ -349,8 +413,9 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     }
     let (a, b) = s.sel.ordered();
     // Capture this before text revisions are resolved: accepting a deletion or rejecting an
-    // insertion can change the body's end position.
-    let whole_body = a != b && a == s.doc.start_of(StoryRef::Body) && b == s.doc.end_of(StoryRef::Body);
+    // insertion can change the body's end position. Whole body is only resolved on explicit whole-body
+    // selections, not navigated single revisions that happen to span the single-paragraph document.
+    let whole_body = !navigated_any && a != b && a == s.doc.start_of(StoryRef::Body) && b == s.doc.end_of(StoryRef::Body);
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
     // A caret targeting a paragraph's numbering change.
@@ -366,7 +431,15 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let mark_fmt = s.doc.para_at(&a).is_some_and(|p| a.off == p.len() && p.mark.fmt_change.is_some());
         let para_fmt = s.doc.para_at(&a).is_some_and(|p| p.props.fmt_change.is_some());
         match found {
-            _ if num_fmt => {
+            _ if navigated_para.as_ref().is_some_and(|t| t.path == a.path) => {
+                caret_props = Some(a.path.clone());
+                (a.clone(), a)
+            }
+            _ if navigated_num.as_ref().is_some_and(|t| t.path == a.path) => {
+                caret_num = Some(a.path.clone());
+                (a.clone(), a)
+            }
+            _ if !navigated_any && num_fmt => {
                 caret_num = Some(a.path.clone());
                 (a.clone(), a)
             }
@@ -397,9 +470,11 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let to = if path == b.path { b.off } else { len };
         // A paragraph's mark is in the selection when the selection goes on past it.
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
+        let is_navigated_fmt = navigated_para.as_ref().is_some_and(|t| t.path == path);
         let multi_para = a.path != b.path;
         let props_fmt = (ranged && (multi_para || to > from)) || caret_props.as_ref() == Some(&path);
-        let props_num = (ranged && (multi_para || whole_body) && (path != a.path || from == 0)) || caret_num.as_ref() == Some(&path);
+        let props_num =
+            (ranged && (multi_para || (whole_body && !is_navigated_fmt)) && (path != a.path || from == 0)) || caret_num.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), mark, (props_num, props_fmt), accept)?;
         if ranged {
             resolve_cell(s, a.story, &path, accept)?;
@@ -442,15 +517,24 @@ fn changes(s: &Session) -> Vec<Change> {
             }
         }
         if let Some(ch) = &p.props.num_change {
-            out.push(Change::format(mk(&path, 0), mk(&path, 0), ch.rev, fmt_revisions::para_num_diff(&p.props)));
+            out.push(Change::para_num(mk(&path, 0), mk(&path, 0), ch.rev, fmt_revisions::para_num_diff(&p.props)));
         }
         if let Some(ch) = &p.props.fmt_change {
-            out.push(Change::format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
+            out.push(Change::para_format(mk(&path, 0), mk(&path, p.len()), ch.rev, fmt_revisions::para_diff(&p.props)));
         }
         for (r, c) in p.run_ranges() {
             let kind = run_kind(&s.doc, c.ins, c.del);
             if !kind.is_empty() {
-                out.push(Change { a: mk(&path, r.start), b: mk(&path, r.end), kind, rev: c.ins.or(c.del), props: Vec::new(), style: None });
+                out.push(Change {
+                    a: mk(&path, r.start),
+                    b: mk(&path, r.end),
+                    kind,
+                    rev: c.ins.or(c.del),
+                    props: Vec::new(),
+                    style: None,
+                    para_fmt: false,
+                    para_num: false,
+                });
             }
             let Some(ch) = &c.fmt_change else { continue };
             let props = fmt_revisions::char_diff(c);
@@ -600,11 +684,21 @@ pub fn has_deletions(doc: &wordcraft_doc::Document) -> bool {
     })
 }
 
+/// Navigate to the next (`dir > 0`) or previous (`dir < 0`) tracked change across the document body.
 pub(super) fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
     let list = changes(s);
     let caret = s.sel.ordered();
-    // From a navigated style change, the one next to it in the list (they share their anchor).
-    let at = navigated_style(s).and_then(|t| list.iter().position(|c| c.style.as_deref() == Some(t.style.as_str()) && c.rev == Some(t.rev)));
+    // From a navigated change, locate its index in the list so coincident ranges (e.g. style changes,
+    // table/numbering changes at cell start, empty paragraphs) advance to the adjacent change.
+    let at = if let Some(t) = navigated_style(s) {
+        list.iter().position(|c| c.style.as_deref() == Some(t.style.as_str()) && c.rev == Some(t.rev))
+    } else if let Some(t) = navigated_para_num(s) {
+        list.iter().position(|c| c.para_num && c.a.path == t.path)
+    } else if let Some(t) = navigated_para_fmt(s) {
+        list.iter().position(|c| c.para_fmt && c.a.path == t.path)
+    } else {
+        None
+    };
     let t = match at {
         Some(i) if dir > 0 && i + 1 < list.len() => list.get(i + 1),
         Some(i) if dir < 0 && i > 0 => list.get(i - 1),

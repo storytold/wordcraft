@@ -98,6 +98,9 @@ impl Session {
             hf_return: _,
             // Which navigated style change Accept/Reject acts on: it checks the selection itself.
             review_style: _,
+            review_para_fmt: _,
+            review_para_num: _,
+            review_navigated: _,
             history,
             undo_evicted,
             redo,
