@@ -11,6 +11,7 @@ use wordcraft_doc::{Pos, StoryRef};
 use crate::{Session, cmd};
 
 mod bidi;
+mod custom_prop_types;
 mod documents;
 mod find_apostrophes;
 mod fit_one_page;
