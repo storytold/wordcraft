@@ -15,6 +15,19 @@ fn utf16(b: &[u8], le: bool) -> String {
     String::from_utf16_lossy(&units)
 }
 
+fn utf32(b: &[u8], le: bool) -> String {
+    let units: Vec<char> = b
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| {
+            let u = if le { u32::from_le_bytes(*c) } else { u32::from_be_bytes(*c) };
+            char::from_u32(u).unwrap_or('\u{FFFD}')
+        })
+        .collect();
+    units.into_iter().collect()
+}
+
 /// UTF-16 without a BOM, told by its zero bytes: `Some(true)` little-endian, `Some(false)`
 /// big-endian.
 fn unmarked_utf16(b: &[u8]) -> Option<bool> {
@@ -41,7 +54,12 @@ fn unmarked_utf16(b: &[u8]) -> Option<bool> {
 /// other control characters in its first 64 KB. PDFs are refused by their signature (they
 /// start as text). An empty file is text.
 pub fn is_text(b: &[u8]) -> bool {
-    if b.starts_with(&[0xEF, 0xBB, 0xBF]) || b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) {
+    if b.starts_with(&[0xEF, 0xBB, 0xBF])
+        || b.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
+        || b.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+        || b.starts_with(&[0xFF, 0xFE])
+        || b.starts_with(&[0xFE, 0xFF])
+    {
         return true;
     }
     if b.starts_with(b"%PDF-") {
@@ -67,6 +85,12 @@ pub fn is_text(b: &[u8]) -> bool {
 pub fn decode(b: &[u8]) -> String {
     if let Some(rest) = b.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
         return String::from_utf8_lossy(rest).into_owned();
+    }
+    if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return utf32(rest, true);
+    }
+    if let Some(rest) = b.strip_prefix(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return utf32(rest, false);
     }
     if let Some(rest) = b.strip_prefix(&[0xFF, 0xFE]) {
         return utf16(rest, true);
@@ -103,7 +127,13 @@ pub fn legacy(b: &[u8]) -> String {
 /// Decode bytes in a named encoding (a WHATWG label such as `gbk`, `gb18030`, `big5`,
 /// `shift_jis`, `euc-kr`, `utf-16le`, `windows-1251`); `None` when the label isn't known.
 pub fn decode_as(b: &[u8], label: &str) -> Option<String> {
-    let enc = encoding_rs::Encoding::for_label(label.trim().as_bytes())?;
+    let clean = label.trim().to_ascii_lowercase();
+    match clean.as_str() {
+        "utf-32" | "utf-32le" => return Some(utf32(b.strip_prefix(&[0xFF, 0xFE, 0x00, 0x00]).unwrap_or(b), true)),
+        "utf-32be" => return Some(utf32(b.strip_prefix(&[0x00, 0x00, 0xFE, 0xFF]).unwrap_or(b), false)),
+        _ => {}
+    }
+    let enc = encoding_rs::Encoding::for_label(clean.as_bytes())?;
     Some(enc.decode(b).0.into_owned())
 }
 
@@ -111,7 +141,7 @@ pub fn decode_as(b: &[u8], label: &str) -> Option<String> {
 pub fn import(bytes: &[u8]) -> Document {
     let text = decode(bytes);
     let text = text.replace("\r\n", "\n").replace('\r', "\n");
-    let clean: String = text.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t' | '\u{000C}')).collect();
+    let clean: String = text.chars().filter(|c| !c.is_control() || matches!(c, '\n' | '\t' | '\u{000B}' | '\u{000C}' | '\u{000E}')).collect();
     Document::from_text(&clean)
 }
 
@@ -140,18 +170,25 @@ fn blocks_text(blocks: &[FBlock], out: &mut Vec<String>, lists: &mut ListCounter
             }
             FBlock::Table(t) => {
                 lists.reset();
+                let cols = t.cols();
                 for row in &t.rows {
-                    let cells: Vec<String> = row
-                        .iter()
-                        .map(|c| {
-                            if depth > 8 {
-                                return String::new();
-                            }
+                    let mut cells: Vec<String> = Vec::new();
+                    for c in row {
+                        if c.covered {
+                            cells.push(String::new());
+                        } else if depth > 8 {
+                            cells.push(String::new());
+                        } else {
                             let mut v = Vec::new();
                             blocks_text(&c.blocks, &mut v, &mut ListCounter::default(), depth + 1);
-                            v.join(" ")
-                        })
-                        .collect();
+                            let text = v.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+                            cells.push(text);
+                        }
+                        for _ in 1..c.colspan.clamp(1, 63) {
+                            cells.push(String::new());
+                        }
+                    }
+                    cells.resize(cols, String::new());
                     out.push(cells.join("\t"));
                 }
             }
@@ -165,4 +202,79 @@ pub fn export(doc: &Document) -> Vec<u8> {
     let mut lines = Vec::new();
     blocks_text(&flow.blocks, &mut lines, &mut ListCounter::default(), 0);
     lines.join("\r\n").into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Cell, Fmt, Para};
+    use wordcraft_doc::StoryRef;
+
+    #[test]
+    fn test_utf32_bom_decode_and_sniffing() {
+        let mut u32le = vec![0xFF, 0xFE, 0x00, 0x00];
+        for c in "Hello 🦀".chars() {
+            u32le.extend((c as u32).to_le_bytes());
+        }
+        assert!(is_text(&u32le));
+        assert_eq!(decode(&u32le), "Hello 🦀");
+        assert_eq!(decode_as(&u32le, "utf-32"), Some("Hello 🦀".into()));
+
+        let mut u32be = vec![0x00, 0x00, 0xFE, 0xFF];
+        for c in "World 🌍".chars() {
+            u32be.extend((c as u32).to_be_bytes());
+        }
+        assert!(is_text(&u32be));
+        assert_eq!(decode(&u32be), "World 🌍");
+        assert_eq!(decode_as(&u32be, "utf-32be"), Some("World 🌍".into()));
+    }
+
+    #[test]
+    fn test_import_preserves_soft_breaks() {
+        let raw = b"Line 1\x0BSoft break\x0ECol break";
+        let doc = import(raw);
+        let text = doc.plain_text(StoryRef::Body);
+        assert_eq!(text, "Line 1\u{000B}Soft break\u{000E}Col break");
+    }
+
+    #[test]
+    fn test_table_export_colspan_covered_and_newline_cleaning() {
+        let mut t = crate::model::FTable::default();
+        let mut c1 = Cell::default();
+        c1.colspan = 2;
+        let mut p1 = Para::default();
+        p1.push_text("Merged\nHeader\tItem", &Fmt::default());
+        c1.blocks.push(FBlock::Para(p1));
+
+        let mut c2 = Cell::default();
+        let mut p2 = Para::default();
+        p2.push_text("Col 3", &Fmt::default());
+        c2.blocks.push(FBlock::Para(p2));
+
+        let mut c3 = Cell::default();
+        c3.covered = true;
+
+        let mut c4 = Cell::default();
+        let mut p4 = Para::default();
+        p4.push_text("Row 2 Col 2", &Fmt::default());
+        c4.blocks.push(FBlock::Para(p4));
+
+        let mut c5 = Cell::default();
+        let mut p5 = Para::default();
+        p5.push_text("Row 2 Col 3", &Fmt::default());
+        c5.blocks.push(FBlock::Para(p5));
+
+        t.rows.push(vec![c1, c2]);
+        t.rows.push(vec![c3, c4, c5]);
+
+        let mut out = Vec::new();
+        let blocks = vec![FBlock::Table(t)];
+        blocks_text(&blocks, &mut out, &mut ListCounter::default(), 0);
+
+        assert_eq!(out.len(), 2);
+        // Row 1: Merged Header Item (colspan 2) -> "Merged Header Item\t\tCol 3"
+        assert_eq!(out[0], "Merged Header Item\t\tCol 3");
+        // Row 2: Covered cell is empty -> "\tRow 2 Col 2\tRow 2 Col 3"
+        assert_eq!(out[1], "\tRow 2 Col 2\tRow 2 Col 3");
+    }
 }
