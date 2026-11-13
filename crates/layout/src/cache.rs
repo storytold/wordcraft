@@ -42,6 +42,11 @@ pub struct LayoutCache {
     pub(crate) outlines: Outlines,
     pub(crate) env: u64,
     pub(crate) used: HashSet<Key>,
+    /// Warnings logged for paragraphs cut at the line limit.
+    pub line_limit_warnings: usize,
+    /// The cut paragraphs (story, path and revision, hashed) last warned about: the warning is
+    /// logged once per revision of them, not on every relayout.
+    pub(crate) line_limit_warned: u64,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
     /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
     /// while both are unchanged, so headers using STYLEREF don't rebuild it on every pass.
