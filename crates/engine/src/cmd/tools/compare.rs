@@ -221,9 +221,10 @@ fn block_text(b: &Block, depth: usize) -> String {
 ///
 /// Known limitation: resolving a revision needs a following paragraph, so a paragraph inserted at
 /// the very end (rejected) or deleted from the very end (accepted) still leaves one empty
-/// paragraph. That is a separate follow-up, not handled here. A section-carrying inserted paragraph
-/// is a second such limitation: `remove_empty_para` refuses it, so when it is rejected its
-/// paragraph is joined into the next one, which takes its properties.
+/// paragraph. That is a separate follow-up, not handled here. A section-carrying inserted
+/// paragraph is not such a case: `resolve_para` removes the section break first (#5734, issue
+/// #5667), so rejecting it takes the paragraph out whole and the following paragraph keeps its
+/// own properties.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
