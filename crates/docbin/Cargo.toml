@@ -9,17 +9,12 @@ description = "WordCraft reader for the Word 97-2003 binary file format (.doc, [
 workspace = true
 
 [dependencies]
+craft-doc-binary = { git = "https://github.com/storytold/craft-libs", rev = "75c70fa6a786240eb853e6267e25fc445f510cd0", version = "=0.1.0" }
+craft-wordmodel = { git = "https://github.com/storytold/craft-libs", rev = "75c70fa6a786240eb853e6267e25fc445f510cd0", version = "=0.1.0" }
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
-cfb = { workspace = true }
-image = { workspace = true }
-miniz_oxide = { workspace = true }
-sha1 = { workspace = true }
-thiserror = { workspace = true }
-log = { workspace = true }
-chrono = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 wordcraft-doc = { workspace = true, features = ["test-support"] }
-proptest = { workspace = true }
-serde_json = { workspace = true }
+cfb = { workspace = true }
