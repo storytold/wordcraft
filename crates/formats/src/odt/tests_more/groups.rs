@@ -121,7 +121,14 @@ fn a_diagram_is_saved_as_a_group_of_its_drawing() {
     let graphic = Graphic {
         kind: GraphicKind::Diagram,
         items: vec![
-            GraphicItem::Shape { rect: [0.0, 0.0, 72.0, 36.0], kind: ShapeKind::RoundedRectangle, fill: Some(blue), stroke: None, stroke_width: 0.0 },
+            GraphicItem::Shape {
+                rect: [0.0, 0.0, 72.0, 36.0],
+                kind: ShapeKind::RoundedRectangle,
+                fill: Some(blue),
+                stroke: None,
+                stroke_width: 0.0,
+                alpha: 1.0,
+            },
             GraphicItem::Text {
                 rect: [0.0, 0.0, 72.0, 36.0],
                 text: "Plan".into(),
@@ -131,7 +138,14 @@ fn a_diagram_is_saved_as_a_group_of_its_drawing() {
                 align: TextAlign::Center,
                 font: None,
             },
-            GraphicItem::Shape { rect: [90.0, 9.0, 18.0, 18.0], kind: ShapeKind::Arrow, fill: Some(blue), stroke: None, stroke_width: 0.0 },
+            GraphicItem::Shape {
+                rect: [90.0, 9.0, 18.0, 18.0],
+                kind: ShapeKind::Arrow,
+                fill: Some(blue),
+                stroke: None,
+                stroke_width: 0.0,
+                alpha: 1.0,
+            },
         ],
         w: 108.0,
         h: 36.0,

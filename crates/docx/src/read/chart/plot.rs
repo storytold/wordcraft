@@ -21,7 +21,7 @@ pub(super) fn backdrop(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w:
     let stroke = ln.and_then(|l| fill_colour(l, theme));
     let stroke_width = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.75).clamp(0.0, 20.0);
     if fill.is_some() || stroke.is_some() {
-        out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill, stroke, stroke_width });
+        out.push(GraphicItem::Shape { rect: [0.0, 0.0, w, h], kind: ShapeKind::Rectangle, fill, stroke, stroke_width, alpha: 1.0 });
     }
 }
 
@@ -457,7 +457,14 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
         }
         for (x, y) in pts.iter().flatten() {
             let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
-            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.series_colour(j)), stroke: None, stroke_width: 0.0 });
+            out.push(GraphicItem::Shape {
+                rect,
+                kind: ShapeKind::Ellipse,
+                fill: Some(c.series_colour(j)),
+                stroke: None,
+                stroke_width: 0.0,
+                alpha: 1.0,
+            });
         }
     }
 }

@@ -132,10 +132,20 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(has_smart_art),
         CommandSpec::new("smartArt.itemColor", "Item Color", "SmartArt Design › SmartArt Styles", |s, v| {
             let i = index(v, "index")?;
+            let set_color = v.get("color").is_some() || v.get("opacity").is_none();
             let color = match v.get("color") {
                 None | Some(Value::Null) => None,
                 Some(Value::String(c)) => Some(Rgb::parse(c).ok_or_else(|| CmdError::Params("`color`: RRGGBB".into()))?),
                 Some(_) => return Err(CmdError::Params("`color`: RRGGBB or null".into())),
+            };
+            let opacity = match v.get("opacity") {
+                None | Some(Value::Null) => None,
+                Some(_) => Some(
+                    p::u64(v, "opacity")
+                        .and_then(|o| u8::try_from(o).ok())
+                        .filter(|o| *o <= 100)
+                        .ok_or_else(|| CmdError::Params("`opacity`: 0 to 100".into()))?,
+                ),
             };
             edit(s, move |g| {
                 let i = item_at(g, i)?;
@@ -143,14 +153,33 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(CmdError::Failed("this item has no shape of its own: it is text in another item's shape".into()));
                 }
                 if let Some(it) = g.items.get_mut(i) {
-                    it.color = color;
+                    if set_color {
+                        it.color = color;
+                        it.opacity = None;
+                    }
+                    if opacity.is_some() {
+                        if it.color.is_none() {
+                            return Err(CmdError::Failed("give the item a colour before its opacity".into()));
+                        }
+                        it.opacity = opacity;
+                    }
                 }
                 Ok(())
             })
         })
-        .params(r#"{"index"?: item index (default: the last), "color"?: "RRGGBB" (none: the style's colour)}"#)
+        .params(r#"{"index"?: item index (default: the last), "color"?: "RRGGBB" (none: the style's colour), "opacity"?: 0-100 percent of the colour that shows (needs a colour)}"#)
         .when(has_smart_art),
-        CommandSpec::new("smartArt.reset", "Reset Graphic", "SmartArt Design › Reset", |s, _| {
+        CommandSpec::new("smartArt.moveItem", "Move Item", "SmartArt Design › Create Graphic", |s, v| {
+            let i = index(v, "index")?.ok_or_else(|| CmdError::Params("`index`: the item to move".into()))?;
+            let slot = index(v, "slot")?.ok_or_else(|| CmdError::Params("`slot`: where the item goes among the other items".into()))?;
+            let level = u8::try_from(p::u64(v, "level").unwrap_or(0).min(u64::from(MAX_LEVEL))).unwrap_or(0);
+            edit(s, move |g| {
+                if g.move_block(i, slot, level) { Ok(()) } else { Err(CmdError::Params(format!("no item {i}"))) }
+            })
+        })
+        .params(r#"{"index": item to move (with the items under it), "slot": position among the other items, "level": the item's new level}"#)
+        .when(has_smart_art),
+        CommandSpec::new("smartArt.reset","Reset Graphic", "SmartArt Design › Reset", |s, _| {
             edit(s, |g| {
                 g.colors = SmartArtColors::default();
                 g.clear_custom_colors();
@@ -263,6 +292,7 @@ fn items_of(v: &Value) -> Result<Vec<SmartArtItem>, CmdError> {
                     Some(Value::String(c)) => Some(Rgb::parse(c).ok_or_else(|| CmdError::Params("`color`: RRGGBB".into()))?),
                     Some(_) => return Err(CmdError::Params("`color`: RRGGBB or null".into())),
                 };
+                item.opacity = p::u64(it, "opacity").and_then(|o| u8::try_from(o).ok()).filter(|o| *o <= 100 && item.color.is_some());
                 Ok(item)
             }
             _ => Err(CmdError::Params(format!("`items`: {ITEMS}"))),

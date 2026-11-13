@@ -7,7 +7,7 @@ use wordcraft_doc::props::Rgb;
 
 use super::Reader;
 use super::chart::text_w;
-use super::drawing_color::{color, paint};
+use super::drawing_color::{color, color_alpha, paint};
 use crate::package::{Rel, Rels, rel_is, rt};
 use crate::units::{MAX_LEN_PT, int};
 use crate::xml::El;
@@ -164,7 +164,7 @@ fn shape(sp: &El, xf: Xf, b: [f64; 4], theme: &[Rgb], fit: f32, image: &mut dyn 
             },
         };
         match geo {
-            Geo::Kind(kind) => out.push(GraphicItem::Shape { rect, kind, fill, stroke, stroke_width }),
+            Geo::Kind(kind) => out.push(GraphicItem::Shape { rect, kind, fill, stroke, stroke_width, alpha: fill_opacity(sppr, theme) }),
             Geo::Poly(pts, closed) if !pts.is_empty() => {
                 // Flip in the box, then turn about its centre (clockwise, y down).
                 let (s, c) = rot.to_radians().sin_cos();
@@ -213,6 +213,12 @@ fn fill_of(sp: &El, sppr: Option<&El>, theme: &[Rgb]) -> Option<Rgb> {
         Some(e) => paint(e, theme),
         None => style_colour(sp, "a:fillRef", theme),
     }
+}
+
+/// How opaque a shape's own solid fill is, 0 to 1.
+fn fill_opacity(sppr: Option<&El>, theme: &[Rgb]) -> f32 {
+    let solid = sppr.and_then(|p| p.child("a:solidFill"));
+    solid.and_then(|f| color_alpha(f, theme, None)).map_or(1.0, |(_, t)| 1.0 - t / 100.0)
 }
 
 /// A shape's outline colour and width in points (`a:ln`, else the style's line at 0.75 pt).
