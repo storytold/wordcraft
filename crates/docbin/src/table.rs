@@ -15,8 +15,15 @@ use crate::sprm::{self, Prl};
 // Paragraph sprms for table membership.
 const P_IN_TABLE: u16 = 0x2416;
 const P_TTP: u16 = 0x2417;
-/// `sprmPItap`: table depth (we only model depth 1; deeper rows fall back to paragraphs).
+/// `sprmPFInnerTableCell` / `sprmPFInnerTtp`: a paragraph mark ending a cell, or a row, of a
+/// table nested in another's cell ([MS-DOC] §2.6.2); its mark is 0x0D, not 0x07.
+const P_INNER_CELL: u16 = 0x244B;
+const P_INNER_TTP: u16 = 0x244C;
+/// `sprmPItap`: table depth (1 = an outermost table, 2 = one in its cell, …).
 const P_ITAP: u16 = 0x6649;
+/// Deepest table nesting we build, as the .docx reader's; deeper rows stay paragraphs in the
+/// cell of the deepest table built.
+const MAX_TABLE_DEPTH: u32 = 24;
 
 // Table sprms ([MS-DOC] §2.6.3).
 const T_JC: u16 = 0x5400;
@@ -56,8 +63,12 @@ pub(crate) struct RowInfo {
     pub(crate) ttp: bool,
     /// The mark itself was 0x07 (a cell end), set by the walker.
     pub(crate) cell_mark: bool,
-    /// Table depth from `sprmPItap` (0 or 1 supported; deeper tables degrade to paragraphs).
+    /// Table depth from `sprmPItap` (0 when absent, read as 1 for a table mark).
     pub(crate) depth: u32,
+    /// `sprmPFInnerTableCell`: the mark ends a cell of a nested table.
+    inner_cell: bool,
+    /// `sprmPFInnerTtp`: the mark ends a row of a nested table.
+    inner_ttp: bool,
     /// Cell-edge positions (points) from `sprmTDefTable` — [MS-DOC] defines them per row,
     /// so each row keeps its own; ascending in well-formed rows, the first edge usually 0
     /// (the row origin). Rows without a `sprmTDefTable` keep this empty.
@@ -86,6 +97,17 @@ impl RowInfo {
     /// Does the mark belong to a table: inside one, ending a row, or ending a cell?
     pub(crate) fn is_table(&self) -> bool {
         self.in_table || self.ttp || self.cell_mark
+    }
+
+    /// The table depth the mark is at: `sprmPItap`, or 1 when a table mark states none.
+    fn level(&self) -> u32 {
+        self.depth.max(1)
+    }
+
+    /// Does the mark end a cell, and a row, of the table at `level`? Outermost cells end with
+    /// 0x07 and rows with `sprmPFTtp`; nested ones with the inner sprms on a 0x0D mark.
+    fn ends_at(&self, level: u32) -> (bool, bool) {
+        if level <= 1 { (self.cell_mark, self.ttp) } else { (self.inner_cell || self.inner_ttp, self.inner_ttp) }
     }
 
     /// The row height from `sprmTDyaRowHeight`, for tests.
@@ -138,6 +160,8 @@ pub(crate) fn decode(papx: &[u8]) -> RowInfo {
         match prl.op {
             P_IN_TABLE => r.in_table = prl.operand.first().copied().unwrap_or(0) != 0,
             P_TTP => r.ttp = prl.operand.first().copied().unwrap_or(0) != 0,
+            P_INNER_CELL => r.inner_cell = prl.operand.first().copied().unwrap_or(0) != 0,
+            P_INNER_TTP => r.inner_ttp = prl.operand.first().copied().unwrap_or(0) != 0,
             P_ITAP => r.depth = i32_of(&prl).unwrap_or(0).max(0) as u32,
             T_DEF_TABLE => r.edges = def_table_edges(prl.operand),
             T_TABLE_HEADER => r.header = prl.operand.first().copied().unwrap_or(0) != 0,
@@ -272,10 +296,16 @@ pub(crate) struct ParaOut {
     pub(crate) row: Option<Box<RowInfo>>,
 }
 
-/// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through.
-/// Rows that never close (or tables nested deeper than we model) degrade to paragraphs so
-/// no text is lost.
+/// Group consecutive in-table paragraphs into [`Table`] blocks; the rest pass through. A
+/// table nested in a cell (`sprmPItap` above the table's own depth) becomes a table inside
+/// that cell, to [`MAX_TABLE_DEPTH`]; deeper rows stay paragraphs so no text is lost.
 pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
+    assemble_at(paras, 1)
+}
+
+/// [`assemble`] for the tables at depth `level`: marks deeper than `level` are gathered and
+/// assembled one level down, into the cell they stand in.
+fn assemble_at(paras: Vec<ParaOut>, level: u32) -> Blocks {
     let mut out: Blocks = Vec::new();
     let mut rows: Vec<Row> = Vec::new();
     let mut cells: Vec<Cell> = Vec::new();
@@ -283,7 +313,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
     let mut grid: Vec<f32> = Vec::new();
     let mut props = TableProps::default();
     let mut open = false;
-    let mut depth_seen = 0u32;
+    // Marks of a table nested in the current cell, until a mark at this level ends it.
+    let mut inner: Vec<ParaOut> = Vec::new();
 
     fn flush_cell(cells: &mut Vec<Cell>, cell: &mut Blocks) {
         let mut blocks = std::mem::take(cell);
@@ -340,7 +371,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             controls: Default::default(),
         }
     }
-    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps, nested: bool) {
+    fn flush_table(out: &mut Blocks, rows: &mut Vec<Row>, cells: &mut Vec<Cell>, cell: &mut Blocks, grid: &[f32], props: &TableProps) {
         if !cells.is_empty() || !cell.is_empty() {
             flush_cell(cells, cell);
             // A stray trailing row (no TTP of its own): size its cells from the grid.
@@ -355,28 +386,30 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if rows.is_empty() {
             return;
         }
-        if nested {
-            // Unclosed or nested deeper than we model: keep the text, drop the table shape.
-            for r in rows.iter() {
-                for c in &r.cells {
-                    out.extend(c.blocks.iter().cloned());
-                }
-            }
-        } else {
-            out.push(Arc::new(Block::Table(Table {
-                props: props.clone(),
-                grid: grid.to_vec(),
-                rows: std::mem::take(rows),
-                controls: Default::default(),
-            })));
-        }
-        rows.clear();
+        out.push(Arc::new(Block::Table(Table {
+            props: props.clone(),
+            grid: grid.to_vec(),
+            rows: std::mem::take(rows),
+            controls: Default::default(),
+        })));
     }
 
     for p in paras {
+        if p.row.as_ref().is_some_and(|r| r.level() > level) {
+            open = true;
+            if level < MAX_TABLE_DEPTH {
+                inner.push(p);
+            } else {
+                cell.push(para_block(p.para));
+            }
+            continue;
+        }
+        if !inner.is_empty() {
+            cell.extend(assemble_at(std::mem::take(&mut inner), level + 1));
+        }
         let Some(info) = p.row else {
             if open {
-                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+                flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props);
                 grid.clear();
                 // Table props are per-table (first row carrying the sprm wins within the
                 // table): reset the accumulator so one table's borders, align, indent and
@@ -385,15 +418,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
                 // change history with its own 40-twip gap — inherited 5.4 pt margins).
                 props = TableProps::default();
                 open = false;
-                depth_seen = 0;
             }
             out.push(para_block(p.para));
             continue;
         };
-        if !open {
-            open = true;
-        }
-        depth_seen = depth_seen.max(info.depth);
+        open = true;
         if grid.is_empty() {
             // Column widths from the table's first `sprmTDefTable`.
             grid = info.edges.windows(2).take(MAX_COLS).map(|w| (w[1] - w[0]).max(0.0)).collect();
@@ -407,7 +436,8 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
         if props.indent.is_none() {
             props.indent = info.indent;
         }
-        if info.cell_mark {
+        let (cell_end, row_end) = info.ends_at(level);
+        if cell_end {
             // A row-end (TTP) mark terminates the row. Word writes rows as N content
             // cells each ended by their own cell mark, followed by an empty row-end mark
             // that carries the row's TDefTable (the 3GPP change history: 8 content marks
@@ -418,7 +448,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             // column over. A TTP mark with content, or one short of the TDefTable's
             // columns, still ends a real cell (rows without a TDefTable keep today's
             // shape: the count is unknowable, so the mark always flushes).
-            let row_end_only = info.ttp && p.para.text.is_empty() && cell.is_empty() && !info.edges.is_empty() && cells.len() + 1 >= info.edges.len();
+            let row_end_only = row_end && p.para.text.is_empty() && cell.is_empty() && !info.edges.is_empty() && cells.len() + 1 >= info.edges.len();
             // ...but a row-end mark with no cells before it still makes a (one-cell) row.
             let row_end_only = row_end_only && !cells.is_empty();
             if !p.para.text.is_empty() {
@@ -427,7 +457,7 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             if !row_end_only {
                 flush_cell(&mut cells, &mut cell);
             }
-            if info.ttp {
+            if row_end {
                 let row = build_row(std::mem::take(&mut cells), &info);
                 rows.push(row);
             }
@@ -435,8 +465,11 @@ pub(crate) fn assemble(paras: Vec<ParaOut>) -> Blocks {
             cell.push(para_block(p.para));
         }
     }
+    if !inner.is_empty() {
+        cell.extend(assemble_at(inner, level + 1));
+    }
     if open {
-        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props, depth_seen > 1);
+        flush_table(&mut out, &mut rows, &mut cells, &mut cell, &grid, &props);
     }
     out
 }

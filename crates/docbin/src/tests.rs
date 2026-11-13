@@ -589,7 +589,7 @@ fn chpx_fkp(runs: &[(u32, Vec<u8>)], end_cp: u32) -> Vec<u8> {
 }
 
 /// A PapxFkp page mapping paragraph-mark FCs (as "FC after the mark") to PAPX data
-/// (istd + grpprl).
+/// (istd + grpprl). Marks with the same PAPX share one copy of it, as Word writes them.
 fn papx_fkp(entries: &[(u32, u16, Vec<u8>)]) -> Vec<u8> {
     let mut page = vec![0u8; 512];
     let n = entries.len();
@@ -599,11 +599,17 @@ fn papx_fkp(entries: &[(u32, u16, Vec<u8>)]) -> Vec<u8> {
     page[n * 4..n * 4 + 4].copy_from_slice(&fc_of(0x3FF0_0000).to_le_bytes()); // far end
     let rgbx_at = (n + 1) * 4;
     let mut data_at = rgbx_at + n * 13;
+    let mut written: Vec<(Vec<u8>, u8)> = Vec::new();
     for (i, e) in entries.iter().enumerate() {
+        let grp = [e.1.to_le_bytes().as_slice(), e.2.as_slice()].concat();
+        if let Some((_, half)) = written.iter().find(|(g, _)| *g == grp) {
+            page[rgbx_at + i * 13] = *half;
+            continue;
+        }
         data_at += data_at & 1;
         let half = (data_at / 2) as u8;
         page[rgbx_at + i * 13] = half;
-        let grp = [e.1.to_le_bytes().as_slice(), e.2.as_slice()].concat();
+        written.push((grp.clone(), half));
         let cb = ((grp.len() + 2) / 2) as u8;
         page[data_at] = cb;
         page[data_at + 1..data_at + 1 + grp.len()].copy_from_slice(&grp);
@@ -1267,6 +1273,70 @@ fn table_assembled_from_marks() {
     assert_eq!(cell_text(1, 1), "d");
     let last = doc.body.last().and_then(|b| b.as_para()).expect("tail para");
     assert_eq!(last.text, "tail");
+}
+
+/// #6405: a table nested in a cell is a table inside that cell, and the table around it keeps
+/// its shape. Nested cells end with a 0x0D mark carrying `sprmPFInnerTableCell` and their rows
+/// with `sprmPFInnerTtp`, at `sprmPItap` 2, as Word and LibreOffice write them.
+#[test]
+fn nested_table_stays_a_table_in_its_cell() {
+    let itap = |d: u8| [d, 0, 0, 0];
+    let (one, two) = (itap(1), itap(2));
+    let outer = grpprl(&[(0x2416, &[0x01]), (0x6649, &one)]);
+    let outer_ttp: Vec<u8> = [grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &one)]), t_def_table(&[0, 2880, 5760])].concat();
+    let inner_cell = grpprl(&[(0x2416, &[0x01]), (0x6649, &two), (0x244B, &[0x01])]);
+    let inner_ttp: Vec<u8> =
+        [grpprl(&[(0x2416, &[0x01]), (0x6649, &two), (0x244B, &[0x01]), (0x244C, &[0x01])]), t_def_table(&[0, 1440, 2880])].concat();
+    // Outer cell 0: "p", then a two-row nested table "i" | "j" and "k" | "l", each row ended
+    // by its own `sprmPFInnerTtp` mark, then the cell's last paragraph and its 0x07; outer
+    // cell 1: "b"; the outer row end; then "tail".
+    let text = "p\ri\rj\r\rk\rl\r\r\r\u{7}b\u{7}\u{7}tail\r";
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![
+            (0, 0, outer.clone()),      // "p"
+            (2, 0, inner_cell.clone()), // "i" ends a nested cell
+            (4, 0, inner_cell.clone()), // "j" ends a nested cell
+            (6, 0, inner_ttp.clone()),  // ends the first nested row
+            (7, 0, inner_cell.clone()), // "k" ends a nested cell
+            (9, 0, inner_cell),         // "l" ends a nested cell
+            (11, 0, inner_ttp),         // ends the second nested row
+            (12, 0, outer.clone()),     // the outer cell's last paragraph
+            (13, 0, outer.clone()),     // its 0x07
+            (14, 0, outer),             // "b"
+            (16, 0, outer_ttp),         // ends the outer row
+            (17, 0, Vec::new()),        // "tail"
+        ],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let tables: Vec<_> = doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(tables.len(), 1, "one outer table");
+    let tbl = tables[0];
+    assert_eq!(tbl.rows.len(), 1);
+    assert_eq!(tbl.rows[0].cells.len(), 2);
+    assert_eq!(tbl.grid, vec![144.0, 144.0]);
+    let first = &tbl.rows[0].cells[0].blocks;
+    assert_eq!(first.first().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("p"));
+    let nested = first.iter().find_map(|b| b.as_table()).expect("a table inside the first cell");
+    assert_eq!(nested.rows.len(), 2);
+    assert_eq!(nested.grid, vec![72.0, 72.0]);
+    let texts = |r: usize| -> Vec<String> {
+        nested.rows[r].cells.iter().map(|c| c.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()).collect()
+    };
+    assert_eq!(texts(0), ["i", "j"]);
+    assert_eq!(texts(1), ["k", "l"]);
+    let second: String = tbl.rows[0].cells[1].blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect();
+    assert_eq!(second, "b");
+    assert_eq!(doc.body.last().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("tail"));
 }
 
 #[test]
