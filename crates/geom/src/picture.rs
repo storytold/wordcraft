@@ -194,6 +194,87 @@ pub fn decode(bytes: &[u8], budget: u64) -> Result<DynamicImage, Refusal> {
     probe(bytes)?.decode(budget)
 }
 
+/// Why a picture can't be drawn, as strict export reports it (#6005).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DrawFailure {
+    /// A picture format we know, but it doesn't decode (damaged, truncated, too large).
+    Undecodable,
+    /// Bytes that are not a picture format we draw.
+    UnsupportedFormat,
+}
+
+impl DrawFailure {
+    /// The words reports use.
+    pub fn label(self) -> &'static str {
+        match self {
+            DrawFailure::Undecodable => "undecodable",
+            DrawFailure::UnsupportedFormat => "unsupported format",
+        }
+    }
+}
+
+impl From<&Refusal> for DrawFailure {
+    fn from(r: &Refusal) -> Self {
+        match r {
+            Refusal::NotAPicture | Refusal::Unsupported(_) => DrawFailure::UnsupportedFormat,
+            Refusal::TooLarge { .. } | Refusal::Broken(_) => DrawFailure::Undecodable,
+        }
+    }
+}
+
+/// Decode a raster picture for drawing: the one decision the PDF export, the raster renderer and
+/// strict export's check all take. The decoder is held to `max_side` pixels a side and the header
+/// is charged against `budget` bytes before anything is allocated. A picture with no pixels or a
+/// side past `max_side` is refused.
+pub fn decode_for_drawing(bytes: &[u8], budget: u64, max_side: u32) -> Result<DynamicImage, Refusal> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(max_side);
+    limits.max_image_height = Some(max_side);
+    let reader = || {
+        let mut r = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().map_err(|_| Refusal::NotAPicture)?;
+        r.limits(limits.clone());
+        Ok::<_, Refusal>(r)
+    };
+    // Header-only size check before anything is allocated: the decoder's buffer at its own pixel
+    // size (8 bytes for 16-bit RGBA) and the RGBA conversion are charged.
+    let (hw, hh, native) = {
+        let d = reader()?.into_decoder().map_err(broken)?;
+        let (w, h) = d.dimensions();
+        (w, h, u64::from(d.color_type().bytes_per_pixel()))
+    };
+    if !crate::decode_peak_fits(hw, hh, native, budget) {
+        return Err(Refusal::TooLarge { width: hw, height: hh });
+    }
+    let img = reader()?.decode().map_err(broken)?;
+    let (w, h) = (img.width(), img.height());
+    if w == 0 || h == 0 || w > max_side || h > max_side {
+        return Err(Refusal::Broken("it has no pixels or a side past the limit".into()));
+    }
+    Ok(img)
+}
+
+/// Largest page-background picture the page raster draws, in pixels (hostile files).
+pub const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// The pixel size of a page-background picture the page raster draws (Design > Page Color > Fill
+/// Effects), or None when it leaves the background out: not a raster picture it can read (a
+/// metafile is not) or one with no pixels or more than [`MAX_BACKGROUND_PIXELS`]. The raster and
+/// the strict check both ask this, so they can't drift.
+pub fn background_size(bytes: &[u8]) -> Option<(u32, u32)> {
+    let (w, h) = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    (w > 0 && h > 0 && u64::from(w) * u64::from(h) <= MAX_BACKGROUND_PIXELS).then_some((w, h))
+}
+
+/// Whether a raster picture decodes for drawing, by the rule the exporters use ([`probe`] within
+/// [`crate::MAX_DECODED_BYTES`], then [`decode_for_drawing`] with `max_side`).
+pub fn check_for_drawing(bytes: &[u8], max_side: u32) -> Result<(), DrawFailure> {
+    let fail = |r: Refusal| DrawFailure::from(&r);
+    if !probe(bytes).map_err(fail)?.fits(crate::MAX_DECODED_BYTES) {
+        return Err(DrawFailure::Undecodable);
+    }
+    decode_for_drawing(bytes, crate::MAX_DECODED_BYTES, max_side).map(|_| ()).map_err(fail)
+}
+
 /// Bytes decoding a `width` × `height` picture holds at its peak: the decoder's output (`native`
 /// bytes a pixel) beside what the decoder keeps while it decodes (`held`), then the output beside
 /// its RGBA8 conversion, then that beside a premultiplied copy. None on overflow.
@@ -338,6 +419,18 @@ mod tests {
         let mut out = Vec::new();
         img.into().write_to(&mut Cursor::new(&mut out), format).unwrap();
         out
+    }
+
+    #[test]
+    fn drawing_check_tells_unsupported_from_undecodable() {
+        let png = encode(image::RgbaImage::new(4, 4), ImageFormat::Png);
+        assert_eq!(check_for_drawing(&png, 100), Ok(()));
+        assert_eq!(check_for_drawing(b"junk", 100), Err(DrawFailure::UnsupportedFormat));
+        assert_eq!(check_for_drawing(&png[..png.len() - 20], 100), Err(DrawFailure::Undecodable));
+        // A side past the limit is refused, by the same function the exporters draw with.
+        assert_eq!(check_for_drawing(&png, 3), Err(DrawFailure::Undecodable));
+        assert!(decode_for_drawing(&png, crate::MAX_DECODED_BYTES, 100).is_ok());
+        assert_eq!(DrawFailure::Undecodable.label(), "undecodable");
     }
 
     /// A PNG whose header declares `w` × `h` pixels, with no pixel data.

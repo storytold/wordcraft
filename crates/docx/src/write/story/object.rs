@@ -4,6 +4,7 @@ use super::section::comment_reference_style;
 use super::{CharProps, Fill, InlineObject, NoteKind, PartRels, TextColor, W, Wrap, Writer, emu, n, rpr};
 
 impl Writer<'_> {
+    /// Write an inline object (`Bookmark`, `Comment`, `Equation`, `Field`, `Shape`, etc.).
     pub(super) fn object(&mut self, w: &mut W, o: &InlineObject, props: &CharProps, rels: &mut PartRels, depth: usize) {
         match o {
             // Written by `para_content` (inline) or `blocks` (around paragraphs).
@@ -51,10 +52,12 @@ impl Writer<'_> {
                     Some(TextColor::Rgb(c)) => Some(c),
                     _ => None,
                 };
+                self.rev_open(w, props);
                 match crate::write::math::resolve_numbers(math, *display, &mut self.eq_number) {
                     Some(m) => crate::write::math::write_equation(w, linear, *display, &m, color),
                     None => crate::write::math::write_equation(w, linear, *display, math, color),
                 }
+                self.rev_close(w, props);
             }
             InlineObject::Field { instr, result, locked, dirty, form, .. } => {
                 self.field(w, FieldData { instr, result, locked: *locked, dirty: *dirty, form }, props)
@@ -269,7 +272,7 @@ impl Writer<'_> {
             self.rev_close(w, props);
             return;
         }
-        let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) else { return };
+        let Some(file) = self.media_files.get(media).cloned() else { return };
         self.rev_open(w, props);
         w.open("w:r", &[]);
         self.rpr(w, props);
@@ -450,7 +453,7 @@ impl Writer<'_> {
             let at = (c.x, c.y);
             match &c.obj {
                 InlineObject::Image { media, .. } => {
-                    if let Some(file) = self.media_files.get(media).cloned().or_else(|| media.strip_prefix("link:").map(str::to_string)) {
+                    if let Some(file) = self.media_files.get(media).cloned() {
                         self.pic(w, &c.obj, &file, at, rels);
                     }
                 }
