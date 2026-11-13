@@ -8,6 +8,7 @@ use proptest::prelude::*;
 use super::read;
 
 mod drawing;
+mod empty_inline_shape;
 mod encrypted;
 mod metadata;
 

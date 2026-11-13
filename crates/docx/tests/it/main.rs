@@ -15,6 +15,7 @@ mod drawing_payload;
 mod east_asian_lang;
 mod east_asian_layout;
 mod emphasis_marks;
+mod empty_inline_shape;
 mod fixtures;
 mod glossary;
 mod heading_levels;
