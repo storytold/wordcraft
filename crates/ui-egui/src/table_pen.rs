@@ -1,8 +1,10 @@
-//! Draw Table and Eraser as canvas modes (Insert › Tables, Table Layout › Draw). The buttons
-//! toggle a pen or an eraser; while one is on, presses on the page draw (or erase) instead of
-//! moving the caret, a preview follows the pointer, and each finished stroke or click runs
-//! `table.draw` / `table.eraser` with page coordinates (one undo step each). Esc or the button
-//! again turns it off. The geometry decisions are the engine's (`cmd::table_draw`).
+//! Draw Table, Eraser and Border Painter as canvas modes (Insert › Tables, Table Layout › Draw,
+//! Table Design › Borders). The buttons toggle a pen, an eraser or the border painter (picking a
+//! Border Style turns the painter on too); while one is on, presses on the page draw (erase,
+//! paint) instead of moving the caret, a preview follows the pointer, and each finished stroke
+//! or click runs `table.draw` / `table.eraser` / `table.borderPainter` with page coordinates
+//! (one undo step each). Esc or the button again turns it off. The geometry decisions are the
+//! engine's (`cmd::table_draw`, `cmd::border_pen`).
 
 use egui::{Pos2, Rect, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -17,6 +19,8 @@ use crate::theme::Tokens;
 pub enum TableTool {
     Draw,
     Erase,
+    /// Border Painter: a click paints the border under it with the border pen.
+    Paint,
 }
 
 impl TableTool {
@@ -24,6 +28,7 @@ impl TableTool {
         match self {
             TableTool::Draw => "table.draw",
             TableTool::Erase => "table.eraser",
+            TableTool::Paint => "table.borderPainter",
         }
     }
 }
@@ -37,17 +42,34 @@ pub(crate) struct PenStroke {
 }
 
 /// The ribbon buttons (no page coordinates): turn the tool on, or off when it already is.
-/// `{"on": bool}` sets it. With coordinates the command goes to the engine instead (`None`).
+/// `{"on": bool}` sets it. With coordinates (or Border Painter's `kind`) the command goes to the
+/// engine instead (`None`). Picking a Border Style (`table.borderStyles` with a style, width or
+/// colour) sets the pen and turns the Border Painter on.
 pub fn toggle(app: &mut WordApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if id == "table.borderStyles" {
+        let picked = ["style", "width", "color"].iter().any(|k| p.get(k).is_some());
+        let r = app.session.run(id, p).map_err(|e| e.to_string());
+        if picked && r.is_ok() {
+            set(app, TableTool::Paint, true);
+        }
+        return Some(r);
+    }
     let tool = match id {
         "table.draw" => TableTool::Draw,
         "table.eraser" => TableTool::Erase,
+        "table.borderPainter" if p.get("kind").is_none() => TableTool::Paint,
         _ => return None,
     };
     if p.get("page").is_some() {
         return None;
     }
     let on = p.get("on").and_then(Value::as_bool).unwrap_or(app.canvas.table_tool != Some(tool));
+    set(app, tool, on);
+    Some(Ok(json!({"tool": app.canvas.table_tool.map(TableTool::id)})))
+}
+
+/// Turns `tool` on (saying how it works on the status bar) or every tool off.
+fn set(app: &mut WordApp, tool: TableTool, on: bool) {
     app.canvas.table_tool = on.then_some(tool);
     app.canvas.table_stroke = None;
     if on {
@@ -55,9 +77,9 @@ pub fn toggle(app: &mut WordApp, id: &str, p: &Value) -> Option<Result<Value, St
         app.status(match tool {
             TableTool::Draw => tl!("Drag a rectangle to draw a table, or a line across cells to split them. Esc stops."),
             TableTool::Erase => tl!("Click a border between two cells to merge them. Esc stops."),
+            TableTool::Paint => tl!("Click a table border to paint it with the chosen border style. Esc stops."),
         });
     }
-    Some(Ok(json!({"tool": app.canvas.table_tool.map(TableTool::id)})))
 }
 
 /// Turn the tool off (Esc).
@@ -110,7 +132,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
             }
             json!({"page": st.page, "x0": st.from.0, "y0": st.from.1, "x1": st.to.0, "y1": st.to.1})
         }
-        TableTool::Erase => json!({"page": st.page, "x": st.to.0, "y": st.to.1}),
+        TableTool::Erase | TableTool::Paint => json!({"page": st.page, "x": st.to.0, "y": st.to.1}),
     };
     if let Err(e) = app.run(tool.id(), params) {
         app.status(e);
@@ -174,11 +196,24 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
                 painter.line_segment([a, b], Stroke::new(3.0, t.red));
             }
         }
+        (TableTool::Paint, _) => {
+            if let Some(p) = hover
+                && let Some((page, x, y)) = crate::canvas::page_at(pages, layout, scale, p)
+                && let Some((from, to)) = wordcraft_engine::cmd::border_pen::paint_target(layout, page, x, y)
+                && let (Some(a), Some(b)) = (to_screen(page, from.0, from.1), to_screen(page, to.0, to.1))
+            {
+                painter.line_segment([a, b], Stroke::new(3.0, t.accent));
+            }
+        }
         _ => {}
     }
     if let Some(p) = hover.filter(|p| pages.iter().any(|r| r.contains(*p))) {
         let r = Rect::from_min_size(p + vec2(8.0, 6.0), vec2(16.0, 16.0));
-        let icon = if tool == TableTool::Draw { "pencil" } else { "eraser" };
+        let icon = match tool {
+            TableTool::Draw => "pencil",
+            TableTool::Erase => "eraser",
+            TableTool::Paint => "borderPainter",
+        };
         crate::icons::paint(painter, r, icon, t.icon, t.accent);
     }
 }
@@ -201,6 +236,59 @@ mod tests {
         // With coordinates it is the engine's command (an error here: nothing to split).
         assert!(a.run("table.draw", json!({"page": 0, "x0": 1, "y0": 1, "x1": 2, "y1": 2})).is_err());
         assert!(a.canvas.table_tool.is_none());
+    }
+
+    /// Picking a border style sets the pen and turns on the Border Painter; its button turns
+    /// it off and on again, Esc turns it off, and the pen stays. A kind or page coordinates go
+    /// to the engine instead.
+    #[test]
+    fn border_styles_turn_on_the_border_painter() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        a.run("table.borderStyles", json!({})).unwrap();
+        assert_eq!(a.canvas.table_tool, None, "asking for the pen changes nothing");
+        a.run("table.borderStyles", json!({"style": "double", "width": 1.5})).unwrap();
+        assert_eq!(a.canvas.table_tool, Some(TableTool::Paint));
+        assert_eq!(a.run("table.borderPainter", json!({})).unwrap()["tool"], Value::Null);
+        assert_eq!(a.run("table.borderPainter", json!({})).unwrap()["tool"], "table.borderPainter");
+        assert!(stop(&mut a) && a.canvas.table_tool.is_none());
+        assert_eq!(a.run("table.borderStyles", json!({})).unwrap()["style"], "double", "the pen is kept");
+        // A kind is the engine's: it paints those borders and leaves the tool alone.
+        a.run("table.borderPainter", json!({"kind": "outside"})).unwrap();
+        assert_eq!(a.canvas.table_tool, None);
+        let t = a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(t.props.borders.and_then(|b| b.top).map(|b| b.width), Some(1.5));
+        // Picking another tool replaces the painter.
+        a.run("table.borderStyles", json!({"style": "single"})).unwrap();
+        a.run("table.eraser", json!({})).unwrap();
+        assert_eq!(a.canvas.table_tool, Some(TableTool::Erase));
+    }
+
+    /// With the Border Painter on, a click just inside a cell's edge paints that one border with
+    /// the pen (one undo step) and the painter stays on; Esc turns it off.
+    #[test]
+    fn the_border_painter_paints_a_clicked_border() {
+        use crate::table_resize::tests::{H, button, cell, screen, steps, table_window};
+        let mut h: H = table_window();
+        h.state_mut().run("table.borderStyles", json!({"style": "double", "color": "E97132"})).unwrap();
+        assert_eq!(h.state().canvas.table_tool, Some(TableTool::Paint));
+        let b = cell(&mut h, 0, 0);
+        let at = screen(&mut h, b.x + b.w - 1.5, b.y + b.h / 2.0);
+        let depth = h.state().session.undo_depth();
+        h.event(egui::Event::PointerMoved(at));
+        h.step();
+        button(&h, at, true);
+        h.step();
+        button(&h, at, false);
+        steps(&mut h, 2);
+        let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        let right = t.rows[0].cells[0].props.borders.and_then(|b| b.right);
+        assert_eq!(right.map(|b| (b.style, b.color.map(|c| c.hex()))), Some((wordcraft_doc::props::BorderStyle::Double, Some("E97132".into()))));
+        assert_eq!(h.state().session.undo_depth(), depth + 1);
+        assert_eq!(h.state().canvas.table_tool, Some(TableTool::Paint), "the painter stays on");
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        steps(&mut h, 2);
+        assert_eq!(h.state().canvas.table_tool, None);
     }
 
     /// Deleting a table or removing its last cells turns off the eraser.
