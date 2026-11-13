@@ -273,6 +273,11 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
     p
 }
 
+/// A shaped text run of a graphic label: the face that draws it, its byte offset in the whole
+/// label, the text it covers and its glyphs in logical order (as [`wordcraft_fonts::shape`] returns
+/// them).
+type LabelRun<'t> = (FaceRef, usize, &'t str, Vec<wordcraft_fonts::ShapedGlyph>);
+
 /// One line of a `GraphicItem::Text` in `r`, shaped in its font (the document's body font when
 /// unset) and aligned horizontally, centred vertically, at its size times `k`. Characters the font
 /// lacks (Chinese in a chart drawn in Calibri's substitute, #4720) are drawn in a fallback face, as
@@ -290,29 +295,36 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
     let primary = resolved.face;
     let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
-    let runs: Vec<_> = face_runs(text, primary, *bold)
+    let runs: Vec<LabelRun<'_>> = face_runs(text, primary, *bold)
         .into_iter()
-        .map(|(face, s)| (face, s, wordcraft_fonts::shape(face.get(), s, &[], |c| c)))
-        .filter(|(_, _, shaped)| !shaped.is_empty())
+        .filter_map(|(face, at)| {
+            let s = text.get(at.clone())?;
+            let shaped = wordcraft_fonts::shape(face.get(), s, &[], |c| c);
+            (!shaped.is_empty()).then_some((face, at.start, s, shaped))
+        })
         .collect();
-    let width: f32 = runs.iter().map(|(f, _, shaped)| shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() * scale(*f)).sum();
+    let width: f32 = runs.iter().map(|(f, _, _, shaped)| shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() * scale(*f)).sum();
     // The font's own line metrics centre the line, whichever faces draw it.
     let (ascent, descent) = wordcraft_fonts::word::line_metrics(primary.get());
     let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * scale(primary) / 2.0;
-    let mut pen = match align {
+    let start = match align {
         TextAlign::Left => r.x,
         TextAlign::Center => r.x + (r.w - width) / 2.0,
         TextAlign::Right => r.x + r.w - width,
     };
+    // Right to left where the label reads that way (#4199): the label is one line of text, so
+    // its clusters go left to right in visual order, as a paragraph's line does.
+    let base_rtl = text.chars().find_map(crate::para::strong_rtl).unwrap_or(false);
+    let levels = crate::para::bidi_levels(text, base_rtl);
+    let pens = label_pens(&runs, start, size, &levels, base_rtl);
     let mut out = Vec::with_capacity(runs.len());
-    for (face, s, shaped) in runs {
+    for ((face, _, s, shaped), xs) in runs.iter().zip(&pens) {
+        let face = *face;
         let k = scale(face);
-        let ranges = crate::missing::cluster_ranges(s, &shaped);
-        let mut glyphs = Vec::with_capacity(shaped.len());
-        for g in &shaped {
-            glyphs.push((g.gid, pen + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k));
-            pen += g.x_advance as f32 * k;
-        }
+        let ranges = crate::missing::cluster_ranges(s, shaped);
+        // Glyphs stay in the shaped (logical) order, each at the x its cluster took, so they
+        // still line up with `text` and `ranges`.
+        let glyphs = shaped.iter().zip(xs).map(|(g, x)| (g.gid, x + g.x_offset as f32 * k, baseline - g.y_offset as f32 * k)).collect();
         // A fallback face is emboldened when it has no bold of its own, as in body text.
         let synth_bold = if face.id() == primary.id() { resolved.synth_bold } else { *bold && face.weight < 600.0 };
         out.push(Draw::Glyphs {
@@ -333,11 +345,71 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     out
 }
 
-/// `text` split into runs of the face that draws them: `primary` where it has the character, else a
-/// fallback face. A run the primary lacks takes one face covering all of it when one does (so a
-/// Chinese label doesn't mix serif and sans glyphs), else each character its own fallback. Spaces
-/// and combining marks stay in the run before them; a character no face has stays in `primary`.
-fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
+/// The pen x of every glyph of every run of a graphic label, left to right, the first at `start`.
+///
+/// `levels` are the label's bidi embedding levels by byte ([`crate::para::bidi_levels`]),
+/// empty for a label with no right-to-left character: that one walks the pen straight through the
+/// shaped glyphs, exactly as it is laid out. Otherwise the label's clusters are ordered visually
+/// (UAX #9 rule L2, as a paragraph's line is), because [`wordcraft_fonts::shape`] returns glyphs in
+/// logical order and nothing else here would turn them round: an Arabic chart title, category,
+/// legend entry or SmartArt label used to read back to front, and a mixed Latin/Arabic label had
+/// its runs the wrong way round (#4199). Each cluster's glyphs keep the shaper's order inside the
+/// cluster's own box.
+fn label_pens(runs: &[LabelRun<'_>], start: f32, size: f32, levels: &[u8], base_rtl: bool) -> Vec<Vec<f32>> {
+    let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
+    let mut pens: Vec<Vec<f32>> = runs.iter().map(|(_, _, _, shaped)| vec![0.0; shaped.len()]).collect();
+    if levels.is_empty() {
+        let mut pen = start;
+        for ((face, _, _, shaped), xs) in runs.iter().zip(&mut pens) {
+            let k = scale(*face);
+            for (g, x) in shaped.iter().zip(xs) {
+                *x = pen;
+                pen += g.x_advance as f32 * k;
+            }
+        }
+        return pens;
+    }
+    // One box per cluster of the whole label, in logical order: which run it came from, which of
+    // that run's glyphs it holds, its bidi level and its width.
+    let mut cls: Vec<(usize, std::ops::Range<usize>, u8, f32)> = Vec::new();
+    for (ri, (face, at, _, shaped)) in runs.iter().enumerate() {
+        let k = scale(*face);
+        let mut i = 0;
+        while let Some(g) = shaped.get(i) {
+            let mut j = i + 1;
+            while shaped.get(j).is_some_and(|next| next.cluster == g.cluster) {
+                j += 1;
+            }
+            let w = shaped.get(i..j).unwrap_or_default().iter().map(|g| g.x_advance as f32 * k).sum();
+            let level = levels.get(at.saturating_add(g.cluster)).copied().unwrap_or(u8::from(base_rtl));
+            cls.push((ri, i..j, level, w));
+            i = j;
+        }
+    }
+    let order = crate::para::visual_order(&cls.iter().map(|c| c.2).collect::<Vec<_>>());
+    let mut pen = start;
+    for &i in &order {
+        let Some((ri, gs, _, w)) = cls.get(i) else { continue };
+        let Some((face, _, _, shaped)) = runs.get(*ri) else { continue };
+        let k = scale(*face);
+        let mut x = pen;
+        for (n, g) in shaped.get(gs.clone()).unwrap_or_default().iter().enumerate() {
+            if let Some(slot) = pens.get_mut(*ri).and_then(|v| v.get_mut(gs.start.saturating_add(n))) {
+                *slot = x;
+            }
+            x += g.x_advance as f32 * k;
+        }
+        pen += w;
+    }
+    pens
+}
+
+/// `text` split into runs of the face that draws them, by byte range: `primary` where it has the
+/// character, else a fallback face. A run the primary lacks takes one face covering all of it when
+/// one does (so a Chinese label doesn't mix serif and sans glyphs), else each character its own
+/// fallback. Spaces and combining marks stay in the run before them; a character no face has stays
+/// in `primary`. The ranges follow each other in logical order and cover the whole of `text`.
+fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, std::ops::Range<usize>)> {
     let joins = |c: char| c.is_whitespace() || wordcraft_doc::math_linear::is_combining(c);
     // (start, end, drawn by `primary`)
     let mut spans: Vec<(usize, usize, bool)> = Vec::new();
@@ -350,16 +422,16 @@ fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
         }
     }
     let db = wordcraft_fonts::FontDb::global();
-    let mut out: Vec<(FaceRef, &str)> = Vec::with_capacity(spans.len());
+    let mut out: Vec<(FaceRef, std::ops::Range<usize>)> = Vec::with_capacity(spans.len());
     for (start, end, own) in spans {
         let Some(s) = text.get(start..end) else { continue };
         if own {
-            out.push((primary, s));
+            out.push((primary, start..end));
             continue;
         }
         let chars: Vec<char> = s.chars().filter(|c| !joins(*c)).collect();
         if let Some(f) = db.fallback_for_run(&chars, primary.id(), bold, false) {
-            out.push((FaceRef::of(&f), s));
+            out.push((FaceRef::of(&f), start..end));
             continue;
         }
         // No one face has them all: each character in its own fallback, neighbours sharing a face
@@ -370,7 +442,7 @@ fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
                 if joins(c) { None } else { Some(db.fallback_styled(c, primary.id(), bold, false).map(|f| FaceRef::of(&f)).unwrap_or(primary)) };
             match (run, face) {
                 (Some((cur, from)), Some(f)) if f.id() != cur.id() => {
-                    out.extend(s.get(from..i).map(|t| (cur, t)));
+                    out.push((cur, start + from..start + i));
                     run = Some((f, i));
                 }
                 (None, f) => run = Some((f.unwrap_or(primary), i)),
@@ -378,7 +450,7 @@ fn face_runs(text: &str, primary: FaceRef, bold: bool) -> Vec<(FaceRef, &str)> {
             }
         }
         if let Some((cur, from)) = run {
-            out.extend(s.get(from..).map(|t| (cur, t)));
+            out.push((cur, start + from..end));
         }
     }
     out
