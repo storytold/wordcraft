@@ -1096,6 +1096,42 @@ fn compare_records_the_final_sections_properties() {
     assert!(s.doc.last_section.fmt_change.is_none());
 }
 
+/// Plain-text input carries no section of its own: the section `Document::from_text` builds is
+/// a synthetic default, not an authored page layout. Comparing text against a document whose
+/// final section has nondefault margins/page size must therefore keep the document's section —
+/// no `w:sectPrChange`, no layout reset — whether the text is identical or edited.
+#[test]
+fn compare_plain_text_input_keeps_the_documents_final_section() {
+    let original = || {
+        let mut d = Document::from_text("Same text.");
+        d.last_section.margin_left = 144.0;
+        d.last_section.page_w = 595.0;
+        d
+    };
+    // Identical text: no change at all, and the section is untouched.
+    let mut s = Session::new(original());
+    let r = s.run("review.compare", &json!({"text": "Same text."})).unwrap();
+    assert_eq!(r["changes"], 0, "identical plain text is no change: {r}");
+    assert!(s.doc.last_section.fmt_change.is_none(), "plain-text input records no w:sectPrChange");
+    assert_eq!(s.doc.last_section.margin_left, 144.0, "the original margin survives");
+    assert_eq!(s.doc.last_section.page_w, 595.0, "the original page width survives");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.last_section.margin_left, 144.0, "accept cannot commit a layout reset that was never a change");
+    assert_eq!(s.doc.last_section.page_w, 595.0);
+
+    // Edited text: the text edit is the only change; the section still survives.
+    let mut s = Session::new(original());
+    let r = s.run("review.compare", &json!({"text": "Edited text."})).unwrap();
+    assert_eq!(r["changes"], 1, "only the text edit is a change: {r}");
+    assert!(s.doc.last_section.fmt_change.is_none(), "an edited plain text records no w:sectPrChange either");
+    assert_eq!(s.doc.last_section.margin_left, 144.0, "the original margin survives the edit");
+    assert_eq!(s.doc.last_section.page_w, 595.0, "the original page width survives the edit");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Edited text.");
+    assert_eq!(s.doc.last_section.margin_left, 144.0, "accept keeps the original layout");
+    assert_eq!(s.doc.last_section.page_w, 595.0);
+}
+
 /// A paragraph-embedded section change (`w:sectPr` in `w:pPr`) is tracked as `w:sectPrChange`.
 #[test]
 fn compare_records_a_paragraph_sections_properties() {

@@ -49,10 +49,10 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
 /// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
-    let revised = if let Some(t) = p::str(v, "text") {
-        Document::from_text(t)
+    let (revised, plain_text) = if let Some(t) = p::str(v, "text") {
+        (Document::from_text(t), true)
     } else if let Some(path) = p::str(v, "path") {
-        crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?
+        (crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?, false)
     } else {
         return Err(CmdError::Params("`path` or `text` of the revised document is required".into()));
     };
@@ -184,8 +184,10 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.body = out;
     // The final section has no block of its own: compare it explicitly. A section-only
     // difference is tracked (`w:sectPrChange`) and the revised section's properties win, so
-    // rejecting restores the original's.
-    if opts.formatting {
+    // rejecting restores the original's. Plain-text input has no section of its own — the one
+    // `Document::from_text` builds is a synthetic default, not an authored layout — so the
+    // original's final section is kept untouched on that path.
+    if opts.formatting && !plain_text {
         let mut section = revised.last_section.clone();
         if crate::cmd::fmt_revisions::compare_section(&s.doc.last_section, &mut section, &mut s.doc.revisions, &author, &date) {
             // References are content, not formatting: `strip_section` keeps them out of the
