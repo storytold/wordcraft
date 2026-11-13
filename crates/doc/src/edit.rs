@@ -1535,12 +1535,18 @@ impl Document {
             let tail = target.split_off(pos.off)?;
             let added = src.len();
             let keep = target.props.clone();
+            let src_shading = src.props.shading;
             let sect = tail.section.clone();
             let mut src = src;
             src.section = None;
             target.append(src);
             target.append(tail);
             target.props = keep;
+            // Paragraph shading is the pasted text's background (HTML container backgrounds
+            // become paragraph shading), so an unshaded destination takes the source's.
+            if target.props.shading.is_none() {
+                target.props.shading = src_shading;
+            }
             target.section = sect;
             return Ok(Pos { off: pos.off + added, ..pos.clone() });
         }

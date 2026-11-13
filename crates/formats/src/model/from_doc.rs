@@ -545,7 +545,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         mark_ins: None,
                         mark_del: None,
                         fmt_change: None,
-                        extra: None,
+                        extra: out.extra.clone(),
                         mark: None,
                         kept: None,
                         wrap: None,

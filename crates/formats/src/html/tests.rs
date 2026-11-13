@@ -917,6 +917,26 @@ fn paragraph_shading_from_a_style_survives_html_export() {
     assert!(out.contains("background-color:#123456"), "style shading is exported: {out}");
 }
 
+/// A closing parenthesis without an opening one invalidates the declaration (#6157).
+#[test]
+fn background_shorthand_unbalanced_closing_paren_is_ignored() {
+    let html = r#"<span style="background-color:#ff0000"><span style="background: ) none repeat">text</span></span>"#;
+    let doc = import(html);
+    let wordcraft_doc::Block::Para(p) = &*doc.body[0] else { panic!("expected Para") };
+    assert_eq!(p.runs[0].props.shading, Some(wordcraft_doc::Rgb(0xff, 0x00, 0x00)), "invalid shorthand must not clear inherited shading");
+}
+
+/// A shaded paragraph keeps its shading on both sides of an internal page break (#6157).
+#[test]
+fn paragraph_shading_survives_an_internal_page_break() {
+    let mut p = wordcraft_doc::Paragraph::with_text("before\u{000C}after", wordcraft_doc::CharProps::default());
+    p.props.shading = Some(wordcraft_doc::Rgb(0x12, 0x34, 0x56));
+    let mut doc = Document::new();
+    doc.body = vec![wordcraft_doc::para_block(p)];
+    let out = crate::html::export(&doc);
+    assert_eq!(out.matches("background-color:#123456").count(), 2, "{out}");
+}
+
 /// Verify that CSS-escaped quote characters in background shorthand URLs remain part of the URL
 /// content and do not cause the shorthand declaration to be rejected.
 #[test]

@@ -1841,6 +1841,7 @@ fn pasted_code_from_vscode_has_syntax_colors_and_no_character_shading() {
     for r in &p.runs {
         assert_eq!(r.props.shading, None, "character should have no shading from container div");
     }
+    assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "container background is kept as paragraph shading");
     assert!(p.runs.iter().any(|r| r.props.color == Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(0x56, 0x9c, 0xd6)))));
 }
 

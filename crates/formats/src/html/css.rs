@@ -193,7 +193,10 @@ fn parse_bg_layers(val: &str) -> Option<Vec<BgLayer<'_>>> {
                 start = Some(i);
             }
         } else if c == ')' {
-            paren_depth = paren_depth.saturating_sub(1);
+            if paren_depth == 0 {
+                return None;
+            }
+            paren_depth -= 1;
         } else if paren_depth == 0 {
             if c == '/' {
                 current_slashes = current_slashes.saturating_add(1);
