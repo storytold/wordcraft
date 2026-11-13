@@ -839,6 +839,72 @@ fn bold_toggles_selection_and_caret_word() {
     assert_eq!(p.props_of_char(9).italic, None);
 }
 
+/// A partly formatted selection toggles by its first character, as Word does (#6516).
+#[test]
+fn toggles_on_mixed_selection_follow_first_character() {
+    // `Abc abc` with `fmt` set by `cmd`, then `cmd` with `v` on the selection `from` → `to`.
+    let toggled = |cmd: &str, fmt: (usize, usize), from: usize, to: usize, v: serde_json::Value| -> String {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "Abc abc"}));
+        let sel = |s: &mut Session, a: usize, b: usize| {
+            run(s, "select.range", json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}}));
+        };
+        sel(&mut s, fmt.0, fmt.1);
+        run(&mut s, cmd, json!({"value": true}));
+        sel(&mut s, from, to);
+        run(&mut s, cmd, v);
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        (0..7)
+            .map(|i| {
+                let c = p.props_of_char(i);
+                match cmd {
+                    "format.italic" => c.italic == Some(true),
+                    "format.underline" => c.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None),
+                    _ => c.bold == Some(true),
+                }
+            })
+            .map(|on| if on { 'F' } else { '.' })
+            .collect()
+    };
+    let t = || json!({});
+    for cmd in ["format.bold", "format.italic", "format.underline"] {
+        // `FFF....`: a selection starting on formatted text removes the format from all of it.
+        assert_eq!(toggled(cmd, (0, 3), 2, 5, t()), "FF.....", "{cmd}");
+        assert_eq!(toggled(cmd, (0, 3), 0, 7, t()), ".......", "{cmd}");
+        assert_eq!(toggled(cmd, (0, 3), 1, 7, t()), "F......", "{cmd}");
+        // Made right to left: still the first character in document order.
+        assert_eq!(toggled(cmd, (0, 3), 5, 2, t()), "FF.....", "{cmd}");
+        assert_eq!(toggled(cmd, (0, 3), 7, 0, t()), ".......", "{cmd}");
+        // `....FFF`: a selection starting on plain text applies it to all of it.
+        assert_eq!(toggled(cmd, (4, 7), 0, 7, t()), "FFFFFFF", "{cmd}");
+        // An explicit value still sets.
+        assert_eq!(toggled(cmd, (0, 3), 0, 7, json!({"value": true})), "FFFFFFF", "{cmd}");
+        assert_eq!(toggled(cmd, (4, 7), 0, 7, json!({"value": false})), ".......", "{cmd}");
+    }
+}
+
+/// A selection that starts in an empty paragraph: Word decides from the first text character, not
+/// from the empty paragraph's mark (observed in Word for Windows, #6516 review).
+#[test]
+fn toggle_on_a_selection_from_an_empty_paragraph_follows_the_first_text() {
+    let toggled = |mark_bold: bool, text_bold: bool| -> Option<bool> {
+        let mut s = s();
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": "abc"}));
+        let first = Pos::body(0, 0);
+        s.doc.para_mut(first.story, &first.path).unwrap().mark.bold = Some(mark_bold);
+        run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 3}}));
+        run(&mut s, "format.bold", json!({"value": text_bold}));
+        run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 1, "off": 3}}));
+        run(&mut s, "format.bold", json!({}));
+        s.doc.para_at(&Pos::body(1, 0)).unwrap().props_of_char(0).bold
+    };
+    // A bold empty paragraph before plain text: Bold goes on.
+    assert_eq!(toggled(true, false), Some(true));
+    // A plain empty paragraph before bold text: Bold comes off.
+    assert_eq!(toggled(false, true), Some(false));
+}
+
 #[test]
 fn border_toggles_and_saves() {
     use wordcraft_doc::props::Border;

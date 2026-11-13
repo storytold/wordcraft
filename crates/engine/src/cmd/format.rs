@@ -310,10 +310,20 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
     out
 }
 
+/// Whether a toggle without a `value` turns its format on. A selection follows its first character
+/// in document order, as Word does: one that starts formatted loses the format, all of it (#6516).
+fn turns_on(s: &Session, has: impl Fn(&ResolvedChar) -> bool) -> bool {
+    let chars = resolved(s);
+    if !s.sel.is_collapsed() || selected_text_box(s).is_some() || column_rows(s).is_some() {
+        return !chars.first().is_some_and(has);
+    }
+    !chars.iter().all(has)
+}
+
 fn toggle(s: &mut Session, v: &Value, get: fn(&ResolvedChar) -> bool, set: fn(&mut CharProps, bool)) -> CmdResult {
     let on = match p::bool(v, "value") {
         Some(b) => b,
-        None => !resolved(s).iter().all(get),
+        None => turns_on(s, get),
     };
     apply(s, &|c| set(c, on))
 }
@@ -323,7 +333,7 @@ fn underline(s: &mut Session, v: &Value) -> CmdResult {
     let on = match (p::bool(v, "value"), style) {
         (Some(b), _) => b,
         (None, Some(_)) => true,
-        (None, None) => !resolved(s).iter().all(|r| r.underline != Underline::None),
+        (None, None) => turns_on(s, |r| r.underline != Underline::None),
     };
     let u = if on { style.unwrap_or(Underline::Single) } else { Underline::None };
     apply(s, &|c| c.underline = Some(u))
