@@ -156,6 +156,7 @@ fn set_code(s: &mut Session, v: &Value) -> CmdResult {
     if code.is_empty() || code.len() > MAX_CODE || code.contains(OBJ) {
         return Err(CmdError::Params("bad field code".into()));
     }
+    crate::active_fields::check(&code)?;
     let Some(f) = selected(s).into_iter().next() else { return Err(none_selected()) };
     with_field(s, &f.at, |o| match o {
         InlineObject::Field { instr, .. } | InlineObject::FieldStart { instr, .. } => *instr = code.clone(),

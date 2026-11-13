@@ -229,6 +229,7 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
+    crate::active_fields::check(instr)?;
     let props = s.typing_props();
     let at = delete_selection(s)?;
     let end = s.doc.insert_object(

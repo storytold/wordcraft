@@ -162,6 +162,33 @@ sha256 of each archive only matches what that index says: it catches a broken do
 changed pack. `proof.packs` then returns `"index_override": "<url or path>"`, and the app shows the
 test source in File › Options › Language and on the bar's Install.
 
+## Fields Word acts on
+
+An agent can be steered by text in the document it was asked to edit, so from MCP and from the
+control channel WordCraft refuses to put into a document the field types Microsoft Word acts on
+when it opens a document or updates its fields: `DDE` and `DDEAUTO` (Word offers to start another
+program) and `INCLUDETEXT`, `INCLUDEPICTURE`, `LINK`, `IMPORT`, `INCLUDE`, `DATABASE` and `RD`
+(Word fetches the target, over the network for a `\\server\share` path), also nested in another
+field's code (#3628). They are refused:
+
+- in a field code: `insert.field`, `fields.setCode` and the mail-merge rules;
+- in content brought in from elsewhere: a paste (any of the paste commands, the Spike), a file's
+  text (`insert.textFromFile`, `insert.object`), a Quick Part or AutoText entry, and a document
+  compared or combined with this one (`review.compare`, `review.combine`). A field whose very code
+  the document already has is let through, so copying the document's own fields works. One cut
+  without Track Changes has left the document, so pasting it back from automation is refused;
+- in a document whose bytes the agent supplies: `file.open` and `file.newFromTemplate` with
+  `data`. When markup kept from such a file holds fields, the document loses all of its kept
+  markup and is written from what WordCraft read.
+
+The tool error reads, for example, `not available: DDEAUTO fields can't be inserted from
+automation`. A document opened from a file by its path keeps its fields (the file already has
+them), and the person at the keyboard can still insert them. A host that needs them from
+automation sets the environment variable `WORDCRAFT_ALLOW_ACTIVE_FIELDS=1` for the server or the
+app; no command parameter turns the check off. Not covered: a field typed into the Field dialog
+through synthetic input (`ui.key`, `ui.text`, `ui.click`), and embedded objects and other parts
+of a supplied document that WordCraft keeps without reading.
+
 ## Tools
 
 | Tool | What it does |

