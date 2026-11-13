@@ -1853,7 +1853,7 @@ fn multi_block_paste_keeps_first_paragraph_shading() {
     let html = r#"<div style="background-color:#1e1e1e"><p>one</p><p>two</p></div>"#;
     run(&mut s, "edit.paste", json!({"text": "one\ntwo", "html": html}));
     assert_eq!(text(&s), "one\ntwo");
-    let p = s.doc.body.get(0).and_then(|b| b.as_para()).unwrap();
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
     assert_eq!(p.props.shading, Some(wordcraft_doc::Rgb(0x1e, 0x1e, 0x1e)), "first pasted paragraph keeps its shading");
 }
 
@@ -1872,7 +1872,7 @@ fn paste_keeps_destination_style_shading() {
     run(&mut s, "para.style", json!({"style": "Shaded"}));
     let html = r#"<div style="background-color:#1e1e1e"><span>text</span></div>"#;
     run(&mut s, "edit.paste", json!({"text": "text", "html": html}));
-    let p = s.doc.body.get(0).and_then(|b| b.as_para()).unwrap();
+    let p = s.doc.body.first().and_then(|b| b.as_para()).unwrap();
     assert_eq!(p.props.shading, None, "source shading must not override the destination style");
     assert_eq!(
         s.doc.styles.resolve_para(&p.props).shading,
