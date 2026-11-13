@@ -2240,6 +2240,31 @@ fn numbering_change_caches_the_previous_definition() {
     assert_eq!(nc.previous_numbering(), Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }));
 }
 
+/// A cache longer than the old 256-character read cap still matches its list and round-trips.
+#[test]
+fn a_long_numbering_change_cache_roundtrips() {
+    // 32 placeholders fill the reader's 64-character lvlText limit; a start of 100 makes the
+    // cache 288 characters, past the cap the reader used to apply.
+    let tokens = "%1".repeat(32);
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="7"><w:lvl w:ilvl="0"><w:start w:val="100"/><w:numFmt w:val="decimal"/><w:lvlText w:val="{tokens}"/></w:lvl></w:abstractNum><w:num w:numId="2"><w:abstractNumId w:val="7"/></w:num></w:numbering>"#
+    );
+    let package =
+        docx(r#"<w:p><w:r><w:t>Removed</w:t></w:r></w:p>"#, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let mut d = wordcraft_docx::read(&package).unwrap();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change =
+        Some(Box::new(wordcraft_doc::props::NumChange::for_numbering(0, Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }))));
+    let cache = d.numbering.change_original(2, 0).expect("the cache fits the limit");
+    assert!(cache.len() > 256, "the old read cap would truncate it: {}", cache.len());
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&out), "word/document.xml");
+    assert!(xml.contains(&format!(r#"w:original="{cache}""#)), "{xml}");
+    let again = wordcraft_docx::read(&out).unwrap();
+    let ap = paras(&again);
+    let nc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(nc.previous_numbering(), Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }));
+}
+
 /// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
 /// when given, `settings`.
 fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {

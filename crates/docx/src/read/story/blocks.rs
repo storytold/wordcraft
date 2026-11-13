@@ -251,7 +251,7 @@ impl Reader<'_> {
                 para.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
             if let Some(ch) = ppr.child("w:numPr").and_then(|n| n.child("w:numberingChange")) {
-                let original: String = ch.attr("w:original").unwrap_or("").chars().take(256).collect();
+                let original: String = ch.attr("w:original").unwrap_or("").chars().take(wordcraft_doc::numbering::MAX_CHANGE_ORIGINAL).collect();
                 let snapshot = self.previous_numbering(&original);
                 para.props.num_change = Some(Box::new(NumChange { rev: self.revision(RevisionKind::Format, ch), original, snapshot }));
             }

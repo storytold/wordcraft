@@ -9,6 +9,10 @@ use crate::props::{Align, CharProps, NumRef};
 use crate::section::NumFormat;
 use crate::{DocError, free_id};
 
+/// Longest `w:numberingChange` `w:original` cache this app writes or keeps (bytes on write,
+/// characters on read). A longer previous definition gets no cache rather than a truncated one.
+pub const MAX_CHANGE_ORIGINAL: usize = 4096;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub enum LevelSuffix {
@@ -243,6 +247,9 @@ impl Numbering {
     pub fn change_original(&self, num: u32, level: u8) -> Option<String> {
         let level = level.min(8);
         let lvl = self.level(num, level)?;
+        if lvl.text.len() > MAX_CHANGE_ORIGINAL {
+            return None;
+        }
         let chars: Vec<char> = lvl.text.chars().collect();
         let is_token = |i: usize| chars.get(i) == Some(&'%') && chars.get(i + 1).is_some_and(|c| ('1'..='9').contains(c));
         let mut out = String::new();
@@ -267,13 +274,17 @@ impl Numbering {
                 j += 1;
             }
             let suffix: String = chars[i + 2..j].iter().collect();
-            out.push_str(&format!("%{k}:{}:{}:{suffix}", self.start_of(num, (k - 1) as u8), l.format.nfc()));
+            let segment = format!("%{k}:{}:{}:{suffix}", self.start_of(num, (k - 1) as u8), l.format.nfc());
+            if out.len() + segment.len() > MAX_CHANGE_ORIGINAL {
+                return None;
+            }
+            out.push_str(&segment);
             i = j;
         }
         if !complete || out.is_empty() {
             out = format!("%{}:{}:{}:{}", level + 1, self.start_of(num, level), lvl.format.nfc(), lvl.text);
         }
-        Some(out)
+        (out.len() <= MAX_CHANGE_ORIGINAL).then_some(out)
     }
     /// The list level whose [`Numbering::change_original`] cache is `original`, for reopening a
     /// document this app wrote. Definitions several lists or levels share answer with the first,
@@ -569,6 +580,25 @@ mod tests {
         assert_eq!(caches.get("%1:1:0:."), Some(&NumRef { num: numbered, level: 0 }), "a shared definition answers with the first list");
         assert_eq!(caches.get("%1:1:23:•"), Some(&NumRef { num: bullet, level: 0 }));
         assert_eq!(caches.get("%3:1:0:."), None, "a mid-level segment is not a whole cache");
+    }
+
+    /// A cache longer than the DOCX reader used to keep is still written in one piece; one longer
+    /// than the shared limit is dropped instead of truncated.
+    #[test]
+    fn change_original_keeps_the_writer_and_reader_limits_aligned() {
+        let mut n = Numbering::default();
+        let list = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == list) {
+            num.level_overrides = vec![(0, Level { text: "%1".repeat(32), start: 100, ..Level::default() })];
+        }
+        let cache = n.change_original(list, 0).expect("cache within the limit");
+        assert!(cache.len() > 256, "the old reader cap would truncate this cache: {}", cache.len());
+        assert!(cache.len() <= MAX_CHANGE_ORIGINAL);
+
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == list) {
+            num.level_overrides = vec![(0, Level { text: "x".repeat(MAX_CHANGE_ORIGINAL + 1), ..Level::default() })];
+        }
+        assert_eq!(n.change_original(list, 0), None, "an oversized cache is dropped, not truncated");
     }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.

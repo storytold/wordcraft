@@ -866,14 +866,16 @@ fn an_adopted_paragraph_with_numbering_change_remaps_previous_numbering() {
     // valid and it is kept as the file wrote it.
     let mut theirs_legacy = doc(&["theirs_legacy"]);
     theirs_legacy.revisions.push(Revision { kind: RevisionKind::Format, ..Revision::default() });
+    let legacy_list = Arc::make_mut(&mut theirs_legacy.numbering).add_list(crate::numbering::ListKind::Numbered);
     let p_leg = theirs_legacy.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
     p_leg.props.numbering = None;
-    p_leg.props.num_change = Some(Box::new(NumChange { rev: 0, original: "1.".into(), snapshot: Some(NumRef { num: their_list, level: 2 }) }));
+    p_leg.props.num_change = Some(Box::new(NumChange { rev: 0, original: "1.".into(), snapshot: Some(NumRef { num: legacy_list, level: 2 }) }));
     let frag_leg = ours.adopt(theirs_legacy);
     let Some(Block::Para(p_leg_res)) = frag_leg.blocks.first() else { panic!() };
     let nc_leg = p_leg_res.props.num_change.as_ref().unwrap();
     let prev_leg = nc_leg.previous_numbering().expect("previous numbering preserved and remapped");
-    assert_ne!(prev_leg.num, their_list, "snapshot remapped");
+    assert_ne!(prev_leg.num, legacy_list, "snapshot remapped");
+    assert!(ours.numbering.nums.iter().any(|n| n.id == prev_leg.num), "remapped to a target list");
     assert_eq!(nc_leg.original, "1.", "imported cache kept as written");
 }
 
