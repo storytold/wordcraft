@@ -465,7 +465,8 @@ fn push_open_runs(stack: &mut Vec<(u32, u32)>, x0: u32, x1: u32, ny: u32, open: 
 fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image::DynamicImage, CmdError> {
     let (w, h) = grown(img.width(), img.height(), border).ok_or_else(too_large)?;
     let mut out = canvas(w, h, color)?;
-    image::imageops::overlay(&mut out, &img.to_rgba8(), border as i64, border as i64);
+    // Copied, not blended: the frame goes around the picture and never shows through it (#6444).
+    image::imageops::replace(&mut out, &img.to_rgba8(), border as i64, border as i64);
     Ok(image::DynamicImage::ImageRgba8(out))
 }
 
