@@ -5608,3 +5608,45 @@ fn context_menu_accepts_or_rejects_the_change_under_the_caret() {
         assert!(!wordcraft_engine::cmd::review::change_at_selection(s), "{choice} resolved the insertion");
     }
 }
+
+/// The context menu offers what it worked out for the selection it opened on. An arrow key still
+/// reaches the canvas while the menu is open; once it moves the caret off the change, the menu
+/// closes rather than offer Accept Change for a caret that is no longer on one.
+#[test]
+fn moving_the_caret_off_a_change_closes_the_context_menu() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("plain text")), Default::default());
+    a.run("review.trackChanges", json!({"value": true})).unwrap();
+    a.run("caret.set", json!({"pos": {"block": 0, "off": 5}})).unwrap();
+    a.run("text.insert", json!({"text": "NEW "})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 7)).expect("laid out");
+    let at = page_to_screen(h.state_mut(), c.page, c.x, c.top + c.height / 2.0).expect("on screen");
+    h.event(egui::Event::PointerMoved(at));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.step();
+    assert!(h.query_by_label_contains("Accept Change").is_some(), "the menu opens on the insertion with Accept Change");
+    for _ in 0..5 {
+        h.key_press(egui::Key::ArrowRight);
+        h.step();
+    }
+    h.step();
+    let s = &h.state().session;
+    assert_eq!(s.sel, wordcraft_engine::Selection::caret(Pos::body(0, 12)), "the arrow keys moved the caret off the insertion");
+    assert!(!wordcraft_engine::cmd::review::change_at_selection(s), "no change at the new caret");
+    assert!(!h.state().canvas.context_menu_open, "the menu closed when the caret moved");
+    assert!(h.query_by_label_contains("Accept Change").is_none(), "no Accept Change for the caret off the change");
+}

@@ -194,6 +194,10 @@ pub struct CanvasState {
     /// The selection touched a tracked change when the menu opened, so the menu offers Accept and
     /// Reject Change ([`wordcraft_engine::cmd::review::change_at_selection`], asked once per opening).
     pub context_change: bool,
+    /// The selection the context menu opened on. What the menu offers was worked out for it, so
+    /// the menu closes if the selection changes while it is open (an arrow key still reaches the
+    /// canvas).
+    pub context_sel: Option<wordcraft_engine::Selection>,
     /// The right-click context menu is open (the mini toolbar stands down while it is).
     pub context_menu_open: bool,
     /// Shift+F10 (or `ui.contextMenu`) asked for the context menu at the caret (#821).
@@ -425,6 +429,7 @@ impl Default for CanvasState {
             context_issue: None,
             context_synonyms: None,
             context_change: false,
+            context_sel: None,
             obj_drag: None,
             crop: None,
             crop_drag: None,
@@ -1466,6 +1471,9 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
     if secondary_clicked || from_keys || eq_strip.is_some() {
         egui::Popup::close_all(ui.ctx());
         open = true;
+        app.canvas.context_sel = Some(app.session.sel.clone());
+    } else if open && app.canvas.context_sel.as_ref() != Some(&app.session.sel) {
+        open = false;
     } else if open && ui.input(|i| i.pointer.any_click()) {
         let layer = ui.input(|i| i.pointer.interact_pos()).and_then(|p| ui.ctx().layer_id_at(p));
         if !layer.is_some_and(|l| matches!(l.order, egui::Order::Foreground | egui::Order::Tooltip)) {
