@@ -24,6 +24,9 @@ pub struct Fragment {
     /// id: pasting into another document brings them along ([`Document::insert_fragment`]).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub comments: BTreeMap<u32, CopiedComment>,
+    /// Media items referenced by objects in this fragment.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::byte_store")]
+    pub media: BTreeMap<String, Arc<Vec<u8>>>,
 }
 
 /// A comment a [`Fragment`] carries, with a copy of its text.
@@ -41,6 +44,8 @@ impl Fragment {
     pub fn to_document(&self) -> Document {
         let mut d = Document::new();
         d.body = self.blocks.iter().cloned().map(Arc::new).collect();
+        d.parts = self.parts.clone();
+        d.media = self.media.clone();
         d
     }
     /// Whether the fragment holds an equation (in tables too), which a copy also puts on the
@@ -636,6 +641,44 @@ fn remap_comment_marks(p: &mut Paragraph, foreign: &BTreeSet<u32>, ids: &BTreeMa
     p.touch();
 }
 
+/// Remap media references in an inline object.
+fn remap_media_object(o: &mut InlineObject, map: &BTreeMap<String, String>, depth: usize) {
+    match o {
+        InlineObject::Image { media, .. } => {
+            if let Some(k) = map.get(media.as_str()) {
+                *media = k.clone();
+            }
+        }
+        InlineObject::Graphic { graphic, .. } => {
+            let mapped = |m: &str| map.get(m).filter(|k| k.as_str() != m);
+            if graphic.items.iter().any(|i| matches!(i, crate::graphic::GraphicItem::Image { media, .. } if mapped(media).is_some())) {
+                for i in &mut Arc::make_mut(graphic).items {
+                    if let crate::graphic::GraphicItem::Image { media, .. } = i
+                        && let Some(k) = map.get(media.as_str())
+                    {
+                        *media = k.clone();
+                    }
+                }
+            }
+        }
+        InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => {
+            for child in children {
+                remap_media_object(&mut child.obj, map, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Remap media references in a block.
+fn remap_media_block(b: &mut Block, map: &BTreeMap<String, String>) {
+    each_para_mut(b, 0, &mut |p| {
+        for o in &mut p.objects {
+            remap_media_object(o, map, 0);
+        }
+    });
+}
+
 impl Document {
     /// Convert notes between footnotes and endnotes: footnotes (`foot`) become endnotes and
     /// endnotes (`end`) footnotes, both at once to swap them. Each note's kind changes, as do its
@@ -1071,10 +1114,12 @@ impl Document {
         self.with_stories(blocks)
     }
 
-    /// `blocks` as a fragment, with copies of the text boxes and comments in them.
+    /// `blocks` as a fragment, with copies of the text boxes and comments in them and of the media
+    /// they all show.
     fn with_stories(&self, blocks: Vec<Block>) -> Fragment {
         let (parts, comments) = self.stories_in(&blocks);
-        Fragment { blocks, parts, comments }
+        let media = self.media_in(&blocks, &parts, &comments);
+        Fragment { blocks, parts, comments, media }
     }
 
     /// Copies of the text box stories shapes in `blocks` show and of the comments anchored there (a
@@ -1140,8 +1185,16 @@ impl Document {
     /// anchored where it ended, and one whose start alone is there stays behind (its start goes);
     /// so does one there is no room for, so an anchor never points at another comment of this
     /// document. Comments this document has as `frag` copied them (a copy from here) keep their ids
-    /// and anchors.
-    fn bring_comments(&mut self, blocks: &mut [Block], frag: &Fragment, budget: &mut BoxBudget) {
+    /// and anchors. `parts` are `frag`'s text box stories and `media` the keys its media were
+    /// given here, both as [`Self::insert_fragment`] remapped them.
+    fn bring_comments(
+        &mut self,
+        blocks: &mut [Block],
+        frag: &Fragment,
+        parts: &BTreeMap<u32, Part>,
+        media: &BTreeMap<String, String>,
+        budget: &mut BoxBudget,
+    ) {
         let foreign: BTreeSet<u32> = frag.comments.iter().filter(|(id, c)| !self.has_comment(**id, c)).map(|(id, _)| *id).collect();
         if foreign.is_empty() {
             return;
@@ -1187,7 +1240,10 @@ impl Document {
             let Some(c) = frag.comments.get(&old) else { continue };
             let Some(new) = crate::free_id(self.comments.keys().next_back().copied(), self.comments.keys().copied(), 0) else { break };
             let mut story: Vec<Block> = c.story.blocks.iter().map(|b| (**b).clone()).collect();
-            self.adopt_text_boxes(&mut story, &frag.parts, 0, budget);
+            if !media.is_empty() {
+                story.iter_mut().for_each(|b| remap_media_block(b, media));
+            }
+            self.adopt_text_boxes(&mut story, parts, 0, budget);
             let Ok(part) = self.try_add_part(PartKind::Comment, story.into_iter().map(Arc::new).collect()) else { break };
             texts.push(part);
             // Replies come after their comment, which has its new id by then.
@@ -1422,7 +1478,7 @@ impl Document {
         }
         let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
         blocks.iter_mut().for_each(|b| link.block(b));
-        Fragment { blocks, parts, ..Default::default() }
+        Fragment { blocks, parts, media: self.media.clone(), ..Default::default() }
     }
 
     /// [`Self::adopt_with`] as blocks to place in a story directly (a reader building one): its
@@ -1434,6 +1490,60 @@ impl Document {
         let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         blocks
+    }
+
+    /// Media items referenced by objects in `blocks`, the text box stories and comments they hold
+    /// included.
+    pub fn media_of_blocks(&self, blocks: &[Block]) -> BTreeMap<String, Arc<Vec<u8>>> {
+        let (parts, comments) = self.stories_in(blocks);
+        self.media_in(blocks, &parts, &comments)
+    }
+
+    /// Media items referenced by objects in `blocks` and in the stories of `parts` and `comments`
+    /// (theirs, from [`Self::stories_in`]).
+    fn media_in(&self, blocks: &[Block], parts: &BTreeMap<u32, Part>, comments: &BTreeMap<u32, CopiedComment>) -> BTreeMap<String, Arc<Vec<u8>>> {
+        let mut keys = std::collections::BTreeSet::new();
+        /// Collect media keys from an inline object recursively.
+        fn collect_object(o: &InlineObject, keys: &mut std::collections::BTreeSet<String>, depth: usize) {
+            match o {
+                InlineObject::Image { media, .. } => {
+                    keys.insert(media.clone());
+                }
+                InlineObject::Graphic { graphic, .. } => {
+                    for item in &graphic.items {
+                        if let crate::graphic::GraphicItem::Image { media, .. } = item {
+                            keys.insert(media.clone());
+                        }
+                    }
+                }
+                InlineObject::Group { children, .. } if depth < MAX_BOX_DEPTH => {
+                    for child in children {
+                        collect_object(&child.obj, keys, depth + 1);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut collect_para = |p: &Paragraph| {
+            for o in &p.objects {
+                collect_object(o, &mut keys, 0);
+            }
+        };
+        for b in blocks {
+            each_para(b, 0, &mut collect_para);
+        }
+        for story in parts.values().chain(comments.values().map(|c| &c.story)) {
+            for b in &story.blocks {
+                each_para(b, 0, &mut collect_para);
+            }
+        }
+        let mut out = BTreeMap::new();
+        for k in keys {
+            if let Some(data) = self.media.get(&k) {
+                out.insert(k, data.clone());
+            }
+        }
+        out
     }
 
     fn copy_blocks(&self, a: &Pos, b: &Pos) -> Vec<Block> {
@@ -1585,6 +1695,18 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
+        let mut media_remap = BTreeMap::new();
+        for (k, v) in &frag.media {
+            if let Some(existing) = self.media.get(k) {
+                if existing.as_slice() != v.as_slice() {
+                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let new_key = self.add_media((**v).clone(), ext);
+                    media_remap.insert(k.clone(), new_key);
+                }
+            } else {
+                self.media.insert(k.clone(), v.clone());
+            }
+        }
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).
         let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
         let mut blocks = Vec::with_capacity(frag.blocks.len());
@@ -1601,11 +1723,22 @@ impl Document {
         if para.clamp(pos.off) != pos.off {
             return Err(DocError::BadOffset(pos.off));
         }
+        let mut parts = frag.parts.clone();
+        if !media_remap.is_empty() {
+            for b in &mut blocks {
+                remap_media_block(b, &media_remap);
+            }
+            for part in parts.values_mut() {
+                for b in &mut part.blocks {
+                    remap_media_block(Arc::make_mut(b), &media_remap);
+                }
+            }
+        }
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
-        self.adopt_text_boxes(&mut blocks, &frag.parts, 0, &mut budget);
+        self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
         // Comments copied from another document come too (#6096).
-        self.bring_comments(&mut blocks, frag, &mut budget);
+        self.bring_comments(&mut blocks, frag, &parts, &media_remap, &mut budget);
         if budget.skipped > 0 {
             // Once per paste, not once per box (review of #3874).
             log::warn!(

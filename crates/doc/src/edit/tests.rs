@@ -339,6 +339,39 @@ fn paste_at_a_bad_offset_adds_no_comments() {
 }
 
 #[test]
+fn an_image_in_a_comment_pasted_into_another_document_comes_along() {
+    // The copy carries the comment's picture, which gets a key of its own where the target
+    // already has other media under that key.
+    let mut src = doc(&["Alpha beta"]);
+    let id = comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
+    src.media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+    let image = InlineObject::Image {
+        media: "image1.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    let text = Pos { story: StoryRef::Part(src.comments[&id].part), path: Path::top(0), off: 0 };
+    src.insert_object(&text, image, &CharProps::default()).unwrap();
+    let end = src.para_at(&Pos::body(0, 0)).unwrap().len();
+    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, end));
+    assert!(f.media.contains_key("image1.png"));
+    let mut dst = doc(&["t"]);
+    dst.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+    dst.insert_fragment(&Pos::body(0, 1), &f).unwrap();
+    let c = dst.comments.values().next().unwrap();
+    let p = dst.para(StoryRef::Part(c.part), &Path::top(0)).unwrap();
+    let key = p.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.clone()) } else { None }).unwrap();
+    assert_ne!(key, "image1.png");
+    assert_eq!(dst.media[&key].as_slice(), &[2, 2, 2]);
+    assert_eq!(dst.media["image1.png"].as_slice(), &[1, 1, 1]);
+}
+
+#[test]
 fn text_box_in_a_copied_table_gets_its_own_story() {
     let mut d = doc(&["before", "after"]);
     d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(Table::new(1, 1, 200.0))).unwrap();
@@ -985,4 +1018,81 @@ fn an_adopted_notes_text_box_gets_a_story_of_its_own() {
     let part = &ours.parts[&story];
     assert_eq!(part.kind, PartKind::TextBox);
     assert!(matches!(part.blocks.first().map(|b| &**b), Some(Block::Para(p)) if p.text == "their box"));
+}
+
+#[test]
+fn media_of_blocks_collects_graphic_and_group_images() {
+    let mut d = doc(&["test"]);
+    d.media.insert("graphic_img.png".into(), Arc::new(vec![1, 2, 3]));
+    d.media.insert("group_img.png".into(), Arc::new(vec![4, 5, 6]));
+
+    let graphic = crate::graphic::Graphic {
+        kind: crate::graphic::GraphicKind::Diagram,
+        items: vec![crate::graphic::GraphicItem::Image { rect: [0.0, 0.0, 10.0, 10.0], media: "graphic_img.png".into() }],
+        ..Default::default()
+    };
+    let group = InlineObject::Group {
+        w: 50.0,
+        h: 50.0,
+        float: Default::default(),
+        ch_w: 50.0,
+        ch_h: 50.0,
+        canvas: None,
+        children: vec![crate::para::GroupChild {
+            x: 0.0,
+            y: 0.0,
+            obj: InlineObject::Image {
+                media: "group_img.png".into(),
+                w: 10.0,
+                h: 10.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop: [0.0; 4],
+                fx: Default::default(),
+                ole: None,
+            },
+        }],
+    };
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Graphic { w: 100.0, h: 100.0, float: Default::default(), alt: String::new(), graphic: Arc::new(graphic) });
+    p.objects.push(group);
+    let blocks = vec![Block::Para(p)];
+    let collected = d.media_of_blocks(&blocks);
+    assert!(collected.contains_key("graphic_img.png"));
+    assert!(collected.contains_key("group_img.png"));
+}
+
+#[test]
+fn insert_fragment_remaps_conflicting_media_keys() {
+    let mut d = doc(&["destination"]);
+    d.media.insert("image1.png".into(), Arc::new(vec![1, 1, 1]));
+
+    let mut frag_media = std::collections::BTreeMap::new();
+    frag_media.insert("image1.png".into(), Arc::new(vec![2, 2, 2]));
+
+    let mut p = Paragraph::with_text(&crate::para::OBJ.to_string(), CharProps::default());
+    p.objects.push(InlineObject::Image {
+        media: "image1.png".into(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    });
+    let frag = Fragment { blocks: vec![Block::Para(p)], media: frag_media, ..Default::default() };
+
+    let pos = Pos::body(0, 0);
+    d.insert_fragment(&pos, &frag).unwrap();
+    // The original destination media is preserved.
+    assert_eq!(d.media["image1.png"].as_slice(), &[1, 1, 1]);
+    // A second media key was created for the conflicting fragment media.
+    assert_eq!(d.media.len(), 2);
+    let other_key = d.media.keys().find(|k| k.as_str() != "image1.png").unwrap();
+    assert_eq!(d.media[other_key].as_slice(), &[2, 2, 2]);
+    // The inserted paragraph references the remapped key.
+    let para = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    let remapped = para.objects.iter().find_map(|o| if let InlineObject::Image { media, .. } = o { Some(media.as_str()) } else { None }).unwrap();
+    assert_eq!(remapped, other_key);
 }
