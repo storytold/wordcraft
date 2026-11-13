@@ -281,7 +281,10 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
             return out;
         }
     }
-    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) else {
+    // Formatting waiting at a caret is what the caret shows, also inside a word: after Backspace
+    // it is the deleted character's (#6518), as Word's buttons show it.
+    let waiting = s.sel.is_collapsed() && s.pending.is_some();
+    let Some((a, b)) = selected_text_box(s).or_else(|| target(s)).filter(|_| !waiting) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
         out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
