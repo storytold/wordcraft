@@ -23,6 +23,9 @@
 //!     is now that file; the next Save sends its name with `false`.
 //!   - Save As or Export to a format that doesn't (PDF, Markdown, plain text), Export as PDF and
 //!     Export Page as PNG: `false`. They are copies; the document's file stays the same.
+//! - `wordcraft:host` (from the host): `{ version, autosave? }`. `autosave: true` says the host
+//!   stores each `wordcraft:save` in place (the same file again), so AutoSave is available: the app
+//!   saves by itself shortly after changes, sending ordinary `save` messages with `saveAs: false`.
 //! - `wordcraft:dirty` whenever unsaved changes appear or go away, `wordcraft:failed` when the
 //!   app couldn't start.
 //!
@@ -63,7 +66,9 @@ impl Bridge {
     /// Hand saved and exported files to the host instead of downloading them, report unsaved
     /// changes to it, and hear the files it sends.
     pub fn connect(&self, services: &mut Services, inbox: Inbox, ctx: egui::Context) {
-        self.listen(inbox, ctx);
+        let host_autosave = std::rc::Rc::new(std::cell::Cell::new(false));
+        services.host_autosave = Some(host_autosave.clone());
+        self.listen(inbox, ctx, host_autosave);
         let bridge = self.clone();
         services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| bridge.post_save(name, bytes, save_as)));
         // Anything else that would download goes to the host too.
@@ -99,11 +104,15 @@ impl Bridge {
     }
 
     /// Hear `wordcraft:open` and queue the file like a dropped one.
-    fn listen(&self, inbox: Inbox, ctx: egui::Context) {
-        self.host.listen(move |message| {
-            if let Message::Open { name, data } = message {
-                deliver_open(&inbox, &ctx, &name, &data);
+    fn listen(&self, inbox: Inbox, ctx: egui::Context, host_autosave: std::rc::Rc<std::cell::Cell<bool>>) {
+        self.host.listen(move |message| match message {
+            Message::Open { name, data } => deliver_open(&inbox, &ctx, &name, &data),
+            // The page stores every save in place: AutoSave may hand it writes (`host_autosave`).
+            Message::Host { autosave, .. } => {
+                host_autosave.set(autosave);
+                ctx.request_repaint();
             }
+            _ => {}
         });
     }
 }
