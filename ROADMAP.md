@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -146,13 +146,17 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 4. Stability sweep of the open crash, hang and write-failure issues; autosave soak test (20–30 h).
 5. Pagination fidelity: column balancing, footnote continuation, compat options, comparison
    harness; an Aptos-metric font decision (30–50 h + owner).
-6. Formatting revisions and content controls (12–18 h); native printing (6–10 h); dialog depth
+6. Formatting revisions and content controls (8–12 h); native printing (6–10 h); dialog depth
    (20–30 h).
 
 ## Progress log
 
-- 2026-11-12: DOCX: `w:lnNumType` without a positive `w:countBy` leaves line numbering off, as Word does, instead of numbering every line on screen, in PDF export and on re-save (#6209). Readiness estimates unchanged.
 - 2026-11-09: Vertical text: a proportional font's ideographic comma or full stop (、。, about half or two thirds of an em wide) no longer overlaps its neighbours in a top-to-bottom section. One that ends its run (after Latin text) takes its own advance as its square instead of an em, and it moves to the square's upper right by half its advance and 0.05 em instead of 0.55 em; full-width ones are drawn as before (#6060).
+ fix/6146-touchpad-scroll-speed
+- 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
+
+- 2026-11-12: DOCX: `w:lnNumType` without a positive `w:countBy` leaves line numbering off, as Word does, instead of numbering every line on screen, in PDF export and on re-save (#6209). Readiness estimates unchanged.
+ main
 - 2026-11-04: Three behaviours lost in the #4501 refactor are back (#4683). From the second section on, headers, footers and note separators are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's. An ODT paragraph default style that names no font no longer clears the document's default font. A press the canvas handles itself (Ctrl+click on a link, switching into a header or footer, equation entry) no longer also shows the link tooltip in that frame. Readiness unchanged.
 - 2026-11-08: `wordcraft-cli convert --strict` (#6005) and `render --strict` (#6008): a PDF or PNG export (render: the page it writes) refuses, exit 3 and nothing written, when it would draw a character no font has or leave out a picture (missing part, external target, link only, undecodable or unsupported format); the report is on stderr with one JSON line. Engine: `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and `file.exportPng`, and the pure `file.strictReport`. External picture targets are never fetched. The result depends on the host's installed fonts (#5624); readiness estimates unchanged.
 - 2026-11-05: ODT tables with a usable width keep their column proportions when the file gives only shares (gap 19): LibreOffice's CV template opened and saved with equal columns.
@@ -472,6 +476,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-18 | Clearing a font query with no matches keeps Recently Used Fonts visible at the top of a scrollable list. The initial scroll position no longer skips its heading; measured keyboard scrolling is unchanged (#2068). |
 | 2026-10-19 | Centred numbered headings after a leading page break keep their number before the text (#2964). The label uses the alignment of the line it is drawn on; heading text positions and page count stay the same. |
 | 2026-10-17 | Edit Recipient List finds records (#1576): a Find in list box hides rows with no cell containing the text (any case) and counts the matches, and "Show only records that will be merged" hides the rows the filter leaves out; both only change the view. Rows are striped, and edits and removes go to the right record however the grid is narrowed |
+| 2026-10-17 | Tracked style-property changes (#2697): Modify Style and Update Style to Match Selection record the paragraph/run properties as they were while Track Changes is on (`w:pPrChange` / `w:rPrChange` inside the style), the Reviewing Pane lists them at the start of the document, accepting keeps the new properties and rejecting restores the old ones; the change and revision round-trip through DOCX |
 | 2026-10-17 | Recent documents can be taken off the list (#2716): hovering a row in File › Home/Open ▸ Recent shows a × that removes that document, a Clear all button under the list empties it, and the change is written to the preferences right away, so it survives a crash. `ui.recentRemove {"path"}` and `ui.recentClear` do the same for CLI, control and MCP |
 | 2026-10-31 | Control/MCP #2596 review: write/flush failures after sending begins are outcome-unknown; image exports to a path are not replayed; accept-thread startup failures disable the server and remove the key; invalid UTF-8 is rejected per line without ending stdio. Synthetic regressions cover partial JSON delivery at EOF, flush failure, export vs in-memory retry and failed startup. |
 | 2026-10-16 | Control/MCP delivery (#1326, #1331): the MCP bridge never re-sends a mutation whose outcome is unknown (explicit "outcome unknown" error; reads and not-sent requests still retry); a control request whose caller timed out while queued never runs, and a timeout before execution is told apart from an unknown outcome; bounded MCP and reply line reads; capped unauthenticated control connections with fallible thread creation |
@@ -1441,3 +1446,4 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
+| 2026-11-12 | minor | Progress log: layout.fitOnePage condenses a multi-page document by one page while preserving typography hierarchy (#6433) |
