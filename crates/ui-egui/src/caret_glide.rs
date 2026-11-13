@@ -9,7 +9,8 @@
 //!   [`GLIDE_SECS`], fast at first and settling ([`ease`]). The time is the same for one
 //!   character and for a whole line.
 //! - **Another move before it arrives:** it snaps to where it was heading and glides from there.
-//! - **A click moves the caret:** no glide; it is drawn at its new place.
+//! - **A click moves the caret:** it glides the same way, so the eye follows it to the new place
+//!   (our choice; Word draws it at once).
 //! - **A command from a script or the control channel:** no glide, no fade.
 //! - **The blink is a fade:** each time the caret turns on or off it takes [`GLIDE_SECS`] to get
 //!   there. A move by a key or a click turns it on the same way, from however visible it was, so
@@ -190,8 +191,8 @@ impl CaretGlide {
             // A key or a click turns the caret on, from however visible it was.
             self.fade = Some(FadeIn { from: was_opacity, started: f.now });
             self.glide = match heading {
-                // Keys glide, from where the caret was heading (not from where it has got to).
-                Some(from) if by_keys && !by_pointer && same_view => {
+                // Keys and clicks glide, from where the caret was heading (not from where it has got to).
+                Some(from) if same_view => {
                     let seen = f.viewport.expand(OFFSCREEN_SLACK);
                     let on_screen = |b: Bar| seen.intersects(Rect::from_two_pos(b[0], b[1]));
                     (on_screen(from) && on_screen(f.target)).then_some(Glide { from, to: f.target, started: f.now })
