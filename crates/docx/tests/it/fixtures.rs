@@ -1953,15 +1953,22 @@ fn ole_object_round_trips() {
     assert!(matches!(paras(&back)[0].objects.first(), Some(InlineObject::Image { w: 144.0, ole: Some(_), .. })));
 }
 
-/// An OLE object read from `bytes` is kept with no picture, `size` points large, and saving writes
-/// it back with its embedded data `ole`, again with no picture. Returns the saved document part.
+/// An OLE object read from `bytes` is kept with no picture, `size` points large. Resized to twice
+/// that, saving writes it back at its new size with its embedded data `ole`, again with no
+/// picture. Returns the saved document part.
 fn ole_object_kept_without_picture(bytes: &[u8], ole: &str, size: (f32, f32)) -> String {
-    let d = wordcraft_docx::read(bytes).unwrap();
+    let mut d = wordcraft_docx::read(bytes).unwrap();
     let Some(InlineObject::Image { media, w, h, ole: Some(_), .. }) = paras(&d)[0].objects.first() else { panic!("{:?}", paras(&d)[0].objects) };
     assert!(!d.media.contains_key(media), "no picture");
     assert_eq!((*w, *h), size);
     assert_eq!(paras(&d)[0].text, "Before \u{fffc} after");
 
+    let resized = (size.0 * 2.0, size.1 * 2.0);
+    if let Some(Block::Para(p)) = d.body.first_mut().map(Arc::make_mut)
+        && let Some(InlineObject::Image { w, h, .. }) = p.objects.first_mut()
+    {
+        (*w, *h) = resized;
+    }
     let out = wordcraft_docx::write(&d).unwrap();
     let files = unzip(&out);
     let body = text(&files, "word/document.xml");
@@ -1974,7 +1981,7 @@ fn ole_object_kept_without_picture(bytes: &[u8], ole: &str, size: (f32, f32)) ->
 
     let back = wordcraft_docx::read(&out).unwrap();
     let Some(InlineObject::Image { w, h, ole: Some(_), .. }) = paras(&back)[0].objects.first() else { panic!("{:?}", paras(&back)[0].objects) };
-    assert_eq!((*w, *h), size);
+    assert_eq!((*w, *h), resized);
     body
 }
 
@@ -1998,8 +2005,10 @@ fn an_ole_object_without_a_picture_round_trips() {
             &[("[Content_Types].xml", types), ("word/embeddings/oleObject1.bin", ole)],
         );
         let saved = ole_object_kept_without_picture(&bytes, ole, size);
-        if !vml.is_empty() {
-            assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:100pt;height:50pt"]);
+        if vml.is_empty() {
+            assert_eq!(attr_values(&saved, "w:object", "w:dxaOrig"), ["5760"]);
+        } else {
+            assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:200pt;height:100pt"]);
             assert_eq!(attr_values(&saved, "v:shape", "alt"), ["Data"]);
         }
     }
@@ -2030,7 +2039,7 @@ fn an_ole_object_whose_picture_is_missing_round_trips() {
         assert_eq!(d.missing_pictures.list.len(), 1, "{:?}", d.missing_pictures.list);
         let saved = ole_object_kept_without_picture(&bytes, ole, size);
         if picture == vml {
-            assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:100pt;height:50pt"]);
+            assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:200pt;height:100pt"]);
         }
     }
 }

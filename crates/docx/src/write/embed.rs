@@ -484,7 +484,8 @@ impl super::Writer<'_> {
 
     /// Write an OLE object's size (and position, when floating), rotation and flips into its VML
     /// shape and DrawingML picture, with the effect extent covering the rotated bounds as for
-    /// other drawings, its alt text into both, and give its drawing a fresh `wp:docPr` id.
+    /// other drawings, its alt text into both, and give its drawing a fresh `wp:docPr` id. With
+    /// neither shape nor picture, its size goes into its original size (`w:dxaOrig`, `w:dyaOrig`).
     fn resize_object(&mut self, e: &mut El, w: f32, h: f32, float: &Float, alt: &str, depth: usize) {
         if depth > MAX_DEPTH {
             return;
@@ -497,6 +498,15 @@ impl super::Writer<'_> {
                 set_attr(e, "alt", alt);
             }
             "wp:extent" => set_size_attrs(e, w, h),
+            // An object with no shape or drawing to carry its size (one kept without a picture,
+            // #6480) is read at its original size, so a new size is written there.
+            "w:object" if !e.els().any(|c| c.name == "v:shape" || c.name == "w:drawing") => {
+                for (k, pt) in [("w:dxaOrig", w), ("w:dyaOrig", h)] {
+                    if pt > 0.0 || e.attr(k).is_some() {
+                        set_attr(e, k, &crate::units::twips(pt.max(0.0)));
+                    }
+                }
+            }
             // A turned object needs an effect extent (filled in below) right after its extent.
             "wp:inline" | "wp:anchor" if !e.els().any(|c| c.name == "wp:effectExtent") && float.spin().deg != 0.0 => {
                 if let Some(at) = e.kids.iter().position(|k| matches!(k, xml::Node::El(c) if c.name == "wp:extent")) {
