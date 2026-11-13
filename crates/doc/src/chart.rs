@@ -146,7 +146,7 @@ pub struct ChartSeries {
     /// "None" line: the series draws no line.
     #[serde(default)]
     pub no_line: bool,
-    /// Markers on points; `None`: the chart's default (scatter charts draw them).
+    /// Markers on points; `None`: unset (scatter charts draw them; a saved scatter series then has no `c:marker`, so Word picks its own symbols).
     #[serde(default)]
     pub markers: Option<bool>,
     /// Draw the line as a smooth curve.

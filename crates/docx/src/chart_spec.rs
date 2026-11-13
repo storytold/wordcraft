@@ -311,10 +311,13 @@ fn series_marker(w: &mut W, k: ChartType, s: &ChartSeries) {
             w.empty("c:symbol", &[("val", if s.markers == Some(true) { "circle" } else { "none" })]);
             w.close("c:marker");
         }
+        // Unset: no `c:marker`, so Word picks its automatic symbol for each series.
         ChartType::Scatter => {
-            w.open("c:marker", &[]);
-            w.empty("c:symbol", &[("val", if s.markers == Some(false) { "none" } else { "circle" })]);
-            w.close("c:marker");
+            if let Some(on) = s.markers {
+                w.open("c:marker", &[]);
+                w.empty("c:symbol", &[("val", if on { "circle" } else { "none" })]);
+                w.close("c:marker");
+            }
         }
         _ => {}
     }
@@ -507,9 +510,10 @@ pub(crate) fn spec_of(space: &El) -> Option<ChartSpec> {
                 no_fill: s.child("c:spPr").and_then(|p| p.child("a:noFill")).is_some(),
                 line_w: ln.and_then(|l| l.attr("w")).and_then(|w| w.parse::<f64>().ok()).filter(|w| w.is_finite()).map(|w| (w / 12700.0) as f32),
                 no_line: ln.and_then(|l| l.child("a:noFill")).is_some(),
-                // Scatter series show markers by default, line series by default show none:
-                // only a setting that differs from that default belongs in the model.
-                markers: symbol.map(|v| v != "none").filter(|m| *m != scatter),
+                // Line series show no markers by default: only a setting that differs from that
+                // belongs in the model. A scatter series keeps what the file says, so a missing
+                // `c:marker` (Word's automatic symbols) stays unset and is not written back.
+                markers: symbol.map(|v| v != "none").filter(|m| scatter || *m),
                 smooth: s.child("c:smooth").and_then(|v| v.attr("val")).is_some_and(|v| v == "1"),
                 labels: s.child("c:dLbls").and_then(|d| d.child("c:showVal")).and_then(|v| v.attr("val")).map(|v| v == "1"),
                 fmt: s
@@ -551,9 +555,8 @@ pub(crate) fn spec_of(space: &El) -> Option<ChartSpec> {
 }
 
 /// `part` (what [`chart_xml`] writes) as the earlier WordCraft writer wrote the same model: it
-/// had no axis `c:numFmt` and no `c:marker` in scatter series. Only those elements go, and only
-/// with the values their absence reads as (General, linked to the source; the scatter series'
-/// default circle markers), so a part that matches still holds nothing the model leaves out.
+/// had no axis `c:numFmt`. Only that element goes, and only with the value its absence reads as
+/// (General, linked to the source), so a part that matches still holds nothing the model leaves out.
 fn as_previous_writer(part: &mut El) {
     fn els_mut(e: &mut El) -> impl Iterator<Item = &mut El> {
         e.kids.iter_mut().filter_map(|n| match n {
@@ -566,14 +569,8 @@ fn as_previous_writer(part: &mut El) {
     }
     let Some(plot) = els_mut(part).find(|e| e.name == "c:chart").and_then(|c| els_mut(c).find(|e| e.name == "c:plotArea")) else { return };
     for e in els_mut(plot) {
-        match e.name.as_str() {
-            "c:catAx" | "c:valAx" => drop_els(e, |c| c.name == "c:numFmt" && c.attr("sourceLinked") == Some("1")),
-            "c:scatterChart" => {
-                for ser in els_mut(e).filter(|s| s.name == "c:ser") {
-                    drop_els(ser, |c| c.name == "c:marker" && c.child("c:symbol").and_then(|s| s.attr("val")) == Some("circle"));
-                }
-            }
-            _ => {}
+        if matches!(e.name.as_str(), "c:catAx" | "c:valAx") {
+            drop_els(e, |c| c.name == "c:numFmt" && c.attr("sourceLinked") == Some("1"));
         }
     }
 }
@@ -700,7 +697,7 @@ mod tests {
             let spec = spec_of(&xml::parse(x.as_bytes()).unwrap()).unwrap_or_else(|| panic!("{kind:?}: the earlier part is read-only"));
             assert_eq!((spec.kind, spec.series.len()), (kind, if kind == ChartType::Scatter { 2 } else { 3 }));
             assert_eq!((spec.cat_axis.fmt.as_deref(), spec.val_axis.fmt.as_deref()), (None, None), "{kind:?}");
-            assert!(spec.series.iter().all(|s| s.markers.is_none()), "{kind:?}: default markers");
+            assert!(spec.series.iter().all(|s| s.markers.is_none()), "{kind:?}: markers unset");
             // Saved again, it is in the current shape and still reads back as the same model.
             assert_eq!(spec_of(&parse(&spec)).as_ref(), Some(&spec), "{kind:?}");
         }
@@ -716,6 +713,32 @@ mod tests {
         assert_eq!(edited(PREVIOUS_SCATTER, ln, &format!(r#"{ln}<c:marker><c:symbol val="square"/></c:marker>"#)), None);
         assert_eq!(edited(PREVIOUS_SCATTER, ln, &format!(r#"{ln}<c:marker><c:symbol val="circle"/><c:size val="9"/></c:marker>"#)), None);
         assert_eq!(edited(PREVIOUS_COLUMN, "<c:roundedCorners val=\"0\"/>", "<c:roundedCorners val=\"0\"/><c:style val=\"2\"/>"), None);
+    }
+
+    /// A scatter series with no `c:marker` (Word's automatic symbols) stays without one after an
+    /// unrelated edit and a save; an explicit circle or "none" stays explicit.
+    #[test]
+    fn scatter_series_without_a_marker_stay_without_after_a_save() {
+        let marker_of = |x: &El| -> Vec<Option<String>> {
+            let sc = x.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:scatterChart").unwrap();
+            sc.children("c:ser").map(|s| s.child("c:marker").map(|m| m.child("c:symbol").unwrap().attr("val").unwrap().to_string())).collect()
+        };
+        let mut spec = spec_of(&xml::parse(PREVIOUS_SCATTER.as_bytes()).unwrap()).unwrap();
+        assert_eq!(marker_of(&xml::parse(PREVIOUS_SCATTER.as_bytes()).unwrap()), [None, None]);
+        spec.title = Some("Edited".into());
+        spec.series[0].name = "Renamed".into();
+        let saved = parse(&spec);
+        assert_eq!(marker_of(&saved), [None, None]);
+        let again = spec_of(&saved).unwrap();
+        assert_eq!(again, spec);
+        assert!(again.series.iter().all(|s| s.markers.is_none()));
+        // Explicit choices are kept as written.
+        spec.series[0].markers = Some(true);
+        spec.series[1].markers = Some(false);
+        let saved = parse(&spec);
+        assert_eq!(marker_of(&saved), [Some("circle".to_string()), Some("none".to_string())]);
+        let again = spec_of(&saved).unwrap();
+        assert_eq!((again.series[0].markers, again.series[1].markers), (Some(true), Some(false)));
     }
 
     #[test]
@@ -783,7 +806,9 @@ mod tests {
         let lc = line.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:lineChart").unwrap();
         assert_eq!(names(lc), ["c:grouping", "c:varyColors", "c:ser", "c:ser", "c:ser", "c:dLbls", "c:marker", "c:axId", "c:axId"]);
         assert_eq!(names(lc.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:marker", "c:cat", "c:val", "c:smooth"]);
-        let sc = parse(&ChartSpec::sample(ChartType::Scatter));
+        let mut scatter = ChartSpec::sample(ChartType::Scatter);
+        scatter.series.iter_mut().for_each(|s| s.markers = Some(true));
+        let sc = parse(&scatter);
         let sc = sc.child("c:chart").unwrap().child("c:plotArea").unwrap().child("c:scatterChart").unwrap();
         assert_eq!(names(sc.child("c:ser").unwrap()), ["c:idx", "c:order", "c:tx", "c:spPr", "c:marker", "c:xVal", "c:yVal", "c:smooth"]);
         let dn = parse(&ChartSpec::sample(ChartType::Doughnut));
