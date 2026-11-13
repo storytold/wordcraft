@@ -40,15 +40,37 @@ pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// (`F_FULLFSYNC`); where the file system can't do one (SMB shares and virtual file systems
 /// refuse it with `ENOTSUP` #6155, `EINVAL`, or `ENOTTY`), this falls back to a plain `fsync`,
 /// as Apple's own `removefile` and SQLite do. Plain `fsync` flushes to the drive controller but
-/// does not guarantee disk cache durability; any other error is returned as it is.
+/// does not guarantee disk cache durability; any other error is returned as it is. A file system
+/// that has no flush at all (some virtual/network ones) is treated as having flushed.
 fn sync_file(file: &File) -> io::Result<()> {
-    #[cfg(target_vendor = "apple")]
-    let plain = || rustix::fs::fsync(file).map_err(io::Error::from);
-    #[cfg(not(target_vendor = "apple"))]
-    let plain = || Ok(());
-    or_plain_fsync(file.sync_all(), plain)
+    match file.sync_all() {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            #[cfg(target_vendor = "apple")]
+            if full_flush_unsupported(&e) {
+                return match rustix::fs::fsync(file).map_err(io::Error::from) {
+                    Ok(()) => Ok(()),
+                    Err(e2) if sync_unsupported(&e2) => Ok(()),
+                    Err(e2) => Err(e2),
+                };
+            }
+            if sync_unsupported(&e) {
+                Ok(())
+            } else {
+                Err(e)
+            }
+        }
+    }
 }
 
+/// Whether a flush failure means the file system has no flush to do: `ENOTSUP`, `ENOSYS`,
+/// `ENOTTY`, or the standard `Unsupported` kind (virtual and network file systems).
+fn sync_unsupported(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::Unsupported
+        || matches!(e.raw_os_error(), Some(25 | 38 | 95))
+}
+
+#[allow(dead_code)]
 /// Returns `full`, or calls `fsync()` when `full` failed only because the file system can't do a full flush.
 fn or_plain_fsync(full: io::Result<()>, fsync: impl FnOnce() -> io::Result<()>) -> io::Result<()> {
     match full {
@@ -57,6 +79,7 @@ fn or_plain_fsync(full: io::Result<()>, fsync: impl FnOnce() -> io::Result<()>) 
     }
 }
 
+#[allow(dead_code)]
 /// Whether `e` is a file system refusing a full flush (`F_FULLFSYNC`): `ENOTSUP` (45, SMB),
 /// `EINVAL` (22), or `ENOTTY` (25) on Apple platforms. Never elsewhere: there `sync_all` is a plain `fsync`.
 fn full_flush_unsupported(e: &io::Error) -> bool {
@@ -91,7 +114,12 @@ fn not_supported(e: &io::Error) -> bool {
     } else {
         &[]
     };
-    e.kind() == io::ErrorKind::Unsupported || e.raw_os_error().is_some_and(|code| CODES.contains(&code))
+    // ENOTTY (25): a file system that has no chmod at all (KIO/OneDrive) reports the mode
+    // change as an unsupported operation. EIO (5): some virtual file systems (KIO/OneDrive)
+    // report a failed mode change as a plain I/O error.
+    e.kind() == io::ErrorKind::Unsupported
+        || matches!(e.raw_os_error(), Some(5 | 25))
+        || e.raw_os_error().is_some_and(|code| CODES.contains(&code))
 }
 
 fn replace_with(path: &Path, private: bool, prepare: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
@@ -214,8 +242,55 @@ impl Temporary {
     fn commit(mut self, destination: &Path) -> io::Result<()> {
         // Close before replacement, including on Windows.
         drop(self.file.take());
-        fs::rename(&self.path, destination)?;
+        // Most file systems replace an existing destination with a single rename. Some (OneDrive
+        // reached through KIO) refuse to overwrite and report the destination as already existing;
+        // there, move the existing file aside first, install the new one, then drop the old copy.
+        match fs::rename(&self.path, destination) {
+            Ok(()) => {
+                self.committed = true;
+                return Ok(());
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists || e.raw_os_error() == Some(17) => {}
+            Err(e) => return Err(e),
+        }
+        let parent = destination.parent().unwrap_or_else(|| Path::new(""));
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let mut backup = None;
+        for _ in 0..128 {
+            let id = NEXT.fetch_add(1, Ordering::Relaxed);
+            let cand = parent.join(format!(".wordcraft-save-backup-{}-{id}.tmp", std::process::id()));
+            if !cand.exists() {
+                backup = Some(cand);
+                break;
+            }
+        }
+        let backup = backup.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, "could not create a save backup name"))?;
+        // Never move a folder aside: a save destination must be a file.
+        if fs::metadata(destination).map(|m| m.is_dir()).unwrap_or(false) {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, "save destination is a folder"));
+        }
+        if let Err(e) = fs::rename(destination, &backup) {
+            // The destination may have vanished in the meantime; retry the direct rename.
+            if e.kind() == io::ErrorKind::NotFound {
+                if fs::rename(&self.path, destination).is_ok() {
+                    self.committed = true;
+                    return Ok(());
+                }
+            }
+            return Err(e);
+        }
+        if let Err(e) = fs::rename(&self.path, destination) {
+            // Restore the previous file so a failed save leaves it in place; report it if that fails too.
+            if let Err(restore_err) = fs::rename(&backup, destination) {
+                return Err(io::Error::new(
+                    e.kind(),
+                    format!("{e}; restoring the previous file from {} also failed: {restore_err}", backup.display()),
+                ));
+            }
+            return Err(e);
+        }
         self.committed = true;
+        let _ = fs::remove_file(&backup);
         Ok(())
     }
 }
