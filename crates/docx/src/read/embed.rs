@@ -453,10 +453,14 @@ mod tests {
         let saved = crate::write(&doc).expect("save must not clash or produce duplicate parts");
         let reopened = crate::read(&saved).expect("reopen must succeed");
         assert_eq!(reopened.fit_state, Some(fit));
-        assert!(
-            reopened.passthrough.keys().any(|k| k.starts_with("customxml/")),
-            "the unrelated custom XML store must survive saving under an allocated name"
-        );
+        let kept: Vec<_> = reopened
+            .passthrough
+            .iter()
+            .filter(|(k, v)| k.starts_with("customxml/") && String::from_utf8_lossy(v).contains("urn:other"))
+            .map(|(k, _)| k.clone())
+            .collect();
+        assert_eq!(kept.len(), 1, "the unrelated custom XML store must survive saving exactly once: {kept:?}");
+        assert!(!kept[0].eq_ignore_ascii_case(crate::fit::PART), "it must not take the reserved fit part name");
     }
 
     /// The parts the reader carries over unchanged, as one string.
