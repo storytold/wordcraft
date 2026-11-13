@@ -24,7 +24,7 @@ use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{PropChange, Rgb, VAlign};
 use wordcraft_doc::section::NumFormat;
-use wordcraft_doc::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
+use wordcraft_doc::styles::{LatentStyle, PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
 use wordcraft_doc::{
     Block, Blocks, Comment, Document, InlineObject, MissingPicture, MissingPictureReason, PagePicture, Paragraph, PartKind, Revision, RevisionKind,
     Zoom, ZoomFit, para_block,

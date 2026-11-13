@@ -1,6 +1,6 @@
 use super::{
-    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, PropChange, Reader, RevisionKind, Style, StyleKind, StyleSheet,
-    TablePart, TableStyleParts, VAlign, flag, int, props, tw, u32_of,
+    AbstractNum, DocxError, El, LatentStyle, Level, LevelSuffix, Num, NumFormat, PartFormat, PropChange, Reader, RevisionKind, Style, StyleKind,
+    StyleSheet, TablePart, TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
 use std::sync::Arc;
@@ -49,6 +49,46 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
     let name = name.trim();
     let digit = name.get(..8).filter(|p| p.eq_ignore_ascii_case("heading ")).and(name.get(8..))?;
     digit.parse::<u8>().ok().filter(|d| digit.len() == 1 && (1..=9).contains(d)).map(|d| d - 1)
+}
+
+/// What `l` (the file's `w:latentStyles`) says about each built-in style it leaves latent, passed
+/// to [`StyleSheet::add_latent_gallery`], which adds the ones Word's gallery shows (`w:qFormat`,
+/// not `w:semiHidden`) to `sheet`: Word writes a style out only once it is used (#3909).
+fn latent_gallery(sheet: &mut StyleSheet, l: &El) {
+    let on = |e: &El, k: &str, default: bool| e.attr(k).map_or(default, |v| !matches!(v.trim(), "0" | "false" | "off"));
+    let (quick, hidden) = (on(l, "w:defQFormat", false), on(l, "w:defSemiHidden", false));
+    // Without `w:defUIPriority` Word sorts the latent styles at 0, not at their built-in
+    // priorities (observed: Subtitle then comes before a Title at 5).
+    let priority = l.attr("w:defUIPriority").and_then(u32_of).unwrap_or(0);
+    let locked = on(l, "w:defLockedState", false);
+    let exceptions: Vec<&El> = l.children("w:lsdException").take(10_000).collect();
+    let prio_of = |e: &El| e.attr("w:uiPriority").and_then(u32_of).unwrap_or(priority);
+    // A style the file defines without `w:uiPriority` (Word's Normal) takes the latent one.
+    for st in sheet.styles.iter_mut().filter(|s| s.priority.is_none()) {
+        if let Some(e) = exceptions.iter().find(|e| e.attr("w:name").is_some_and(|n| n.eq_ignore_ascii_case(&st.name))) {
+            st.priority = Some(prio_of(e));
+        }
+    }
+    // Each built-in style: the latent defaults, overridden by its own exception if any. Its
+    // lock comes too, so Restrict Editing still keeps a locked latent style off. The ones the
+    // file keeps out of the gallery come along as well, because a style it shows brings its bases.
+    let builtin = StyleSheet::builtin();
+    let latent: Vec<LatentStyle> = builtin
+        .styles
+        .iter()
+        .filter(|b| b.kind != StyleKind::Table)
+        .map(|b| {
+            let e = exceptions.iter().find(|e| e.attr("w:name").is_some_and(|n| n.eq_ignore_ascii_case(&b.name)));
+            LatentStyle {
+                name: b.name.clone(),
+                priority: Some(e.map_or(priority, |e| prio_of(e))),
+                locked: e.map_or(locked, |e| on(e, "w:locked", locked)),
+                quick: e.map_or(quick, |e| on(e, "w:qFormat", quick)),
+                hidden: e.map_or(hidden, |e| on(e, "w:semiHidden", hidden)),
+            }
+        })
+        .collect();
+    sheet.add_latent_gallery(&latent);
 }
 
 impl Reader<'_> {
@@ -225,6 +265,10 @@ impl Reader<'_> {
         }
         if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
             sheet.default_para.numbering = None;
+        }
+        // Built-in styles the file leaves latent but shows in Word's gallery (#3909).
+        if let Some(l) = root.child("w:latentStyles") {
+            latent_gallery(&mut sheet, l);
         }
         // A producer that never writes `w:qFormat` (LibreOffice) still gets Word's usual gallery.
         if !sheet.styles.iter().any(|s| s.quick) {

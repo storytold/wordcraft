@@ -821,6 +821,220 @@ fn styles_with_qformat_keep_their_gallery() {
     assert_eq!(gallery_ids(&styles), vec!["Normal".to_string()]);
 }
 
+/// #3909: Word writes a built-in style out only once it is used; a new document's file defines
+/// Normal and leaves Heading 1, Title, Quote and the rest latent. The gallery shows the latent
+/// styles marked `w:qFormat` and not `w:semiHidden`, in `w:uiPriority` order, as Word does; hidden
+/// ones (Heading 2 until used), ones without `w:qFormat`, and names with no built-in style stay
+/// out, and a style the file defines keeps its own `w:qFormat`.
+#[test]
+fn latent_quick_styles_fill_the_gallery() {
+    let lsd = |name: &str, prio: u32, hidden: bool, quick: bool| {
+        let h = if hidden { r#" w:semiHidden="1" w:unhideWhenUsed="1""# } else { "" };
+        let q = if quick { r#" w:qFormat="1""# } else { "" };
+        format!(r#"<w:lsdException w:name="{name}"{h} w:uiPriority="{prio}"{q}/>"#)
+    };
+    let mut latent = String::new();
+    for (name, prio, hidden, quick) in [
+        ("Normal", 0, false, true),
+        ("heading 1", 9, false, true),
+        ("heading 2", 9, true, true),
+        ("caption", 35, true, true),
+        ("Title", 10, false, true),
+        ("Subtitle", 11, false, true),
+        ("Strong", 22, false, true),
+        ("Emphasis", 20, false, true),
+        ("Plain Text", 99, false, false),
+        ("No Spacing", 1, false, true),
+        ("List Paragraph", 34, false, true),
+        ("Quote", 29, false, true),
+        ("Intense Quote", 30, false, true),
+        ("Subtle Emphasis", 19, false, true),
+        ("Intense Emphasis", 21, false, true),
+        ("Subtle Reference", 31, false, true),
+        ("Intense Reference", 32, false, true),
+        ("Book Title", 33, false, true),
+        ("Nothing Built In", 5, false, true),
+    ] {
+        latent.push_str(&lsd(name, prio, hidden, quick));
+    }
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:latentStyles w:defLockedState="0" w:defUIPriority="99" w:defSemiHidden="0" w:defUnhideWhenUsed="0" w:defQFormat="0" w:count="376">{latent}</w:latentStyles>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let names: Vec<&str> = d.styles.gallery().iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Normal",
+            "No Spacing",
+            "Heading 1",
+            "Title",
+            "Subtitle",
+            "Subtle Emphasis",
+            "Emphasis",
+            "Intense Emphasis",
+            "Strong",
+            "Quote",
+            "Intense Quote",
+            "Subtle Reference",
+            "Intense Reference",
+            "Book Title",
+            "List Paragraph"
+        ]
+    );
+    // Heading 1 is usable as the built-in: based on Normal, with its own look.
+    let h1 = d.styles.find("Heading 1").unwrap();
+    assert_eq!((h1.id.as_str(), h1.based_on.as_deref()), ("Heading1", Some("Normal")));
+    assert!(h1.chr.size.is_some(), "the built-in heading's size");
+    // A style the file defines without w:qFormat stays out, latent w:qFormat or not.
+    let defined = styles.replace(
+        "</w:styles>",
+        r#"<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/></w:style></w:styles>"#,
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &defined)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert!(!d.styles.gallery().iter().any(|s| s.name == "Title"), "the file's own Title isn't quick");
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Title").count(), 1, "no second Title");
+}
+
+/// #3909: the latent defaults count for every built-in style the file has no exception for:
+/// with `w:defQFormat="1"` the built-ins are quick unless an exception says otherwise, and with
+/// `w:defSemiHidden="1"` only those an exception shows are in the gallery.
+#[test]
+fn latent_defaults_apply_to_styles_without_an_exception() {
+    let gallery = |latent: &str| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{latent}<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>"#
+        );
+        let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+        let d = wordcraft_docx::read(&bytes).unwrap();
+        d.styles.gallery().iter().map(|s| s.name.clone()).collect::<Vec<_>>()
+    };
+    // Quick by default; Title says it isn't.
+    let names = gallery(
+        r#"<w:latentStyles w:defQFormat="1" w:defSemiHidden="0" w:defUIPriority="99"><w:lsdException w:name="Title" w:qFormat="0"/></w:latentStyles>"#,
+    );
+    for n in ["Normal", "Heading 1", "Subtitle", "Quote", "Strong"] {
+        assert!(names.iter().any(|x| x == n), "{n} in {names:?}");
+    }
+    assert!(!names.iter().any(|x| x == "Title"), "{names:?}");
+    // Quick but hidden by default; only Heading 1 is shown.
+    let names = gallery(
+        r#"<w:latentStyles w:defQFormat="1" w:defSemiHidden="1"><w:lsdException w:name="heading 1" w:semiHidden="0" w:uiPriority="9"/></w:latentStyles>"#,
+    );
+    // Neither has a priority here, so only which styles count, not their order.
+    let mut names = names;
+    names.sort();
+    assert_eq!(names, ["Heading 1", "Normal"]);
+}
+
+/// #3909 review: without `w:defUIPriority` Word sorts a latent style that has no `w:uiPriority`
+/// at 0, not at its built-in priority: Subtitle comes before a Title at 5. And a latent style's
+/// lock (`w:defLockedState`, an exception's `w:locked`) comes with it into the gallery, so
+/// Restrict Editing still keeps it off.
+#[test]
+fn latent_styles_take_the_files_default_priority_and_lock() {
+    let read = |latent: &str| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{latent}<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>"#
+        );
+        let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+        wordcraft_docx::read(&bytes).unwrap()
+    };
+    let d = read(
+        r#"<w:latentStyles w:defQFormat="0" w:defSemiHidden="0"><w:lsdException w:name="Title" w:uiPriority="5" w:qFormat="1"/><w:lsdException w:name="Subtitle" w:qFormat="1"/></w:latentStyles>"#,
+    );
+    let names: Vec<String> = d.styles.gallery().iter().map(|s| s.name.clone()).collect();
+    let at = |n: &str| names.iter().position(|x| x == n).unwrap_or_else(|| panic!("{n} in {names:?}"));
+    assert!(at("Subtitle") < at("Title"), "{names:?}");
+    // Locked by default; Title says it isn't.
+    let d = read(
+        r#"<w:latentStyles w:defLockedState="1" w:defQFormat="1" w:defSemiHidden="0" w:defUIPriority="99"><w:lsdException w:name="Title" w:locked="0"/></w:latentStyles>"#,
+    );
+    assert!(d.styles.find("Subtitle").is_some_and(|s| s.locked), "Subtitle is locked");
+    assert!(d.styles.find("Title").is_some_and(|s| !s.locked), "Title isn't");
+}
+
+/// #3909 review: a latent style brings the built-in styles it is based on. TOC Heading has no
+/// font, size or colour of its own — all of it is Heading 1's — so materialising it alone would
+/// show it in the gallery with Normal's look. Word writes the base out with it (observed with
+/// this file: using TOC Heading saves `Heading1` too, `w:semiHidden` and without `w:qFormat`),
+/// and the base stays out of the gallery unless the file's own latent settings put it there.
+#[test]
+fn a_latent_style_brings_the_builtin_styles_it_is_based_on() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:latentStyles w:defLockedState="0" w:defUIPriority="99" w:defSemiHidden="0" w:defUnhideWhenUsed="0" w:defQFormat="0" w:count="376">
+  <w:lsdException w:name="Normal" w:uiPriority="0" w:qFormat="1"/>
+  <w:lsdException w:name="heading 1" w:semiHidden="1" w:unhideWhenUsed="1" w:uiPriority="9"/>
+  <w:lsdException w:name="TOC Heading" w:uiPriority="39" w:qFormat="1"/>
+ </w:latentStyles>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    // The gallery is the file's: TOC Heading, not the Heading 1 it brought in.
+    let names: Vec<&str> = d.styles.gallery().iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, ["Normal", "TOC Heading"]);
+    // Heading 1 is there as the file's latent styles describe it: hidden, not quick, priority 9.
+    let h1 = d.styles.find("Heading 1").unwrap_or_else(|| panic!("Heading 1 in {:?}", d.styles.styles.iter().map(|s| &s.id).collect::<Vec<_>>()));
+    assert_eq!((h1.id.as_str(), h1.quick, h1.hidden, h1.priority), ("Heading1", false, true, Some(9)));
+    // So TOC Heading inherits Heading 1's font, size and colour, as Word shows it.
+    let chain: Vec<&str> = d.styles.chain("TOCHeading").iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(chain, ["Normal", "Heading1", "TOCHeading"], "Normal → Heading 1 → TOC Heading");
+    let toc = d.styles.resolve_char(Some("TOCHeading"), &wordcraft_doc::props::CharProps::default());
+    let heading = d.styles.resolve_char(Some("Heading1"), &wordcraft_doc::props::CharProps::default());
+    assert_eq!((toc.font.as_str(), toc.size, toc.color), (heading.font.as_str(), heading.size, heading.color));
+    assert_ne!(toc.size, d.styles.resolve_char(Some("Normal"), &wordcraft_doc::props::CharProps::default()).size, "not Normal's size");
+    // The document's own Normal is kept, and nothing is added twice.
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Normal").count(), 1);
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Heading 1").count(), 1);
+}
+
+/// #3909 review: the document may define the base under its own id (translated Word writes
+/// `heading 1` as `Título1`), so the built-in one isn't added over its name and `based_on` would
+/// point at nothing. Word opens such a file with that style renamed to `Heading1` and writes the
+/// materialised TOC Heading with the built-in Heading 1's own `w:rPr` on it (observed: Georgia /
+/// 18 pt / green in the file, `Styles("TOC Heading")` still Aptos Display / 16 pt / `0F4761`), so
+/// the style points at the document's definition and keeps the built-in base's formatting.
+#[test]
+fn a_latent_style_whose_base_the_document_names_under_its_own_id() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:latentStyles w:defUIPriority="99" w:defSemiHidden="0" w:defQFormat="0">
+  <w:lsdException w:name="Normal" w:uiPriority="0" w:qFormat="1"/>
+  <w:lsdException w:name="heading 1" w:semiHidden="1" w:unhideWhenUsed="1" w:uiPriority="9"/>
+  <w:lsdException w:name="TOC Heading" w:uiPriority="39" w:qFormat="1"/>
+ </w:latentStyles>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="paragraph" w:styleId="Titulo1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="9"/><w:pPr><w:spacing w:before="720"/></w:pPr><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:color w:val="008000"/><w:sz w:val="36"/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    // No second Heading 1: the document's definition keeps its id, and TOC Heading points at it.
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Heading 1").count(), 1);
+    assert_eq!(d.styles.find("Heading 1").map(|s| s.id.as_str()), Some("Titulo1"));
+    let toc = d.styles.get("TOCHeading").unwrap();
+    assert_eq!(toc.based_on.as_deref(), Some("Titulo1"), "no dangling base");
+    let chain: Vec<&str> = d.styles.chain("TOCHeading").iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(chain, ["Normal", "Titulo1", "TOCHeading"]);
+    // It keeps the built-in Heading 1's look, as Word's saved file does, not the document's.
+    let r = d.styles.resolve_char(Some("TOCHeading"), &wordcraft_doc::props::CharProps::default());
+    let builtin = wordcraft_doc::StyleSheet::builtin();
+    let h1 = builtin.resolve_char(Some("Heading1"), &wordcraft_doc::props::CharProps::default());
+    assert_eq!((r.font.as_str(), r.size, r.color), (h1.font.as_str(), h1.size, h1.color));
+    // TOC Heading's own spacing still wins over the base's.
+    let p = wordcraft_doc::props::ParaProps { style: Some("TOCHeading".into()), ..Default::default() };
+    assert_eq!(d.styles.resolve_para(&p).space_before, 12.0);
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]
