@@ -412,7 +412,7 @@ fn format_name(ext: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick, save_exts, save_filters};
+    use super::{is_saved_ext, pick, save_exts, save_filters};
     use std::time::Duration;
 
     /// #2999: a dialog that "cancels" at once is a portal that failed: asked again without a
