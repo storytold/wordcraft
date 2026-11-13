@@ -164,16 +164,32 @@ impl Session {
     /// area with the comments in balloons. Fields Word fills in for output show their fresh
     /// results ([`crate::cmd::references::output_fields`]).
     pub fn export_layout_with(&self, markup: bool) -> Arc<DocLayout> {
-        let out = crate::cmd::references::output_fields(&self.doc);
-        self.export_layout_of(out.as_ref().unwrap_or(&self.doc), markup)
+        self.output_layout(markup, false)
     }
 
-    /// [`Session::export_layout_with`] of `doc`, this document as it is output.
-    pub(crate) fn export_layout_of(&self, doc: &Document, markup: bool) -> Arc<DocLayout> {
+    /// The layout a print job draws ([`Session::print_pdf`]): with `markup` as
+    /// [`Session::export_layout_with`]; without it the final text, as Word's "No Markup", so tracked
+    /// deletions, which the job doesn't draw, take no space either, whatever Track Changes
+    /// Options say. Page images keep [`Session::export_layout_with`]: they always show markup.
+    pub fn print_layout(&self, markup: bool) -> Arc<DocLayout> {
+        self.output_layout(markup, !markup)
+    }
+
+    /// The print-view layout for output; `final_text` leaves tracked deletions out.
+    fn output_layout(&self, markup: bool, final_text: bool) -> Arc<DocLayout> {
+        let out = crate::cmd::references::output_fields(&self.doc);
+        self.output_layout_of(out.as_ref().unwrap_or(&self.doc), markup, final_text)
+    }
+
+    /// [`Session::output_layout`] of `doc`, this document as it is output; `final_text` leaves tracked deletions out.
+    pub(crate) fn output_layout_of(&self, doc: &Document, markup: bool, final_text: bool) -> Arc<DocLayout> {
         let (fn_name, fn_path) = self.resolved_filenames();
         let opts = LayoutOptions {
             view: ViewMode::Print,
+            hide_deleted: final_text,
             comment_balloons: markup && self.prefs.markup.comments,
+            // Deletions Track Changes Options mark Hidden take no space, as on screen.
+            hide_marked: self.prefs.markup.hidden_deletions(),
             numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
             filename: Some(Arc::from(fn_name.as_str())),
             filepath: Some(Arc::from(fn_path.as_str())),

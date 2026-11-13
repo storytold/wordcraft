@@ -221,7 +221,7 @@ impl Session {
         let markup = crate::cmd::file::export_options(self, v);
         let out = crate::cmd::references::output_fields(&self.doc);
         let doc = out.as_ref().unwrap_or(&self.doc);
-        let lay = self.export_layout_of(doc, markup.markup);
+        let lay = self.output_layout_of(doc, markup.markup, !markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
         let mut single = v.clone();
         single["copies"] = json!(1);
@@ -238,6 +238,9 @@ impl Session {
             comments: markup.comments,
             paper,
             links,
+            numeral: markup.numeral,
+            revisions: markup.revisions.clone(),
+            compress: p::bool(v, "compress").unwrap_or(true),
             ..Default::default()
         };
         let bytes = wordcraft_pdf::export_layout(doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;

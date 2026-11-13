@@ -220,6 +220,7 @@ impl Exporter<'_> {
         }
     }
 
+    /// Draws the content of a single page (background, watermark, headers, footers, body items, and comments) onto the surface.
     pub(crate) fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
         if let Some(c) = self.doc.settings.page_color
             && let Some(p) = rect_path(&Rect::new(0.0, 0.0, w, h))

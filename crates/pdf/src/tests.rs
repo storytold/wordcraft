@@ -4,6 +4,7 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::picfx::PicFx;
 use wordcraft_doc::props::NumRef;
 use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Watermark, para_block};
+use wordcraft_layout::display::{DeleteMark, MarkupOptions};
 
 use crate::*;
 use wordcraft_layout::LayoutOptions;
@@ -168,6 +169,65 @@ fn extract_text(bytes: &[u8]) -> Vec<String> {
         .collect()
 }
 
+/// Extract text runs with their RGB fill colour from `bytes`.
+fn extract_colored_text(bytes: &[u8]) -> Vec<(String, [u8; 3])> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    /// A testing device that records extracted text runs along with their RGB fill colour.
+    struct Ex(Vec<(String, [u8; 3])>);
+    impl Device<'_> for Ex {
+        /// Ignore soft masks during text extraction.
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        /// Ignore blend modes during text extraction.
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        /// Ignore paths during text extraction.
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        /// Ignore clip paths during text extraction.
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        /// Ignore transparency groups during text extraction.
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        /// Records glyph text with its non-stroking RGB color, merging adjacent glyphs of identical color.
+        fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, paint: &Paint<'_>, mode: &GlyphDrawMode) {
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            let Paint::Color(color) = paint else { return };
+            let rgba = color.to_rgba().to_rgba8();
+            let rgb = [rgba[0], rgba[1], rgba[2]];
+            let ch = match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => c.to_string(),
+                Some(hayro_cmap::BfString::String(s)) => s.to_string(),
+                None => "\u{FFFD}".to_string(),
+            };
+            if let Some((last_text, last_rgb)) = self.0.last_mut()
+                && *last_rgb == rgb
+            {
+                last_text.push_str(&ch);
+                return;
+            }
+            self.0.push((ch, rgb));
+        }
+        /// Ignore images during text extraction.
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        /// Ignore clip path pop during text extraction.
+        fn pop_clip_path(&mut self) {}
+        /// Ignore transparency group pop during text extraction.
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut ex = Ex(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut ex);
+    }
+    ex.0
+}
+
 fn squash(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -292,6 +352,89 @@ fn tracked_deletions_are_left_out_without_markup() {
     // With markup the deletion is still there (struck through).
     let text = squash(&extract_text(&export(&d, &PdfOptions { include_markup: true, ..Default::default() }).unwrap()).concat());
     assert_eq!(text, "Keep DELETEDTEXT INSERTED");
+}
+
+/// #5232: the Track Changes Options colours (blue insertions, red deletions) reach the PDF instead
+/// of every revision taking its author's colour.
+#[test]
+fn markup_takes_the_track_changes_option_colours() {
+    use wordcraft_doc::props::Rgb;
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+
+    // By author: both revisions take Ada's colour (#B01E8F = [176, 30, 143]), no pure blue or red.
+    let by_author_bytes = export(&d, &PdfOptions { include_markup: true, compress: false, ..Default::default() }).unwrap();
+    let by_author_runs = extract_colored_text(&by_author_bytes);
+    let kansas_author = by_author_runs.iter().find(|(s, _)| s.contains("Kansas")).map(|(_, c)| *c).expect("Kansas present");
+    let missouri_author = by_author_runs.iter().find(|(s, _)| s.contains("Missouri")).map(|(_, c)| *c).expect("Missouri present");
+    assert_eq!(kansas_author, missouri_author, "by-author colours must match for the same author");
+    assert_ne!(kansas_author, [255, 0, 0], "by-author is not red");
+    assert_ne!(missouri_author, [0, 0, 255], "by-author is not blue");
+
+    // With explicit Track Changes colours: insertions are blue, deletions are red.
+    let blue = Rgb(0, 0, 255);
+    let red = Rgb(255, 0, 0);
+    let coloured_opts = PdfOptions {
+        include_markup: true,
+        compress: false,
+        revisions: MarkupOptions { insert_color: Some(blue), delete_color: Some(red), ..Default::default() },
+        ..Default::default()
+    };
+    let coloured_bytes = export(&d, &coloured_opts).unwrap();
+    let coloured_runs = extract_colored_text(&coloured_bytes);
+    let kansas_color = coloured_runs.iter().find(|(s, _)| s.contains("Kansas")).map(|(_, c)| *c).expect("Kansas present");
+    let missouri_color = coloured_runs.iter().find(|(s, _)| s.contains("Missouri")).map(|(_, c)| *c).expect("Missouri present");
+    assert_eq!(kansas_color, [255, 0, 0], "deleted Kansas must be red");
+    assert_eq!(missouri_color, [0, 0, 255], "inserted Missouri must be blue");
+
+    // Also assert the PDF content stream has the corresponding color operators preceding each run.
+    let raw = String::from_utf8_lossy(&coloured_bytes);
+    let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+    let has = |op: &str| {
+        let want: Vec<_> = op.split_ascii_whitespace().collect();
+        tokens.windows(want.len()).any(|w| w == want.as_slice())
+    };
+    assert!(has("1 0 0 rg"), "raw PDF stream contains red non-stroking operator");
+    assert!(has("0 0 1 rg"), "raw PDF stream contains blue non-stroking operator");
+}
+
+/// #5232: deletions marked Hidden in Track Changes Options take no space and are omitted from
+/// the exported PDF with markup.
+#[test]
+fn hidden_deletions_stay_out_of_markup_pdf() {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Delete, author: "Ada".into(), date: String::new(), move_name: None });
+    d.revisions.push(Revision { kind: RevisionKind::Insert, author: "Ada".into(), date: String::new(), move_name: None });
+    let mut p = Paragraph::with_text("Keep ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "Kansas ", &CharProps { del: Some(0), ..Default::default() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, "Missouri", &CharProps { ins: Some(1), ..Default::default() }).unwrap();
+    d.body = vec![para_block(p)];
+
+    // Strikethrough: deleted Kansas is included in markup PDF.
+    let strike_opts = PdfOptions {
+        include_markup: true,
+        revisions: MarkupOptions { delete_mark: DeleteMark::Strikethrough, ..Default::default() },
+        ..Default::default()
+    };
+    let strike_text = squash(&extract_text(&export(&d, &strike_opts).unwrap()).concat());
+    assert_eq!(strike_text, "Keep Kansas Missouri");
+
+    // Hidden: deleted Kansas is omitted from markup PDF.
+    let hidden_opts =
+        PdfOptions { include_markup: true, revisions: MarkupOptions { delete_mark: DeleteMark::Hidden, ..Default::default() }, ..Default::default() };
+    let hidden_text = squash(&extract_text(&export(&d, &hidden_opts).unwrap()).concat());
+    assert_eq!(hidden_text, "Keep Missouri");
 }
 
 #[test]
