@@ -7,7 +7,8 @@ pub const MAX_LEN_PT: f32 = 14_400.0;
 
 /// Parse a number, accepting decimals and ISO 29500 universal measures (`1in`, `2.5cm`, `12pt`,
 /// `3mm`, `1pc`, `1pi`). `per_pt` is how many file units make a point when there's no unit
-/// suffix (20 for twips, 2 for half-points, 8 for eighths, 12700 for EMU). Returns points.
+/// suffix (20 for twips, 2 for half-points, 8 for eighths, 12700 for EMU); unitless values with
+/// `per_pt > 1.0` are rounded to the nearest whole file unit before dividing. Returns points.
 pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     let t = s.trim();
     if t.is_empty() || t.len() > 40 {
@@ -46,7 +47,10 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     }
     let unit_lower = unit.trim().to_ascii_lowercase();
     let pt = match unit_lower.as_str() {
-        "" => v / per_pt as f64,
+        "" => {
+            let file_units = if per_pt > 1.0 { v.round() } else { v };
+            file_units / per_pt as f64
+        }
         "pt" => v,
         "in" => v * 72.0,
         "cm" => v * 72.0 / 2.54,
@@ -68,7 +72,7 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
 pub fn line_multiple(s: &str) -> Option<f32> {
     let t = s.trim();
     let measured = t.ends_with(|c: char| c.is_ascii_alphabetic());
-    measure(t, 240.0).map(|v| if measured { v * 20.0 / 240.0 } else { v })
+    measure(t, 240.0).map(|v| if measured { (v * 20.0).round() / 240.0 } else { v })
 }
 
 /// Plain integer (accepts decimals, rounds; clamps into i64 range).
@@ -187,6 +191,7 @@ mod tests {
         assert_eq!(u("-20"), Some(-1.0));
     }
 
+    /// Standard unit conversions and `w:line` auto-multiple parsing.
     #[test]
     fn measures() {
         assert_eq!(measure("1440", 20.0), Some(72.0));
@@ -207,6 +212,19 @@ mod tests {
         assert!((inches - 7.2).abs() < 1e-5, "{inches}");
         assert_eq!(line_multiple("junk"), None);
         assert_eq!(line_multiple(""), None);
+    }
+
+    /// Fractional unitless file-unit values round to the nearest whole file unit when `per_pt > 1`.
+    #[test]
+    fn measures_round_fractional_file_units() {
+        assert_eq!(measure("398.4", 240.0), measure("398", 240.0));
+        assert_eq!(measure("398.5", 240.0), measure("399", 240.0));
+        assert_eq!(measure("-398.4", 20.0), measure("-398", 20.0));
+        assert_eq!(measure("-398.5", 20.0), measure("-399", 20.0));
+        assert_eq!(measure("12.3", 1.0), Some(12.3));
+        assert_eq!(measure("398.4", 20.0), measure("398", 20.0));
+        assert_eq!(measure("17.9955", 2.0), measure("18", 2.0));
+        assert_eq!(line_multiple("398.4"), line_multiple("398"));
         assert_eq!(measure("12700emu", 20.0), Some(1.0));
         assert_eq!(measure("25400EMU", 20.0), Some(2.0));
         assert_eq!(measure("1IN", 20.0), Some(72.0));
