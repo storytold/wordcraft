@@ -217,6 +217,15 @@ pub(crate) fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Opti
             pb.cubic_to(x1, y0, cx, y0, cx, y0 + h * 0.3);
             pb.close();
         }
+        // The outer rectangle and the hole wound the other way: a hole under either fill rule.
+        ShapeKind::Frame => {
+            poly(&mut pb, &[(x0, y0), (x1, y0), (x1, y1), (x0, y1)]);
+            let t = wordcraft_doc::connector::frame_width(corner, r.w, r.h);
+            let (i0, j0, i1, j1) = (x0 + t, y0 + t, x1 - t, y1 - t);
+            if i1 > i0 && j1 > j0 {
+                poly(&mut pb, &[(i0, j0), (i0, j1), (i1, j1), (i1, j0)]);
+            }
+        }
     }
     pb.finish()
 }

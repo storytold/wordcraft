@@ -2685,6 +2685,39 @@ fn rounded_rectangle_corners_are_read_and_saved() {
     assert_eq!(corners(&wordcraft_docx::read(&bytes).unwrap()), expected);
 }
 
+/// A `frame` preset (a letterhead's page border) is a frame, not a filled rectangle: its border
+/// width is its `adj1`, read, capped and written back as the same preset.
+#[test]
+fn frame_presets_keep_their_hole_and_border_width() {
+    let geom =
+        |av: &str| format!(r#"<a:prstGeom prst="frame"><a:avLst>{av}</a:avLst></a:prstGeom><a:solidFill><a:srgbClr val="E3AB48"/></a:solidFill>"#);
+    let gd = |fmla: &str| format!(r#"<a:gd name="adj1" fmla="{fmla}"/>"#);
+    let body = [geom(&gd("val 2604")), geom(""), geom(&gd("val 90000")), geom(r#"<a:gd name="adj" fmla="val 100"/>"#)]
+        .iter()
+        .map(|sppr| anchored_wsp("Frame", 2540000, 1270000, sppr, "", "<wps:cNvSpPr/>"))
+        .collect::<String>();
+    let frames = |d: &Document| -> Vec<(ShapeKind, Option<u32>)> {
+        paras(d)[0]
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::Shape { kind, extra, .. } => Some((*kind, extra.corner)),
+                _ => None,
+            })
+            .collect()
+    };
+    let f = ShapeKind::Frame;
+    let expected = vec![(f, Some(2604)), (f, None), (f, Some(50_000)), (f, None)];
+    let d = read_body(&format!("<w:p>{body}</w:p>"));
+    assert_eq!(frames(&d), expected);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut xml = String::new();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+    std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="frame"><a:avLst><a:gd name="adj1" fmla="val 2604"/></a:avLst></a:prstGeom>"#), "{xml}");
+    assert_eq!(frames(&wordcraft_docx::read(&bytes).unwrap()), expected);
+}
+
 /// #611: legacy VML lines and rectangles (documents without DrawingML).
 #[test]
 fn vml_lines_and_rectangles() {

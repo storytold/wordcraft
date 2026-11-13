@@ -78,17 +78,41 @@ impl<'a> ItemDisplay<'a> {
     }
 }
 
-/// A page's draw items as two layers, its headers and footers then its body, each at full
-/// strength with the opacity to draw it at. A dimmed layer is faded as one picture, as Word dims
-/// it: where its lines or fills overlap (a table's borders meeting) they don't darken each other.
-pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32, Vec<Draw>); 2] {
+/// A page's draw items as layers in paint order, each at full strength with the opacity to draw
+/// it at: its headers and footers, then its body. The pictures, shapes and charts of headers and
+/// footers are never dimmed, as in Word (a letterhead's page frame keeps its colours while the
+/// body is edited), so a dimmed header is split into runs of drawings and runs of the rest, kept
+/// in their order: a picture in front of a shaded paragraph stays in front of it. A dimmed layer
+/// is faded as one picture, as Word dims it: where its lines or fills overlap (a table's borders
+/// meeting) they don't darken each other.
+pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<(f32, Vec<Draw>)> {
     let (ha, ba) = dimming(opts);
-    let (mut hf, mut body) = (Vec::new(), Vec::new());
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, 1.0, &mut hf);
+    let mut hf = Vec::new();
+    let mut marks = Vec::new();
+    stories_display_marked(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, 1.0, &mut hf, Some(&mut marks));
+    // Each mark starts an item's draws, which run to the next mark (cut off from the back).
+    let mut runs: Vec<(bool, Vec<Draw>)> = Vec::with_capacity(marks.len());
+    for &(start, drawing) in marks.iter().rev() {
+        let draws = hf.split_off(start.min(hf.len()));
+        if !draws.is_empty() {
+            runs.push((drawing, draws));
+        }
+    }
+    // Consecutive items at the same opacity share a layer.
+    let mut layers: Vec<(f32, Vec<Draw>)> = Vec::new();
+    for (drawing, draws) in runs.into_iter().rev() {
+        let alpha = if drawing { 1.0 } else { ha };
+        match layers.last_mut() {
+            Some((a, items)) if *a == alpha => items.extend(draws),
+            _ => layers.push((alpha, draws)),
+        }
+    }
+    let mut body = Vec::new();
     stories_display(doc, &[&page.items[..]], None, opts, &authors, 1.0, &mut body);
     body_change_bars(doc, page, &page.items, opts, 1.0, &mut body);
-    [(ha, hf), (ba, body)]
+    layers.push((ba, body));
+    layers
 }
 
 /// The opacity of the headers/footers and of the body.
@@ -114,6 +138,22 @@ fn stories_display(
     a: f32,
     out: &mut Vec<Draw>,
 ) {
+    stories_display_marked(doc, stories, shared, opts, authors, a, out, None);
+}
+
+/// [`stories_display`], noting in `marks` where each placed item's draws start in `out` and
+/// whether the item is a drawing (a picture, shape, chart or clipped group).
+#[allow(clippy::too_many_arguments)]
+fn stories_display_marked(
+    doc: &Document,
+    stories: &[&[Placed]],
+    shared: Option<&Clips>,
+    opts: &DisplayOptions,
+    authors: &Authors,
+    a: f32,
+    out: &mut Vec<Draw>,
+    mut marks: Option<&mut Vec<(usize, bool)>>,
+) {
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
@@ -129,6 +169,9 @@ fn stories_display(
         };
         let mut done: Vec<u32> = Vec::new();
         for it in items.iter() {
+            if let Some(m) = marks.as_deref_mut() {
+                m.push((out.len(), matches!(it, Placed::Image { .. } | Placed::Shape { .. } | Placed::Graphic { .. } | Placed::Clip { .. })));
+            }
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
