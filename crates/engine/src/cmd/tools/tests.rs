@@ -635,6 +635,8 @@ fn compare_bounds_total_diff_work() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
 }
 
+mod compare_completeness;
+
 /// Verifies that moving a paragraph past `MAX_LCS` in a long document does not cascade into false
 /// revisions in the tail, asserting exact changed block indices, text, and edit types.
 #[test]

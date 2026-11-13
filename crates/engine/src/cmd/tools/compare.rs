@@ -392,10 +392,13 @@ fn flatten_region(out: &mut Vec<Op>, region: &[(Op, usize, Kind)]) {
 }
 
 /// A token of a changed paragraph: a word (or character), or an inline object without text
-/// of its own (a text box anchor, a picture, a bookmark…), which is compared and kept whole.
+/// of its own (a text box anchor, a picture, a bookmark…) or an equation, which is compared and
+/// kept whole.
 enum Tok<'a> {
     Text(String),
-    Obj(&'a InlineObject),
+    /// An object, with the colour of the run that carries its marker in the source
+    /// paragraph (an equation's own colour lives there, not on the object).
+    Obj(&'a InlineObject, Option<wordcraft_doc::props::TextColor>),
 }
 
 /// What a comparison sees of a token: the text as the options say, an object with the text of
@@ -412,7 +415,25 @@ fn obj_key(doc: &Document, o: &InlineObject) -> Key {
     for story in o.text_box_slots() {
         *story = None;
     }
+    clear_retained_omml(&mut o);
     Key::Obj(Box::new(o), texts)
+}
+
+/// Drop the retained source XML of an equation whose structure is modelled: two files can
+/// serialise the same equation differently (its OMML runs split at other places), and the
+/// reader already merges like runs into the same structure, so the XML must not take part
+/// in the comparison. An equation with no modelled structure keeps its XML: there, the XML
+/// is all the comparison has.
+fn clear_retained_omml(o: &mut InlineObject) {
+    match o {
+        InlineObject::Equation { math, .. } if !math.nodes.is_empty() => math.omml.clear(),
+        InlineObject::Group { children, .. } => {
+            for child in children {
+                clear_retained_omml(&mut child.obj);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Whether two paragraphs hold the same objects, as compared.
@@ -421,7 +442,7 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 }
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
-/// between them. Objects with text (fields, equations…) count as their text.
+/// between them. Objects with text (fields, ruby…) count as their text; equations are kept whole.
 fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
     fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
         cur.push(c);
@@ -429,22 +450,39 @@ fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
             v.push(Tok::Text(std::mem::take(cur)));
         }
     }
+    let mut obj_props: Vec<CharProps> = Vec::new();
+    for (range, props) in p.run_ranges() {
+        for c in p.text.get(range).unwrap_or("").chars() {
+            if c == OBJ {
+                obj_props.push(props.clone());
+            }
+        }
+    }
     let mut v = Vec::new();
     let mut cur = String::new();
     let mut objects = p.objects.iter();
+    let mut obj_at = 0;
     for c in p.text.chars() {
         if c != OBJ {
             push(&mut v, &mut cur, c, characters);
             continue;
         }
         match objects.next() {
-            Some(o) if o.plain_text().is_empty() => {
+            // An equation's linear text is a stand-in, not the file's text. Flattened, the result
+            // gets that text in place of the equation, glued to the word beside it ("m149" +
+            // "x+1" saved as one `w:t` "m149x+1"), and the equation leaves the file (#5924).
+            Some(o) if o.plain_text().is_empty() || matches!(o, InlineObject::Equation { .. }) => {
+                let source = obj_props.get(obj_at).and_then(|props| props.color);
+                obj_at += 1;
                 if !cur.is_empty() {
                     v.push(Tok::Text(std::mem::take(&mut cur)));
                 }
-                v.push(Tok::Obj(o));
+                v.push(Tok::Obj(o, source));
             }
-            Some(o) => o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters)),
+            Some(o) => {
+                obj_at += 1;
+                o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters))
+            }
             None => {
                 // A marker without its object (a broken paragraph): kept as a visible
                 // placeholder, so the loss shows in the result instead of vanishing.
@@ -466,11 +504,25 @@ fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
         Some(Tok::Text(t)) => {
             let _ = p.insert_text(at, t, props);
         }
-        Some(Tok::Obj(o)) => {
+        Some(Tok::Obj(o, _)) => {
             let _ = p.insert_object(at, (*o).clone(), props);
         }
         None => {}
     }
+}
+
+/// Add a token with the paragraph's base props and the given revision marks, except that
+/// an equation keeps its own source colour: the writer rebuilds a retained equation whose
+/// carrying colour differs from its source colour, discarding what the model does not
+/// hold, so giving it the base run's colour would recolour and rebuild it.
+fn put_token(p: &mut Paragraph, t: Option<&Tok<'_>>, base: &CharProps, ins: Option<u32>, del: Option<u32>) {
+    let mut props = CharProps { ins, del, ..base.clone() };
+    if let Some(Tok::Obj(o, source)) = t
+        && matches!(o, InlineObject::Equation { .. })
+    {
+        props.color = *source;
+    }
+    put(p, t, &props);
 }
 
 /// Returns `true` if paragraph `p` contains more characters than `limit`.
@@ -503,7 +555,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t) => Key::Text(ctx.opts.key(t)),
-        Tok::Obj(o) => obj_key(doc, o),
+        Tok::Obj(o, _) => obj_key(doc, o),
     };
     let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
@@ -512,22 +564,26 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
     let ops = if chars { collapse_noise_matches(&ops) } else { ops };
     let mut p = Paragraph::new();
     p.props = b.props.clone();
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    let mut base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
+    // A symbol's font belongs to that one character (a manual bullet opening the paragraph).
+    // Given to every token, it makes the writer save each of them as a `w:sym`, so the words
+    // leave the file's text, deleted ones included (#5924).
+    base.sym_font = None;
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
                 // Equal as compared (perhaps up to case or spacing): the revised text.
-                put(&mut p, tb.get(j), &base);
+                put_token(&mut p, tb.get(j), &base, None, None);
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..base.clone() });
+                put_token(&mut p, ta.get(i), &base, None, Some(ctx.del));
                 i += 1;
             }
             Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..base.clone() });
+                put_token(&mut p, tb.get(j), &base, Some(ctx.ins), None);
                 j += 1;
             }
         }
