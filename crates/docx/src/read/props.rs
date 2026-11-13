@@ -5,16 +5,17 @@ use std::collections::HashMap;
 use wordcraft_doc::para::cap_alt;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, CombineBrackets, EastAsianLayout, HeightRule, Highlight, LineSpacing, NumRef,
-    ParaProps, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor, TextDirection, Underline,
-    VAlign, VMerge, VertAlign,
+    ParaProps, ParagraphTextDirection, Rgb, RowProps, TabAlign, TabLeader, TabStop, TableFloat, TableLook, TableProps, TextAlignment, TextColor,
+    TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{
     Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, MAX_CHAR_SPACE, MAX_GRID_PITCH, NotePos, NoteProps, NoteRestart, NumFormat,
     PageVAlign, SectionProps, SectionStart,
 };
 
+use super::MAX_FONT_NAME;
 use super::drawing_color::adjust_lum;
-use crate::units::{int, line_multiple, measure, on_off, tw, u32_of};
+use crate::units::{int, line_multiple, measure, on_off, tw, tw_i16, tw_u16, u32_of};
 
 /// A text frame (`w:framePr` without a drop cap, ECMA-376 §17.3.1.11), sizes and offsets in
 /// points (clamped), names kept as OOXML writes them.
@@ -145,6 +146,29 @@ pub(crate) fn resolve_level_only(sheet: &wordcraft_doc::styles::StyleSheet, p: &
     }
 }
 
+/// A `w:rFonts` value as the document keeps it: `None` when it names no family, else its leading
+/// families up to [`MAX_FONT_NAME`] bytes, cut at a `;` so no name is split. A LibreOffice file
+/// names its Latin font as a semicolon-separated fallback list, and a real list names a few
+/// families; a longer value is corrupt or hostile, and every piece of text drawn in it would pay
+/// for its whole length as the list is classified and resolved. Keeping the leading families keeps
+/// the family such a list picks, and the rest of the value is dropped like `w:cs`/`w:eastAsia`
+/// drop an over-long name.
+fn bounded_font_list(v: &str) -> Option<String> {
+    if v.len() <= MAX_FONT_NAME {
+        return (!v.is_empty()).then(|| v.to_string());
+    }
+    let mut end = 0usize;
+    for part in v.split_inclusive(';') {
+        let next = end + part.len();
+        if next > MAX_FONT_NAME {
+            break;
+        }
+        end = next;
+    }
+    let kept = v.get(..end)?.trim_end_matches(';');
+    (!kept.is_empty()).then(|| kept.to_string())
+}
+
 impl PropCtx {
     pub fn style_id(&self, id: &str) -> String {
         self.alias.get(id).cloned().unwrap_or_else(|| id.to_string())
@@ -226,6 +250,8 @@ impl PropCtx {
         shd_fill(e)
     }
 
+    /// The character properties `e` (a `w:rPr`) sets: direct formatting, plus the fonts, size,
+    /// weight and posture of the complex-script and East Asian text beside them.
     pub fn rpr(&self, e: &El) -> CharProps {
         let mut c = CharProps::default();
         for k in e.els() {
@@ -234,7 +260,11 @@ impl PropCtx {
                 "w:rFonts" => {
                     // A theme font supersedes the fixed font beside it (`w:asciiTheme` over
                     // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
-                    let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
+                    // A LibreOffice file names the Latin font as a semicolon-separated fallback
+                    // list. Names are bounded like `w:cs`/`w:eastAsia` below: a longer one is
+                    // corrupt or hostile, and every piece of text drawn in it would pay for its
+                    // whole length as the list is classified (see `bounded_font_list`).
+                    let named = |a: &str| k.attr(a).and_then(bounded_font_list);
                     let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
                     // `w:eastAsia` and `w:cs` name fonts for other scripts and stay in `font_ea` /
                     // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
@@ -338,6 +368,7 @@ impl PropCtx {
                 "w:suppressAutoHyphens" => p.suppress_hyphens = Some(on_off(k)),
                 "w:suppressLineNumbers" => p.suppress_line_numbers = Some(on_off(k)),
                 "w:bidi" => p.bidi = Some(on_off(k)),
+                "w:textDirection" => p.text_direction = k.attr("w:val").and_then(ParagraphTextDirection::from_ooxml),
                 "w:kinsoku" => p.kinsoku = Some(on_off(k)),
                 "w:wordWrap" => p.word_wrap = Some(on_off(k)),
                 "w:overflowPunct" => p.overflow_punct = Some(on_off(k)),
@@ -376,10 +407,10 @@ impl PropCtx {
                     p.tabs = Some(tabs);
                 }
                 "w:spacing" => {
-                    if let Some(v) = tw(k, "w:before") {
+                    if let Some(v) = tw_u16(k, "w:before") {
                         p.space_before = Some(v.max(0.0));
                     }
-                    if let Some(v) = tw(k, "w:after") {
+                    if let Some(v) = tw_u16(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
                     // HTML-style automatic spacing; "0" switches an inherited one off.
@@ -402,15 +433,15 @@ impl PropCtx {
                     }
                 }
                 "w:ind" => {
-                    if let Some(v) = tw(k, "w:left").or_else(|| tw(k, "w:start")) {
+                    if let Some(v) = tw_i16(k, "w:left").or_else(|| tw_i16(k, "w:start")) {
                         p.indent_left = Some(v);
                     }
-                    if let Some(v) = tw(k, "w:right").or_else(|| tw(k, "w:end")) {
+                    if let Some(v) = tw_i16(k, "w:right").or_else(|| tw_i16(k, "w:end")) {
                         p.indent_right = Some(v);
                     }
-                    if let Some(v) = tw(k, "w:hanging") {
+                    if let Some(v) = tw_i16(k, "w:hanging") {
                         p.indent_first = Some(-v);
-                    } else if let Some(v) = tw(k, "w:firstLine") {
+                    } else if let Some(v) = tw_i16(k, "w:firstLine") {
                         p.indent_first = Some(v);
                     }
                     // Character units (hundredths of a character), which win when non-zero.
@@ -685,7 +716,10 @@ pub struct HfRef {
     pub rid: String,
 }
 
-/// `w:sectPr` (header/footer references are returned for the caller to resolve).
+/// Reads `w:sectPr` element properties (header/footer references are returned for the caller to resolve).
+///
+/// Parses section page size, margins, columns, line numbering (`w:lnNumType`), page numbering,
+/// vertical alignment, borders, and document grid settings.
 pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
     let mut s = SectionProps::default();
     let mut refs = Vec::new();
@@ -786,20 +820,23 @@ pub fn sectpr(pc: &PropCtx, e: &El) -> (SectionProps, Vec<HfRef>) {
                 s.footnote_columns = k.attr("w:val").and_then(u32_of).filter(|v| (1..=45).contains(v));
             }
             "w:lnNumType" => {
-                let mut l = LineNumbering::default();
-                if let Some(v) = k.attr("w:countBy").and_then(u32_of) {
-                    l.count_by = v.clamp(1, 100);
+                // Word leaves line numbering off unless `w:countBy` gives an interval above 0,
+                // whatever `w:start`, `w:distance` and `w:restart` say (#6209, observed in Word;
+                // the RTF-to-DOCX converter there writes the element without `w:countBy`).
+                // Falling back to `LineNumbering::default()` would number every line instead.
+                if let Some(count_by) = k.attr("w:countBy").and_then(u32_of).filter(|&v| v > 0) {
+                    let mut l = LineNumbering { count_by: count_by.clamp(1, 100), ..LineNumbering::default() };
+                    if let Some(v) = k.attr("w:start").and_then(int) {
+                        l.start = (v.clamp(0, 32_767) + 1) as u32;
+                    }
+                    l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
+                    l.restart = match k.attr("w:restart") {
+                        Some("newSection") => LineNumberRestart::Section,
+                        Some("continuous") => LineNumberRestart::Continuous,
+                        _ => LineNumberRestart::Page,
+                    };
+                    s.line_numbers = Some(l);
                 }
-                if let Some(v) = k.attr("w:start").and_then(int) {
-                    l.start = (v.clamp(0, 32_767) + 1) as u32;
-                }
-                l.distance = tw(k, "w:distance").unwrap_or(0.0).max(0.0);
-                l.restart = match k.attr("w:restart") {
-                    Some("newSection") => LineNumberRestart::Section,
-                    Some("continuous") => LineNumberRestart::Continuous,
-                    _ => LineNumberRestart::Page,
-                };
-                s.line_numbers = Some(l);
             }
             "w:vAlign" => {
                 s.valign = match k.attr("w:val") {

@@ -116,6 +116,27 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
     e.attr(attr).and_then(|v| measure(v, 20.0))
 }
 
+/// Signed twips Word keeps in 16 bits (paragraph and list indents, ECMA-376 Part 1 §17.3.1.12):
+/// a plain integer outside `i16` keeps its low 16 bits, two's complement, as Word reads it
+/// (66256 → 720). Values with a unit or a fraction read as [`tw`].
+pub fn tw_i16(e: &El, attr: &str) -> Option<f32> {
+    let v = e.attr(attr)?;
+    match v.trim().parse::<i64>() {
+        Ok(i) => Some(f32::from(i as i16) / 20.0),
+        Err(_) => measure(v, 20.0),
+    }
+}
+
+/// Unsigned twips Word keeps in 16 bits (paragraph spacing, §17.3.1.33): a plain integer above
+/// 65535 keeps its low 16 bits (65537 → 1). Other values read as [`tw`].
+pub fn tw_u16(e: &El, attr: &str) -> Option<f32> {
+    let v = e.attr(attr)?;
+    match v.trim().parse::<i64>() {
+        Ok(i) if i > 0xFFFF => Some(f32::from((i & 0xFFFF) as u16) / 20.0),
+        _ => measure(v, 20.0),
+    }
+}
+
 /// ST_OnOff: absent `w:val` = on; `0`, `false`, `off` = off.
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
@@ -147,6 +168,24 @@ pub fn emu(pt: f32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn twips_beyond_16_bits_wrap() {
+        let el = |a: &str| El { attrs: vec![("w:v".into(), a.into())], ..El::default() };
+        let s = |a: &str| tw_i16(&el(a), "w:v");
+        let u = |a: &str| tw_u16(&el(a), "w:v");
+        assert_eq!(s("66256"), Some(36.0));
+        assert_eq!(s("-65516"), Some(1.0));
+        assert_eq!(s("98304"), Some(-1638.4));
+        assert_eq!(s("32767"), Some(1638.35));
+        assert_eq!(s("-32768"), Some(-1638.4));
+        assert_eq!(s("1in"), Some(72.0));
+        assert_eq!(s("x"), None);
+        assert_eq!(u("65537"), Some(0.05));
+        assert_eq!(u("65535"), Some(3276.75));
+        assert_eq!(u("12pt"), Some(12.0));
+        assert_eq!(u("-20"), Some(-1.0));
+    }
 
     #[test]
     fn measures() {

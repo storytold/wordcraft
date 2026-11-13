@@ -96,6 +96,55 @@ fn title_stem_omits_nul_from_each_title_source() {
     }
 }
 
+/// #5793: a name from a paragraph's first words, as Word suggests one: up to the first sentence or
+/// clause end, without what a file name can't hold, at most 50 characters at a word's end.
+#[test]
+fn a_suggested_name_is_the_first_words_of_the_text() {
+    use crate::app::suggested_stem as stem;
+    assert_eq!(stem("Quarterly report for the board. More follows here.").as_deref(), Some("Quarterly report for the board"));
+    assert_eq!(stem("Minutes of the meeting, 6 November").as_deref(), Some("Minutes of the meeting, 6 November"));
+    assert_eq!(stem("What happened? Nobody knows").as_deref(), Some("What happened"));
+    assert_eq!(stem("Plan: phase one").as_deref(), Some("Plan"));
+    assert_eq!(stem("Q3 / Q4 \"draft\" <final> *v2* | a\\b").as_deref(), Some("Q3 Q4 draft final v2 a b"));
+    assert_eq!(stem("  Leading   and   inner   spaces  ").as_deref(), Some("Leading and inner spaces"));
+    assert_eq!(stem("日本語の文書。続きの文").as_deref(), Some("日本語の文書"));
+    let long = "Annual report of the regional committee on transport and infrastructure planning";
+    let got = stem(long).unwrap();
+    assert!(got.chars().count() <= 50 && long.starts_with(&got) && long[got.len()..].starts_with(' '), "{got:?}");
+    assert_eq!(stem(&"x".repeat(80)).map(|s| s.chars().count()), Some(50), "one long word is cut at 50");
+    for nothing in ["", "   ", "...", "?", "/ * |", "\u{1}"] {
+        assert_eq!(stem(nothing), None, "{nothing:?}");
+    }
+}
+
+/// #5793: Save As suggests the first words for a document that was never saved and has no title
+/// of its own (the first paragraph with text, past empty ones); a title, a file name or a path
+/// still name it.
+#[test]
+fn save_as_suggests_the_first_words_of_a_new_document() {
+    let mut app = app();
+    assert_eq!(app.default_save_name(), format!("{}.docx", app.title_stem()), "an empty document");
+    for c in [
+        json!(["text.newParagraph", {}]),
+        json!(["text.insert", {"text": "Minutes of the board meeting. Present: all"}]),
+        json!(["text.newParagraph", {}]),
+        json!(["text.insert", {"text": "Second paragraph"}]),
+    ] {
+        app.session.run(c[0].as_str().unwrap(), &c[1]).unwrap();
+    }
+    assert_eq!(app.default_save_name(), "Minutes of the board meeting.docx");
+    assert_eq!(
+        app.title_stem(),
+        crate::documents::untitled_title(&app.session.resolved_filenames().0).unwrap_or_else(|| "Document1".into()),
+        "the window title stays Document1"
+    );
+    app.session.doc.core.title = "Board minutes".into();
+    assert_eq!(app.default_save_name(), "Board minutes.docx", "a title wins");
+    app.session.doc.core.title.clear();
+    app.session.path = Some(std::path::PathBuf::from("/tmp/kept.docm"));
+    assert_eq!(app.default_save_name(), "kept.docm", "a saved file keeps its name and format");
+}
+
 /// #1678: Focus and Full Screen View put the window in full screen, asked of the system once
 /// per change (switching between the two keeps it), and the usual window comes back after.
 #[test]
@@ -539,6 +588,25 @@ fn title_and_account_buttons_work() {
     assert_eq!(h.state().ui.backstage_page, "options");
     assert_eq!(h.state().ui.options_pane, "general");
     assert!(h.query_by_label("User name:").is_some());
+}
+
+/// The Options toggle hides the community pill in the title bar; the backstage menu's
+/// Discord link hides with it — one setting, everywhere the link shows.
+#[test]
+fn the_community_button_off_hides_the_backstage_discord_link_too() {
+    use egui_kittest::kittest::Queryable;
+    let mut a = app();
+    a.run("ui.backstage", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord community").is_some(), "the community link shows by default");
+
+    let mut a = app();
+    a.ui.show_discord = false;
+    a.run("ui.backstage", json!({"value": true})).unwrap();
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert!(h.query_by_label("Discord community").is_none(), "the backstage link honors the same setting");
 }
 
 /// File › Options › Advanced › Editing: alignment guides are a UI command, on by default and
@@ -1674,6 +1742,145 @@ fn wheel_notches_land_at_once_with_animation_effects_off() {
     assert!(first > 0.0 && first < notch, "a notch eases in again: {first}");
 }
 
+/// A Ctrl+wheel notch eases in over several frames, each a new size: those pages are drawn
+/// unhinted (they show for a moment, and hinting each size would fill the hint caches), and
+/// the first frame after the zoom stops draws them hinted, as the platform draws text.
+#[test]
+fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let platform = crate::canvas::screen_render_options().hinting;
+    assert_eq!(a.canvas.pages_hinted, platform, "at rest");
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let before = a.canvas.scale;
+    frame(&mut a, vec![wheel]);
+    // The wheel's own frame already starts the zoom, unhinted.
+    assert_ne!(a.canvas.scale, before, "the zoom starts in the wheel's frame");
+    assert!(!platform || !a.canvas.pages_hinted, "the wheel's frame is unhinted");
+    let (mut eased, mut unhinted) = (0, 0);
+    let mut last = a.canvas.scale;
+    for _ in 0..60 {
+        frame(&mut a, Vec::new());
+        if a.canvas.scale != last {
+            eased += 1;
+            unhinted += usize::from(!a.canvas.pages_hinted);
+            last = a.canvas.scale;
+        } else {
+            break;
+        }
+    }
+    assert!(a.canvas.scale > before && eased >= 2, "the notch eased in over frames: {eased}");
+    if platform {
+        assert_eq!(unhinted, eased, "every in-between size unhinted");
+    }
+    // The frame after the zoom stops: hinted again, at the size it ended on.
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.scale, last);
+    assert_eq!(a.canvas.pages_hinted, platform, "hinted once the zoom stops");
+}
+
+/// A pointer zoom stretches the pages' last rasters rather than rendering each in-between
+/// size: a notch (22 %) renders nothing until it stops, then the page once; a long zoom renders
+/// again only when a raster would be stretched past half again its size. A zoom that isn't a
+/// gesture (View › Zoom) renders at once.
+#[test]
+fn a_pointer_zoom_stretches_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        // A GPU's texture size, as on desktops: at egui's 2048 default the zoomed page would
+        // be drawn in tiles (for very long Web Layout pages), which this isn't about.
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), max_texture_side: Some(8192), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    // Frames until the zoom stops; returns (frames with a new scale, rasters rendered in them,
+    // rasters rendered in the frame it stopped).
+    let ease = |a: &mut WordApp, frame: &mut dyn FnMut(&mut WordApp, Vec<egui::Event>), notches: &[usize]| {
+        let before = a.canvas.rasters;
+        let (mut moving, mut last, mut f) = (0, a.canvas.scale, 0);
+        loop {
+            let ahead = a.canvas.rasters;
+            frame(a, if notches.contains(&f) { vec![wheel()] } else { Vec::new() });
+            f += 1;
+            if a.canvas.scale == last && f > notches.iter().max().copied().unwrap_or(0) {
+                return (moving, ahead - before, a.canvas.rasters - ahead);
+            }
+            moving += usize::from(a.canvas.scale != last);
+            last = a.canvas.scale;
+            assert!(f < 120, "the zoom stops");
+        }
+    };
+    let start = a.canvas.scale;
+    let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0]);
+    assert!(moving >= 3 && a.canvas.scale / start > 1.2, "a notch eases in: {moving} frames");
+    assert_eq!((while_moving, at_rest), (0, 1), "no raster while it moves ({moving} frames), one the frame it stops");
+    // A long zoom (three notches, about 1.8x): rendered again only every half again.
+    let start = a.canvas.scale;
+    let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0, 3, 6]);
+    let rasters = while_moving + at_rest;
+    assert!(a.canvas.scale / start > 1.7, "{}", a.canvas.scale / start);
+    assert!((2..=3).contains(&rasters) && rasters < moving as u64, "{rasters} rasters over {moving} frames");
+    // View › Zoom isn't a gesture: the page is rendered at the new size in that frame.
+    let before = a.canvas.rasters;
+    a.run("view.zoom", json!({"value": 100.0})).unwrap();
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.rasters, before + 1);
+    // Read Mode: the wheel changes the text size and the pages reflow, so a raster of the old
+    // text must not stand in for them: they are rendered as they change.
+    a.run("view.readMode", json!({})).unwrap();
+    for _ in 0..10 {
+        frame(&mut a, Vec::new());
+    }
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let (moving, while_moving, _) = ease(&mut a, &mut frame, &[0]);
+    assert!(moving >= 3, "the text size eases in: {moving} frames");
+    assert!(while_moving >= 2, "reflowed pages rendered while it moves: {while_moving} over {moving} frames");
+}
+
 /// With animation effects off a zoom step is finished in its own frame: Ctrl+wheel zooms the
 /// notch's whole step at once, the page is already placed and drawn as it will stay, and the
 /// status bar's zoom readout follows in the very next frame. Turns that arrive in small pieces
@@ -1716,6 +1923,7 @@ fn zoom_steps_land_finished_with_animation_effects_off() {
     frame(&mut a, vec![ctrl_wheel(1.0)]);
     let (scale, pages) = (a.canvas.scale, a.canvas.page_rects.clone());
     assert!((scale / before - notch_zoom).abs() < 1e-3, "the whole notch in its frame: {before} -> {scale}");
+    assert_eq!(a.canvas.pages_hinted, crate::canvas::screen_render_options().hinting, "drawn as it stays: hinted where text is");
     for _ in 0..30 {
         frame(&mut a, Vec::new());
         assert_eq!(a.canvas.scale, scale, "nothing is left to ease in");
@@ -2849,6 +3057,88 @@ fn a_command_line_file_still_asks_for_its_password_after_the_startup_document_is
     assert!(body_text(&a).contains("Locked away"), "{}", body_text(&a));
 }
 
+/// A template WordCraft can be handed, saved by the engine with `text` (and `password`).
+fn template_file(path: &std::path::Path, text: &str, password: Option<&str>) -> Vec<u8> {
+    let mut s = Session::new(wordcraft_doc::Document::from_text(text));
+    s.run("file.save", &json!({"path": path.to_string_lossy(), "password": password})).unwrap();
+    std::fs::read(path).unwrap()
+}
+
+/// #3433: a Word template the platform hands the app (the command line, a double-click in the
+/// file manager, the Finder) starts a new, untitled document based on it, in place of the
+/// untouched blank document, as Word does; saving can't write over the template. A document is
+/// still opened as itself, and File › Open still opens a template itself, to edit it.
+#[test]
+fn a_template_the_platform_hands_the_app_starts_a_new_document() {
+    let dir = scratch("platform-template");
+    let path = dir.join("Letterhead.DOTX");
+    let bytes = template_file(&path, "Letterhead text", None);
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    let r = a.open_from_platform(&name, None).unwrap();
+    assert_eq!(r.get("pending"), None, "{r}");
+    assert_eq!(a.session.documents().len(), 1, "the blank startup document gave way");
+    assert_eq!(a.session.path, None);
+    assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(name.as_str()));
+    assert!(body_text(&a).contains("Letterhead text"));
+    assert_eq!(a.title_stem(), "Document1");
+    a.run("text.insert", json!({"text": "Dear reader, "})).unwrap();
+    let _ = a.run("file.save", json!({}));
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "Save never writes over the template");
+    assert_eq!(a.session.path, None);
+
+    // A document opens as itself, beside the new one.
+    let doc = dir.join("Report.docx");
+    template_file(&doc, "Report text", None);
+    a.open_from_platform(&doc.to_string_lossy(), None).unwrap();
+    assert_eq!(a.session.path.as_deref(), Some(doc.as_path()));
+    // File › Open edits the template itself.
+    let mut b = app();
+    b.open_file(&name, None).unwrap();
+    assert_eq!(b.session.path.as_deref(), Some(path.as_path()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #3433: a protected template from the platform asks for its password, and the password box
+/// retries the command that asked, so the template still starts a new document instead of
+/// opening itself.
+#[test]
+fn a_protected_template_from_the_platform_asks_for_its_password_and_stays_a_new_document() {
+    let dir = scratch("platform-template-password");
+    let path = dir.join("Locked.dotm");
+    let bytes = template_file(&path, "Locked template", Some("sesame"));
+    let name = path.to_string_lossy().to_string();
+
+    let mut a = app();
+    a.open_from_platform(&name, None).unwrap();
+    assert_eq!(prompt(&a), Some("password"));
+    let (then, params) = match &a.dialog {
+        Some(crate::dialogs::Dialog::Password { then, params, .. }) => (then.clone(), params.clone()),
+        other => panic!("{:?}", other.as_ref().map(|d| d.name())),
+    };
+    assert_eq!(then, "file.newFromTemplate");
+    let mut with = params;
+    with["password"] = json!("sesame");
+    a.execute(&then, with).unwrap();
+    assert!(body_text(&a).contains("Locked template"), "{}", body_text(&a));
+    assert_eq!((a.session.path.as_ref(), a.session.password.is_some()), (None, false));
+    assert_eq!(a.session.documents().len(), 1);
+    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn word_templates_are_told_by_their_extension() {
+    use crate::documents::is_word_template;
+    for t in ["a.dotx", "a.dotm", "a.dot", "A.DOTX", "/x/y.Dotm", "C:\\x\\y.DOT"] {
+        assert!(is_word_template(t), "{t}");
+    }
+    for t in ["a.docx", "a.doc", "dotx", "a.dotx.docx", "a.ott", "", "a."] {
+        assert!(!is_word_template(t), "{t}");
+    }
+}
+
 /// #55: a password-protected document asks for its password (after Save Changes) instead of
 /// opening blank; scripts get the error instead of a dialog; Encrypt with Password asks for one.
 #[test]
@@ -2981,6 +3271,20 @@ fn window_close_save_writes_the_file_and_quits() {
     assert!(on_disk.contains("Revised Draft"), "the edit is on disk: {on_disk:?}");
     assert!(a.quit_requested, "the app may close");
     assert!(a.close_requested(), "the close that follows goes ahead");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Save As suggests a Markdown file's own format, as it does a Word file's; anything else is .docx.
+#[test]
+fn save_as_suggests_a_markdown_files_own_format() {
+    let dir = scratch("save-name");
+    for (name, suggested) in [("notes.md", "notes.md"), ("notes.markdown", "notes.markdown"), ("notes.MD", "notes.MD"), ("notes.txt", "notes.docx")] {
+        let path = dir.join(name);
+        std::fs::write(&path, b"Hello\n").unwrap();
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(a.default_save_name(), suggested, "{name}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -4323,10 +4627,9 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Q, egui::Modifiers::ALT));
     h.event(egui::Event::Text("q".into()));
     h.step();
-    let query = |h: &egui_kittest::Harness<WordApp>| match &h.state().dialog {
-        Some(dialogs::Dialog::Commands { query, .. }) => Some(query.clone()),
-        _ => None,
-    };
+    // The title bar shows the Search box, so Search opens there, in place (#5398).
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    assert!(h.state().dialog.is_none(), "no Search Commands dialog over the page");
     assert_eq!(query(&h).as_deref(), Some(""), "Search is open and empty");
     h.step();
     {
@@ -4340,7 +4643,8 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(h.state().dialog.is_none(), "Escape closes Search");
+    assert!(query(&h).is_none(), "Escape closes Search");
+    assert!(!h.state().session.view.full_screen_view);
     // Words that name no command: Enter finds them in the document, in the Navigation pane.
     h.event(key(egui::Key::Q, egui::Modifiers::ALT));
     h.step();
@@ -4352,9 +4656,192 @@ fn alt_q_opens_search_and_typing_goes_there() {
     h.event(key(egui::Key::Enter, egui::Modifiers::NONE));
     h.step();
     h.step();
-    assert!(h.state().dialog.is_none(), "Enter ran the search");
+    assert!(query(&h).is_none(), "Enter ran the search");
     assert!(h.state().session.view.nav_pane, "the Navigation pane shows the results");
     assert_eq!(h.state().session.find.results.len(), 1);
+}
+
+/// #5398: a click on the title bar's Search box types into that box, as in Word, with the
+/// results dropping down under it, instead of opening a second box in a dialog; a result's click
+/// runs it, and a click elsewhere closes Search.
+#[test]
+fn the_title_bar_search_box_is_typed_in_place() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let open = |h: &mut egui_kittest::Harness<WordApp>| {
+        h.get_by_label("Search commands and help").click();
+        h.run_steps(3);
+    };
+    open(&mut h);
+    assert!(h.state().dialog.is_none(), "no second box in a dialog");
+    assert_eq!(query(&h).as_deref(), Some(""));
+    assert!(h.ctx.text_edit_focused(), "the box itself takes the typing");
+    h.event(egui::Event::Text("word count".into()));
+    h.run_steps(2);
+    assert_eq!(query(&h).as_deref(), Some("word count"));
+    let body = |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    assert_eq!(body(&h).trim(), "", "nothing typed into the document");
+    // The result is a row of the drop-down (the ribbon's own Word Count button has no "—").
+    let row = h
+        .query_all_by_label_contains("Word Count")
+        .find(|n| n.accesskit_node().label().is_some_and(|l| l.contains('—')))
+        .expect("Word Count among the results");
+    row.click();
+    h.run_steps(3);
+    assert!(query(&h).is_none(), "running a result closes Search");
+    assert!(h.state().dialog.is_some(), "and Word Count ran (its dialog is open)");
+    h.state_mut().dialog = None;
+    h.run_steps(2);
+    // A click elsewhere closes it.
+    open(&mut h);
+    assert!(query(&h).is_some());
+    for pressed in [true, false] {
+        let at = egui::pos2(720.0, 600.0);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        h.step();
+    }
+    h.run_steps(2);
+    assert!(query(&h).is_none(), "a click on the page closes Search");
+}
+
+/// #5398 (review): Focus hides the Search box, so Search there is the dialog, even on the frame
+/// Focus comes on; and Search left open when Focus comes on doesn't keep Escape from leaving it.
+#[test]
+fn focus_mode_search_never_opens_in_the_hidden_box() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    // Search, as Alt+Q opens it (Windows and Linux; macOS has no Alt+Q, Option+Q types a character).
+    let search = |h: &mut egui_kittest::Harness<WordApp>| {
+        let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    };
+    // The last frame drew the box; Focus comes on just before Search.
+    h.state_mut().run("view.focus", json!({"value": true})).unwrap();
+    search(&mut h);
+    h.step();
+    assert!(query(&h).is_none(), "no Search in a box Focus hides");
+    assert!(matches!(h.state().dialog, Some(dialogs::Dialog::Commands { .. })), "Search opens as the dialog");
+    h.state_mut().dialog = None;
+    h.state_mut().run("view.focus", json!({"value": false})).unwrap();
+    h.run_steps(3);
+    // Search open in the title bar, then Focus comes on: Escape leaves Focus.
+    search(&mut h);
+    h.run_steps(2);
+    assert!(query(&h).is_some());
+    h.state_mut().run("view.focus", json!({"value": true})).unwrap();
+    h.run_steps(3);
+    assert!(query(&h).is_none(), "Search whose box is gone is dropped");
+    h.event(key(egui::Key::Escape, egui::Modifiers::NONE));
+    h.run_steps(2);
+    assert!(!h.state().session.view.focus_mode, "Escape leaves Focus");
+}
+
+/// #5398 (review): what is typed on the very first frame after Search opens goes into the
+/// Search box, not into the document; and Enter on a result that opens a dialog (Word Count)
+/// leaves that dialog open: the same Enter doesn't also press its OK.
+#[test]
+fn title_bar_search_takes_the_first_keys_and_enter_opens_the_result() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let body = |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+    // Search as the ribbon's box and Alt+Q open it, then typing straight away.
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.event(egui::Event::Text("word count".into()));
+    h.step();
+    h.step();
+    assert_eq!(body(&h).trim(), "", "nothing typed into the document");
+    assert_eq!(query(&h).as_deref(), Some("word count"), "the first keys go into the Search box");
+    let enter = egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    h.event(enter);
+    h.run_steps(4);
+    assert!(query(&h).is_none(), "Enter ran the first result");
+    assert!(matches!(h.state().dialog, Some(dialogs::Dialog::WordCount { .. })), "Word Count is open, not closed by the same Enter");
+}
+
+/// #5398 (review): Tab moves from the Search box to its results, and the box doesn't take the
+/// focus back, so a keyboard user can pick a result; Enter on it runs it.
+#[test]
+fn tab_moves_to_a_search_result_and_enter_runs_it() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+    let _ = h.state_mut().run("ui.dialog", json!({"name": "commands"}));
+    h.step();
+    h.event(egui::Event::Text("word count".into()));
+    h.run_steps(2);
+    let edit = h.state().window_id("title_search_edit");
+    assert!(h.ctx.memory(|m| m.has_focus(edit)), "the box has the keys");
+    h.event(key(egui::Key::Tab));
+    h.run_steps(3);
+    assert!(!h.ctx.memory(|m| m.has_focus(edit)), "the box didn't take the focus back");
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "a result has it");
+    assert_eq!(query(&h).as_deref(), Some("word count"), "Search is still open");
+    h.event(key(egui::Key::Enter));
+    h.run_steps(4);
+    assert!(query(&h).is_none(), "Enter ran the result that has the focus");
+    assert!(h.state().dialog.is_some(), "its dialog is open, not closed by the same Enter");
+}
+
+/// #5398 (review): Alt+Q pressed on the page opens Search while the page has the keys; what is
+/// typed on the very next frame goes into the Search box, not into the document.
+#[cfg(not(target_os = "macos"))]
+#[test]
+fn keys_typed_right_after_alt_q_go_into_search() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app(),
+    );
+    h.run_steps(6);
+    h.event(egui::Event::Text("Kilns".into()));
+    h.step();
+    let query = |h: &egui_kittest::Harness<WordApp>| crate::chrome::title_search_query(h.state(), &h.ctx);
+    h.event(egui::Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT });
+    h.step();
+    // Typing sends each key's press before its text.
+    h.event(egui::Event::Key { key: egui::Key::B, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    h.event(egui::Event::Text("bold".into()));
+    h.step();
+    h.step();
+    assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns", "nothing typed into the document");
+    assert_eq!(query(&h).as_deref(), Some("bold"), "the keys went into the Search box");
 }
 
 /// #819: `tools.search` with a query lists matching commands for scripts and agents; every
@@ -5502,6 +5989,51 @@ fn check_spelling_survives_restart() {
     let conflicting = serde_json::from_value(json!({"checkSpelling": true, "editing": {"checkSpelling": false}})).unwrap();
     second.apply_prefs(conflicting);
     assert!(second.session.prefs.check_spelling, "the live spelling setting and its saved copy agree");
+}
+
+/// With several documents open, turning Check spelling as you type off in one keeps it off in the
+/// others, and the next run starts with it off whichever document was active when the settings
+/// were saved (#5740: it came back on every time the file was opened again).
+#[test]
+fn check_spelling_off_survives_a_switch_and_a_restart() {
+    let mut first = app();
+    let a = first.session.document_id();
+    first.run("file.new", json!({})).unwrap();
+    first.run("file.options", json!({"checkSpelling": false})).unwrap();
+    first.session.activate(a).unwrap();
+    assert!(!first.session.view.proofing, "off in the other document too");
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!second.session.view.proofing && !second.session.prefs.check_spelling);
+}
+
+/// The same across windows: Check spelling as you type turned off in a second window on a document
+/// stays off when the first window's own view of it comes back, in a window on another document,
+/// back in the second window, and in the saved settings (#5740).
+#[test]
+fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
+    let mut a = app();
+    let first = a.windows.shown();
+    a.new_window();
+    let second = a.windows.shown();
+    assert_ne!(first, second, "View › New Window opened a window with its own view");
+    a.run("file.options", json!({"checkSpelling": false})).unwrap();
+
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing, "the first window's own view, put back, follows the setting");
+    a.run("file.new", json!({})).unwrap();
+    assert!(!a.session.view.proofing, "a new document's window");
+    assert!(a.enter_window(second));
+    assert!(!a.session.view.proofing, "back in the second window");
+    assert!(a.enter_window(first));
+    assert!(!a.session.view.proofing);
+
+    let saved = serde_json::to_vec(&a.prefs()).unwrap();
+    let mut b = app();
+    b.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert!(!b.session.view.proofing && !b.session.prefs.check_spelling, "saved off, whichever window was drawn");
 }
 
 #[test]
@@ -7536,4 +8068,492 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
+}
+
+/// Issue #2716: taking documents off the recent list is final — the open document must not be
+/// pushed back by the after-command re-add — and the change goes to the settings at once, so
+/// it survives the app being killed. Junk params return errors, never panics.
+#[test]
+fn recent_list_edits_are_final_and_persist() {
+    let saved = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let saved_hook = saved.clone();
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(move |app: &WordApp| {
+        saved_hook.set(saved_hook.get() + 1);
+        let _ = serde_json::to_string(&app.prefs()).unwrap();
+        Ok(true)
+    }));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    // The open document is on the list, at the back.
+    a.session.path = Some(std::path::PathBuf::from("/tmp/beta.docx"));
+
+    // Removing the open document sticks: `after_command` must not re-add it.
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/beta.docx"})).unwrap();
+    assert_eq!(r["removed"], 1);
+    assert_eq!(r["recent"], json!(["/tmp/alpha.docx"]));
+    assert_eq!(r["saved"], true);
+    assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "the open document stays off the list");
+    assert_eq!(saved.get(), 1, "the change is written out at once");
+
+    // Removing an entry that isn't there is an error, not a silent success, and saves nothing.
+    assert!(a.run("ui.recentRemove", json!({"path": "/tmp/gamma.docx"})).is_err());
+    assert_eq!(saved.get(), 1, "a rejected command writes nothing");
+    // Hostile params: missing path, junk types.
+    for junk in [json!({}), json!({"path": 7}), json!({"path": null}), json!({"path": ["x"]})] {
+        assert!(a.run("ui.recentRemove", junk).is_err());
+    }
+    assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "junk params change nothing");
+
+    // A normal command re-adds the open document, as before.
+    a.run("text.insert", json!({"text": "x"})).unwrap();
+    assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()));
+
+    // Clearing empties the list (the re-added open document is back, so both entries go) and
+    // keeps it empty through the next command.
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!(r["removed"], 2);
+    assert!(a.ui.recent.is_empty());
+    assert_eq!(saved.get(), 2, "the clear is written out at once");
+    a.run("text.insert", json!({"text": "y"})).unwrap();
+    assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()), "the open document comes back after clearing");
+
+    // Clearing an empty list reports zero removed and is not an error.
+    a.ui.recent.clear();
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+
+    // The list lives in the prefs, so a restart keeps the removal.
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    let saved_prefs = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved_prefs.contains(r#""recent":["/tmp/beta.docx"]"#), "{saved_prefs}");
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved_prefs).unwrap());
+    assert_eq!(b.ui.recent, ["/tmp/beta.docx".to_string()]);
+}
+
+/// Issue #2716: when the immediate preferences write fails, both recent commands say so (result
+/// and status line) instead of reporting plain success; the removal still holds for this run.
+/// A host with no hook, or one that wrote nothing, reports `saved: null`.
+#[test]
+fn recent_list_edits_report_a_failed_preferences_save() {
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(|_: &WordApp| Err::<bool, _>("disk full".to_string())));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["recent"], json!(["/tmp/beta.docx"]));
+    assert_eq!(a.ui.recent, ["/tmp/beta.docx".to_string()], "the removal holds for this run");
+    let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(status.contains("disk full") && !status.starts_with("Removed"), "{status}");
+
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["removed"], 1);
+    assert!(a.ui.recent.is_empty());
+
+    // No hook, or a hook that wrote nothing (preferences switched off): `saved` is null.
+    for hook in [None, Some(Box::new(|_: &WordApp| Ok(false)) as Box<dyn Fn(&WordApp) -> Result<bool, String>>)] {
+        a.services.save_prefs = hook;
+        a.ui.recent = vec!["/tmp/alpha.docx".into()];
+        let r = a.run("ui.recentClear", json!({})).unwrap();
+        assert!(r["saved"].is_null() && r.get("saveError").is_none(), "{r}");
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.starts_with("Removed")), "{:?}", a.status_msg);
+    }
+}
+
+/// Issue #2716: taking documents off the list needs no open document — the Start screen shows
+/// the recent list, and its buttons must work from there.
+#[test]
+fn recent_list_edits_work_without_a_document() {
+    let mut a = app();
+    a.ui.recent = vec!["/tmp/alpha.docx".into()];
+    assert!(!a.session.dirty && a.session.path.is_none());
+    assert!(works_without_document("ui.recentRemove") && works_without_document("ui.recentClear"));
+    assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+}
+
+/// Issue #6146: touchpad scrolling on Linux/Wayland is scaled by `touchpad_factor` in
+/// `raw_input_hook` so swiping matches the desktop's speed instead of crawling 1:1.
+/// Wheel notches scale with `ui.scrollSpeed`. Both settings persist in `ui.json` and are set on
+/// `ui.touchpadScrollSpeed` and `ui.scrollSpeed`.
+#[test]
+fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32, ctrl: bool| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: if ctrl { egui::Modifiers::CTRL } else { egui::Modifiers::NONE },
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. In `raw_input_hook`, touchpad Point deltas are scaled by touchpad_scroll_speed factor,
+    // while Line deltas and Ctrl/Command zoom events are untouched.
+    let mut raw = egui::RawInput {
+        events: vec![
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, false),
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, true),
+            wheel_event(egui::MouseWheelUnit::Line, -1.0, false),
+        ],
+        ..Default::default()
+    };
+    a.raw_input_hook(&ctx, &mut raw);
+    let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+    let expected_factor = crate::scroll::ScrollSpeed::Normal.touchpad_factor();
+    assert_eq!(dy[0], -10.0 * expected_factor, "point deltas are scaled by touchpad factor");
+    assert_eq!(dy[1], -10.0, "Ctrl+wheel zoom delta is NOT scaled");
+    assert_eq!(dy[2], -1.0, "Line deltas are NOT scaled by touchpad factor");
+
+    // Fast touchpad setting scales raw_input_hook point deltas by the Fast factor.
+    a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    let mut raw_fast = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0, false)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw_fast);
+    let expected_fast = if cfg!(target_arch = "wasm32") {
+        -10.0 * a.ui.scroll_speed.wheel_factor()
+    } else {
+        -10.0 * crate::scroll::ScrollSpeed::Fast.touchpad_factor()
+    };
+    if let egui::Event::MouseWheel { delta, .. } = &raw_fast.events[0] {
+        assert_eq!(delta.y, expected_fast);
+    }
+
+    // 2. Commands ui.touchpadScrollSpeed and ui.scrollSpeed set the preferences.
+    let r = a.run("ui.touchpadScrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["touchpadScrollSpeed"], "fast");
+    assert_eq!(a.ui.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    let r = a.run("ui.scrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["scrollSpeed"], "fast");
+    assert_eq!(a.ui.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    assert!(a.run("ui.touchpadScrollSpeed", json!({"value": "warp"})).is_err());
+    assert!(a.run("ui.scrollSpeed", json!({"value": "warp"})).is_err());
+
+    // 3. Persistence between runs in ui.json
+    let saved = serde_json::to_string(&a.ui).unwrap();
+    let restored = UiState::from_json(saved.as_bytes()).unwrap();
+    assert_eq!(restored.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+    assert_eq!(restored.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+}
+
+/// Issue #6146 / PR #6167: unconsumed raw input is replayed by eframe across hidden logic ticks.
+/// The touchpad scroll multiplier must be applied once per event, never compounded across replays.
+#[test]
+fn touchpad_point_scrolling_is_scaled_once_across_hidden_logic_ticks() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    let mut raw = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0)], ..Default::default() };
+
+    // 1. First raw_input_hook call scales the point delta by the touchpad factor.
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected = -10.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    assert_eq!(raw.events[0], wheel_event(egui::MouseWheelUnit::Point, expected));
+
+    // 2. Hidden logic tick: eframe saves raw into pending_raw_input and invokes the hook again
+    // on the next tick without a UI pass having consumed it. The delta must not compound.
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "hidden logic tick replay must not compound the scroll delta");
+    }
+
+    // 3. Appending a new event during a subsequent hidden tick: older events stay scaled once,
+    // and only the new event is scaled.
+    raw.events.push(wheel_event(egui::MouseWheelUnit::Point, -5.0));
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected_new = -5.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "initial event still scaled once");
+    }
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[1] {
+        assert_eq!(delta.y, expected_new, "new event is scaled once");
+    }
+
+    // 4. A UI pass consumes the input, acknowledging the frame.
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+
+    // 5. Subsequent fresh frame scales fresh input once.
+    let mut fresh = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -20.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut fresh);
+    let expected_fresh = -20.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &fresh.events[0] {
+        assert_eq!(delta.y, expected_fresh, "fresh input is scaled once");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: replay tracking must be cleared when a warm-up UI pass
+/// consumes the input (which returns before `flush_shot_and_synthetic`), so a fresh event
+/// on the next frame whose delta happens to equal the previous scaled delta is not falsely
+/// treated as a replay.
+#[test]
+fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |y: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // Ensure the app is in the warm-up phase (fonts_frames < 2).
+    a.fonts_frames = 0;
+
+    // 1. First frame: incoming Point delta is -1.0. At Normal speed on Wayland, it scales to -4.0.
+    let mut raw1 = egui::RawInput { events: vec![wheel_event(-1.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw1);
+    let factor = a.ui.touchpad_scroll_speed.touchpad_factor();
+    let scaled_1 = -factor;
+    assert_eq!(raw1.events[0], wheel_event(scaled_1));
+
+    // 2. Warm-up UI pass runs: window_ui returns early because fonts_frames < 2.
+    // This UI pass consumes raw1, so replay tracking must be cleared.
+    ctx.run_ui(raw1, |ui| {
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(a.fonts_frames, 1, "first warm-up frame executed");
+
+    // 3. Second frame: fresh incoming event happens to have delta equal to scaled_1 (-4.0).
+    // Because the previous frame's input was consumed by the UI, this is fresh input,
+    // NOT a replay, so it must be scaled by factor (e.g. -4.0 * 4.0 = -16.0).
+    let mut raw2 = egui::RawInput { events: vec![wheel_event(scaled_1)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw2);
+    let expected_2 = scaled_1 * factor;
+    if let egui::Event::MouseWheel { delta, .. } = &raw2.events[0] {
+        assert_eq!(delta.y, expected_2, "fresh event matching previous scaled delta must be scaled, not skipped as replay");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: changing mouse-wheel scroll speed (Slow / Normal / Fast)
+/// must only affect scrolling distance, not Ctrl/⌘+wheel zoom distance for either Line or Point events.
+/// Tests both animation settings (`animate == true` eased zoom and `animate == false`
+/// `CanvasScroll::zoom` discrete steps) for both Line and Point mouse-wheel events.
+#[test]
+fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
+    let mut a = app();
+    let default_opts = egui::InputOptions::default();
+    let default_notch_zoom = (default_opts.scroll_zoom_speed * default_opts.line_scroll_speed).exp();
+
+    let ctrl_line_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    let ctrl_point_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 20.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. Establish baseline zoom with Normal speed
+    a.ui.scroll_speed = crate::scroll::ScrollSpeed::Normal;
+    let mut baseline_eased_line_zoom = 1.0;
+    let mut baseline_cumulative_line_zoom = 1.0;
+    let mut baseline_discrete_line_zoom = 1.0;
+    let mut baseline_eased_point_zoom = 1.0;
+    let mut baseline_cumulative_point_zoom = 1.0;
+    let mut baseline_discrete_point_zoom = 1.0;
+    let mut baseline_pinch_zoom = 1.0;
+
+    // Line baseline across full smoothing:
+    let ctx_line_base = egui::Context::default();
+    a.logic(&ctx_line_base);
+    let opts_line_base = ctx_line_base.options(|o| o.input_options);
+    let mut canvas_scroll_base = crate::scroll::CanvasScroll::default();
+    ctx_line_base
+        .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            baseline_eased_line_zoom = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+            if baseline_eased_line_zoom != 1.0 {
+                canvas_scroll_base.cancel();
+            }
+            baseline_cumulative_line_zoom *= baseline_eased_line_zoom;
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_line_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_line_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_line_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                let z = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+                if z != 1.0 {
+                    canvas_scroll_base.cancel();
+                }
+                baseline_cumulative_line_zoom *= z;
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Point baseline across full smoothing:
+    let ctx_point_base = egui::Context::default();
+    a.logic(&ctx_point_base);
+    let opts_point_base = ctx_point_base.options(|o| o.input_options);
+    let mut canvas_scroll_point_base = crate::scroll::CanvasScroll::default();
+    ctx_point_base
+        .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            baseline_eased_point_zoom = ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            baseline_cumulative_point_zoom *= baseline_eased_point_zoom;
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_point_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_point_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                baseline_cumulative_point_zoom *= ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Pinch baseline:
+    let ctx_pinch_base = egui::Context::default();
+    a.logic(&ctx_pinch_base);
+    let opts_pinch_base = ctx_pinch_base.options(|o| o.input_options);
+    ctx_pinch_base
+        .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            baseline_pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch_base, true));
+        })
+        .drop_without_applying_deltas();
+
+    assert!((baseline_discrete_line_zoom - default_notch_zoom).abs() < 1e-3, "discrete line zoom equals notch zoom");
+    assert!(baseline_eased_line_zoom > 1.0 && baseline_eased_line_zoom < default_notch_zoom, "eased line zoom begins in first frame");
+    assert!(
+        (baseline_cumulative_line_zoom - default_notch_zoom).abs() < 1e-3,
+        "cumulative completed eased line zoom matches default notch zoom ({baseline_cumulative_line_zoom} vs {default_notch_zoom})"
+    );
+    assert!(baseline_eased_point_zoom > 1.0, "point zoom applies in eased mode");
+    assert!(baseline_discrete_point_zoom > 1.0, "point zoom applies in discrete mode");
+    assert!((baseline_pinch_zoom - 1.25).abs() < 1e-4, "pinch zoom matches pinch factor");
+
+    // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings and smoothing frames
+    for speed in [crate::scroll::ScrollSpeed::Slow, crate::scroll::ScrollSpeed::Normal, crate::scroll::ScrollSpeed::Fast] {
+        a.ui.scroll_speed = speed;
+
+        // Test Line-wheel zoom invariance across multiple frames:
+        let ctx_line = egui::Context::default();
+        a.logic(&ctx_line);
+        let opts = ctx_line.options(|o| o.input_options);
+        let factor = speed.wheel_factor();
+        assert!(
+            (opts.line_scroll_speed - default_opts.line_scroll_speed * factor).abs() < 1e-4,
+            "line scroll speed scales by factor for ordinary scrolling"
+        );
+        assert_eq!(
+            opts.scroll_zoom_speed, default_opts.scroll_zoom_speed,
+            "scroll zoom speed remains unscaled default so point-wheel zoom is unchanged"
+        );
+
+        let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
+        let mut cumulative_line_zoom = 1.0;
+        ctx_line
+            .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                if eased_zoom != 1.0 {
+                    canvas_scroll_eased.cancel();
+                }
+                cumulative_line_zoom *= eased_zoom;
+                assert!(
+                    (eased_zoom - baseline_eased_line_zoom).abs() < 1e-5,
+                    "first frame eased line zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_line_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_line_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_line_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        // Advance through subsequent empty frames until line smoothing completes
+        for f in 1..25 {
+            ctx_line
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    let z = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                    if z != 1.0 {
+                        canvas_scroll_eased.cancel();
+                    }
+                    cumulative_line_zoom *= z;
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_line_zoom - baseline_cumulative_line_zoom).abs() < 1e-3,
+            "cumulative completed line zoom for speed {speed:?} matches baseline ({cumulative_line_zoom} vs {baseline_cumulative_line_zoom})"
+        );
+
+        // Test Point-wheel zoom invariance across multiple frames:
+        let ctx_point = egui::Context::default();
+        a.logic(&ctx_point);
+        let opts_point = ctx_point.options(|o| o.input_options);
+        let mut canvas_scroll_point = crate::scroll::CanvasScroll::default();
+        let mut cumulative_point_zoom = 1.0;
+        ctx_point
+            .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let eased_zoom = ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                cumulative_point_zoom *= eased_zoom;
+                assert!(
+                    (eased_zoom - baseline_eased_point_zoom).abs() < 1e-5,
+                    "first frame eased point zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_point_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_point_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom point delta for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_point_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        for f in 1..25 {
+            ctx_point
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    cumulative_point_zoom *= ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_point_zoom - baseline_cumulative_point_zoom).abs() < 1e-3,
+            "cumulative completed point zoom for speed {speed:?} matches baseline ({cumulative_point_zoom} vs {baseline_cumulative_point_zoom})"
+        );
+
+        // Test pinch gesture independence from scroll speed settings:
+        let ctx_pinch = egui::Context::default();
+        a.logic(&ctx_pinch);
+        let opts_pinch = ctx_pinch.options(|o| o.input_options);
+        ctx_pinch
+            .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+                let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+                let pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch, true));
+                assert!(
+                    (pinch_zoom - baseline_pinch_zoom).abs() < 1e-5,
+                    "pinch zoom for speed {speed:?} matches baseline ({pinch_zoom} vs {baseline_pinch_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+    }
 }

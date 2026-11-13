@@ -4,8 +4,13 @@ use super::headers::HfLinks;
 use super::placed::Placed;
 use super::{
     Anchor, Arc, Block, CharProps, Counters, DocLayout, Document, FieldCtx, Float, HashMap, HashSet, HideDeleted, InlineObject, LayoutOptions, Level,
-    ParaLayout, Paragraph, Rect, Rgb, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
+    ParaLayout, Paragraph, Rect, SectionProps, StoryRef, ViewMode, Wrap, contour, math, para, styleref, textbox,
 };
+
+/// The character style Word formats line numbers with: `w:styleId="LineNumber"` in English
+/// Word; other languages localise the id (German `Zeilennummer`) but keep the built-in name.
+const LINE_NUMBER_STYLE: &str = "LineNumber";
+const LINE_NUMBER_STYLE_NAME: &str = "line number";
 
 /// A layout pass: finished, or to be done again with the page totals it found, or with the
 /// floats placed above their anchors it found ([`EarlyFloats`]).
@@ -59,9 +64,9 @@ pub(crate) struct Ctx<'a> {
     pub(crate) pin: Option<Pin>,
     pub(crate) footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     pub(crate) header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
-    /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
-    /// per layout ([`textbox::fitted_height`]).
-    pub(crate) fitted: HashMap<(u32, u32), Option<f32>>,
+    /// Heights of text boxes that resize to fit their text, by story, width and page fields,
+    /// worked out once per matching layout context ([`textbox::fitted_height`]).
+    pub(crate) fitted: HashMap<(u32, u32, (u32, u32, u32, u32, u64, wordcraft_doc::section::NumFormat)), Option<f32>>,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     pub(crate) floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -193,10 +198,15 @@ impl Ctx<'_> {
         if let Some(p) = self.numbers.get(&n) {
             return p.clone();
         }
-        let mut p = Paragraph::with_text(
-            &n.to_string(),
-            CharProps { size: Some(10.0), color: Some(wordcraft_doc::TextColor::Rgb(Rgb(0x60, 0x60, 0x60))), ..Default::default() },
-        );
+        // Word formats line numbers with the "Line Number" character style over the document's
+        // defaults (measured in Word for Mac: Aptos 12 pt black in a document whose defaults are
+        // Aptos 12 pt), not in a fixed small grey.
+        let styles = &self.doc.styles;
+        let style = styles
+            .get(LINE_NUMBER_STYLE)
+            .or_else(|| styles.find(LINE_NUMBER_STYLE_NAME).filter(|s| s.kind == wordcraft_doc::StyleKind::Character))
+            .map(|s| s.id.clone());
+        let mut p = Paragraph::with_text(&n.to_string(), CharProps { style, ..Default::default() });
         p.props.space_after = Some(0.0);
         p.props.space_before = Some(0.0);
         let env = para::ParaEnv {
@@ -344,7 +354,7 @@ impl Ctx<'_> {
 
     /// The height of text box `id`, `w` wide, when it resizes to fit its text (once per layout).
     fn fitted_height(&mut self, id: u32, w: f32) -> Option<f32> {
-        let key = (id, w.to_bits());
+        let key = (id, w.to_bits(), self.fields.page_key());
         if let Some(h) = self.fitted.get(&key) {
             return *h;
         }
@@ -454,4 +464,86 @@ pub(crate) fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(
     let out = f(ctx);
     ctx.pct_base = before;
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::para::{Float, ShapeKind, Wrap};
+    use wordcraft_doc::{PartKind, TextBody, para_block};
+
+    #[test]
+    fn fitted_text_box_cache_separates_page_field_contexts() {
+        let mut doc = Document::from_text("Parent");
+        let mut story_para = Paragraph::new();
+        story_para
+            .insert_object(
+                0,
+                InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+                &Default::default(),
+            )
+            .unwrap();
+        let id = doc.add_part(PartKind::TextBox, vec![para_block(story_para)]);
+        if let Some(part) = doc.parts.get_mut(&id) {
+            part.body = TextBody { auto_fit: true, ..Default::default() };
+        }
+        let mut p = Paragraph::new();
+        p.insert_object(
+            0,
+            InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w: 100.0,
+                h: 20.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 0.0,
+                float: Float { wrap: Wrap::Inline, ..Default::default() },
+                story: Some(id),
+                freeform: None,
+                effects: Default::default(),
+                extra: Default::default(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+        let opts = LayoutOptions::default();
+        let mut cache = LayoutCache::new();
+        let mut ctx = Ctx {
+            doc: &doc,
+            cache: &mut cache,
+            opts: &opts,
+            counters: Default::default(),
+            fields: FieldCtx::default(),
+            notes_hash: 0,
+            numbers: Default::default(),
+            eq_count: 0,
+            boxes: Default::default(),
+            chains: Default::default(),
+            grid: Default::default(),
+            hide_deleted: opts.hides_deleted(StoryRef::Body),
+            uses_totals: false,
+            track_totals: false,
+            pct_base: None,
+            quiet_marks: Vec::new(),
+            stacked_marks: Vec::new(),
+            mirror: false,
+            table_keys: Vec::new(),
+            pin: None,
+            footer_wraps: Default::default(),
+            header_tables: Default::default(),
+            fitted: Default::default(),
+            floats_above: Default::default(),
+            hf: Arc::new(HfLinks::new(doc.sections())),
+            alphas: Default::default(),
+            header_repeats: 0,
+        };
+
+        ctx.fitted_boxes(&p);
+        assert_eq!(ctx.fitted.len(), 1);
+        ctx.fields.page_format = wordcraft_doc::section::NumFormat::CardinalText;
+        ctx.fitted_boxes(&p);
+        assert_eq!(ctx.fitted.len(), 2, "the same box with a different PAGE format needs its own height");
+        ctx.fitted_boxes(&p);
+        assert_eq!(ctx.fitted.len(), 2, "matching field context reuses the fitted height");
+    }
 }

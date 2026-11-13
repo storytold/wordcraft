@@ -161,19 +161,33 @@ impl Writer {
                 out.push_str("<table:table-header-rows>");
             }
             // A row of a set height: exact (`style:row-height`) or at least (`style:min-row-height`).
-            match t.extra.as_ref().and_then(|x| x.heights.get(ri).copied().flatten()) {
-                Some((h, exact)) => {
-                    let props = if exact { format!(" style:row-height=\"{}\"", pt(h)) } else { format!(" style:min-row-height=\"{}\"", pt(h)) };
-                    let k = match self.row_styles.iter().position(|s| *s == props) {
-                        Some(k) => k,
-                        None => {
-                            self.row_styles.push(props);
-                            self.row_styles.len() - 1
-                        }
-                    };
-                    out.push_str(&format!("<table:table-row table:style-name=\"{}Row{}\">", self.prefix, k + 1));
-                }
-                None => out.push_str("<table:table-row>"),
+            let height = match t.extra.as_ref().and_then(|x| x.heights.get(ri).copied().flatten()) {
+                Some((h, true)) => format!(" style:row-height=\"{}\"", pt(h)),
+                Some((h, false)) => format!(" style:min-row-height=\"{}\"", pt(h)),
+                None => String::new(),
+            };
+            // A row that doesn't break across pages (§20.247 on a row). One that may says so where
+            // the file's default row style, which stays, would keep it together.
+            let keep = if t.extra.as_ref().is_some_and(|x| x.keep_rows.get(ri) == Some(&true)) {
+                " fo:keep-together=\"always\""
+            } else if self.kept_defs.get("common~style:default-style~table-row").is_some_and(|d| d.contains("keep-together") && d.contains("always"))
+            {
+                " fo:keep-together=\"auto\""
+            } else {
+                ""
+            };
+            let props = format!("{height}{keep}");
+            if props.is_empty() {
+                out.push_str("<table:table-row>");
+            } else {
+                let k = match self.row_styles.iter().position(|s| *s == props) {
+                    Some(k) => k,
+                    None => {
+                        self.row_styles.push(props);
+                        self.row_styles.len() - 1
+                    }
+                };
+                out.push_str(&format!("<table:table-row table:style-name=\"{}Row{}\">", self.prefix, k + 1));
             }
             let mut g = 0usize;
             for c in row {
