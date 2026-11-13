@@ -1563,14 +1563,22 @@ impl Document {
                 let src_shading = self.styles.resolve_para(&p.props).shading;
                 let l = self.para_mut(pos.story, &left)?;
                 let keep = l.props.clone();
+                let keep_empty = keep.is_empty();
                 let keep_shading = keep.shading;
                 let mut p2 = p;
                 let pprops = p2.props.clone();
                 p2.section = None;
                 l.append(p2);
-                l.props = if keep.is_empty() { pprops } else { keep };
+                l.props = if keep_empty { pprops } else { keep };
                 if destination_shading.is_some() {
-                    l.props.shading = keep_shading;
+                    // When adopting a source paragraph style into an empty destination,
+                    // preserve the destination background as a direct override so the
+                    // source style's shading does not win over it (#6157).
+                    if keep_empty && l.props.style.is_some() {
+                        l.props.shading = destination_shading;
+                    } else {
+                        l.props.shading = keep_shading;
+                    }
                 } else if l.props.shading.is_none() {
                     l.props.shading = src_shading;
                 }

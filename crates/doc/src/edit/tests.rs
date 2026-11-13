@@ -175,6 +175,33 @@ fn multi_block_paste_keeps_destination_default_shading() {
     assert_eq!(d.styles.resolve_para(&p.props).shading, Some(crate::Rgb(0x22, 0x22, 0x22)));
 }
 
+/// An empty destination with inherited shading keeps its shading when pasting a differently shaded source style (#6157).
+#[test]
+fn multi_block_paste_keeps_destination_inherited_shading_over_source_style() {
+    let mut d = doc(&["plain"]);
+    Arc::make_mut(&mut d.styles).default_para.shading = Some(crate::Rgb(0x22, 0x22, 0x22));
+    Arc::make_mut(&mut d.styles).upsert(crate::Style {
+        id: "SourceShaded".into(),
+        name: "Source Shaded".into(),
+        kind: crate::StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: ParaProps { shading: Some(crate::Rgb(0x33, 0x33, 0x33)), ..Default::default() },
+        ..Default::default()
+    });
+    let mut a = Paragraph::with_text("A", CharProps::default());
+    a.props.style = Some("SourceShaded".into());
+    let b = Paragraph::with_text("B", CharProps::default());
+    let frag = Fragment { blocks: vec![Block::Para(a), Block::Para(b)], ..Default::default() };
+    d.insert_fragment(&Pos::body(0, 5), &frag).unwrap();
+    let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
+    assert_eq!(p.props.shading, Some(crate::Rgb(0x22, 0x22, 0x22)), "destination inherited shading is preserved as a direct override");
+    assert_eq!(
+        d.styles.resolve_para(&p.props).shading,
+        Some(crate::Rgb(0x22, 0x22, 0x22)),
+        "resolved shading must match the destination background, not the source style"
+    );
+}
+
 /// The first paragraph of the deepest cell, following the first table at each level.
 fn deepest(d: &Document) -> Path {
     let (mut path, mut blocks) = (Vec::new(), &d.body);

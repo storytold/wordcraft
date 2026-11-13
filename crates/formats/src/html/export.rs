@@ -188,6 +188,8 @@ fn trim_num(v: f32) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// Generate HTML attribute string (including `style="..."`) for paragraph styling such
+/// as alignment, page breaks, and background shading.
 fn para_attrs(p: &Para) -> String {
     let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
@@ -214,6 +216,8 @@ fn para_html(p: &Para) -> String {
     }
 }
 
+/// Serialize a formatted table into HTML table markup, formatting cell spans, borders,
+/// and nested cell blocks up to the maximum recursion depth.
 fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("<table style=\"border-collapse:collapse\">\n");
     for row in &t.rows {
@@ -268,6 +272,8 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
     out.push_str("</table>\n");
 }
 
+/// Serialize a slice of formatted blocks (tables and paragraphs) into HTML markup,
+/// handling nested tables and list groupings.
 fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
     let mut i = 0;
     while let Some(b) = blocks.get(i) {
