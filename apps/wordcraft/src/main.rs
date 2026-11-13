@@ -21,6 +21,8 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod portal_save;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -367,9 +369,10 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
 /// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
-fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
+fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::CancelHandle, ctx: &egui::Context) -> Services {
     Services {
         file_dialog: Some(file_dialog),
+        cancel_file_dialog: Some(Box::new(move || cancel_file_dialog.cancel())),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
         cancel_print: Some(print::cancel()),
@@ -381,6 +384,8 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         clipboard_text: Some(Box::new(clipboard::text)),
         clipboard_html: Some(Box::new(clipboard::html)),
         set_clipboard_rich: Some(Box::new(clipboard::set_rich)),
+        set_clipboard_image: Some(Box::new(clipboard::set_image)),
+        clipboard_is_own: Some(Box::new(clipboard::is_own)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         save_prefs: Some(Box::new(try_save_prefs)),
@@ -611,9 +616,10 @@ fn main() -> eframe::Result {
             let region = region::system();
             let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
+            let cancel_file_dialog = dialogs.cancel_handle();
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            let mut app = WordApp::new(session, services(file_dialog, cancel_file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             // After the preferences, so the reason it gives is in the interface language.
