@@ -5,6 +5,7 @@ use super::{Ui, WordApp, big, big_toggle, group, json, menu_button, small, vec2}
 /// and Templates groups.
 pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
     let v = app.session.view.clone();
+    let v_source = app.session.md_source.is_some();
     group(ui, "Views", None, app, |ui, app| {
         big(ui, app, "readMode", "Read\nMode", "view.readMode", json!({}), false);
         big(ui, app, "printLayout", "Print\nLayout", "view.printLayout", json!({}), false);
@@ -12,6 +13,8 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             small(ui, app, "outline", Some("Outline"), "Outline", crate::widgets::ButtonAction::new("view.outline", json!({}), false));
             small(ui, app, "draft", Some("Draft"), "Draft", crate::widgets::ButtonAction::new("view.draft", json!({}), false));
+            let source = crate::widgets::ButtonAction::new("view.markdownSource", json!({}), v_source);
+            small(ui, app, "markdownSource", Some("Markdown"), "Markdown Source", source);
         });
     });
     group(ui, "Immersive", None, app, |ui, app| {
@@ -93,6 +96,23 @@ pub(super) fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
+        // Across the app's windows (#322; `windows`).
+        let w = app.session.windows.clone();
+        stack(ui, |ui| {
+            if w.side_by_side.is_none() && w.others.len() > 1 {
+                menu_button(
+                    ui,
+                    app,
+                    crate::widgets::MenuButtonOptions::new("sideBySide", Some("View Side by Side"), "View Side by Side", false, "view.sideBySide"),
+                    |ui, app| window_list(ui, app, &w.others, "view.sideBySide"),
+                );
+            } else {
+                let action = crate::widgets::ButtonAction::new("view.sideBySide", json!({}), w.side_by_side.is_some());
+                small(ui, app, "sideBySide", Some("View Side by Side"), "View Side by Side", action);
+            }
+            let action = crate::widgets::ButtonAction::new("view.syncScroll", json!({}), w.sync_scroll);
+            small(ui, app, "syncScroll", Some("Synchronous Scrolling"), "Synchronous Scrolling", action);
+        });
         menu_button(
             ui,
             app,
@@ -185,4 +205,17 @@ pub(super) fn outlining(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Close", None, app, |ui, app| {
         big(ui, app, "closeOutline", "Close Outline\nView", "outline.close", json!({}), false);
     });
+}
+
+/// The other WordCraft windows by title; picking one runs `id` with it.
+fn window_list(ui: &mut Ui, app: &mut WordApp, others: &[wordcraft_engine::cmd::view::OtherWindow], id: &str) {
+    if others.is_empty() {
+        ui.add_enabled(false, egui::Label::new(tl!("No other WordCraft windows are open.")));
+    }
+    for o in others {
+        if ui.add(egui::Button::new(o.title.as_str()).min_size(vec2(200.0, 0.0))).clicked() {
+            let _ = app.run(id, json!({"window": o.id}));
+            ui.close();
+        }
+    }
 }

@@ -41,6 +41,8 @@ pub enum MItem {
         /// Glyph id, x, y (baseline, up).
         glyphs: Vec<(u32, f32, f32)>,
         text: String,
+        /// Byte range of `text` each glyph shows (empty when `text` is: a glyph picked by id).
+        ranges: Vec<std::ops::Range<usize>>,
     },
     /// A filled rectangle; `y` is its bottom edge.
     Rect {
@@ -207,6 +209,8 @@ pub fn layout_equation(
     props: &MathProps,
     counter: &mut u32,
 ) -> MathLayout {
+    #[cfg(test)]
+    crate::test_fonts();
     let parsed;
     let nodes: &Arg = if math.nodes.is_empty() && !math.linear {
         parsed = parse_linear(linear);

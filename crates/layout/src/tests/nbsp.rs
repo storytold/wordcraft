@@ -6,6 +6,7 @@ use crate::{Document, LayoutCache, LayoutOptions, Placed, layout};
 /// Inter with its U+00A0 glyph twice as wide as its space, under the family name "Wnbsp".
 /// Built from the bundled font so the test needs no installed font.
 fn wide_nbsp_family() -> &'static str {
+    crate::test_fonts();
     const FAMILY: &str = "Wnbsp";
     let inter = wordcraft_fonts::word::resolve("Inter", false, false).face;
     let mut data = inter.data().to_vec();
@@ -54,6 +55,7 @@ fn line_width(text: &str) -> f32 {
 
 #[test]
 fn a_no_break_space_is_as_wide_as_a_space() {
+    crate::test_fonts();
     let face = wordcraft_fonts::word::resolve(wide_nbsp_family(), false, false).face;
     assert_eq!(face.family, wide_nbsp_family(), "the test font is installed under its own name");
     assert!(
