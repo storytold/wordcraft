@@ -933,6 +933,33 @@ fn latent_defaults_apply_to_styles_without_an_exception() {
     assert_eq!(names, ["Heading 1", "Normal"]);
 }
 
+/// #3909 review: without `w:defUIPriority` Word sorts a latent style that has no `w:uiPriority`
+/// at 0, not at its built-in priority: Subtitle comes before a Title at 5. And a latent style's
+/// lock (`w:defLockedState`, an exception's `w:locked`) comes with it into the gallery, so
+/// Restrict Editing still keeps it off.
+#[test]
+fn latent_styles_take_the_files_default_priority_and_lock() {
+    let read = |latent: &str| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{latent}<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>"#
+        );
+        let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+        wordcraft_docx::read(&bytes).unwrap()
+    };
+    let d = read(
+        r#"<w:latentStyles w:defQFormat="0" w:defSemiHidden="0"><w:lsdException w:name="Title" w:uiPriority="5" w:qFormat="1"/><w:lsdException w:name="Subtitle" w:qFormat="1"/></w:latentStyles>"#,
+    );
+    let names: Vec<String> = d.styles.gallery().iter().map(|s| s.name.clone()).collect();
+    let at = |n: &str| names.iter().position(|x| x == n).unwrap_or_else(|| panic!("{n} in {names:?}"));
+    assert!(at("Subtitle") < at("Title"), "{names:?}");
+    // Locked by default; Title says it isn't.
+    let d = read(
+        r#"<w:latentStyles w:defLockedState="1" w:defQFormat="1" w:defSemiHidden="0" w:defUIPriority="99"><w:lsdException w:name="Title" w:locked="0"/></w:latentStyles>"#,
+    );
+    assert!(d.styles.find("Subtitle").is_some_and(|s| s.locked), "Subtitle is locked");
+    assert!(d.styles.find("Title").is_some_and(|s| !s.locked), "Title isn't");
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]

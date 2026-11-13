@@ -865,14 +865,15 @@ impl StyleSheet {
     }
     /// Word's gallery for the built-in styles a file leaves latent (#3909): Word writes a built-in
     /// style into the file only once it is used, and takes its gallery place from the file's
-    /// `w:latentStyles` instead. Each of `latent`, (name as the file writes it, `w:uiPriority`),
-    /// is a latent style the file marks `w:qFormat` and not `w:semiHidden`: one the document
-    /// doesn't define gets WordCraft's built-in definition, in the gallery at that priority (its
-    /// linked character style comes with it). Names WordCraft has no built-in style for, and
-    /// styles the document defines (whose own `w:qFormat` decides), are left as they are.
-    pub fn add_latent_gallery(&mut self, latent: &[(String, Option<u32>)]) {
+    /// `w:latentStyles` instead. Each of `latent`, (name as the file writes it, `w:uiPriority`,
+    /// `w:locked`), is a latent style the file marks `w:qFormat` and not `w:semiHidden`: one the
+    /// document doesn't define gets WordCraft's built-in definition, in the gallery at that
+    /// priority and with that lock (its linked character style comes with it). Names WordCraft has
+    /// no built-in style for, and styles the document defines (whose own `w:qFormat` decides), are
+    /// left as they are.
+    pub fn add_latent_gallery(&mut self, latent: &[(String, Option<u32>, bool)]) {
         let builtin = StyleSheet::builtin();
-        for (name, priority) in latent {
+        for (name, priority, locked) in latent {
             let Some(b) = builtin.styles.iter().find(|s| s.kind != StyleKind::Table && s.name.eq_ignore_ascii_case(name)) else { continue };
             if self.get(&b.id).is_some() || self.find(&b.name).is_some() {
                 continue;
@@ -881,6 +882,7 @@ impl StyleSheet {
             st.quick = true;
             st.hidden = false;
             st.priority = priority.or(st.priority);
+            st.locked = *locked;
             let linked = st.linked.clone();
             self.styles.push(st);
             if let Some(l) = linked.as_deref().and_then(|l| builtin.get(l))
