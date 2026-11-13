@@ -839,6 +839,50 @@ fn bold_toggles_selection_and_caret_word() {
     assert_eq!(p.props_of_char(9).italic, None);
 }
 
+/// A partly formatted selection toggles by its first character, as Word does (#6516).
+#[test]
+fn toggles_on_mixed_selection_follow_first_character() {
+    // `Abc abc` with `fmt` set by `cmd`, then `cmd` with `v` on the selection `from` → `to`.
+    let toggled = |cmd: &str, fmt: (usize, usize), from: usize, to: usize, v: serde_json::Value| -> String {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "Abc abc"}));
+        let sel = |s: &mut Session, a: usize, b: usize| {
+            run(s, "select.range", json!({"anchor": {"block": 0, "off": a}, "focus": {"block": 0, "off": b}}));
+        };
+        sel(&mut s, fmt.0, fmt.1);
+        run(&mut s, cmd, json!({"value": true}));
+        sel(&mut s, from, to);
+        run(&mut s, cmd, v);
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        (0..7)
+            .map(|i| {
+                let c = p.props_of_char(i);
+                match cmd {
+                    "format.italic" => c.italic == Some(true),
+                    "format.underline" => c.underline.is_some_and(|u| u != wordcraft_doc::props::Underline::None),
+                    _ => c.bold == Some(true),
+                }
+            })
+            .map(|on| if on { 'F' } else { '.' })
+            .collect()
+    };
+    let t = || json!({});
+    for cmd in ["format.bold", "format.italic", "format.underline"] {
+        // `FFF....`: a selection starting on formatted text removes the format from all of it.
+        assert_eq!(toggled(cmd, (0, 3), 2, 5, t()), "FF.....", "{cmd}");
+        assert_eq!(toggled(cmd, (0, 3), 0, 7, t()), ".......", "{cmd}");
+        assert_eq!(toggled(cmd, (0, 3), 1, 7, t()), "F......", "{cmd}");
+        // Made right to left: still the first character in document order.
+        assert_eq!(toggled(cmd, (0, 3), 5, 2, t()), "FF.....", "{cmd}");
+        assert_eq!(toggled(cmd, (0, 3), 7, 0, t()), ".......", "{cmd}");
+        // `....FFF`: a selection starting on plain text applies it to all of it.
+        assert_eq!(toggled(cmd, (4, 7), 0, 7, t()), "FFFFFFF", "{cmd}");
+        // An explicit value still sets.
+        assert_eq!(toggled(cmd, (0, 3), 0, 7, json!({"value": true})), "FFFFFFF", "{cmd}");
+        assert_eq!(toggled(cmd, (4, 7), 0, 7, json!({"value": false})), ".......", "{cmd}");
+    }
+}
+
 #[test]
 fn border_toggles_and_saves() {
     use wordcraft_doc::props::Border;
