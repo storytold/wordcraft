@@ -286,12 +286,18 @@ impl Reader<'_> {
                 }
             }
             // The note's own number at the start of its text: a reference to the note being read.
+            // A footnote's mark outside any note (in the body, a table cell) has no note to number:
+            // Word shows the number 1 there, formatted as its run (measured in Word for Windows,
+            // with and without footnotes before it, whatever number format `w:settings` gives).
+            // Shortcut: with a number format in the section's own `w:footnotePr` Word shows that
+            // format's first number ("i"); the section's properties are not read yet here, so
+            // this stays "1". Upgrade by keeping the mark as an object numbered at layout.
             "w:footnoteRef" | "w:endnoteRef" => {
                 let kind = if k.local() == "footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
-                if let Some((nk, id)) = self.current_note
-                    && nk == kind
-                {
-                    *note = Some((kind, id, None));
+                match self.current_note {
+                    Some((nk, id)) if nk == kind => *note = Some((kind, id, None)),
+                    None if kind == NoteKind::Footnote => self.emit_text(sc, pb, "1", props),
+                    _ => {}
                 }
             }
             // The lines of a note separator (only there).
