@@ -96,6 +96,7 @@ pub use dialogs::dialogs_controls;
 pub use dialogs::dialogs_insert;
 pub use dialogs::dialogs_keyboard;
 pub use dialogs::dialogs_layout;
+pub use dialogs::dialogs_list_style;
 pub use dialogs::dialogs_lists;
 pub use dialogs::dialogs_notes;
 pub use dialogs::dialogs_para;

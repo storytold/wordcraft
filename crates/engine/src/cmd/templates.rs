@@ -390,8 +390,30 @@ fn import_num(doc: &mut Document, src: &Document, num: u32, map: &HashMap<String
     for l in &mut levels {
         l.style = l.style.as_deref().and_then(|s| map.get(s).cloned().or_else(|| doc.styles.get(s).map(|x| x.id.clone())));
     }
-    Arc::make_mut(&mut doc.numbering).abstracts.push(AbstractNum { id: new_abs, name: abs.name.clone(), levels, ..Default::default() });
+    // A list style's definition stays linked to the style, under its id in `doc`.
+    let link = |s: &Option<String>| s.as_deref().and_then(|s| map.get(s).cloned());
+    let style_link = link(&abs.style_link);
+    let defines = style_link.clone();
+    // A list style copied over one the document has: the copied definition is the style's now,
+    // so the old one stops defining it (one `w:styleLink` per style).
+    if let Some(id) = &style_link {
+        for a in Arc::make_mut(&mut doc.numbering).abstracts.iter_mut().filter(|a| a.style_link.as_deref() == Some(id.as_str())) {
+            a.style_link = None;
+        }
+    }
+    Arc::make_mut(&mut doc.numbering).abstracts.push(AbstractNum {
+        id: new_abs,
+        name: abs.name.clone(),
+        levels,
+        style_link,
+        num_style_link: link(&abs.num_style_link),
+        ..Default::default()
+    });
     Arc::make_mut(&mut doc.numbering).nums.push(Num { id: new_num, abstract_id: new_abs, ..n.clone() });
+    // The document's lists using that style follow the copied definition.
+    if let Some(id) = &defines {
+        Arc::make_mut(&mut doc.numbering).sync_style(id);
+    }
     done.insert(num, new_num);
     Some(new_num)
 }
@@ -486,6 +508,28 @@ mod tests {
         s.run("edit.undo", &json!({})).unwrap();
         assert!(s.doc.styles.get("Callout").is_none() && s.doc.styles.get("Box").is_none());
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// #3805: a list style copied over one the document has leaves one definition linked to the
+    /// style (the copied one, which the style's own list uses), and the document's lists using the
+    /// style take its levels.
+    #[test]
+    fn copying_a_list_style_over_one_keeps_one_definition() {
+        let mut s = Session::new(Document::new());
+        s.run("text.insert", &json!({"text": "One"})).unwrap();
+        s.run("list.defineStyle", &json!({"name": "Steps"})).unwrap();
+        let mut src = Session::new(Document::new());
+        src.run("list.defineStyle", &json!({"name": "Steps", "apply": false, "levels": [{"text": "Step %1:"}]})).unwrap();
+        let id = s.doc.styles.find("Steps").map(|x| x.id.clone()).unwrap();
+        let src_id = src.doc.styles.find("Steps").map(|x| x.id.clone()).unwrap();
+        copy_styles(&mut s.doc, &src.doc, &[src_id]);
+        let linked = s.doc.numbering.abstracts.iter().filter(|a| a.style_link.as_deref() == Some(id.as_str())).count();
+        assert_eq!(linked, 1, "one w:styleLink per style");
+        let own = s.doc.styles.get(&id).and_then(|x| x.para.numbering).map(|n| n.num).unwrap();
+        assert_eq!(s.doc.numbering.abstract_of(own).and_then(|a| a.style_link.clone()), Some(id.clone()));
+        assert_eq!(s.doc.numbering.style_definition(&id).map(|a| a.levels[0].text.as_str()), Some("Step %1:"));
+        let num = s.doc.body.iter().filter_map(|b| b.as_para()).next().and_then(|p| p.props.numbering).map(|n| n.num).unwrap();
+        assert_eq!(s.doc.numbering.level(num, 0).map(|l| l.text.as_str()), Some("Step %1:"), "the paragraph's list follows");
     }
 
     /// The template path comes from the document, so opening never reads it, even with

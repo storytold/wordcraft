@@ -171,6 +171,22 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     resp
 }
 
+/// [`small`]'s look (17 px icon, the ribbon's hover, pressed and checked states) for a dialog's
+/// own toggle, which runs no command: bold, bullets or an indent in a dialog's formatting row
+/// look as they do on the ribbon. `tip` is already translated; `enabled: false` greys it out.
+pub fn small_toggle(ui: &mut Ui, icon: &str, tip: &str, checked: bool, enabled: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), if enabled { Sense::click() } else { Sense::hover() });
+    if enabled {
+        bg(ui, r, &resp, checked, &t);
+    }
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    let (c, a) = if enabled { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint(ui.painter(), ic, icon, c, a);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, checked, tip));
+    resp.on_hover_text(tip)
+}
+
 /// A split button: the left part runs `id`, the arrow opens a menu filled by `menu`.
 pub fn split(
     ui: &mut Ui,

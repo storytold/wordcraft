@@ -1,6 +1,6 @@
 use super::common::{mi, mi_text, stack};
 use super::underline::underline_menu;
-use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split, vec2};
+use super::{Remember, Stroke, Target, Tokens, Ui, Value, WordApp, big, group, json, menu_button, small, split};
 
 /// The Format Painter button. A click arms it for one use (blue border only); a double-click keeps
 /// it on across several uses (full checked look), like Word. Esc or another click turns it off.
@@ -179,17 +179,8 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                 split(ui, app, "bullets", "Bullets", crate::widgets::ButtonAction::new("para.bullets", json!({}), lists.bullets), None, |ui, app| {
                     ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
                     ui.horizontal(|ui| {
-                        for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
-                            // The interface fonts have no ➢, so its tile draws the arrowhead.
-                            let label = if c == "➢" { " " } else { c };
-                            let resp = ui.button(egui::RichText::new(label).size(16.0));
-                            if c == "➢" {
-                                let m = resp.rect.center();
-                                let pts = [(-4.0, -5.0), (5.0, 0.0), (-4.0, 5.0), (-1.5, 0.0)].map(|(x, y)| m + vec2(x, y));
-                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[0], pts[1], pts[3]], Tokens::get(ui.ctx()).text, Stroke::NONE));
-                                ui.painter().add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], Tokens::get(ui.ctx()).text, Stroke::NONE));
-                            }
-                            if resp.clicked() {
+                        for c in super::BULLET_LIBRARY {
+                            if super::bullet_tile(ui, c).clicked() {
                                 let _ = app.run("para.bullets", json!({"kind": c}));
                                 ui.close();
                             }
@@ -218,6 +209,8 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         ui.separator();
                         mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
                         mi(ui, app, "None", "para.numbering", json!({"off": true}));
+                        ui.separator();
+                        mi(ui, app, "Define New Number Format…", "para.defineNumber", json!({}));
                     },
                 );
                 split(
@@ -248,7 +241,9 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                             mi_text(ui, app, &text, "list.multilevelPreset", json!({"preset": k}));
                         }
                         ui.separator();
+                        list_styles_menu(ui, app);
                         mi(ui, app, "Define New Multilevel List…", "list.define", json!({}));
+                        mi(ui, app, "Define New List Style…", "list.defineStyle", json!({}));
                         ui.separator();
                         for lv in 0..5u64 {
                             mi(ui, app, &format!("Change to Level {}", lv + 1), "para.listLevel", json!({"level": lv}));
@@ -381,4 +376,30 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Editor", None, app, |ui, app| {
         big(ui, app, "editor", "Editor", "review.spelling", json!({}), false);
     });
+}
+
+/// The Multilevel List menu's List Styles (#3805): the document's list styles by name; a click
+/// numbers the selection with one. The default "No List" style isn't one to pick. Many scroll, so
+/// Define New List Style… and the commands after them stay on screen.
+pub(super) fn list_styles_menu(ui: &mut Ui, app: &mut WordApp) {
+    let mut list_styles: Vec<(String, String)> = app
+        .session
+        .doc
+        .styles
+        .styles
+        .iter()
+        .filter(|st| st.kind == wordcraft_doc::StyleKind::Numbering && !st.default && !st.hidden && st.id != "NoList")
+        .map(|st| (st.id.clone(), if st.name.is_empty() { st.id.clone() } else { st.name.clone() }))
+        .collect();
+    list_styles.sort_by(|a, b| a.1.cmp(&b.1));
+    if list_styles.is_empty() {
+        return;
+    }
+    ui.label(egui::RichText::new(tl!("List Styles")).small().weak());
+    egui::ScrollArea::vertical().id_salt("list_styles").max_height(240.0).show(ui, |ui| {
+        for (id, name) in list_styles {
+            mi_text(ui, app, &name, "list.applyStyle", json!({"style": id}));
+        }
+    });
+    ui.separator();
 }

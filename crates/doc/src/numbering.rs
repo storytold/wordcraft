@@ -87,6 +87,14 @@ pub struct AbstractNum {
     /// `None`: derived from the levels.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub multi_level_type: Option<String>,
+    /// The list style (a numbering style's id) this is the definition of (`w:styleLink`):
+    /// changing the style changes these levels.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style_link: Option<String>,
+    /// The list style (a numbering style's id) whose definition this list uses (`w:numStyleLink`):
+    /// its levels are a copy of the style's, kept in step by [`Numbering::sync_style`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_style_link: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -180,6 +188,21 @@ fn bullet_level(i: usize, c: char) -> Level {
     }
 }
 
+/// The label of a "none" level whose template is `text`: the text with every level's number
+/// (`%1`…`%9`) left out, as Word draws it.
+pub fn none_label(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '%' && chars.peek().is_some_and(|d| ('1'..='9').contains(d)) {
+            chars.next();
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Nine levels for a list kind.
 pub fn levels_for(kind: ListKind) -> Vec<Level> {
     (0..9)
@@ -235,6 +258,23 @@ impl Numbering {
             return Some(l);
         }
         self.abstract_of(num)?.levels.get(level as usize)
+    }
+    /// The definition of list style `style` (the abstract list linked to it by `w:styleLink`).
+    pub fn style_definition(&self, style: &str) -> Option<&AbstractNum> {
+        self.abstracts.iter().find(|a| a.style_link.as_deref() == Some(style))
+    }
+    /// Give every list using list style `style` (`w:numStyleLink`) the style's levels again,
+    /// after the style's definition changed. Returns the `num` ids whose levels changed.
+    pub fn sync_style(&mut self, style: &str) -> Vec<u32> {
+        let Some(levels) = self.style_definition(style).map(|a| a.levels.clone()) else { return Vec::new() };
+        let mut changed = Vec::new();
+        for a in self.abstracts.iter_mut().filter(|a| a.num_style_link.as_deref() == Some(style) && a.style_link.is_none()) {
+            if a.levels != levels {
+                a.levels = levels.clone();
+                changed.push(a.id);
+            }
+        }
+        self.nums.iter().filter(|n| changed.contains(&n.abstract_id)).map(|n| n.id).collect()
     }
     /// Create a new list of `kind`; returns the `num` id. List ids run out only past `u32::MAX`
     /// lists, more than memory holds; then nothing is added and the id is 0, "no list".
@@ -484,6 +524,25 @@ const MAX_LABEL_BYTES: usize = 256;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #2787: the Define New Number Format preview's label for a "none" level ([`none_label`]) is
+    /// the one the list draws: its text with the numbers left out, the same on every paragraph.
+    #[test]
+    fn a_none_level_shows_its_text_without_the_number() {
+        for text in ["Note:", "%1.", "Part %1", "(%1)", ""] {
+            let mut n = Numbering::default();
+            let id = n.add_list(ListKind::Numbered);
+            if let Some(num) = n.nums.iter_mut().find(|x| x.id == id) {
+                num.level_overrides = vec![(0, Level { format: NumFormat::None, text: text.into(), ..Level::default() })];
+            }
+            let mut c = Counters::default();
+            for _ in 0..2 {
+                assert_eq!(c.next_label(&n, id, 0).map(|(l, _)| l), Some(none_label(text)), "{text:?}");
+            }
+        }
+        assert_eq!((none_label("%1."), none_label("(%1)")), (".".to_string(), "()".to_string()));
+        assert_eq!(none_label("%1.%2 – %10"), ". – 0");
+    }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.
     #[test]

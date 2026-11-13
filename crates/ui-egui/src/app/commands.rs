@@ -1075,6 +1075,10 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
         "fields.setCode" if !has_value(params, "code") => Some("editFieldCode"),
         "picture.size" if no_settings(params) => Some("pictureSize"),
         "list.define" if params.get("levels").is_none() => Some("defineList"),
+        // Define New Number Format without settings shows its dialog (#2787).
+        "para.defineNumber" if no_settings(params) => Some("defineNumber"),
+        // Define New List Style without a name or a style to change shows its dialog (#3805).
+        "list.defineStyle" if params.get("name").is_none() && params.get("style").is_none() => Some("defineListStyle"),
         "review.trackingOptions" if no_settings(params) => Some("trackChangesOptions"),
         "review.compare" if !has_value(params, "path") && !has_value(params, "text") => Some("compare"),
         "review.combine" if !has_value(params, "path") && !has_value(params, "text") => Some("combine"),

@@ -1092,3 +1092,49 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// #3805: every Bullet Library tile is named by its bullet for screen readers, the ➢ tile too,
+/// which draws its arrowhead instead of writing it.
+#[test]
+fn every_bullet_library_tile_is_named_by_its_bullet() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 100.0)).build_ui(|ui| {
+        // The app's fonts (which have the bullets) apply from the next frame.
+        if ui.ctx().cumulative_pass_nr() == 0 {
+            crate::theme::install_fonts(ui.ctx());
+            ui.ctx().request_repaint();
+            return;
+        }
+        ui.horizontal(|ui| {
+            for c in BULLET_LIBRARY {
+                bullet_tile(ui, c);
+            }
+        });
+    });
+    h.run_steps(3);
+    for c in BULLET_LIBRARY {
+        assert!(h.query_by_label(c).is_some(), "{c}");
+    }
+}
+
+/// #3805: many list styles scroll in the Multilevel List menu, so the commands after them stay
+/// on screen.
+#[test]
+fn many_list_styles_scroll_in_the_multilevel_list_menu() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Steps")), crate::Services::default());
+    for n in 0..40 {
+        app.run("list.defineStyle", json!({"name": format!("Steps {n:02}"), "apply": false})).unwrap();
+    }
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(300.0, 1600.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            super::home::list_styles_menu(ui, app);
+            ui.label("After the list styles");
+        },
+        app,
+    );
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Steps 00").is_some());
+    let after = h.get_by_label("After the list styles").rect();
+    assert!(after.top() < 320.0, "{after:?}");
+}

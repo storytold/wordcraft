@@ -9,6 +9,33 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
+/// The Bullet Library: the bullets Home › Bullets offers, and Define New List Style's number
+/// styles after the numbers (#3805).
+pub(crate) const BULLET_LIBRARY: [&str; 7] = ["•", "○", "▪", "◆", ARROW_BULLET, "✓", "–"];
+
+/// The arrowhead bullet, which the interface fonts lack: [`bullet_tile`] draws it.
+pub(crate) const ARROW_BULLET: &str = "➢";
+
+/// A Bullet Library tile: the bullet at 16 pt on a button. The interface fonts have no ➢, so its
+/// tile draws the arrowhead, and is named ➢ for screen readers as the other tiles are named by
+/// their bullet.
+pub(crate) fn bullet_tile(ui: &mut Ui, c: &str) -> egui::Response {
+    let label = if c == ARROW_BULLET { " " } else { c };
+    let resp = ui.button(egui::RichText::new(label).size(16.0));
+    if c == ARROW_BULLET {
+        paint_arrow_bullet(ui.painter(), resp.rect.center(), 1.0, Tokens::get(ui.ctx()).text);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), ARROW_BULLET));
+    }
+    resp
+}
+
+/// The ➢ bullet drawn as an arrowhead centred on `at`, 10 points tall at `scale` 1.
+pub(crate) fn paint_arrow_bullet(p: &egui::Painter, at: egui::Pos2, scale: f32, ink: egui::Color32) {
+    let pts = [(-4.0, -5.0), (5.0, 0.0), (-4.0, 5.0), (-1.5, 0.0)].map(|(x, y)| at + vec2(x, y) * scale);
+    p.add(egui::Shape::convex_polygon(vec![pts[0], pts[1], pts[3]], ink, Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(vec![pts[3], pts[1], pts[2]], ink, Stroke::NONE));
+}
+
 mod arrange;
 mod charts;
 mod common;

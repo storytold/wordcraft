@@ -227,6 +227,15 @@ pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {
         if let Some(n) = &a.name {
             w.val("w:name", n);
         }
+        // …styleLink, numStyleLink, then the levels: links only to a list style the document
+        // has, so Word never meets one to a missing or other kind of style.
+        let list_style = |s: &Option<String>| s.clone().filter(|s| doc.styles.get(s).is_some_and(|st| st.kind == StyleKind::Numbering));
+        if let Some(s) = list_style(&a.style_link) {
+            w.val("w:styleLink", &s);
+        }
+        if let Some(s) = list_style(&a.num_style_link).filter(|_| a.style_link.is_none()) {
+            w.val("w:numStyleLink", &s);
+        }
         for (i, l) in a.levels.iter().take(9).enumerate() {
             write_level(&mut w, i, l);
         }
