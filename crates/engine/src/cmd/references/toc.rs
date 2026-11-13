@@ -3,6 +3,18 @@ use super::{
     StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
 };
 
+/// A table-of-contents title is a heading, not document body: longer titles are rejected
+/// instead of laying out megabytes of text (#3720).
+pub(super) const MAX_TOC_TITLE: usize = 1024;
+
+fn checked_title(v: &Value) -> Result<Option<&str>, CmdError> {
+    let Some(title) = p::str(v, "title") else { return Ok(None) };
+    if title.chars().count() > MAX_TOC_TITLE {
+        return Err(CmdError::Params(format!("`title` is longer than {MAX_TOC_TITLE} characters")));
+    }
+    Ok(Some(title))
+}
+
 /// A level range such as `1-3` (or one level, `2`), clamped to 1–9.
 pub fn level_range(s: &str) -> Option<(u8, u8)> {
     let mut it = s.split('-').map(|x| x.trim().parse::<u8>().ok());
@@ -375,6 +387,7 @@ pub(super) fn cached_toc_tabs(s: &Session) -> Vec<(String, Vec<TabStop>)> {
 }
 
 pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
+    let title = checked_title(v)?.unwrap_or("Contents").to_string();
     let tabs = cached_toc_tabs(s);
     range_toc_to_field(s)?;
     let replace = v.as_object().is_some_and(|m| !m.is_empty());
@@ -403,7 +416,6 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
         }
         None => delete_selection(s)?,
     };
-    let title = p::str(v, "title").unwrap_or("Contents").to_string();
     if at.story != StoryRef::Body || at.path.depth() > 0 {
         return Err(CmdError::Failed("a table of contents goes in the main text".into()));
     }
@@ -433,6 +445,7 @@ pub(super) fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
 /// (`title_above_break`): the field takes `v`'s settings, the title `v`'s `title` if one is given
 /// (otherwise it is kept, as Word's Insert Table of Contents keeps it), and the entries are rebuilt.
 fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(String, Vec<TabStop>)]) -> Result<(), CmdError> {
+    let new_title = checked_title(v)?;
     let instr = toc_instr(v);
     let field = s.doc.para_mut(StoryRef::Body, &Path::top(start))?;
     for o in &mut field.objects {
@@ -446,7 +459,7 @@ fn replace_toc_above_break(s: &mut Session, v: &Value, start: usize, tabs: &[(St
         }
     }
     field.touch();
-    if let (Some(title), Some(i)) = (p::str(v, "title"), start.checked_sub(1)) {
+    if let (Some(title), Some(i)) = (new_title, start.checked_sub(1)) {
         let old = s.doc.para_mut(StoryRef::Body, &Path::top(i))?;
         let mut head = Paragraph::with_text(title, old.props_of_char(0).clone());
         head.props = old.props.clone();
