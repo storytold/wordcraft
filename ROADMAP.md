@@ -150,6 +150,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+- 2026-10-26: Contextual ribbon tabs receive stable WordCraft-assigned single-letter KeyTips; the four object-design tabs also expose control badges, while Equation and Outlining do not yet have control badges (#3854).
 
  fix/6146-touchpad-scroll-speed
 - 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
@@ -1043,6 +1044,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-10-27 | trivial | Progress log: Return on File › Print prints, as Word's default Print button does |
 | 2026-10-27 | trivial | PR #4609: Numeric cross-references (#4533): preserve the numbered clause through field updates; adapted from @Alyosha-dot-shop's issue patch, with extra relative-context and cache guards. Synthetic checks only; readiness estimates unchanged. |
 | 2026-10-26 | minor | Word-observed Proofing task pane uses shared review commands; clicking a suggestion corrects and advances; context, suggestion cards and ignore/dictionary links follow the Windows reference; inspected previews prompted a full-width context and scrollable three-card list; exact selected spelling takes priority over overlapping grammar, with command/pane regressions and integration workflow paths; readiness estimates unchanged |
+| 2026-10-26 | trivial | Contextual KeyTips (#3854): WordCraft-assigned letters for six contextual tabs; four tabs have control badges, Equation and Outlining do not |
 | 2026-10-14 | trivial | Progress log: Insert Date and Time and DATE/TIME fields use local time (#1707) |
 | 2026-10-27 | trivial | Preserve #4249 complete-record CSV delimiter detection and its regressions in the mailings modules; recipient commands, limits and refusal behavior unchanged. |
 | 2026-10-26 | trivial | Integrate #4249 with current-main CSV helpers, preserving logical-record detection, existing recipient limits and refusal behavior. |
