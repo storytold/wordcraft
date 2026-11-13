@@ -490,6 +490,8 @@ fn press_member(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f3
     if app.run_keep_view("select.member", json!({"index": index})).is_err() {
         return true;
     }
+    // A header's canvas is on every page: the member picked is the one clicked (its handles go there).
+    app.session.page_hint = object.page;
     let Some(o) = hit_object(app, &object) else { return true };
     let (min, picture) = (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. }));
     app.canvas.obj_drag = Some(ObjectDrag {

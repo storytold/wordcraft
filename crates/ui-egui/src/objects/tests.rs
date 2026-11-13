@@ -593,6 +593,58 @@ fn clicking_a_canvas_member_keeps_the_view() {
     assert_eq!(h.state().canvas.scroll_offset, view, "the click kept the view");
 }
 
+/// #4929 review: a header's canvas repeats on every page. A click on one of its members on another
+/// page than the one being edited picks the member there: its handles are drawn on the clicked page.
+#[test]
+fn picking_a_header_canvas_member_on_another_page_puts_its_handles_there() {
+    use egui::{Event, PointerButton};
+    let mut a = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run("insert.header", json!({"text": "Head"})).unwrap();
+    a.run("insert.canvas", json!({"width": 200, "height": 100})).unwrap();
+    let canvas = wordcraft_engine::cmd::objects::object_selection(&a.session).map(|(p, _)| p).expect("the new canvas is selected");
+    a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 40})).unwrap();
+    a.run("canvas.member", json!({"index": 0, "x": 40, "y": 30})).unwrap();
+    a.run("insert.closeHeader", json!({})).unwrap();
+    a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(400)})).unwrap();
+    a.run("view.zoom", json!({"value": 40})).unwrap();
+    a.run("insert.editHeader", json!({"page": 0})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    assert_eq!(h.state().session.sel.focus.story, canvas.story, "editing the header, which holds the canvas");
+    let click = |h: &mut egui_kittest::Harness<'_, WordApp>, page: usize| {
+        let layout = h.state_mut().session.layout();
+        let on = layout.object(&canvas, page).filter(|o| o.page == page).expect("the header's canvas on the page");
+        let r = member_hit(h.state(), &on, 0).expect("its member").rect;
+        let at = crate::canvas::page_to_screen(h.state_mut(), page, r.x + r.w / 2.0, r.y + r.h / 2.0).expect("on screen");
+        h.event(Event::PointerMoved(at));
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        for _ in 0..40 {
+            h.step();
+        }
+    };
+    let handles_on = |h: &mut egui_kittest::Harness<'_, WordApp>| {
+        let layout = h.state_mut().session.layout();
+        active(h.state(), &layout).map(|(o, _)| (o.page, o.member))
+    };
+    click(&mut h, 1);
+    assert_eq!(wordcraft_engine::cmd::canvas::selected_member(&h.state().session).map(|(_, i, _)| i), Some(0), "the member is picked");
+    assert_eq!(handles_on(&mut h), Some((1, Some(0))), "the handles are on the clicked page");
+    click(&mut h, 0);
+    assert_eq!(handles_on(&mut h), Some((0, Some(0))));
+}
+
 /// A floating rectangle shape, `w` × `h`.
 fn floating_rect(w: f32, h: f32) -> InlineObject {
     InlineObject::Shape {
