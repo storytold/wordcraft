@@ -93,13 +93,23 @@ fn a_malformed_hex_escape_leaves_no_stray_text() {
     let f = parse(rtf).unwrap();
     assert_eq!(texts(&f)[0], "Normal:+4z");
 
-    let rtf = br"{\rtf1\ansi{\'}}after\par}";
+    // "after" stays inside the outer group: text past the brace that closes it is dropped, as
+    // Word drops it (#5658).
+    let rtf = br"{\rtf1\ansi{\'}after\par}";
     let f = parse(rtf).unwrap();
     assert!(texts(&f).iter().any(|t| t.contains("after")), "{:?}", texts(&f));
+    // A second `}` closes the document: "after" is past its end and is not read (#5658).
+    let rtf = br"{\rtf1\ansi{\'}}after\par}";
+    let f = parse(rtf).unwrap();
+    assert!(!texts(&f).iter().any(|t| t.contains("after")), "{:?}", texts(&f));
+    let rtf = br"{\rtf1\ansi before{\'}}after\par}";
+    let f = parse(rtf).unwrap();
+    assert!(texts(&f).iter().any(|t| t.contains("before")), "{:?}", texts(&f));
+    assert!(!texts(&f).iter().any(|t| t.contains("after")), "{:?}", texts(&f));
 
     // A hex digit that starts a valid pair with the byte after it is part of the escape:
     // \'4} reads '4' as the escape's byte and leaves `}` to close the group.
-    let rtf = br"{\rtf1\ansi\'4}x\par}";
+    let rtf = br"{\rtf1\ansi{\'4}x\par}";
     let f = parse(rtf).unwrap();
     assert!(texts(&f).iter().any(|t| t.contains('x') && !t.contains('}')), "{:?}", texts(&f));
 }
@@ -1827,3 +1837,4 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+mod trailing_data;
