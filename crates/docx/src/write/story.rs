@@ -17,6 +17,7 @@ use crate::xml::W;
 mod blocks;
 mod drawing;
 mod field;
+mod grid;
 mod object;
 mod para;
 mod section;

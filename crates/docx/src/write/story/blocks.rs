@@ -1,5 +1,7 @@
+use super::grid::saved_grid;
 use super::toc::written_toc_span;
 use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
+use wordcraft_doc::props::CellProps;
 
 impl Writer<'_> {
     fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
@@ -89,24 +91,25 @@ impl Writer<'_> {
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
-        let rows: Vec<_> = t.rows.iter().filter(|r| !r.cells.is_empty()).collect();
-        if rows.is_empty() {
+        if t.rows.iter().all(|r| r.cells.is_empty()) {
             return;
         }
+        let (grid, spans) = saved_grid(t);
         w.open("w:tbl", &[]);
         let chg = t.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
         tblpr(w, &t.props, chg.as_ref());
         w.open("w:tblGrid", &[]);
-        let cols = t.cols().clamp(1, 63);
-        for g in 0..cols {
-            let gw = t.grid.get(g).copied().unwrap_or(72.0);
+        for gw in &grid {
             w.empty("w:gridCol", &[("w:w", &twips(gw.max(0.0)))]);
         }
         w.close("w:tblGrid");
         // Controls around rows and cells (repeating sections): opens and closes balanced
         // whatever editing left, the ones still open closed at the end.
         let mut open_rows = 0u32;
-        for r in rows {
+        for (r, spans) in t.rows.iter().zip(&spans) {
+            if r.cells.is_empty() {
+                continue;
+            }
             for c in &r.controls.open {
                 crate::write::sdt::open(w, c);
                 open_rows += 1;
@@ -115,14 +118,18 @@ impl Writer<'_> {
             let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
             trpr(w, &r.props, chg.as_ref());
             let mut open_cells = 0u32;
-            for c in &r.cells {
+            for (i, c) in r.cells.iter().enumerate() {
                 for ctl in &c.controls.open {
                     crate::write::sdt::open(w, ctl);
                     open_cells += 1;
                 }
                 w.open("w:tc", &[]);
                 let chg = c.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
-                tcpr(w, &c.props, chg.as_ref());
+                // The span on the saved grid, which differs from the model's when the grid was rebuilt.
+                match spans.get(i) {
+                    Some(&span) if span != c.props.span => tcpr(w, &CellProps { span, ..c.props.clone() }, chg.as_ref()),
+                    _ => tcpr(w, &c.props, chg.as_ref()),
+                }
                 self.blocks(w, &c.blocks, rels, false, depth + 1);
                 w.close("w:tc");
                 let n = c.controls.close.min(open_cells);
