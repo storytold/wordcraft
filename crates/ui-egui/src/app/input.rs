@@ -24,10 +24,15 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
+        self.apply_raw_input_scroll(raw);
         if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
+            self.record_scaled_scroll_events(raw);
             return;
         }
-        let Some((events, n)) = self.peek_synthetic() else { return };
+        let Some((events, n)) = self.peek_synthetic() else {
+            self.record_scaled_scroll_events(raw);
+            return;
+        };
         if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
             // Control input belongs to this window's remembered widget even while another app
             // is active. Give only this input frame egui focus, without requesting OS activation.
@@ -40,6 +45,34 @@ impl WordApp {
         raw.events.extend(events);
         self.synthetic_pending = true;
         self.synthetic_injected = n;
+        self.record_scaled_scroll_events(raw);
+    }
+
+    /// Scales point-wheel events in the incoming [`egui::RawInput`] by the touchpad / wheel speed multiplier.
+    /// When eframe or web runners replay an unconsumed [`egui::RawInput`] across hidden logic ticks,
+    /// already-scaled events in the pending prefix are skipped so the multiplier is applied exactly once per event (#6146).
+    fn apply_raw_input_scroll(&mut self, raw: &mut egui::RawInput) {
+        let previously_scaled = self.raw_scroll_events_scaled;
+        let is_replayed = previously_scaled > 0
+            && raw.events.len() >= previously_scaled
+            && raw.events.get(..previously_scaled) == Some(&self.last_scaled_scroll_events[..]);
+        let start_idx = if is_replayed { previously_scaled } else { 0 };
+        if let Some(new_events) = raw.events.get_mut(start_idx..) {
+            self.ui.touchpad_scroll_speed.apply_events_scroll(new_events, self.ui.scroll_speed);
+        }
+    }
+
+    /// Records the current state of scaled events in the raw input batch so replay across hidden ticks
+    /// does not compound multipliers.
+    fn record_scaled_scroll_events(&mut self, raw: &egui::RawInput) {
+        self.raw_scroll_events_scaled = raw.events.len();
+        self.last_scaled_scroll_events = raw.events.clone();
+    }
+
+    /// Clears recorded scroll replay tracking when the UI pass consumes the frame's input.
+    pub(crate) fn clear_raw_scroll_replay(&mut self) {
+        self.raw_scroll_events_scaled = 0;
+        self.last_scaled_scroll_events.clear();
     }
 
     /// Whether this pass's input came from the control channel (`ui.click`, `ui.key`, `ui.drag`,
