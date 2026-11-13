@@ -4,6 +4,14 @@ use super::{
     placeholder_of, sectpr, tcpr, trpr,
 };
 
+/// The offset of the first thing a paragraph shows: text, or an object other than a marker. A field
+/// counts even with no cached result, since PAGE or DATE fill theirs in when drawn.
+fn first_visible(p: &Paragraph) -> Option<usize> {
+    let text = p.text.char_indices().find(|(_, c)| *c != wordcraft_doc::para::OBJ).map(|(i, _)| i);
+    let object = p.objects_with_offsets().find(|(_, o)| !o.is_marker()).map(|(i, _)| i);
+    text.into_iter().chain(object).min()
+}
+
 impl Reader<'_> {
     /// Read a story's blocks from a container element (`w:body`, `w:hdr`, `w:tc`, `w:txbxContent`…).
     pub fn read_blocks(&mut self, sc: &mut StoryCtx, parent: &El, rels: &Rels, out: &mut Blocks, depth: usize) {
@@ -20,12 +28,34 @@ impl Reader<'_> {
                         && prev.section.is_none()
                         && prev.text.len() <= 16
                         && p.props.drop_cap.is_none()
+                        // A paragraph showing nothing has no text to drop into: merging would take
+                        // the letter's size away and leave a paragraph too short to drop a letter.
+                        && first_visible(&p).is_some()
                         && let Some(Block::Para(mut first)) = out.pop().map(|b| (*b).clone())
                     {
                         let mut props = p.props.clone();
                         props.drop_cap = first.props.drop_cap;
                         props.drop_cap_margin = first.props.drop_cap_margin;
                         props.drop_cap_distance = first.props.drop_cap_distance;
+                        // The first character is the one a drop cap drops, in the layout and when saving,
+                        // so a bookmark or comment anchor opening the frame moves behind the letter. A
+                        // field, content control or permission range stays around it: moving the letter
+                        // out would lose the field's result, the control's content or the protection.
+                        use wordcraft_doc::para::InlineObject as O;
+                        if let Some(at) = first_visible(&first).filter(|at| *at > 0)
+                            && first.objects_with_offsets().take_while(|(i, _)| *i < at).all(|(_, o)| {
+                                matches!(o, O::BookmarkStart { .. } | O::BookmarkEnd { .. } | O::CommentStart { .. } | O::CommentEnd { .. })
+                            })
+                            && let Some(len) =
+                                first.text.get(at..).and_then(|t| t.chars().next()).filter(|c| *c != wordcraft_doc::para::OBJ).map(char::len_utf8)
+                            && let Ok(mut letter) = first.split_off(at)
+                            && let Ok(rest) = letter.split_off(len)
+                        {
+                            letter.mark = first.mark.clone();
+                            letter.append(std::mem::take(&mut first));
+                            letter.append(rest);
+                            first = letter;
+                        }
                         // A letter in a font of its own: the drop cap's font, the letter itself
                         // in the text's (so taking the drop cap away gives the letter its font back).
                         let cap_font = first.runs.first().and_then(|r| r.props.font.clone());
@@ -35,6 +65,34 @@ impl Reader<'_> {
                                 r.props.font = text_font.clone();
                             }
                             props.drop_cap_font = cap_font;
+                        }
+                        // The same for the size: the letter carries the enlarged one the file's
+                        // writer computed, and the layout enlarges a dropped letter from its own size,
+                        // so keeping it would render the enlargement twice (#3000). A frame around the
+                        // size the text draws a letter takes the text's size; any other is a letter
+                        // of its own, mapped back to the size that draws at it.
+                        // A leading bookmark or comment anchor is a run of its own: sizes come from the
+                        // first run showing something, in the text and in the letter's frame alike.
+                        let shown = |q: &Paragraph| {
+                            let at = first_visible(q)?;
+                            q.run_ranges().find(|(range, _)| range.contains(&at)).map(|(_, props)| props.clone())
+                        };
+                        let text_props = shown(&p).unwrap_or_default();
+                        let resolved = self.doc.styles.resolve_char_in(p.props.style.as_deref(), None, &text_props);
+                        let lines = first.props.drop_cap.unwrap_or(1);
+                        let letter_size = |frame: Option<f32>, text: Option<f32>, text_resolved: f32| {
+                            frame.and_then(|big| wordcraft_doc::resolve::drop_cap_letter_size(big, text_resolved, lines)).or(text)
+                        };
+                        // Only runs at the letter's enlarged size: a frame run with a size of its own keeps it.
+                        let cap = shown(&first);
+                        let cap_sizes = cap.as_ref().map(|c| (c.size, c.size_cs));
+                        let new_size = letter_size(cap.as_ref().and_then(|c| c.size), text_props.size, resolved.size);
+                        let new_size_cs = letter_size(cap.as_ref().and_then(|c| c.size_cs), text_props.size_cs, resolved.size_cs);
+                        // A letter left behind a marker isn't dropped, so it keeps the size it shows at.
+                        let dropped = first.text.chars().next().is_some_and(|c| c != wordcraft_doc::para::OBJ);
+                        for r in first.runs.iter_mut().filter(|r| dropped && Some((r.props.size, r.props.size_cs)) == cap_sizes) {
+                            r.props.size = new_size;
+                            r.props.size_cs = new_size_cs;
                         }
                         first.append(p);
                         first.props = props;
