@@ -750,6 +750,12 @@ fn paint_draw_to_review(pen: &Pen, name: &str) -> bool {
             pen.text(7.0, 7.0, 8.0, "ab-", c, false);
             pen.text(9.0, 14.5, 8.0, "cd", a, false);
         }
+        "fitOnePage" => {
+            pen.page(4.0, 2.0, 16.0, 18.0);
+            pen.lines(6.5, 13.5, &[6.0, 8.5, 11.0]);
+            pen.line_c(&[(10.0, 16.5), (10.0, 13.0)], a);
+            pen.line_c(&[(8.0, 14.5), (10.0, 13.0), (12.0, 14.5)], a);
+        }
         "position" | "wrapText" => {
             pen.lines(3.0, 17.0, &[3.0, 17.0]);
             pen.lines(3.0, 6.0, &[7.0, 10.0, 13.0]);
@@ -1058,6 +1064,15 @@ fn paint_view_and_tables(pen: &Pen, name: &str) -> bool {
             pen.line(&[(12.5, 15.5), (17.0, 15.5)]);
         }
         "draft" => pen.lines(3.0, 17.0, &[4.0, 7.0, 10.0, 13.0, 16.0]),
+        // A heading mark, then lines of text.
+        "markdownSource" => {
+            pen.line_c(&[(4.0, 3.0), (4.0, 9.0)], a);
+            pen.line_c(&[(7.5, 3.0), (7.5, 9.0)], a);
+            pen.line_c(&[(2.5, 5.0), (9.0, 5.0)], a);
+            pen.line_c(&[(2.5, 7.0), (9.0, 7.0)], a);
+            pen.lines(3.0, 17.0, &[12.0, 15.0]);
+            pen.lines(11.0, 17.0, &[4.0, 7.0]);
+        }
         "focus" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
@@ -1781,5 +1796,17 @@ mod tests {
         // Dots only where no line is drawn: 21 on the empty box, none once every line is drawn.
         let dots = |name: &str| drawn(name).matches("Circle(").count();
         assert_eq!([dots("borderNone"), dots("borderBottom"), dots("borderInside"), dots("borderAll")], [21, 16, 12, 0]);
+    }
+
+    /// Verify that the fitOnePage vector icon renders without panics and emits shapes.
+    #[test]
+    fn fit_one_page_icon_paints_without_panic() {
+        let ctx = egui::Context::default();
+        let key = "fitOnePage";
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), key, Color32::BLACK, Color32::BLUE);
+        });
+        assert!(!output.shapes.is_empty(), "{key} icon must emit shapes");
+        output.drop_without_applying_deltas();
     }
 }
