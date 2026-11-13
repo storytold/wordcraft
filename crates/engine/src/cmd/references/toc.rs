@@ -1,6 +1,6 @@
 use super::{
     Block, CharProps, CmdError, CmdResult, Counters, FieldCode, InlineObject, LevelSuffix, NumFormat, OBJ, Paragraph, Path, Pos, Selection, Session,
-    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, sel_result,
+    StoryRef, TabAlign, TabLeader, TabStop, Value, delete_selection, p, page_at, page_formats, page_text, sel_result,
 };
 
 /// A level range such as `1-3` (or one level, `2`), clamped to 1–9.
@@ -555,6 +555,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     };
     let no_pages = f.has('n').then(|| f.arg('n').and_then(level_range).unwrap_or((1, 9)));
     let sep = f.arg('p').map(str::to_string).unwrap_or_else(|| "\t".into());
+    let formats = page_formats(s);
     for pass in 0..2 {
         // Pass 1 lays out with the entries in place, so headings below the TOC sit `entries.len()`
         // blocks further down and their pages account for the TOC's own length.
@@ -574,8 +575,8 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             {
                 *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
             }
-            let page =
-                l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
+            let page = page_at(&l, &formats, &Pos { story: StoryRef::Body, path: target, off: e.lead })
+                .map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt));
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let link = links.get(k).cloned().flatten();
             // With a bookmark to point at, the page number is a `PAGEREF` field, as Word writes
@@ -589,7 +590,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             let props = CharProps { link, ..Default::default() };
             let mut para = Paragraph::with_text(&text, props.clone()).styled(&format!("TOC{}", e.level + 1));
             if let Some(instr) = pageref {
-                let field = InlineObject::Field { instr, result: page.to_string(), locked: false, dirty: false, code: false, form: String::new() };
+                let field = InlineObject::Field { instr, result: page.clone(), locked: false, dirty: false, code: false, form: String::new() };
                 para.insert_object(para.len(), field, &props)?;
             }
             para.mark = CharProps::default();

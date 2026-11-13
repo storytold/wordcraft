@@ -19,6 +19,7 @@ mod sources;
 mod styles;
 
 use cross_refs::cross_ref;
+pub(crate) use cross_refs::leading_breaks;
 pub use cross_refs::{caption_labels, ref_targets};
 #[cfg(test)]
 use generated::ENTRY_STYLE;
