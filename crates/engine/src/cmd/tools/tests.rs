@@ -1027,3 +1027,80 @@ fn compare_keeps_a_page_reference_whose_page_changed_live() {
     assert_eq!(r.unwrap()["changes"], 0);
     assert_eq!(fields(&s.doc), vec![f("3", false, false)]);
 }
+
+#[test]
+fn compare_keeps_a_bookmarked_merge_field_whose_result_changed() {
+    // A mail-merge letter, "Dear «FirstName», welcome.", with the field inside a bookmark;
+    // the revised file shows another merge result. The field and its bookmark stay in the
+    // result and in the saved file, and Accept All and Reject All give back each side.
+    fn letter(result: &str) -> Document {
+        let mut p = Paragraph::new();
+        let c = CharProps::default();
+        p.insert_text(0, "Dear , welcome.", &c).unwrap();
+        let at = "Dear ".len();
+        p.insert_object(at, InlineObject::BookmarkEnd { name: "Greeting".into() }, &c).unwrap();
+        let field = InlineObject::Field {
+            instr: "MERGEFIELD FirstName".into(),
+            result: result.into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object(at, field, &c).unwrap();
+        p.insert_object(at, InlineObject::BookmarkStart { name: "Greeting".into() }, &c).unwrap();
+        let mut d = Document::from_text("x");
+        d.body = vec![para_block(p)];
+        d
+    }
+    /// The body's fields (code, result, deleted, inserted) and bookmark marks, in order.
+    fn census(d: &Document) -> (Vec<(String, String, bool, bool)>, Vec<String>) {
+        let (mut fields, mut marks) = (Vec::new(), Vec::new());
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            for (off, o) in p.objects_with_offsets() {
+                match o {
+                    InlineObject::Field { instr, result, .. } => {
+                        let c = p.props_of_char(off);
+                        fields.push((instr.clone(), result.clone(), c.del.is_some(), c.ins.is_some()));
+                    }
+                    InlineObject::BookmarkStart { name } => marks.push(format!("start {name}")),
+                    InlineObject::BookmarkEnd { name } => marks.push(format!("end {name}")),
+                    _ => {}
+                }
+            }
+        }
+        (fields, marks)
+    }
+    let f = |r: &str, del, ins| ("MERGEFIELD FirstName".to_string(), r.to_string(), del, ins);
+    let marks = || vec!["start Greeting".to_string(), "end Greeting".to_string()];
+    let dir = std::env::temp_dir();
+    let revised = dir.join(format!("wc-compare-merge-rev-{}.docx", std::process::id()));
+    let result = dir.join(format!("wc-compare-merge-out-{}.docx", std::process::id()));
+    crate::io::save_path(&revised, &letter("Bob")).unwrap();
+    let mut s = Session::new(letter("Ann"));
+    s.run("review.compare", &json!({"path": revised.to_string_lossy()})).unwrap();
+    let expected = (vec![f("Ann", true, false), f("Bob", false, true)], marks());
+    assert_eq!(census(&s.doc), expected);
+    // The saved result keeps the live fields (fldChar and instrText) and the bookmark.
+    crate::io::save_path(&result, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&result);
+    let _ = std::fs::remove_file(&revised);
+    let _ = std::fs::remove_file(&result);
+    let reopened = reopened.unwrap();
+    assert_eq!(census(&reopened), expected);
+    for (then, left, text) in [("review.acceptAll", "Bob", "Dear Bob, welcome."), ("review.rejectAll", "Ann", "Dear Ann, welcome.")] {
+        let mut s = Session::new(reopened.clone());
+        s.run(then, &json!({})).unwrap();
+        assert_eq!(census(&s.doc), (vec![f(left, false, false)], marks()), "{then}");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "{then}");
+    }
+    // Comparing with an identical letter changes nothing.
+    let mut s = Session::new(letter("Ann"));
+    let same = dir.join(format!("wc-compare-merge-same-{}.docx", std::process::id()));
+    crate::io::save_path(&same, &letter("Ann")).unwrap();
+    let r = s.run("review.compare", &json!({"path": same.to_string_lossy()}));
+    let _ = std::fs::remove_file(&same);
+    assert_eq!(r.unwrap()["changes"], 0);
+    assert_eq!(census(&s.doc), (vec![f("Ann", false, false)], marks()));
+}
