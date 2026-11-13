@@ -3999,6 +3999,33 @@ fn no_markup_view_lays_out_the_final_text() {
     assert!(gap(&mut s).abs() < 0.01);
 }
 
+/// #5626: Simple Markup lays out the final text, as No Markup does; Original the text before
+/// the changes: the insertion takes no room and the deletion does, even marked Hidden.
+#[test]
+fn simple_markup_and_original_views_lay_out_the_final_and_the_original_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "old"}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "text.insert", json!({"text": "new"}));
+    run(&mut s, "select.text", json!({"text": "old"}));
+    run(&mut s, "text.delete", json!({}));
+    let width = |s: &mut Session, a, b| {
+        let l = s.layout();
+        let x = |off| l.caret(&Pos::body(0, off)).map(|c| c.x).unwrap_or(f32::NAN);
+        x(b) - x(a)
+    };
+    let (old, new) = ((0, 3), (3, 6));
+    assert!(width(&mut s, old.0, old.1) > 5.0 && width(&mut s, new.0, new.1) > 5.0, "All Markup shows both");
+    run(&mut s, "review.markup", json!({"value": "simpleMarkup"}));
+    assert!(width(&mut s, old.0, old.1).abs() < 0.01 && width(&mut s, new.0, new.1) > 5.0, "Simple Markup leaves the deletion out");
+    run(&mut s, "review.markup", json!({"value": "original"}));
+    assert!(width(&mut s, old.0, old.1) > 5.0 && width(&mut s, new.0, new.1).abs() < 0.01, "Original leaves the insertion out");
+    run(&mut s, "review.trackingOptions", json!({"deleteMark": "hidden"}));
+    assert!(width(&mut s, old.0, old.1) > 5.0, "Original shows the deletion whatever its mark");
+    run(&mut s, "review.markup", json!({"value": "allMarkup"}));
+    assert!(width(&mut s, old.0, old.1).abs() < 0.01, "All Markup follows the mark");
+}
+
 #[test]
 fn replace_all_is_tracked() {
     let mut s = s();

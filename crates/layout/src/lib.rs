@@ -201,6 +201,9 @@ pub struct LayoutOptions {
     pub show_hidden: bool,
     /// Final text ("No Markup"): tracked deletions take no space and draw nothing.
     pub hide_deleted: bool,
+    /// Original text (Review › Display for Review › Original): tracked insertions, moved-to text
+    /// included, take no space and draw nothing, in every story.
+    pub hide_inserted: bool,
     /// Tracked deletions that take no space and draw nothing although markup is shown: those
     /// Track Changes Options mark Hidden (deletions, or moved-away text). `hide_deleted` and
     /// `deletions_in_balloons` leave every deletion out whatever this says.
@@ -257,29 +260,38 @@ impl Default for ProofOptions {
 }
 
 impl LayoutOptions {
-    /// Which tracked deletions in `story` take no space and draw nothing.
+    /// Which tracked deletions in `story` take no space and draw nothing (and whether its tracked
+    /// insertions don't either, [`LayoutOptions::hide_inserted`]).
     pub fn hides_deleted(&self, story: StoryRef) -> HideDeleted {
-        if self.hide_deleted || (self.deletions_in_balloons && story == StoryRef::Body) { HideDeleted::ALL } else { self.hide_marked }
+        let deleted = if self.hide_deleted || (self.deletions_in_balloons && story == StoryRef::Body) { HideDeleted::ALL } else { self.hide_marked };
+        HideDeleted { inserted: self.hide_inserted, ..deleted }
     }
 }
 
 /// Which tracked deletions are left out of the layout: ordinary ones, and the text a tracked
-/// move took away (the source of a move, `w:moveFrom`).
+/// move took away (the source of a move, `w:moveFrom`). In the Original view the tracked
+/// insertions are left out instead (`inserted`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct HideDeleted {
     pub plain: bool,
     pub moved_from: bool,
+    /// Tracked insertions, moved-to text included ([`LayoutOptions::hide_inserted`]).
+    pub inserted: bool,
 }
 
 impl HideDeleted {
-    pub const ALL: HideDeleted = HideDeleted { plain: true, moved_from: true };
-    /// Whether any deletion is left out.
+    pub const ALL: HideDeleted = HideDeleted { plain: true, moved_from: true, inserted: false };
+    /// Whether any tracked change is left out.
     pub fn any(self) -> bool {
-        self.plain || self.moved_from
+        self.plain || self.moved_from || self.inserted
     }
     /// Whether text deleted by revision `del` (`None`: not deleted) is left out.
     pub fn hides(self, doc: &Document, del: Option<u32>) -> bool {
         del.is_some() && if doc.move_name(del).is_some() { self.moved_from } else { self.plain }
+    }
+    /// Whether text inserted by revision `ins` and deleted by `del` (`None`: neither) is left out.
+    pub fn hides_change(self, doc: &Document, ins: Option<u32>, del: Option<u32>) -> bool {
+        (self.inserted && ins.is_some()) || self.hides(doc, del)
     }
 }
 

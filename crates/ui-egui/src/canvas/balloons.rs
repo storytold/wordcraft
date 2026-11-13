@@ -218,14 +218,16 @@ fn collect_items(app: &WordApp, layout: &DocLayout, only_shown: bool, shown: Opt
         }
         add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Comment(id));
     }
-    if markup.formatting {
+    // Simple Markup keeps the comments alone beside the page.
+    let revisions = app.session.revision_balloons_shown();
+    if revisions && markup.formatting {
         for (pos, author, props) in wordcraft_engine::cmd::review::format_changes(&app.session).into_iter().take(500) {
             let what = crate::panes::describe_props(&props).join(", ");
             let text = if what.is_empty() { tl!("Formatted").to_string() } else { format!("{}: {what}", tl!("Formatted")) };
             add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));
         }
     }
-    if markup.insertions_deletions {
+    if revisions && markup.insertions_deletions {
         for (pos, author, from) in wordcraft_engine::cmd::review::move_changes(&app.session).into_iter().take(500) {
             let text = if from { tl!("Moved from") } else { tl!("Moved to") }.to_string();
             add_balloon_anchor(&mut by_page, layout, app.session.page_hint, pos, Balloon::Format(author, text));

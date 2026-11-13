@@ -12418,9 +12418,9 @@ fn a_paragraph_left_out_whole_takes_no_room() {
     assert!((three_top(&d, &fin, 2) - without).abs() < 0.01, "no blank line in the final text");
     assert!(three_top(&d, &LayoutOptions::default(), 2) > without + 1.0, "with markup it keeps its line");
     // Only moved-away text hidden: an ordinary deletion keeps its line.
-    let moves = LayoutOptions { hide_marked: HideDeleted { plain: false, moved_from: true }, ..Default::default() };
+    let moves = LayoutOptions { hide_marked: HideDeleted { plain: false, moved_from: true, ..Default::default() }, ..Default::default() };
     assert!(three_top(&d, &moves, 2) > without + 1.0);
-    let plain = LayoutOptions { hide_marked: HideDeleted { plain: true, moved_from: false }, ..Default::default() };
+    let plain = LayoutOptions { hide_marked: HideDeleted { plain: true, moved_from: false, ..Default::default() }, ..Default::default() };
     assert!((three_top(&d, &plain, 2) - without).abs() < 0.01);
 }
 
@@ -12443,6 +12443,83 @@ fn a_paragraph_left_out_whole_draws_no_borders_or_shading() {
     };
     assert_eq!(decorations(false), 5, "shading and four borders with markup");
     assert_eq!(decorations(true), 0, "none in the final text");
+}
+
+/// The glyph text, the horizontal lines (underlines, strikethroughs), the bars left of the body
+/// with their colours, and the glyph colours a page draws.
+type Drawn = (String, usize, Vec<(f32, f32, wordcraft_doc::Rgb)>, Vec<wordcraft_doc::Rgb>);
+
+fn drawn(d: &Document, l: &DocLayout, opts: &display::DisplayOptions) -> Drawn {
+    let page = &l.pages[0];
+    let items = display::page_display(d, page, opts);
+    let mut out: Drawn = Default::default();
+    for i in &items {
+        match i {
+            display::Draw::Glyphs { text, color, .. } => {
+                out.0.push_str(text);
+                out.3.push(*color);
+            }
+            display::Draw::Line { x0, y0, x1, y1, .. } if y0 == y1 => out.1 += usize::from(x1 > x0),
+            display::Draw::Line { x0, y0, x1, y1, color, .. } if x0 == x1 && *x0 < page.body.x => out.2.push((*y0, *y1, *color)),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// #5626: Simple Markup lays out and draws the text as if the changes were accepted, with no
+/// marks, and puts a red bar beside each changed line: a deletion's line too, though the
+/// deletion takes no room. All Markup's bars stay grey; No Markup has none.
+#[test]
+fn simple_markup_marks_changed_lines_with_red_bars() {
+    crate::test_fonts();
+    let mut d = Document::from_text("Plain one\nWith new words\nWith old words\nPlain two");
+    d.format_range(&Pos::body(1, 5), &Pos::body(1, 9), &|c| c.ins = Some(0)).unwrap();
+    d.format_range(&Pos::body(2, 5), &Pos::body(2, 9), &|c| c.del = Some(0)).unwrap();
+    let fin = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted: true, ..Default::default() });
+    let simple = display::DisplayOptions { markup: false, simple_markup: true, ..Default::default() };
+    let (text, struck, bars, colors) = drawn(&d, &fin, &simple);
+    assert!(text.contains("new") && !text.contains("old"), "the text as if accepted: {text:?}");
+    assert_eq!(struck, 0, "no underline or strikethrough");
+    assert!(colors.iter().all(|c| *c == wordcraft_doc::Rgb::BLACK), "no change is coloured: {colors:?}");
+    assert_eq!(bars.len(), 2, "one bar for each changed line: {bars:?}");
+    assert!(bars.iter().all(|b| b.2 == display::SIMPLE_CHANGE_BAR), "red bars: {bars:?}");
+    for (block, bar) in [1, 2].into_iter().zip(&bars) {
+        let caret = fin.caret(&Pos::body(block, 0)).unwrap();
+        assert!(bar.0 <= caret.top + 0.5 && bar.1 >= caret.top + caret.height - 0.5, "bar {bar:?} beside paragraph {block}");
+    }
+
+    let none = display::DisplayOptions { markup: false, ..Default::default() };
+    assert!(drawn(&d, &fin, &none).2.is_empty(), "No Markup has no bars");
+    let all = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let (_, struck, bars, _) = drawn(&d, &all, &display::DisplayOptions::default());
+    assert_eq!(struck, 2, "All Markup underlines and strikes");
+    assert!(bars.len() == 2 && bars.iter().all(|b| b.2 == display::CHANGE_BAR), "grey bars: {bars:?}");
+}
+
+/// #5626: the Original view lays out the text as if the changes were rejected: insertions take
+/// no room (a paragraph inserted whole none at all) and deletions are drawn as plain text.
+#[test]
+fn the_original_leaves_insertions_out_and_draws_deletions_plainly() {
+    crate::test_fonts();
+    let mut d = Document::from_text("Keep new old\nAdded\nThree");
+    d.format_range(&Pos::body(0, 5), &Pos::body(0, 9), &|c| c.ins = Some(0)).unwrap();
+    d.format_range(&Pos::body(0, 9), &Pos::body(0, 12), &|c| c.del = Some(0)).unwrap();
+    d.format_range(&Pos::body(1, 0), &Pos::body(2, 0), &|c| c.ins = Some(0)).unwrap();
+    let original = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_inserted: true, ..Default::default() });
+    let x = |off| original.caret(&Pos::body(0, off)).unwrap().x;
+    assert!((x(9) - x(5)).abs() < 0.01, "the insertion takes no room");
+    assert!(x(12) - x(9) > 5.0, "the deletion does");
+    let before = layout(&Document::from_text("Keep old\nThree"), &mut LayoutCache::new(), &LayoutOptions::default());
+    let top = |l: &DocLayout, block| l.caret(&Pos::body(block, 0)).unwrap().top;
+    assert!((top(&original, 2) - top(&before, 1)).abs() < 0.01, "the inserted paragraph takes no room");
+
+    let shown = display::DisplayOptions { markup: false, original: true, ..Default::default() };
+    let (text, struck, bars, colors) = drawn(&d, &original, &shown);
+    assert!(text.contains("old") && !text.contains("new") && !text.contains("Added"), "the text as if rejected: {text:?}");
+    assert_eq!(struck, 0, "the deletion isn't struck through");
+    assert!(bars.is_empty(), "no bars");
+    assert!(colors.iter().all(|c| *c == wordcraft_doc::Rgb::BLACK), "no change is coloured: {colors:?}");
 }
 
 #[test]

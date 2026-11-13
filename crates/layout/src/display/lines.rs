@@ -204,8 +204,8 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         let rc = &st.rc;
         let m = &opts.revisions;
         // Without markup a deletion is never drawn as ordinary text, even in a layout that
-        // kept it; nor when its mark is Hidden.
-        if rc.del.is_some() && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some())) {
+        // kept it; nor when its mark is Hidden. The Original view draws it as plain text.
+        if rc.del.is_some() && !opts.original && (!opts.markup || m.hides_deletion(doc.move_name(rc.del).is_some())) {
             continue;
         }
         let shown = opts.markup && m.insertions_deletions;
@@ -557,9 +557,15 @@ fn formatting_marks(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 _ => {}
             }
         }
-        // A deleted paragraph mark that isn't shown (no markup, or its mark is Hidden) draws no ¶.
-        let mark_gone =
-            para.is_some_and(|p| p.mark.del.is_some() && (!opts.markup || opts.revisions.hides_deletion(doc.move_name(p.mark.del).is_some())));
+        // A deleted paragraph mark that isn't shown (no markup, or its mark is Hidden) draws no ¶;
+        // the Original view shows it. There an inserted one draws none.
+        let mark_gone = para.is_some_and(|p| {
+            if opts.original {
+                p.mark.ins.is_some()
+            } else {
+                p.mark.del.is_some() && (!opts.markup || opts.revisions.hides_deletion(doc.move_name(p.mark.del).is_some()))
+            }
+        });
         if line.end == LineEnd::Para && marks.paragraphs && !mark_gone {
             // The mark follows the line's visual end, past every glyph, even where the
             // logically last text runs against the paragraph's direction.
@@ -592,7 +598,7 @@ fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let (pl, line, opts, x, base, alpha) = (ctx.pl, ctx.line, ctx.opts, ctx.x, ctx.base, ctx.alpha);
     for r in pl.rubies.iter().filter(|r| (line.c0..line.c1).contains(&r.cluster)) {
         let Some(bst) = pl.clusters.get(r.cluster).and_then(|c| pl.styles.get(c.style as usize)) else { continue };
-        if bst.rc.del.is_some() && !opts.markup {
+        if (bst.rc.del.is_some() && !opts.markup && !opts.original) || (bst.rc.ins.is_some() && opts.original) {
             continue;
         }
         let cx = x + line.cl_left(r.cluster).unwrap_or(0.0);

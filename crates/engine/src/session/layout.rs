@@ -2,7 +2,7 @@ use super::doc_state::{Selection, TypedWord, typed_range};
 use super::locale::SYSTEM_LOCALE;
 use super::snapshot_types::LayoutEntry;
 use super::view::DRAFT_WIDTH;
-use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, Session, StoryRef, Value, ViewMode};
+use super::{Arc, DocLayout, Document, LayoutCache, LayoutOptions, ReviewDisplay, Session, StoryRef, Value, ViewMode};
 
 impl Session {
     /// The current layout (recomputed when the document or view changed).
@@ -23,8 +23,13 @@ impl Session {
         let spacing = if self.view.read_mode { self.view.read_line_spacing.map(f32::to_bits) } else { None };
         // Deletions in balloons depend on the view (the Comments pane, Read Mode, side by side), so
         // a view change that moves them in or out of the text lays it out again.
-        let hide_deleted = !self.view.show_markup;
-        let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
+        // Simple Markup and No Markup lay out the text as if the changes were accepted, Original
+        // as if they were rejected: its deletions are all shown, whatever their marks.
+        let display = self.view.review_display;
+        let hide_deleted = matches!(display, ReviewDisplay::SimpleMarkup | ReviewDisplay::NoMarkup);
+        let hide_inserted = display == ReviewDisplay::Original;
+        let marked = if hide_inserted { Default::default() } else { self.prefs.markup.hidden_deletions() };
+        let deleted = (hide_deleted, marked, self.revisions_in_balloons(), hide_inserted);
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
         let shown = (self.view.marks || self.prefs.marks.hidden, self.view.field_codes);
         // A dictionary or Language pack installed, removed or edited (in this document's window or
@@ -63,6 +68,7 @@ impl Session {
             read_line_spacing: spacing.map(f32::from_bits),
             show_hidden: shown.0,
             hide_deleted,
+            hide_inserted,
             hide_marked: deleted.1,
             deletions_in_balloons: deleted.2,
             proofing: self.view.proofing,

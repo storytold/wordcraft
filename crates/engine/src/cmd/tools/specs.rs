@@ -346,9 +346,16 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"lang": "en-US|en-GB|pl-PL|nl-NL|…" (BCP 47)} — only the saved default proofing language, what future blank documents are written in, as Options › Language › Set as default does; the open document, the selection and the undo history don't change. Returns {"preferred": tag}."#)
             .pure(),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
-            s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
+            use crate::ReviewDisplay;
+            let shown = s.view.review_display.shows_markup();
+            // Turning markup on keeps Simple Markup if that is shown; it shows All Markup otherwise.
+            s.view.review_display = match p::bool(v, "value").unwrap_or(!shown) {
+                true if shown => s.view.review_display,
+                true => ReviewDisplay::AllMarkup,
+                false => ReviewDisplay::NoMarkup,
+            };
             s.relayout();
-            Ok(json!({"value": s.view.show_markup}))
+            Ok(json!({"value": s.view.review_display.shows_markup()}))
         })
         .pure(),
         CommandSpec::new("review.editor", "Editor", "Home › Editor", |s, v| s.run("review.spelling", v)).pure(),

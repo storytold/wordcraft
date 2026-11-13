@@ -98,8 +98,11 @@ fn dimming(opts: &DisplayOptions) -> (f32, f32) {
 }
 
 fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
-    if opts.markup && (opts.revisions.insertions_deletions || opts.revisions.formatting) && opts.revisions.changed_lines != ChangeBar::None {
-        change_bars(doc, page, items, &opts.revisions, alpha, out);
+    let m = &opts.revisions;
+    if (opts.markup || opts.simple_markup) && (m.insertions_deletions || m.formatting) && m.changed_lines != ChangeBar::None {
+        // Simple Markup's bars are red, whatever colour All Markup's are, as in Word.
+        let color = if opts.markup { m.changed_lines_color.unwrap_or(CHANGE_BAR) } else { SIMPLE_CHANGE_BAR };
+        change_bars(doc, page, items, m, color, alpha, out);
     }
 }
 
@@ -363,9 +366,13 @@ fn warped_text(input: WarpedText<'_, '_, '_, '_, '_, '_>, out: &mut Vec<Draw>) {
 /// The automatic colour of the bars beside changed lines.
 pub const CHANGE_BAR: Rgb = Rgb(0x50, 0x50, 0x50);
 
+/// The colour of the bars beside changed lines in Simple Markup: red, where All Markup's are grey.
+pub const SIMPLE_CHANGE_BAR: Rgb = Rgb(0xFF, 0x00, 0x00);
+
 /// Bars in the margin beside body lines with tracked insertions or deletions, or (when shown)
-/// tracked formatting changes of their text, paragraph or paragraph mark.
-fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions, alpha: f32, out: &mut Vec<Draw>) {
+/// tracked formatting changes of their text, paragraph or paragraph mark, in `color`. Deletions the
+/// layout left out still mark their line: their characters stay in it as markers.
+fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions, color: Rgb, alpha: f32, out: &mut Vec<Draw>) {
     // Outside: the left margin, or the outer one of a right-hand page with mirrored margins.
     let right = match m.changed_lines {
         ChangeBar::Right => true,
@@ -373,7 +380,6 @@ fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions,
         _ => false,
     };
     let bx = if right { page.body.right() + 9.0 } else { page.body.x - 9.0 };
-    let color = m.changed_lines_color.unwrap_or(CHANGE_BAR);
     for it in items {
         let Placed::Lines { story, path, para: pl, l0, l1, y, turn, .. } = it else { continue };
         if turn.is_turned() {

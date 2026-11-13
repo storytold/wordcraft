@@ -61,14 +61,15 @@ pub(super) fn review(app: &mut WordApp, ui: &mut Ui) {
                 app,
                 crate::widgets::MenuButtonOptions::new(
                     "markup",
-                    Some(if app.session.view.show_markup { "All Markup" } else { "No Markup" }),
+                    Some(app.session.view.review_display.label()),
                     "Display for Review",
                     false,
                     "review.markup",
                 ),
                 |ui, app| {
-                    mi(ui, app, "All Markup", "review.markup", json!({"value": "all"}));
-                    mi(ui, app, "No Markup", "review.markup", json!({"value": "noMarkup"}));
+                    for (_, name, label) in wordcraft_engine::ReviewDisplay::ALL {
+                        mi(ui, app, label, "review.markup", json!({"value": name}));
+                    }
                 },
             );
             small(
