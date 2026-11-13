@@ -21,10 +21,10 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
-#[cfg(all(unix, not(target_os = "macos")))]
-mod portal_save;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 mod office_web;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod portal_save;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -453,22 +453,39 @@ fn build_sha() -> &'static str {
 }
 
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
-/// one (#1440). A `--control` port that isn't is an error.
-fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
-    let (mut args, mut files) = (Vec::new(), Vec::new());
-    for (i, a) in std::env::args_os().skip(1).enumerate() {
+/// one (#1440), and the `--plugin` folders whose names aren't. A `--control` port that isn't is an
+/// error.
+fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    match split_args(std::env::args_os().skip(1)) {
+        Ok(split) => split,
+        Err((n, lossy)) => {
+            // Unlike `eprintln!`, never panics.
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: argument {n} is not valid Unicode: {lossy}\n"));
+            std::process::exit(2);
+        }
+    }
+}
+
+/// [`text_args`] for any arguments: the text ones, the files and the add-in folders whose names
+/// aren't text, or the 1-based position (and lossy text) of a `--control` port that isn't text.
+fn split_args(
+    raw: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(Vec<String>, Vec<std::path::PathBuf>, Vec<std::path::PathBuf>), (usize, String)> {
+    let (mut args, mut files, mut plugins) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, a) in raw.enumerate() {
         match a.into_string() {
             Ok(a) => args.push(a),
-            Err(a) if args.last().is_some_and(|p| p == "--control") => {
-                // Unlike `eprintln!`, never panics.
-                let (n, lossy) = (i + 1, a.to_string_lossy());
-                let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: argument {n} is not valid Unicode: {lossy}\n"));
-                std::process::exit(2);
+            Err(a) if args.last().is_some_and(|p| p == "--control") => return Err((i + 1, a.to_string_lossy().into_owned())),
+            // The folder `--plugin` names: kept as one, and the flag goes too, so it doesn't
+            // take the next argument instead.
+            Err(a) if args.last().is_some_and(|p| p == "--plugin") => {
+                args.pop();
+                plugins.push(a.into());
             }
             Err(a) => files.push(a.into()),
         }
     }
-    (args, files)
+    Ok((args, files, plugins))
 }
 
 /// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
@@ -542,7 +559,8 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut sample = false;
     let mut plugin_dirs: Vec<std::path::PathBuf> = Vec::new();
-    let (args, other_files) = text_args();
+    let (args, other_files, other_plugins) = text_args();
+    plugin_dirs.extend(other_plugins);
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
@@ -729,6 +747,19 @@ fn main() -> eframe::Result {
 mod tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
+
+    /// An add-in folder whose name isn't Unicode is still an add-in folder, not a document, and
+    /// `--plugin` doesn't take the argument after it instead.
+    #[test]
+    fn a_plugin_folder_whose_name_isnt_unicode_stays_a_plugin_folder() {
+        let os = |b: &[u8]| std::ffi::OsString::from_vec(b.to_vec());
+        let raw = vec![os(b"--plugin"), os(b"/opt/caf\xe9"), os(b"Report.docx"), os(b"n\xe9.txt")];
+        let (args, files, plugins) = split_args(raw.into_iter()).unwrap();
+        assert_eq!(args, ["Report.docx"]);
+        assert_eq!(files, [std::path::PathBuf::from(os(b"n\xe9.txt"))]);
+        assert_eq!(plugins, [std::path::PathBuf::from(os(b"/opt/caf\xe9"))]);
+        assert_eq!(split_args(vec![os(b"--control"), os(b"\xff")].into_iter()).map_err(|e| e.0), Err(2));
+    }
 
     #[test]
     fn a_file_whose_name_isnt_unicode_opens_and_saves_back_to_itself() {

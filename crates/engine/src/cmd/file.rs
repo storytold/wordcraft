@@ -407,6 +407,19 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     check_strict_output(p::bool(v, "strict").unwrap_or(false), &path.to_string_lossy())?;
+    // Macros need a macro-enabled format: Notes.docx is saved as Notes.docm (the .docx is left alone).
+    let asked = path.clone();
+    let path = crate::io::macro_enabled_path(&s.doc, &asked).unwrap_or(path);
+    let renamed = (path != asked).then(|| asked.to_string_lossy().into_owned());
+    // Whoever asked agreed to replace the name they gave, not the macro-enabled one: another
+    // file already there under that name is left alone. This comes before the password is
+    // taken, so a refused save leaves the password as it was.
+    if renamed.is_some() && s.path.as_deref() != Some(path.as_path()) && crate::io::is_regular_file(&path).is_some() {
+        return Err(CmdError::Failed(format!(
+            "this document has macros, so it is saved as {}, and a file with that name already exists: choose another name",
+            path.display()
+        )));
+    }
     if let Some(pw) = v.get("password").filter(|pw| !pw.is_null()) {
         let Some(pw) = pw.as_str().filter(|pw| !pw.is_empty()) else {
             return Err(CmdError::Params("`password` must be a non-empty string (file.encrypt removes a password)".into()));
@@ -419,18 +432,6 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         wordcraft_docx::check_password(pw).map_err(|e| CmdError::Params(e.to_string()))?;
         s.clear_recovery_before_password()?;
         s.password = Some(crate::io::Password::new(pw));
-    }
-    // Macros need a macro-enabled format: Notes.docx is saved as Notes.docm (the .docx is left alone).
-    let asked = path.clone();
-    let path = crate::io::macro_enabled_path(&s.doc, &asked).unwrap_or(path);
-    let renamed = (path != asked).then(|| asked.to_string_lossy().into_owned());
-    // Whoever asked agreed to replace the name they gave, not the macro-enabled one: another
-    // file already there under that name is left alone.
-    if renamed.is_some() && s.path.as_deref() != Some(path.as_path()) && crate::io::is_regular_file(&path).is_some() {
-        return Err(CmdError::Failed(format!(
-            "this document has macros, so it is saved as {}, and a file with that name already exists: choose another name",
-            path.display()
-        )));
     }
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let mut opts = export_options(s, v);

@@ -211,10 +211,9 @@ impl IdSpace {
             let end = self.start.saturating_add(Self::BLOCK);
             let lo = self.start.max(self.floor);
             let mine = taken.clone().filter(|id| (self.start..end).contains(id)).max().map(|m| m.saturating_add(1)).unwrap_or(lo).max(lo).max(floor);
-            if mine < end {
-                return Some(mine);
-            }
-            // The block is full: one past the highest.
+            // The block is full: no id rather than one past the highest, which can be in
+            // another person's block and collide with an id they make later.
+            return (mine < end).then_some(mine);
         }
         free_id(taken.clone().max(), taken, floor)
     }

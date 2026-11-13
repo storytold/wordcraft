@@ -256,6 +256,35 @@ fn sharing_seeds_the_room_and_joining_brings_the_chat_in() {
     assert_eq!(peers[0].s.doc.chat.messages.len(), 3);
 }
 
+/// A front end that shows documents in windows of their own makes each window's document active
+/// to draw it. Remote changes that arrive meanwhile go into the room's document, never into the
+/// one being drawn, and that one isn't sent to the room.
+#[test]
+fn remote_changes_reach_the_rooms_document_while_another_is_active() {
+    let mut rng = Rng(11);
+    let mut sent = Vec::new();
+    let mut peers = room(2, Document::from_text("Agenda"), None, &mut rng, &mut sent);
+    let shared = peers[0].s.document_id();
+    let other = peers[0].s.add_document(Document::from_text("Private notes"));
+    assert_eq!(peers[0].s.document_id(), other);
+    peers[1].s.run("caret.docStart", &json!({})).unwrap();
+    peers[1].s.run("text.insert", &json!({"text": "Hello "})).unwrap();
+    let mut queue = Vec::new();
+    route(&mut peers, 1, &mut queue, &mut rng, &mut sent);
+    settle(&mut peers, &mut queue, &mut rng, &mut sent);
+    let body = |s: &Session| s.doc.plain_text(StoryRef::Body);
+    assert_eq!(peers[0].s.document_id(), other, "the drawn document stays active");
+    assert!(body(&peers[0].s).contains("Private notes") && !body(&peers[0].s).contains("Hello"), "{:?}", body(&peers[0].s));
+    let text = peers[0].s.with_document(shared, |s| body(s)).unwrap();
+    assert!(text.contains("Hello Agenda"), "{text:?}");
+    assert!(!body(&peers[1].s).contains("Private"), "the other document never reached the room");
+    assert!(peers[0].s.collab.room.is_some(), "the session goes on");
+    // Closing the room's document ends the session at the next poll.
+    peers[0].s.close_document(shared).unwrap();
+    peers[0].s.collab_poll_pushed(5_000, Vec::new());
+    assert!(peers[0].s.collab.room.is_none());
+}
+
 #[test]
 fn clearing_reaches_everyone() {
     let mut rng = Rng(11);

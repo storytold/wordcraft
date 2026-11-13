@@ -297,8 +297,12 @@ impl Session {
                     self.bib_style = bib_style;
                     self.merge.preview = merge_preview;
                 }
+                // The chat isn't rolled back (a nested command's message may be shared already),
+                // so a chat that changed is still an unsaved change once `dirty` is restored.
+                let mut chat_changed = false;
                 if let Some((d, s, h, r, t, ev, c)) = before_doc {
                     let chat = self.doc.chat.clone();
+                    chat_changed = d.chat != chat;
                     self.doc = d;
                     self.doc.chat = chat;
                     self.sel = s;
@@ -316,6 +320,7 @@ impl Session {
                 if let Some(dirty) = dirty_before {
                     self.dirty = dirty;
                 }
+                self.dirty |= chat_changed;
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
                 }

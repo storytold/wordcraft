@@ -29,6 +29,11 @@ impl Events {
     pub fn take(&self) -> Vec<Event> {
         std::mem::take(&mut *self.queue.borrow_mut())
     }
+    /// A frame the socket refused waits here for the next one to hand back to the session:
+    /// until then it counts as unsent too, so the page isn't left meanwhile.
+    pub fn has_unsent(&self) -> bool {
+        self.queue.borrow().iter().any(|e| matches!(e, Event::Unsent(_)))
+    }
     pub fn set_context(&self, ctx: egui::Context) {
         *self.ctx.borrow_mut() = Some(ctx);
     }

@@ -472,6 +472,8 @@ pub struct Live {
     loaded: bool,
     /// The reason in a permission-denied message, for the close that follows it.
     denied: Option<String>,
+    /// Close was asked while edits hadn't reached the room: the next Close discards them.
+    close_warned: bool,
     now: u64,
     out: Vec<Action>,
 }
@@ -497,6 +499,7 @@ impl Live {
             pending: Vec::new(),
             loaded: false,
             denied: None,
+            close_warned: false,
             now: 0,
             out: Vec::new(),
         }
@@ -584,6 +587,14 @@ impl Live {
             Event::Prepared(r) => self.prepared(s, r),
             Event::Shell(m) => self.shell(s, &m),
             Event::Save => self.save_now(),
+            // Leaving the room drops edits that haven't reached it: the first Close says so and
+            // keeps the room, a second one is the person's say-so to discard them.
+            Event::Close if self.has_unsent() && !self.close_warned => {
+                self.close_warned = true;
+                self.out.push(Action::Status(
+                    tl!("Your latest changes haven't reached the others yet. Wait for the connection, or close again to discard them.").to_string(),
+                ));
+            }
             Event::Close => {
                 self.out.push(Action::Shell(json!({"type": "craft-live:close"})));
                 self.close(s);
@@ -596,6 +607,10 @@ impl Live {
     /// Every frame: reconnects when it's time, and sends what the engine produced.
     pub fn tick(&mut self, s: &mut Session, now: u64) {
         self.now = now;
+        // Everything went out: a later Close with new unsent edits warns again.
+        if !self.has_unsent() {
+            self.close_warned = false;
+        }
         if self.socket == Socket::Down
             && let Some(at) = self.retry_at
             && now >= at

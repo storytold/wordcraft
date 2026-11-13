@@ -229,8 +229,9 @@ impl LiveShell {
         live.tick(&mut app.session, now);
         let actions = live.take_actions();
         self.io.run(actions, app);
-        // Queued in the session, or sent but still in the browser's buffer.
-        self.unsent.set(live.has_unsent() || self.io.buffered());
+        // Queued in the session, refused by the socket and waiting for the next frame, or sent
+        // but still in the browser's buffer.
+        self.unsent.set(live.has_unsent() || self.io.events.has_unsent() || self.io.buffered());
     }
 }
 

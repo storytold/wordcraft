@@ -503,6 +503,10 @@ fn save_turns_a_docx_with_macros_into_a_docm() {
     assert!(e.to_string().contains("already exists"), "{e}");
     assert_eq!(std::fs::read(dir.join("Report.docm")).expect("read"), b"someone else's");
     assert!(!dir.join("Report.docx").exists() && s.path.is_none());
+    // Asked with a password, the refused save doesn't take the password either.
+    let e = s.run("file.save", &serde_json::json!({"path": dir.join("Report.docx"), "password": "secret"})).expect_err("refused");
+    assert!(e.to_string().contains("already exists"), "{e}");
+    assert!(s.password.is_none(), "the refused save left the password unchanged");
     // Without macros a .docx stays a .docx.
     let mut s = wordcraft_engine::Session::new(Document::from_text("plain"));
     let r = s.run("file.save", &serde_json::json!({"path": dir.join("Plain.docx")})).expect("save");

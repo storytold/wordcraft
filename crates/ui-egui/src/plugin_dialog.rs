@@ -38,6 +38,9 @@ enum Edit {
 pub struct PluginDialog {
     /// The add-in whose commands the dialog runs.
     pub plugin: String,
+    /// Written as `spec`: `dialogs::Dialog` is tagged by a `dialog` key, which a field of that
+    /// name would overwrite in the UI state a script reads.
+    #[serde(rename = "spec")]
     pub dialog: Dialog,
     filter: String,
     /// Indices of the items for `filtered_for`'s filter.

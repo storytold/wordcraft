@@ -448,7 +448,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     match entry {
                         // Every tab hidden: nothing to show.
                         Some(e) if e.hidden => return,
-                        Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
+                        // A tab of the user's own: its groups, then those add-ins and the
+                        // document put on a tab of that name.
+                        Some(e) if e.custom => {
+                            custom_groups(app, ui, &e.groups);
+                            let tab = app.ui.tab.clone();
+                            crate::plugin_ui::ribbon_groups(app, ui, &tab);
+                            crate::dialogs_developer::book_ribbon_groups(app, ui, &tab);
+                            return;
+                        }
                         _ => {}
                     }
                     match app.ui.tab.as_str() {

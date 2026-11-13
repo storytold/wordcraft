@@ -32,14 +32,15 @@ impl WordApp {
         if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
             return crate::md_source::undo(self, id == "edit.redo");
         }
-        if let Some(r) = self.host_command(id) {
-            return r;
-        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
         let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        // The host saves or closes the document as it stands, so after the draft is in it.
+        if let Some(r) = self.host_command(id) {
+            return r;
+        }
         // An add-in command run from the interface: its dialog or file comes after it (below).
         let plugin = (id == "plugins.run").then(|| params.get("plugin").and_then(Value::as_str).map(str::to_string)).flatten();
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {

@@ -138,6 +138,10 @@ fn dialogs_chain_and_end_by_opening_a_file() {
     let mut h = harness(a);
     h.run_steps(4);
     assert_eq!(shown(&h).as_deref(), Some("Open from the cloud"));
+    // A script reading the UI's state sees which dialog this is, and the add-in's dialog in it.
+    let state = serde_json::to_value(&h.state().dialog).unwrap();
+    assert_eq!(state["dialog"], "plugin", "{state}");
+    assert_eq!(state["spec"]["title"], "Open from the cloud", "{state}");
     assert!(h.query_by_label("Documents").is_some(), "the prompt");
     assert!(h.query_by_label("Up").is_some(), "the add-in's button");
     // A click picks the folder, OK runs `browse` with its id, and the answer is the next dialog.

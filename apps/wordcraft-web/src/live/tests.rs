@@ -846,6 +846,35 @@ fn hostile_control_messages_change_nothing() {
     assert!(room.uploads.is_empty());
 }
 
+/// Close while edits haven't reached the room (the connection is down) keeps the room and says
+/// so; closing again discards them.
+#[test]
+fn closing_with_unsent_edits_asks_for_a_second_close() {
+    let mut room = Room::new("Plan.docx", docx_with("Base", "Plan.docx"));
+    let a = room.open("ada", true);
+    room.settle();
+    room.drop_tab(a);
+    room.tabs[a].events.push(Event::Closed { code: 1006, reason: String::new() });
+    room.step();
+    type_in(&mut room.tabs[a], "Offline edit. ").unwrap();
+    room.step();
+    assert!(room.tabs[a].live.has_unsent());
+    room.tabs[a].events.push(Event::Close);
+    // Handled in one step, its status line carried out in the next.
+    room.step();
+    room.step();
+    let t = &room.tabs[a];
+    assert_eq!(t.live.phase, Phase::Live, "the room is kept");
+    assert!(!t.shell_types().contains(&"craft-live:close".to_string()));
+    assert!(t.status.iter().any(|m| m.contains("close again to discard")), "{:?}", t.status);
+    room.tabs[a].events.push(Event::Close);
+    room.step();
+    room.step();
+    let t = &room.tabs[a];
+    assert_eq!(t.live.phase, Phase::Closed);
+    assert!(t.shell_types().contains(&"craft-live:close".to_string()));
+}
+
 #[test]
 fn a_frame_the_socket_refused_waits_and_keeps_the_page_guarded() {
     let cfg = Config::from_json(&json!({"ws": "ws://127.0.0.1:9/ws/r", "room": "r", "token": "t", "seed": false, "role": "edit"})).unwrap();

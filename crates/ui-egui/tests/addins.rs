@@ -68,6 +68,13 @@ fn add_ins_bring_ribbon_tabs_groups_and_menu_items() {
     h.state_mut().run("ui.tab", json!({"tab": "Review"})).unwrap();
     h.run_steps(4);
     assert!(h.query_by_label("Count Here").is_some(), "a group at the end of a built-in tab");
+    // A tab of the user's own with the add-in's tab name is one tab: its groups, then the add-in's.
+    h.state_mut().run("tools.customizeRibbon", json!({"newTab": {"name": "Tidy"}})).unwrap();
+    h.state_mut().run("ui.tab", json!({"tab": "Tidy"})).unwrap();
+    h.run_steps(4);
+    assert!(h.state().session.ribbon.tabs().iter().any(|t| t.name == "Tidy" && t.custom));
+    assert!(h.query_by_label("Tidy Up").is_some(), "the add-in's buttons on the user's tab");
+    h.state_mut().run("tools.customizeRibbon", json!({"reset": "ribbon"})).unwrap();
     // The right-click menu: text items always, table items in a table; the plain `ui` (another
     // app's cell menu) isn't used because `uiFor.wordcraft` is there.
     let labels = |t: bool, p: bool| wordcraft_ui_egui::plugin_ui::menu_items(t, p).into_iter().map(|i| i.label).collect::<Vec<_>>();

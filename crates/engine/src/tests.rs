@@ -5194,6 +5194,24 @@ fn caught_panic_flags_a_command_that_panics() {
     assert!(!caught_panic(&full.registry, &echoed), "{echoed:?}");
 }
 
+/// The chat isn't rolled back with a failed command (a message may be shared already), so the
+/// unsaved-changes flag it set stays set: closing then still asks about it.
+#[test]
+fn a_failed_command_keeps_the_chat_it_changed_unsaved() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Notes"));
+    let failing = crate::CommandSpec::new("test.chatThenFail", "Chat Then Fail", "", |s, _| {
+        s.run("chat.send", &json!({"text": "Sent before the failure"}))?;
+        Err(crate::CmdError::Failed("later step failed".into()))
+    });
+    let mut specs: Vec<crate::CommandSpec> = s.registry.all().to_vec();
+    specs.push(failing);
+    s.registry = std::sync::Arc::new(crate::Registry::new(specs));
+    s.dirty = false;
+    assert!(s.run("test.chatThenFail", &json!({})).is_err());
+    assert_eq!(s.doc.chat.messages.len(), 1, "the chat isn't rolled back");
+    assert!(s.dirty, "the kept chat message is an unsaved change");
+}
+
 #[test]
 fn inspect_reports_structure() {
     let mut s = Session::new(crate::sample::sample_document());

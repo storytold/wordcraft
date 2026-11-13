@@ -569,11 +569,12 @@ pub fn now_unix() -> u64 {
 
 /// Milliseconds since the Unix epoch: the system clock, or the browser's on the web.
 pub fn now_ms() -> i64 {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     {
         std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| i64::try_from(d.as_millis()).unwrap_or(0)).unwrap_or(0)
     }
-    #[cfg(target_arch = "wasm32")]
+    // As in `now_unix`: js-sys is a dependency on wasm32-unknown-unknown only (WASI has a clock).
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     {
         let ms = js_sys::Date::now();
         if ms.is_finite() && ms > 0.0 { ms as i64 } else { 0 }

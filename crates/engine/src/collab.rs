@@ -774,6 +774,28 @@ impl Session {
     /// [`Session::collab_poll`] with the messages given (several sessions in one process share
     /// the plugins' queue: the caller splits it; [`IN_MEMORY`] rooms get theirs this way).
     pub fn collab_poll_pushed(&mut self, now: u64, pushed: Vec<Pushed>) -> bool {
+        // The room is its document's: with another one active (a front end drawing another
+        // window), the room's is made active for the poll, so its changes never reach the other
+        // one. A room whose document closed ends, as `after_command` ends it.
+        let home = self.document_id();
+        match self.collab.room.as_ref().map(|r| r.document).filter(|&d| d != home) {
+            None => self.poll_room(now, pushed),
+            Some(doc) if self.is_open(doc) => match self.with_document(doc, |s| s.poll_room(now, pushed)) {
+                Ok(changed) => changed,
+                Err(_) => {
+                    leave_room(self, Some("the document was closed"), true);
+                    true
+                }
+            },
+            Some(_) => {
+                leave_room(self, Some("the document was closed"), true);
+                true
+            }
+        }
+    }
+
+    /// [`Session::collab_poll_pushed`] with the room's document active.
+    fn poll_room(&mut self, now: u64, pushed: Vec<Pushed>) -> bool {
         self.collab.now = now;
         let mut changed = false;
         if let Some(mut r) = self.collab.room.take() {
