@@ -52,6 +52,12 @@ pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()
 }
 
+/// Does the document carry a VBA project (`word/vbaProject.bin`)? The document invariant the
+/// macros banner and the `document.macros` audit read; the project itself never runs.
+pub fn has_macros(doc: &Document) -> bool {
+    doc.passthrough.contains_key(wordcraft_docx::VBA_PROJECT_PART)
+}
+
 /// How a copy in another format is written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExportOptions {
