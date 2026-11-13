@@ -7,7 +7,7 @@ use wordcraft_doc::{Pos, StoryRef, Table};
 
 use crate::{Selection, Session};
 
-fn run(s: &mut Session, id: &str, v: Value) -> Value {
+pub(super) fn run(s: &mut Session, id: &str, v: Value) -> Value {
     s.run(id, &v).unwrap_or_else(|e| panic!("{id}: {e}"))
 }
 
@@ -17,12 +17,12 @@ fn visible(s: &Session) -> String {
     p.run_ranges().filter(|(_, c)| c.del.is_none()).filter_map(|(r, _)| p.text.get(r)).collect::<String>().replace(OBJ, "")
 }
 
-fn table(s: &Session) -> Option<&Table> {
+pub(super) fn table(s: &Session) -> Option<&Table> {
     s.doc.body.iter().find_map(|b| b.as_table())
 }
 
 /// Every cell's text, row by row (deleted text included).
-fn cells(s: &Session) -> Vec<Vec<String>> {
+pub(super) fn cells(s: &Session) -> Vec<Vec<String>> {
     table(s)
         .map(|t| {
             t.rows
@@ -34,7 +34,7 @@ fn cells(s: &Session) -> Vec<Vec<String>> {
 }
 
 /// Whether every character of every cell in `which` is a tracked deletion.
-fn cells_deleted(s: &Session, which: &[(usize, usize)]) -> bool {
+pub(super) fn cells_deleted(s: &Session, which: &[(usize, usize)]) -> bool {
     let Some(t) = table(s) else { return false };
     which.iter().all(|(r, c)| {
         let cell = &t.rows[*r].cells[*c];
@@ -44,9 +44,14 @@ fn cells_deleted(s: &Session, which: &[(usize, usize)]) -> bool {
 
 /// A 2×2 table holding A1 B1 / A2 B2, the caret in A1 (at its start).
 fn table_session() -> Session {
+    filled_table(2, &["A1", "B1", "A2", "B2"])
+}
+
+/// A table `cols` cells wide holding `texts` row by row, the caret in its first cell.
+pub(super) fn filled_table(cols: usize, texts: &[&str]) -> Session {
     let mut s = Session::new(wordcraft_doc::Document::new());
-    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
-    for (i, t) in ["A1", "B1", "A2", "B2"].iter().enumerate() {
+    run(&mut s, "insert.table", json!({"rows": texts.len().div_ceil(cols.max(1)), "cols": cols}));
+    for (i, t) in texts.iter().enumerate() {
         if i > 0 {
             run(&mut s, "text.tab", json!({}));
         }
@@ -56,7 +61,7 @@ fn table_session() -> Session {
     s
 }
 
-fn caret_in(s: &mut Session, r: u32, c: u32, off: usize) {
+pub(super) fn caret_in(s: &mut Session, r: u32, c: u32, off: usize) {
     s.sel = Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, r, c, 0]), off });
 }
 

@@ -1023,6 +1023,8 @@ fn input_dialog_table(id: &str, params: &Value) -> Option<&'static str> {
         "table.formula" if !has_value(params, "formula") => Some("tableFormula"),
         "table.sort" if no_settings(params) => Some("tableSort"),
         "table.split" if no_settings(params) => Some("splitCells"),
+        "table.insertCells" if no_settings(params) => Some("insertCells"),
+        "table.deleteCells" if no_settings(params) => Some("deleteCells"),
         "table.fromText" if no_settings(params) => Some("textToTable"),
         "table.toText" if no_settings(params) => Some("tableToText"),
         "para.tabs" if no_settings(params) => Some("tabs"),

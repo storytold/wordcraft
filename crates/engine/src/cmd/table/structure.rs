@@ -19,13 +19,25 @@ pub(in crate::cmd) fn row(s: &mut Session, below: bool) -> CmdResult {
 /// Insert Left / Right: a column beside the caret's cell; the caret goes into it.
 pub(in crate::cmd) fn col(s: &mut Session, right: bool) -> CmdResult {
     let (tp, r, c) = cell(s)?;
-    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    let t = s.doc.table(s.sel.focus.story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
     let g = t.grid_col(r, c);
     let span = t.rows.get(r).and_then(|x| x.cells.get(c)).map(|x| x.span()).unwrap_or(1);
-    t.insert_col(if right { g + span } else { g });
+    insert_cols(s, if right { g + span } else { g }, 1, (r, if right { c + 1 } else { c }))
+}
+
+/// Insert `n` grid columns at grid index `g`, keeping the table within its width (all columns
+/// shrink in proportion); the caret goes to cell `caret` (row, cell).
+pub(super) fn insert_cols(s: &mut Session, g: usize, n: usize, caret: (usize, usize)) -> CmdResult {
+    let (tp, _, _) = cell(s)?;
+    let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    let n = n.clamp(1, wordcraft_doc::table::MAX_COLS.saturating_sub(t.grid.len()).max(1));
+    for _ in 0..n {
+        t.insert_col(g);
+    }
     // Keep the table within its width: shrink all columns proportionally.
     let total: f32 = t.grid.iter().sum();
-    let before: f32 = total - t.grid.get(if right { g + span } else { g }).copied().unwrap_or(0.0);
+    let added: f32 = t.grid.get(g..g.saturating_add(n).min(t.grid.len())).map_or(0.0, |x| x.iter().sum());
+    let before: f32 = total - added;
     if before > 0.0 {
         let k = before / total;
         t.grid.iter_mut().for_each(|w| *w *= k);
@@ -33,7 +45,7 @@ pub(in crate::cmd) fn col(s: &mut Session, right: bool) -> CmdResult {
     // The inserted cells carry the pre-scale column width, and the layout prefers a cell width
     // over the grid: sync them, or the shrink never reaches the layout or the saved `w:tcW`.
     sync_cell_widths(t);
-    fix_caret(s, &tp, r, if right { c + 1 } else { c })
+    fix_caret(s, &tp, caret.0, caret.1)
 }
 
 pub(super) fn del_row(s: &mut Session, _: &Value) -> CmdResult {
