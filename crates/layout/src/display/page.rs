@@ -612,6 +612,7 @@ mod tests_warp_lookups {
             text_box: id,
             wrap: Default::default(),
             origin: Default::default(),
+            group_boxes: Vec::new(),
         }
     }
 
