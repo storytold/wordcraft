@@ -20,6 +20,9 @@ impl Reader<'_> {
                         && prev.section.is_none()
                         && prev.text.len() <= 16
                         && p.props.drop_cap.is_none()
+                        // An empty paragraph after it has no text to drop into: merging would take
+                        // the letter's size away and leave a paragraph too short to drop a letter.
+                        && p.text.chars().any(|c| c != wordcraft_doc::para::OBJ)
                         && let Some(Block::Para(mut first)) = out.pop().map(|b| (*b).clone())
                     {
                         let mut props = p.props.clone();
@@ -28,13 +31,42 @@ impl Reader<'_> {
                         props.drop_cap_distance = first.props.drop_cap_distance;
                         // A letter in a font of its own: the drop cap's font, the letter itself
                         // in the text's (so taking the drop cap away gives the letter its font back).
-                        let cap_font = first.runs.first().and_then(|r| r.props.font.clone());
-                        let text_font = p.runs.first().and_then(|r| r.props.font.clone());
+                        // Bookmark/comment markers are object runs and can precede the first text
+                        // run. Find the font from the first actual text in each paragraph.
+                        let text_run = |para: &Paragraph| {
+                            let mut start = 0;
+                            para.runs.iter().position(|r| {
+                                let end = start + r.len;
+                                let has_text = para.text.get(start..end).is_some_and(|part| part.chars().any(|c| c != wordcraft_doc::para::OBJ));
+                                start = end;
+                                has_text
+                            })
+                        };
+                        let cap_run = text_run(&first);
+                        let cap_font = cap_run.and_then(|i| first.runs.get(i)).and_then(|r| r.props.font.clone());
+                        let text_font = text_run(&p).and_then(|i| p.runs.get(i)).and_then(|r| r.props.font.clone());
                         if cap_font.is_some() && cap_font != text_font {
                             for r in first.runs.iter_mut().filter(|r| r.props.font == cap_font) {
                                 r.props.font = text_font.clone();
                             }
                             props.drop_cap_font = cap_font;
+                        }
+                        // The same for the size: the letter carries the enlarged one the file's
+                        // writer computed, and the layout sizes a dropped letter from the text
+                        // around it — keeping it would render the enlargement twice (#3000).
+                        // A leading bookmark or comment anchor is a run of its own: sizes come from the
+                        // first run with text, in the text and in the letter's frame alike.
+                        let text_sizes = |q: &Paragraph| {
+                            q.run_ranges()
+                                .find(|(range, _)| q.text.get(range.clone()).is_some_and(|t| t.chars().any(|c| c != wordcraft_doc::para::OBJ)))
+                                .map(|(_, props)| (props.size, props.size_cs))
+                        };
+                        let (text_size, text_size_cs) = text_sizes(&p).unwrap_or((None, None));
+                        // Only runs at the letter's enlarged size: a frame run with a size of its own keeps it.
+                        let cap_size = text_sizes(&first);
+                        for r in first.runs.iter_mut().filter(|r| Some((r.props.size, r.props.size_cs)) == cap_size) {
+                            r.props.size = text_size;
+                            r.props.size_cs = text_size_cs;
                         }
                         first.append(p);
                         first.props = props;

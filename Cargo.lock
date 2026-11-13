@@ -6838,6 +6838,7 @@ dependencies = [
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
+ "wordcraft-render",
  "wordcraft-ui-egui",
  "x11-dl",
  "x11rb",
