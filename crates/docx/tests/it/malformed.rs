@@ -165,6 +165,40 @@ fn millions_of_attributes_on_one_paragraph_are_capped() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
 }
 
+/// Attributes distributed across many elements cannot exceed the cumulative budget, while large
+/// writer output (65,537 alternating formatted runs) saves and reopens within the limit (#4299).
+#[test]
+fn cumulative_attributes_across_many_paragraphs_are_capped() {
+    let attrs = " a=\"\"".repeat(1024);
+    let elem = format!("<w:p{attrs}><w:r><w:t>x</w:t></w:r></w:p>");
+    let body = elem.repeat(1025);
+    let x = format!("<w:document {W_NS}><w:body>{body}</w:body></w:document>");
+    match read(&doc_zip(x.as_bytes())) {
+        Err(DocxError::Limit(_)) => {}
+        Ok(_) => panic!("expected a Limit error for cumulative attributes"),
+        Err(e) => panic!("expected a Limit error, got {e}"),
+    }
+
+    // Writer output with 65,537 alternating formatted runs (4 attributes per run = 262,148
+    // attributes) saves and reopens within the budget.
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.text = " x".repeat(65_537);
+    p.runs.clear();
+    for i in 0..65_537usize {
+        let props = wordcraft_doc::props::CharProps {
+            font: Some(if i % 2 == 0 { "Serif".into() } else { "Sans".into() }),
+            color: Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::props::Rgb((i & 0xFF) as u8, 0, 0))),
+            ..Default::default()
+        };
+        p.runs.push(wordcraft_doc::para::Run { len: 2, props });
+    }
+    let mut d = wordcraft_doc::Document::new();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let saved = write(&d).unwrap();
+    let reopened = read(&saved).unwrap();
+    assert_eq!(reopened.plain_text(wordcraft_doc::StoryRef::Body).len(), 65_537 * 2);
+}
+
 /// A small valid document.xml to mutate.
 fn base_xml() -> String {
     format!(
