@@ -101,6 +101,89 @@ fn a_hanging_indent_style_previews_from_the_tile_edge() {
     assert!(last - first > 40, "the first line is cut off by the tile's left edge (ink {first}..{last})");
 }
 
+/// `style`'s preview picture in `doc`'s gallery and the part of its width the tile paints, as
+/// the `u` range of the painted mesh.
+fn gallery_preview(doc: Document, style: wordcraft_doc::styles::Style) -> (egui::ColorImage, f32, f32) {
+    let (shapes, mut images) = run_gallery(doc, style);
+    let at = images.iter().position(|i| (200..300).contains(&i.size[0]) && (20..60).contains(&i.size[1])).expect("the preview is rendered");
+    let (u0, u1) = shapes
+        .iter()
+        .find_map(|s| match &s.shape {
+            egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => {
+                let us: Vec<f32> = m.vertices.iter().map(|v| v.uv.x).collect();
+                Some((us.iter().copied().fold(f32::MAX, f32::min), us.iter().copied().fold(f32::MIN, f32::max)))
+            }
+            _ => None,
+        })
+        .expect("the preview is painted");
+    (images.swap_remove(at), u0, u1)
+}
+
+/// Two tiles are the same picture, cut in the same place.
+fn assert_same_tile(a: &(egui::ColorImage, f32, f32), b: &(egui::ColorImage, f32, f32)) {
+    assert_eq!(a.1, b.1, "the tile cuts the picture elsewhere than its left-to-right twin");
+    assert_eq!(a.0.size, b.0.size);
+    let differ = a.0.pixels.iter().zip(&b.0.pixels).filter(|(x, y)| x != y).count();
+    assert_eq!(differ, 0, "{differ} pixels differ from the left-to-right twin");
+}
+
+/// #4944: the sample reads left to right whatever the style's direction, so with large type,
+/// where it is wider than its tile, a right-to-left tile must be the same picture, cut in the same
+/// place, as its left-to-right twin. Ink alone wouldn't do: a sample cut at its start has ink too.
+#[test]
+fn a_large_right_to_left_style_previews_like_its_left_to_right_twin() {
+    let tile = |bidi: Option<bool>| {
+        let mut style = gallery_style("Large");
+        style.chr.size = Some(28.0);
+        style.para.bidi = bidi;
+        gallery_preview(Document::new(), style)
+    };
+    let ltr = tile(None);
+    let rtl = tile(Some(true));
+    let (ltr_picture, _, ltr_u1) = &ltr;
+    let [w, h] = ltr_picture.size;
+    // The sample must run past the tile, or this says nothing about where the tile cuts it.
+    let cut = (ltr_u1 * w as f32) as usize;
+    let past_tile = (cut..w).any(|x| (0..h).any(|y| ltr_picture.pixels.get(y * w + x).is_some_and(|p| p.a() > 0 && p.r() < 160)));
+    assert!(past_tile, "the sample ends inside the tile at u {ltr_u1}");
+    assert_same_tile(&rtl, &ltr);
+}
+
+/// #4944, the issue's steps: Normal updated to match a right-to-left paragraph. A large style that
+/// only inherits the direction from Normal must show the same tile as in a document without any
+/// right-to-left.
+#[test]
+fn a_style_inheriting_right_to_left_from_normal_previews_like_its_left_to_right_twin() {
+    let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), Default::default());
+    for (command, params) in [("text.insert", json!({"text": "Some text"})), ("para.rtl", json!({})), ("styles.updateToMatch", json!({}))] {
+        let _ = app.run(command, params);
+    }
+    let right_to_left = app.session.doc.clone();
+    let normal = wordcraft_doc::props::ParaProps { style: Some("Normal".into()), ..Default::default() };
+    assert!(right_to_left.styles.resolve_para(&normal).bidi, "Update to Match made Normal right to left");
+    let tile = |doc: Document| {
+        let mut style = gallery_style("Large");
+        style.based_on = Some("Normal".into());
+        style.chr.size = Some(28.0);
+        gallery_preview(doc, style)
+    };
+    assert_same_tile(&tile(right_to_left), &tile(Document::new()));
+}
+
+/// #4944: a right-to-left style's sample was laid out at the right end of its picture, and the
+/// tile shows the left end, so the tile was blank. The sample now stands at the left edge.
+#[test]
+fn a_right_to_left_style_previews_its_sample_text() {
+    let mut style = gallery_style("Right to left");
+    style.para.bidi = Some(true);
+    let (preview, u0, u1) = gallery_preview(Document::new(), style);
+    let [w, h] = preview.size;
+    let inked: Vec<bool> = (0..w).map(|x| (0..h).any(|y| preview.pixels.get(y * w + x).is_some_and(|p| p.a() > 0 && p.r() < 160))).collect();
+    let shown = ((u0 * w as f32) as usize).min(w)..((u1 * w as f32).ceil() as usize).min(w);
+    let ink = inked.get(shown.clone()).map_or(0, |c| c.iter().filter(|&&i| i).count());
+    assert!(ink > 20, "the tile shows columns {shown:?} of the preview, which have {ink} inked columns");
+}
+
 /// #663: gallery previews are dimmed in the dark theme, unless they show Switch Modes' dark
 /// page; the light theme keeps a white page.
 #[test]
