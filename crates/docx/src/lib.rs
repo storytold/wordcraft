@@ -11,6 +11,7 @@ mod bibliography;
 mod chart_spec;
 mod crypt;
 mod custom;
+mod fit;
 mod flat;
 mod fonts;
 mod package;
