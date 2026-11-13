@@ -133,7 +133,7 @@ pub(super) fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResul
                 let e = e.ok_or_else(|| CmdError::Params(format!("no Quick Part `{name}`")))?;
                 let blocks: Vec<_> = e.blocks.iter().map(|b| (**b).clone()).collect();
                 let media = s.doc.media_of_blocks(&blocks);
-                wordcraft_doc::edit::Fragment { blocks, parts: Default::default(), media }
+                wordcraft_doc::edit::Fragment { blocks, media, ..Default::default() }
             }
         };
         let at = delete_selection(s)?;

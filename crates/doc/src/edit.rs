@@ -2,7 +2,7 @@
 //! paragraphs and tables, apply character/paragraph formatting, copy a range to a fragment and
 //! paste a fragment.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -20,9 +20,20 @@ pub struct Fragment {
     /// gives each box a new story made from these.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub parts: BTreeMap<u32, Part>,
+    /// The comments anchored in its text, with their replies, by the source document's comment
+    /// id: pasting into another document brings them along ([`Document::insert_fragment`]).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub comments: BTreeMap<u32, CopiedComment>,
     /// Media items referenced by objects in this fragment.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "crate::byte_store")]
     pub media: BTreeMap<String, Arc<Vec<u8>>>,
+}
+
+/// A comment a [`Fragment`] carries, with a copy of its text.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+pub struct CopiedComment {
+    pub comment: crate::Comment,
+    pub story: Part,
 }
 
 impl Fragment {
@@ -210,6 +221,9 @@ struct BoxBudget {
     costs: BTreeMap<u32, usize>,
     /// Boxes left without a story because the paste's budget couldn't hold theirs.
     skipped: usize,
+    /// The text box stories the paste has made, so the comments it brings can be anchored in them
+    /// ([`Document::bring_comments`]).
+    made: Vec<u32>,
     /// A box the fragment has no story for may show this document's story of that id (a
     /// fragment copied from this document without its parts). Off for another document's
     /// fragment, whose ids mean nothing here.
@@ -218,7 +232,15 @@ struct BoxBudget {
 
 impl BoxBudget {
     fn new() -> BoxBudget {
-        BoxBudget { stories: MAX_PASTED_BOXES, bytes: MAX_PASTED_BOX_BYTES, active: Vec::new(), costs: BTreeMap::new(), skipped: 0, local: true }
+        BoxBudget {
+            stories: MAX_PASTED_BOXES,
+            bytes: MAX_PASTED_BOX_BYTES,
+            active: Vec::new(),
+            costs: BTreeMap::new(),
+            skipped: 0,
+            made: Vec::new(),
+            local: true,
+        }
     }
 }
 
@@ -563,6 +585,60 @@ fn perm_end<'a>(blocks: impl Iterator<Item = &'a Arc<Block>>) -> u32 {
 /// Text box story ids of a paragraph's shapes.
 fn box_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
     p.objects.iter().flat_map(InlineObject::text_boxes)
+}
+
+/// The comments `p` holds an anchor of (a start or an end).
+fn comment_ids(p: &Paragraph) -> impl Iterator<Item = u32> + '_ {
+    p.objects.iter().filter_map(|o| match o {
+        InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } => Some(*id),
+        _ => None,
+    })
+}
+
+/// Add the text boxes and the comments `b` refers to to `boxes` and `notes`.
+fn story_refs(b: &Block, boxes: &mut Vec<u32>, notes: &mut Vec<u32>) {
+    each_para(b, 0, &mut |p| {
+        boxes.extend(box_ids(p));
+        notes.extend(comment_ids(p));
+    });
+}
+
+/// Point the anchors in `p` of the `foreign` comments (another document's) at the ids they were
+/// brought under (`ids`): an end whose start isn't pasted (not in `starts`) gets one just before
+/// it, and the anchor of a comment that wasn't brought goes.
+fn remap_comment_marks(p: &mut Paragraph, foreign: &BTreeSet<u32>, ids: &BTreeMap<u32, u32>, starts: &BTreeSet<u32>) {
+    let marks: Vec<(usize, bool, u32)> = p
+        .objects_with_offsets()
+        .filter_map(|(off, o)| match o {
+            InlineObject::CommentStart { id } if foreign.contains(id) => Some((off, false, *id)),
+            InlineObject::CommentEnd { id } if foreign.contains(id) => Some((off, true, *id)),
+            _ => None,
+        })
+        .collect();
+    if marks.is_empty() {
+        return;
+    }
+    for o in p.objects.iter_mut() {
+        if let InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } = o
+            && let Some(new) = ids.get(id)
+        {
+            *id = *new;
+        }
+    }
+    // Last first, so the offsets still to visit don't move.
+    for (off, end, old) in marks.into_iter().rev() {
+        match ids.get(&old) {
+            Some(new) if end && !starts.contains(&old) => {
+                let props = p.props_at(off).clone();
+                let _ = p.insert_object(off, InlineObject::CommentStart { id: *new }, &props);
+            }
+            Some(_) => {}
+            None => {
+                let _ = p.delete(off, off.saturating_add(crate::para::OBJ.len_utf8()));
+            }
+        }
+    }
+    p.touch();
 }
 
 /// Remap media references in an inline object.
@@ -1011,14 +1087,10 @@ impl Document {
         Ok(())
     }
 
-    /// Copy `a..b` into a fragment (with copies of the text boxes in it).
+    /// Copy `a..b` into a fragment (with copies of the text boxes and comments in it).
     pub fn copy_range(&self, a: &Pos, b: &Pos) -> Fragment {
-        let mut blocks = self.copy_blocks(a, b);
         // Half a content control (one marker without the other) isn't copied.
-        crate::control::balance_blocks(&mut blocks);
-        let parts = self.text_box_parts(&blocks);
-        let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        self.fragment_of(self.copy_blocks(a, b))
     }
 
     /// A copy of the block at `path` (a whole table, say) as a fragment, with its text boxes.
@@ -1036,12 +1108,170 @@ impl Document {
         Some(self.fragment_of(vec![Block::Table(t)]))
     }
 
-    /// `blocks` as a fragment: half content controls dropped, text boxes copied along.
+    /// `blocks` as a fragment: half content controls dropped, text boxes and comments copied along.
     fn fragment_of(&self, mut blocks: Vec<Block>) -> Fragment {
         crate::control::balance_blocks(&mut blocks);
-        let parts = self.text_box_parts(&blocks);
-        let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        self.with_stories(blocks)
+    }
+
+    /// `blocks` as a fragment, with copies of the text boxes and comments in them and of the media
+    /// they all show.
+    fn with_stories(&self, blocks: Vec<Block>) -> Fragment {
+        let (parts, comments) = self.stories_in(&blocks);
+        let media = self.media_in(&blocks, &parts, &comments);
+        Fragment { blocks, parts, comments, media }
+    }
+
+    /// Copies of the text box stories shapes in `blocks` show and of the comments anchored there (a
+    /// start or an end of theirs is there), with their replies: for [`Fragment::parts`] and
+    /// [`Fragment::comments`]. Those in the stories copied count too (a comment in a text box, a
+    /// text box in a comment). Each story is walked once, so a cycle from a hostile file ends.
+    fn stories_in(&self, blocks: &[Block]) -> (BTreeMap<u32, Part>, BTreeMap<u32, CopiedComment>) {
+        let (mut parts, mut comments) = (BTreeMap::new(), BTreeMap::new());
+        let (mut boxes, mut notes) = (Vec::new(), Vec::new());
+        for b in blocks {
+            story_refs(b, &mut boxes, &mut notes);
+        }
+        let mut replies: Option<BTreeMap<u32, Vec<u32>>> = None;
+        loop {
+            if let Some(id) = boxes.pop() {
+                if parts.contains_key(&id) {
+                    continue;
+                }
+                let Some(part) = self.parts.get(&id).filter(|p| p.kind == PartKind::TextBox) else { continue };
+                for b in &part.blocks {
+                    story_refs(b, &mut boxes, &mut notes);
+                }
+                parts.insert(id, part.clone());
+            } else if let Some(id) = notes.pop() {
+                if comments.contains_key(&id) {
+                    continue;
+                }
+                let Some(c) = self.comments.get(&id) else { continue };
+                let Some(story) = self.parts.get(&c.part).filter(|p| p.kind == PartKind::Comment) else { continue };
+                for b in &story.blocks {
+                    story_refs(b, &mut boxes, &mut notes);
+                }
+                let replies = replies.get_or_insert_with(|| {
+                    let mut r: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+                    for (id, c) in &self.comments {
+                        if let Some(parent) = c.parent {
+                            r.entry(parent).or_default().push(*id);
+                        }
+                    }
+                    r
+                });
+                notes.extend(replies.get(&id).into_iter().flatten().copied());
+                comments.insert(id, CopiedComment { comment: c.clone(), story: story.clone() });
+            } else {
+                break;
+            }
+        }
+        (parts, comments)
+    }
+
+    /// Whether this document has comment `id` just as `c` copied it: the same record, its text the
+    /// very blocks the copy shares. Only a copy from this document, of a comment untouched since,
+    /// shares them: one from another document never does.
+    fn has_comment(&self, id: u32, c: &CopiedComment) -> bool {
+        let same_text = |p: &Part| p.blocks.len() == c.story.blocks.len() && p.blocks.iter().zip(&c.story.blocks).all(|(a, b)| Arc::ptr_eq(a, b));
+        self.comments.get(&id) == Some(&c.comment) && self.parts.get(&c.comment.part).is_some_and(same_text)
+    }
+
+    /// Bring the comments `frag` carries from another document into this one, for its `blocks`
+    /// (`frag`'s, about to be pasted, their text boxes already given new stories): each comment
+    /// whose end is in them or in those stories comes, with its replies, under a new id and with a
+    /// story of its own; the anchors point at it. As in Word, a comment whose end alone is there is
+    /// anchored where it ended, and one whose start alone is there stays behind (its start goes);
+    /// so does one there is no room for, so an anchor never points at another comment of this
+    /// document. Comments this document has as `frag` copied them (a copy from here) keep their ids
+    /// and anchors. `parts` are `frag`'s text box stories and `media` the keys its media were
+    /// given here, both as [`Self::insert_fragment`] remapped them.
+    fn bring_comments(
+        &mut self,
+        blocks: &mut [Block],
+        frag: &Fragment,
+        parts: &BTreeMap<u32, Part>,
+        media: &BTreeMap<String, String>,
+        budget: &mut BoxBudget,
+    ) {
+        let foreign: BTreeSet<u32> = frag.comments.iter().filter(|(id, c)| !self.has_comment(**id, c)).map(|(id, _)| *id).collect();
+        if foreign.is_empty() {
+            return;
+        }
+        let (mut starts, mut ends) = (BTreeSet::new(), BTreeSet::new());
+        let mut note = |p: &Paragraph| {
+            for o in &p.objects {
+                match o {
+                    InlineObject::CommentStart { id } => starts.insert(*id),
+                    InlineObject::CommentEnd { id } => ends.insert(*id),
+                    _ => false,
+                };
+            }
+        };
+        for b in blocks.iter() {
+            each_para(b, 0, &mut note);
+        }
+        // The pasted text boxes' new stories, made from `frag.parts` just before.
+        for b in budget.made.iter().filter_map(|id| self.parts.get(id)).flat_map(|p| p.blocks.iter()) {
+            each_para(b, 0, &mut note);
+        }
+        let mut replies: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
+        for (id, c) in frag.comments.iter().filter(|(id, _)| foreign.contains(id)) {
+            if let Some(parent) = c.comment.parent {
+                replies.entry(parent).or_default().push(*id);
+            }
+        }
+        // The comments that come, each before its replies; a reply is never reached twice.
+        let mut coming: Vec<u32> = foreign.iter().copied().filter(|id| ends.contains(id)).collect();
+        let mut seen: BTreeSet<u32> = coming.iter().copied().collect();
+        let mut i = 0;
+        while let Some(&at) = coming.get(i) {
+            for id in replies.get(&at).into_iter().flatten() {
+                if seen.insert(*id) {
+                    coming.push(*id);
+                }
+            }
+            i += 1;
+        }
+        let mut ids = BTreeMap::new();
+        let mut texts = Vec::new();
+        // Another document's comment: a box whose story the fragment doesn't carry keeps none,
+        // never this document's story of that id.
+        budget.local = false;
+        for old in coming {
+            let Some(c) = frag.comments.get(&old) else { continue };
+            let Some(new) = crate::free_id(self.comments.keys().next_back().copied(), self.comments.keys().copied(), 0) else { break };
+            let mut story: Vec<Block> = c.story.blocks.iter().map(|b| (**b).clone()).collect();
+            if !media.is_empty() {
+                story.iter_mut().for_each(|b| remap_media_block(b, media));
+            }
+            self.adopt_text_boxes(&mut story, parts, 0, budget);
+            let Ok(part) = self.try_add_part(PartKind::Comment, story.into_iter().map(Arc::new).collect()) else { break };
+            texts.push(part);
+            // Replies come after their comment, which has its new id by then.
+            let parent = c.comment.parent.and_then(|p| ids.get(&p).copied());
+            // Its durable id is unique in its own document only: the writer gives the copy one.
+            self.comments.insert(new, crate::Comment { parent, part, durable_id: None, ..c.comment.clone() });
+            ids.insert(old, new);
+        }
+        let mut remap = |p: &mut Paragraph| remap_comment_marks(p, &foreign, &ids, &starts);
+        for b in blocks.iter_mut() {
+            each_para_mut(b, 0, &mut remap);
+        }
+        // The new stories too: the text boxes' (the comments' own included) and the comments'.
+        // Their blocks may still be shared with `frag`, which stays as it was.
+        let stories: BTreeSet<u32> = budget.made.iter().chain(&texts).copied().collect();
+        for id in stories {
+            let Some(part) = self.parts.get_mut(&id) else { continue };
+            for b in part.blocks.iter_mut() {
+                let mut any = false;
+                each_para(b, 0, &mut |p| any |= comment_ids(p).any(|id| foreign.contains(&id)));
+                if any {
+                    each_para_mut(Arc::make_mut(b), 0, &mut remap);
+                }
+            }
+        }
     }
 
     /// The table whose whole text `a..b` covers when the range runs across its cells: from the
@@ -1079,12 +1309,10 @@ impl Document {
         None
     }
 
-    /// The whole body as a fragment (with its text boxes), to insert into another document.
+    /// The whole body as a fragment (with its text boxes and comments), to insert into another
+    /// document.
     pub fn body_fragment(&self) -> Fragment {
-        let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();
-        let parts = self.text_box_parts(&blocks);
-        let media = self.media_of_blocks(&blocks);
-        Fragment { blocks, parts, media }
+        self.with_stories(self.body.iter().map(|b| (**b).clone()).collect())
     }
 
     /// Another document's body as a fragment of this one, to insert: the media, lists, styles,
@@ -1253,7 +1481,7 @@ impl Document {
         }
         let mut blocks: Vec<Block> = src.body.iter().map(|b| (**b).clone()).collect();
         blocks.iter_mut().for_each(|b| link.block(b));
-        Fragment { blocks, parts, media: self.media.clone() }
+        Fragment { blocks, parts, media: self.media.clone(), ..Default::default() }
     }
 
     /// [`Self::adopt_with`] as blocks to place in a story directly (a reader building one): its
@@ -1267,28 +1495,16 @@ impl Document {
         blocks
     }
 
-    /// Copies of the text box stories shapes in `blocks` show, nested boxes included.
-    fn text_box_parts(&self, blocks: &[Block]) -> BTreeMap<u32, Part> {
-        let mut out = BTreeMap::new();
-        let mut todo = Vec::new();
-        for b in blocks {
-            each_para(b, 0, &mut |p| todo.extend(box_ids(p)));
-        }
-        while let Some(id) = todo.pop() {
-            if out.contains_key(&id) {
-                continue;
-            }
-            let Some(part) = self.parts.get(&id).filter(|p| p.kind == PartKind::TextBox) else { continue };
-            for b in &part.blocks {
-                each_para(b, 0, &mut |p| todo.extend(box_ids(p)));
-            }
-            out.insert(id, part.clone());
-        }
-        out
+    /// Media items referenced by objects in `blocks`, the text box stories and comments they hold
+    /// included.
+    pub fn media_of_blocks(&self, blocks: &[Block]) -> BTreeMap<String, Arc<Vec<u8>>> {
+        let (parts, comments) = self.stories_in(blocks);
+        self.media_in(blocks, &parts, &comments)
     }
 
-    /// Media items referenced by objects in `blocks`, nested text box stories included.
-    pub fn media_of_blocks(&self, blocks: &[Block]) -> BTreeMap<String, Arc<Vec<u8>>> {
+    /// Media items referenced by objects in `blocks` and in the stories of `parts` and `comments`
+    /// (theirs, from [`Self::stories_in`]).
+    fn media_in(&self, blocks: &[Block], parts: &BTreeMap<u32, Part>, comments: &BTreeMap<u32, CopiedComment>) -> BTreeMap<String, Arc<Vec<u8>>> {
         let mut keys = std::collections::BTreeSet::new();
         /// Collect media keys from an inline object recursively.
         fn collect_object(o: &InlineObject, keys: &mut std::collections::BTreeSet<String>, depth: usize) {
@@ -1319,8 +1535,8 @@ impl Document {
         for b in blocks {
             each_para(b, 0, &mut collect_para);
         }
-        for part in self.text_box_parts(blocks).values() {
-            for b in &part.blocks {
+        for story in parts.values().chain(comments.values().map(|c| &c.story)) {
+            for b in &story.blocks {
                 each_para(b, 0, &mut collect_para);
             }
         }
@@ -1457,6 +1673,7 @@ impl Document {
         }
         budget.active.pop();
         let id = self.try_add_part(PartKind::TextBox, blocks).ok()?;
+        budget.made.push(id);
         if let Some(p) = self.parts.get_mut(&id) {
             p.body = body;
         }
@@ -1481,6 +1698,22 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
+        // Tables that would nest deeper than the limit here become their paragraphs (#1596).
+        let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
+        let mut blocks = Vec::with_capacity(frag.blocks.len());
+        for b in frag.blocks.iter().cloned() {
+            fit_tables(b, room, &mut blocks);
+        }
+        if blocks.is_empty() {
+            return Ok(pos.clone());
+        }
+        let Some(para) = self.para_at(pos) else {
+            return Err(DocError::BadPath(pos.path.to_string()));
+        };
+        // Checked before media, text boxes and comments are added, so a paste that fails adds none.
+        if para.clamp(pos.off) != pos.off {
+            return Err(DocError::BadOffset(pos.off));
+        }
         let mut media_remap = BTreeMap::new();
         for (k, v) in &frag.media {
             if let Some(existing) = self.media.get(k) {
@@ -1492,18 +1725,6 @@ impl Document {
             } else {
                 self.media.insert(k.clone(), v.clone());
             }
-        }
-        // Tables that would nest deeper than the limit here become their paragraphs (#1596).
-        let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
-        let mut blocks = Vec::with_capacity(frag.blocks.len());
-        for b in frag.blocks.iter().cloned() {
-            fit_tables(b, room, &mut blocks);
-        }
-        if blocks.is_empty() {
-            return Ok(pos.clone());
-        }
-        if self.para_at(pos).is_none() {
-            return Err(DocError::BadPath(pos.path.to_string()));
         }
         let mut parts = frag.parts.clone();
         if !media_remap.is_empty() {
@@ -1519,6 +1740,8 @@ impl Document {
         // Pasted text boxes get stories of their own (never shared with the copy's source).
         let mut budget = BoxBudget::new();
         self.adopt_text_boxes(&mut blocks, &parts, 0, &mut budget);
+        // Comments copied from another document come too (#6096).
+        self.bring_comments(&mut blocks, frag, &parts, &media_remap, &mut budget);
         if budget.skipped > 0 {
             // Once per paste, not once per box (review of #3874).
             log::warn!(
