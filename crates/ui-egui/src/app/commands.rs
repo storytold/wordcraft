@@ -136,13 +136,11 @@ impl WordApp {
             return r;
         }
         let ctx = self.ctx.clone();
-        if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
-            if let Err(e) = &r {
-                self.status(e.clone());
-            }
-            return r;
-        }
-        if let Some(r) = crate::gdrive::command(self, id, &params).or_else(|| crate::gdrive::intercept_save(self, id, &params)) {
+        // The Zotero link and Google Drive (its commands, and Save for a Drive document).
+        if let Some(r) = zotero::command(self, id, &params, ctx.as_ref())
+            .or_else(|| crate::gdrive::command(self, id, &params))
+            .or_else(|| crate::gdrive::intercept_save(self, id, &params))
+        {
             if let Err(e) = &r {
                 self.status(e.clone());
             }
