@@ -399,7 +399,7 @@ fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
         let mark = path != b.path || caret_mark.as_ref() == Some(&path);
         let multi_para = a.path != b.path;
         let props_fmt = (ranged && (multi_para || to > from)) || caret_props.as_ref() == Some(&path);
-        let props_num = (ranged && multi_para && (path != a.path || from == 0)) || caret_num.as_ref() == Some(&path);
+        let props_num = (ranged && (multi_para || whole_body) && (path != a.path || from == 0)) || caret_num.as_ref() == Some(&path);
         resolve_para(s, a.story, &path, (from, to), mark, (props_num, props_fmt), accept)?;
         if ranged {
             resolve_cell(s, a.story, &path, accept)?;

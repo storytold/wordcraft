@@ -1485,3 +1485,46 @@ fn style_inherited_numbering_and_compare_fmt_change_preservation() {
     assert_eq!(new_styled_p.props.numbering, None, "Reject restores None so paragraph inherits style numbering again");
     assert!(new_styled_p.props.num_change.is_none(), "num_change cleared on reject");
 }
+
+/// Verification that selecting the whole body in a single-paragraph document resolves numbering changes.
+#[test]
+fn single_paragraph_whole_body_selection_resolves_numbering_change() {
+    use wordcraft_doc::props::{NumChange, NumRef};
+
+    let mut doc = Document::from_text("Single paragraph list item");
+    let p = doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    p.props.numbering = None;
+    p.props.num_change = Some(Box::new(NumChange::for_numbering(0, Some(NumRef { num: 1, level: 0 }))));
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: RevisionKind::Format,
+        author: "Alice".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+
+    // 1. Partial selection inside single paragraph does not resolve numbering change
+    let mut s_partial = Session::new(doc.clone());
+    s_partial.sel = Selection {
+        anchor: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 },
+        focus: wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 5 },
+    };
+    s_partial.run("review.accept", &json!({})).unwrap();
+    let p_partial = s_partial.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_partial.props.num_change.is_some(), "partial range in single paragraph does not resolve numbering");
+
+    // 2. Select-all (whole body) in single paragraph document resolves numbering change on accept
+    let mut s_accept = Session::new(doc.clone());
+    s_accept.run("select.all", &json!({})).unwrap();
+    s_accept.run("review.accept", &json!({})).unwrap();
+    let p_accept = s_accept.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_accept.props.num_change.is_none(), "whole-body select in single-paragraph doc resolves numbering on accept");
+    assert_eq!(p_accept.props.numbering, None);
+
+    // 3. Select-all (whole body) in single paragraph document resolves numbering change on reject
+    let mut s_reject = Session::new(doc);
+    s_reject.run("select.all", &json!({})).unwrap();
+    s_reject.run("review.reject", &json!({})).unwrap();
+    let p_reject = s_reject.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert!(p_reject.props.num_change.is_none(), "whole-body select in single-paragraph doc resolves numbering on reject");
+    assert_eq!(p_reject.props.numbering, Some(NumRef { num: 1, level: 0 }), "reject restores snapshot numbering");
+}
