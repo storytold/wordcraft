@@ -354,9 +354,13 @@ impl Reader {
         true
     }
 
+    /// The words that open a header or footer story. Inside a note or comment one is skipped, as
+    /// a note inside a header is: it belongs to a section, and starting it there would take the
+    /// body read so far with it when the note's group closes (#6304).
     fn start_header_footer_word(&mut self, word: &str) -> bool {
         if !matches!(word, "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf")
             || self.hf.is_some()
+            || self.sub.is_some()
             || self.st.dest != Dest::Body
             || self.st.intbl
         {
