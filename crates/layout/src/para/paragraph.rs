@@ -411,7 +411,7 @@ impl<'a> Shaped<'a> {
 
     /// A field: a legacy form field, its code in braces, or its result.
     fn field(&mut self, cx: &Cx, (k, o): (usize, &InlineObject), slot: Slot, rc: &Arc<ResolvedChar>) {
-        let InlineObject::Field { instr, result, code, .. } = o else { return };
+        let InlineObject::Field { instr, result, code, locked, .. } = o else { return };
         let env = cx.env;
         let form = if env.field_codes != *code { None } else { o.legacy_form() };
         if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
@@ -427,7 +427,7 @@ impl<'a> Shaped<'a> {
             }
             self.b.shape_atomic(&field_code_text(instr), slot.start, slot.end, &Arc::new(shaded));
         } else {
-            self.field_result(cx, (instr, result), slot, rc);
+            self.field_result(cx, (instr, result, *locked), slot, rc);
         }
     }
 
@@ -442,12 +442,16 @@ impl<'a> Shaped<'a> {
         self.check_boxes.push(k);
     }
 
-    fn field_result(&mut self, cx: &Cx, (instr, result): (&str, &str), slot: Slot, rc: &Arc<ResolvedChar>) {
+    fn field_result(&mut self, cx: &Cx, (instr, result, locked): (&str, &str, bool), slot: Slot, rc: &Arc<ResolvedChar>) {
         let (start, end) = (slot.start, slot.end);
         match wordcraft_doc::eq::parse_overstrike(instr) {
             Some(o) => overstrike(&mut self.b, &o, instr, start, end, rc, &mut self.enclosures),
             None => {
-                let (t, page_dep) = field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start));
+                let (t, page_dep) = if locked && crate::fields::field_name(instr) == "SYMBOL" {
+                    (result.to_string(), false)
+                } else {
+                    field_text_on(instr, result, cx.env.fields, cx.env.fields.page_at(start))
+                };
                 self.has_page_fields |= page_dep;
                 self.b.shape_atomic(&t, start, end, &linked(rc, instr));
             }

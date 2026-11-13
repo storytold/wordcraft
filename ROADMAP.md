@@ -904,6 +904,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 > 2026-11-05 · Shapes, text boxes, groups and canvases in Strict Open XML documents open (#3548); recorded in the progress log, readiness unchanged.
 > 2026-11-07 · Progress log: VML text boxes keep their text direction (#5193).
 >
+| 2026-11-06 | trivial | P0078: unlocked SYMBOL fields show their evaluated character despite stale stored results; F9 refreshes the result; missing, nonnumeric and non-Unicode codes above 255 show `###`. Locked fields keep their stored result; readiness estimates unchanged. |
 > 2026-11-03 · Arabic dialogs read right to left (rtl::Table); recorded in the progress log, readiness unchanged.
 > 2026-11-03 · Before Word 2013 layout a floating table moved below another keeps its own left edge, also when its first cell has no left margin; readiness unchanged.
 >

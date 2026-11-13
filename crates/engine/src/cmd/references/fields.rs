@@ -377,6 +377,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             }
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
+                "SYMBOL" => updates.push((k, wordcraft_layout::fields::symbol_text(instr))),
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
                     let lang = field_lang(&s.doc, p, k);
                     let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));

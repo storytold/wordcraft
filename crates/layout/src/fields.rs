@@ -309,6 +309,7 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
             };
             (apply_case_switch(instr, text), false)
         }
+        "SYMBOL" => (symbol_text(instr), false),
         // ASK and SET only assign text to a bookmark: they never show a result (ECMA-376 §17.16.5).
         "ASK" | "SET" => (String::new(), false),
         "STYLEREF" => match &ctx.styleref {
@@ -317,6 +318,100 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         },
         _ => (result.to_string(), false),
     }
+}
+
+/// The words of a field instruction: quoted text is one word (without its quotes) and a
+/// backslash starts a new word (`\f"Symbol"` is `\f`, `Symbol`).
+fn instr_words(instr: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut chars = instr.chars();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            words.push(chars.by_ref().take_while(|c| *c != '"').collect());
+        } else if c.is_whitespace() || c == '\\' {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            if c == '\\' {
+                word.push(c);
+            }
+        } else {
+            word.push(c);
+        }
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// The character a `SYMBOL` field shows (ECMA-376 Part 1 §17.16.5.68): the code is decimal or
+/// `0x` hexadecimal; in a symbol font (`\f`) it is a font code (0x20–0xFF, or its private-use form
+/// 0xF020–0xF0FF) shown as its Unicode equivalent, or nothing when it has none. Otherwise `\u`
+/// reads it as Unicode, `\j` as one Shift-JIS character and the default (`\a` ANSI) as
+/// Windows-1252. Control characters other than tab show nothing. `\s` and `\h` only change size.
+pub fn symbol_text(instr: &str) -> String {
+    let words = instr_words(instr);
+    let code = words.get(1).filter(|w| !w.starts_with('\\')).and_then(|w| match w.strip_prefix("0x").or_else(|| w.strip_prefix("0X")) {
+        Some(hex) => u32::from_str_radix(hex, 16).ok(),
+        None => w.parse::<u32>().ok(),
+    });
+    let Some(code) = code else { return "###".into() };
+    if code == 0 {
+        return String::new();
+    }
+    let unicode = has_switch(instr, 'u');
+    let font = words.iter().position(|w| w.eq_ignore_ascii_case("\\f")).and_then(|i| words.get(i + 1)).filter(|w| !w.starts_with('\\'));
+    let symbol_font = font.filter(|f| wordcraft_doc::symbol_fonts::is_symbol_font(f));
+    let shown = match symbol_font {
+        // A font code is never a soft hyphen: look it up through its private-use form so Symbol
+        // 0xAD is its up arrow like every other code.
+        Some(font) if code <= 0xFF || (0xF020..=0xF0FF).contains(&code) => {
+            char::from_u32(0xF000 | (code & 0xFF)).and_then(|c| wordcraft_doc::symbol_fonts::symbol_char(font, c))
+        }
+        Some(_) if unicode => None,
+        _ if has_switch(instr, 'j') => shift_jis(code),
+        _ if code > 0xFF && !unicode => return "###".into(),
+        _ if unicode => char::from_u32(code),
+        _ => match code {
+            0x80..=0x9F => windows_1252(code),
+            _ => char::from_u32(code),
+        },
+    };
+    // A raw CR or LF would end up in paragraph text when the field is unlinked.
+    shown.filter(|c| *c == '\t' || !('\0'..='\u{1f}').contains(c)).map(String::from).unwrap_or_default()
+}
+
+/// The one character the Shift-JIS code `code` (one byte, or two with the lead byte high) stands
+/// for; `None` when it is not exactly one valid character.
+fn shift_jis(code: u32) -> Option<char> {
+    let bytes: Vec<u8> = match code {
+        0..=0xFF => vec![u8::try_from(code).ok()?],
+        0x100..=0xFFFF => u16::try_from(code).ok()?.to_be_bytes().to_vec(),
+        _ => return None,
+    };
+    let (text, had_errors) = encoding_rs::SHIFT_JIS.decode_without_bom_handling(&bytes);
+    if had_errors {
+        return None;
+    }
+    let mut chars = text.chars();
+    chars.next().filter(|_| chars.next().is_none())
+}
+
+/// The character Windows-1252 puts at `code` in 0x80..=0x9F (`None` for its five unused codes).
+fn windows_1252(code: u32) -> Option<char> {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, // 0x80
+        0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017D, 0, // 0x88
+        0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, // 0x90
+        0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178, // 0x98
+    ];
+    let i = usize::try_from(code.checked_sub(0x80)?).ok()?;
+    HIGH.get(i).copied().filter(|u| *u != 0).and_then(char::from_u32)
 }
 
 /// Extract the bookmark target from a `PAGEREF` instruction.
