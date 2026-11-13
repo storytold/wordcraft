@@ -159,7 +159,9 @@ fn custom_styles(doc: &Document, named: &std::collections::BTreeSet<String>, on_
         if pp.bidi == Some(true) {
             attrs.push_str(" style:writing-mode=\"rl-tb\"");
         }
-        attrs.push_str(&super::writer::border_attrs(pp.borders));
+        // At the width each side is drawn at, as the paragraph's own borders already are by the
+        // time the flow model holds them: ODF has no border that is drawn and takes no room (#5065).
+        attrs.push_str(&super::writer::border_attrs(pp.borders.map(|b| b.as_drawn())));
         if let Some(bg) = pp.shading {
             attrs.push_str(&format!(" fo:background-color=\"#{}\"", bg.hex().to_ascii_lowercase()));
         }
