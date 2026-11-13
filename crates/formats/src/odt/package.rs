@@ -801,8 +801,15 @@ fn with_kept_files(
             continue;
         }
         if key.starts_with("common:") {
-            let restored = key.strip_prefix("common:").is_some_and(|n| w.kept_used.1.contains_key(n));
-            if (!styles_kept && !restored) || super::kept::defined(styles, d) {
+            // The file's definition is written back whole (`styles_as_read`, non-`draw:`
+            // definitions win), or this one is restored for markup naming it. WordCraft's own
+            // definition takes a drawing definition's place: its href is no longer used.
+            let written = if styles_kept {
+                !(super::kept::drawing_def(d) && super::kept::defined(styles, d))
+            } else {
+                key.strip_prefix("common:").is_some_and(|n| w.kept_used.1.contains_key(n)) && !super::kept::defined(styles, d)
+            };
+            if !written {
                 continue;
             }
         }
@@ -1360,6 +1367,35 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// A `draw:fill-image` definition's name and picture path, when `xml` starts with one.
+fn fill_image_of(xml: &str) -> Option<(String, String)> {
+    let tag = xml.split('>').next()?;
+    if !tag.trim_start_matches('<').starts_with("draw:fill-image") {
+        return None;
+    }
+    let name = super::kept::raw_attr(tag, "draw:name").map(super::kept::attr_text)?;
+    let href = super::kept::raw_attr(tag, "xlink:href").map(super::kept::attr_text)?;
+    Some((name.into_owned(), href.into_owned()))
+}
+
+/// `name` as a `draw:name` (§16.42) may read: an NCName — letters, digits, `-`, `_` and `.`, not
+/// starting with a digit — of at most 255 characters, as a DOCX texture's `o:title` ("Blue tissue
+/// paper") is not one.
+fn fill_image_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len().min(255));
+    for (i, c) in name.chars().take(255).enumerate() {
+        let ok = c.is_alphanumeric() || matches!(c, '-' | '_' | '.');
+        if i == 0 && !(c.is_alphabetic() || c == '_') {
+            out.push('_');
+        }
+        out.push(if ok { c } else { '_' });
+    }
+    if out.is_empty() {
+        out.push('_');
+    }
+    out
+}
+
 /// `styles` with the page background picture (Design › Page Color › Fill Effects › Picture) declared
 /// in `<office:styles>` as `<draw:fill-image>`, referenced in each page layout's properties
 /// (`draw:fill="bitmap"`, `draw:fill-image-name`), and as legacy fallback (§17.3
@@ -1369,52 +1405,52 @@ fn page_background(doc: &Document, w: &mut Writer, mut styles: String) -> String
     let Some(pic) = doc.settings.page_picture.as_ref() else { return styles };
     let Some(data) = doc.media.get(&pic.media) else { return styles };
     let Some(ext) = model::sniff_image(data) else { return styles };
+    let kept = doc.kept.of("odt");
+    // A kept package file holding these bytes is this picture already: its path is reused, so
+    // saving what was opened doesn't add a copy on every save.
+    let same_kept = |path: &str| kept.is_some_and(|k| k.files.get(path).is_some_and(|b| b.as_slice() == data.as_slice()));
     let mut name = format!("Pictures/page-background.{ext}");
     let mut pic_n = 1;
-    while w.reserved.contains(&name) || w.pictures.iter().any(|(n, d, _)| n == &name && d.as_slice() != data.as_slice()) {
+    while (w.reserved.contains(&name) && !same_kept(&name)) || w.pictures.iter().any(|(n, d, _)| n == &name && d.as_slice() != data.as_slice()) {
         name = format!("Pictures/page-background-{pic_n}.{ext}");
         pic_n += 1;
-    }
-    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
-        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
     }
     let repeat = match pic.fill_type.to_ascii_lowercase().as_str() {
         "tile" => "repeat",
         "center" => "no-repeat",
         _ => "stretch",
     };
-    let mut fill_name = if !pic.title.is_empty() { pic.title.clone() } else { "PageBackground".to_string() };
+    // The fill-image definitions already written, by name, once: renaming looks each up rather
+    // than scanning every definition for it (a hostile file names thousands alike).
+    let mut fill_images: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for d in w.kept_defs.values() {
+        if let Some((n, h)) = fill_image_of(d) {
+            fill_images.insert(n, h);
+        }
+    }
+    for (i, _) in styles.match_indices("<draw:fill-image ") {
+        if let Some((n, h)) = styles.get(i..).and_then(fill_image_of) {
+            fill_images.insert(n, h);
+        }
+    }
+    let mut fill_name = if !pic.title.is_empty() { fill_image_name(&pic.title) } else { "PageBackground".to_string() };
     let base_fill_name = fill_name.clone();
-    let existing_fill_href = |styles: &str, w: &Writer, name: &str| -> Option<String> {
-        styles
-            .match_indices("<draw:fill-image ")
-            .find_map(|(i, _)| {
-                let tag = styles.get(i..)?.split('>').next()?;
-                if super::kept::raw_attr(tag, "draw:name").is_some_and(|nm| super::kept::attr_text(nm) == name) {
-                    super::kept::raw_attr(tag, "xlink:href").map(|h| super::kept::attr_text(h).into_owned())
-                } else {
-                    None
-                }
-            })
-            .or_else(|| {
-                w.kept_defs.values().find_map(|d| {
-                    let tag = d.split('>').next()?;
-                    let el = tag.trim_start_matches('<').split([' ', '/', '\t', '\n', '\r']).next()?;
-                    if el == "draw:fill-image" && super::kept::raw_attr(tag, "draw:name").is_some_and(|nm| super::kept::attr_text(nm) == name) {
-                        super::kept::raw_attr(tag, "xlink:href").map(|h| super::kept::attr_text(h).into_owned())
-                    } else {
-                        None
-                    }
-                })
-            })
-    };
+    // The definition under this name is this picture when its path is ours, or a kept file with
+    // the same bytes: then the file's name is reused instead of a copy being added.
+    let same_picture =
+        |href: &str, w: &Writer| href == name || same_kept(href) || w.pictures.iter().any(|(n, d, _)| n == href && d.as_slice() == data.as_slice());
     let mut n = 1;
-    while let Some(href) = existing_fill_href(&styles, w, &fill_name) {
-        if href == name {
+    while let Some(href) = fill_images.get(&fill_name) {
+        let href = href.clone();
+        if same_picture(&href, w) {
+            name = href;
             break;
         }
         fill_name = format!("{base_fill_name}-{n}");
         n += 1;
+    }
+    if !w.pictures.iter().any(|(n, _, _)| *n == name) {
+        w.pictures.push((name.clone(), data.clone(), model::mime_of(ext).to_string()));
     }
     let fill_image_def =
         format!("<draw:fill-image draw:name=\"{}\" xlink:href=\"{}\" xlink:type=\"simple\" xlink:actuate=\"onLoad\"/>", x(&fill_name), x(&name));

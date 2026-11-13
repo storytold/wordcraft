@@ -673,3 +673,165 @@ fn replaced_page_picture_allocates_distinct_fill_name_and_keeps_retained_def() {
     assert!(archive.by_name("Pictures/original.png").is_ok(), "Pictures/original.png must be in package");
     assert!(archive.by_name("Pictures/page-background.png").is_ok(), "Pictures/page-background.png must be in package");
 }
+
+/// The pictures in package `bytes` under `Pictures/`, sorted.
+fn picture_paths(bytes: &[u8]) -> Vec<String> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+    let mut out: Vec<String> =
+        (0..archive.len()).map(|i| archive.by_index(i).unwrap().name().to_string()).filter(|n| n.starts_with("Pictures/")).collect();
+    out.sort();
+    out
+}
+
+/// Saving a page background picture and opening it again keeps one picture and one fill-image
+/// definition: the kept file is reused while its bytes are the document's, not renamed (#5856).
+#[test]
+fn page_background_round_trips_do_not_grow_the_package() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let media = d.add_media(png, "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media, fill_type: "frame".into(), title: "PageBackground".into() });
+    let mut current = d;
+    for generation in 1..=4 {
+        let saved = export(&current).unwrap();
+        let styles = crate::odt::tests::entry(&saved, "styles.xml");
+        assert_eq!(styles.matches("<draw:fill-image ").count(), 1, "generation {generation} must keep one fill image: {styles}");
+        assert_eq!(picture_paths(&saved), ["Pictures/page-background.png"], "generation {generation} must keep one picture");
+        current = import(&saved).unwrap();
+    }
+}
+
+/// An untouched LibreOffice page background (fill image `Bg1` in `Pictures/original.png`) is
+/// written back as it was: one definition, one file, no renamed copies (#5856).
+#[test]
+fn an_unchanged_libreoffice_page_background_is_written_back_once() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let ns = crate::odt::tests::NS_T;
+    let nsd = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let styles = format!(
+        r#"<office:document-styles {ns} {nsd}><office:styles><draw:fill-image draw:name="Bg1" xlink:href="Pictures/original.png" xlink:type="simple"/><style:style style:name="Standard" style:family="paragraph"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" draw:fill="bitmap" draw:fill-image-name="Bg1"><style:background-image xlink:href="Pictures/original.png" xlink:type="simple" xlink:actuate="onLoad" style:repeat="stretch"/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Body text.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/original.png", &png)]);
+    let d = import(&pkg).unwrap();
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert_eq!(s.matches("<draw:fill-image ").count(), 1, "one fill image, as read: {s}");
+    assert!(s.contains(r#"<draw:fill-image draw:name="Bg1" xlink:href="Pictures/original.png""#), "the file's fill image is reused: {s}");
+    assert!(!s.contains("page-background"), "no second picture is named for the background: {s}");
+    assert_eq!(picture_paths(&saved), ["Pictures/original.png"], "one picture, as read");
+}
+
+/// A kept paragraph style both sides name (`Standard`) keeps the picture its background refers
+/// to: when styles are written as read, the file's definition wins and its file must stay
+/// (#5856).
+#[test]
+fn common_style_background_picture_survives_styles_as_read() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let ns = crate::odt::tests::NS_T;
+    let nsd = "xmlns:xlink=\"http://www.w3.org/1999/xlink\"";
+    let styles = format!(
+        r#"<office:document-styles {ns} {nsd}><office:styles><style:style style:name="Standard" style:family="paragraph"><style:paragraph-properties><style:background-image xlink:href="Pictures/para.png" xlink:type="simple" xlink:actuate="onLoad"/></style:paragraph-properties></style:style></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Body text.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[("content.xml", content.as_bytes()), ("styles.xml", styles.as_bytes()), ("Pictures/para.png", &png)]);
+    let d = import(&pkg).unwrap();
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains("Pictures/para.png"), "the style's background reference must stay: {s}");
+    assert_eq!(picture_paths(&saved), ["Pictures/para.png"], "the referenced picture must be written");
+}
+
+/// A DOCX texture name (`o:title`, "Blue tissue paper") is not an XML NCName: the fill image it
+/// names is written with one (#5856).
+#[test]
+fn a_texture_name_is_written_as_an_ncname() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let mut d = Document::new();
+    let media = d.add_media(png, "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media, fill_type: "frame".into(), title: "Blue tissue paper".into() });
+    let saved = export(&d).unwrap();
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains(r#"<draw:fill-image draw:name="Blue_tissue_paper""#), "the fill name is an NCName: {s}");
+    assert!(s.contains(r#"draw:fill-image-name="Blue_tissue_paper""#), "the page layout names it: {s}");
+    let back = import(&saved).unwrap();
+    assert_eq!(back.settings.page_picture.as_ref().map(|p| p.title.as_str()), Some("Blue_tissue_paper"));
+}
+
+/// Fill-image names a hostile file repeats with suffixes cost one lookup each, not a scan of
+/// every definition per attempt (#5856).
+#[test]
+fn many_colliding_fill_image_names_export_in_linear_time() {
+    let bg = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let other = {
+        let img = image::RgbImage::from_pixel(4, 4, image::Rgb([30, 200, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let replacement = {
+        let img = image::RgbImage::from_pixel(2, 6, image::Rgb([30, 30, 200]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    const N: usize = 12_000;
+    let ns = crate::odt::tests::NS_T;
+    let nsd = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let mut defs = String::with_capacity(N * 90);
+    for i in 0..N {
+        let name = if i == 0 { "X".to_string() } else { format!("X-{i}") };
+        let href = if i == 0 { "Pictures/bg.png" } else { "Pictures/other.png" };
+        defs.push_str(&format!(r#"<draw:fill-image draw:name="{name}" xlink:href="{href}" xlink:type="simple"/>"#));
+    }
+    let styles = format!(
+        r#"<office:document-styles {ns} {nsd}><office:styles>{defs}</office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" draw:fill="bitmap" draw:fill-image-name="X"><style:background-image xlink:href="Pictures/bg.png" xlink:type="simple" xlink:actuate="onLoad" style:repeat="stretch"/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Body text.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Pictures/bg.png", &bg),
+        ("Pictures/other.png", &other),
+    ]);
+    let mut d = import(&pkg).unwrap();
+    // The user replaces the picture: its fill-image name now meets every kept name.
+    let media = d.add_media(replacement, "png");
+    d.settings.page_picture = Some(wordcraft_doc::PagePicture { media, fill_type: "stretch".into(), title: "X".into() });
+    let start = std::time::Instant::now();
+    let saved = export(&d).unwrap();
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "export took {:?}", start.elapsed());
+    let s = crate::odt::tests::entry(&saved, "styles.xml");
+    assert!(s.contains(r#"<draw:fill-image draw:name="X-12000""#), "a free fill-image name is allocated: {s}");
+}

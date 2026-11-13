@@ -944,7 +944,11 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
         && let Some(ext) = model::sniff_image(&bytes)
     {
         let media = doc.add_media(bytes, ext);
-        doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media, fill_type: fill.to_string(), title: name.unwrap_or_default() });
+        doc.settings.page_picture = Some(wordcraft_doc::PagePicture {
+            media,
+            fill_type: fill.to_string(),
+            title: name.map(|n| n.chars().take(255).collect()).unwrap_or_default(),
+        });
     }
     if let Some((fmt, props)) = page_doc.notes[0] {
         (doc.settings.footnote_format, doc.settings.footnote_pr) = (fmt, props);
