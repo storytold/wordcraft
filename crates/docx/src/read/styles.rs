@@ -1,11 +1,9 @@
 use super::{
-    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, Reader, Style, StyleKind, StyleSheet, TablePart, TableStyleParts,
-    VAlign, flag, int, props, tw, u32_of,
+    AbstractNum, DocxError, El, Level, LevelSuffix, Num, NumFormat, PartFormat, PropChange, Reader, RevisionKind, Style, StyleKind, StyleSheet,
+    TablePart, TableStyleParts, VAlign, flag, int, props, tw, u32_of,
 };
 use crate::units::tw_i16;
 use std::sync::Arc;
-use wordcraft_doc::RevisionKind;
-use wordcraft_doc::props::PropChange;
 
 /// Built-in style names Word stores in lower case, and how the UI shows them.
 pub(crate) const LOWER_NAMES: &[(&str, &str)] = &[
@@ -54,22 +52,9 @@ fn builtin_heading_level(name: &str) -> Option<u8> {
 }
 
 impl Reader<'_> {
-    /// Read style definitions and document defaults from `styles.xml` at `path`.
-    pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
-        /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
-        const MAX_LATENT_STYLES_XML: usize = 1 << 20;
-        let Some(root) = self.xml(path)? else { return Ok(()) };
-        // The default paragraph style must be called `Normal` in our model.
-        let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
-        if !has_normal
-            && let Some(def) = root
-                .children("w:style")
-                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
-            && let Some(id) = def.attr("w:styleId")
-        {
-            self.pc.alias.insert(id.to_string(), "Normal".into());
-        }
-        // Word in other languages names the TOC styles' ids in that language (`toc 1` is `Sumrio1`
+    /// Register aliases for localised TOC style names (e.g. `Sumário 1` -> `TOC1`).
+    fn resolve_toc_aliases(&mut self, root: &El) {
+        // Word in other languages names the TOC styles' ids in that language (`toc 1` is `Sumário1`
         // in Portuguese): they take the engine's ids, which Update Table and the writer's TOC
         // recognise the entries by (#3889). Not when the file or an earlier style has that id.
         let mut taken: Vec<String> = root.children("w:style").take(10_000).filter_map(|s| s.attr("w:styleId")).map(str::to_string).collect();
@@ -87,6 +72,76 @@ impl Reader<'_> {
                 self.pc.alias.insert(id.to_string(), canonical);
             }
         }
+    }
+
+    /// Resolve styles that specify only a list level to inherit the list from their base style.
+    fn resolve_level_only_numberings(sheet: &mut StyleSheet) {
+        // Old style formatting revisions that give only a list level take the list from the style
+        // they are based on, rather than the revised style's own list. This runs before the
+        // current-numbering pass below normalizes level-only values: an unchanged intermediate
+        // style's level would otherwise point at the base's current list instead of its old one.
+        let fixed_old_num: Vec<Option<Option<wordcraft_doc::props::NumRef>>> = sheet
+            .styles
+            .iter()
+            .map(|s| {
+                s.para_change.as_ref().or(s.para.fmt_change.as_ref()).and_then(|ch| match ch.old.numbering {
+                    Some(n) if n.num == props::LEVEL_ONLY => {
+                        let base_style = ch.old.style.as_deref().or(s.based_on.as_deref());
+                        let base = base_style.and_then(|b| props::chain_list_before(sheet, b));
+                        Some(base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }))
+                    }
+                    _ => None,
+                })
+            })
+            .collect();
+        for (s, opt_num) in sheet.styles.iter_mut().zip(fixed_old_num) {
+            if let Some(new_num) = opt_num {
+                if let Some(ch) = &mut s.para_change {
+                    ch.old.numbering = new_num;
+                }
+                if let Some(ch) = &mut s.para.fmt_change {
+                    ch.old.numbering = new_num;
+                }
+            }
+        }
+        // Styles that give only a list level take the list from the style they are based on
+        // (Heading 3: level 3 of Heading 2's outline list).
+        let fixed: Vec<(Option<wordcraft_doc::props::NumRef>, bool)> = sheet
+            .styles
+            .iter()
+            .map(|s| match s.para.numbering {
+                Some(n) if n.num == props::LEVEL_ONLY => {
+                    let base = s.based_on.as_deref().and_then(|b| props::chain_list(sheet, b));
+                    (base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }), base.is_some())
+                }
+                other => (other, false),
+            })
+            .collect();
+        for (s, (n, inherited)) in sheet.styles.iter_mut().zip(fixed) {
+            s.para.numbering = n;
+            s.numbering_from_base = inherited;
+        }
+        if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
+            sheet.default_para.numbering = None;
+        }
+    }
+
+    /// Read style definitions and document defaults from `styles.xml` at `path`.
+    pub(super) fn read_styles(&mut self, path: &str) -> Result<(), DocxError> {
+        /// Largest `w:latentStyles` kept (Word's has ~380 exceptions, ~40 KB).
+        const MAX_LATENT_STYLES_XML: usize = 1 << 20;
+        let Some(root) = self.xml(path)? else { return Ok(()) };
+        // The default paragraph style must be called `Normal` in our model.
+        let has_normal = root.children("w:style").any(|s| s.attr("w:styleId") == Some("Normal"));
+        if !has_normal
+            && let Some(def) = root
+                .children("w:style")
+                .find(|s| s.attr("w:type") == Some("paragraph") && s.attr("w:default").is_some_and(|v| v == "1" || v == "true"))
+            && let Some(id) = def.attr("w:styleId")
+        {
+            self.pc.alias.insert(id.to_string(), "Normal".into());
+        }
+        self.resolve_toc_aliases(&root);
         let mut sheet = StyleSheet::empty();
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
         if let Some(dd) = root.child("w:docDefaults") {
@@ -140,6 +195,8 @@ impl Reader<'_> {
                     ),
                 ..Default::default()
             };
+            let mut old_para = None;
+            let mut old_chr = None;
             if let Some(p) = s.child("w:pPr") {
                 st.para = self.pc.ppr(p).0;
                 if let Some(ch) = p.child("w:pPrChange") {
@@ -150,7 +207,7 @@ impl Reader<'_> {
                     if kind == StyleKind::Paragraph && st.builtin && old.outline_level.is_none() {
                         old.outline_level = s.child_val("w:name").and_then(builtin_heading_level);
                     }
-                    st.para.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old.formatting());
+                    old_para = Some((self.revision(RevisionKind::Format, ch), old.formatting()));
                 }
             }
             // Word gives its built-in heading styles their outline level whether or not the file
@@ -158,14 +215,33 @@ impl Reader<'_> {
             // Navigation pane and the table of contents, whatever its id (#4696).
             if kind == StyleKind::Paragraph
                 && st.builtin
-                && st.para.outline_level.is_none()
                 && let Some(level) = s.child_val("w:name").and_then(builtin_heading_level)
             {
-                st.para.outline_level = Some(level);
+                if st.para.outline_level.is_none() {
+                    st.para.outline_level = Some(level);
+                }
+                if let Some((_, old)) = &mut old_para
+                    && old.outline_level.is_none()
+                {
+                    old.outline_level = Some(level);
+                }
             }
             if let Some(rp) = s.child("w:rPr") {
                 st.chr = self.pc.rpr(rp);
-                st.chr.fmt_change = self.rpr_change(rp);
+                if let Some(ch) = rp.child("w:rPrChange") {
+                    let old = ch.child("w:rPr").map(|o| self.pc.rpr(o).formatting()).unwrap_or_default();
+                    old_chr = Some((self.revision(RevisionKind::Format, ch), old));
+                }
+            }
+            // CT_Style has no `stylePrChange`. Keep its two valid revision carriers separate: a
+            // foreign document may attribute paragraph and run changes to different authors.
+            if let Some((rev, old)) = old_para {
+                st.para.fmt_change = PropChange::boxed(rev, old.clone());
+                st.para_change = PropChange::boxed(rev, old);
+            }
+            if let Some((rev, old)) = old_chr {
+                st.chr.fmt_change = PropChange::boxed(rev, old.clone());
+                st.chr_change = PropChange::boxed(rev, old);
             }
             if kind == StyleKind::Table {
                 let parts = self.table_style_parts(s, &mut st);
@@ -179,51 +255,7 @@ impl Reader<'_> {
                 None => sheet.styles.push(st),
             }
         }
-        // Old style formatting revisions that give only a list level take the list from the style
-        // they are based on, rather than the revised style's own list. This runs before the
-        // current-numbering pass below normalizes level-only values: an unchanged intermediate
-        // style's level would otherwise point at the base's current list instead of its old one.
-        let fixed_old_num: Vec<Option<Option<wordcraft_doc::props::NumRef>>> = sheet
-            .styles
-            .iter()
-            .map(|s| {
-                s.para.fmt_change.as_ref().and_then(|ch| match ch.old.numbering {
-                    Some(n) if n.num == props::LEVEL_ONLY => {
-                        let base_style = ch.old.style.as_deref().or(s.based_on.as_deref());
-                        let base = base_style.and_then(|b| props::chain_list_before(&sheet, b));
-                        Some(base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }))
-                    }
-                    _ => None,
-                })
-            })
-            .collect();
-        for (s, opt_num) in sheet.styles.iter_mut().zip(fixed_old_num) {
-            if let Some(new_num) = opt_num
-                && let Some(ch) = &mut s.para.fmt_change
-            {
-                ch.old.numbering = new_num;
-            }
-        }
-        // Styles that give only a list level take the list from the style they are based on
-        // (Heading 3: level 3 of Heading 2's outline list).
-        let fixed: Vec<(Option<wordcraft_doc::props::NumRef>, bool)> = sheet
-            .styles
-            .iter()
-            .map(|s| match s.para.numbering {
-                Some(n) if n.num == props::LEVEL_ONLY => {
-                    let base = s.based_on.as_deref().and_then(|b| props::chain_list(&sheet, b));
-                    (base.map(|num| wordcraft_doc::props::NumRef { num, level: n.level }), base.is_some())
-                }
-                other => (other, false),
-            })
-            .collect();
-        for (s, (n, inherited)) in sheet.styles.iter_mut().zip(fixed) {
-            s.para.numbering = n;
-            s.numbering_from_base = inherited;
-        }
-        if sheet.default_para.numbering.is_some_and(|n| n.num == props::LEVEL_ONLY) {
-            sheet.default_para.numbering = None;
-        }
+        Self::resolve_level_only_numberings(&mut sheet);
         // A producer that never writes `w:qFormat` (LibreOffice) still gets Word's usual gallery.
         if !sheet.styles.iter().any(|s| s.quick) {
             sheet.add_default_gallery();
@@ -266,11 +298,17 @@ impl Reader<'_> {
                 if let Some(p) = ppr {
                     st.para.overlay(&p);
                     // The region applies whether or not the style's own change is rejected.
+                    if let Some(ch) = st.para_change.as_mut() {
+                        ch.old.overlay(&p);
+                    }
                     if let Some(ch) = st.para.fmt_change.as_mut() {
                         ch.old.overlay(&p);
                     }
                 }
                 st.chr.overlay(&f.chr);
+                if let Some(ch) = st.chr_change.as_mut() {
+                    ch.old.overlay(&f.chr);
+                }
                 if let Some(ch) = st.chr.fmt_change.as_mut() {
                     ch.old.overlay(&f.chr);
                 }

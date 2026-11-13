@@ -229,6 +229,8 @@ fn sync_style_definitions(
             if let Some(target) = result_styles.styles.iter_mut().find(|st| st.id == new_st.id) {
                 let old_st = target.clone();
                 let mut updated = new_st.clone();
+                updated.para_change = None;
+                updated.chr_change = None;
                 updated.para.fmt_change = None;
                 updated.chr.fmt_change = None;
                 let needs_remapping = updated.para.numbering.is_some_and(|n| {
@@ -246,6 +248,8 @@ fn sync_style_definitions(
                 *target = updated;
             } else {
                 let mut added = new_st.clone();
+                added.para_change = None;
+                added.chr_change = None;
                 added.para.fmt_change = None;
                 added.chr.fmt_change = None;
                 remap_style_numbering(&mut s.doc, &revised.numbering, &mut added.para.numbering, maps);
@@ -258,6 +262,8 @@ fn sync_style_definitions(
         for new_st in &revised.styles.styles {
             if !result_styles.styles.iter().any(|st| st.id == new_st.id) {
                 let mut added = new_st.clone();
+                added.para_change = None;
+                added.chr_change = None;
                 added.para.fmt_change = None;
                 added.chr.fmt_change = None;
                 remap_style_numbering(&mut s.doc, &revised.numbering, &mut added.para.numbering, maps);
@@ -312,6 +318,7 @@ fn remap_revised_numbering(doc: &mut Document, revised: &mut Document, maps: &mu
     }
 }
 
+/// Remap list numbering references in `blocks` to avoid collisions with existing lists in `doc`.
 fn remap_blocks_numbering(
     doc: &mut Document,
     source: &wordcraft_doc::numbering::Numbering,

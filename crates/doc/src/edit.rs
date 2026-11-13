@@ -1210,6 +1210,21 @@ impl Document {
             }
             if self.styles.get(&st.id).is_none() {
                 renumber(&mut st.para.numbering);
+                match (st.para_change.as_ref().and_then(|c| rev_id(c.rev)), st.para_change.as_mut()) {
+                    (Some(v), Some(c)) => {
+                        c.rev = v;
+                        restyle(&mut c.old.style);
+                        renumber(&mut c.old.numbering);
+                    }
+                    _ => st.para_change = None,
+                }
+                match (st.chr_change.as_ref().and_then(|c| rev_id(c.rev)), st.chr_change.as_mut()) {
+                    (Some(v), Some(c)) => {
+                        c.rev = v;
+                        restyle(&mut c.old.style);
+                    }
+                    _ => st.chr_change = None,
+                }
                 match (st.para.fmt_change.as_ref().and_then(|c| rev_id(c.rev)), st.para.fmt_change.as_mut()) {
                     (Some(v), Some(c)) => {
                         c.rev = v;

@@ -290,7 +290,7 @@ impl Writer<'_> {
     }
 
     /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
-    pub(super) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
+    pub(in crate::write) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
         crate::write::props::change_attrs(self.doc, &mut self.next_rev_id, idx)
     }
 

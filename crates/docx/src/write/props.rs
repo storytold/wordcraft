@@ -286,6 +286,7 @@ pub fn ppr_inner_style(w: &mut W, p: &ParaProps, framed: bool, num_change: Optio
     ppr_inner_with(w, p, framed, num_change, inherit_numbering);
 }
 
+/// Write inner `w:pPr` elements, optionally omitting `w:numId` if numbering is inherited from base.
 fn ppr_inner_with(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>, inherit_numbering: bool) {
     if let Some(s) = &p.style {
         w.val("w:pStyle", s);
