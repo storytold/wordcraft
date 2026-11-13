@@ -464,13 +464,20 @@ fn changes(s: &Session) -> Vec<Change> {
             {
                 let kind = run_kind(&s.doc, row.props.ins, row.props.del);
                 if !kind.is_empty() {
-                    out.push(Change { a: mk(&path, 0), b: mk(&path, 0), kind, rev: row.props.ins.or(row.props.del), props: Vec::new() });
+                    out.push(Change { a: mk(&path, 0), b: mk(&path, 0), kind, rev: row.props.ins.or(row.props.del), props: Vec::new(), style: None });
                 }
             }
             if let Some(cell) = cell {
                 let kind = run_kind(&s.doc, cell.props.ins, cell.props.del);
                 if !kind.is_empty() {
-                    out.push(Change { a: mk(&path, 0), b: mk(&path, 0), kind, rev: cell.props.ins.or(cell.props.del), props: Vec::new() });
+                    out.push(Change {
+                        a: mk(&path, 0),
+                        b: mk(&path, 0),
+                        kind,
+                        rev: cell.props.ins.or(cell.props.del),
+                        props: Vec::new(),
+                        style: None,
+                    });
                 }
             }
             let found = [
