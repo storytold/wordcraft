@@ -6037,6 +6037,21 @@ fn check_spelling_off_in_a_second_window_stays_off_in_every_window() {
 }
 
 #[test]
+fn field_shading_survives_restart() {
+    // #4290: Never/Always is a user preference, like Word's Options setting.
+    let mut first = app();
+    first.run("view.fieldShading", json!({"value": "always"})).unwrap();
+    let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+    let mut second = app();
+    second.apply_prefs(serde_json::from_slice(&saved).unwrap());
+    assert_eq!(second.session.view.field_shading, wordcraft_engine::FieldShading::Always);
+    // A saved file from before #4290 has no key: Word's default applies.
+    second.apply_prefs(serde_json::from_str("{}").unwrap());
+    assert_eq!(second.session.view.field_shading, wordcraft_engine::FieldShading::WhenSelected);
+}
+
+#[test]
 fn prefs_without_user_name_keep_default() {
     let mut a = app();
     let default = a.session.author.clone();
