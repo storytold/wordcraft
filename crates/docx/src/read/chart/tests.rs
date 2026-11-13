@@ -590,3 +590,65 @@ fn series_without_a_usable_c_idx_take_their_place() {
     let big = [renumbered(&a, &format!(r#"<c:idx val="{}"/>"#, u32::MAX))];
     assert_eq!(column_colours(&big).0.len(), 1);
 }
+
+// Automatic colours from six on (#5961): Word splits N automatic colours into G = N / 6 + 1
+// groups of the six accents and shades the early groups and tints the late ones, in linear RGB.
+// The expected colours are Word's own, from its PDF output (Office 2023 theme, as `theme()`),
+// to within 1/255.
+
+/// The slice colours of a pie of `n` equal slices with no `c:dPt`.
+fn pie_colours(n: usize) -> Vec<Rgb> {
+    let cats: Vec<String> = (1..=n).map(|k| format!("C{k}")).collect();
+    let cats: Vec<&str> = cats.iter().map(String::as_str).collect();
+    let plot = format!(r#"<c:pieChart><c:varyColors val="1"/>{}</c:pieChart>"#, ser(0, "S", None, &cats, &vec!["1"; n]));
+    filled(&chart_items(&space(&plot), &theme(), 300.0, 300.0)).iter().map(|f| f.0).collect()
+}
+
+fn hex(c: u32) -> Rgb {
+    Rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
+}
+
+#[test]
+fn automatic_point_colours_from_six_on_are_shaded_and_tinted() {
+    let accent = |k: usize| theme()[4 + k];
+    // Up to five: the plain accents.
+    assert_eq!(pie_colours(5), (0..5).map(accent).collect::<Vec<_>>());
+    // Six already makes two groups: all six shaded 76.7%.
+    let six = pie_colours(6);
+    assert_eq!((six[0], six[5]), (hex(0x115473), hex(0x449428)));
+    // 13: shaded 65%, plain, then tinted 65%.
+    let thirteen = pie_colours(13);
+    assert_eq!(thirteen.len(), 13);
+    assert_eq!(
+        [thirteen[0], thirteen[5], thirteen[6], thirteen[11], thirteen[12]],
+        [hex(0x0F4E6A), hex(0x3F8924), accent(0), accent(5), hex(0xA1AFBB)]
+    );
+    // A point's own colour is never shaded.
+    let cats: Vec<String> = (1..=7).map(|k| format!("C{k}")).collect();
+    let cats: Vec<&str> = cats.iter().map(String::as_str).collect();
+    let s = ser(0, "S", None, &cats, &["1"; 7]);
+    let at = s.find("<c:cat>").unwrap_or(s.len());
+    let red = r#"<c:dPt><c:idx val="0"/><c:spPr><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill></c:spPr></c:dPt>"#;
+    let plot = format!(r#"<c:pieChart><c:varyColors val="1"/>{}{red}{}</c:pieChart>"#, &s[..at], &s[at..]);
+    assert_eq!(filled(&chart_items(&space(&plot), &theme(), 300.0, 300.0))[0].0, Rgb(0xFF, 0, 0));
+}
+
+#[test]
+fn automatic_series_colours_are_grouped_by_the_highest_c_idx() {
+    let accent = |k: usize| theme()[4 + k];
+    // 13 series, idx 0…12: as 13 points.
+    let sers: Vec<String> = (0..13).map(|k| ser(k, &format!("S{k}"), None, &["Q1"], &["1"])).collect();
+    let bars = column_colours(&sers).0;
+    assert_eq!([bars[0], bars[6], bars[12]], [hex(0x0F4E6A), accent(0), hex(0xA1AFBB)]);
+    // idx 0 and 7: the count is 8, two groups, so idx 0 is shaded and idx 7 is accent2 tinted.
+    let a = ser(0, "A", None, &["Q1"], &["1"]);
+    let b = ser(1, "B", None, &["Q1"], &["2"]);
+    let gap = [a.clone(), renumbered(&b, r#"<c:idx val="7"/><c:order val="1"/>"#)];
+    assert_eq!(column_colours(&gap).0, [hex(0x115473), hex(0xEEA28B)]);
+    // A lone series with idx 7: the same tinted accent2.
+    let lone = [renumbered(&a, r#"<c:idx val="7"/><c:order val="0"/>"#)];
+    assert_eq!(column_colours(&lone).0, [hex(0xEEA28B)]);
+    // A series' own colour is never shaded.
+    let own = [ser(0, "A", Some("FF0000"), &["Q1"], &["1"]), renumbered(&b, r#"<c:idx val="7"/><c:order val="1"/>"#)];
+    assert_eq!(column_colours(&own).0, [Rgb(0xFF, 0, 0), hex(0xEEA28B)]);
+}

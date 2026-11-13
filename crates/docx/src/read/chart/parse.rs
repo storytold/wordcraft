@@ -23,6 +23,8 @@ impl Chart {
         } else {
             series.iter().map(|s| s.values.len()).max().unwrap_or(0).max(cats.len())
         };
+        // Counted before the cell budget drops any series: Word counts them all.
+        let series_n = series.iter().enumerate().map(|(j, s)| s.idx.unwrap_or(j).saturating_add(1)).max().unwrap_or(0);
         // Every series is padded to `n` points, so keep only as many as the cell budget holds.
         if let Some(keep) = MAX_CELLS.checked_div(n) {
             series.truncate(keep.max(1));
@@ -69,6 +71,7 @@ impl Chart {
             radar_marks: radar_style == Some("marker"),
             vary: matches!(kind, Kind::Pie | Kind::Doughnut) && ty.child("c:varyColors").and_then(|v| v.attr("val")).is_none_or(truthy),
             n,
+            series_n,
             cats,
             title: title_of(chart, &series),
             series,
@@ -87,24 +90,38 @@ impl Chart {
         self.grouping != Grouping::Clustered
     }
 
-    fn accent(&self, i: usize) -> Rgb {
-        self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK)
+    /// Automatic colour `i` of `n`, as Word picks it: accent `i % 6`, with the `n` colours in
+    /// `n / 6 + 1` groups of six (so six colours already make two), the early groups shaded and
+    /// the late ones tinted, the further from the middle the more (measured in Word, #5961).
+    fn auto_colour(&self, i: usize, n: usize) -> Rgb {
+        let accent = self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK);
+        let groups = (n / 6 + 1) as f64;
+        // From the middle group: < 0 for the early groups, > 0 for the late ones.
+        let d = 2.0 * (i / 6) as f64 - (groups - 1.0);
+        let f = 1.0 - 0.7 * d.abs() / (groups + 1.0);
+        if d < 0.0 {
+            shade_linear(accent, f)
+        } else if d > 0.0 {
+            tint_linear(accent, f)
+        } else {
+            accent
+        }
     }
 
-    /// Colour of series `j`: its own, else the accent its `c:idx` picks (as Word does; `c:order`
-    /// doesn't matter), else the one its place in the file picks.
+    /// Colour of series `j`: its own, else the automatic colour its `c:idx` picks (as Word does;
+    /// `c:order` doesn't matter), else the one its place in the file picks.
     pub(super) fn series_colour(&self, j: usize) -> Rgb {
         let s = self.series.get(j);
-        s.and_then(|s| s.color).unwrap_or_else(|| self.accent(s.and_then(|s| s.idx).unwrap_or(j)))
+        s.and_then(|s| s.color).unwrap_or_else(|| self.auto_colour(s.and_then(|s| s.idx).unwrap_or(j), self.series_n))
     }
 
-    /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied accent (pie) or
-    /// the series colour.
+    /// Colour of point `i` of series `j`: its `c:dPt` override, else the varied automatic colour
+    /// (pie) or the series colour.
     pub(super) fn point_colour(&self, j: usize, i: usize) -> Rgb {
         if let Some(Some(c)) = self.series.get(j).and_then(|s| s.points.get(i)) {
             return *c;
         }
-        if self.vary { self.accent(i) } else { self.series_colour(j) }
+        if self.vary { self.auto_colour(i, self.n) } else { self.series_colour(j) }
     }
 
     pub(super) fn legend_entries(&self) -> Vec<(String, Rgb)> {
@@ -333,6 +350,32 @@ fn rich_into(e: &El, s: &mut String) {
             rich_into(c, s);
         }
     }
+}
+
+/// `c` darkened as Word shades an automatic chart colour: each channel × `f` in linear RGB.
+fn shade_linear(c: Rgb, f: f64) -> Rgb {
+    let ch = |v: u8| to_srgb(to_linear(v) * f);
+    Rgb(ch(c.0), ch(c.1), ch(c.2))
+}
+
+/// `c` lightened as Word tints an automatic chart colour: each channel's distance from white × `f`
+/// in linear RGB.
+fn tint_linear(c: Rgb, f: f64) -> Rgb {
+    let ch = |v: u8| to_srgb(1.0 - (1.0 - to_linear(v)) * f);
+    Rgb(ch(c.0), ch(c.1), ch(c.2))
+}
+
+/// An sRGB channel as linear light, 0..1.
+fn to_linear(v: u8) -> f64 {
+    let v = f64::from(v) / 255.0;
+    if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+}
+
+/// Linear light (clamped to 0..1) as an sRGB channel.
+fn to_srgb(x: f64) -> u8 {
+    let x = x.clamp(0.0, 1.0);
+    let v = if x <= 0.003_130_8 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+    (v * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 fn truthy(v: &str) -> bool {
