@@ -333,7 +333,13 @@ fn suggested_ext(name: &str) -> Option<String> {
         .map(str::to_ascii_lowercase)
         // A .markdown file is under Markdown's one entry in the list.
         .map(|e| if e == "markdown" { "md".to_string() } else { e })
-        .filter(|e| wordcraft_engine::io::SAVE_EXTS.contains(&e.as_str()) || wordcraft_engine::io::SAVE_ALIASES.iter().any(|(alias, _)| alias == e))
+        .filter(|e| is_saved_ext(e))
+}
+
+/// Whether `ext` (lower case) is an extension the engine saves: a format's own extension or one
+/// of its [`wordcraft_engine::io::SAVE_ALIASES`].
+pub(crate) fn is_saved_ext(ext: &str) -> bool {
+    wordcraft_engine::io::SAVE_EXTS.contains(&ext) || wordcraft_engine::io::SAVE_ALIASES.iter().any(|(alias, _)| *alias == ext)
 }
 
 /// The format a saved extension belongs to: an alias's format, else the extension itself.
@@ -502,5 +508,17 @@ mod tests {
         let exts = save_exts("novel.docx");
         assert!(wordcraft_engine::io::SAVE_EXTS.iter().all(|e| exts.iter().any(|x| x == e)));
         assert_eq!(exts.len(), wordcraft_engine::io::SAVE_EXTS.len());
+    }
+
+    /// A Single File Web Page's second extension is one WordCraft saves, as each format's own
+    /// is, so the Linux portal's Save dialog keeps a typed `.mhtml` and replaces one it opened
+    /// with (`portal_save::with_chosen_type`); other extensions aren't.
+    #[test]
+    fn every_extension_a_format_saves_under_counts_as_saved() {
+        assert!(wordcraft_engine::io::SAVE_EXTS.iter().all(|e| is_saved_ext(e)));
+        assert!(is_saved_ext("mhtml"));
+        for other in ["2024", "rtf2", "htm", ""] {
+            assert!(!is_saved_ext(other), "{other}");
+        }
     }
 }
