@@ -7040,6 +7040,32 @@ fn custom_table_style_applies_modifies_and_saves() {
     assert_eq!(t.props.style.as_deref(), Some(id.as_str()), "w:tblStyle");
 }
 
+/// #6430: text a table style makes bold (its header row) shows Bold on, and Bold turns it off.
+#[test]
+fn bold_from_table_style_shows_and_toggles_off() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "text.insert", json!({"text": "Head"}));
+    run(&mut s, "table.look", json!({"headerRow": true}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    run(&mut s, "table.newStyle", json!({"name": "Bold Header", "headerRow": {"bold": true}}));
+    let shown_bold = |s: &mut Session| {
+        let mut p = tp.0.clone();
+        p.extend([0, 0, 0]);
+        s.layout().pages[0]
+            .items
+            .iter()
+            .find_map(|i| if let crate::layout::Placed::Lines { path, para, .. } = i { (path.0 == p).then(|| para.styles[0].rc.bold) } else { None })
+            .unwrap()
+    };
+    run(&mut s, "select.text", json!({"text": "Head"}));
+    assert!(shown_bold(&mut s), "the header row is drawn bold");
+    assert_eq!(crate::cmd::format::state(&s)["bold"], json!(true), "Bold shows on");
+    run(&mut s, "format.bold", json!({}));
+    assert!(!shown_bold(&mut s), "Bold turns the style's bold off");
+    assert_eq!(crate::cmd::format::state(&s)["bold"], json!(false));
+}
+
 /// #714: Modify Table Style edits one part at a time (header row, even bands, a corner cell…)
 /// with font, fill, borders and cell alignment, and every table using the style follows.
 /// #1288: a cell's own Top alignment beats a table style that centres vertically, and it

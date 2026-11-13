@@ -50,7 +50,7 @@ use wordcraft_geom::{Point, Rect, Spin};
 pub use fields::FieldCtx;
 pub use hit::VisualStep;
 pub use para::{LineEnd, ParaLayout};
-pub use table::{autofit_widths, cell_margins, measure_table_columns};
+pub use table::{autofit_widths, cell_chr, cell_margins, measure_table_columns};
 
 mod boxes;
 mod cache;
