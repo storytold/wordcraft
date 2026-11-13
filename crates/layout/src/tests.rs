@@ -6656,9 +6656,46 @@ fn justified_line_with_tab_and_no_spaces_after_it_does_not_shrink() {
 /// mode, fitting more text than legacy mode 14 just as non-tab lines do.
 #[test]
 fn justified_lines_with_tab_shrink_spaces_in_word_2013_mode() {
-    let text = format!("\t{}", "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40));
-    let (modern, ends) = justified_lines(&text, 15, Align::Justify);
-    let (legacy, legacy_ends) = justified_lines(&text, 14, Align::Justify);
+    let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
+    let word = "nnnn";
+    let n = 12;
+    let tab_at = 36.0; // default 0.5" tab stop
+    let para = |text: &str, right: f32, mode: u32| {
+        let mut d = Document::new();
+        d.settings.compat_mode = mode;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.props = ParaProps { align: Some(Align::Justify), indent_right: Some(right), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        d
+    };
+    let first = |d: &Document| {
+        let l = lay(d);
+        let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+        let line = &pl.lines[0];
+        let text = &d.para(StoryRef::Body, &Path::top(0)).unwrap().text[line.start..line.stop];
+        text.split('\t').nth(1).unwrap_or("").split_whitespace().count()
+    };
+    let probe = para(&format!("{word} {word}"), 0.0, 15);
+    let l = lay(&probe);
+    let pl = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let w = pl.x_of(0, word.len()).unwrap() - pl.x_of(0, 0).unwrap();
+    let sw = pl.x_of(0, word.len() + 1).unwrap() - pl.x_of(0, word.len()).unwrap();
+    let room = (0.25 * n as f32 * sw).min(0.355 * (w + sw));
+    let text = format!("\t{}", vec![word; 3 * n].join(" "));
+    let full = probe.last_section.text_width();
+    let width = tab_at + (n + 1) as f32 * w + n as f32 * sw - (room - 0.1);
+
+    // Verify on the tabbed first line that mode 15 fits the extra word via space shrinking
+    // while legacy mode 14 does not shrink spaces, wrapping the extra word to the next line.
+    let modern_doc = para(&text, full - width, 15);
+    let legacy_doc = para(&text, full - width, 14);
+    assert_eq!(first(&modern_doc), n + 1, "mode 15 with leading tab fits extra word within allowable overrun");
+    assert_eq!(first(&legacy_doc), n, "mode 14 with leading tab does not shrink spaces and wraps extra word");
+
+    // Multi-line justified paragraph with leading tab also fits more lines overall in mode 15.
+    let text_full = format!("\t{}", "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40));
+    let (modern, ends) = justified_lines(&text_full, 15, Align::Justify);
+    let (legacy, legacy_ends) = justified_lines(&text_full, 14, Align::Justify);
     assert!(modern < legacy, "mode 15 with leading tab fits more per line: {modern} vs {legacy} lines");
     for e in ends.iter().chain(&legacy_ends) {
         assert!(*e <= 540.0 + 0.05, "line ends past the right margin: {e}");
