@@ -10178,6 +10178,49 @@ fn review_language_validates_tags_and_marks_text_unchecked() {
     assert_eq!(run(&mut s, "review.issues", json!({})), json!([]));
 }
 
+/// #6013: as in Word, a table inserted in French text is French. Its cells take the language at
+/// the caret, not the document's default, so what is typed in them is proofed in that language.
+#[test]
+fn a_new_table_is_in_the_language_at_the_caret() {
+    polish_test_dictionary();
+    let cell_langs = |s: &Session| -> Vec<Option<String>> {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).filter_map(|b| b.as_para()).map(|p| p.mark.lang.clone()).collect()
+    };
+    let mut fr = s();
+    assert_eq!(fr.doc.styles.default_chr.lang.as_deref(), Some("en-US"));
+    run(&mut fr, "review.language", json!({"lang": "fr-FR"}));
+    run(&mut fr, "text.insert", json!({"text": "Bonjour"}));
+    run(&mut fr, "text.newParagraph", json!({}));
+    let at = run(&mut fr, "insert.table", json!({"rows": 2, "cols": 2}))["table"][0].clone();
+    assert_eq!(cell_langs(&fr), vec![Some("fr-FR".to_string()); 4]);
+    // Click in a cell, then type.
+    for (cell, word) in [(1, "Vin"), (2, "Fromage")] {
+        run(&mut fr, "caret.set", json!({"pos": {"story": "body", "path": [at, cell / 2, cell % 2, 0], "off": 0}}));
+        assert_eq!(run(&mut fr, "format.state", json!({}))["lang"], "fr-FR", "cell {cell}");
+        run(&mut fr, "text.insert", json!({"text": word}));
+    }
+    let t = fr.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    for (cell, word) in [(1, "Vin"), (2, "Fromage")] {
+        let p = t.rows[cell / 2].cells[cell % 2].blocks[0].as_para().unwrap();
+        assert_eq!((p.plain_text().as_str(), p.props_of_char(0).lang.as_deref()), (word, Some("fr-FR")));
+    }
+
+    // At the end of a Polish paragraph: Polish words typed in the cell aren't misspelt.
+    let mut pl = Session::new(wordcraft_doc::Document::from_text("Płynie rzeka."));
+    run(&mut pl, "select.all", json!({}));
+    run(&mut pl, "review.language", json!({"lang": "pl-PL"}));
+    run(&mut pl, "caret.docEnd", json!({}));
+    run(&mut pl, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut pl, "text.insert", json!({"text": "Zażółć gęślą jaźń."}));
+    assert_eq!(run(&mut pl, "review.issues", json!({})), json!([]));
+
+    // Text with no language of its own: the cells follow the document's default.
+    let mut plain = s();
+    run(&mut plain, "insert.table", json!({"rows": 1, "cols": 2}));
+    assert_eq!(cell_langs(&plain), vec![None, None]);
+}
+
 /// The editing language (set by the front end from the interface language): new blank
 /// documents and opened plain text are written in it; the untouched first document switches,
 /// a document with changes never does, and templates stay English.
