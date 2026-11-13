@@ -797,7 +797,7 @@ fn has_align_mark(e: &El, depth: usize) -> bool {
 
 fn nary(chr: char, lim_loc: LimLoc, sub: Arg, sup: Arg) -> MNode {
     let lim_loc = Some(lim_loc).filter(|l| *l != if is_integral(chr) { LimLoc::SubSup } else { LimLoc::UndOvr });
-    MNode::Nary { chr, lim_loc, grow: false, sub_hide: sub.is_empty(), sup_hide: sup.is_empty(), sub, sup, e: Vec::new() }
+    MNode::Nary { chr, lim_loc, grow: None, sub_hide: sub.is_empty(), sup_hide: sup.is_empty(), sub, sup, e: Vec::new() }
 }
 
 #[cfg(test)]

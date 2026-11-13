@@ -545,7 +545,7 @@ impl Lp {
                 Some(ch) if is_nary_char(ch) => vec![MNode::Nary {
                     chr: ch,
                     lim_loc: None,
-                    grow: false,
+                    grow: None,
                     sub_hide: true,
                     sup_hide: true,
                     sub: Vec::new(),
