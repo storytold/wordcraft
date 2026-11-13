@@ -265,10 +265,10 @@ mod tests {
         }
         assert!(shape_outline(ShapeKind::Rectangle, 10.0, 10.0, None).is_none());
         // The end of the bottom-right corner: in the frame's corner when the corner is square,
-        // 16% of the height (8 of 100 wide) in from it by default.
+        // a sixth of the height (8.33 of 100 wide) in from it by default.
         let corner_pt = |corner| shape_outline(ShapeKind::RoundedRectangle, 100.0, 50.0, corner).unwrap()[6];
         assert!(corner_pt(Some(0)).0 > 0.999 && corner_pt(Some(0)).1 > 0.999, "{:?}", corner_pt(Some(0)));
-        assert!((corner_pt(None).0 - 0.92).abs() < 0.001, "{:?}", corner_pt(None));
+        assert!((corner_pt(None).0 - 0.916_67).abs() < 0.0001, "{:?}", corner_pt(None));
     }
 
     #[test]

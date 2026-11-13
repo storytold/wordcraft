@@ -270,8 +270,11 @@ impl ShapeExtra {
 /// The largest rounded-rectangle corner: half the shorter side, which makes its ends round.
 pub const MAX_CORNER: u32 = 50_000;
 
-/// A rounded rectangle's corner radius without its own: 16% of the shorter side.
-pub const DEFAULT_CORNER: f32 = 0.16;
+/// A rounded rectangle's corner radius without its own: a sixth of the shorter side, the preset's
+/// default `adj` of 16667 (ECMA-376 §20.1.10.56). Measured in Word for Windows: a 300 × 100 pt
+/// rounded rectangle without `adj` is drawn with corners of 16.67 pt, a 300 × 40 pt one of 6.67
+/// pt and a 60 × 150 pt one of 10 pt.
+pub const DEFAULT_CORNER: f32 = 16_667.0 / 100_000.0;
 
 /// The corner radius, in points, of a `w` × `h` rounded rectangle with `corner` (see
 /// [`ShapeExtra::corner`]).
@@ -521,7 +524,10 @@ mod tests {
     #[test]
     fn corner_radius_follows_the_shorter_side() {
         let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
-        assert!(near(corner_radius(None, 200.0, 100.0), 16.0));
+        assert!(near(corner_radius(None, 200.0, 100.0), 16.667));
+        assert!(near(corner_radius(None, 300.0, 40.0), 6.6668));
+        assert!(near(corner_radius(None, 60.0, 150.0), 10.0002));
+        assert!(near(corner_radius(None, 200.0, 100.0), corner_radius(Some(16_667), 200.0, 100.0)), "the preset's default");
         assert!(near(corner_radius(Some(0), 200.0, 100.0), 0.0));
         assert!(near(corner_radius(Some(3_565), 100.0, 200.0), 3.565));
         assert!(near(corner_radius(Some(MAX_CORNER), 200.0, 100.0), 50.0));
