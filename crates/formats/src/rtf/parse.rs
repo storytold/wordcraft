@@ -24,6 +24,10 @@ struct Parsed {
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
     notes: Vec<NoteData>,
     comments: Vec<CommentData>,
+    /// `\wraptrsp`.
+    wrap_trail_spaces: bool,
+    /// `\jexpand` was the document's last justification word.
+    expand_justification: bool,
 }
 
 /// `marks`: also read footnotes, endnotes and comments (as place markers in the flow's text, for
@@ -259,7 +263,17 @@ fn finalize(mut r: Reader) -> Parsed {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
-    Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers, notes: r.notes, comments: r.comments }
+    Parsed {
+        flow: Flow { blocks, meta: r.meta },
+        page: r.page,
+        last_section,
+        default_font,
+        headers_footers,
+        notes: r.notes,
+        comments: r.comments,
+        wrap_trail_spaces: r.wrap_trail_spaces,
+        expand_justification: r.expand_justification,
+    }
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -302,8 +316,13 @@ pub(super) fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f3
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let Parsed { flow, last_section, default_font, headers_footers, notes, comments, .. } = parse_full(bytes, true)?;
+    let Parsed { flow, last_section, default_font, headers_footers, notes, comments, wrap_trail_spaces, expand_justification, .. } =
+        parse_full(bytes, true)?;
     let mut doc = model::to_doc_in(&flow, last_section);
+    // Word fits justified lines of an RTF document more tightly than a DOCX one: it squeezes a
+    // line's spaces to keep an overrunning word unless the document says `\jexpand`.
+    doc.settings.rtf_justification = !expand_justification;
+    doc.settings.wrap_trail_spaces = wrap_trail_spaces;
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
     for parts in &headers_footers {

@@ -25,6 +25,11 @@ pub(super) struct Reader {
     /// The document's page (`\paperw`, `\margl`…) and the current section's formatting.
     pub(super) page: PageGeom,
     pub(super) sec: SecFmt,
+    /// `\wraptrsp`: Wrap trailing spaces onto the next line.
+    pub(super) wrap_trail_spaces: bool,
+    /// `\jexpand` (true) / `\jcompress` (false), the last one read: with expanding justification
+    /// Word does not squeeze a line's spaces to keep its overrunning last word.
+    pub(super) expand_justification: bool,
     /// The headers and footers of each section ended so far (`\sect`); `hf_parts` holds the
     /// current section's.
     pub(super) section_parts: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
