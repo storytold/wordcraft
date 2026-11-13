@@ -3,7 +3,7 @@
 //! Page range and parity shape the PDF. Native printer settings and copy collation go to
 //! the shared spooler; browser printing and saved print PDFs retain copies in the PDF.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use egui::{Rect, Sense, Stroke, TextureHandle, Ui, pos2, vec2};
 use serde_json::{Value, json};
@@ -118,38 +118,56 @@ fn choice_named(ui: &mut Ui, salt: &str, current: &mut String, items: &[(&str, &
     changed
 }
 
-/// The output layout, kept while the document and Print Markup setting are unchanged.
+/// What the preview's layout is made from besides the document's text: the revision, Print
+/// Markup, the file name and path FILENAME fields show (#6282: Save As and Rename change them
+/// without an edit), and the font database generation the app has seen (#6283:
+/// `WordApp::watch_fonts` moves it when fonts are added or removed).
+type LayoutKey = (u64, bool, (String, String), u64);
+
+/// The [`LayoutKey`] now.
+fn layout_key(app: &WordApp) -> LayoutKey {
+    (app.session.rev(), app.session.prefs.print_markup, app.session.resolved_filenames(), app.font_generation)
+}
+
+/// The output layout, kept while what it is made from ([`LayoutKey`]) is unchanged.
 fn layout_of(app: &WordApp, ctx: &egui::Context) -> Arc<DocLayout> {
     let id = egui::Id::unique("print_page_layout");
-    let rev = app.session.rev();
-    let markup = app.session.prefs.print_markup;
-    if let Some((r, m, l)) = ctx.data(|d| d.get_temp::<(u64, bool, Arc<DocLayout>)>(id))
-        && r == rev
-        && m == markup
+    let key = layout_key(app);
+    if let Some((k, l)) = ctx.data(|d| d.get_temp::<(LayoutKey, Arc<DocLayout>)>(id))
+        && k == key
     {
         return l;
     }
-    let l = app.session.export_layout_with(markup);
-    ctx.data_mut(|d| d.insert_temp(id, (rev, markup, l.clone())));
+    let l = app.session.export_layout_with(app.session.prefs.print_markup);
+    ctx.data_mut(|d| d.insert_temp(id, (key, l.clone())));
     l
 }
 
-/// A bounded per-cell texture cache, refreshed when the page, scale or Print Markup changes.
-fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &DocLayout, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
+/// What a preview texture was drawn from: the layout, the page and the render scale's bits.
+type TextureKey = (Weak<DocLayout>, usize, u32);
+
+/// A bounded per-cell texture cache, drawn again when the layout, the page or the scale changes.
+fn page_texture(app: &WordApp, ctx: &egui::Context, lay: &Arc<DocLayout>, page: usize, cache_slot: usize, width: f32) -> Option<TextureHandle> {
     let id = egui::Id::unique(("print_page_texture", cache_slot));
-    let key = (app.session.rev(), app.session.prefs.print_markup, page, width as u32, (ctx.pixels_per_point() * 100.0) as u32);
-    if let Some((k, t)) = ctx.data(|d| d.get_temp::<((u64, bool, usize, u32, u32), TextureHandle)>(id))
-        && k == key
-    {
-        return Some(t);
-    }
     let pg = lay.pages.get(page)?;
     // Zoomed in, the texture stays within what the GPU takes and is stretched beyond that.
     let max_side = ctx.input(|i| i.max_texture_side) as f32 / pg.w.max(pg.h).max(1.0);
     let scale = (width / pg.w.max(1.0) * ctx.pixels_per_point()).clamp(0.05, 4.0).min(max_side);
+    // Keyed on what the page is drawn from: the layout, so whatever lays the page out again
+    // draws it again (held weakly: no later layout can take its address while the key holds
+    // it), the page, and the exact scale (#6285), which also follows the GPU's texture limit
+    // (#6284).
+    if let Some(((l, p, s), t)) = ctx.data(|d| d.get_temp::<(TextureKey, TextureHandle)>(id))
+        && std::ptr::eq(l.as_ptr(), Arc::as_ptr(lay))
+        && p == page
+        && s == scale.to_bits()
+    {
+        return Some(t);
+    }
     let img = wordcraft_render::render_page(&app.session.doc, pg, scale, &Default::default());
     let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight());
     let tex = ctx.load_texture("print_page_preview", color, egui::TextureOptions::LINEAR);
+    let key: TextureKey = (Arc::downgrade(lay), page, scale.to_bits());
     ctx.data_mut(|d| d.insert_temp(id, (key, tex.clone())));
     Some(tex)
 }
@@ -359,7 +377,7 @@ fn zoom_step(z: f32, up: bool) -> f32 {
 
 /// The preview (#1156): the page fills the pane, a bar below pages through the document and
 /// zooms; zoomed in, the page scrolls both ways.
-fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout) {
+fn preview(app: &mut WordApp, ui: &mut Ui, lay: &Arc<DocLayout>) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let sheets = match wordcraft_engine::print::sheets(&app.ui.print.params(), lay, app.session.current_pages(lay)) {
@@ -512,5 +530,100 @@ mod tests {
             assert_eq!(app.session.rev(), rev);
             assert_eq!(app.session.dirty, dirty);
         }
+    }
+
+    /// A one-page synthetic document in a fresh preview.
+    fn synthetic_app() -> (WordApp, egui::Context) {
+        let session = Session::new(wordcraft_doc::Document::from_text("Synthetic print preview"));
+        (WordApp::new(session, Services::default()), egui::Context::default())
+    }
+
+    /// Rename (and Save As) change what a FILENAME field shows without an edit (#6282): the
+    /// preview lays the page out and draws it again.
+    #[test]
+    fn preview_follows_the_name_a_filename_field_shows() {
+        let mut doc = wordcraft_doc::Document::new();
+        let mut p = wordcraft_doc::Paragraph::new();
+        let field = wordcraft_doc::InlineObject::Field {
+            instr: "FILENAME".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object(0, field, &Default::default()).unwrap();
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let mut app = WordApp::new(Session::new(doc), Services::default());
+        let ctx = egui::Context::default();
+        let shown = |l: &DocLayout| -> String {
+            l.pages[0]
+                .items
+                .iter()
+                .filter_map(|it| {
+                    if let wordcraft_layout::Placed::Lines { para, .. } = it {
+                        Some(para.shown.iter().map(|s| s.1.as_str()).collect::<String>())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        };
+        let before = layout_of(&app, &ctx);
+        assert_eq!(shown(&before), app.session.resolved_filenames().0, "the untitled document's name");
+        let texture = page_texture(&app, &ctx, &before, 0, 0, 300.0).unwrap().id();
+        let rev = app.session.rev();
+        app.session.run("file.rename", &json!({"name": "Quarterly report"})).unwrap();
+        assert_eq!(app.session.rev(), rev, "renaming is no edit");
+        let after = layout_of(&app, &ctx);
+        assert_eq!(shown(&after), "Quarterly report");
+        assert_ne!(page_texture(&app, &ctx, &after, 0, 0, 300.0).unwrap().id(), texture);
+    }
+
+    /// Fonts added or removed change the layout without an edit (#6283): once the app has seen the
+    /// font database move, the preview lays the page out and draws it again.
+    #[test]
+    fn preview_follows_the_fonts() {
+        let (mut app, ctx) = synthetic_app();
+        let before = layout_of(&app, &ctx);
+        let texture = page_texture(&app, &ctx, &before, 0, 0, 300.0).unwrap().id();
+        // What `watch_fonts` records when a font is added: not the shared database itself, which
+        // tests running alongside change.
+        app.font_generation = app.font_generation.wrapping_add(1);
+        let after = layout_of(&app, &ctx);
+        assert!(!Arc::ptr_eq(&before, &after), "laid out again with the new fonts");
+        assert!(Arc::ptr_eq(&after, &layout_of(&app, &ctx)), "and kept while the fonts stay");
+        assert_ne!(page_texture(&app, &ctx, &after, 0, 0, 300.0).unwrap().id(), texture);
+    }
+
+    /// The GPU's texture limit changes with the GPU, as when the window moves to a display on
+    /// another one (#6284): a page drawn under the old limit is drawn again under the new one.
+    #[test]
+    fn preview_texture_follows_the_gpu_texture_limit() {
+        let (app, ctx) = synthetic_app();
+        let layout = layout_of(&app, &ctx);
+        let wide = page_texture(&app, &ctx, &layout, 0, 0, 1200.0).unwrap();
+        assert!(wide.size()[1] > 1024, "{:?}", wide.size());
+        // 1024: egui's font atlas takes no less.
+        ctx.run_pass(egui::RawInput { max_texture_side: Some(1024), ..Default::default() }, |_| {}).textures_delta.clear();
+        let capped = page_texture(&app, &ctx, &layout, 0, 0, 1200.0).unwrap();
+        assert!(capped.size().iter().all(|side| *side <= 1024), "{:?}", capped.size());
+    }
+
+    /// The texture is keyed on the exact width and pixels per point (#6285): a fraction of a point
+    /// wider, or a slightly denser display, draws the page again at its own resolution.
+    #[test]
+    fn preview_texture_follows_the_exact_width_and_pixels_per_point() {
+        let (app, ctx) = synthetic_app();
+        let layout = layout_of(&app, &ctx);
+        let texture = |width: f32| page_texture(&app, &ctx, &layout, 0, 0, width).unwrap();
+        assert_ne!(texture(300.2).id(), texture(300.8).id(), "less than a point wider");
+        assert_eq!(texture(300.5).size()[0], 301);
+        let mut input = egui::RawInput::default();
+        input.viewports.insert(egui::ViewportId::ROOT, egui::ViewportInfo { native_pixels_per_point: Some(1.004), ..Default::default() });
+        ctx.run_pass(input, |_| {}).textures_delta.clear();
+        let ppp = ctx.pixels_per_point();
+        assert!(ppp > 1.0 && ppp < 1.01, "{ppp}");
+        assert_eq!(texture(300.5).size()[0], (300.5 * ppp).ceil() as usize, "drawn for {ppp} pixels per point");
     }
 }
