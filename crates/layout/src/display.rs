@@ -23,9 +23,9 @@ mod paint;
 
 pub(crate) use glyphs::author_order;
 pub use glyphs::{CHECK_BOX_INSET, check_box, text_color, upright_in_vertical};
+pub use lines::{BOOKMARK_COLOR, mark_text_width, section_break_label};
 #[cfg(test)]
 pub(crate) use lines::{leader_pitch, leader_xs};
-pub use lines::{mark_text_width, section_break_label};
 pub(crate) use objects::inline_rect;
 pub use objects::seg_path;
 pub use options::{BalloonMode, ChangeBar, CommentDisplay, DeleteMark, DisplayOptions, FormattingMarks, InsertMark, MarkupOptions};

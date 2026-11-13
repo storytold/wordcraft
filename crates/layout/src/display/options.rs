@@ -44,6 +44,9 @@ pub struct DisplayOptions {
     pub placeholders: bool,
     /// Review › Hide Ink: leave ink strokes out (they stay in the document).
     pub hide_ink: bool,
+    /// File › Options › Advanced › Show bookmarks: grey brackets around each bookmark's text, an
+    /// I-beam where one marks a place (screen only; prints and PDFs never show them, as in Word).
+    pub bookmarks: bool,
     /// How tracked changes and comments are marked when `markup` is on (Track Changes Options).
     pub revisions: MarkupOptions,
     /// Leave this object out of the page: while it is dragged, the preview under the pointer
@@ -61,6 +64,7 @@ impl Default for DisplayOptions {
             markup: true,
             placeholders: false,
             hide_ink: false,
+            bookmarks: false,
             revisions: MarkupOptions::default(),
             hide_object: None,
         }
