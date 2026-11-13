@@ -13,7 +13,7 @@ const RTF: &str = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Times New Roman;}
 {\headerr \pard\plain Part one - upright\par}
 {\footerr \pard\plain Pg. {\field{\*\fldinst PAGE}{\fldrslt 1}}\sectd\colsx708 {\par}}
 \pard\plain Annual summary\par
-\pard\plain Opening text of the first part.\par \sect }
+\pard\plain Opening text of the first part.\par \sect
 \sectd\lndscpsxn\pgwsxn16838\pghsxn11906\pgnrestart\headery708\footery708\colsx708
 {\headerr \pard\plain Part two - wide\par}
 {\footerr \pard\plain Pg. {\field{\*\fldinst PAGE}{\fldrslt 1}}\sectd\lndscpsxn\pgwsxn16838\pghsxn11906 {\par}}
@@ -22,7 +22,7 @@ const RTF: &str = r"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Times New Roman;}
 \pard {\sect }
 \sectd\lndscpsxn\pgwsxn16838\pghsxn11906\sbknone\pgnrestart\headery708\footery708\cols2\colsx708\linebetcol
 \pard\plain Column text one.\par
-\pard\plain Column text two.\par \sect }
+\pard\plain Column text two.\par \sect
 \sectd\pgnrestart\headery708\footery708\colsx708
 \pard\plain Closing words\par
 \pard\plain Last line.\par}";
