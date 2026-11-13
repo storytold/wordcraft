@@ -521,3 +521,13 @@ fn screen_paper_color_options_round_trip_and_work_without_a_document() {
     h.run_steps(3);
     assert_eq!(h.state().session.prefs.paper_color, PaperColor::Cream);
 }
+
+/// File › Options › Advanced › Region offers European Portuguese right after Brazil's, and the tag
+/// gives Portugal's A4 paper, centimetres and decimal comma.
+#[test]
+fn the_region_list_offers_european_portuguese_after_brazil() {
+    let at = |tag: &str| super::REGIONS.iter().position(|r| *r == tag);
+    assert_eq!(at("pt-PT"), at("pt-BR").map(|i| i + 1));
+    let pt = wordcraft_geom::Region::from_tag("pt-PT");
+    assert_eq!((pt.paper().0, pt.units(), pt.decimal()), ("A4", Unit::Centimeters, ','));
+}
