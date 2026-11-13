@@ -78,6 +78,8 @@ pub(crate) struct Build<'a> {
 pub(crate) struct Out<'a> {
     pub(crate) pics: &'a mut Pictures,
     pub(crate) doc: &'a mut Document,
+    /// The paragraphs the document may still have; WordArt lines are paragraphs too.
+    pub(crate) paragraphs: &'a crate::ParaBudget,
 }
 
 /// The floating objects anchored by `PlcfSpa` (at `pair`), as (absolute anchor CP, object),
@@ -124,7 +126,7 @@ pub(crate) fn anchors(
         float.flip_h = sp.flip_h();
         float.flip_v = sp.flip_v();
         let obj = match node {
-            Node::Shape(sp) => leaf(sp, w, h, float, b, sink),
+            Node::Shape(sp) => leaf(sp, w, h, (1.0, 1.0), float, b, sink),
             Node::Group(sp, members) => group(sp, members, w, h, float, b, sink),
         };
         match obj {
@@ -192,15 +194,16 @@ fn spa_float(flags: u16, p: &crate::officeart::Props) -> Float {
     }
 }
 
-/// One shape as a picture or a drawn shape, `w` × `h` points.
-fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, out: &mut Out) -> Option<InlineObject> {
+/// One shape as a picture or a drawn shape, `w` × `h` frame units: points, or a group's own
+/// units for a member, `pt` points to the unit across and down.
+fn leaf(sp: &Sp, w: f32, h: f32, pt: (f32, f32), float: Float, b: &Build, out: &mut Out) -> Option<InlineObject> {
     let p = &sp.props;
     if let Some(pib) = p.pib {
         let media = out.pics.bse(pib, b.bstore, b.delay)?;
         return Some(InlineObject::Image { media, w, h, alt: p.alt.clone(), float, crop: p.crop, fx: Default::default(), ole: None });
     }
     if WORD_ART.contains(&sp.spt) {
-        return word_art(p, w, h, float, out.doc);
+        return word_art(p, (w, h), pt, float, out);
     }
     let story = b.stories.get(&sp.spid).copied().filter(|_| sp.textbox || sp.spt == 202);
     let mut kind = match sp.spt {
@@ -252,12 +255,18 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, out: &mut Out) -> Opti
 /// A WordArt shape (`msosptTextPlainText` 136 to `msosptTextCanDown` 175) as a text box holding
 /// its `gtextUNICODE` text, in its `gtextFont` and the shape's fill colour, with neither fill nor
 /// outline: the letters are the art, so a filled box would hide them. The text is not bent to the
-/// shape's warp. `None` (the shape left out) when it has no text or the part cap is reached.
-fn word_art(p: &Props, w: f32, h: f32, float: Float, doc: &mut Document) -> Option<InlineObject> {
+/// shape's warp. `None` (the shape left out) when it has no text, or the part cap or the
+/// paragraph budget is reached. The frame `w` × `h` is in frame units, `pt` points each (a group
+/// member's frame is in its group's units, but its text is sized in points).
+fn word_art(p: &Props, (w, h): (f32, f32), pt: (f32, f32), float: Float, out: &mut Out) -> Option<InlineObject> {
     let text: String = p.gtext.chars().take(MAX_WORD_ART_CHARS).collect();
     let text = text.replace("\r\n", "\n");
     let lines: Vec<&str> = text.split(['\n', '\r']).collect();
-    if text.trim().is_empty() || doc.parts.len() >= crate::MAX_PARTS {
+    if text.trim().is_empty() || out.doc.parts.len() >= crate::MAX_PARTS {
+        return None;
+    }
+    // Each line is a paragraph, charged to the document's paragraph budget like any other.
+    if !lines.iter().all(|_| out.paragraphs.spend()) {
         return None;
     }
     let font = Some(p.gtext_font.chars().take(100).collect::<String>()).filter(|f| !f.trim().is_empty());
@@ -266,7 +275,9 @@ fn word_art(p: &Props, w: f32, h: f32, float: Float, doc: &mut Document) -> Opti
     // two-fifths of an em per letter, so a line isn't wrapped and cut off. Combining marks
     // (Arabic harakat, accents) take no width of their own.
     let letters = lines.iter().map(|l| l.chars().filter(|c| !is_mark(*c)).count()).max().unwrap_or(0).max(1);
-    let size = (h * 0.75 / lines.len() as f32).min(w / (letters as f32 * 0.4)).clamp(8.0, 200.0);
+    let (w_pt, h_pt) = (w * pt.0, h * pt.1);
+    let size = (h_pt * 0.75 / lines.len() as f32).min(w_pt / (letters as f32 * 0.4));
+    let size = if size.is_finite() { size.clamp(8.0, 200.0) } else { 8.0 };
     let color = if p.filled == Some(false) { p.line_color } else { p.fill_color };
     let props = CharProps {
         font: font.clone(),
@@ -285,10 +296,13 @@ fn word_art(p: &Props, w: f32, h: f32, float: Float, doc: &mut Document) -> Opti
             para_block(para)
         })
         .collect();
-    let id = doc.add_part(PartKind::TextBox, blocks);
-    if let Some(part) = doc.parts.get_mut(&id) {
+    let id = out.doc.add_part(PartKind::TextBox, blocks);
+    if let Some(part) = out.doc.parts.get_mut(&id) {
         part.body.anchor = VAlign::Center;
         part.body.inset = Some([0; 4]);
+        // The size above is an estimate: a line wider than it allows wraps, and the box grows to
+        // hold it rather than hide the text past its bottom.
+        part.body.auto_fit = true;
     }
     Some(InlineObject::Shape {
         kind: ShapeKind::TextBox,
@@ -319,14 +333,16 @@ fn group(sp: &Sp, members: &[Node], w: f32, h: f32, float: Float, b: &Build, out
     let (ch_w, ch_h) = if cw > 0.0 && ch > 0.0 { (cw, ch) } else { (w.max(1.0), h.max(1.0)) };
     let mut children = Vec::new();
     // Map: outer = x0 + inner × s; the top group's space starts at its FSPGR origin.
-    members_into(members, (-(l as f32), -(t as f32), 1.0, 1.0), 0, b, out, &mut children);
+    // Points to one unit of the group's own space, for the members' text.
+    let pt = (w / ch_w, h / ch_h);
+    members_into(members, (-(l as f32), -(t as f32), 1.0, 1.0), pt, 0, b, out, &mut children);
     if children.is_empty() {
         return None;
     }
     Some(InlineObject::Group { w, h, float, ch_w, ch_h, children, canvas: None })
 }
 
-fn members_into(nodes: &[Node], t: (f32, f32, f32, f32), depth: usize, b: &Build, sink: &mut Out, out: &mut Vec<GroupChild>) {
+fn members_into(nodes: &[Node], t: (f32, f32, f32, f32), pt: (f32, f32), depth: usize, b: &Build, sink: &mut Out, out: &mut Vec<GroupChild>) {
     let (x0, y0, sx, sy) = t;
     let fit = |v: f32| if v.is_finite() { v.clamp(-1e7, 1e7) } else { 0.0 };
     for n in nodes {
@@ -346,12 +362,12 @@ fn members_into(nodes: &[Node], t: (f32, f32, f32, f32), depth: usize, b: &Build
                 let (gw, gh) = ((gr as f64 - gl as f64) as f32, (gb as f64 - gt as f64) as f32);
                 let (kx, ky) = if gw > 0.0 && gh > 0.0 { (ew / gw, eh / gh) } else { (1.0, 1.0) };
                 let nt = (fit(x0 + (ox - gl as f32 * kx) * sx), fit(y0 + (oy - gt as f32 * ky) * sy), fit(sx * kx), fit(sy * ky));
-                members_into(members, nt, depth + 1, b, sink, out);
+                members_into(members, nt, pt, depth + 1, b, sink, out);
             }
             Node::Shape(sp) => {
                 let float = Float { rot: sp.props.rot, flip_h: sp.flip_h(), flip_v: sp.flip_v(), ..Float::default() };
                 let (w, h) = (fit(ew * sx).max(0.0), fit(eh * sy).max(0.0));
-                if let Some(obj) = leaf(sp, w, h, float, b, sink) {
+                if let Some(obj) = leaf(sp, w, h, pt, float, b, sink) {
                     out.push(GroupChild { x: fit(x0 + ox * sx), y: fit(y0 + oy * sy), obj });
                 }
             }

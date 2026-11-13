@@ -243,6 +243,56 @@ fn word_art_is_its_text_without_a_box() {
     assert_eq!(props.color, Some(wordcraft_doc::TextColor::Rgb(Rgb(255, 0, 0))));
     // Each of the two lines gets about its half of the 72 pt box.
     assert_eq!(props.size, Some(27.0));
+    // The size is an estimate, so the box grows to its text rather than cut a wrapped line off.
+    assert!(part.body.auto_fit);
+}
+
+/// One OfficeArt record holding four i32s (an FSPGR or a child anchor).
+fn rect_rec(typ: u16, r: [i32; 4]) -> Vec<u8> {
+    rec(if typ == 0xF009 { 1 } else { 0 }, 0, typ, &r.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>())
+}
+
+#[test]
+fn word_art_in_a_group_is_sized_in_points() {
+    // A 1" × 0.5" group whose own space is 7200 × 3600 units (0.01 pt each), holding one-line
+    // WordArt that fills it. Its frame is in the group's units, but its text is sized in points:
+    // 0.75 of its 36 pt height. Sized from the 3600 units, it was clamped to 200 pt.
+    let head = sp(&[fsp(0, 3000, 0x201), rect_rec(0xF009, [0, 0, 7200, 3600])]);
+    let member = sp(&[fsp(136, 3001, 0xA02), rect_rec(0xF00F, [0, 0, 7200, 3600]), fopt(&[], &[(0x00C0, wz("Hi"))])]);
+    let art = art_content(&[], &[container(0xF003, &[head, member])]);
+    let spas = plc(&[1, 3], &spa(3000, [0, 0, 1440, 720], spa_flags(0, 0, 3, false)));
+    let text = "A\u{8}B\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let p0 = doc.body.first().and_then(|b| b.as_para()).expect("para");
+    let [InlineObject::Group { children, .. }] = &p0.objects[..] else { panic!("{:?}", p0.objects) };
+    let [child] = &children[..] else { panic!("{children:?}") };
+    let InlineObject::Shape { kind, w, h, story, .. } = &child.obj else { panic!("{child:?}") };
+    // The frame stays in the group's units; layout scales it.
+    assert_eq!((*kind, *w, *h), (ShapeKind::TextBox, 7200.0, 3600.0));
+    let part = story.and_then(|id| doc.parts.get(&id)).expect("WordArt text part");
+    let size = part.blocks.first().and_then(|b| b.as_para()).and_then(|p| p.runs.first()).and_then(|r| r.props.size);
+    assert_eq!(size, Some(27.0));
+}
+
+#[test]
+fn word_art_lines_count_against_the_paragraph_cap() {
+    // A WordArt shape whose text is one letter and 199 line feeds (its 200-character cap) makes
+    // 200 paragraphs. They weren't charged to the document's paragraph budget, so many such
+    // shapes could get past it.
+    let lines = format!("A{}", "\n".repeat(199));
+    let shape = sp(&[fsp(136, 1026, 0xA00), fopt(&[], &[(0x00C0, wz(&lines))])]);
+    let art = art_content(&[], &[shape]);
+    let spas = plc(&[1, 3], &spa(1026, [0, 0, 1440, 1440], spa_flags(0, 0, 3, false)));
+    let text = "A\u{8}B\r";
+    let ccp = text.chars().count() as u32;
+    let spec = StructSpec { text, extra_pairs: vec![(40, spas), (50, art)], ..structured_spec(text, ccp) };
+    let file = struct_doc(&spec);
+    // The body's one paragraph and the WordArt's 200 fit a cap of 201, but not one of 200.
+    assert!(crate::read_limited(&file, None, 201).is_ok());
+    let over = crate::read_limited(&file, None, 200);
+    assert!(matches!(over, Err(crate::DocbinError::Limit(_))), "{over:?}");
 }
 
 #[test]

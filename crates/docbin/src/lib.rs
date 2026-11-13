@@ -328,7 +328,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         }
     }
     let build = drawing::Build { bstore: &art.bstore, delay: &word, stories: &tb_stories };
-    let mut out = drawing::Out { pics: &mut pics, doc: &mut doc };
+    let mut out = drawing::Out { pics: &mut pics, doc: &mut doc, paragraphs: &paragraphs };
     let mut drawn = drawing::anchors(&table, fib.pair(fib::pair::PLC_SPA_MOM), 0, &art.main, &build, &mut out);
     drawn.extend(drawing::anchors(&table, fib.pair(fib::pair::PLC_SPA_HDR), hdd_base, &art.header, &build, &mut out));
     drawn.sort_by_key(|(cp, _)| *cp);
@@ -508,14 +508,14 @@ struct WalkCtx<'a> {
 
 /// The paragraph and cell marks still allowed in this document, and whether a walk ran into
 /// the end of them (the read then fails).
-struct ParaBudget {
+pub(crate) struct ParaBudget {
     left: std::cell::Cell<usize>,
     exceeded: std::cell::Cell<bool>,
 }
 
 impl ParaBudget {
     /// Spends one mark; false (and the overrun noted) when none are left.
-    fn spend(&self) -> bool {
+    pub(crate) fn spend(&self) -> bool {
         match self.left.get().checked_sub(1) {
             Some(left) => {
                 self.left.set(left);
