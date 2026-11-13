@@ -24,6 +24,7 @@ fn picture() -> InlineObject {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        shape: None,
     }
 }
 fn model_box() -> Document {

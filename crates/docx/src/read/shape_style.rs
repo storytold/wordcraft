@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
-use wordcraft_doc::para::ShapeKind;
+use wordcraft_doc::para::{PictureShape, ShapeKind};
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::wordart::{GradStop, MAX_STOPS};
 
@@ -49,6 +49,64 @@ pub(crate) fn preset_kind(prst: &str) -> ShapeKind {
         "heart" => ShapeKind::Heart,
         _ => ShapeKind::Rectangle,
     }
+}
+
+/// The DrawingML preset geometry (ECMA-376 Part 1 §20.1.10.56) written for a shape kind.
+pub(crate) fn preset_name(kind: ShapeKind) -> &'static str {
+    match kind {
+        ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
+        ShapeKind::RoundedRectangle => "roundRect",
+        ShapeKind::Ellipse => "ellipse",
+        ShapeKind::FlowchartOr => "flowChartOr",
+        ShapeKind::Triangle => "triangle",
+        ShapeKind::RightTriangle => "rtTriangle",
+        ShapeKind::Diamond => "diamond",
+        ShapeKind::Line => "line",
+        ShapeKind::StraightConnector => "straightConnector1",
+        ShapeKind::ElbowConnector => "bentConnector3",
+        ShapeKind::CurvedConnector => "curvedConnector3",
+        ShapeKind::Arrow => "rightArrow",
+        ShapeKind::ArrowLeft => "leftArrow",
+        ShapeKind::ArrowUp => "upArrow",
+        ShapeKind::ArrowDown => "downArrow",
+        ShapeKind::Star => "star5",
+        ShapeKind::Heart => "heart",
+    }
+}
+
+/// The most adjust values kept from a picture's preset outline, and the longest name or formula.
+const MAX_ADJUSTS: usize = 16;
+const MAX_ADJUST_LEN: usize = 256;
+
+/// A picture's Crop to Shape outline from its `a:prstGeom` (ECMA-376 Part 1 §20.1.9.18): drawn as
+/// the nearest shape WordCraft has (a rectangle for presets it doesn't know, or open ones), and
+/// the file's own preset name and adjust values kept when that isn't exactly the shape's own, so
+/// saving writes them back unchanged. None for a plain rectangle or a malformed name.
+pub(crate) fn picture_shape(geom: &El) -> Option<PictureShape> {
+    let prst = geom.attr("prst")?;
+    if prst.is_empty() || prst.len() > 64 || !prst.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return None;
+    }
+    let av: Vec<(String, String)> = geom
+        .child("a:avLst")
+        .map(|l| {
+            l.children("a:gd")
+                .filter_map(|gd| Some((gd.attr("name")?, gd.attr("fmla")?)))
+                .filter(|(n, f)| n.len() <= MAX_ADJUST_LEN && f.len() <= MAX_ADJUST_LEN)
+                .take(MAX_ADJUSTS)
+                .map(|(n, f)| (n.to_string(), f.to_string()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if prst == "rect" && av.is_empty() {
+        return None;
+    }
+    let kind = match preset_kind(prst) {
+        k if k.is_open() => ShapeKind::Rectangle,
+        k => k,
+    };
+    let prst = if preset_name(kind) == prst && av.is_empty() { String::new() } else { prst.to_string() };
+    Some(PictureShape { kind, prst, av })
 }
 
 /// The shape kind drawn for a legacy VML preset shape type `spt` (`o:spt`, the MSOSPT numbers of

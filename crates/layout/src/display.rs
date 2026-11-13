@@ -83,6 +83,8 @@ pub enum Draw {
         crop: [f32; 4],
         /// Opacity, the picture's own transparency folded in.
         alpha: f32,
+        /// Crop to Shape: the outline the picture is clipped to (None: `rect`).
+        shape: Option<ShapeKind>,
         /// The picture's alt text (empty for a floating or diagram picture, which tag themselves).
         alt: String,
         /// Brightness and contrast to apply to the pixels (transparency is in `alpha`).

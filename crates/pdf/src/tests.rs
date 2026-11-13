@@ -106,6 +106,7 @@ fn sample() -> Document {
             crop: [0.1, 0.0, 0.0, 0.0],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -243,6 +244,7 @@ fn hostile_documents_export() {
             crop: [f32::NAN; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -258,6 +260,7 @@ fn hostile_documents_export() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -1043,6 +1046,7 @@ fn metafile_pictures_are_drawn_as_vector_paths() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -1090,7 +1094,17 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
         let mut p = Paragraph::new();
         p.insert_object(
             0,
-            InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop, fx: Default::default(), ole: None },
+            InlineObject::Image {
+                media,
+                w: 70.0,
+                h: 70.0,
+                alt: String::new(),
+                float: Default::default(),
+                crop,
+                fx: Default::default(),
+                ole: None,
+                shape: None,
+            },
             &CharProps::default(),
         )
         .unwrap();
@@ -1159,6 +1173,7 @@ fn inline_picture_figure_keeps_its_alt_text() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
         d.body = vec![para_block(p)];
@@ -1176,7 +1191,17 @@ fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
     let media = d.add_media(red_right_half_emf(), "emf");
     let mut p = Paragraph::with_text("Figure: ", CharProps::default());
     let n = p.len();
-    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "A red square".into(), float, crop: [0.0; 4], fx: Default::default(), ole: None };
+    let obj = InlineObject::Image {
+        media,
+        w: 70.0,
+        h: 70.0,
+        alt: "A red square".into(),
+        float,
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+        shape: None,
+    };
     p.insert_object(n, obj, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
@@ -1225,6 +1250,7 @@ fn a_clipped_cell_tags_its_text_and_picture() {
             crop: [0.0; 4],
             ole: None,
             fx: Default::default(),
+            shape: None,
         };
         p.insert_object(n, obj, &CharProps::default()).unwrap();
         let mut t = Table::new(1, 1, 300.0);
@@ -1259,6 +1285,7 @@ fn rotated_group_tags_each_picture_on_its_own() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        shape: None,
     };
     let decorative = Float { alt: AltText { decorative: true, ..Default::default() }, ..Default::default() };
     let group = InlineObject::Group {
@@ -1326,6 +1353,7 @@ fn metafile_strokes_use_round_caps_and_joins() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -1366,6 +1394,7 @@ fn metafile_fill_items_carry_no_stroke_state() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -1399,6 +1428,7 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -1446,6 +1476,7 @@ fn metafile_text_records_are_drawn_as_text() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -1642,6 +1673,7 @@ fn outline_keeps_visible_objects() {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
     ] {
         let mut d = base.clone();
@@ -2195,6 +2227,7 @@ fn picture_fx_is_baked_into_the_embedded_image() {
                 crop: [0.0; 4],
                 fx: *fx,
                 ole: None,
+                shape: None,
             };
             p.insert_object(0, pic, &CharProps::default()).unwrap();
         }
@@ -2280,6 +2313,7 @@ fn hostile_picture_header_is_refused_without_allocating() {
         crop: [0.0; 4],
         fx: PicFx::new(80_000, -80_000, 0),
         ole: None,
+        shape: None,
     };
     let mut p = Paragraph::new();
     p.insert_object(0, pic, &CharProps::default()).unwrap();
@@ -2385,6 +2419,131 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let bytes = export_layout(&d, &lay, &PdfOptions::default()).unwrap();
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
+}
+
+/// What a page draws, as hayro's interpreter sees it: each image's placement (the image
+/// square's bounds) and whether a curved clip (an outline, not a rectangle) is active around
+/// it; the clips around each image (curved or not, and their bounds); and the bounds of every
+/// red filled path.
+#[derive(Default)]
+struct Drawn {
+    images: Vec<(kurbo::Rect, bool)>,
+    image_clips: Vec<Vec<(bool, kurbo::Rect)>>,
+    red_fills: Vec<kurbo::Rect>,
+}
+
+fn drawn(bytes: &[u8]) -> Drawn {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    use kurbo::Shape;
+    struct Rec(Drawn, Vec<(bool, kurbo::Rect)>);
+    impl Device<'_> for Rec {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, p: &kurbo::BezPath, t: kurbo::Affine, paint: &Paint<'_>, mode: &PathDrawMode) {
+            if let (Paint::Color(c), PathDrawMode::Fill(_)) = (paint, mode)
+                && c.to_rgba().to_rgba8() == [255, 0, 0, 255]
+            {
+                self.0.red_fills.push((t * p.clone()).bounding_box());
+            }
+        }
+        fn push_clip_path(&mut self, c: &ClipPath) {
+            let curved = c.path.elements().iter().any(|e| matches!(e, kurbo::PathEl::CurveTo(..) | kurbo::PathEl::QuadTo(..)));
+            self.1.push((curved, c.path.bounding_box()));
+        }
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, t: kurbo::Affine) {
+            let b = t.transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, 1.0, 1.0));
+            self.0.images.push((b, self.1.iter().any(|c| c.0)));
+            self.0.image_clips.push(self.1.clone());
+        }
+        fn pop_clip_path(&mut self) {
+            self.1.pop();
+        }
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut out = Rec(Drawn::default(), Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut out);
+    }
+    out.0
+}
+
+/// A document with one 100 × 100 pt picture of `bytes` (`ext`), cropped `crop`, outlined `shape`.
+fn picture_pdf(bytes: Vec<u8>, ext: &str, crop: [f32; 4], shape: Option<wordcraft_doc::para::PictureShape>) -> Vec<u8> {
+    let mut d = Document::new();
+    let media = d.add_media(bytes, ext);
+    let mut p = Paragraph::with_text("", CharProps::default());
+    p.insert_object(
+        0,
+        InlineObject::Image {
+            media,
+            w: 100.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop,
+            ole: None,
+            shape,
+            fx: Default::default(),
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    d.body = vec![para_block(p)];
+    export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap()
+}
+
+fn solid_png() -> Vec<u8> {
+    let mut b = Vec::new();
+    image::RgbaImage::from_pixel(40, 40, image::Rgba([0, 0, 255, 255])).write_to(&mut std::io::Cursor::new(&mut b), image::ImageFormat::Png).unwrap();
+    b
+}
+
+/// Crop to Shape in PDF: an ellipse-cropped picture is drawn inside a curved clip, a plain one
+/// inside its rectangle.
+#[test]
+fn shape_cropped_picture_is_clipped_to_its_outline() {
+    use wordcraft_doc::para::{PictureShape, ShapeKind};
+    let d = drawn(&picture_pdf(solid_png(), "png", [0.0; 4], Some(PictureShape::new(ShapeKind::Ellipse))));
+    assert_eq!(d.images.len(), 1);
+    assert!(d.images[0].1, "drawn inside the ellipse's curved clip");
+    let d = drawn(&picture_pdf(solid_png(), "png", [0.0; 4], None));
+    assert!(!d.images[0].1, "a plain picture: a rectangle clip");
+}
+
+/// A shape-cropped picture is also clipped to its frame, so an outline reaching past the frame
+/// can't draw outside it; the outline's own clip stays.
+#[test]
+fn shape_cropped_picture_is_also_clipped_to_its_frame() {
+    use wordcraft_doc::para::{PictureShape, ShapeKind};
+    let d = drawn(&picture_pdf(solid_png(), "png", [0.0; 4], Some(PictureShape::new(ShapeKind::Ellipse))));
+    let clips = d.image_clips.first().expect("the picture is drawn");
+    let square = |r: &kurbo::Rect| (r.width() - 100.0).abs() < 0.5 && (r.height() - 100.0).abs() < 0.5;
+    assert!(clips.iter().any(|(curved, r)| !curved && square(r)), "a 100 x 100 frame clip: {clips:?}");
+    assert!(clips.iter().any(|(curved, r)| *curved && square(r)), "the ellipse's clip: {clips:?}");
+}
+
+/// Fit in PDF: a padded picture is drawn smaller than its frame (the padding stays empty), for
+/// bitmaps and metafiles alike.
+#[test]
+fn padded_picture_is_drawn_smaller_than_its_frame() {
+    // A square picture padded by half its height above and below: twice as wide as tall.
+    let d = drawn(&picture_pdf(solid_png(), "png", [0.0, -0.5, 0.0, -0.5], None));
+    let (b, _) = d.images[0];
+    assert!((b.width() / b.height() - 2.0).abs() < 0.01, "bitmap {b:?}");
+    // The metafile's red right half: 50 × 100 of its 100 × 100 frame, so 50 × 50 pt padded.
+    let d = drawn(&picture_pdf(red_right_half_emf(), "emf", [0.0, -0.5, 0.0, -0.5], None));
+    let b = d.red_fills.first().copied().expect("the red half is drawn");
+    assert!((b.width() - 50.0).abs() < 0.5 && (b.height() - 50.0).abs() < 0.5, "metafile {b:?}");
 }
 
 /// #2534: text with legacy font effects is drawn from its outlines and keeps its text, once.

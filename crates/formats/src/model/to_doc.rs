@@ -390,6 +390,7 @@ impl<'a> Builder<'a> {
                     crop,
                     fx: Default::default(),
                     ole,
+                    shape: None,
                 })
             }
             // Its drawing is made from the chart by the program that opens the document

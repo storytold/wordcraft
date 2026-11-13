@@ -244,8 +244,18 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
     let rect = carried(rect, ospin, oc);
     let spin = own.within(ospin);
     match o {
-        InlineObject::Image { media, crop, fx, .. } => {
-            vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin, fx: *fx }]
+        InlineObject::Image { media, crop, shape, fx, .. } => {
+            vec![Placed::Image {
+                rect,
+                media: media.clone(),
+                crop: *crop,
+                story,
+                path: Path(path.to_vec()),
+                off,
+                spin,
+                shape: shape.as_ref().map(|s| s.kind),
+                fx: *fx,
+            }]
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let object = wordcraft_doc::Pos { story, path: Path(path.to_vec()), off };

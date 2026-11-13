@@ -228,6 +228,7 @@ fn picture_in_box_keeps_its_frame() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        shape: None,
     };
     let mut p = Paragraph::new();
     p.insert_object(0, image, &Default::default()).unwrap();

@@ -531,6 +531,7 @@ fn a_note_with_a_picture_stays_when_its_citation_leaves() {
         crop: [0.0; 4],
         fx: Default::default(),
         ole: None,
+        shape: None,
     };
     p.insert_object(n, image, &Default::default()).unwrap();
     z.ok("Field_convert", json!([1, a, "ReferenceMark", 0]));

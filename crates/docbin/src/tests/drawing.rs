@@ -428,6 +428,7 @@ fn a_floating_copy_is_charged_its_alt_text() {
         crop: Default::default(),
         fx: Default::default(),
         ole: None,
+        shape: None,
     };
     let bare = crate::object_cost(&image(String::new()));
     assert_eq!(crate::object_cost(&image("€".repeat(4096))), bare + 3 * 4096);

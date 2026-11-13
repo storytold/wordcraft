@@ -78,6 +78,7 @@ fn sample() -> Document {
             crop: [0.0; 4],
             fx: Default::default(),
             ole: None,
+            shape: None,
         },
         &CharProps::default(),
     )
@@ -210,6 +211,7 @@ fn picture_brightness_and_contrast_round_trip() {
                 crop: [0.0; 4],
                 fx: *fx,
                 ole: None,
+                shape: None,
             };
             p.insert_object(0, pic, &CharProps::default()).unwrap();
             para_block(p)

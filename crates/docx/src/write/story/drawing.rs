@@ -25,7 +25,7 @@ impl Writer<'_> {
 
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
-        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
+        let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, shape, fx, .. } = o else { return };
         let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
@@ -51,8 +51,9 @@ impl Writer<'_> {
             }
             w.close("a:blip");
         }
-        if crop.iter().any(|c| *c > 0.0) {
-            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
+        // Negative values pad the picture (Fit): ECMA-376 §20.1.8.55 allows them.
+        if crop.iter().any(|c| wordcraft_geom::finite(*c) != 0.0) {
+            let c = |v: f32| n((wordcraft_geom::finite(v).clamp(wordcraft_doc::para::MIN_CROP, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);
         }
         w.open("a:stretch", &[]);
@@ -61,8 +62,23 @@ impl Writer<'_> {
         w.close("pic:blipFill");
         w.open("pic:spPr", &[("bwMode", "auto")]);
         xfrm(w, off, *iw, *ih, float.spin());
-        w.open("a:prstGeom", &[("prst", "rect")]);
-        w.empty("a:avLst", &[]);
+        // Crop to Shape: the outline the picture is clipped to.
+        // A preset read from a file is written back as it was, adjust values included.
+        let (prst, av) = match shape {
+            Some(s) if !s.prst.is_empty() => (s.prst.as_str(), s.av.as_slice()),
+            Some(s) => (crate::read::shape_style::preset_name(s.kind), s.av.as_slice()),
+            None => ("rect", &[][..]),
+        };
+        w.open("a:prstGeom", &[("prst", prst)]);
+        if av.is_empty() {
+            w.empty("a:avLst", &[]);
+        } else {
+            w.open("a:avLst", &[]);
+            for (name, fmla) in av {
+                w.empty("a:gd", &[("name", name), ("fmla", fmla)]);
+            }
+            w.close("a:avLst");
+        }
         w.close("a:prstGeom");
         w.close("pic:spPr");
         w.close("pic:pic");
@@ -99,25 +115,7 @@ impl Writer<'_> {
         }
         w.open("wps:spPr", &[]);
         xfrm(w, off, *sw, *sh, float.spin());
-        let prst = match kind {
-            ShapeKind::Rectangle | ShapeKind::TextBox | ShapeKind::Freeform => "rect",
-            ShapeKind::RoundedRectangle => "roundRect",
-            ShapeKind::Ellipse => "ellipse",
-            ShapeKind::FlowchartOr => "flowChartOr",
-            ShapeKind::Triangle => "triangle",
-            ShapeKind::RightTriangle => "rtTriangle",
-            ShapeKind::Diamond => "diamond",
-            ShapeKind::Line => "line",
-            ShapeKind::StraightConnector => "straightConnector1",
-            ShapeKind::ElbowConnector => "bentConnector3",
-            ShapeKind::CurvedConnector => "curvedConnector3",
-            ShapeKind::Arrow => "rightArrow",
-            ShapeKind::ArrowLeft => "leftArrow",
-            ShapeKind::ArrowUp => "upArrow",
-            ShapeKind::ArrowDown => "downArrow",
-            ShapeKind::Star => "star5",
-            ShapeKind::Heart => "heart",
-        };
+        let prst = crate::read::shape_style::preset_name(*kind);
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
             None => {

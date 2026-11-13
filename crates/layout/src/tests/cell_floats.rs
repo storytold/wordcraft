@@ -13,6 +13,7 @@ fn picture(name: &str, w: f32, h: f32, x: f32, y: f32, wrap: Wrap, dist: f32) ->
         float: Float { wrap, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, y, dist, ..Default::default() },
         crop: [0.0; 4],
         fx: Default::default(),
+        shape: None,
         ole: None,
     }
 }
