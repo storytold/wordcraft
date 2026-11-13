@@ -161,6 +161,27 @@ impl Placed {
         Some(turn_rect(*turn, *x, *y, Rect::new(0.0, 0.0, len, last.top + last.height - first.top)))
     }
 
+    /// The vertical extent `(top, bottom)` the item occupies on its page.
+    ///
+    /// Items side by side (a table row's cells, say) report overlapping extents; callers that sum
+    /// them take the union instead.
+    pub fn vertical_span(&self) -> (f32, f32) {
+        if let Some(r) = self.turned_bounds() {
+            return (r.y, r.y + r.h);
+        }
+        match self {
+            Placed::Lines { para, l0, l1, y, .. } => (*y, super::page::item_bottom(*y, para, *l0, *l1).unwrap_or(*y)),
+            Placed::Fill { rect, .. }
+            | Placed::Image { rect, .. }
+            | Placed::Shape { rect, .. }
+            | Placed::Graphic { rect, .. }
+            | Placed::Clip { rect, .. }
+            | Placed::Cell { rect, .. }
+            | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
+            Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),
+        }
+    }
+
     /// Move an item laid out in a turned frame (a table cell's text running `turn`) onto the
     /// page, the frame's origin landing on page point (`x`, `y`).
     pub(crate) fn turn(&mut self, turn: TextDirection, x: f32, y: f32) {
