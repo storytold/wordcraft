@@ -11984,6 +11984,70 @@ fn cell_widths_override_grid() {
     }
 }
 
+/// Cell widths given as percentages of the table's, the same in every row, replace a stale grid
+/// like consistent widths in points. Measured in Word for Windows (16.0.20625) with three equal
+/// grid columns under cells of 50, 25 and 25%: the columns are 240.8, 120.3 and 120.4 pt of a
+/// 481.5 pt table, with fixed layout too, and the same under cells of 40, 20 and 20%. WordCraft
+/// kept the grid's three equal columns.
+#[test]
+fn consistent_percentage_cell_widths_override_the_grid() {
+    crate::test_fonts();
+    const EQUAL: [f32; 3] = [133.0, 133.0, 134.0];
+    // How far after the first column's text the second and third columns' start, second row, in
+    // a 400 pt table.
+    let columns = |fixed: bool, grid: [f32; 3], shares: [f32; 3], setup: &dyn Fn(&mut Table)| {
+        let mut t = Table::new(2, 3, 400.0);
+        t.props.fixed = fixed;
+        t.grid = grid.to_vec();
+        for row in &mut t.rows {
+            for (cell, share) in row.cells.iter_mut().zip(shares) {
+                cell.props.width = None;
+                cell.props.width_pct = Some(share);
+                cell.blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("A", Default::default()))];
+            }
+        }
+        setup(&mut t);
+        let mut d = Document::from_text("After");
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let at = |col: u32| para_at(&l, &[0, 1, col, 0]).first().map(|p| p.0).expect("the cell's text");
+        (at(1) - at(0), at(2) - at(0))
+    };
+    let near = |got: (f32, f32), want: (f32, f32)| (got.0 - want.0).abs() < 0.01 && (got.1 - want.1).abs() < 0.01;
+    for fixed in [false, true] {
+        for (shares, what) in [([50.0, 25.0, 25.0], "50, 25 and 25%"), ([40.0, 20.0, 20.0], "40, 20 and 20%, shares of their sum")] {
+            let got = columns(fixed, EQUAL, shares, &|_| {});
+            assert!(near(got, (200.0, 300.0)), "{what}, fixed layout {fixed}: the columns start {got:?} after the first");
+        }
+        // A grid that agrees stays what it is, to the last twentieth of a point: Word wrote it
+        // from the shares, and a column 0.02 pt off moves a word of a full line to the next.
+        let got = columns(fixed, [200.0, 100.0, 100.0], [50.0, 25.0, 25.0], &|_| {});
+        assert!(near(got, (200.0, 300.0)), "a grid that agrees, fixed layout {fixed}: {got:?}");
+        let got = columns(fixed, [194.35, 102.85, 102.8], [48.58, 25.71, 25.71], &|_| {});
+        assert!(near(got, (194.35, 297.2)), "a grid a rounding away from the shares, fixed layout {fixed}: {got:?}");
+    }
+    // Left to the grid: rows that disagree, a row without widths, a spanning cell, a width in
+    // points among the percentages, and shares that add up to more than the table.
+    let cases: [(&str, [f32; 3], &dyn Fn(&mut Table)); 9] = [
+        ("rows that disagree", [50.0, 25.0, 25.0], &|t| t.rows[1].cells[0].props.width_pct = Some(25.0)),
+        ("a row without widths", [50.0, 25.0, 25.0], &|t| t.rows[1].cells.iter_mut().for_each(|c| c.props.width_pct = None)),
+        ("a spanning cell", [50.0, 25.0, 25.0], &|t| {
+            t.rows[0].cells.remove(1);
+            t.rows[0].cells[0].props.span = 2;
+        }),
+        ("a width in points among them", [50.0, 25.0, 25.0], &|t| t.rows[0].cells[2].props.width = Some(100.0)),
+        ("shares over 100%", [60.0, 40.0, 40.0], &|_| {}),
+        ("a share that is no number", [f32::NAN, 25.0, 25.0], &|_| {}),
+        ("an endless share", [f32::INFINITY, 25.0, 25.0], &|_| {}),
+        ("a negative share", [-50.0, 25.0, 25.0], &|_| {}),
+        ("a share of nothing", [0.0, 25.0, 25.0], &|_| {}),
+    ];
+    for (what, shares, setup) in cases {
+        let got = columns(false, EQUAL, shares, setup);
+        assert!(near(got, (133.0, 266.0)), "{what}: the columns start {got:?} after the first, the grid says 133 and 266");
+    }
+}
+
 #[test]
 fn ambiguous_widths_keep_grid() {
     crate::test_fonts();
