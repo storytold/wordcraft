@@ -91,12 +91,25 @@ pub fn load_all(ctx: egui::Context) {
         let r: Result<(), String> = async {
             let db = open().await?;
             let store = db.transaction_with_str(STORE).map_err(js)?.object_store(STORE).map_err(js)?;
-            let keys = done(&store.get_all_keys().map_err(js)?).await?;
-            let values = done(&store.get_all().map_err(js)?).await?;
-            let (keys, values) = (js_sys::Array::from(&keys), js_sys::Array::from(&values));
-            for i in 0..keys.length().min(values.length()) {
-                let Some(name) = keys.get(i).as_string() else { continue };
-                let Ok(bytes) = values.get(i).dyn_into::<js_sys::Uint8Array>() else { continue };
+            let keys = js_sys::Array::from(&done(&store.get_all_keys().map_err(js)?).await?);
+            // One font at a time: `get_all` would hold every stored font in memory at once (#1333).
+            for i in 0..keys.length() {
+                let key = keys.get(i);
+                let Some(name) = key.as_string() else { continue };
+                let value = match store.get(&key) {
+                    Ok(req) => match done(&req).await {
+                        Ok(v) => v,
+                        Err(e) => {
+                            log::warn!("stored font {name} skipped: {e}");
+                            continue;
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("stored font {name} skipped: {}", js(e));
+                        continue;
+                    }
+                };
+                let Ok(bytes) = value.dyn_into::<js_sys::Uint8Array>() else { continue };
                 if bytes.length() as usize > wordcraft_fonts::MAX_FONT_FILE_BYTES {
                     log::warn!("stored font {name} is too large; skipped");
                     continue;
