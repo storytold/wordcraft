@@ -908,6 +908,7 @@ impl StyleSheet {
             st
         };
         let mut added: Vec<String> = Vec::new();
+        let mut filled: Vec<String> = Vec::new();
         for l in latent.iter().filter(|l| l.quick && !l.hidden) {
             let Some(b) = builtin.styles.iter().find(|s| s.kind != StyleKind::Table && s.name.eq_ignore_ascii_case(&l.name)) else { continue };
             if self.get(&b.id).is_some() || self.find(&b.name).is_some() {
@@ -916,11 +917,13 @@ impl StyleSheet {
             let st = of(b, Some(l));
             let linked = st.linked.clone();
             added.push(st.id.clone());
+            filled.push(st.id.clone());
             self.styles.push(st);
             if let Some(l) = linked.as_deref().and_then(|l| builtin.get(l))
                 && self.get(&l.id).is_none()
                 && self.find(&l.name).is_none()
             {
+                filled.push(l.id.clone());
                 self.styles.push(l.clone());
             }
         }
@@ -937,10 +940,31 @@ impl StyleSheet {
                 }
                 let st = of(b, latent.iter().find(|l| l.name.eq_ignore_ascii_case(&b.name)));
                 added.push(st.id.clone());
+                filled.push(st.id.clone());
                 self.styles.push(st);
             }
             if added.is_empty() {
                 break;
+            }
+        }
+        // A base left out because the document already uses its name under another id (translated
+        // Word writes `heading 1` as `Título1`) would leave `based_on` pointing at nothing, since
+        // `chain` resolves ids. Word opens such a file with that style renamed to the built-in id
+        // and writes the materialised style with the built-in base's own formatting on it, so its
+        // TOC Heading keeps the built-in Heading 1's font, size and colour instead of taking the
+        // document's: point `based_on` at the document's definition and flatten the built-in
+        // base's formatting under the style's own, which is the file Word saves. The document's
+        // own styles are left as they are.
+        for id in filled {
+            let Some(base) = self.get(&id).and_then(|s| s.based_on.clone()).filter(|b| self.get(b).is_none()) else { continue };
+            let Some(b) = builtin.get(&base) else { continue };
+            let found = self.styles.iter().find(|s| s.kind == b.kind && s.id != id && s.name.eq_ignore_ascii_case(&b.name));
+            let Some(target) = found.map(|s| s.id.clone()) else { continue };
+            let (para, chr) = (b.para.clone(), b.chr.clone());
+            if let Some(st) = self.get_mut(&id) {
+                st.para = para.overlaid(&st.para);
+                st.chr = chr.overlaid(&st.chr);
+                st.based_on = Some(target);
             }
         }
     }

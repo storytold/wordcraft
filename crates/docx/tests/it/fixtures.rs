@@ -997,6 +997,44 @@ fn a_latent_style_brings_the_builtin_styles_it_is_based_on() {
     assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Heading 1").count(), 1);
 }
 
+/// #3909 review: the document may define the base under its own id (translated Word writes
+/// `heading 1` as `Título1`), so the built-in one isn't added over its name and `based_on` would
+/// point at nothing. Word opens such a file with that style renamed to `Heading1` and writes the
+/// materialised TOC Heading with the built-in Heading 1's own `w:rPr` on it (observed: Georgia /
+/// 18 pt / green in the file, `Styles("TOC Heading")` still Aptos Display / 16 pt / `0F4761`), so
+/// the style points at the document's definition and keeps the built-in base's formatting.
+#[test]
+fn a_latent_style_whose_base_the_document_names_under_its_own_id() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:latentStyles w:defUIPriority="99" w:defSemiHidden="0" w:defQFormat="0">
+  <w:lsdException w:name="Normal" w:uiPriority="0" w:qFormat="1"/>
+  <w:lsdException w:name="heading 1" w:semiHidden="1" w:unhideWhenUsed="1" w:uiPriority="9"/>
+  <w:lsdException w:name="TOC Heading" w:uiPriority="39" w:qFormat="1"/>
+ </w:latentStyles>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="paragraph" w:styleId="Titulo1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:uiPriority w:val="9"/><w:pPr><w:spacing w:before="720"/></w:pPr><w:rPr><w:rFonts w:ascii="Georgia" w:hAnsi="Georgia"/><w:color w:val="008000"/><w:sz w:val="36"/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    // No second Heading 1: the document's definition keeps its id, and TOC Heading points at it.
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Heading 1").count(), 1);
+    assert_eq!(d.styles.find("Heading 1").map(|s| s.id.as_str()), Some("Titulo1"));
+    let toc = d.styles.get("TOCHeading").unwrap();
+    assert_eq!(toc.based_on.as_deref(), Some("Titulo1"), "no dangling base");
+    let chain: Vec<&str> = d.styles.chain("TOCHeading").iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(chain, ["Normal", "Titulo1", "TOCHeading"]);
+    // It keeps the built-in Heading 1's look, as Word's saved file does, not the document's.
+    let r = d.styles.resolve_char(Some("TOCHeading"), &wordcraft_doc::props::CharProps::default());
+    let builtin = wordcraft_doc::StyleSheet::builtin();
+    let h1 = builtin.resolve_char(Some("Heading1"), &wordcraft_doc::props::CharProps::default());
+    assert_eq!((r.font.as_str(), r.size, r.color), (h1.font.as_str(), h1.size, h1.color));
+    // TOC Heading's own spacing still wins over the base's.
+    let p = wordcraft_doc::props::ParaProps { style: Some("TOCHeading".into()), ..Default::default() };
+    assert_eq!(d.styles.resolve_para(&p).space_before, 12.0);
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]
