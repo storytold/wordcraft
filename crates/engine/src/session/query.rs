@@ -84,6 +84,14 @@ impl Session {
         self.ime_body_epoch
     }
 
+    /// The open document takes in content from `doc`, a document read from a file (Compare,
+    /// Insert ▸ Text from File, styles from another document): the fonts `doc` embeds are claimed
+    /// for it as well, so they stay while it is open even when another document that embeds them
+    /// closes (#3687).
+    pub(crate) fn claim_fonts_of(&mut self, doc: &Document) {
+        self.font_claims.claim_also(self.document_id, doc);
+    }
+
     /// Note that a command replaced the document or its whole body under this document id.
     ///
     /// The counter fails closed: if it were ever exhausted (unreachable in practice), the
