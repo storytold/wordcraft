@@ -434,6 +434,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         tl!("Edited")
                     } else if app.session.path.is_some() {
                         tl!("Saved")
+                    } else if crate::gdrive::saved_in_drive(app) {
+                        tl!("Saved to Google Drive")
                     } else {
                         tl!("Not saved")
                     }

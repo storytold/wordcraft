@@ -136,7 +136,11 @@ impl WordApp {
             return r;
         }
         let ctx = self.ctx.clone();
-        if let Some(r) = zotero::command(self, id, &params, ctx.as_ref()) {
+        // The Zotero link and Google Drive (its commands, and Save for a Drive document).
+        if let Some(r) = zotero::command(self, id, &params, ctx.as_ref())
+            .or_else(|| crate::gdrive::command(self, id, &params))
+            .or_else(|| crate::gdrive::intercept_save(self, id, &params))
+        {
             if let Err(e) = &r {
                 self.status(e.clone());
             }
@@ -214,6 +218,7 @@ impl WordApp {
         } else {
             self.session.run(id, &params).map_err(|e| e.to_string())
         };
+        crate::gdrive::note_local_save(self, id, document, &r);
         if self.session.ime_body_epoch() != body_epoch {
             self.canvas.ime_interrupted_preedit |= composing_before;
             // The body (or the whole document) was replaced under the same id — setText, a
@@ -1160,6 +1165,9 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
+        // File › Google Drive signs in, lists and opens with no document open; saving and
+        // exporting need one.
+        || (id.starts_with("ui.drive.") && !matches!(id, "ui.drive.save" | "ui.drive.export"))
 }
 
 /// Commands that save, export, print, send or replace the document: comment text still being
@@ -1178,6 +1186,8 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
             | "file.share"
             | "ui.print"
             | "ui.printSubmit"
+            | "ui.drive.save"
+            | "ui.drive.export"
     ) || discards_document(id, params)
 }
 

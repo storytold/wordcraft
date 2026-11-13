@@ -1463,6 +1463,15 @@ fn paint_file_and_tools(pen: &Pen, name: &str) -> bool {
             pen.circle(10.0, 10.0, 5.5, c);
             pen.circle(10.0, 10.0, 2.2, a);
         }
+        // Google Drive: a plain cloud with an arrow up into it (generic; no service's logo).
+        "cloudDrive" => {
+            pen.circle(6.5, 11.0, 3.5, c);
+            pen.circle(10.5, 8.5, 4.5, c);
+            pen.circle(14.0, 11.0, 3.5, c);
+            pen.fill(&[(6.5, 11.0), (14.0, 11.0), (14.0, 14.5), (6.5, 14.5)], c);
+            pen.line_c(&[(10.25, 16.5), (10.25, 9.5)], a);
+            pen.line_c(&[(8.0, 11.75), (10.25, 9.5), (12.5, 11.75)], a);
+        }
         // Recover: a page with a turning arrow, a copy brought back.
         "recover" => {
             pen.page(2.5, 2.0, 12.5, 15.5);

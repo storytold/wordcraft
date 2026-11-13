@@ -45,6 +45,7 @@ pub mod file_browser;
 pub mod file_dialogs;
 pub mod format_shape;
 pub mod frame;
+pub mod gdrive;
 pub mod guides;
 pub mod i18n;
 pub mod ibeam;
@@ -440,6 +441,9 @@ pub struct UiState {
     /// How far a touchpad swipe the system reports in points (Wayland, macOS) scrolls (#6146).
     #[serde(default, alias = "touchpadScrollSpeed")]
     pub touchpad_scroll_speed: ScrollSpeed,
+    /// File › Options › Accounts › Google Drive: off until turned on, so File › Google Drive
+    /// appears only for people who set up a Google client.
+    pub google_drive: bool,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -523,6 +527,7 @@ impl Default for UiState {
             status_count: StatusCount::default(),
             scroll_speed: ScrollSpeed::default(),
             touchpad_scroll_speed: ScrollSpeed::default(),
+            google_drive: false,
         }
     }
 }
@@ -775,6 +780,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// Google Drive: sign-in, the file list and where Drive documents came from (`ui.drive.*`).
+    pub drive: gdrive::DriveLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Whether the current command was entered by an input method's own transaction. The engine

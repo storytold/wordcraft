@@ -7,7 +7,7 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
-const PAGES: [(&str, &str, &str); 11] = [
+const PAGES: [(&str, &str, &str); 12] = [
     ("home", "Home", "homeFolder"),
     ("new", "New", "blankPage"),
     ("open", "Open", "open"),
@@ -15,6 +15,7 @@ const PAGES: [(&str, &str, &str); 11] = [
     ("recover", "Recover", "recover"),
     ("save", "Save", "save"),
     ("saveAs", "Save As", "saveAs"),
+    ("drive", "Google Drive", "cloudDrive"),
     ("print", "Print", "print"),
     ("export", "Export", "export"),
     ("close", "Close", "close"),
@@ -131,6 +132,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label, icon) in PAGES {
+                // File › Google Drive only once it is turned on (File › Options › Accounts).
+                if id == "drive" && !app.ui.google_drive {
+                    continue;
+                }
                 // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
                 let on = has_document || works_without_document(id);
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
@@ -203,6 +208,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     "saveAs" => save_as_page(app, ui),
                     "info" => info_page(app, ui),
                     "recover" => recovery_page(app, ui),
+                    "drive" => crate::gdrive::page(app, ui),
                     "print" | "export" => export_page(app, ui),
                     "options" => crate::options::page(app, ui),
                     _ => home_page(app, ui),
@@ -275,12 +281,16 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
         // A document without a file goes to the Save As page (as in Word) instead
         // of `file.save`, which would also open the native Save As dialog.
         // In the browser a save is a download, so it saves right away.
-        "save" if app.session.path.is_none() && app.services.download.is_none() => {
+        // A document from Google Drive saves back to Drive.
+        "save" if app.session.path.is_none() && app.services.download.is_none() && !crate::gdrive::saves_to_drive(app) => {
             app.ui.backstage_page = "saveAs".into();
         }
         "save" => {
             let r = app.run("file.save", json!({}));
-            if r.is_ok_and(|v| v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some()) {
+            // A Drive save runs in the background (`started`) and reports in the status bar.
+            if r.is_ok_and(|v| {
+                v.get("saved").and_then(serde_json::Value::as_bool) == Some(true) || v.get("downloaded").is_some() || v.get("started").is_some()
+            }) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             } else {
@@ -301,7 +311,7 @@ pub(crate) fn go_to_page(app: &mut WordApp, id: &str) {
 
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
-    matches!(page, "home" | "new" | "open" | "options")
+    matches!(page, "home" | "new" | "open" | "drive" | "options")
 }
 
 fn heading(ui: &mut Ui, s: &str) {
@@ -899,7 +909,9 @@ fn export_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Export");
     ui.label(tl!("Save a copy in another format. Printing goes through a PDF you can print from any viewer."));
     ui.add_space(12.0);
+    crate::gdrive::export_checkbox(app, ui);
     crate::print_page::export_formats(app, ui);
+    crate::gdrive::export_google_doc_button(app, ui);
 }
 
 #[cfg(test)]

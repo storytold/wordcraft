@@ -111,6 +111,10 @@ pub struct Services {
     /// used while File › Options names none. File › New lists personal templates from it and Save
     /// as Word Template starts in it. `None` (web) hides personal templates.
     pub templates_dir: Option<std::path::PathBuf>,
+    /// Desktop: the profile folder holding `google-drive.json` (the OAuth client). Set, File ›
+    /// Google Drive can sign in and open and save documents; unset (tests, headless, web), every
+    /// `ui.drive.*` command answers that Drive isn't available and nothing touches the network.
+    pub drive_profile: Option<std::path::PathBuf>,
 }
 
 /// Files delivered asynchronously.
