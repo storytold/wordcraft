@@ -25,6 +25,7 @@ mod logging;
 mod portal_save;
 mod print;
 mod region;
+mod start_failure;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
 
@@ -607,7 +608,7 @@ fn main() -> eframe::Result {
     let apple_events = apple_events::AppleEvents::install();
     #[cfg(target_os = "macos")]
     let apple_events = &apple_events;
-    eframe::run_native(
+    let result = eframe::run_native(
         "WordCraft",
         options,
         Box::new(move |cc| {
@@ -685,7 +686,12 @@ fn main() -> eframe::Result {
                 apple_events.connect(&cc.egui_ctx),
             )))
         }),
-    )
+    );
+    // Say why instead of exiting silently (`start_failure`).
+    if let Err(e) = &result {
+        start_failure::report(e);
+    }
+    result
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
