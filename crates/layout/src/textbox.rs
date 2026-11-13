@@ -95,32 +95,52 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
     layout_box(ctx, BoxInput::other(story, blocks, len, depth + 1, None)).items
 }
 
+/// The part of a shape's frame `rect` its text is set in: inside `inset`, the shape's text
+/// rectangle ([`wordcraft_doc::connector::text_insets`]). Measured in Word for Windows: the lines
+/// are that much shorter and start that far in, and the text is aligned (top, middle, bottom) in
+/// that part. Only for text that runs across: turned and stacked text keep the whole frame.
+fn text_rect(body: &TextBody, rect: Rect, inset: [f32; 4]) -> Rect {
+    if body.vert.turn() != TextDirection::Horizontal || body.vert == TextVert::Stacked {
+        return rect;
+    }
+    let [l, t, r, b] = inset.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    Rect::new(rect.x + l, rect.y + t, (rect.w - l - r).max(0.0), (rect.h - t - b).max(0.0))
+}
+
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
-/// share of a linked chain's, cut to what fits, aligned and turned as the box says.
-pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {
+/// share of a linked chain's, cut to what fits, aligned and turned as the box says. `inset` is
+/// the text rectangle of the shape holding it ([`text_rect`]).
+pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, inset: [f32; 4], depth: usize) -> Vec<Placed> {
     let body = ctx.doc.parts.get(&id).map(|p| p.body).unwrap_or_default();
-    let (len, across) = frame(&body, rect.w, rect.h);
-    let items = match chain_share(ctx, id, depth) {
-        Some(items) => items,
+    // What may show before the text is cut: as deep as the whole frame allows, as before the
+    // text rectangle was taken into account. Word cuts at the text rectangle's bottom; cutting
+    // there would hide lines that show now, so the cut is left where it was.
+    let (_, room) = frame(&body, rect.w, rect.h);
+    let (items, rect) = match chain_share(ctx, id, depth) {
+        // A linked chain is split over its boxes' whole frames (`flow`).
+        Some(items) => (items, rect),
         None => {
             if !ctx.boxes.enter(id) {
                 return Vec::new();
             }
+            let rect = text_rect(&body, rect, inset);
+            let (len, _) = frame(&body, rect.w, rect.h);
             let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
             let inner = lay(ctx, id, &blocks, len, body.vert, depth);
             ctx.boxes.leave();
             // Text that doesn't fit inside the margins is hidden, as in Word; a box that resizes
             // to fit its text shows it all (#743).
-            if body.auto_fit { inner } else { fit_box(inner, across) }
+            (if body.auto_fit { inner } else { fit_box(inner, room) }, rect)
         }
     };
+    let (_, across) = frame(&body, rect.w, rect.h);
     place(items, &body, rect, across)
 }
 
 /// The height of a `w` wide text box `id` that resizes to fit its text (`a:spAutoFit`): its text's
 /// depth plus its top and bottom margins, as Word fits it when laying the document out. `None`
 /// for a box that keeps its own height: one that doesn't resize, with turned text, or linked.
-pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
+pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32, inset: [f32; 4]) -> Option<f32> {
     let body = ctx.doc.parts.get(&id).map(|p| p.body)?;
     if !body.auto_fit || body.vert.turn() != TextDirection::Horizontal || body.next.is_some() {
         return None;
@@ -130,14 +150,19 @@ pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
         return None;
     }
     let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-    let (len, _) = frame(&body, w, 0.0);
+    // The shape's text rectangle as its saved size gives it: Word fits the box to its text plus
+    // the room that rectangle left above and below it in the box as it was saved (measured in
+    // Word for Windows: a rounded rectangle saved 100 pt tall around three lines comes out 44.3
+    // pt tall, one saved 20 pt tall 36.5 pt).
+    let [gl, gt, gr, gb] = inset.map(|v| if v.is_finite() { v.max(0.0) } else { 0.0 });
+    let (len, _) = frame(&body, w - gl - gr, 0.0);
     // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
     let snap = (ctx.counters.clone(), ctx.eq_count);
     let items = lay(ctx, id, &blocks, len, body.vert, 0);
     (ctx.counters, ctx.eq_count) = snap;
     ctx.boxes.leave();
     let [_, t, _, b] = body.insets_pt();
-    let h = extent(&items) + t + b;
+    let h = extent(&items) + t + b + gt + gb;
     h.is_finite().then_some(h)
 }
 
