@@ -305,6 +305,11 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
 /// The Text Pane button on the left edge of the selected graphic's frame, as in Word, while
 /// the pane is closed.
 pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, clip: Rect) {
+    // A split window's pane not being worked in (`split`) has no button, and its selection
+    // isn't the window's to close the Text pane by.
+    if app.canvas.passive {
+        return;
+    }
     // The pane goes with the graphic: it opens again only on request.
     if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_none() {
         app.session.view.smart_art_pane = false;

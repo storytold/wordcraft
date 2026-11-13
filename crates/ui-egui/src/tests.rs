@@ -1510,13 +1510,19 @@ fn reading_mode_columns_wheel_turns_and_navigation() {
 }
 
 /// Runs egui frames over the app with a steady clock.
-struct FrameDriver {
+pub(crate) struct FrameDriver {
     ctx: egui::Context,
     t: f64,
 }
 
 impl FrameDriver {
-    fn frame(&mut self, a: &mut WordApp, events: Vec<egui::Event>, screen: egui::Rect) {
+    /// A driver with a fresh egui context, its clock at zero.
+    pub(crate) fn new() -> FrameDriver {
+        FrameDriver { ctx: egui::Context::default(), t: 0.0 }
+    }
+
+    /// One frame of the app on a `screen`-sized window with `events` as its input.
+    pub(crate) fn frame(&mut self, a: &mut WordApp, events: Vec<egui::Event>, screen: egui::Rect) {
         self.t += 1.0 / 60.0;
         let input = egui::RawInput { events, time: Some(self.t), screen_rect: Some(screen), ..Default::default() };
         self.ctx
