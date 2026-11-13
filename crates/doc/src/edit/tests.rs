@@ -327,15 +327,49 @@ fn paste_at_a_bad_offset_adds_no_comments() {
     let mut src = doc(&["Alpha beta"]);
     comment(&mut src, &Pos::body(0, 0), 6, 10, "Theirs");
     text_box(&mut src, &Pos::body(0, 0), "Boxed");
-    let f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 19));
+    let mut f = src.copy_range(&Pos::body(0, 0), &Pos::body(0, 19));
     assert_eq!((f.comments.len(), f.parts.len()), (1, 1));
+    // Its media are checked too: one new here, one under a key the target already uses.
+    f.media.insert("image1.png".into(), Arc::new(vec![2]));
+    f.media.insert("image2.png".into(), Arc::new(vec![2]));
     let mut dst = doc(&["\u{e9}t"]);
+    dst.media.insert("image2.png".into(), Arc::new(vec![1]));
     let parts = dst.parts.len();
     for off in [1, 99] {
         assert!(matches!(dst.insert_fragment(&Pos::body(0, off), &f), Err(DocError::BadOffset(_))), "{off}");
         assert!(dst.comments.is_empty(), "{off}");
         assert_eq!(dst.parts.len(), parts, "{off}");
+        assert_eq!(dst.media.keys().collect::<Vec<_>>(), ["image2.png"], "{off}");
     }
+}
+
+#[test]
+fn a_box_in_another_documents_comment_never_shows_a_story_of_this_one() {
+    // Review of #6096: the comment's box has no story in the fragment, and the target's text box
+    // of that id is unrelated: the copy in the comment gets none.
+    let mut dst = doc(&["t"]);
+    let own = dst.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Mine", CharProps::default()))]);
+    let mut text = Paragraph::with_text("Theirs", CharProps::default());
+    text.insert_object(0, box_shape(Some(own)), &CharProps::default()).unwrap();
+    let story = Part { kind: PartKind::Comment, blocks: vec![para_block(text)], ..Default::default() };
+    let mut p = Paragraph::with_text("ab", CharProps::default());
+    p.insert_object(2, InlineObject::CommentEnd { id: 7 }, &CharProps::default()).unwrap();
+    p.insert_object(0, InlineObject::CommentStart { id: 7 }, &CharProps::default()).unwrap();
+    let copied = CopiedComment { comment: crate::Comment { part: 50, ..Default::default() }, story };
+    let f = Fragment { blocks: vec![Block::Para(p)], comments: [(7, copied)].into(), ..Default::default() };
+    let parts = dst.parts.len();
+    dst.insert_fragment(&Pos::body(0, 1), &f).unwrap();
+    let [c] = dst.comments.values().collect::<Vec<_>>()[..] else { panic!("{:?}", dst.comments) };
+    let shapes: Vec<_> = dst
+        .para(StoryRef::Part(c.part), &Path::top(0))
+        .unwrap()
+        .objects
+        .iter()
+        .filter_map(|o| if let InlineObject::Shape { story, .. } = o { Some(*story) } else { None })
+        .collect();
+    assert_eq!(shapes, [None]);
+    // Only the comment's own story is added.
+    assert_eq!(dst.parts.len(), parts + 1);
 }
 
 #[test]

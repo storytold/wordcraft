@@ -1236,6 +1236,9 @@ impl Document {
         }
         let mut ids = BTreeMap::new();
         let mut texts = Vec::new();
+        // Another document's comment: a box whose story the fragment doesn't carry keeps none,
+        // never this document's story of that id.
+        budget.local = false;
         for old in coming {
             let Some(c) = frag.comments.get(&old) else { continue };
             let Some(new) = crate::free_id(self.comments.keys().next_back().copied(), self.comments.keys().copied(), 0) else { break };
@@ -1695,18 +1698,6 @@ impl Document {
 
     /// Insert a fragment at `pos`; returns the position after the pasted content.
     pub fn insert_fragment(&mut self, pos: &Pos, frag: &Fragment) -> Result<Pos> {
-        let mut media_remap = BTreeMap::new();
-        for (k, v) in &frag.media {
-            if let Some(existing) = self.media.get(k) {
-                if existing.as_slice() != v.as_slice() {
-                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
-                    let new_key = self.add_media((**v).clone(), ext);
-                    media_remap.insert(k.clone(), new_key);
-                }
-            } else {
-                self.media.insert(k.clone(), v.clone());
-            }
-        }
         // Tables that would nest deeper than the limit here become their paragraphs (#1596).
         let room = MAX_TABLE_DEPTH.saturating_sub(pos.path.depth());
         let mut blocks = Vec::with_capacity(frag.blocks.len());
@@ -1719,9 +1710,21 @@ impl Document {
         let Some(para) = self.para_at(pos) else {
             return Err(DocError::BadPath(pos.path.to_string()));
         };
-        // Checked before text boxes and comments are added, so a paste that fails adds none.
+        // Checked before media, text boxes and comments are added, so a paste that fails adds none.
         if para.clamp(pos.off) != pos.off {
             return Err(DocError::BadOffset(pos.off));
+        }
+        let mut media_remap = BTreeMap::new();
+        for (k, v) in &frag.media {
+            if let Some(existing) = self.media.get(k) {
+                if existing.as_slice() != v.as_slice() {
+                    let ext = k.rsplit_once('.').map_or("png", |(_, ext)| ext);
+                    let new_key = self.add_media((**v).clone(), ext);
+                    media_remap.insert(k.clone(), new_key);
+                }
+            } else {
+                self.media.insert(k.clone(), v.clone());
+            }
         }
         let mut parts = frag.parts.clone();
         if !media_remap.is_empty() {
