@@ -2,10 +2,11 @@
 //! column, left of a row and along a cell's left edge inside it select the column, row or cell,
 //! and a drag from one selects every one up to the pointer; insert buttons left of a row border
 //! and above a column border add a row or column there; the move handle just past the table's
-//! top-left corner selects the table or, dragged, moves it (the table then floats where it's
-//! dropped, the text wrapping around it, as in Word); a double-click on a column border fits the
-//! column left of it to its contents. The app sends each click or finished drag here in page
-//! points, so each is one command (one undo step when it changes the document).
+//! top-left corner (top-right in a right-to-left table) selects the table or, dragged, moves it
+//! (the table then floats where it's dropped, the text wrapping around it, as in Word); a
+//! double-click on a column border fits the column left of it to its contents. The app sends
+//! each click or finished drag here in page points, so each is one command (one undo step when
+//! it changes the document).
 
 use std::collections::BTreeMap;
 
@@ -34,7 +35,7 @@ const INSERT_REACH: f32 = 3.5;
 const INSERT_OUT: f32 = 14.0;
 /// An insert button's centre sits this far out from the table's edge (points).
 const BUTTON_OUT: f32 = 8.0;
-/// The move handle's side and its gap from the table's top-left corner (points).
+/// The move handle's side and its gap from the table's top corner (points).
 const HANDLE: f32 = 8.0;
 const HANDLE_GAP: f32 = 2.0;
 /// The farthest a drag moves a table (points; Word's 22 inches).
@@ -44,14 +45,14 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("table.selectAt", "Select Table Cells by Clicking", "Table Layout › Table › Select", select_at)
             .params(
-                r#"{"page": n, "x": pt, "y": pt, "toX"?: pt, "toY"?: pt, "reach"?: pt, "extend"?: bool, "anchorRow"?: n} (a click in page points, 0-based page, on a selection area of a table in the caret's story: just above a column selects the column, left of a row the row, along a cell's left edge inside it the cell, the move handle past the top-left corner the table; with toX/toY (a drag) every column, row or cell from there to that point; the page margin beside a table (its leading side: right for a right-to-left table) is a row area too, and `extend` (Shift+click) on one takes the rows from the selected ones' anchor, or from row `anchorRow` (0-based) when given, so a drag keeps its press's anchor. `reach` (default 3) is the column borders' resize reach, which the cell areas keep clear of.)"#,
+                r#"{"page": n, "x": pt, "y": pt, "toX"?: pt, "toY"?: pt, "reach"?: pt, "extend"?: bool, "anchorRow"?: n} (a click in page points, 0-based page, on a selection area of a table in the caret's story: just above a column selects the column, left of a row the row, along a cell's left edge inside it the cell, the move handle past the top-left corner (top-right in a right-to-left table) the table; with toX/toY (a drag) every column, row or cell from there to that point; the page margin beside a table (its leading side: right for a right-to-left table) is a row area too, and `extend` (Shift+click) on one takes the rows from the selected ones' anchor, or from row `anchorRow` (0-based) when given, so a drag keeps its press's anchor. `reach` (default 3) is the column borders' resize reach, which the cell areas keep clear of.)"#,
             )
             .pure(),
         CommandSpec::new("table.insertAt", "Insert Row or Column by Clicking", "Table Layout › Rows & Columns", insert_at).params(
             r#"{"page": n, "x": pt, "y": pt, "reach"?: pt} (a click on a table's insert button: left of a row border adds a row there, above a column border a column; the new row or column is selected, as in Word)"#,
         ),
         CommandSpec::new("table.moveDrag", "Move Table by Dragging", "Table Layout › Table", move_drag).params(
-            r#"{"page": n, "x": pt, "y": pt, "toX": pt, "toY": pt, "reach"?: pt} (a drag from the move handle past a table's top-left corner: the table floats where it's dropped, the text wrapping around it; tables in the main text only)"#,
+            r#"{"page": n, "x": pt, "y": pt, "toX": pt, "toY": pt, "reach"?: pt} (a drag from the move handle past a table's top-left corner (top-right in a right-to-left table): the table floats where it's dropped, the text wrapping around it; tables in the main text only)"#,
         ),
         CommandSpec::new("table.fitColumn", "AutoFit Column by Double-Clicking", "Table Layout › Cell Size", fit_column).params(
             r#"{"page": n, "x": pt, "y": pt, "reach"?: pt} (a double-click on a column border: the column left of it fits its contents and the columns right of it keep their widths, moving with the border, so the table narrows or widens (up to the right margin), as in Word)"#,
@@ -67,7 +68,8 @@ pub enum Spot {
     /// The insert button of horizontal border `n` (0 = the table's top, `n` = the bottom of row
     /// `n - 1`).
     InsertRow(usize),
-    /// The insert button of grid line `n` (0 = the table's left edge).
+    /// The insert button of grid line `n` (0 = the table's left edge, or a right-to-left table's
+    /// right edge).
     InsertColumn(usize),
     /// The selection area above grid column `n`.
     Column(usize),
@@ -92,9 +94,11 @@ pub struct InsertMark {
     pub to: (f32, f32),
 }
 
-/// The move handle's square (page points), just past the table's top-left corner.
+/// The move handle's square (page points), just past the table's top-left corner, or its
+/// top-right one when the table runs right to left (#6438).
 pub fn handle(geom: &ResizeTarget) -> Rect {
-    Rect::new(geom.left() - HANDLE_GAP - HANDLE, geom.top() - HANDLE_GAP - HANDLE, HANDLE, HANDLE)
+    let x = if geom.rtl { geom.right() + HANDLE_GAP } else { geom.left() - HANDLE_GAP - HANDLE };
+    Rect::new(x, geom.top() - HANDLE_GAP - HANDLE, HANDLE, HANDLE)
 }
 
 /// Whether the table's first row is on this page (its move handle is there).
@@ -116,10 +120,12 @@ fn nearest(lines: impl Iterator<Item = (usize, f32)>, at: f32, reach: f32) -> Op
     lines.map(|(i, v)| (i, (at - v).abs())).filter(|(_, d)| *d <= reach).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
 }
 
-/// The grid column at page x `x` (the first or the last beyond the table).
+/// The grid column at page x `x` (the first or the last beyond the table); a right-to-left
+/// table's count from the right.
 fn column_at(geom: &ResizeTarget, x: f32) -> usize {
     let n = geom.cols.len().saturating_sub(1);
-    geom.cols.iter().skip(1).take_while(|cx| **cx <= x).count().min(n.saturating_sub(1))
+    let drawn = geom.cols.iter().skip(1).take_while(|cx| **cx <= x).count().min(n.saturating_sub(1));
+    if geom.rtl { n.saturating_sub(1).saturating_sub(drawn) } else { drawn }
 }
 
 /// The drawn row at page y `y` (the first or the last beyond the table).
@@ -140,7 +146,7 @@ fn spot_in(geom: &ResizeTarget, cells: &[&CellBox], x: f32, y: f32, reach: f32, 
         if y < top
             && let Some(line) = nearest(lines, x, INSERT_REACH)
         {
-            return Some(Spot::InsertColumn(line));
+            return Some(Spot::InsertColumn(geom.grid_line(line)));
         }
         if y >= top - COLUMN_ABOVE && x >= left && x <= right {
             return Some(Spot::Column(column_at(geom, x)));
@@ -230,7 +236,8 @@ pub fn handle_table(l: &DocLayout, doc: &Document, story: StoryRef, page: usize,
         .into_iter()
         .filter(|g| {
             let h = handle(g);
-            g.story == story && starts_here(g) && x >= h.x - pad && x <= g.right() && y >= h.y - pad && y <= g.bottom()
+            let (x0, x1) = if g.rtl { (g.left(), h.right() + pad) } else { (h.x - pad, g.right()) };
+            g.story == story && starts_here(g) && x >= x0 && x <= x1 && y >= h.y - pad && y <= g.bottom()
         })
         .max_by_key(|g| g.table.0.len())
 }
@@ -256,7 +263,7 @@ pub fn caret_handles(l: &DocLayout, doc: &Document, story: StoryRef, table: &Pat
     let Some(g) = table_resize::tables_on(l, doc, page).into_iter().find(|g| g.story == story && g.table == *table) else {
         return (None, None);
     };
-    (first.then(|| handle(&g)), last.then(|| g.handle()))
+    (first.then(|| handle(&g)), (last && g.resizable_columns()).then(|| g.handle()))
 }
 
 /// The insert button a target is, if it's one.
@@ -269,7 +276,7 @@ pub fn insert_mark(t: &Target) -> Option<InsertMark> {
             Some(InsertMark { center: (g.left() - BUTTON_OUT, y), from: (g.left(), y), to: (g.right(), y) })
         }
         Spot::InsertColumn(line) => {
-            let x = g.cols.get(line).copied()?;
+            let x = g.cols.get(g.grid_line(line)).copied()?;
             Some(InsertMark { center: (x, g.top() - BUTTON_OUT), from: (x, g.top()), to: (x, g.bottom()) })
         }
         _ => None,
