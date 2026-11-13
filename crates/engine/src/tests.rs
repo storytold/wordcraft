@@ -6946,6 +6946,36 @@ fn style_inspector_pane_and_hostile_params() {
 }
 
 /// Home › Editing › Find › Advanced Find: every match, in the body or a selection, with Reading Highlight.
+/// A search from the Navigation pane's box (`edit.find`) marks every match on the page while
+/// the pane is open, as Word does; closing the pane, clearing the results or an Advanced Find
+/// search without Reading Highlight takes the marks away.
+#[test]
+fn navigation_pane_search_marks_every_match_while_the_pane_is_open() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "cat dog cat"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Cat"}));
+    s.view.nav_pane = true;
+    assert!(s.find_highlights().is_empty(), "nothing searched yet");
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "cat"}))["count"], 3);
+    assert_eq!(s.find_highlights().len(), 3);
+    // The marks follow edits.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " cat"}));
+    assert_eq!(s.find_highlights().len(), 4);
+    // Closing the pane takes them away; opening it again brings them back.
+    s.view.nav_pane = false;
+    assert!(s.find_highlights().is_empty());
+    s.view.nav_pane = true;
+    assert_eq!(s.find_highlights().len(), 4);
+    // The box emptied: no results, no marks.
+    s.find.results.clear();
+    assert!(s.find_highlights().is_empty());
+    // Advanced Find without Reading Highlight doesn't mark.
+    run(&mut s, "edit.advancedFind", json!({"text": "dog"}));
+    assert!(s.find_highlights().is_empty());
+}
+
 #[test]
 fn advanced_find_lists_and_highlights_matches() {
     let mut s = s();

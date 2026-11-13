@@ -103,9 +103,12 @@ impl Session {
         self.dirty = true;
     }
 
-    /// Reading Highlight ranges for the current document (searched again after edits); empty when it's off.
+    /// The matches marked on the page (searched again after edits): Advanced Find's Reading
+    /// Highlight, or a search from the Navigation pane while it is open and has results. Empty
+    /// otherwise.
     pub fn find_highlights(&mut self) -> &[(Pos, Pos)] {
-        if !self.find.highlight {
+        let pane = self.find.from_pane && self.view.nav_pane && !self.find.query.is_empty() && !self.find.results.is_empty();
+        if !self.find.highlight && !pane {
             return &[];
         }
         if self.find.highlights.as_ref().is_none_or(|(r, _)| *r != self.rev) {
