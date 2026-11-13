@@ -903,3 +903,1018 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// #5861: When an edit run contains inserted or deleted paragraphs, blocks are aligned by
+/// text similarity rather than naive positional zipping, so edited paragraphs retain their
+/// partner and are diffed within rather than restructured wholesale.
+#[test]
+fn compare_pairs_paragraphs_across_insertions_and_deletions_retaining_within_diff() {
+    // 1. Insertion before a modified paragraph:
+    let original = "The supplier agrees to deliver the items on time every week.\nKeep this anchor.";
+    let revised = "A brand new preamble paragraph.\nThe vendor agrees to deliver the items on time every week.\nKeep this anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // The revised paragraph must be diffed within rather than replaced wholesale:
+    // "agrees to deliver the items on time every week." must survive as unmarked unchanged text.
+    let para = s.doc.body[1].as_para().unwrap();
+    let unmarked: String = para.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| para.text[r].to_string()).collect();
+    assert!(unmarked.contains("agrees to deliver the items on time every week."), "unchanged text must survive as unmarked text; got: {unmarked}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+
+    // 2. Deletion before a modified paragraph:
+    let original = "Obsolete preamble paragraph to be deleted.\nThe supplier agrees to deliver the items on time every week.\nKeep this anchor.";
+    let revised = "The contractor agrees to deliver the items on time every week.\nKeep this anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    let para = s.doc.body[1].as_para().unwrap();
+    let unmarked: String = para.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| para.text[r].to_string()).collect();
+    assert!(
+        unmarked.contains("agrees to deliver the items on time every week."),
+        "unchanged text must survive as unmarked text after deletion; got: {unmarked}"
+    );
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), original);
+
+    // 3. Insertion between two modified paragraphs:
+    let original = "Clause 1. Definitions of the agreement terms.\nClause 2. Obligations of the supplier.\nKeep anchor.";
+    let revised = "Clause 1. Definitions of the contract terms.\nClause 1.5. Special rules.\nClause 2. Obligations of the vendor.\nKeep anchor.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+    // Both Clause 1 and Clause 2 must be diffed within and retain their unmarked text:
+    let p_c1 = s.doc.body[0].as_para().unwrap();
+    let p_c2 = s.doc.body[2].as_para().unwrap();
+    let unmarked_c1: String = p_c1.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_c1.text[r].to_string()).collect();
+    let unmarked_c2: String = p_c2.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_c2.text[r].to_string()).collect();
+    assert!(unmarked_c1.contains("Definitions of the"), "Clause 1 within-paragraph diff: {unmarked_c1}");
+    assert!(unmarked_c2.contains("Obligations of the"), "Clause 2 within-paragraph diff: {unmarked_c2}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+
+    // 4. Chinese text across an insertion:
+    let original = "会议改到周三下午。\n保持此段。";
+    let revised = "新插入的段落。\n会议改到周四下午。\n保持此段。";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised, "level": "character"})).unwrap();
+    let p_cjk = s.doc.body[1].as_para().unwrap();
+    let unmarked_cjk: String =
+        p_cjk.run_ranges().filter(|(_, c)| c.del.is_none() && c.ins.is_none()).map(|(r, _)| p_cjk.text[r].to_string()).collect();
+    assert!(unmarked_cjk.contains("会议改到周"), "Chinese within-paragraph diff: {unmarked_cjk}");
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
+}
+
+/// #5861: Unrelated paragraphs scoring below SIMILARITY_THRESHOLD across edit runs are left
+/// unpaired as clean deletions and insertions rather than an interleaved within-paragraph diff.
+#[test]
+fn compare_leaves_unrelated_paragraphs_unpaired() {
+    struct Case {
+        name: &'static str,
+        original: &'static str,
+        revised: &'static str,
+        level: Option<&'static str>,
+        expected_dels: &'static [&'static str],
+        expected_inss: &'static [&'static str],
+        anchor: &'static str,
+    }
+
+    let cases = [
+        Case {
+            name: "sparse common words (sentences sharing only 'the')",
+            original: "The red car parked by the house.\nKeep anchor.",
+            revised: "Preamble insertion.\nThe blue dog jumped over the river.\nKeep anchor.",
+            level: None,
+            expected_dels: &["The red car parked by the house."],
+            expected_inss: &["Preamble insertion.", "The blue dog jumped over the river."],
+            anchor: "Keep anchor.",
+        },
+        Case {
+            name: "single-token paragraphs across unequal counts",
+            original: "First\nSecond\nKeep anchor.",
+            revised: "Third\nFourth\nFifth\nKeep anchor.",
+            level: None,
+            expected_dels: &["First", "Second"],
+            expected_inss: &["Third", "Fourth", "Fifth"],
+            anchor: "Keep anchor.",
+        },
+        Case {
+            name: "unrelated CJK paragraphs across unequal counts",
+            original: "会议安排\n财务预算\n保持锚点。",
+            revised: "人事变动\n安全检查\n年终总结\n保持锚点。",
+            level: Some("character"),
+            expected_dels: &["会议安排", "财务预算"],
+            expected_inss: &["人事变动", "安全检查", "年终总结"],
+            anchor: "保持锚点。",
+        },
+    ];
+
+    for case in &cases {
+        let mut s = Session::new(Document::from_text(case.original));
+        let mut params = json!({"text": case.revised});
+        if let Some(level) = case.level {
+            params["level"] = json!(level);
+        }
+        s.run("review.compare", &params).unwrap();
+
+        let mut body_idx = 0;
+        for &expected_del in case.expected_dels {
+            let p = s.doc.body[body_idx].as_para().unwrap();
+            assert_eq!(p.plain_text(), expected_del, "case '{}' del text mismatch", case.name);
+            assert!(p.runs.iter().all(|r| r.props.del.is_some()), "case '{}' del run mismatch", case.name);
+            body_idx += 1;
+        }
+        for &expected_ins in case.expected_inss {
+            let p = s.doc.body[body_idx].as_para().unwrap();
+            assert_eq!(p.plain_text(), expected_ins, "case '{}' ins text mismatch", case.name);
+            assert!(p.runs.iter().all(|r| r.props.ins.is_some()), "case '{}' ins run mismatch", case.name);
+            body_idx += 1;
+        }
+
+        let p_anchor = s.doc.body[body_idx].as_para().unwrap();
+        assert_eq!(p_anchor.plain_text(), case.anchor, "case '{}' anchor text mismatch", case.name);
+        assert!(p_anchor.runs.iter().all(|r| r.props.del.is_none() && r.props.ins.is_none()), "case '{}' anchor must be unmarked", case.name);
+
+        let mut s_accept = Session::new(s.doc.clone());
+        s_accept.run("review.acceptAll", &json!({})).unwrap();
+        assert_eq!(s_accept.doc.plain_text(StoryRef::Body), case.revised, "case '{}' acceptAll mismatch", case.name);
+
+        let mut s_reject = Session::new(s.doc.clone());
+        s_reject.run("review.rejectAll", &json!({})).unwrap();
+        assert_eq!(s_reject.doc.plain_text(StoryRef::Body), case.original, "case '{}' rejectAll mismatch", case.name);
+    }
+}
+
+/// #5861: When no paragraph in an edit run meets SIMILARITY_THRESHOLD but both sides have
+/// equal block counts (n == m), paragraph blocks fall back to 1-to-1 positional pairing.
+/// This preserves paragraph slots for wholesale rewrites and ensures acceptAll / rejectAll
+/// restore the respective documents.
+#[test]
+fn compare_equal_count_unrelated_paragraphs_pairs_positionally() {
+    let original = "Alpha bravo charlie.\nDelta echo foxtrot.";
+    let revised = "Golf hotel india.\nJuliet kilo lima.";
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+
+    // Because n == m == 2 and similarity is 0, positional fallback pairs paragraph 0 with 0
+    // and paragraph 1 with 1, producing exactly 2 Diff paragraphs rather than 2 deletions
+    // followed by 2 insertions.
+    assert_eq!(s.doc.body.len(), 2, "must preserve paragraph slots via positional pairing");
+
+    let p0 = s.doc.body[0].as_para().unwrap();
+    let p1 = s.doc.body[1].as_para().unwrap();
+
+    // Paragraph 0 has original text marked del and revised text marked ins:
+    assert!(p0.run_ranges().any(|(r, c)| c.del.is_some() && p0.text[r].contains("Alpha")));
+    assert!(p0.run_ranges().any(|(r, c)| c.ins.is_some() && p0.text[r].contains("Golf")));
+
+    // Paragraph 1 has original text marked del and revised text marked ins:
+    assert!(p1.run_ranges().any(|(r, c)| c.del.is_some() && p1.text[r].contains("Delta")));
+    assert!(p1.run_ranges().any(|(r, c)| c.ins.is_some() && p1.text[r].contains("Juliet")));
+
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
+
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
+}
+
+/// #5861: Verifies positional fallbacks in align_block_run when exceeding MAX_RUN_ALIGN_CELLS,
+/// when handling non-paragraph blocks (tables), or when work budget is exhausted.
+#[test]
+fn align_block_run_oversize_and_budget_fallbacks() {
+    let dummy_para = Arc::new(Block::Para(Paragraph::with_text("Dummy paragraph text.", CharProps::default())));
+    let dummy_table = Arc::new(Block::Table(wordcraft_doc::Table::new(1, 1, 100.0)));
+
+    // 1. Oversize run: 1001 * 1000 = 1,001,000 > MAX_RUN_ALIGN_CELLS (1,000,000)
+    let mut old_blocks = vec![dummy_para.clone(); 1001];
+    old_blocks[5] = dummy_table.clone();
+    let new_blocks = vec![dummy_para.clone(); 1000];
+    let opts = CompareOptions::default();
+    let mut budget = 50_000_000u64;
+
+    let pairs = align_block_run(&old_blocks, &new_blocks, &opts, &mut budget);
+
+    assert_eq!(pairs.len(), 1002);
+    assert_eq!(pairs[0], RunPair::Diff(0, 0));
+    assert_eq!(pairs[5], RunPair::Del(5));
+    assert_eq!(pairs[6], RunPair::Ins(5));
+    assert_eq!(pairs[1001], RunPair::Del(1000));
+
+    // 2. Budget exhaustion: small run but budget = 0 falls back to positional pairing
+    let old_small = vec![
+        Arc::new(Block::Para(Paragraph::with_text("First paragraph changed.", CharProps::default()))),
+        Arc::new(Block::Para(Paragraph::with_text("Second paragraph changed.", CharProps::default()))),
+    ];
+    let new_small = vec![
+        Arc::new(Block::Para(Paragraph::with_text("First paragraph revised.", CharProps::default()))),
+        Arc::new(Block::Para(Paragraph::with_text("Second paragraph revised.", CharProps::default()))),
+    ];
+    let mut exhausted_budget = 0u64;
+    let pairs_budget = align_block_run(&old_small, &new_small, &opts, &mut exhausted_budget);
+    assert_eq!(pairs_budget, vec![RunPair::Diff(0, 0), RunPair::Diff(1, 1)]);
+}
+
+/// #5861: Verifies that lcs_len charges prefix and suffix comparisons to budget,
+/// returning None if the budget is exhausted during scan.
+#[test]
+fn lcs_len_charges_prefix_and_suffix_budget() {
+    let mut dp_buf = Vec::new();
+
+    // 1. Prefix scan stops and returns None when budget is exhausted during prefix scan:
+    let a = vec![1, 2, 3, 4, 5];
+    let b = vec![1, 2, 3, 4, 5];
+    let mut small_budget = 3u64;
+    assert_eq!(super::lcs_len(&a, &b, &mut dp_buf, &mut small_budget), None);
+    assert_eq!(small_budget, 0);
+
+    // 2. Sufficient budget correctly debits prefix/suffix comparisons:
+    let mut budget = 100u64;
+    let a2 = vec![1, 2, 3, 9, 8, 7];
+    let b2 = vec![1, 2, 3, 0, 8, 7];
+    // Prefix scan: 1==1, 2==2, 3==3, 9!=0 (4 comparisons).
+    // Suffix scan on remaining [9,8,7] and [0,8,7]: 7==7, 8==8, 9!=0 (3 comparisons).
+    // Core: [9] and [0] (len 1 each). cells = 1.
+    // Total charged: 4 + 3 + 1 = 8.
+    let res = super::lcs_len(&a2, &b2, &mut dp_buf, &mut budget);
+    assert_eq!(res, Some(5)); // 3 (prefix) + 2 (suffix) + 0 (core) = 5
+    assert_eq!(budget, 92);
+}
+
+/// #5861: Verifies head, interior, and tail sampling for word and character tokens on long inputs.
+#[test]
+fn sample_words_and_chars_interior_sampling() {
+    // Exactly at limit: keeps all
+    let short_text = "one two three four five";
+    assert_eq!(super::sample_words(short_text, 5), vec!["one", "two", "three", "four", "five"]);
+
+    // Exceeding limit: samples head, interior (middle), and tail
+    let long_text = "w1 w2 w3 w4 w5 w6 w7 w8 w9 w10";
+    let sampled = super::sample_words(long_text, 6);
+    assert_eq!(sampled, vec!["w1", "w2", "w5", "w6", "w9", "w10"]);
+
+    // Character sampling
+    let long_chars = "abcdefghij";
+    let sampled_ch = super::sample_chars(long_chars, 6);
+    assert_eq!(sampled_ch, vec!['a', 'b', 'e', 'f', 'i', 'j']);
+
+    // Two long paragraphs with identical 300-word heads and 300-word tails but different middles:
+    let head = "boilerplate_head ".repeat(300);
+    let tail = "boilerplate_tail ".repeat(300);
+    let para_a = format!("{head} middle_a_unique {tail}");
+    let para_b = format!("{head} middle_b_unique {tail}");
+    let sample_a = super::sample_words(&para_a, super::MAX_SIM_WORDS);
+    let sample_b = super::sample_words(&para_b, super::MAX_SIM_WORDS);
+    assert_ne!(sample_a, sample_b, "samples must differ when interior differs");
+}
+
+/// #5861: Verifies that modified single-token headings (such as "Introduction" vs "Introductions")
+/// pair by character similarity across an insertion in an edit run with unequal block counts,
+/// instead of collapsing into wholesale paragraph deletions and insertions.
+#[test]
+fn compare_single_token_headings_paired_across_insertion() {
+    let original = "Introduction\nKeep anchor.";
+    let revised = "Preamble note.\nIntroductions\nKeep anchor.";
+
+    let mut s = Session::new(Document::from_text(original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+
+    assert_eq!(s.doc.body.len(), 3);
+
+    let p_preamble = s.doc.body[0].as_para().unwrap();
+    assert!(p_preamble.run_ranges().all(|(r, c)| c.ins.is_some() && p_preamble.text[r].contains("Preamble")));
+
+    let p_heading = s.doc.body[1].as_para().unwrap();
+    assert!(p_heading.run_ranges().any(|(r, c)| c.del.is_some() && p_heading.text[r].contains("Introduction")));
+    assert!(p_heading.run_ranges().any(|(r, c)| c.ins.is_some() && p_heading.text[r].contains("Introductions")));
+
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s_accept.doc.plain_text(StoryRef::Body), revised);
+
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(s_reject.doc.plain_text(StoryRef::Body), original);
+}
+
+/// #5861: Verifies that long paragraphs sharing only a prefix do not score 1000 similarity.
+#[test]
+fn compare_long_paragraphs_sharing_prefix_diff_cleanly() {
+    use super::compare::{para_similarity, precompute_blocks};
+
+    let common_prefix = "word ".repeat(500);
+    let original = format!("{}unique_original_ending", common_prefix);
+    let revised = format!("{}unique_revised_ending", common_prefix);
+
+    let opts = CompareOptions { case: true, white_space: true, formatting: true, characters: false };
+    let orig_block = Arc::new(Block::Para(Paragraph::with_text(&original, CharProps::default())));
+    let rev_block = Arc::new(Block::Para(Paragraph::with_text(&revised, CharProps::default())));
+    let orig_blocks = [orig_block];
+    let rev_blocks = [rev_block];
+    let orig_key = [Some(opts.key(&original))];
+    let rev_key = [Some(opts.key(&revised))];
+    let pre_old = precompute_blocks(&orig_blocks, &orig_key);
+    let pre_new = precompute_blocks(&rev_blocks, &rev_key);
+    let mut dp_buf = Vec::new();
+    let mut budget = 100_000u64;
+    let sim = para_similarity(&pre_old[0], &pre_new[0], &opts, &mut dp_buf, &mut budget).unwrap();
+    assert!(sim < 1000, "similarity {sim} must be strictly less than 1000 for differing paragraphs");
+
+    let mut s = Session::new(Document::from_text(&original));
+    s.run("review.compare", &json!({"text": revised})).unwrap();
+
+    assert_eq!(s.doc.body.len(), 1);
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.run_ranges().any(|(r, c)| c.del.is_some() && p.text[r].contains("unique_original_ending")));
+    assert!(p.run_ranges().any(|(r, c)| c.ins.is_some() && p.text[r].contains("unique_revised_ending")));
+}
+
+/// #5861: Verifies that word_diff preserves section breaks on revised paragraphs paired across edits.
+#[test]
+fn compare_preserves_section_break_on_paired_paragraph() {
+    let original = "Old paragraph to be edited.\nKeep anchor.";
+    let mut rev = Document::from_text("Preamble note.\nRevised paragraph to be edited.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[1]) {
+        p.section = Some(Box::new(wordcraft_doc::SectionProps::default()));
+    }
+
+    let mut s = Session::new(Document::from_text(original));
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // A section-presence change is a whole-block replacement: the original paragraph and the
+    // revised one are both kept under their own revisions.
+    assert_eq!(s.doc.body.len(), 4);
+    let revised_text = "Revised paragraph to be edited.";
+    let p_paired = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text() == revised_text).unwrap();
+    assert!(p_paired.section.is_some(), "section break must be preserved on the revised paragraph");
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let p_accepted = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text() == revised_text).unwrap();
+    assert!(p_accepted.section.is_some(), "section break must survive acceptAll");
+}
+
+/// #5861: Verifies that unchanged run formatting survives similarity-paired paragraphs through acceptAll.
+#[test]
+fn compare_preserves_run_formatting_on_paired_paragraphs() {
+    let mut orig = Document::from_text("Plain first sentence. Bold second sentence.\nKeep anchor.");
+    let start_b = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(0), 22);
+    let end_b = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(0), 43);
+    orig.format_range(&start_b, &end_b, &|c| c.bold = Some(true)).unwrap();
+
+    let mut rev = Document::from_text("Preamble insertion.\nPlain first sentence edited. Bold second sentence.\nKeep anchor.");
+    let start_b_rev = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 29);
+    let end_b_rev = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 50);
+    rev.format_range(&start_b_rev, &end_b_rev, &|c| c.bold = Some(true)).unwrap();
+
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-fmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    // Paragraph 1 is the paired edited paragraph
+    assert_eq!(s.doc.body.len(), 3);
+    let p_paired = s.doc.body[1].as_para().unwrap();
+    assert!(
+        p_paired.run_ranges().any(|(r, c)| p_paired.text[r].contains("Bold second sentence") && c.bold == Some(true)),
+        "unchanged bold run must retain its formatting in paired paragraph"
+    );
+
+    // Accept all changes
+    s.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(s.doc.body.len(), 3);
+    let p_accepted = s.doc.body[1].as_para().unwrap();
+    assert!(
+        p_accepted.run_ranges().any(|(r, c)| p_accepted.text[r].contains("Bold second sentence") && c.bold == Some(true)),
+        "unchanged bold run must remain bold after acceptAll"
+    );
+}
+
+/// #5861: Verifies that word-level comparison matches text across formatting boundaries.
+/// An unchanged word with internal formatting changes in revised (e.g. "ship" bold, "ment" plain)
+/// matches the original word rather than being treated as deleted and re-inserted.
+#[test]
+fn compare_word_level_matches_across_formatting_boundaries() {
+    for formatting in [true, false] {
+        let orig = Document::from_text("The shipment arrived safely.\nKeep anchor.");
+        let mut rev = Document::from_text("Preamble note.\nThe shipment arrived quickly.\nKeep anchor.");
+
+        let start_ship = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 4);
+        let end_ship = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 8);
+        rev.format_range(&start_ship, &end_ship, &|c| c.bold = Some(true)).unwrap();
+
+        let mut s = Session::new(orig);
+        let path = std::env::temp_dir().join(format!("wc-compare-wbnd-{}-{}.docx", formatting, std::process::id()));
+        crate::io::save_path(&path, &rev).unwrap();
+        s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": formatting})).unwrap();
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(s.doc.body.len(), 3);
+        let p = s.doc.body[1].as_para().unwrap();
+
+        let shipment_runs: Vec<_> =
+            p.run_ranges().filter(|(r, _)| p.text[r.clone()].contains("ship") || p.text[r.clone()].contains("ment")).collect();
+        assert!(!shipment_runs.is_empty());
+        for (r, props) in &shipment_runs {
+            assert!(props.ins.is_none(), "formatting {formatting}: matched word part {:?} should not be inserted", &p.text[r.clone()]);
+            assert!(props.del.is_none(), "formatting {formatting}: matched word part {:?} should not be deleted", &p.text[r.clone()]);
+        }
+
+        if formatting {
+            let ship_run = p.run_ranges().find(|(r, _)| &p.text[r.clone()] == "ship").unwrap();
+            assert!(ship_run.1.fmt_change.is_some(), "ship must have fmt_change");
+        }
+    }
+}
+
+/// #5861: Verifies that matched tokens preserve the original token's revision state rather than
+/// inheriting revision markers from the revised document, so rejectAll does not delete matched tokens.
+#[test]
+fn compare_preserves_original_revision_state_for_matched_tokens() {
+    let orig = Document::from_text("Keep this original sentence intact.\nKeep anchor.");
+    let mut rev = Document::from_text("Preamble note.\nKeep this original sentence edited.\nKeep anchor.");
+
+    let start_orig = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 10);
+    let end_orig = Pos::new(StoryRef::Body, wordcraft_doc::Path::top(1), 18);
+    rev.format_range(&start_orig, &end_orig, &|c| c.ins = Some(999)).unwrap();
+
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-revstate-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(s.doc.body.len(), 3);
+    let p = s.doc.body[1].as_para().unwrap();
+    let orig_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("original")).unwrap();
+    assert_eq!(orig_run.1.ins, None, "matched token must not inherit revised document's ins revision");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let all_text = s.doc.body.iter().filter_map(|b| b.as_para().map(|p| p.plain_text())).collect::<Vec<_>>().join("\n");
+    assert!(all_text.contains("Keep this original sentence intact."), "matched sentence must survive rejectAll");
+}
+
+/// #5861: Verifies that paragraph mark and section formatting changes are tracked on paired paragraphs
+/// and properly resolve on accept and reject.
+#[test]
+fn compare_tracks_paragraph_mark_and_section_formatting_changes() {
+    let mut orig = Document::from_text("Original paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        p.mark.bold = Some(false);
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let mut rev = Document::from_text("Preamble insertion.\nRevised paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[1]) {
+        p.mark.bold = Some(true);
+        let sec = wordcraft_doc::SectionProps { margin_left: 144.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-secfmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(s.doc.body.len(), 3);
+    let p = s.doc.body[1].as_para().unwrap();
+    assert!(p.mark.fmt_change.is_some(), "paragraph mark must have fmt_change");
+    assert!(p.section.as_ref().unwrap().fmt_change.is_some(), "section must have fmt_change");
+
+    let mut s_accept = Session::new(s.doc.clone());
+    s_accept.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = s_accept.doc.body[1].as_para().unwrap();
+    assert_eq!(p_acc.mark.bold, Some(true));
+    assert_eq!(p_acc.section.as_ref().unwrap().margin_left, 144.0);
+
+    let mut s_reject = Session::new(s.doc.clone());
+    s_reject.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s_reject.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.mark.bold, Some(false));
+    assert_eq!(p_rej.section.as_ref().unwrap().margin_left, 72.0);
+}
+
+/// #5861: Verifies that paired CJK paragraphs diff at character level without requiring
+/// an explicit `"level": "character"` argument, keeping shared characters unmarked.
+#[test]
+fn compare_paired_cjk_paragraphs_diff_by_character_without_explicit_option() {
+    let orig = Document::from_text("会议改到周三下午。");
+    let rev = Document::from_text("会议改到周四下午。");
+
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-cjk-default-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let runs: Vec<_> = p.run_ranges().map(|(r, props)| (&p.text[r], props.ins, props.del)).collect();
+
+    let deleted_san = runs.iter().any(|(t, _, del)| *t == "三" && del.is_some());
+    let inserted_si = runs.iter().any(|(t, ins, _)| *t == "四" && ins.is_some());
+    let shared_prefix = runs.iter().any(|(t, ins, del)| t.contains("会议改到周") && ins.is_none() && del.is_none());
+    let shared_suffix = runs.iter().any(|(t, ins, del)| t.contains("下午。") && ins.is_none() && del.is_none());
+
+    assert!(deleted_san, "三 must be marked as deleted");
+    assert!(inserted_si, "四 must be marked as inserted");
+    assert!(shared_prefix, "shared prefix must survive unmarked");
+    assert!(shared_suffix, "shared suffix must survive unmarked");
+}
+
+/// #5861: Verifies that original revision ranges are mapped through text positions when whitespace
+/// is normalized, so revisions on whitespace-expanded words do not spill over to adjacent text.
+#[test]
+fn compare_maps_original_revision_ranges_across_normalized_whitespace() {
+    let mut orig = Document::from_text("New     keep");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Author".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 8, &|c| c.ins = Some(0)); // covers "New     "
+    }
+
+    let rev = Document::from_text("New keep");
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-ws-map-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "whiteSpace": false})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let keep_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("keep")).unwrap();
+    assert_eq!(keep_run.1.ins, None, "'keep' must not inherit the insertion revision from 'New     '");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let remaining = s.doc.body[0].as_para().unwrap().plain_text();
+    assert!(remaining.contains("keep"), "'keep' must survive rejectAll when whitespace was normalized");
+}
+
+/// #5861: Verifies that pre-existing formatting revisions on matched text are retained when
+/// formatting does not change, allowing rejectAll to restore the pre-revision formatting.
+#[test]
+fn compare_preserves_pre_existing_formatting_revisions_on_matched_text() {
+    let mut orig = Document::from_text("Keep this text intact.");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Author".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    let old_props = CharProps { bold: Some(false), ..Default::default() };
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 9, &|c| {
+            c.bold = Some(true);
+            c.fmt_change = wordcraft_doc::props::PropChange::boxed(0, old_props.clone());
+        });
+    }
+
+    let rev = orig.clone();
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-fmt-retain-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let keep_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("Keep this")).unwrap();
+    assert!(keep_run.1.fmt_change.is_some(), "pre-existing fmt_change must be retained on matched run");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    let rej_run = p_rej.run_ranges().find(|(r, _)| p_rej.text[r.clone()].contains("Keep this")).unwrap();
+    assert_eq!(rej_run.1.bold, Some(false), "rejectAll must restore pre-revision formatting");
+}
+
+/// #5861: Verifies that lowercase expansions (e.g. Turkish dotted I vs i with combining dot) map
+/// revision ranges accurately back to source byte boundaries without eating adjacent characters.
+#[test]
+fn compare_maps_revision_ranges_across_lowercase_expansions() {
+    let mut orig = Document::from_text("i\u{0307} keep");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Author".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 4, &|c| c.ins = Some(0)); // covers "i\u{0307} "
+    }
+
+    let rev = Document::from_text("İ keep");
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-case-exp-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let keep_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("keep")).unwrap();
+    assert_eq!(keep_run.1.ins, None, "'keep' must not inherit the insertion revision across lowercase expansion");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let remaining = s.doc.body[0].as_para().unwrap().plain_text();
+    assert_eq!(remaining, "keep", "'keep' must survive rejectAll cleanly without losing its initial character");
+}
+
+/// #5861: Verifies that deleted tokens retain their original insertion and formatting revision metadata
+/// so rejectAll properly restores or rejects them.
+#[test]
+fn compare_deleted_token_retains_original_revision_metadata() {
+    let mut orig = Document::from_text("DeleteMe keep");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Author".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 9, &|c| c.ins = Some(0)); // covers "DeleteMe "
+    }
+
+    let rev = Document::from_text("keep");
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-del-meta-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let del_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("DeleteMe")).unwrap();
+    assert!(del_run.1.del.is_some(), "deleted token must have del marker");
+    assert_eq!(del_run.1.ins, Some(0), "deleted token must retain original ins revision metadata");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let remaining = s.doc.body[0].as_para().unwrap().plain_text();
+    assert_eq!(remaining, "keep", "rejecting insertion of deleted token must leave only keep");
+}
+
+/// #5861: Verifies that section presence is preserved on paired paragraphs when formatting comparison
+/// is disabled.
+#[test]
+fn compare_preserves_original_section_presence_when_formatting_disabled() {
+    let mut orig = Document::from_text("First paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let rev = Document::from_text("First paragraph.\nKeep anchor.");
+    // rev has no section on body[0]
+    let mut s = Session::new(orig);
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-nofmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": false})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.section.is_some(), "original section presence must be preserved when formatting comparison is disabled");
+}
+
+/// #5861: Verifies that removing a section break on a paragraph with formatting enabled correctly
+/// removes the section break upon acceptAll, and restores it upon rejectAll.
+#[test]
+fn compare_removes_section_break_on_accept_when_revised_lacks_section() {
+    let mut orig = Document::from_text("First paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let rev = Document::from_text("First paragraph.\nKeep anchor.");
+    // rev has no section on body[0]
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-rm-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    // Verify acceptAll removes the section break.
+    let mut s_acc = Session::new(orig.clone());
+    s_acc.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = s_acc.doc.body[0].as_para().unwrap();
+    assert!(p_acc.section.is_none(), "acceptAll must remove section break when revised doc has none");
+
+    // Verify rejectAll restores the section break.
+    let mut s_rej = Session::new(orig);
+    s_rej.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s_rej.doc.body[0].as_para().unwrap();
+    assert!(p_rej.section.is_some(), "rejectAll must restore the original section break");
+}
+
+/// #5861: Verifies that adding a section break on an edited paragraph can be rejected: the
+/// original paragraph has no section break, so rejectAll must remove the new section break and
+/// page setup rather than restoring the revised section as the "old" value.
+#[test]
+fn compare_keeps_added_section_break_on_accept_and_removes_it_on_reject() {
+    let orig = Document::from_text("First paragraph.\nKeep anchor.");
+    let mut rev = Document::from_text("Revised first paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-add-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    // Verify acceptAll keeps the added section break.
+    let mut s_acc = Session::new(orig.clone());
+    s_acc.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = s_acc.doc.body[0].as_para().unwrap();
+    assert_eq!(p_acc.plain_text(), "Revised first paragraph.");
+    assert_eq!(p_acc.section.as_ref().map(|s| s.margin_left), Some(72.0), "acceptAll must keep the added section break");
+
+    // Verify rejectAll removes the added section break.
+    let mut s_rej = Session::new(orig);
+    s_rej.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s_rej.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "First paragraph.");
+    assert!(p_rej.section.is_none(), "rejectAll must remove the added section break");
+}
+
+/// #5861: The same presence change must reject cleanly when the text is normalized-equal, which
+/// takes the unchanged-block path instead of the similarity-paired path.
+#[test]
+fn compare_keeps_added_section_break_on_reject_across_case_difference() {
+    let orig = Document::from_text("section heading.\nKeep anchor.");
+    let mut rev = Document::from_text("Section heading.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-add-case-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s_acc = Session::new(orig.clone());
+    s_acc.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = s_acc.doc.body[0].as_para().unwrap();
+    assert_eq!(p_acc.plain_text(), "Section heading.");
+    assert_eq!(p_acc.section.as_ref().map(|s| s.margin_left), Some(72.0), "acceptAll must keep the added section break");
+
+    let mut s_rej = Session::new(orig);
+    s_rej.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s_rej.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "section heading.");
+    assert!(p_rej.section.is_none(), "rejectAll must remove the added section break");
+}
+
+/// #5861: Verifies that when paragraph formatting matches between original and revised,
+/// pre-existing formatting revisions on props, mark, and section are preserved so rejectAll restores them.
+#[test]
+fn compare_preserves_pre_existing_props_mark_and_section_formatting_revisions() {
+    let mut orig = Document::from_text("Original paragraph text.\nKeep anchor.");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Author".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let old_para_props = wordcraft_doc::ParaProps { indent_left: Some(36.0), ..Default::default() };
+        p.props.indent_left = Some(72.0);
+        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(0, old_para_props);
+
+        let old_mark_props = CharProps { bold: Some(false), ..Default::default() };
+        p.mark.bold = Some(true);
+        p.mark.fmt_change = wordcraft_doc::props::PropChange::boxed(0, old_mark_props);
+
+        let old_sec_props = wordcraft_doc::SectionProps { margin_left: 36.0, ..Default::default() };
+        let mut sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        sec.fmt_change = wordcraft_doc::props::PropChange::boxed(0, old_sec_props);
+        p.section = Some(Box::new(sec));
+    }
+
+    // Edited text in revised document with matching paragraph/mark/section formatting.
+    let mut rev = Document::from_text("Revised paragraph text.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        p.props.indent_left = Some(72.0);
+        p.mark.bold = Some(true);
+        p.section = Some(Box::new(wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() }));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-fmt-meta-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.props.fmt_change.is_some(), "props fmt_change must be retained on paired paragraph");
+    assert!(p.mark.fmt_change.is_some(), "mark fmt_change must be retained on paired paragraph");
+    assert!(p.section.as_ref().and_then(|s| s.fmt_change.as_ref()).is_some(), "section fmt_change must be retained on paired paragraph");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.props.indent_left, Some(36.0), "rejectAll must restore pre-revision paragraph props");
+    assert_eq!(p_rej.mark.bold, Some(false), "rejectAll must restore pre-revision mark props");
+    assert_eq!(p_rej.section.as_ref().map(|s| s.margin_left), Some(36.0), "rejectAll must restore pre-revision section props");
+}
+
+/// #5861: Verifies that section replacement blocks clear pre-existing deletion and foreign
+/// revision metadata from the revised document so acceptAll does not delete the replacement run.
+#[test]
+fn compare_removes_pre_existing_revisions_on_section_replacement_blocks() {
+    let mut orig = Document::from_text("Section paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let mut rev = Document::from_text("Replacement text.\nKeep anchor.");
+    rev.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Delete,
+        author: "RevAuthor".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    // rev body[0] has no section, but carries a pre-existing deletion
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        let _ = p.format(0, 11, &|c| c.del = Some(0));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-del-clear-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let text = s.doc.body[0].as_para().unwrap().plain_text();
+    assert_eq!(text, "Replacement text.", "acceptAll must preserve the replacement paragraph text without deleting runs");
+}
+
+/// #5861: Verifies that section formatting differences are tracked even when paragraph text differs
+/// by case under caseChanges: false.
+#[test]
+fn compare_tracks_section_property_change_across_case_differences() {
+    let mut orig = Document::from_text("Section heading.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 36.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let mut rev = Document::from_text("section heading.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-case-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert!(p.section.as_ref().and_then(|s| s.fmt_change.as_ref()).is_some(), "section fmt_change must be recorded across case difference");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.section.as_ref().map(|s| s.margin_left), Some(36.0), "rejectAll must restore the original section margin");
+}
+
+/// #5861: Verifies that contextual Greek lowercase rules (final sigma ς vs interior σ) are respected
+/// across whitespace and case normalization so offset keys match comparison keys and rejectAll preserves
+/// words following Greek final sigmas.
+#[test]
+fn compare_maps_revision_ranges_across_greek_final_sigma() {
+    let mut orig = Document::from_text("ΟΣ        keep");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Author".into(),
+        date: "2026-11-11T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        // Mark "ΟΣ        " (12 bytes) as inserted
+        let _ = p.format(0, 12, &|c| c.ins = Some(0));
+    }
+
+    let rev = Document::from_text("ος keep");
+    let path = std::env::temp_dir().join(format!("wc-compare-greek-sigma-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "whiteSpace": false})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let keep_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("keep")).unwrap();
+    assert_eq!(keep_run.1.ins, None, "'keep' must not inherit the insertion revision across Greek final sigma");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let remaining = s.doc.body[0].as_para().unwrap().plain_text();
+    assert_eq!(remaining, "keep", "'keep' must survive rejectAll cleanly without losing its initial character");
+}
+
+/// #5861: Verifies that run formatting differences are tracked across case differences
+/// under caseChanges: false, so rejectAll restores original run formatting.
+#[test]
+fn compare_tracks_run_formatting_changes_across_case_differences() {
+    let mut orig = Document::from_text("Title paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 5, &|c| c.bold = Some(true));
+    }
+
+    let rev = Document::from_text("title paragraph.\nKeep anchor.");
+    // rev has unbold "title"
+    let path = std::env::temp_dir().join(format!("wc-compare-case-fmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    let title_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("title")).unwrap();
+    assert!(title_run.1.fmt_change.is_some(), "run fmt_change must be recorded across case difference");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s.doc.body[0].as_para().unwrap();
+    let rej_run = p_rej.run_ranges().find(|(r, _)| p_rej.text[r.clone()].contains("title")).unwrap();
+    assert_eq!(rej_run.1.bold, Some(true), "rejectAll must restore the original bold formatting");
+}
+
+/// #5861: Verifies that an unchanged paragraph retaining pre-existing tracked revision metadata
+/// from the original document does not falsely increment the comparison changes count.
+#[test]
+fn compare_preserved_revision_metadata_does_not_count_as_new_change() {
+    let mut orig = Document::from_text("Unchanged paragraph.\nAnchor paragraph.");
+    orig.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Original Author".to_string(),
+        date: "2026-01-01T00:00:00Z".to_string(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut orig.body[0]) {
+        let _ = p.format(0, 9, &|c| c.ins = Some(0));
+    }
+
+    let rev = Document::from_text("Unchanged paragraph.\nAnchor paragraph.");
+    let path = std::env::temp_dir().join(format!("wc-compare-pres-meta-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    let res = s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    assert_eq!(res["changes"], 0, "comparison of identical text/formatting must report 0 changes despite preserved metadata");
+    let p = s.doc.body[0].as_para().unwrap();
+    let ins_run = p.run_ranges().find(|(r, _)| p.text[r.clone()].contains("Unchanged")).unwrap();
+    assert_eq!(ins_run.1.ins, Some(0), "pre-existing original insertion marker must still be preserved");
+}
+
+/// #5861: Verifies that inserted paragraphs clear foreign paragraph and section fmt_change
+/// metadata inherited from the revised document's revision table.
+#[test]
+fn compare_inserted_paragraph_clears_foreign_paragraph_and_section_fmt_change() {
+    let orig = Document::from_text("Anchor paragraph.");
+
+    let mut rev = Document::from_text("Inserted paragraph with formatting.\nAnchor paragraph.");
+    rev.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Foreign Author".to_string(),
+        date: "2026-01-01T00:00:00Z".to_string(),
+        move_name: None,
+    });
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(42, wordcraft_doc::ParaProps::default());
+        let sec = wordcraft_doc::SectionProps {
+            fmt_change: wordcraft_doc::props::PropChange::boxed(42, wordcraft_doc::SectionProps::default()),
+            ..Default::default()
+        };
+        p.section = Some(Box::new(sec));
+    }
+    let path = std::env::temp_dir().join(format!("wc-compare-ins-foreign-fmt-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s = Session::new(orig);
+    s.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let p = s.doc.body[0].as_para().unwrap();
+    assert_eq!(p.text, "Inserted paragraph with formatting.");
+    assert_eq!(p.props.fmt_change, None, "foreign paragraph fmt_change must be cleared on inserted paragraphs");
+    if let Some(sec) = &p.section {
+        assert_eq!(sec.fmt_change, None, "foreign section fmt_change must be cleared on inserted paragraphs");
+    }
+    assert!(p.mark.ins.is_some(), "inserted paragraph mark must have comparison insertion marker");
+}
