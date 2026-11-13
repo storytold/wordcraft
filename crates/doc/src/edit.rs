@@ -1532,11 +1532,11 @@ impl Document {
             && let Some(Block::Para(src)) = blocks.first()
         {
             let src = src.clone();
+            let src_shading = self.styles.resolve_para(&src.props).shading;
             let target = self.para_mut(pos.story, &pos.path)?;
             let tail = target.split_off(pos.off)?;
             let added = src.len();
             let keep = target.props.clone();
-            let src_shading = src.props.shading;
             let sect = tail.section.clone();
             let mut src = src;
             src.section = None;
@@ -1560,15 +1560,18 @@ impl Document {
         let mut idx = left.last() + 1;
         match first {
             Block::Para(p) => {
+                let src_shading = self.styles.resolve_para(&p.props).shading;
                 let l = self.para_mut(pos.story, &left)?;
                 let keep = l.props.clone();
+                let keep_shading = keep.shading;
                 let mut p2 = p;
                 let pprops = p2.props.clone();
-                let src_shading = pprops.shading;
                 p2.section = None;
                 l.append(p2);
                 l.props = if keep.is_empty() { pprops } else { keep };
-                if l.props.shading.is_none() && destination_shading.is_none() {
+                if destination_shading.is_some() {
+                    l.props.shading = keep_shading;
+                } else if l.props.shading.is_none() {
                     l.props.shading = src_shading;
                 }
             }
