@@ -1,7 +1,7 @@
 # Real-time collaboration: implementation status
 
-- Date: 2026-11-13 (PR facts measured at 2026-11-13T12:52Z: the head of the
-  branch, the tree, and the state of PR #5834)
+- Date: 2026-11-13 (PR facts measured at 2026-11-13T14:16Z: the head of the
+  branch, the tree, the state of PR #5834 and the runs on it)
 - Branch: `feature/realtime-collaboration` (fork `copoka/wordcraft`)
 - PR: <https://github.com/storytold/wordcraft/pull/5834> (ready for review
   since 2026-11-10 14:57Z, no longer a draft), title "Real-time collaboration:
@@ -18,7 +18,24 @@
   `git ls-remote fork refs/heads/feature/realtime-collaboration` for the branch
   itself. The only stable source is the PR number. A hash below is a dated
   observation, never a claim that the tip stopped moving.
-- Measured at 2026-11-13T12:52Z: `git ls-remote fork`, the `headRefOid` of
+- Measured at 2026-11-13T14:16Z: `git ls-remote fork
+  refs/heads/feature/realtime-collaboration` and `gh pr view 5834 --json
+  headRefOid` both answered
+  `9c6e343ae17ea09c69ac12d72f8bea748c51982b`; the local `HEAD` was
+  `f2bfaabb9296790bee0e7bb6a98ae663f6866912` and
+  `git rev-list --left-right --count 9c6e343a...HEAD` answered `0 1` — one
+  documentation commit above the head, the page's §5.46 sync — with a clean
+  tree. The PR was updated at 2026-11-13T13:20:03Z and is `MERGEABLE`/`BLOCKED`
+  with an empty `reviewDecision`; `gh run list --commit 9c6e343a` answers `[]`,
+  so this head has no workflow run at all: none created, none executed. (This
+  page's own commit sits above `f2bfaabb`, so the local branch is `0 2` from the
+  head as it is read.) The head
+  is one commit above `29afb475` and changes one file, `Cargo.lock` (+8/−8): the
+  eight collab packages `0.15.1` → `0.18.1` (§5.47). §5.47 also holds the gate
+  on it: `cargo metadata --locked` accepts the lock and leaves the tree alone,
+  and the workspace gate is green except two `fit_one_page` tests that fail the
+  same way on clean `origin/main` `b5fa2f9e`.
+- Earlier measurement, 2026-11-13T12:52Z: `git ls-remote fork`, the `headRefOid` of
   PR #5834 and the local `HEAD` all answered
   `29afb4757ff5a03f808626f8e62aee653610b68b`, the tree was clean and
   `git rev-list --left-right --count fork/feature/realtime-collaboration...HEAD`
@@ -60,18 +77,26 @@
   21:11Z (`d55d7c94`), at 05:42Z on 2026-11-12 (`b85e193a`), at 19:38Z
   (`3532bfda`, with `089bec7c` and `aa839078` together), at 23:24Z
   (`d9d667ec` and `ce0bb001` together) and at 10:15Z on 2026-11-13
-  (`29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46); at each point the
-  local `HEAD`, the fork branch and the `headRefOid` of PR #5834 were the same
-  commit (§5.21, §5.24, §5.26, §5.27, §5.35, §5.36, §5.38, §5.39, §5.40,
-  §5.43, §5.44, §5.46).
+  (`29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), and at 13:18Z on
+  2026-11-13 (`9c6e343a`, the lock fix of §5.47, pushed by the cabinet's PR
+  sweep rather than by this session); the fork branch and the `headRefOid` of
+  PR #5834 answered the same commit at each of those points, and the local
+  `HEAD` did too at every one before 13:18Z; above the head it carries only
+  documentation commits of this page — the §5.46 sync and the §5.47 sync — and
+  never a code change (§5.21, §5.24, §5.26, §5.27,
+  §5.35, §5.36, §5.38, §5.39, §5.40, §5.43, §5.44, §5.46, §5.47).
 - The PR is `MERGEABLE` and `BLOCKED`, and its `reviewDecision` is empty: the
   branch merges cleanly, and `BLOCKED` is the required review plus the
-  unapproved workflows. Its rollup on `29afb475` holds one check, CodeRabbit's
-  `skipped`; no run on that head has executed. The fork git source is gone from
+  unapproved workflows. Its rollup on `9c6e343a` holds one check, CodeRabbit's
+  `skipped` (`gh pr view 5834 --json statusCheckRollup`,
+  2026-11-13T14:17Z); no run on that head has been created, let alone executed
+  (§5.47). The fork git source is gone from
   the manifest and the lock
   (§5.24), and the three `printing.yml` steps are green on the pushed tree at
   the build host (§5.25).
-- CI has still not executed on any pushed head. The five runs created at
+- CI has still not executed on any pushed head. On the head of §5.47,
+  `9c6e343a` (pushed at 13:18Z), not even the runs were created:
+  `gh run list --commit 9c6e343a` answers `[]`. The five runs created at
   2026-11-13T10:15:10Z on `29afb475` were created and not executed — each is
   `completed` with `conclusion: action_required` and no job started:
   `Printing` (`43407760756`), `CI` (`43407760935`), `Packaging lint`
@@ -414,7 +439,7 @@ missing, and where the next session should start.
 | Commit creates a new version, original kept | done | commit/409/`warnings[]`; §5.18 publishes the built file to the cabinet (M87), stores its etag with the snapshot and shows `cabinet.version`/`etag` to every peer; a `409` offers the room's file as a copy without overwriting the cabinet (§5.19); cabinet owns versions |
 | Single-user mode intact; feature behind a flag | done | flag off by default; 1137 UI tests |
 | RFC, protocol, tests, documentation | done | `rfc.md`, `server.md`, `README.md`, this page |
-| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered | PR #5834; its head is read from the PR, not crowned here, and the 2026-11-13T12:52Z measurement answered `29afb475` (the merge of `origin/main` `b5fa2f9e`, §5.46), above the earlier `ce0bb001` (the test fix of §5.45) and `d9d667ec` (the documentation sync carrying §5.44), `3532bfda` and `089bec7c` (§5.43), with the fork branch, `headRefOid` and the local `HEAD` matching and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: the five runs on `29afb475` were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233) with only CodeRabbit's `skipped` in the rollup, as on `ce0bb001` (§5.2, §5.45, §5.46); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `29afb475` went up in the 10:15Z push; the branch's only CI change is the declared `git-sources` job (§5.24) |
+| PR to upstream | open and ready for review (not draft) since 2026-11-10 14:57Z; the head is delivered, and this pass did not move it | PR #5834; its head is read from the PR, not crowned here: the 2026-11-13T14:16Z measurement answered `9c6e343a` (the lock fix of §5.47, one commit above `29afb475`, the merge of `origin/main` `b5fa2f9e`, §5.46), with the fork branch and the PR's `headRefOid` agreeing, the local `HEAD` one documentation commit above it and a clean tree; `MERGEABLE`/`BLOCKED` with an empty `reviewDecision` and no executing check: no run exists on `9c6e343a` at all (`gh run list --commit 9c6e343a` → `[]`), and the five runs on the previous head `29afb475` were created at 2026-11-13T10:15:10Z as `action_required` (`Printing` 43407760756, `SonarCloud` 43407761150, `CI` 43407760935, `Packaging lint` 43407761099, `Nix` 43407761233) with only CodeRabbit's `skipped` in the rollup, as on `ce0bb001` (§5.2, §5.45, §5.46); the gate on the current head ran on the build host (§5.47); the eight inline findings of review `5853542478` are answered in `af6c311b` (§5.35), its ninth — the snapshot rollback — is closed by `347947ef` (§5.41, delivered), and the nine of `5855379673` in `65037c7b` and `a32524b5` (§5.37); nothing is left above the measured head — `9c6e343a` went up in the 13:18Z push made by the cabinet's PR sweep; the branch's only CI change is the declared `git-sources` job (§5.24) |
 | Web host bridge | done; `craft-web-host` pinned to revision `7666e2b1`, fetched from `storytold/craft-libs` (§5.24) | `host.rs`, `collab-web`, `host-bridge.md` |
 | Two clients through a cabinet-like host page | done headlessly: one browser, two iframes | §5.1: session → edit → presence → commit → `committed`; 30 ops, 0 rejects |
 | Two real machines and the real cabinet storage | not run | §5.1 "What remains for a person" |
@@ -437,6 +462,14 @@ CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts cargo xtask ci   # all
 
 Results at this writing:
 
+- §5.47, the lock head `9c6e343a` (one commit above `29afb475`, `Cargo.lock`
+  only): on the build host `agents`, `cargo metadata --locked` rc 0 with the
+  lock's sha256 unchanged and a clean tree; `cargo xtask ci` green through fmt
+  and clippy and red at `test` only on the two upstream `fit_one_page` tests,
+  which fail identically on clean `origin/main` `b5fa2f9e`; the rest of the
+  `test` step — 6375 passed, 0 failed, 11 ignored in 45 targets — and
+  i18n-report, language, doctests, assets, layers and wasm all rc 0. The
+  details, command by command, are in §5.47.
 - §5.46, the merge head `29afb475` (upstream `main` `b5fa2f9e` merged in): on
   the build host `agents`, `cargo check --workspace -j 12` EXIT=0 (27.15 s),
   `cargo test` over the eight collab crates — 402 passed, 0 failed, 1 ignored
@@ -4491,6 +4524,73 @@ is external and unchanged: a maintainer approves the five runs on `29afb475`,
 reviews, and merges. This pass changed no code and pushed nothing — the docs
 commit recording this section stays local, because a push would move the head
 away from `29afb475` and reset the five runs that wait for approval.
+
+### 5.47 The lock names the 0.18.1 collab crates, and the only red tests fail on clean `main` too (run 2026-11-13)
+
+**Why the head moved.** The head was `29afb475` (§5.46). At 13:18Z the
+cabinet's PR sweep pushed `9c6e343a` ("fix(collab): the lock names the 0.18.1
+collab crates"), and PR #5834 shows it at 2026-11-13T13:20:03Z. One commit, one
+file: `Cargo.lock`, +8/−8 — the eight collab packages (`wordcraft-collab`,
+`-app`, `-client`, `-doc`, `-engine`, `-server`, `-web`, `-ws`) move from
+`0.15.1` to the workspace's `0.18.1`. No source, manifest or test changed:
+`git diff --name-status 29afb475 9c6e343a` answers `M Cargo.lock` and nothing
+else. The shared `git-sources` job runs `cargo metadata --locked`, which wanted
+to rewrite a lock that still named `0.15.1`, so that job could not pass on the
+old head.
+
+**The metadata check.** On the build host `agents`, from a tree checked out at
+`9c6e343a`: `cargo metadata --locked --format-version 1` returned 0 and the
+tree is untouched — `sha256sum Cargo.lock` answered
+`21553b6d7e0cb4a6eb001e4ebbfa6d69d6476d7883926a261002a6559f52c70a` both before
+and after, and `git status --porcelain` was `0` lines both times. The lock is
+accepted, not rewritten.
+
+**The gate** (build host `agents`, 20 cores,
+`CRAFT_I18N_DIR=~/craft-i18n CRAFT_FONTS_DIR=~/craft-fonts`; logs in the
+cabinet workspace under `.craft/logs/`):
+
+| # | Command | Result |
+|---|---|---|
+| 1 | `cargo metadata --locked` | rc 0; `Cargo.lock` sha256 unchanged; `git status --porcelain` 0 lines. `gate-wordcraft-5834-9c6e343a.log` |
+| 2 | `cargo xtask ci` (2026-11-13T14:15:35Z → 14:19:31Z) | `fmt` ok, `clippy` ok (`--workspace --all-targets -D warnings`), `test` **FAIL** at `-p wordcraft-engine --lib`: 1459 passed, 2 failed; the six steps after `test` did not run. `gate-wordcraft-5834-9c6e343a.log` |
+| 3 | `cargo test -p wordcraft-engine --lib -- tests::fit_one_page` | 41 passed, **2 failed**, 0 ignored — deterministic with the binary run alone. `gate-wordcraft-5834-9c6e343a-rest.log` |
+| 4 | `cargo test --workspace --lib --bins --tests -- --skip i18n::audit::untranslated_interface_text --skip fit_one_page` | 45 test targets, **6375 passed, 0 failed, 11 ignored**, rc 0 (the rest of the `test` step). `gate-wordcraft-5834-9c6e343a-rest.log` |
+| 5 | `cargo xtask i18n-report` / `language` / `cargo test --workspace --doc` / `assets` / `layers` / `wasm` | rc 0 each: the audit and the language pack test pass, 23 doc targets hold no doctest, 48 asset files attributed, 27 crates with no layering violation, wasm check over 22 crates. `gate-wordcraft-5834-9c6e343a-rest.log`, `…-doctest-control.log` |
+| 6 | control: `git checkout b5fa2f9e` (clean `origin/main`) and the same two tests | 41 passed, **2 failed** — the same two names, same assertions. `gate-wordcraft-5834-9c6e343a-doctest-control.log` |
+
+**The collab suites are the same 402 the merge head answered in §5.46.** Per
+crate: `collab` 61, `-app` 47, `-client` 26, `-doc` 116, `-engine` 58,
+`-server` 78 (+1 ignored, the LibreOffice commit gate), `-web` 14 and `-ws` 2
+(`tests/reconnect.rs`), all passed, 0 failed.
+
+**The two red tests are upstream's, not this branch's.** Both live in
+`crates/engine/src/tests/fit_one_page.rs`, a file the merge `b5fa2f9e` brought
+from upstream `main` (merge commit "Merge pull request #6436 from
+batistalucasv/feat/fit-one-page-upstream"). They fail with
+`stepPt=0.1 must generate fine-grained candidates under maxDelta 0.4:
+…no permitted typography adjustment could remove a page` and `second fit within
+remaining budget must succeed` — the fit search depends on the host's font
+metrics. The same two failed on the previous head `29afb475` (merge gate
+2026-11-13T10:03Z, `gate-wordcraft-5834-merge-test-20261113T1003.log`: 1458
+passed, 3 failed in `wordcraft-engine --lib` — these two plus `swiss_german`,
+which this run passes because `CRAFT_I18N_DIR` is set), and they fail on clean
+`origin/main` `b5fa2f9e` at the same environment today (§ above, rc 101).
+`9c6e343a` changes no `.rs` file, so it cannot be their cause.
+
+**Verdict.** The lock fix does what it claims: `cargo metadata --locked`
+accepts `9c6e343a` and leaves the tree alone, which is the property the
+`git-sources` job checks. Everything in `cargo xtask ci` that does not depend on
+the host's font metrics is green on the head — fmt, clippy over the workspace
+with `-D warnings`, 6375 workspace tests in 45 targets with 0 failures and 11
+ignored, the interface audit, the language pack test, the doctests, the 48
+assets, the 27-crate layering and the 22-crate wasm check. The two
+`fit_one_page` tests are red for the same reason on clean upstream `main`; they
+are not a property of this head and they touch no collab code. The head itself
+carries no workflow run at all (`gh run list --commit 9c6e343a` answers `[]`),
+so CI has not executed on it and this gate is the evidence instead. Nothing was
+pushed and the head did not move: the documentation commit that records this
+section stays local, and the PR still waits for a maintainer's approval and
+review.
 
 ## 6. Where things live
 
