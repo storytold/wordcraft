@@ -21,6 +21,12 @@ const R2_NOP: u32 = 11;
 const PATCOPY: u32 = 0x00F0_0021;
 const BLACKNESS: u32 = 0x0000_0042;
 const WHITENESS: u32 = 0x00FF_0062;
+/// SETTEXTALIGN: draw at and update the current point.
+const TA_UPDATECP: u32 = 1;
+/// Font height (cell height, logical units) of the default font, used for a height of 0.
+const DEFAULT_FONT_HEIGHT: f64 = 16.0;
+/// Face used when a font names none.
+const DEFAULT_FONT_FACE: &str = "Arial";
 /// Device pixels per millimetre assumed for WMF (96 dpi), and for EMF files without a device size.
 const DEFAULT_PX_PER_MM: f64 = 96.0 / 25.4;
 
@@ -54,11 +60,23 @@ pub(crate) struct Brush {
     pub color: [u8; 4],
 }
 
+/// A logical font (EMF LogFont): height in logical units (negative = character height, positive =
+/// cell height, 0 = default), escapement in tenths of a degree, face name as UTF-16 (NUL-padded).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct Font {
+    pub height: i32,
+    pub escapement: i32,
+    pub weight: i32,
+    pub italic: bool,
+    pub face: [u16; 32],
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Obj {
     Pen(Pen),
     Brush(Brush),
-    /// Fonts, palettes, pattern brushes and regions: they take a table slot but draw nothing.
+    Font(Font),
+    /// Palettes, pattern brushes and regions: they take a table slot but draw nothing.
     Other,
 }
 
@@ -168,6 +186,23 @@ fn ratio(num: f64, den: f64) -> f64 {
 pub(crate) enum Raw {
     Path { ops: Vec<Op>, fill: Option<[u8; 4]>, stroke: Option<([u8; 4], f64)>, even_odd: bool },
     Bitmap { rect: [f64; 4], img: Rgba },
+    Text(RawText),
+}
+
+/// A text run in device units: the reference point, the font height along the text's up direction,
+/// the baseline angle (radians, clockwise in y-down space) and per-character advances.
+pub(crate) struct RawText {
+    pub text: String,
+    pub origin: P,
+    pub size: f64,
+    pub cell: bool,
+    pub angle: f64,
+    pub dx: Vec<f64>,
+    pub font: String,
+    pub bold: bool,
+    pub italic: bool,
+    pub color: [u8; 4],
+    pub align: u32,
 }
 
 #[derive(Clone)]
@@ -177,6 +212,9 @@ struct Saved {
     brush: Brush,
     even_odd: bool,
     nop: bool,
+    font: Option<Font>,
+    text_color: [u8; 4],
+    text_align: u32,
 }
 
 pub(crate) struct Canvas {
@@ -201,6 +239,11 @@ pub(crate) struct Canvas {
     even_odd: bool,
     /// The mix mode is R2_NOP: shapes draw nothing.
     nop: bool,
+    /// The selected font; None is the default font.
+    font: Option<Font>,
+    text_color: [u8; 4],
+    /// SETTEXTALIGN flags (TA_*).
+    text_align: u32,
     pos: P,
     in_path: bool,
     path: Vec<Op>,
@@ -224,6 +267,9 @@ impl Canvas {
             brush: Brush { style: BS_SOLID, color: [255, 255, 255, 255] },
             even_odd: true,
             nop: false,
+            font: None,
+            text_color: [0, 0, 0, 255],
+            text_align: 0,
             pos: (0.0, 0.0),
             in_path: false,
             path: Vec::new(),
@@ -238,8 +284,12 @@ impl Canvas {
 
     fn push(&mut self, raw: Raw) {
         let cost = match &raw {
-            Raw::Path { ops, .. } => ops.len() * std::mem::size_of::<Op>(),
-            Raw::Bitmap { img, .. } => img.px.len(),
+            // What is held, capacity and all.
+            Raw::Path { ops, .. } => ops.capacity().saturating_mul(std::mem::size_of::<Op>()),
+            Raw::Bitmap { img, .. } => img.px.capacity(),
+            Raw::Text(t) => {
+                t.text.capacity().saturating_add(t.font.capacity()).saturating_add(t.dx.capacity().saturating_mul(std::mem::size_of::<f64>()))
+            }
         };
         if self.items.len() >= MAX_ITEMS || self.used.saturating_add(cost) > MAX_BYTES {
             self.full = true;
@@ -318,7 +368,16 @@ impl Canvas {
     /// could no longer match the file.
     pub fn save_dc(&mut self) {
         if self.saved.len() < MAX_STACK {
-            self.saved.push(Saved { map: self.map, pen: self.pen, brush: self.brush, even_odd: self.even_odd, nop: self.nop });
+            self.saved.push(Saved {
+                map: self.map,
+                pen: self.pen,
+                brush: self.brush,
+                even_odd: self.even_odd,
+                nop: self.nop,
+                font: self.font,
+                text_color: self.text_color,
+                text_align: self.text_align,
+            });
         } else {
             self.full = true;
         }
@@ -335,6 +394,9 @@ impl Canvas {
         self.brush = s.brush;
         self.even_odd = s.even_odd;
         self.nop = s.nop;
+        self.font = s.font;
+        self.text_color = s.text_color;
+        self.text_align = s.text_align;
     }
 
     /// Stores an object in `slot` (EMF index), or in the lowest free slot (WMF handle table).
@@ -384,6 +446,7 @@ impl Canvas {
         match self.objects.get(i as usize).copied().flatten() {
             Some(Obj::Pen(p)) => self.pen = p,
             Some(Obj::Brush(b)) => self.brush = b,
+            Some(Obj::Font(f)) => self.font = Some(f),
             Some(Obj::Other) | None => {}
         }
     }
@@ -402,6 +465,8 @@ impl Canvas {
             6 => self.pen = Pen { style: 0, width: 0.0, color: white },
             7 | 19 => self.pen = Pen { style: 0, width: 0.0, color: black },
             8 => self.pen = Pen { style: PS_NULL, width: 0.0, color: black },
+            // The stock fonts (OEM, ANSI, system, device default...): the default font.
+            10..=17 => self.font = None,
             _ => {}
         }
     }
@@ -568,6 +633,57 @@ impl Canvas {
             BLACKNESS => self.fill_rect_with(rect, [0, 0, 0, 255]),
             WHITENESS => self.fill_rect_with(rect, [255, 255, 255, 255]),
             _ => {}
+        }
+    }
+
+    pub fn set_text_color(&mut self, c: [u8; 4]) {
+        self.text_color = c;
+    }
+
+    pub fn set_text_align(&mut self, a: u32) {
+        self.text_align = a;
+    }
+
+    /// Draws `text` at the logical point `at` (the current point with TA_UPDATECP) with the selected
+    /// font, text colour and alignment. `dx` holds per-character logical advances (empty for the
+    /// font's own); with TA_UPDATECP the current point moves past them.
+    pub fn text(&mut self, at: P, text: String, dx: &[f64]) {
+        if text.is_empty() || self.in_path {
+            return;
+        }
+        let font = self.font.unwrap_or(Font { height: 0, escapement: 0, weight: 400, italic: false, face: [0; 32] });
+        let at = if self.text_align & TA_UPDATECP != 0 { self.pos } else { at };
+        if self.text_align & TA_UPDATECP != 0 {
+            self.pos = (at.0 + dx.iter().sum::<f64>(), at.1);
+        }
+        let height = if font.height == 0 { DEFAULT_FONT_HEIGHT } else { f64::from(font.height) };
+        let origin = self.map.device(at);
+        let len = |v: P| {
+            let d = self.map.device((at.0 + v.0, at.1 + v.1));
+            (d.0 - origin.0).hypot(d.1 - origin.1)
+        };
+        let base = self.map.device((at.0 + 1.0, at.1));
+        let escapement = f64::from(font.escapement) / 10.0;
+        let angle = (base.1 - origin.1).atan2(base.0 - origin.0) - escapement.to_radians();
+        let size = len((0.0, height.abs()));
+        let dx = dx.iter().map(|d| len((*d, 0.0)).copysign(*d)).collect();
+        let name = String::from_utf16_lossy(&font.face);
+        let name = name.trim_end_matches('\0').trim();
+        let raw = RawText {
+            text,
+            origin,
+            size,
+            cell: height > 0.0,
+            angle: if angle.is_finite() { angle } else { 0.0 },
+            dx,
+            font: if name.is_empty() { DEFAULT_FONT_FACE.to_string() } else { name.to_string() },
+            bold: font.weight >= 600,
+            italic: font.italic,
+            color: self.text_color,
+            align: self.text_align,
+        };
+        if raw.origin.0.is_finite() && raw.origin.1.is_finite() && raw.size.is_finite() && raw.size > 0.0 {
+            self.push(Raw::Text(raw));
         }
     }
 
