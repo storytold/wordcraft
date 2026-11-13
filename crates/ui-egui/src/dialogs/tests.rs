@@ -783,6 +783,15 @@ fn paragraph_dialog_takes_indents_in_characters() {
     assert_eq!((p.indent_first_chars, p.indent_first), (Some(0.0), Some(36.0)), "a length replaces the characters");
     assert_eq!((p.indent_left_chars, p.indent_left), (Some(1.5), Some(1.5 * size)), "the left indent stays as it was");
     assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+
+    // No characters is no indent, over a length too.
+    h.state_mut().run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+    h.run_steps(3);
+    type_into(&mut h, "First line:", "0 ch");
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    let p = props(h.state());
+    assert_eq!((p.indent_first_chars, p.indent_first), (Some(0.0), Some(0.0)), "0 ch clears the 0.5\"");
 }
 
 /// Switching the Paragraph dialog's tabs re-centred it, so the tab strip jumped up and down

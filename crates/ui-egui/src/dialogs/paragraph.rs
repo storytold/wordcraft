@@ -41,7 +41,8 @@ const INDENTS: [(&str, &str); 3] = [("left", "leftChars"), ("right", "rightChars
 /// The Paragraph dialog's fields as `para.set` takes them: `align`, `left` and `right` as seen
 /// on the page (its `onPage`), the rest as paragraph properties, line spacing as a multiple. An
 /// indent in characters is just those (`leftChars`); one in a length also clears the characters
-/// (`leftChars: 0`), as they would win over it.
+/// (`leftChars: 0`), as they would win over it. No characters (`0 ch`) is no indent, a length of
+/// 0, so it replaces one in points too.
 pub(super) fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
     let Dialog::Paragraph {
         rtl, align, left, right, first, chars, before, after, line, keep_next, keep_lines, page_break, widow, asian, opts, ..
@@ -64,10 +65,11 @@ pub(super) fn para_fields(d: &Dialog) -> serde_json::Map<String, Value> {
         _ => serde_json::Map::new(),
     };
     for (((length, in_chars), value), is_chars) in INDENTS.iter().zip([left, right, first]).zip(chars) {
-        if *is_chars {
+        if *is_chars && *value != 0.0 {
             fields.insert(in_chars.to_string(), json!(*value));
         } else {
-            fields.insert(length.to_string(), json!(*value * unit));
+            let pt = if *is_chars { 0.0 } else { *value * unit };
+            fields.insert(length.to_string(), json!(pt));
             fields.insert(in_chars.to_string(), json!(0.0));
         }
     }
