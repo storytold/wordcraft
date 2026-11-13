@@ -186,6 +186,11 @@ pub struct Float {
     /// top. 0 = unknown, drawn in document order (objects inserted here, or from other formats).
     #[serde(skip_serializing_if = "is_zero_u32")]
     pub z: u32,
+    /// The page a drawing anchored to a page is on, from 1 (ODF's `text:anchor-page-number`,
+    /// §19.872); 0 = anchored to its paragraph or not said. Kept for saving: the layout places a
+    /// drawing on its anchor paragraph's page.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub page: u32,
     /// Turned, but the file keeps no room for the turn (`wp:effectExtent` missing or zero, as
     /// files from other tools have): Word then keeps an inline one's line to its frame and lets
     /// the turned object overhang it (see [`Float::line_pad`]). Cleared by [`Float::set_spin`].

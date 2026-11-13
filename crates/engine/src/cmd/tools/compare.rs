@@ -5,7 +5,11 @@ use super::{
 use wordcraft_doc::para::OBJ;
 
 /// Compare and Combine take the same settings.
+ fix/5842-compare-footnotes-endnotes
 pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character", "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared), "footnotes"?: bool (default true: compare footnotes and endnotes)}"#;
+
+pub(super) const COMPARE_PARAMS: &str = r#"{"path"?: string (revised document), "text"?: string (revised text), "original"?: string (original document; default: this one), "author"?: string (label changes with), "caseChanges"?: bool, "whiteSpace"?: bool, "formatting"?: bool (default true: differences count), "level"?: "word|character" (character: paragraphs over 2000 characters fall back to word; see characterFallback/notHonoured), "showIn"?: "original|revised|new" (revised/new: an untitled document), "moves"|"comments"|"tables"|"headersFooters"|"footnotes"|"textBoxes"|"fields"?: bool (accepted; not honoured yet except tables, always compared)}"#;
+ main
 
 /// What Compare / Combine compares (the More >> settings of Word's dialog).
 struct CompareOptions {
@@ -27,6 +31,15 @@ impl CompareOptions {
     }
 }
 
+/// Context and tracking counters for diffing paragraph contents.
+struct DiffCtx<'a> {
+    ins: u32,
+    del: u32,
+    opts: &'a CompareOptions,
+    budget: &'a mut u64,
+    char_fallbacks: &'a mut usize,
+}
+
 /// Changed paragraphs longer than this (in characters) are compared word by word even at
 /// character level, so the comparison table stays small.
 const MAX_CHAR_DIFF: usize = 2000;
@@ -34,9 +47,16 @@ const MAX_CHAR_DIFF: usize = 2000;
 /// Compare the current document (original, or `original` from a file) with a revised one: the
 /// result shows the differences as tracked insertions, deletions and formatting changes, labelled
 /// with `author`. Options Word offers that the comparison can't honour yet (moves, comments,
+ fix/5842-compare-footnotes-endnotes
 /// headers and footers, text boxes, fields) are accepted and listed in the result. Footnotes and
 /// endnotes are compared by default (`footnotes`: true), tracking edits, insertions, deletions,
 /// and paragraph formatting changes within note stories.
+
+/// headers and footers, footnotes, text boxes, fields) are accepted and listed in the result.
+/// When character-level comparison is requested (`"level": "character"`) but any paragraph exceeds
+/// [`MAX_CHAR_DIFF`] characters, it falls back to word-level diff for that paragraph, surfaces the
+/// fallback count in `"characterFallback"`, and includes `"level"` in `"notHonoured"`.
+ main
 pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     let mut revised = if let Some(t) = p::str(v, "text") {
         Document::from_text(t)
@@ -63,9 +83,14 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
         formatting: p::bool(v, "formatting").unwrap_or(true),
         characters: matches!(level, "character" | "char"),
     };
+ fix/5842-compare-footnotes-endnotes
     let compare_notes = p::bool(v, "footnotes").unwrap_or(true);
     let not_honoured: Vec<&str> =
         ["moves", "comments", "headersFooters", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
+
+    let mut not_honoured: Vec<&str> =
+        ["moves", "comments", "headersFooters", "footnotes", "textBoxes", "fields"].into_iter().filter(|k| v.get(*k).is_some()).collect();
+ main
     let author = p::str(v, "author").map(str::trim).filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| s.author.clone());
     let date = crate::cmd::now_iso();
     let mut budget = MAX_COMPARE_CELLS;
@@ -188,7 +213,14 @@ fn compare_blocks(
         // Tables match as a whole, by their text.
         Block::Table(_) => format!("\u{0}table\u{0}{}", run.opts.key(&block_text(b, 0))),
     };
+ fix/5842-compare-footnotes-endnotes
     let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), budget);
+
+    let mut budget = MAX_COMPARE_CELLS;
+    let mut char_fallbacks = 0usize;
+    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
+    let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks };
+ main
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -202,7 +234,11 @@ fn compare_blocks(
                     if !same_objects(parts, pa, pb) {
                         // Same text, but objects (text boxes, pictures…) differ: diffed, so the
                         // original's objects aren't lost.
+ fix/5842-compare-footnotes-endnotes
                         out.push(para_block(word_diff(parts, pa, pb, run.ins, run.del, run.opts, budget)));
+
+                        out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx)));
+ main
                         changes += 1;
                         i += 1;
                         j += 1;
@@ -234,9 +270,13 @@ fn compare_blocks(
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
+ fix/5842-compare-footnotes-endnotes
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => {
                             out.push(para_block(word_diff(parts, pa, pb, run.ins, run.del, run.opts, budget)))
                         }
+
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
+ main
                         _ => {
                             if let Some(x) = a {
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(run.del), 0)));
@@ -640,11 +680,29 @@ fn remap_note_refs(b: &Block, map: &std::collections::HashMap<u32, u32>, depth: 
             Block::Table(t)
         }
     }
+ fix/5842-compare-footnotes-endnotes
 }
 
 /// Returns the plain text of a part's blocks.
 fn part_text(p: &wordcraft_doc::Part) -> String {
     p.blocks.iter().map(|b| block_text(b, 0)).collect::<Vec<_>>().join("\n")
+
+    if char_fallbacks > 0 {
+        log::warn!(
+            "compare: {char_fallbacks} paragraph(s) exceeded character diff limit of {MAX_CHAR_DIFF}; fell back from character to word level diff"
+        );
+        if !not_honoured.contains(&"level") {
+            not_honoured.push("level");
+        }
+    }
+    s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+    Ok(json!({
+        "changes": changes,
+        "author": author,
+        "notHonoured": not_honoured,
+        "characterFallback": char_fallbacks,
+    }))
+ main
 }
 
 /// A block's text (a table's cells in order), for matching blocks.
@@ -658,13 +716,14 @@ fn block_text(b: &Block, depth: usize) -> String {
     }
 }
 
-/// A copy of the block with every run (in tables, every cell's) changed by `f`.
+/// Returns a copy of `b` with all text runs and paragraph marks (or nested table cells) updated by `f`.
 fn mark_block(b: &Block, f: &dyn Fn(&mut CharProps), depth: usize) -> Block {
     match b {
         Block::Para(p) => {
             let mut p = p.clone();
             let len = p.len();
             let _ = p.format(0, len, f);
+            f(&mut p.mark);
             Block::Para(p)
         }
         Block::Table(t) => {
@@ -686,59 +745,96 @@ pub(super) enum Op {
     Ins,
 }
 
-/// Longest sequence the comparison table is built for; the rest of a longer sequence is
-/// compared as deleted and inserted, never dropped.
+/// Longest sequence window per LCS comparison table chunk; sequences longer than this are
+/// aligned in successive chunked windows rather than truncated, preserving tail alignment.
 const MAX_LCS: usize = 4000;
 
 /// Comparison table cells one compare may fill over all its tables (blocks and every changed
 /// paragraph pair); once spent, the remaining middles are compared as deleted and inserted.
 const MAX_COMPARE_CELLS: u64 = 50_000_000;
 
-/// LCS edit script between two sequences: the common start and end are matched first, then the
-/// middle (bounded size). The middle's table is charged to `budget`; when it doesn't fit, the
-/// middle is deleted and inserted whole.
+/// Computes the longest common subsequence (LCS) edit script (`Op::Same`, `Op::Del`, `Op::Ins`)
+/// between sequences `a` and `b`.
+///
+/// Strips common prefix and suffix first, then iterates over windows capped at [`MAX_LCS`],
+/// charging comparison cells against `budget`. Between windows, intermediate common prefixes
+/// are trimmed to re-anchor alignment without table allocations. When the remaining cells
+/// exceed `budget`, the unaligned tail degrades honestly as whole deletions and insertions.
 pub(super) fn lcs_ops<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Vec<Op> {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let (ra, rb) = (a.get(pre..).unwrap_or_default(), b.get(pre..).unwrap_or_default());
     let suf = ra.iter().rev().zip(rb.iter().rev()).take_while(|(x, y)| x == y).count();
-    let (a, b) = (ra.get(..ra.len() - suf).unwrap_or_default(), rb.get(..rb.len() - suf).unwrap_or_default());
+    let mut rem_a = ra.get(..ra.len().saturating_sub(suf)).unwrap_or_default();
+    let mut rem_b = rb.get(..rb.len().saturating_sub(suf)).unwrap_or_default();
     let mut ops = vec![Op::Same; pre];
-    let (mut n, mut m) = (a.len().min(MAX_LCS), b.len().min(MAX_LCS));
-    let cells = (n as u64).saturating_mul(m as u64);
-    if cells > *budget {
-        (n, m) = (0, 0);
-    } else {
-        *budget -= cells;
-    }
-    let mut t = vec![vec![0u32; m + 1]; n + 1];
-    for i in (0..n).rev() {
-        for j in (0..m).rev() {
-            let v = if a.get(i) == b.get(j) {
-                t.get(i + 1).and_then(|r| r.get(j + 1)).copied().unwrap_or(0) + 1
-            } else {
-                t.get(i + 1).and_then(|r| r.get(j)).copied().unwrap_or(0).max(t.get(i).and_then(|r| r.get(j + 1)).copied().unwrap_or(0))
-            };
-            if let Some(c) = t.get_mut(i).and_then(|r| r.get_mut(j)) {
-                *c = v;
+
+    while !rem_a.is_empty() && !rem_b.is_empty() {
+        let p = rem_a.iter().zip(rem_b).take_while(|(x, y)| x == y).count();
+        if p > 0 {
+            ops.extend(std::iter::repeat_n(Op::Same, p));
+            rem_a = rem_a.get(p..).unwrap_or_default();
+            rem_b = rem_b.get(p..).unwrap_or_default();
+            if rem_a.is_empty() || rem_b.is_empty() {
+                break;
             }
         }
-    }
-    let (mut i, mut j) = (0, 0);
-    while i < n && j < m {
-        if a.get(i) == b.get(j) {
-            ops.push(Op::Same);
-            i += 1;
-            j += 1;
-        } else if t.get(i + 1).and_then(|r| r.get(j)) >= t.get(i).and_then(|r| r.get(j + 1)) {
-            ops.push(Op::Del);
-            i += 1;
-        } else {
-            ops.push(Op::Ins);
-            j += 1;
+
+        let n = rem_a.len().min(MAX_LCS);
+        let m = rem_b.len().min(MAX_LCS);
+        let cells = (n as u64).saturating_mul(m as u64);
+        if cells > *budget || n == 0 || m == 0 {
+            break;
         }
+        *budget = budget.saturating_sub(cells);
+
+        let stride = m.saturating_add(1);
+        let table_len = n.saturating_add(1).saturating_mul(stride);
+        let mut t = vec![0u32; table_len];
+
+        for i in (0..n).rev() {
+            let row = i.saturating_mul(stride);
+            let next_row = i.saturating_add(1).saturating_mul(stride);
+            for j in (0..m).rev() {
+                let v = if rem_a.get(i) == rem_b.get(j) {
+                    t.get(next_row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0).saturating_add(1)
+                } else {
+                    let down = t.get(next_row.saturating_add(j)).copied().unwrap_or(0);
+                    let right = t.get(row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0);
+                    down.max(right)
+                };
+                if let Some(c) = t.get_mut(row.saturating_add(j)) {
+                    *c = v;
+                }
+            }
+        }
+
+        let (mut i, mut j) = (0usize, 0usize);
+        while i < n && j < m {
+            let row = i.saturating_mul(stride);
+            let next_row = i.saturating_add(1).saturating_mul(stride);
+            if rem_a.get(i) == rem_b.get(j) {
+                ops.push(Op::Same);
+                i = i.saturating_add(1);
+                j = j.saturating_add(1);
+            } else {
+                let down = t.get(next_row.saturating_add(j)).copied().unwrap_or(0);
+                let right = t.get(row.saturating_add(j).saturating_add(1)).copied().unwrap_or(0);
+                if down >= right {
+                    ops.push(Op::Del);
+                    i = i.saturating_add(1);
+                } else {
+                    ops.push(Op::Ins);
+                    j = j.saturating_add(1);
+                }
+            }
+        }
+
+        rem_a = rem_a.get(i..).unwrap_or_default();
+        rem_b = rem_b.get(j..).unwrap_or_default();
     }
-    ops.extend(std::iter::repeat_n(Op::Del, a.len() - i));
-    ops.extend(std::iter::repeat_n(Op::Ins, b.len() - j));
+
+    ops.extend(std::iter::repeat_n(Op::Del, rem_a.len()));
+    ops.extend(std::iter::repeat_n(Op::Ins, rem_b.len()));
     ops.extend(std::iter::repeat_n(Op::Same, suf));
     ops
 }
@@ -892,6 +988,7 @@ fn put(p: &mut Paragraph, t: Option<&Tok<'_>>, props: &CharProps) {
     }
 }
 
+ fix/5842-compare-footnotes-endnotes
 /// Diffs two paragraphs word-by-word (or character-by-character) and returns a new paragraph
 /// containing tracked deletions and insertions.
 fn word_diff(
@@ -909,8 +1006,41 @@ fn word_diff(
     let key = |t: &Tok<'_>| match t {
         Tok::Text(t) => Key::Text(opts.key(t)),
         Tok::Obj(o) => obj_key(parts, o),
+
+/// Returns `true` if paragraph `p` contains more characters than `limit`.
+///
+/// Bounded to scan at most `limit + 1` characters without allocating unless inline objects
+/// are present, avoiding O(n) traversal of large paragraphs.
+fn para_exceeds_char_limit(p: &Paragraph, limit: usize) -> bool {
+    if p.objects.is_empty() {
+        p.text.chars().take(limit.saturating_add(1)).count() > limit
+    } else {
+        p.plain_text().chars().take(limit.saturating_add(1)).count() > limit
+    }
+}
+
+/// Diffs two matched paragraphs either at word granularity or at character granularity according
+/// to `ctx.opts.characters`. When character-level diff is requested but either paragraph exceeds
+/// [`MAX_CHAR_DIFF`] characters, falls back to word-level diff and increments `ctx.char_fallbacks`
+/// so callers can discover the fallback.
+fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>) -> Paragraph {
+    let chars = if ctx.opts.characters {
+        if para_exceeds_char_limit(a, MAX_CHAR_DIFF) || para_exceeds_char_limit(b, MAX_CHAR_DIFF) {
+            *ctx.char_fallbacks = ctx.char_fallbacks.saturating_add(1);
+            false
+        } else {
+            true
+        }
+    } else {
+        false
     };
-    let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), budget);
+    let (ta, tb) = (tokens(a, chars), tokens(b, chars));
+    let key = |t: &Tok<'_>| match t {
+        Tok::Text(t) => Key::Text(ctx.opts.key(t)),
+        Tok::Obj(o) => obj_key(doc, o),
+ main
+    };
+    let ops = lcs_ops(&ta.iter().map(key).collect::<Vec<_>>(), &tb.iter().map(key).collect::<Vec<_>>(), ctx.budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
     // but a matched single character very often does (digits, punctuation), so only there does
     // a short interior match need folding back into its surrounding edit.
@@ -928,11 +1058,11 @@ fn word_diff(
                 j += 1;
             }
             Op::Del => {
-                put(&mut p, ta.get(i), &CharProps { del: Some(del), ..base.clone() });
+                put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..base.clone() });
                 i += 1;
             }
             Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(ins), ..base.clone() });
+                put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..base.clone() });
                 j += 1;
             }
         }

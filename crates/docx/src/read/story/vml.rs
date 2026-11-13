@@ -131,7 +131,14 @@ impl Reader<'_> {
             None => vml_float(shape, style, sc.in_hf),
         };
         if let Some(img) = shape.find("v:imagedata") {
-            let id = img.attr("r:id").or_else(|| img.attr("r:pict"))?;
+            let Some(id) = img.attr("r:id").or_else(|| img.attr("r:pict")) else {
+                // `r:href` names a file outside the package: never fetched.
+                if let Some(href) = img.attr("r:href") {
+                    let target = rels.by_id(href).map_or_else(|| href.to_string(), |r| r.target.clone());
+                    self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+                }
+                return None;
+            };
             let media = self.media_for(rels, id)?;
             let alt = shape.attr("alt").or_else(|| img.attr("o:title")).unwrap_or("").to_string();
             // Brightness and contrast (Word's picture watermark "Washout" sets them, #1711).
