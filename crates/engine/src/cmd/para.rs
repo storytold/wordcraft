@@ -18,7 +18,7 @@ mod styles;
 mod tabs_borders;
 mod tools;
 
-use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_props, tog};
+use format::{align, asian_typography, cur, direction, line_spacing, ls, set_align, set_indents, set_props, tog};
 pub use format::{cur as selection_para, fmt, indent, outdent};
 pub use lists::{ListButtons, list_buttons, manage_list, touch_all};
 use lists::{list, restart_numbering};
@@ -78,22 +78,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .key("Mod+Shift+T"),
-        CommandSpec::new("para.indents", "Indents", "Layout › Paragraph", |s, v| {
-            let (l, r, f) = (p::f32(v, "left"), p::f32(v, "right"), p::f32(v, "firstLine"));
-            fmt(s, &|p| {
-                if let Some(x) = l {
-                    p.indent_left = Some(x.clamp(-1584.0, 1584.0));
-                }
-                if let Some(x) = r {
-                    p.indent_right = Some(x.clamp(-1584.0, 1584.0));
-                }
-                if let Some(x) = f {
-                    p.indent_first = Some(x.clamp(-1584.0, 1584.0));
-                }
-                p.cancel_char_indents(l.is_some(), r.is_some(), f.is_some());
-            })
-        })
-        .params(r#"{"left"?: pt, "right"?: pt, "firstLine"?: pt (negative = hanging)}"#),
+        CommandSpec::new("para.indents", "Indents", "Layout › Paragraph", set_indents).params(
+            r#"{"left"?: pt, "right"?: pt, "firstLine"?: pt (negative = hanging), "leftChars"?: number, "rightChars"?: number, "firstLineChars"?: number (in characters, one being the font size; they win over points)}"#,
+        ),
         CommandSpec::new("para.lineSpacing", "Line and Paragraph Spacing", "Home › Paragraph", line_spacing)
             .params(r#"{"value": number (multiple) } | {"atLeast": pt} | {"exactly": pt}"#),
         CommandSpec::new("para.single", "Single Spacing", "Home › Paragraph › Line Spacing", |s, _| ls(s, LineSpacing::Multiple(1.0))).key("Mod+1"),
@@ -226,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             fmt(s, &|p| p.outline_level = l)
         }),
         CommandSpec::new("para.set", "Set Paragraph Formatting", "Home › Paragraph › Paragraph", set_props).params(
-            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
+            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt, "leftChars"?: number, "rightChars"?: number} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start; an indent in characters, here or as `indentLeftChars`, `indentRightChars` or `indentFirstChars` in `props`, also sets its points to the same width unless they are given)}"#,
         ),
         CommandSpec::new("para.dialog", "Paragraph Settings", "Home › Paragraph", |s, _| {
             s.push_ui_request(json!({"open": "paragraph"}));

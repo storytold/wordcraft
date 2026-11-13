@@ -107,6 +107,9 @@ pub enum Dialog {
         left: f32,
         right: f32,
         first: f32,
+        /// Whether `left`, `right` and `first` are in characters (`2 ch`, `w:leftChars` and so
+        /// on) rather than in the measurement unit (#6065).
+        chars: [bool; 3],
         before: f32,
         after: f32,
         /// Line spacing as a multiple; Exactly and At Least show as 1.0, and OK keeps them

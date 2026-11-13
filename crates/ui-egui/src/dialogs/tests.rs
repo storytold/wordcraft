@@ -736,6 +736,64 @@ fn paragraph_dialog_changes_direction() {
     assert_eq!((p.bidi, p.align, p.indent_left, p.indent_right), (Some(false), Some(Align::Right), Some(0.0), Some(72.0)));
 }
 
+/// #6065: the Paragraph dialog's indent boxes take characters, Word's unit for East Asian
+/// indents (`2 ch`, one character being the font size). They stay in characters, with the
+/// points beside them the same width, and show as characters when the dialog opens again; a
+/// length typed over them replaces them.
+#[test]
+fn paragraph_dialog_takes_indents_in_characters() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    fn type_into(h: &mut egui_kittest::Harness<'_, WordApp>, label: &str, text: &str) {
+        h.get_by_role_and_label(Role::SpinButton, label).click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::SpinButton, label).type_text(text);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    fn shown(h: &egui_kittest::Harness<'_, WordApp>, label: &str) -> Option<String> {
+        h.get_by_role_and_label(Role::SpinButton, label).accesskit_node().value()
+    }
+    let mut app = app_with("中文段落首行缩进两个字符");
+    let size = app.session.doc.styles.resolve_char(Some("Normal"), &wordcraft_doc::CharProps::default()).size;
+    app.dialog = Dialog::open("paragraph", &mut app);
+    let mut h = app_harness(app);
+    h.run_steps(4);
+    type_into(&mut h, "Left:", "1,5 ch");
+    type_into(&mut h, "First line:", "2 ch");
+    let boxes = |h: &egui_kittest::Harness<'_, WordApp>| ["Left:", "Right:", "First line:"].map(|l| shown(h, l).unwrap_or_default());
+    let [left, right, first] = boxes(&h);
+    assert_eq!([left, first], ["1.5 ch", "2 ch"], "the boxes typed in are in characters now");
+    assert!(right.ends_with('"'), "the right one is still a length: {right}");
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    let p = props(h.state());
+    assert_eq!((p.indent_first_chars, p.indent_left_chars, p.indent_right_chars), (Some(2.0), Some(1.5), None));
+    assert_eq!((p.indent_first, p.indent_left), (Some(2.0 * size), Some(1.5 * size)), "the same width in points");
+
+    h.state_mut().run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+    h.run_steps(3);
+    let [left, _, first] = boxes(&h);
+    assert_eq!([left, first], ["1.5 ch", "2 ch"], "shown in characters when it opens again");
+    let depth = h.state().session.undo_depth();
+    type_into(&mut h, "First line:", "0.5\"");
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    let p = props(h.state());
+    assert_eq!((p.indent_first_chars, p.indent_first), (Some(0.0), Some(36.0)), "a length replaces the characters");
+    assert_eq!((p.indent_left_chars, p.indent_left), (Some(1.5), Some(1.5 * size)), "the left indent stays as it was");
+    assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step");
+
+    // No characters is no indent, over a length too.
+    h.state_mut().run("ui.dialog", json!({"name": "paragraph"})).unwrap();
+    h.run_steps(3);
+    type_into(&mut h, "First line:", "0 ch");
+    h.get_by_role_and_label(Role::Button, "OK").click();
+    h.run_steps(2);
+    let p = props(h.state());
+    assert_eq!((p.indent_first_chars, p.indent_first), (Some(0.0), Some(0.0)), "0 ch clears the 0.5\"");
+}
+
 /// Switching the Paragraph dialog's tabs re-centred it, so the tab strip jumped up and down
 /// by half the height difference (#507): the top edge now stays put and only the bottom moves.
 #[test]

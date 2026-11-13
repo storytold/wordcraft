@@ -1,4 +1,4 @@
-use super::{Align, CmdError, CmdResult, LineSpacing, NumRef, ParaProps, Pos, Session, Value, json, p, sel_result};
+use super::{Align, CharProps, CmdError, CmdResult, LineSpacing, NumRef, ParaProps, Pos, Session, Value, json, p, sel_result};
 
 /// Resolved paragraph props of the selection: those of the paragraph the caret is in, or of the
 /// last paragraph a selection covers when it ends at the next paragraph's start.
@@ -119,10 +119,13 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
     };
     let indent = |k: &str| p::f32(&page, k).map(|x| x.clamp(-1584.0, 1584.0));
     let (left, right) = (indent("left"), indent("right"));
+    let (left_chars, right_chars) = (p::f32(&page, "leftChars"), p::f32(&page, "rightChars"));
     let story = s.sel.focus.story;
     for path in crate::cmd::selected_paths(s) {
         let Some(para) = s.doc.para(story, &path) else { continue };
-        let rtl = s.doc.styles.resolve_para(&para.props.clone().overlaid(&props)).bidi;
+        let after = para.props.clone().overlaid(&props);
+        let rtl = s.doc.styles.resolve_para(&after).bidi;
+        let size = char_size(s, &after, &para.mark);
         let anchor_lock = props
             .frame
             .as_ref()
@@ -143,6 +146,65 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
         if let Some(x) = end {
             para.props.indent_right = Some(x);
         }
+        let (start_chars, end_chars) = if rtl { (right_chars, left_chars) } else { (left_chars, right_chars) };
+        let chars = [start_chars.or(props.indent_left_chars), end_chars.or(props.indent_right_chars), props.indent_first_chars];
+        let points = [start.is_some() || props.indent_left.is_some(), end.is_some() || props.indent_right.is_some(), props.indent_first.is_some()];
+        set_char_indents(&mut para.props, chars, points, size);
+        para.touch();
+    }
+    sel_result(s)
+}
+
+/// The most characters an indent takes either way: Word keeps them in hundredths in 16 bits
+/// (it refuses `w:firstLineChars` past 32767).
+const MAX_INDENT_CHARS: f32 = 327.67;
+
+/// One character of a paragraph's indents in characters, in points: the size of its mark's
+/// font, as layout measures them (leaving out a table style's font size).
+fn char_size(s: &Session, props: &ParaProps, mark: &CharProps) -> f32 {
+    s.doc.styles.resolve_char(props.style.as_deref(), mark).size
+}
+
+/// Set indents in characters (start, end, first line; `None` leaves one as it is), within what
+/// Word takes. Each one's length in points becomes the same width, `size` points a character,
+/// unless `points` says a length was given for it too: Word writes both (`w:firstLineChars="200"
+/// w:firstLine="420"` at 10.5 pt), so formats without characters keep the indent.
+fn set_char_indents(p: &mut ParaProps, chars: [Option<f32>; 3], points: [bool; 3], size: f32) {
+    let fields = [
+        (&mut p.indent_left_chars, &mut p.indent_left),
+        (&mut p.indent_right_chars, &mut p.indent_right),
+        (&mut p.indent_first_chars, &mut p.indent_first),
+    ];
+    for ((chars, given), (in_chars, in_points)) in chars.into_iter().zip(points).zip(fields) {
+        let Some(c) = chars else { continue };
+        let c = c.clamp(-MAX_INDENT_CHARS, MAX_INDENT_CHARS);
+        *in_chars = Some(c);
+        let pt = c * size;
+        if !given && pt.is_finite() {
+            *in_points = Some(pt.clamp(-1584.0, 1584.0));
+        }
+    }
+}
+
+/// Indents (Layout › Paragraph, the ruler): lengths in points, or in characters. A length
+/// replaces the indent in characters on its side, unless characters are given for it too.
+pub(super) fn set_indents(s: &mut Session, v: &Value) -> CmdResult {
+    let points = [p::f32(v, "left"), p::f32(v, "right"), p::f32(v, "firstLine")].map(|x| x.map(|x| x.clamp(-1584.0, 1584.0)));
+    let chars = [p::f32(v, "leftChars"), p::f32(v, "rightChars"), p::f32(v, "firstLineChars")];
+    let story = s.sel.focus.story;
+    for path in crate::cmd::selected_paths(s) {
+        let Some(para) = s.doc.para(story, &path) else { continue };
+        let size = char_size(s, &para.props, &para.mark);
+        let para = s.doc.para_mut(story, &path)?;
+        let p = &mut para.props;
+        for (x, field) in points.iter().zip([&mut p.indent_left, &mut p.indent_right, &mut p.indent_first]) {
+            if let Some(x) = x {
+                *field = Some(*x);
+            }
+        }
+        let [l, r, f] = [0, 1, 2].map(|i| points[i].is_some() && chars[i].is_none());
+        p.cancel_char_indents(l, r, f);
+        set_char_indents(p, chars, points.map(|x| x.is_some()), size);
         para.touch();
     }
     sel_result(s)
