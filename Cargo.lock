@@ -7187,6 +7187,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "wordcraft-webdav"
+version = "0.15.1"
+dependencies = [
+ "base64 0.23.1",
+ "flate2",
+ "percent-encoding",
+ "thiserror 2.0.21",
+ "ureq",
+]
+
+[[package]]
 name = "wordcraft-zotero"
 version = "0.18.1"
 dependencies = [
