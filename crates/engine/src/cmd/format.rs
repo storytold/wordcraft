@@ -890,8 +890,11 @@ pub fn state(s: &Session) -> Value {
         "bold": all.iter().all(|r| r.bold),
         "italic": all.iter().all(|r| r.italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
+        // The underline style's `w:u` name (null when the selection mixes styles).
+        "underlineStyle": same(&|r| json!(r.underline.ooxml())),
         "underlineColor": same(&|r| json!(r.underline_color.map_or_else(|| "auto".to_string(), |c| c.hex()))),
         "strike": all.iter().all(|r| r.strike),
+        "doubleStrike": all.iter().all(|r| r.double_strike),
         "border": all.iter().all(|r| r.border.is_some()),
         "subscript": all.iter().all(|r| r.vert_align == VertAlign::Subscript),
         "superscript": all.iter().all(|r| r.vert_align == VertAlign::Superscript),
