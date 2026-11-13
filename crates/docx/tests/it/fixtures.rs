@@ -894,6 +894,84 @@ fn empty_tbl_borders_elements_leave_sides_unset() {
     assert!(b.top.is_some() && b.between.is_some() && b.inside_v.is_some());
 }
 
+/// #5056: a table without `w:tblStyle` takes the styles part's default table style, as Word
+/// reports (`Table.Style`) and draws it. A default named Normal Table leaves tables unstyled.
+#[test]
+fn a_table_without_a_style_takes_the_default_table_style() {
+    // A style whose header row draws a bottom rule and bottom-aligns its cells.
+    let ruled_named = |id: &str, name: &str, default: &str| {
+        format!(
+            r#"<w:style w:type="table" w:default="{default}" w:styleId="{id}"><w:name w:val="{name}"/><w:tblStylePr w:type="firstRow"><w:tcPr><w:vAlign w:val="bottom"/><w:tcBorders><w:bottom w:val="single" w:sz="4"/></w:tcBorders></w:tcPr></w:tblStylePr></w:style>"#
+        )
+    };
+    let ruled = |id: &str, default: &str| ruled_named(id, id, default);
+    let normal = r#"<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>"#;
+    let read = |styles: &str, tbl_style: &str| {
+        let styles = format!("<w:styles {W_NS}>{styles}</w:styles>");
+        let body = format!(
+            r#"<w:tbl><w:tblPr>{tbl_style}</w:tblPr><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>"#
+        );
+        wordcraft_docx::read(&docx(&body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap()
+    };
+    let style = |d: &Document| d.body.iter().find_map(|b| b.as_table()).and_then(|t| t.props.style.clone());
+    for (styles, tbl_style, want) in [
+        (ruled("Rule", "1"), "", Some("Rule")),
+        (ruled("Rule", "on"), "", Some("Rule")),
+        (ruled("Rule", "0"), "", None),
+        (format!("{}{}", ruled("Rule", "1"), ruled("Other", "0")), r#"<w:tblStyle w:val="Other"/>"#, Some("Other")),
+        (normal.to_string(), "", None),
+        // Word gives a table nothing from a style named Normal Table (any case, either word
+        // order), even with formatting of its own or from the style it is based on. The name
+        // decides, not the id.
+        (ruled_named("TableNormal", "Normal Table", "1"), "", None),
+        (ruled_named("Plain", "table normal", "1"), "", None),
+        (
+            format!(
+                r#"{}<w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:basedOn w:val="Rule"/></w:style>"#,
+                ruled("Rule", "0")
+            ),
+            "",
+            None,
+        ),
+        (ruled_named("TableNormal", "Foo", "1"), "", Some("TableNormal")),
+        // An id too long to copy into every table is not given to them.
+        (ruled(&"L".repeat(300), "1"), "", None),
+        // A style defined twice is its last definition: that one says whether it is the default
+        // and what it is named.
+        (format!("{}{}", ruled("Rule", "1"), ruled_named("Rule", "Normal Table", "1")), "", None),
+        (format!("{}{}", ruled_named("Rule", "Normal Table", "1"), ruled("Rule", "1")), "", Some("Rule")),
+        (format!("{}{}", ruled("Rule", "1"), ruled("Rule", "0")), "", None),
+    ] {
+        assert_eq!(style(&read(&styles, tbl_style)).as_deref(), want, "{tbl_style} {styles}");
+    }
+    // With no `w:tblLook` the header row is on, as Word draws it: the table gets the style's
+    // header row rule and bottom alignment.
+    let d = read(&ruled("Rule", "1"), "");
+    let head = d.styles.table_style("Rule").unwrap().part(wordcraft_doc::styles::TablePart::FirstRow);
+    assert!(d.body[0].as_table().unwrap().props.look.header_row);
+    assert_eq!(head.v_align, Some(wordcraft_doc::props::VAlign::Bottom));
+    assert!(head.borders.and_then(|b| b.bottom).is_some_and(|b| b.style == BorderStyle::Single));
+    // A tracked table change's old properties without `w:tblStyle` had the default style too, so
+    // rejecting the change keeps it; an old style of their own stays.
+    let old_style = |old: &str| {
+        let change = format!(
+            r#"<w:tblW w:w="5000" w:type="dxa"/><w:tblPrChange w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z"><w:tblPr>{old}<w:tblW w:w="4000" w:type="dxa"/></w:tblPr></w:tblPrChange>"#
+        );
+        let d = read(&format!("{}{}", ruled("Rule", "1"), ruled("Other", "0")), &change);
+        let t = d.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert_eq!(t.props.style.as_deref(), Some("Rule"));
+        t.props.fmt_change.as_ref().unwrap().old.style.clone()
+    };
+    assert_eq!(old_style("").as_deref(), Some("Rule"));
+    assert_eq!(old_style(r#"<w:tblStyle w:val="Other"/>"#).as_deref(), Some("Other"));
+    // A save keeps the style and the file's default flag (`on` included); the plain Normal Table
+    // that saving writes as the default still leaves the table unstyled.
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&read(&ruled("Rule", "on"), "")).unwrap()).unwrap();
+    assert_eq!(style(&back).as_deref(), Some("Rule"));
+    assert!(back.styles.get("Rule").unwrap().default);
+    assert_eq!(style(&wordcraft_docx::read(&wordcraft_docx::write(&read(normal, "")).unwrap()).unwrap()), None);
+}
+
 /// A style ID defined twice is its last definition, whole (Word drops the earlier one rather
 /// than merging: observed with synthetic documents). Generators that write a placeholder
 /// Heading 1 and then their own made headings come out in the placeholder's font and size.
