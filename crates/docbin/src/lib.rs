@@ -285,7 +285,8 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     // once) cannot exceed its stream. A hostile piece or story table that aliases the same bytes
     // many times can, so the walk is held to twice the stream's size — generous for real files,
     // tight against aliasing — and never past the absolute ceiling.
-    let budget = std::cell::Cell::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
+    // Past it the read fails rather than return the text cut short (#6359).
+    let budget = CharBudget::new((word.len() as u64).saturating_mul(2).min(MAX_TOTAL_CHARS));
     let work = Work::new(MAX_WORK);
     let paragraphs = ParaBudget { left: std::cell::Cell::new(max_paragraphs), exceeded: std::cell::Cell::new(false) };
 
@@ -412,9 +413,7 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
         doc.last_section = l;
     }
 
-    if paragraphs.exceeded.get() {
-        return Err(paragraph_limit(max_paragraphs));
-    }
+    check_budgets(&ctx, max_paragraphs)?;
     doc.media.extend(pics.media);
     doc.body = table::assemble(paras);
     doc.ensure_nonempty();
@@ -422,17 +421,23 @@ fn read_limited(bytes: &[u8], password: Option<&str>, max_paragraphs: usize) -> 
     Ok(doc)
 }
 
-fn paragraph_limit(max_paragraphs: usize) -> DocbinError {
-    DocbinError::Limit(format!("the document has more than {max_paragraphs} paragraphs and table cells"))
+/// Fails the read once a walk ran out of the shared paragraph or character budget: the walk
+/// stopped there, so the text it returned is cut short and must not be taken for the document.
+fn check_budgets(ctx: &WalkCtx<'_>, max_paragraphs: usize) -> Result<(), DocbinError> {
+    if ctx.paragraphs.exceeded.get() {
+        return Err(DocbinError::Limit(format!("the document has more than {max_paragraphs} paragraphs and table cells")));
+    }
+    if ctx.budget.exceeded.get() {
+        return Err(DocbinError::Limit(format!("the document's text repeats more than {} characters", ctx.budget.total)));
+    }
+    Ok(())
 }
 
-/// Walks one story into blocks. A walk that spent the shared paragraph budget is refused before
-/// its partial list is assembled, so a flood does not build blocks it will throw away.
+/// Walks one story into blocks. A walk that spent a shared paragraph or character budget is
+/// refused before its partial list is assembled, so a flood does not build blocks it will throw away.
 fn story_blocks(ctx: &WalkCtx<'_>, a: u32, b: u32, pics: &mut media::Pictures, max_paragraphs: usize) -> Result<wordcraft_doc::Blocks, DocbinError> {
     let paras = walk(ctx, a, b, pics);
-    if ctx.paragraphs.exceeded.get() {
-        return Err(paragraph_limit(max_paragraphs));
-    }
+    check_budgets(ctx, max_paragraphs)?;
     Ok(table::assemble(paras))
 }
 
@@ -453,9 +458,7 @@ fn header_story_blocks(
     max_paragraphs: usize,
 ) -> Result<wordcraft_doc::Blocks, DocbinError> {
     let mut paras = walk(ctx, a, b, pics);
-    if ctx.paragraphs.exceeded.get() {
-        return Err(paragraph_limit(max_paragraphs));
-    }
+    check_budgets(ctx, max_paragraphs)?;
     let outside_table = |p: &table::ParaOut| p.row.as_ref().is_none_or(|r| !r.in_table && !r.ttp && !r.cell_mark);
     if let [.., prev, last] = paras.as_slice() {
         let guard = outside_table(last) && last.para.text.is_empty() && last.para.objects.is_empty() && last.para.section.is_none();
@@ -498,7 +501,7 @@ struct WalkCtx<'a> {
     /// Characters still allowed across every story walk of this document. Story ranges (headers,
     /// footnotes, text boxes) are hostile and can each span a whole subdocument, so thousands of
     /// them could otherwise materialise the same text thousands of times; this bounds the total.
-    budget: &'a std::cell::Cell<u64>,
+    budget: &'a CharBudget,
     /// Paragraph and cell marks still allowed across every story walk ([`MAX_PARAGRAPHS`]).
     paragraphs: &'a ParaBudget,
     /// Repeated-work bytes left ([`MAX_WORK`]), and what they left out.
@@ -514,6 +517,35 @@ struct ParaBudget {
 
 impl ParaBudget {
     /// Spends one mark; false (and the overrun noted) when none are left.
+    fn spend(&self) -> bool {
+        match self.left.get().checked_sub(1) {
+            Some(left) => {
+                self.left.set(left);
+                true
+            }
+            None => {
+                self.exceeded.set(true);
+                false
+            }
+        }
+    }
+}
+
+/// The characters still allowed in this document ([`MAX_TOTAL_CHARS`]), and whether a walk ran
+/// into the end of them (the read then fails, #6359).
+struct CharBudget {
+    /// The budget the document started with, for the error.
+    total: u64,
+    left: std::cell::Cell<u64>,
+    exceeded: std::cell::Cell<bool>,
+}
+
+impl CharBudget {
+    fn new(total: u64) -> Self {
+        CharBudget { total, left: std::cell::Cell::new(total), exceeded: std::cell::Cell::new(false) }
+    }
+
+    /// Spends one character; false (and the overrun noted) when none are left.
     fn spend(&self) -> bool {
         match self.left.get().checked_sub(1) {
             Some(left) => {
@@ -618,10 +650,10 @@ fn walk<'a>(ctx: &WalkCtx<'a>, cp_start: u32, cp_end: u32, pics: &mut media::Pic
         };
         // Every real character counts against the document-wide budget; once it is spent, stop
         // (a hostile file with thousands of story ranges over the same text can't multiply on).
-        if ctx.budget.get() == 0 {
+        // The overrun is noted, and the read fails rather than return the text cut short.
+        if !ctx.budget.spend() {
             break;
         }
-        ctx.budget.set(ctx.budget.get() - 1);
         // A section mark (0x0C) at a section's end is that section's last paragraph mark.
         let section_mark = c == '\u{C}' && ctx.sect_ends.binary_search(&cp.saturating_add(1)).is_ok();
         match c {

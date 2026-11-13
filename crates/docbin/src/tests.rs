@@ -320,6 +320,80 @@ fn the_paragraph_budget_counts_down_and_notes_the_overrun() {
     assert!(budget.exceeded.get());
 }
 
+/// #6359: a document whose stream holds `0123456789END\r` once, with a main text of `body`
+/// pieces that all name the digits, then `END\r`; with `note` > 0, a footnote at CP 0 whose
+/// story is `note` more such pieces, then `END\r`.
+fn aliased_digits_doc(body: u32, note: u32) -> Vec<u8> {
+    let digits = (2 * TEXT_FC) | 0x4000_0000;
+    let end = (2 * (TEXT_FC + 10)) | 0x4000_0000;
+    let (mut cps, mut fcs) = (vec![0u32], Vec::new());
+    let mut story = |n: u32| {
+        for (len, fc) in std::iter::repeat_n((10, digits), n as usize).chain([(4, end)]) {
+            cps.push(cps.last().copied().unwrap_or(0) + len);
+            fcs.push(fc);
+        }
+    };
+    story(body);
+    if note > 0 {
+        story(note);
+    }
+    let mut plc: Vec<u8> = cps.iter().flat_map(|c| c.to_le_bytes()).collect();
+    for fc in &fcs {
+        plc.extend_from_slice(&[0, 0]);
+        plc.extend_from_slice(&fc.to_le_bytes());
+        plc.extend_from_slice(&0u16.to_le_bytes());
+    }
+    let mut table = vec![0u8; CLX_AT as usize];
+    table.push(0x02);
+    table.extend_from_slice(&(plc.len() as u32).to_le_bytes());
+    table.extend_from_slice(&plc);
+    let ccp_text = body * 10 + 4;
+    let mut pairs = vec![(33, CLX_AT, (plc.len() + 5) as u32)];
+    let ccp_ftn = if note > 0 { note * 10 + 4 } else { 0 };
+    if note > 0 {
+        let cps = |v: &[u32]| v.iter().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>();
+        let mut refs = cps(&[0, 1]);
+        refs.extend_from_slice(&[0, 0]); // the one reference's data
+        // PlcffndRef (pair 2), then PlcffndTxt (pair 3): story 0..ccp_ftn, then the limit.
+        for (pair, bytes) in [(2, refs), (3, cps(&[0, ccp_ftn, ccp_ftn]))] {
+            pairs.push((pair, table.len() as u32, bytes.len() as u32));
+            table.extend_from_slice(&bytes);
+        }
+    }
+    let mut word = vec![0u8; TEXT_FC as usize];
+    word.extend_from_slice(b"0123456789END\r");
+    let fib = fib_bytes(&FibSpec { ccp_text, ccp_ftn, pairs, ..Default::default() });
+    word[..fib.len()].copy_from_slice(&fib);
+    cfb_file(&[("WordDocument", &word), ("0Table", &table)])
+}
+
+/// #6359: the character budget (twice the 1,550-byte stream: 3,100) used to stop the walk and
+/// return the text cut short, with no error. A file over it is now refused like the paragraph
+/// cap; one under it opens in full.
+#[test]
+fn text_repeated_past_the_character_budget_is_refused_not_cut() {
+    let over = read(&aliased_digits_doc(1000, 0));
+    assert!(matches!(&over, Err(crate::DocbinError::Limit(m)) if m.contains("repeats")), "{:?}", over.map(|d| all_text(&d).len()));
+    let doc = read(&aliased_digits_doc(300, 0)).expect("opens");
+    let body = body_texts(&doc);
+    assert_eq!(body.len(), 1);
+    assert_eq!(body[0].len(), 3003);
+    assert!(body[0].ends_with("789END"), "{:?}", &body[0][2990..]);
+}
+
+/// The character budget is one for the whole document: a body and a footnote that each fit
+/// but together don't are refused too.
+#[test]
+fn the_character_budget_is_shared_by_the_body_and_a_footnote() {
+    let doc = read(&aliased_digits_doc(200, 100)).expect("opens");
+    assert_eq!(doc.parts.len(), 1);
+    assert!(body_texts(&doc).first().is_some_and(|t| t.ends_with("END")));
+    let over = read(&aliased_digits_doc(200, 110));
+    assert!(matches!(&over, Err(crate::DocbinError::Limit(m)) if m.contains("repeats")), "{:?}", over.map(|d| all_text(&d).len()));
+    let over = read(&aliased_digits_doc(210, 100));
+    assert!(matches!(&over, Err(crate::DocbinError::Limit(m)) if m.contains("repeats")), "{:?}", over.map(|d| all_text(&d).len()));
+}
+
 /// The cap is far above any real document (10,000 pages of 50 paragraphs is 500,000), and a
 /// paragraph outside a table no longer carries a table context (a `ParaOut` was 1,224 bytes).
 #[test]
