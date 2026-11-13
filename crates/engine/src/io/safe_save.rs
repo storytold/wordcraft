@@ -115,9 +115,10 @@ fn not_supported(e: &io::Error) -> bool {
         &[]
     };
     // ENOTTY (25): a file system that has no chmod at all (KIO/OneDrive) reports the mode
-    // change as an unsupported operation.
+    // change as an unsupported operation. EIO (5): some virtual file systems (KIO/OneDrive)
+    // report a failed mode change as a plain I/O error.
     e.kind() == io::ErrorKind::Unsupported
-        || e.raw_os_error() == Some(25)
+        || matches!(e.raw_os_error(), Some(5 | 25))
         || e.raw_os_error().is_some_and(|code| CODES.contains(&code))
 }
 
