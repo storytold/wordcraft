@@ -814,3 +814,18 @@ fn missing_pictures_are_capped_deduplicated_and_not_content() {
     assert!(!serde_json::to_string(&d).unwrap().contains("p0"));
     assert_eq!(MissingPictureReason::ExternalTarget.label(), "external target");
 }
+
+/// In a live session a full block of ids makes no more, rather than one past the highest, which
+/// can be in someone else's block.
+#[test]
+fn a_full_id_block_makes_no_more_ids() {
+    let mine = crate::IdSpace::new(crate::IdSpace::BLOCK);
+    let end = crate::IdSpace::BLOCK * 2;
+    // Someone else's block, above mine, with its first id used.
+    let theirs = end;
+    assert_eq!(mine.next([theirs].into_iter(), 0), Some(crate::IdSpace::BLOCK));
+    let full = (crate::IdSpace::BLOCK..end).chain([theirs]);
+    assert_eq!(mine.next(full, 0), None, "not {}, which is theirs to make", theirs + 1);
+    // Outside a session ids are still one past the highest.
+    assert_eq!(crate::IdSpace::default().next([3, 9].into_iter(), 0), Some(10));
+}

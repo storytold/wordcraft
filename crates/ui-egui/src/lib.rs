@@ -29,7 +29,9 @@ pub mod autoscroll;
 pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
+pub mod chat_ui;
 pub mod chrome;
+pub mod collab_ui;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -57,9 +59,12 @@ mod local_time;
 pub mod md_source;
 pub mod mini_toolbar;
 pub mod objects;
+pub mod office_pane;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
+pub mod plugin_dialog;
+pub mod plugin_ui;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
@@ -93,6 +98,7 @@ use wordcraft_engine::Session;
 pub use control::ControlRequest;
 pub use dialogs::dialogs_chart;
 pub use dialogs::dialogs_controls;
+pub use dialogs::dialogs_developer;
 pub use dialogs::dialogs_insert;
 pub use dialogs::dialogs_keyboard;
 pub use dialogs::dialogs_layout;
@@ -115,7 +121,7 @@ mod state;
 use app::control_click_as_secondary;
 pub(crate) use app::works_without_document;
 pub use clock::now_ms;
-pub use services::{HostSaveFn, Inbox, Services};
+pub use services::{HostRequest, HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
 
 /// Web: a save the browser's picker hasn't finished ([`async_saves`]).
@@ -649,6 +655,8 @@ pub struct WordApp {
     /// The language-aware spelling and grammar task pane.
     pub spelling_review: Option<proofing_pane::SpellingForm>,
     pub status_msg: Option<(String, f64)>,
+    /// Live sessions: others' edits highlighted, the recovery timer.
+    pub collab: collab_ui::CollabUi,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
@@ -661,6 +669,12 @@ pub struct WordApp {
     /// A file picked for the open dialog (Templates and Add-ins › Attach…, Organizer ›
     /// Browse…); the dialog takes it on its next frame.
     pub(crate) dialog_pick: Option<String>,
+    /// Installing an add-in from GitHub (File › Options › Add-ins, Insert › Add-ins).
+    pub plugin_install: plugin_ui::Install,
+    /// Office add-ins' task panes.
+    pub office: office_pane::Panes,
+    /// The document (`document_id`) whose "macros disabled" bar was closed or acted on.
+    pub macro_bar_done: Option<u64>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
     /// macOS: the title bar's height and where its content starts, around the traffic lights.
@@ -755,6 +769,8 @@ pub struct WordApp {
     /// Escape may leave full screen. Read before anything handles the frame's keys.
     escape_free: bool,
     pub quit_requested: bool,
+    /// Add-ins have been told the documents close with the app ([`WordApp::closing`]).
+    closing_told: bool,
     pub autosave: bool,
     /// The document's fonts that aren't installed, for the status bar and the font box, and the
     /// layout they were read from.

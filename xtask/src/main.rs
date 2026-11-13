@@ -21,6 +21,9 @@ commands:
   assets          check that every icon/image/font/asset is attributed in ATTRIBUTION.md
   layers          enforce the crate dependency layering (plan/architecture.md §3)
   wasm            cargo check --target wasm32-unknown-unknown for the wasm-safe crates (one call)
+  office-js       build Office add-ins' library (crates/office-js) for task panes into
+                  <target>/office-js: wasm32 release build, `wasm-bindgen --target no-modules`,
+                  and the bootstrap script (the desktop app and packaging pick it up from there)
   test            workspace tests (cargo nextest when installed, else cargo test), the interface
                   audit with its missing-translation report, then doctests
   i18n-report     the interface audit: fails on text that skips the catalog, and prints the
@@ -48,6 +51,7 @@ fn main() -> ExitCode {
         Some("assets") => assets::run(&root()),
         Some("layers") => cmd_layers(),
         Some("wasm") => cmd_wasm(),
+        Some("office-js") => cmd_office_js(),
         Some("test") => cmd_test().and_then(|()| cmd_i18n_report()).and_then(|()| cmd_doctest()),
         Some("i18n-report") => cmd_i18n_report(),
         Some("language") => cmd_language(),
@@ -132,6 +136,23 @@ fn cmd_layers() -> Result<(), String> {
     }
 }
 
+/// `cargo xtask office-js`: the Office.js library task panes load (see `apps/wordcraft/src/office_web.rs`).
+fn cmd_office_js() -> Result<(), String> {
+    let target = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root().join("target"));
+    let mut build = cargo();
+    build.args(["build", "--release", "-p", "wordcraft-office-js", "--target", "wasm32-unknown-unknown"]);
+    run(build, "cargo build --release -p wordcraft-office-js --target wasm32-unknown-unknown")?;
+    let out = target.join("office-js");
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let wasm = target.join("wasm32-unknown-unknown/release/wordcraft_office_js.wasm");
+    let mut bindgen = Command::new("wasm-bindgen");
+    bindgen.args(["--target", "no-modules", "--no-typescript", "--out-name", "office_js", "--out-dir"]).arg(&out).arg(&wasm);
+    run(bindgen, "wasm-bindgen --target no-modules (install it with `cargo install wasm-bindgen-cli` at the version in Cargo.lock)")?;
+    let bootstrap = root().join("crates/office-js/bootstrap.js");
+    std::fs::copy(&bootstrap, out.join("bootstrap.js")).map_err(|e| format!("{}: {e}", bootstrap.display()))?;
+    println!("Office.js library: {}", out.display());
+    Ok(())
+}
 /// Workspace packages that must build for wasm32: all L0–L5 crates plus
 /// the egui shell.
 fn wasm_set() -> Result<Vec<String>, String> {

@@ -117,6 +117,10 @@ echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/wordcraft" "$APP/Contents/MacOS/WordCraft"
+# Office add-ins' library for task panes (`cargo xtask office-js`), when it was built.
+if [ -f "$CARGO_TARGET_DIR/office-js/office_js_bg.wasm" ]; then
+  cp -R "$CARGO_TARGET_DIR/office-js" "$APP/Contents/Resources/office-js"
+fi
 cp "$ROOT/assets/app-icon/wordcraft.icns" "$APP/Contents/Resources/WordCraft.icns"
 # Licences of the embedded craft-fonts fonts (only when built with CRAFT_FONTS_DIR).
 copy_docs "$APP/Contents/Resources"

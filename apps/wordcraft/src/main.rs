@@ -1,6 +1,6 @@
 //! WordCraft desktop app.
 //!
-//! Usage: `wordcraft [--control <port>] [--sample] [files…]`; `--help` prints `USAGE`.
+//! Usage: `wordcraft [--control <port>] [--sample] [--plugin <dir>…] [files…]`; `--help` prints `USAGE`.
 //!
 //! `--control <port>` (or `WORDCRAFT_CONTROL_PORT`) starts a localhost JSON-lines control server:
 //! `{"id":1,"key":"…","method":"engine.execute","params":{"command":"text.insert","params":{"text":"Hi"}}}`.
@@ -21,6 +21,8 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod office_web;
 #[cfg(all(unix, not(target_os = "macos")))]
 mod portal_save;
 mod print;
@@ -108,6 +110,8 @@ impl eframe::App for App {
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.0.quit_requested = false;
+                // `terminate:` skips `on_exit`: add-ins hear the documents close here.
+                self.0.closing();
                 schedule_macos_terminate(&mut self.0, self.2.as_ref());
             }
             #[cfg(not(target_os = "macos"))]
@@ -127,8 +131,13 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
         self.3.show(frame);
+        // Office add-ins' task panes: their web views follow the panes drawn this frame.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office_web::flush(frame);
     }
     fn on_exit(&mut self) {
+        // Add-ins that listen hear the documents close (at most 5 s).
+        self.0.closing();
         print::finish_pending_jobs();
         self.0.session.finish_recovery();
         save_prefs(&self.0);
@@ -262,6 +271,25 @@ fn load_user_fonts() {
     }
 }
 
+/// Add-ins: those named with `--plugin`, in `WORDCRAFT_PLUGIN_PATH` and in `plugins` in
+/// the settings folder, where File › Options › Add-ins installs them too. The ones the user
+/// turned off stay off. Runs without preferences don't read the settings folder's.
+fn load_plugins(app: &WordApp, extra: &[std::path::PathBuf]) {
+    let mut dirs = extra.to_vec();
+    if prefs_enabled()
+        && let Some(dir) = wordcraft_control_key::settings_dir().map(|d| d.join("plugins"))
+    {
+        wordcraft_plugin::install::set_install_dir(Some(dir.clone()));
+        dirs.push(dir);
+    }
+    for (dir, r) in wordcraft_plugin::autoload(&dirs) {
+        if let Err(e) = r {
+            log::warn!("add-in {}: {e}", dir.display());
+        }
+    }
+    wordcraft_engine::cmd::plugins::apply_prefs(&app.session.prefs);
+}
+
 /// The saved preferences, read before the window opens for its geometry and, on Linux and the
 /// BSDs, the display server (`load_prefs` runs after).
 fn saved_ui() -> Option<UiState> {
@@ -389,6 +417,8 @@ fn services(file_dialog: file_dialogs::Hook, cancel_file_dialog: file_dialogs::C
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
         save_prefs: Some(Box::new(try_save_prefs)),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office: Some(office_web::service()),
         ..Default::default()
     }
 }
@@ -406,12 +436,13 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--control PORT] [--plugin DIR…] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
+  --plugin DIR        load the add-in(s) in DIR (repeatable; or WORDCRAFT_PLUGIN_PATH)
   --version           print the version
   -h, --help          print this help
 ";
@@ -422,22 +453,39 @@ fn build_sha() -> &'static str {
 }
 
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
-/// one (#1440). A `--control` port that isn't is an error.
-fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
-    let (mut args, mut files) = (Vec::new(), Vec::new());
-    for (i, a) in std::env::args_os().skip(1).enumerate() {
+/// one (#1440), and the `--plugin` folders whose names aren't. A `--control` port that isn't is an
+/// error.
+fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>, Vec<std::path::PathBuf>) {
+    match split_args(std::env::args_os().skip(1)) {
+        Ok(split) => split,
+        Err((n, lossy)) => {
+            // Unlike `eprintln!`, never panics.
+            let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: argument {n} is not valid Unicode: {lossy}\n"));
+            std::process::exit(2);
+        }
+    }
+}
+
+/// [`text_args`] for any arguments: the text ones, the files and the add-in folders whose names
+/// aren't text, or the 1-based position (and lossy text) of a `--control` port that isn't text.
+fn split_args(
+    raw: impl Iterator<Item = std::ffi::OsString>,
+) -> Result<(Vec<String>, Vec<std::path::PathBuf>, Vec<std::path::PathBuf>), (usize, String)> {
+    let (mut args, mut files, mut plugins) = (Vec::new(), Vec::new(), Vec::new());
+    for (i, a) in raw.enumerate() {
         match a.into_string() {
             Ok(a) => args.push(a),
-            Err(a) if args.last().is_some_and(|p| p == "--control") => {
-                // Unlike `eprintln!`, never panics.
-                let (n, lossy) = (i + 1, a.to_string_lossy());
-                let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("wordcraft: argument {n} is not valid Unicode: {lossy}\n"));
-                std::process::exit(2);
+            Err(a) if args.last().is_some_and(|p| p == "--control") => return Err((i + 1, a.to_string_lossy().into_owned())),
+            // The folder `--plugin` names: kept as one, and the flag goes too, so it doesn't
+            // take the next argument instead.
+            Err(a) if args.last().is_some_and(|p| p == "--plugin") => {
+                args.pop();
+                plugins.push(a.into());
             }
             Err(a) => files.push(a.into()),
         }
     }
-    (args, files)
+    Ok((args, files, plugins))
 }
 
 /// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
@@ -510,7 +558,9 @@ fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
-    let (args, other_files) = text_args();
+    let mut plugin_dirs: Vec<std::path::PathBuf> = Vec::new();
+    let (args, other_files, other_plugins) = text_args();
+    plugin_dirs.extend(other_plugins);
     // Only macOS (Finder / LaunchServices) adds these; elsewhere `-NS…` could be a real file name.
     let args = if cfg!(target_os = "macos") { without_launch_args(args) } else { args };
     let mut bad_control: Option<Option<String>> = None;
@@ -525,6 +575,7 @@ fn main() -> eframe::Result {
                     None => bad_control = Some(port),
                 }
             }
+            "--plugin" => plugin_dirs.extend(args.next().map(std::path::PathBuf::from)),
             "--sample" => sample = true,
             "--version" => {
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
@@ -627,6 +678,7 @@ fn main() -> eframe::Result {
                 app.disable_self_update();
             }
             load_user_dictionary(&mut app);
+            load_plugins(&app, &plugin_dirs);
             // Language packs from the suite's font store; an Install click is the person's own.
             wordcraft_engine::packs::use_font_store(true);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -643,6 +695,8 @@ fn main() -> eframe::Result {
                 if let Err(e) = app.session.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint())) {
                     log::warn!("local recovery unavailable: {e}");
                 }
+                // Live sessions keep their room's state here, so a crash and rejoin merges.
+                app.session.collab.recovery_dir = Some(dir.join("live-sessions"));
             }
             app.ui.window = restored;
             app.set_window_builder(window_builder);
@@ -693,6 +747,19 @@ fn main() -> eframe::Result {
 mod tests {
     use super::*;
     use std::os::unix::ffi::OsStringExt;
+
+    /// An add-in folder whose name isn't Unicode is still an add-in folder, not a document, and
+    /// `--plugin` doesn't take the argument after it instead.
+    #[test]
+    fn a_plugin_folder_whose_name_isnt_unicode_stays_a_plugin_folder() {
+        let os = |b: &[u8]| std::ffi::OsString::from_vec(b.to_vec());
+        let raw = vec![os(b"--plugin"), os(b"/opt/caf\xe9"), os(b"Report.docx"), os(b"n\xe9.txt")];
+        let (args, files, plugins) = split_args(raw.into_iter()).unwrap();
+        assert_eq!(args, ["Report.docx"]);
+        assert_eq!(files, [std::path::PathBuf::from(os(b"n\xe9.txt"))]);
+        assert_eq!(plugins, [std::path::PathBuf::from(os(b"/opt/caf\xe9"))]);
+        assert_eq!(split_args(vec![os(b"--control"), os(b"\xff")].into_iter()).map_err(|e| e.0), Err(2));
+    }
 
     #[test]
     fn a_file_whose_name_isnt_unicode_opens_and_saves_back_to_itself() {

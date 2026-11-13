@@ -320,6 +320,7 @@ fn untranslated_interface_text() {
         "tableOfFigures",
         "sourceManager",
         "createSource",
+        "addIns",
     ];
     for name in dialogs {
         let _ = app.run("ui.dialog", json!({"name": name}));

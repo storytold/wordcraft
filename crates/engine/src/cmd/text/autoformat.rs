@@ -59,14 +59,22 @@ pub(super) fn typing_options(s: &mut Session, text: &str) {
 /// `text.insert`: type `text` at the selection as the keyboard does (AutoCorrect and
 /// AutoFormat unless `raw`), or, with `paragraphs`, line by line with Enter between. A single
 /// trigger character records the IME outcome, and list, AutoCorrect, dash and double-space
-/// AutoFormat run as a separate undo step when they rewrite the paragraph.
+/// AutoFormat run as a separate undo step when they rewrite the paragraph. `literal` (plugin
+/// protocol 2.2's `literalValues`) is `raw`, and its line breaks separate paragraphs as pasted
+/// text does rather than as Enter presses (an empty list item doesn't end the list): the text
+/// goes in exactly as given.
 pub(super) fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::req_str(v, "text")?;
-    let raw = p::bool(v, "raw").unwrap_or(false);
-    if p::bool(v, "paragraphs").unwrap_or(false) {
+    let literal = p::bool(v, "literal").unwrap_or(false);
+    let raw = literal || p::bool(v, "raw").unwrap_or(false);
+    if p::bool(v, "paragraphs").unwrap_or(false) && !literal {
         return insert_paragraphs(s, text);
     }
     typing_options(s, text);
+    if literal {
+        crate::cmd::paste_text(s, text)?;
+        return sel_result(s);
+    }
     let smart_quote = if raw { None } else { autoformat(s, text) };
     let was_collapsed = s.sel.is_collapsed();
     let effect = type_text_effect(s, smart_quote.as_deref().unwrap_or(text))?;

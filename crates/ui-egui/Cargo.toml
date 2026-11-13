@@ -23,6 +23,8 @@ wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
+wordcraft-plugin = { workspace = true }
+wordcraft-docx = { workspace = true }
 wordcraft-zotero = { workspace = true }
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_extras = { workspace = true }
@@ -68,3 +70,8 @@ accesskit_consumer = "=0.39.1"
 [build-dependencies]
 serde_json = { workspace = true }
 toml = "1"
+
+# Runs without libtest: the test binary doubles as the add-in process whose dialogs it drives.
+[[test]]
+name = "plugin_dialogs"
+harness = false

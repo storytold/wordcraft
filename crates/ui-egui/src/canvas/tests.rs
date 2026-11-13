@@ -2440,6 +2440,22 @@ fn saving_writes_a_pending_comment_draft_first() {
     assert!(saved.plain_text(StoryRef::Part(part)).contains("Typed"), "the file has the typed text");
 }
 
+/// Inside craft-live the host saves the document: a comment still being typed is written into it
+/// first, as for any other save.
+#[test]
+fn a_host_save_writes_a_pending_comment_draft_first() {
+    let (mut h, id) = comment_harness();
+    let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = asked.clone();
+    h.state_mut().services.host = Some(Box::new(move |r| seen.borrow_mut().push(r)));
+    click_balloon(&mut h, id);
+    type_in(&mut h, "Typed ");
+    h.state_mut().run("file.save", json!({})).unwrap();
+    assert_eq!(*asked.borrow(), [crate::HostRequest::Save]);
+    let text = comment_text(h.state(), id);
+    assert!(text.contains("Typed"), "the draft was written before the host saved: {text:?}");
+}
+
 /// #1348: closing a document whose only change is a comment still being typed asks to save.
 #[test]
 fn closing_with_a_pending_comment_draft_asks_to_save() {

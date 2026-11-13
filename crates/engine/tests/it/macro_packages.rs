@@ -473,3 +473,43 @@ fn vba_part_names_with_a_colon_stay_relative_references() {
         pkg = zip(&out);
     }
 }
+
+#[test]
+fn save_turns_a_docx_with_macros_into_a_docm() {
+    let vba = fake_vba();
+    let doc = open_bytes("m.docm", &docm_package(&vba, CT_DOCM)).expect("open docm");
+    let dir = std::env::temp_dir().join(format!("wordcraft-macro-save-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    for (asked, saved) in [("Notes.docx", "Notes.docm"), ("Plan.dotx", "Plan.dotm"), ("LOUD.DOCX", "LOUD.DOCM")] {
+        let mut s = wordcraft_engine::Session::new(doc.clone());
+        let r = s.run("file.save", &serde_json::json!({"path": dir.join(asked)})).expect("save");
+        assert_eq!(r["path"], serde_json::json!(dir.join(saved).to_string_lossy()), "{r}");
+        assert_eq!(r["renamedFrom"], serde_json::json!(dir.join(asked).to_string_lossy()));
+        assert!(!dir.join(asked).exists(), "{asked} isn't written");
+        let out = unzip(&std::fs::read(dir.join(saved)).expect("read"));
+        assert!(out.get("word/vbaProject.bin") == Some(&vba), "{saved} keeps the macros");
+        assert_eq!(s.path.as_deref(), Some(dir.join(saved).as_path()), "the document is the {saved} now");
+        assert!(s.ui_requests.iter().any(|q| q["status"].as_str().is_some_and(|t| t.contains(saved))));
+    }
+    // Saved again under its .docx name, the document goes over its own .docm.
+    let mut s = wordcraft_engine::Session::new(doc.clone());
+    s.run("file.save", &serde_json::json!({"path": dir.join("Again.docx")})).expect("save");
+    s.run("file.save", &serde_json::json!({"path": dir.join("Again.docx")})).expect("saved over its own .docm");
+    // Another Report.docm already there isn't replaced: the save is refused, nothing is written.
+    std::fs::write(dir.join("Report.docm"), b"someone else's").expect("write");
+    let mut s = wordcraft_engine::Session::new(doc.clone());
+    let e = s.run("file.save", &serde_json::json!({"path": dir.join("Report.docx")})).expect_err("refused");
+    assert!(e.to_string().contains("already exists"), "{e}");
+    assert_eq!(std::fs::read(dir.join("Report.docm")).expect("read"), b"someone else's");
+    assert!(!dir.join("Report.docx").exists() && s.path.is_none());
+    // Asked with a password, the refused save doesn't take the password either.
+    let e = s.run("file.save", &serde_json::json!({"path": dir.join("Report.docx"), "password": "secret"})).expect_err("refused");
+    assert!(e.to_string().contains("already exists"), "{e}");
+    assert!(s.password.is_none(), "the refused save left the password unchanged");
+    // Without macros a .docx stays a .docx.
+    let mut s = wordcraft_engine::Session::new(Document::from_text("plain"));
+    let r = s.run("file.save", &serde_json::json!({"path": dir.join("Plain.docx")})).expect("save");
+    assert!(r["renamedFrom"].is_null() && dir.join("Plain.docx").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
