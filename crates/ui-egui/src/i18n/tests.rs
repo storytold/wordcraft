@@ -251,12 +251,12 @@ fn brazilian_portuguese_locales_and_saved_preference_work_without_changing_the_d
     for tag in ["pt-BR", "pt_BR.UTF-8", "PT-BR", "pt-BR-latn", "pt_BR.UTF-8@euro"] {
         assert_eq!(lang_from_tag(tag), Some(pt), "{tag}");
     }
-    // European Portuguese and a bare `pt` have no catalog yet, so they follow the fallback
-    // rather than the crate's `pt-br` match.
-    for tag in ["pt-PT", "pt", "pt_PT.UTF-8", "pt-AO", "PT_pt"] {
+    // A bare `pt`, a private-use region and the other Portuguese regions follow the fallback
+    // rather than the crate's `pt-br` match; `pt-PT` has its own catalog.
+    for tag in ["pt", "pt-AO", "pt_AO.UTF-8", "pt-x-PT"] {
         assert_eq!(lang_from_tag(tag), None, "{tag}");
     }
-    assert_eq!(first_supported(["pt-PT", "fr-FR"]), Some(lang("fr")));
+    assert_eq!(first_supported(["pt-AO", "pt-AO.UTF-8", "fr-FR"]), Some(lang("fr")));
     assert_eq!(first_supported([UNSUPPORTED, "pt-BR", "en-US"]), Some(pt));
     let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
     let before = serde_json::to_value(&app.session.doc).unwrap();
@@ -268,6 +268,52 @@ fn brazilian_portuguese_locales_and_saved_preference_work_without_changing_the_d
     let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
     assert_eq!(Lang::from_pref(&restored.language), pt);
     assert_eq!(pt.name(), "Português (Brasil)");
+}
+
+#[test]
+fn european_portuguese_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let pt = lang("pt-pt");
+    for tag in ["pt-PT", "pt_PT.UTF-8", "PT-pt", "pt-PT@euro", "pt_PT.UTF-8@euro", "pt-Latn-PT"] {
+        assert_eq!(lang_from_tag(tag), Some(pt), "{tag}");
+    }
+    assert_eq!(first_supported([UNSUPPORTED, "pt-PT", "en-US"]), Some(pt));
+    assert_eq!(normalize_pref("PT-PT"), Some("pt-pt"));
+    assert_eq!(pt.name(), "Português (Portugal)");
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "pt-PT"})).unwrap();
+    assert_eq!(result["effective"], "pt-pt");
+    assert_eq!(app.ui.language, "pt-pt");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "pt-pt" && l["name"] == "Português (Portugal)"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), pt);
+    assert!(app.run("ui.language", serde_json::json!({"value": "pt-pt-unknown"})).is_err());
+    assert_eq!(app.ui.language, "pt-pt", "invalid preferences must keep the saved language");
+}
+
+#[test]
+fn bundled_interface_fonts_cover_european_portuguese_without_system_fallbacks() {
+    let db = wordcraft_fonts::FontDb::with_font_dirs(Vec::new());
+    needs_catalogs!();
+    let entries = translations("pt-pt");
+    let chars: std::collections::HashSet<char> = entries
+        .iter()
+        .flat_map(|e| e.chars())
+        // The accented Latin letters Portuguese adds on top of ASCII, plus the guillemets and the
+        // typographic apostrophe the catalog uses.
+        .filter(|c| ('\u{00C0}'..='\u{017F}').contains(c))
+        .chain("ÀàÁáÂâÃãÇçÉéÊêÍíÓóÔôÕõÚúÜü«»’".chars())
+        .collect();
+    for (family, style) in [("Inter", "Regular"), ("Inter", "Medium"), ("Inter", "SemiBold"), ("JetBrains Mono", "Regular")] {
+        let face = db.face(family, style);
+        assert_eq!(face.family, family, "must use the bundled interface face");
+        for ch in &chars {
+            assert_ne!(face.glyph_for(*ch), 0, "{family} {style} lacks {ch}");
+        }
+    }
 }
 
 #[test]
@@ -811,7 +857,7 @@ fn an_italian_interface_writes_new_documents_in_italian() {
 #[test]
 fn the_editing_languages_are_the_ones_wordcraft_can_proof() {
     let with: Vec<(&str, &str)> = LANGUAGES.iter().filter_map(|l| l.editing_lang.map(|e| (l.code, e))).collect();
-    assert_eq!(with, [("pt-br", "pt-BR"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT")]);
+    assert_eq!(with, [("pt-br", "pt-BR"), ("pt-pt", "pt-PT"), ("pl", "pl-PL"), ("cs", "cs-CZ"), ("tr", "tr-TR"), ("it", "it-IT")]);
 }
 
 #[test]
