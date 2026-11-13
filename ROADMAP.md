@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -152,7 +152,11 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 - 2026-11-13: Tables: Insert Cells and Delete Cells with Word's four options each (#6330). Insert Cells (the Rows & Columns dialog launcher, the table menu's Insert › Insert Cells…) shifts the selected cells right or down, or inserts entire rows or columns; Delete Cells shifts them left or up, or deletes entire rows or columns. Cells moved sideways keep their widths; a shift that would cut a vertically merged cell is refused. Readiness unchanged.
+ fix/6146-touchpad-scroll-speed
+- 2026-11-09: Touchpad and mouse-wheel scroll speed settings (#6146): scales Wayland touchpad point input by default (4×) so two-finger scrolling matches desktop speed rather than crawling 1:1, and scales mouse wheel line distance; File › Options › Advanced › Scrolling; commands ui.scrollSpeed and ui.touchpadScrollSpeed.
+
 - 2026-11-12: DOCX: `w:lnNumType` without a positive `w:countBy` leaves line numbering off, as Word does, instead of numbering every line on screen, in PDF export and on re-save (#6209). Readiness estimates unchanged.
+ main
 - 2026-11-04: Three behaviours lost in the #4501 refactor are back (#4683). From the second section on, headers, footers and note separators are measured with their own section's document grid and SECTION/SECTIONPAGES values, not the previous section's. An ODT paragraph default style that names no font no longer clears the document's default font. A press the canvas handles itself (Ctrl+click on a link, switching into a header or footer, equation entry) no longer also shows the link tooltip in that frame. Readiness unchanged.
 - 2026-11-08: `wordcraft-cli convert --strict` (#6005) and `render --strict` (#6008): a PDF or PNG export (render: the page it writes) refuses, exit 3 and nothing written, when it would draw a character no font has or leave out a picture (missing part, external target, link only, undecodable or unsupported format); the report is on stderr with one JSON line. Engine: `strict: true` on `file.save`, `file.saveAs`, `file.exportPdf` and `file.exportPng`, and the pure `file.strictReport`. External picture targets are never fetched. The result depends on the host's installed fonts (#5624); readiness estimates unchanged.
 - 2026-11-05: ODT tables with a usable width keep their column proportions when the file gives only shares (gap 19): LibreOffice's CV template opened and saved with equal columns.
@@ -1441,3 +1445,4 @@ MATH glyphs that reference the same construction now share its immutable variant
 
 > 2026-10-29 · Port #2437 to split layout modules: finite border extents and terminal-break keep preflight. Recursive keep lookahead remains outside scope. Source port only; no test execution or new native measurements.
 | 2026-11-03 | trivial | Progress log: a line breaks after a hyphen before a slash (#3408) |
+| 2026-11-12 | minor | Progress log: layout.fitOnePage condenses a multi-page document by one page while preserving typography hierarchy (#6433) |

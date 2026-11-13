@@ -678,11 +678,12 @@ struct ScrollMotion {
     middle: egui::Vec2,
 }
 
+/// Computes this frame's scroll motion from mouse wheel/touchpad input, edge autoscroll, and middle-drag.
 fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> ScrollMotion {
     // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
     let wheel_area = if app.session.view.read_mode { full } else { view.area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
-    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT) * app.ui.scroll_speed.wheel_factor();
     let wheel_delta = if app.session.view.read_mode {
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
         for _ in 0..turns.unsigned_abs() {
