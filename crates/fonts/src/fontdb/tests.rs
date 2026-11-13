@@ -470,3 +470,25 @@ fn named_instances_and_collection_members_are_capped() {
     // (under 0.1 s on a loaded machine) only backs up "read once", with room for a busy CI.
     assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
 }
+
+/// Verifies that `read_family_coverage` reads the cmap from a TTC exceeding `MAX_FONT_FILE_BYTES`.
+#[test]
+fn read_family_coverage_reads_cmap_from_large_ttc_collection() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let path = std::env::temp_dir().join(format!("wc-large-ttc-{}.ttc", std::process::id()));
+    let _cleanup = Cleanup(path.clone());
+    let ttc = collection_of(BUNDLED[0], 1);
+    std::fs::write(&path, &ttc).unwrap();
+    let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    file.set_len((40 << 20) + 1024).unwrap();
+    drop(file);
+    let fallback_file = super::fallback_data::read_fallback_file(&path);
+    let got = super::fallback_data::read_family_coverage(&path);
+    assert!(fallback_file.is_none());
+    assert_eq!(got, super::fallback_data::coverage_ranges(BUNDLED[0]));
+}

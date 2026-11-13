@@ -740,3 +740,38 @@ fn catalog_postscript_names() {
     assert!(!has(&db.families(), "SysfontSans-Bold"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+/// Verifies that cataloged families without a requested glyph are skipped before loading and that rescanning clears cached misses.
+#[test]
+fn cataloged_family_without_glyph_is_not_loaded_by_fallback_and_rescan_clears_misses() {
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let dir = std::env::temp_dir().join(format!("wc-sysfonts-{}-cmap-skip-and-rescan", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _cleanup = Cleanup(dir.clone());
+    // SourceSerif4-Regular lacks '●' (\u{25CF}): cataloging it under Times New Roman and Arial
+    // must not cause circle_fallback or system_fallback to load those families when searching for '●'.
+    std::fs::write(dir.join("TNR.ttf"), named_face("SourceSerif4-Regular.ttf", "Times New Roman")).unwrap();
+    std::fs::write(dir.join("Arial.ttf"), named_face("SourceSerif4-Regular.ttf", "Arial")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    db.faces.write().unwrap().retain(|face| face.family == "Source Serif 4");
+    let primary = db.face("Source Serif 4", "Regular");
+    assert!(db.fallback_for('●', primary.id()).is_none(), "no loaded or cataloged face covers '●'");
+    assert!(!db.is_loaded("Times New Roman"), "circle_fallback must skip Times New Roman when its cmap lacks '●'");
+    assert!(!db.is_loaded("Arial"), "system_fallback must skip Arial when its cmap lacks '●'");
+
+    // Populate sys.tried before rescanning; adding a covering face for preferred family Arial and
+    // rescanning clears both sys.tried and cached misses so preferred-family selection succeeds.
+    db.sys.lock().unwrap().tried.insert("Arial");
+    std::fs::remove_file(dir.join("Arial.ttf")).unwrap();
+    std::fs::write(dir.join("Arial-Covering.ttf"), named_face("SourceSans3-Regular.ttf", "Arial")).unwrap();
+    db.load_system_fonts();
+    assert!(db.sys.lock().unwrap().tried.is_empty(), "rescan clears sys.tried");
+    let resolved = db.fallback_for('●', primary.id()).expect("rescan drops cached miss and loads preferred family Arial");
+    assert_eq!(resolved.family, "Arial");
+}

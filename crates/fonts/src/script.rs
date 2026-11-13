@@ -122,7 +122,8 @@ const COLOR_EMOJI: &[&str] = &["Segoe UI Emoji", "Apple Color Emoji", "Noto Colo
 pub fn is_emoji(c: char) -> bool {
     matches!(
         u32::from(c),
-        0x1F000..=0x1FAFF
+        0x1F000..=0x1F7FF
+            | 0x1F900..=0x1FAFF
             | 0x231A..=0x231B
             | 0x23E9..=0x23EC
             | 0x23F0
@@ -210,8 +211,8 @@ mod tests {
             assert!(fallback_rank(c, "Segoe UI Emoji") < fallback_rank(c, "Segoe UI Symbol"), "{c}");
             assert!(fallback_rank(c, "Noto Color Emoji") < fallback_rank(c, "Noto Emoji"), "{c}");
         }
-        // Text-style symbols keep the symbol fonts.
-        for c in ['✔', '☺', '→', 'a', '1'] {
+        // Text-style symbols keep the symbol fonts, including Supplemental Arrows-C.
+        for c in ['✔', '☺', '→', '\u{1F86A}', 'a', '1'] {
             assert!(!is_emoji(c), "{c}");
         }
     }
