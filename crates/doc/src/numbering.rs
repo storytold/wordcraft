@@ -315,13 +315,17 @@ impl Numbering {
     /// The list level whose [`Numbering::change_original`] cache is `original`, for reopening a
     /// document this app wrote. Ambiguous definitions (shared across multiple lists or levels) are
     /// treated as unresolved (`None`), avoiding attaching a paragraph to an unrelated list and
-    /// disrupting counter continuity. Work is bounded by [`MAX_ORIGINAL_CANDIDATES`].
+    /// disrupting counter continuity. Work is bounded by [`MAX_ORIGINAL_CANDIDATES`]; if the candidate
+    /// budget is exhausted before all definitions can be inspected, the scan fails closed to avoid
+    /// returning incomplete collision results.
     pub fn change_originals(&self) -> BTreeMap<String, NumRef> {
         let abstracts: BTreeMap<u32, &AbstractNum> = self.abstracts.iter().map(|a| (a.id, a)).collect();
         let mut map: BTreeMap<String, Option<NumRef>> = BTreeMap::new();
         let mut candidates = 0;
+        let mut truncated = false;
         for n in &self.nums {
             if candidates >= MAX_ORIGINAL_CANDIDATES || map.len() >= MAX_ORIGINAL_CACHES {
+                truncated = true;
                 break;
             }
             let Some(abs) = abstracts.get(&n.abstract_id).copied() else {
@@ -330,11 +334,17 @@ impl Numbering {
             for level in 0..=8u8 {
                 candidates += 1;
                 if candidates > MAX_ORIGINAL_CANDIDATES {
+                    truncated = true;
                     break;
                 }
                 if let Some(s) = change_original_def(n, abs, level) {
+                    let s = s.trim().to_string();
+                    if s.is_empty() {
+                        continue;
+                    }
                     let nr = NumRef { num: n.id, level };
                     if !map.contains_key(&s) && map.len() >= MAX_ORIGINAL_CACHES {
+                        truncated = true;
                         break;
                     }
                     match map.entry(s) {
@@ -349,6 +359,12 @@ impl Numbering {
                     }
                 }
             }
+            if truncated {
+                break;
+            }
+        }
+        if truncated {
+            return BTreeMap::new();
         }
         map.into_iter().filter_map(|(k, v)| v.map(|nr| (k, nr))).collect()
     }
@@ -654,6 +670,43 @@ mod tests {
         let caches = n.change_originals();
         assert_eq!(caches.get("%1:1:23:•"), Some(&NumRef { num: bullet, level: 0 }));
         assert_eq!(caches.get("%1:1:0:."), None, "colliding numbered caches are unresolved");
+    }
+
+    /// When the candidate budget is exhausted, the scan fails closed so incomplete collision
+    /// checks do not return false-positive unique mappings.
+    #[test]
+    fn change_originals_fails_closed_when_candidate_budget_exhausted() {
+        let mut n = Numbering::default();
+        let bullet1 = n.add_list(ListKind::Bullet);
+        let aid = 2;
+        n.abstracts.push(AbstractNum { id: aid, levels: levels_for(ListKind::Numbered), ..Default::default() });
+        // Add 1,200 numbered lists (1,200 * 9 = 10,800 candidates > MAX_ORIGINAL_CANDIDATES).
+        for id in 10..=1210 {
+            n.nums.push(Num { id, abstract_id: aid, ..Default::default() });
+        }
+        // Place a second bullet list at the end (beyond the 10,000 candidate budget).
+        let bullet2 = n.add_list(ListKind::Bullet);
+        let caches = n.change_originals();
+        assert!(caches.is_empty(), "incomplete candidate scan fails closed");
+        assert_ne!(bullet1, bullet2);
+    }
+
+    /// Definitions differing only by whitespace normalize to the same cache key and collide.
+    #[test]
+    fn change_originals_normalizes_whitespace_to_detect_collisions() {
+        let mut n = Numbering::default();
+        let aid1 = 1;
+        let aid2 = 2;
+        n.abstracts.push(AbstractNum { id: aid1, levels: vec![Level { text: "%1.".into(), start: 1, ..Default::default() }], ..Default::default() });
+        n.abstracts.push(AbstractNum {
+            id: aid2,
+            levels: vec![Level { text: "%1.  ".into(), start: 1, ..Default::default() }],
+            ..Default::default()
+        });
+        n.nums.push(Num { id: 1, abstract_id: aid1, ..Default::default() });
+        n.nums.push(Num { id: 2, abstract_id: aid2, ..Default::default() });
+        let caches = n.change_originals();
+        assert_eq!(caches.get("%1:1:0:."), None, "whitespace difference normalizes and collides");
     }
 
     /// A cache longer than the DOCX reader used to keep is still written in one piece; one longer
