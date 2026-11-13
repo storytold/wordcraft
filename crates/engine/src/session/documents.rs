@@ -247,6 +247,8 @@ impl Session {
             edit_marks: _,
             go_back_step: _,
             // Shared by every open document.
+            // Names the document it belongs to, so it never applies to another one.
+            review_style: _,
             user_dict_path: _,
             clipboard: _,
             clipboard_text: _,

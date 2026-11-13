@@ -1,4 +1,6 @@
-use super::{Document, Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, props, xml};
+use super::{Level, LevelSuffix, ParaProps, Style, StyleKind, TablePart, VAlign, W, Writer, props, xml};
+use crate::write::props::open_change;
+use wordcraft_doc::Document;
 
 /// Built-in names Word keeps in lower case in styles.xml.
 fn file_style_name(name: &str) -> String {
@@ -16,7 +18,8 @@ fn file_style_name(name: &str) -> String {
     name.to_string()
 }
 
-pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
+pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
+    let doc = wr.doc;
     let s = &doc.styles;
     let mut w = W::new();
     let ns = xml::body_ns();
@@ -50,13 +53,15 @@ pub(super) fn styles_xml(doc: &Document) -> Vec<u8> {
     // Kinds whose default style the file named (`w:default`); the English ids stand in otherwise.
     let flagged: Vec<StyleKind> = s.styles.iter().filter(|st| st.default).map(|st| st.kind).collect();
     for st in &s.styles {
-        style_xml(&mut w, st, &flagged);
+        style_xml(wr, &mut w, st, &flagged);
     }
     w.close("w:styles");
     w.into_bytes()
 }
 
-fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
+/// One `w:style` element. A tracked change of its paragraph/run properties is nested in the
+/// corresponding property element as `w:pPrChange` / `w:rPrChange`.
+fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) {
     let ty = match st.kind {
         StyleKind::Paragraph => "paragraph",
         StyleKind::Character => "character",
@@ -102,16 +107,7 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
     if st.locked {
         w.empty("w:locked", &[]);
     }
-    if !st.para.is_empty() && st.kind != StyleKind::Character {
-        w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
-        w.close("w:pPr");
-    }
-    if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {
-        w.open("w:rPr", &[]);
-        props::rpr_inner(w, &st.chr);
-        w.close("w:rPr");
-    }
+    style_property_xml(wr, w, st);
     if let Some(t) = &st.table {
         if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
             w.open("w:tblPr", &[]);
@@ -177,6 +173,37 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         }
     }
     w.close("w:style");
+}
+
+fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
+    let para_change = st.para_change.as_deref().filter(|ch| ch.old.formatting() != st.para.formatting());
+    if (!st.para.is_empty() || para_change.is_some()) && st.kind != StyleKind::Character {
+        w.open("w:pPr", &[]);
+        props::ppr_inner(w, &st.para, false, None);
+        if let Some(ch) = para_change {
+            let a = wr.change_attrs(ch.rev);
+            open_change(w, "w:pPrChange", &a);
+            w.open("w:pPr", &[]);
+            props::ppr_inner(w, &ch.old, false, None);
+            w.close("w:pPr");
+            w.close("w:pPrChange");
+        }
+        w.close("w:pPr");
+    }
+    let run_change = st.chr_change.as_deref().filter(|ch| ch.old.formatting() != st.chr.formatting());
+    if (props::has_rpr(&st.chr) || run_change.is_some()) && st.kind != StyleKind::Numbering {
+        w.open("w:rPr", &[]);
+        props::rpr_inner(w, &st.chr);
+        if let Some(ch) = run_change {
+            let a = wr.change_attrs(ch.rev);
+            open_change(w, "w:rPrChange", &a);
+            w.open("w:rPr", &[]);
+            props::rpr_inner(w, &ch.old);
+            w.close("w:rPr");
+            w.close("w:rPrChange");
+        }
+        w.close("w:rPr");
+    }
 }
 
 pub(super) fn numbering_xml(doc: &Document) -> Vec<u8> {

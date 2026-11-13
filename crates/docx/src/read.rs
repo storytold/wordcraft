@@ -22,8 +22,7 @@ use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::props::VAlign;
+use wordcraft_doc::props::{PropChange, Rgb, VAlign};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
 use wordcraft_doc::{
@@ -332,6 +331,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         r.read_vba_related(&v);
     }
     r.read_glossary(&rels);
+    r.read_fit_state(&root_rels, &rels);
     r.keep_custom_xml(&root_rels, &rels);
     r.keep_unmodelled(&root, &root_rels, &rels);
     if !r.embedded.parts.is_empty() {
