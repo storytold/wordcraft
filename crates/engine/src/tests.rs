@@ -10603,6 +10603,204 @@ fn outline_collapse_hides_descendants_and_expand_restores() {
     assert_eq!(s.selected_text(), "One\na\nTwo\nb");
 }
 
+/// Heading 1 "One", body "a", Heading 2 "Two", body "b", Heading 1 "Three", body "c", Heading 1
+/// "Four", body "d" (Print Layout).
+fn sections_doc() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "One\na\nTwo\nb\nThree\nc\nFour\nd"}));
+    for (i, style) in [(0, "Heading1"), (2, "Heading2"), (4, "Heading1"), (6, "Heading1")] {
+        s.sel = crate::Selection::caret(Pos::body(i, 0));
+        run(&mut s, "para.style", json!({"style": style}));
+    }
+    s
+}
+
+/// Each body paragraph's text and style.
+fn styled(s: &Session) -> Vec<(String, String)> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| (p.plain_text(), p.props.style.clone().unwrap_or_default())).collect()
+}
+
+/// #4288: dragging a heading in the Navigation pane moves it with everything under it, down to
+/// the next heading of its level or higher, before the heading it is dropped on (or to the end).
+/// Levels stay; one undo puts it back; the caret is at the moved heading.
+#[test]
+fn moving_a_heading_takes_its_content_along() {
+    let mut s = sections_doc();
+    let original = styled(&s);
+    run(&mut s, "outline.moveSubtree", json!({"block": 0, "before": 6}));
+    assert_eq!(text(&s), "Three\nc\nOne\na\nTwo\nb\nFour\nd");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(2, 0)));
+    assert_eq!(styled(&s)[4], ("Two".into(), "Heading2".into()), "the subheading keeps its level");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(styled(&s), original, "one undo step");
+    // Up, past a section with a subheading in it.
+    run(&mut s, "outline.moveSubtree", json!({"block": 4, "before": 0}));
+    assert_eq!(text(&s), "Three\nc\nOne\na\nTwo\nb\nFour\nd");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 0)));
+    run(&mut s, "edit.undo", json!({}));
+    // A subheading moves alone, to the end, still Heading 2.
+    run(&mut s, "outline.moveSubtree", json!({"block": 2, "before": "end"}));
+    assert_eq!(text(&s), "One\na\nThree\nc\nFour\nd\nTwo\nb");
+    assert_eq!(styled(&s)[6], ("Two".into(), "Heading2".into()));
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(6, 0)));
+    // The last section moves up before a subheading: it lands inside "One".
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "outline.moveSubtree", json!({"block": 6, "before": 2}));
+    assert_eq!(text(&s), "One\na\nFour\nd\nTwo\nb\nThree\nc");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(styled(&s), original);
+}
+
+/// Moves that make no sense, and junk, change nothing.
+#[test]
+fn moving_a_heading_into_itself_or_by_junk_is_refused() {
+    let mut s = sections_doc();
+    let original = styled(&s);
+    let undo = s.undo_labels();
+    for bad in [
+        json!({"block": 0, "before": 2}),
+        json!({"block": 0, "before": 0}),
+        json!({"block": 0, "before": 4}),
+        json!({"block": 6, "before": "end"}),
+        json!({"block": 1, "before": 4}),
+        json!({"block": 0, "before": 1}),
+        json!({"block": 0}),
+        json!({"before": 4}),
+        json!({"block": 0, "before": "start"}),
+        json!({"block": -1, "before": 4}),
+        json!({"block": 0, "before": u64::MAX}),
+        json!({"block": 99999, "before": "end"}),
+        json!({"block": "0", "before": 4}),
+        json!(null),
+    ] {
+        assert!(s.run("outline.moveSubtree", &bad).is_err(), "{bad}");
+        assert_eq!(styled(&s), original, "{bad}");
+    }
+    assert_eq!(s.undo_labels(), undo, "no undo steps");
+    // A table is no heading. A table under a heading moves with it; with Track Changes on that
+    // isn't done yet, and nothing changes.
+    let mut t = sections_doc();
+    t.sel = crate::Selection::caret(Pos::body(7, 1));
+    run(&mut t, "insert.table", json!({"rows": 1, "cols": 1}));
+    let table = |t: &Session| t.doc.body.iter().position(|b| matches!(**b, wordcraft_doc::Block::Table(_))).unwrap();
+    let at = table(&t);
+    assert!(at > 6);
+    assert!(t.run("outline.moveSubtree", &json!({"block": at, "before": 0})).is_err());
+    run(&mut t, "review.trackChanges", json!({"value": true}));
+    let before = t.doc.body.clone();
+    assert!(t.run("outline.moveSubtree", &json!({"block": 6, "before": 0})).is_err());
+    assert_eq!(t.doc.body, before);
+    run(&mut t, "review.trackChanges", json!({"value": false}));
+    run(&mut t, "outline.moveSubtree", json!({"block": 6, "before": 0}));
+    assert!(table(&t) < 4, "the table moved with its heading");
+    assert!(text(&t).starts_with("Four\n") && text(&t).ends_with("Three\nc"), "{}", text(&t));
+}
+
+/// With Track Changes on the move is recorded as one, as in Word: the content stays where it was,
+/// marked moved away, and lands marked moved there. Accepting either end leaves it moved, with
+/// every paragraph's style as it was; rejecting puts it back; one undo removes the move.
+#[test]
+fn moving_a_heading_under_track_changes_is_a_tracked_move() {
+    let tracked = || {
+        let mut s = sections_doc();
+        run(&mut s, "file.setAuthor", json!({"name": "Ana"}));
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "outline.moveSubtree", json!({"block": 0, "before": 6}));
+        s
+    };
+    let mut s = tracked();
+    assert_eq!(text(&s), "One\na\nTwo\nb\nThree\nc\nOne\na\nTwo\nb\nFour\nd");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(6, 0)));
+    let changes = run(&mut s, "review.changes", json!({}));
+    let changes = changes.as_array().unwrap();
+    assert!(!changes.is_empty() && changes.iter().all(|c| c["kind"].as_str().unwrap().starts_with("move") && c["move"] == "move1"), "{changes:?}");
+    let moved = [("Three", "Heading1"), ("c", ""), ("One", "Heading1"), ("a", ""), ("Two", "Heading2"), ("b", ""), ("Four", "Heading1"), ("d", "")];
+    let want: Vec<(String, String)> = moved.iter().map(|(t, st)| (t.to_string(), st.to_string())).collect();
+    // Accepting the end it moved to, or the end it came from.
+    for at in [6, 0] {
+        let mut s = tracked();
+        s.sel = crate::Selection::caret(Pos::body(at, 1));
+        run(&mut s, "review.accept", json!({}));
+        assert_eq!(styled(&s), want, "accepted at block {at}");
+        assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty());
+    }
+    let mut s = tracked();
+    let original = styled(&sections_doc());
+    s.sel = crate::Selection::caret(Pos::body(6, 1));
+    run(&mut s, "review.reject", json!({}));
+    assert_eq!(styled(&s), original, "rejected");
+    let mut s = tracked();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(styled(&s), original, "one undo step");
+    assert!(run(&mut s, "review.changes", json!({})).as_array().unwrap().is_empty());
+    // The last section moved up: accepting leaves no empty paragraph at the end, as in Word.
+    let mut s = sections_doc();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "outline.moveSubtree", json!({"block": 6, "before": 4}));
+    s.sel = crate::Selection::caret(Pos::body(9, 1));
+    run(&mut s, "review.accept", json!({}));
+    assert_eq!(text(&s), "One\na\nTwo\nb\nFour\nd\nThree\nc");
+    assert_eq!(styled(&s)[7], ("c".into(), String::new()));
+    // Up, and with Track moves off: a deletion and an insertion.
+    let mut s = sections_doc();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "review.trackingOptions", json!({"trackMoves": false}));
+    run(&mut s, "outline.moveSubtree", json!({"block": 6, "before": 0}));
+    assert_eq!(text(&s), "Four\nd\nOne\na\nTwo\nb\nThree\nc\nFour\nd");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 0)));
+    let kinds: Vec<String> =
+        run(&mut s, "review.changes", json!({})).as_array().unwrap().iter().map(|c| c["kind"].as_str().unwrap().to_string()).collect();
+    assert!(
+        kinds.contains(&"insert".to_string()) && kinds.contains(&"delete".to_string()) && kinds.iter().all(|k| !k.starts_with("move")),
+        "{kinds:?}"
+    );
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "Four\nd\nOne\na\nTwo\nb\nThree\nc");
+}
+
+/// A paragraph break another author deleted inside the moved section stays deleted in the copy,
+/// as deleted text does: accepting everything joins the two paragraphs there too. The break after
+/// the section's last paragraph isn't carried over: in the copy it leads to the drop target.
+#[test]
+fn a_tracked_move_keeps_a_deleted_paragraph_break_inside_the_section() {
+    let tracked = |deleted: u64| {
+        let mut s = sections_doc();
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "file.setAuthor", json!({"name": "Bob"}));
+        let end = s.doc.body[deleted as usize].as_para().unwrap().len();
+        run(&mut s, "caret.set", json!({"pos": {"block": deleted, "off": end}}));
+        run(&mut s, "text.delete", json!({}));
+        run(&mut s, "file.setAuthor", json!({"name": "Ana"}));
+        run(&mut s, "outline.moveSubtree", json!({"block": 0, "before": 6}));
+        s
+    };
+    let mut s = tracked(0);
+    assert_eq!(text(&s), "One\na\nTwo\nb\nThree\nc\nOne\na\nTwo\nb\nFour\nd");
+    let mark = |s: &Session, i: usize| s.doc.body[i].as_para().unwrap().mark.clone();
+    let del = mark(&s, 6).del.expect("the copy's break is still deleted");
+    assert_eq!(s.doc.revisions[del as usize].author, "Bob");
+    assert_eq!(mark(&s, 6).del, mark(&s, 0).del, "the same deletion at both ends");
+    let mut all = tracked(0);
+    run(&mut all, "review.acceptAll", json!({}));
+    assert_eq!(text(&all), "Three\nc\nOnea\nTwo\nb\nFour\nd");
+    let mut all = tracked(0);
+    run(&mut all, "review.rejectAll", json!({}));
+    assert_eq!(text(&all), text(&sections_doc()));
+    // Accepting the move leaves Bob's deletion to accept or reject.
+    s.sel = crate::Selection::caret(Pos::body(6, 1));
+    run(&mut s, "review.accept", json!({}));
+    let changes = run(&mut s, "review.changes", json!({}));
+    let changes = changes.as_array().unwrap();
+    assert!(!changes.is_empty() && changes.iter().all(|c| c["kind"] == "delete" && c["author"] == "Bob"), "{changes:?}");
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "Three\nc\nOnea\nTwo\nb\nFour\nd");
+    // The section's last break: the copy keeps it, so "b" doesn't join the heading it lands before.
+    let mut s = tracked(3);
+    assert_eq!(mark(&s, 9).del, None);
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(text(&s), "Three\nc\nOne\na\nTwo\nb\nFour\nd");
+}
+
 /// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
 /// finds them again without scanning the document once per heading, and a caret move doesn't
 /// redo the matching.
