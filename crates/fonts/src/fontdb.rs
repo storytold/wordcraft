@@ -42,9 +42,11 @@ use names::{MAX_NAME_CHARS, file_face_names, font_faces, mini_font, name};
 pub(crate) use names::{last_resort_face, legacy_family};
 
 static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
+static NEXT_DB_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Process-wide font database.
 pub struct FontDb {
+    id: u64,
     faces: RwLock<Vec<Arc<FontFace>>>,
     outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
     /// Screen-hinted outlines per (face, glyph, ppem bits); `None` where the face can't be hinted.
@@ -114,6 +116,7 @@ impl FontDb {
             }
         }
         Self {
+            id: NEXT_DB_ID.fetch_add(1, Ordering::Relaxed),
             faces: RwLock::new(faces),
             outlines: Mutex::new(HashMap::new()),
             hinted: Mutex::new(HashMap::new()),
@@ -178,6 +181,12 @@ impl FontDb {
             });
             installed
         })
+    }
+
+    /// Process-wide unique identity of this database instance, used to isolate per-database
+    /// resolution caches.
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     fn read_faces(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<FontFace>>> {
