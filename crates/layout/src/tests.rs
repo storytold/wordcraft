@@ -8162,6 +8162,27 @@ fn a_mixed_chart_label_orders_its_runs_visually() {
     assert!(rightmost_latin < leftmost_arabic, "the Latin run sits left of the Arabic: {latin:?} {arabic:?}");
 }
 
+#[test]
+fn a_bracket_in_an_arabic_chart_label_is_mirrored() {
+    // UAX #9 rule L4. The primary face has the brackets but not the Arabic, so `(الشرق)` is
+    // drawn as three runs; each is still shaped in the direction the bidi algorithm resolved,
+    // or a bracket moved to the other end of the label would face the wrong way.
+    let draws = chart_labels(&[(10.0, "(الشرق)")]);
+    let bracket = |want: &str| {
+        draws.iter().find_map(|x| match x {
+            display::Draw::Glyphs { face, text, glyphs, .. } if text == want => glyphs.first().map(|g| (g.0, g.1, *face)),
+            _ => None,
+        })
+    };
+    let (open_gid, open_x, face) = bracket("(").expect("the opening bracket is drawn");
+    let (close_gid, close_x, _) = bracket(")").expect("the closing bracket is drawn");
+    // The label reads right to left, so the character written first sits at the right end and
+    // each bracket is drawn with the other one's glyph: on screen the word is still in brackets.
+    assert!(open_x > close_x, "( is drawn at the right end: {open_x} {close_x}");
+    assert_eq!(open_gid, face.glyph_for(')'), "( takes the mirrored glyph");
+    assert_eq!(close_gid, face.glyph_for('('), ") takes the mirrored glyph");
+}
+
 /// The draws with figures opened up.
 fn flat(draws: Vec<display::Draw>) -> Vec<display::Draw> {
     draws.into_iter().flat_map(|x| if let display::Draw::Figure { draws, .. } = x { draws } else { vec![x] }).collect()

@@ -281,9 +281,10 @@ type LabelRun<'t> = (FaceRef, usize, &'t str, Vec<wordcraft_fonts::ShapedGlyph>)
 /// One line of a `GraphicItem::Text` in `r`, shaped in its font (the document's body font when
 /// unset) and aligned horizontally, centred vertically, at its size times `k`. Characters the font
 /// lacks (Chinese in a chart drawn in Calibri's substitute, #4720) are drawn in a fallback face, as
-/// in body text: one draw per run of a face, in reading order. Empty when there is nothing to draw,
-/// or the item's rectangle or size isn't a finite number (a degenerate scale: `r` itself is always
-/// finite, as [`Rect::new`] makes it).
+/// in body text: one draw per run of a face. The label's clusters are placed left to right in
+/// visual order, so a right-to-left label reads the right way round ([`label_pens`], #4199). Empty
+/// when there is nothing to draw, or the item's rectangle or size isn't a finite number (a
+/// degenerate scale: `r` itself is always finite, as [`Rect::new`] makes it).
 fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Vec<Draw> {
     let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return Vec::new() };
     let size = *size * k;
@@ -295,14 +296,23 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     let resolved = wordcraft_fonts::word::resolve(family, *bold, false);
     let primary = resolved.face;
     let scale = |f: FaceRef| size / f.upem.max(1.0) as f32;
-    let runs: Vec<LabelRun<'_>> = face_runs(text, primary, *bold)
-        .into_iter()
-        .filter_map(|(face, at)| {
-            let s = text.get(at.clone())?;
-            let shaped = wordcraft_fonts::shape(face.get(), s, &[], |c| c);
-            (!shaped.is_empty()).then_some((face, at.start, s, shaped))
-        })
-        .collect();
+    // Right to left where the label reads that way (#4199): the label is one line of text, so
+    // its clusters go left to right in visual order, as a paragraph's line does.
+    let base_rtl = text.chars().find_map(crate::para::strong_rtl).unwrap_or(false);
+    let levels = crate::para::bidi_levels(text, base_rtl);
+    // Each piece is shaped in the direction the bidi algorithm resolved for it, so a bracket in a
+    // right-to-left label is mirrored (UAX #9 rule L4) even when the primary face draws it and a
+    // fallback face draws the word beside it.
+    let mut runs: Vec<LabelRun<'_>> = Vec::new();
+    for (face, at) in face_runs(text, primary, *bold) {
+        for (r, rtl) in level_runs(text, &levels, at) {
+            let Some(s) = text.get(r.clone()) else { continue };
+            let shaped = wordcraft_fonts::shape_run(face.get(), s, &[], |c| c, rtl);
+            if !shaped.is_empty() {
+                runs.push((face, r.start, s, shaped));
+            }
+        }
+    }
     let width: f32 = runs.iter().map(|(f, _, _, shaped)| shaped.iter().map(|g| g.x_advance as f32).sum::<f32>() * scale(*f)).sum();
     // The font's own line metrics centre the line, whichever faces draw it.
     let (ascent, descent) = wordcraft_fonts::word::line_metrics(primary.get());
@@ -312,10 +322,6 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
         TextAlign::Center => r.x + (r.w - width) / 2.0,
         TextAlign::Right => r.x + r.w - width,
     };
-    // Right to left where the label reads that way (#4199): the label is one line of text, so
-    // its clusters go left to right in visual order, as a paragraph's line does.
-    let base_rtl = text.chars().find_map(crate::para::strong_rtl).unwrap_or(false);
-    let levels = crate::para::bidi_levels(text, base_rtl);
     let pens = label_pens(&runs, start, size, &levels, base_rtl);
     let mut out = Vec::with_capacity(runs.len());
     for ((face, _, s, shaped), xs) in runs.iter().zip(&pens) {
@@ -341,6 +347,26 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
             text_bg: None,
             x_scale: 1.0,
         });
+    }
+    out
+}
+
+/// `at` split where the direction the bidi algorithm resolved changes, each piece with whether it
+/// reads right to left (an odd embedding level). A label with no right-to-left character has no
+/// levels, and stays one left-to-right piece.
+fn level_runs(text: &str, levels: &[u8], at: std::ops::Range<usize>) -> Vec<(std::ops::Range<usize>, bool)> {
+    if levels.is_empty() {
+        return vec![(at, false)];
+    }
+    let mut out: Vec<(std::ops::Range<usize>, bool)> = Vec::new();
+    for (i, c) in text.get(at.clone()).unwrap_or("").char_indices() {
+        let from = at.start.saturating_add(i);
+        let to = from.saturating_add(c.len_utf8());
+        let rtl = levels.get(from).is_some_and(|l| l % 2 == 1);
+        match out.last_mut() {
+            Some((r, was)) if *was == rtl => r.end = to,
+            _ => out.push((from..to, rtl)),
+        }
     }
     out
 }
