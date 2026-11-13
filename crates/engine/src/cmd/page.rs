@@ -10,6 +10,7 @@ use wordcraft_doc::{Block, Pos, StoryRef};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+/// Returns the command specifications for the Layout tab (page setup, breaks, line numbers).
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("layout.margins", "Margins", "Layout › Page Setup", margins).params(

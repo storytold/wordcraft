@@ -285,6 +285,34 @@ fn fit_one_page_anti_compound_guard_prevents_repeated_invocations() {
 }
 
 #[test]
+fn fit_one_page_already_fits_wins_over_exhausted_budget() {
+    let mut s = create_multiline_doc(5);
+    assert_eq!(s.layout().pages.len(), 1);
+    for b in &mut s.doc.body {
+        if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) {
+            p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(0.94));
+            for r in &mut p.runs {
+                r.props.size = Some(11.0);
+            }
+        }
+    }
+    s.doc.fit_state = Some(wordcraft_doc::FitState {
+        cum_delta: 1.0,
+        cum_space: 0.94,
+        original_font_sizes: vec![12.0],
+        original_line_spacings: vec![wordcraft_doc::props::LineSpacing::Multiple(1.0)],
+        ..Default::default()
+    });
+    s.touch();
+    s.relayout();
+
+    let res = s.run("layout.fitOnePage", &json!({}));
+    assert!(res.is_err());
+    let err = res.unwrap_err().to_string();
+    assert!(err.contains("already fits on one page"), "already-fits must take precedence over exhausted budgets: {err}");
+}
+
+#[test]
 fn fit_one_page_checks_complex_script_font_floor() {
     let mut lines = 28;
     let mut s = create_multiline_doc(lines);

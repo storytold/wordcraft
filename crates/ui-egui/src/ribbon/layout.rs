@@ -48,6 +48,7 @@ pub(super) fn columns_items(ui: &mut Ui, app: &mut WordApp) {
     mi(ui, app, "More Columns…", "ui.dialog", json!({"name": "columns"}));
 }
 
+/// Renders the Layout ribbon tab (Page Setup, Paragraph, Arrange).
 pub(super) fn layout(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Page Setup", Some("layout.pageSetup"), app, |ui, app| {
         // Text Direction works on what the caret is in: table cells, a text box, else the section.

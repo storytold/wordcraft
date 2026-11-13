@@ -47,6 +47,15 @@ pub struct FitState {
     /// Unique effective paragraph spacing values before the first Fit One Page reduction was applied.
     #[serde(default)]
     pub original_paragraph_spacings: Vec<f32>,
+    /// Original effective body font sizes by formatting location key before the first fit.
+    #[serde(default)]
+    pub original_font_locations: std::collections::BTreeMap<String, f32>,
+    /// Original effective line spacing values by formatting location key before the first fit.
+    #[serde(default)]
+    pub original_line_spacing_locations: std::collections::BTreeMap<String, LineSpacing>,
+    /// Original effective paragraph spacing values by formatting location key before the first fit.
+    #[serde(default)]
+    pub original_paragraph_spacing_locations: std::collections::BTreeMap<String, f32>,
 }
 
 /// Scale a font size down by `delta_pt`.
