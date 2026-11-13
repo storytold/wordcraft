@@ -414,7 +414,7 @@ impl Reader<'_> {
         }
         let ole = match self.keep_embedded(obj, rels, &[]) {
             Some(ole) => ole,
-            None => self.keep_embedded(&without_vml_pictures(obj)?, rels, &[])?,
+            None => self.keep_embedded(&without_pictures(obj)?, rels, &[])?,
         };
         let shape = obj.child("v:shape");
         let style = shape.and_then(|s| s.attr("style")).unwrap_or("");
@@ -496,11 +496,14 @@ const VML_TEXT_WARPS: [&str; 40] = [
     "textCanDown",
 ];
 
-/// `obj` without the pictures (`v:imagedata`) of its VML shapes, to keep an object whose picture
-/// can't be written back; `None` when it has none to leave out.
-fn without_vml_pictures(obj: &El) -> Option<El> {
+/// `obj` without its pictures (a DrawingML `w:drawing`, its VML shapes' `v:imagedata`), to keep an
+/// object whose picture can't be written back; `None` when it has none to leave out. Only for an
+/// object none of whose pictures could be read.
+fn without_pictures(obj: &El) -> Option<El> {
     let mut bare = obj.clone();
-    let mut dropped = false;
+    let count = bare.kids.len();
+    bare.kids.retain(|n| !matches!(n, Node::El(e) if e.name == "w:drawing"));
+    let mut dropped = bare.kids.len() != count;
     for k in &mut bare.kids {
         if let Node::El(shape) = k
             && shape.name.starts_with("v:")
