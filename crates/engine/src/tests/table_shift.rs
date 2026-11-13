@@ -192,9 +192,12 @@ fn merged_b() -> Session {
 #[test]
 fn shifts_through_a_vertically_merged_cell_are_refused_and_change_nothing() {
     // Each would move part of the merged B1:B2 (or the cells of its rows) and break it.
-    for (id, shift, r, c) in
-        [("table.insertCells", "right", 0, 0), ("table.insertCells", "down", 0, 1), ("table.deleteCells", "left", 1, 0), ("table.deleteCells", "up", 0, 1)]
-    {
+    for (id, shift, r, c) in [
+        ("table.insertCells", "right", 0, 0),
+        ("table.insertCells", "down", 0, 1),
+        ("table.deleteCells", "left", 1, 0),
+        ("table.deleteCells", "up", 0, 1),
+    ] {
         let mut s = merged_b();
         caret_in(&mut s, r, c, 0);
         let before = s.doc.clone();

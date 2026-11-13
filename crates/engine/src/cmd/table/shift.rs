@@ -297,14 +297,18 @@ fn delete_up(s: &mut Session) -> CmdResult {
     let story = s.sel.focus.story;
     let t = s.doc.table(story, &pk.tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
     let Some(segs) = segments(t, top, pk.g0, pk.g1) else { return Err(failed_merged(s)) };
-    let prefixes: Vec<Vec<u32>> = segs.iter().take(n).enumerate().flat_map(|(i, seg)| seg.clone().map(move |c| (top + i, c))).map(|(r, c)| cell_prefix(&pk.tp, r, c)).collect();
+    let prefixes: Vec<Vec<u32>> =
+        segs.iter().take(n).enumerate().flat_map(|(i, seg)| seg.clone().map(move |c| (top + i, c))).map(|(r, c)| cell_prefix(&pk.tp, r, c)).collect();
     let spans = text_spans(s, story, &prefixes);
     if let Some(done) = guard_delete(s, &spans)? {
         return Ok(done);
     }
     let t = s.doc.table_mut(story, &pk.tp)?;
-    let parts: Vec<Vec<Cell>> =
-        segs.iter().enumerate().map(|(i, seg)| t.rows.get(top + i).and_then(|row| row.cells.get(seg.clone())).map(<[Cell]>::to_vec).unwrap_or_default()).collect();
+    let parts: Vec<Vec<Cell>> = segs
+        .iter()
+        .enumerate()
+        .map(|(i, seg)| t.rows.get(top + i).and_then(|row| row.cells.get(seg.clone())).map(<[Cell]>::to_vec).unwrap_or_default())
+        .collect();
     // The rows at the bottom get blank cells shaped like the ones they had.
     let keep = parts.len().saturating_sub(n);
     let blanks: Vec<Vec<Cell>> = parts.iter().skip(keep).map(|cs| cs.iter().map(blank_like).collect()).collect();
