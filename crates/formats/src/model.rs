@@ -26,7 +26,7 @@ pub use from_doc::{
     tabs_from_indent,
 };
 pub use media::{base64_decode, base64_encode, data_uri, decode_bounded, image_px, make_img, mime_of, percent_decode, sized_img, sniff_image};
-pub use to_doc::{char_props, part_blocks, to_doc, to_doc_in};
+pub use to_doc::{char_props, format_revision, part_blocks, to_doc, to_doc_in};
 pub use types::{
     Affix, BoxLook, CODE_STYLE, Cell, CellPic, Chain, Chart, Conn, FBlock, FComment, FTable, Flow, FlowOpts, Fmt, FmtChange, Group, Img, Inline,
     Kind, Label, ListInfo, MAX_DEPTH, MAX_FONT_NAME, MAX_GROUP_DEPTH, MAX_LINK, MONO_FONT, Member, Meta, OdfObject, Para, RUBY_BASE_SIZE, RevMark,

@@ -2,7 +2,7 @@ use super::date::{dttm_to_iso, iso_date};
 use super::parse::column_grid;
 use super::state::{
     CellDef, CommentData, Dest, HeaderFooter, MARK_CLOSE, MARK_OPEN, MAX_GROUPS, MAX_NOTE_BLOCKS, MAX_NOTES, MAX_REV_AUTHORS, MAX_SECTIONS, NoteData,
-    Output, PageGeom, SecFmt, St, Sub,
+    OldRow, Output, PageGeom, RowFmt, SavedRow, SecFmt, St, Sub, TableAcc,
 };
 use super::styles::{StyleDef, drop_style_formatting, style_fmt};
 use super::{Arc, Cell, FBlock, FTable, Fmt, HashMap, HashSet, Inline, Kind, Meta, Para, Rgb, model};
@@ -28,6 +28,11 @@ pub(super) struct Reader {
     /// The headers and footers of each section ended so far (`\sect`); `hf_parts` holds the
     /// current section's.
     pub(super) section_parts: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
+    /// The tracked change of each section ended so far: who made it, and the section's
+    /// properties before it.
+    pub(super) section_changes: Vec<Option<(model::RevMark, wordcraft_doc::SectionProps)>>,
+    /// The section's formatting set aside while its `\oldsprops` group is read.
+    sec_saved: Option<Box<SecFmt>>,
     /// The header or footer being read: the group depth it started at, which one, and the
     /// body's output, put back when the group closes.
     pub(super) hf: Option<(usize, HeaderFooter, Box<Output>)>,
@@ -89,7 +94,13 @@ pub(super) struct Reader {
     cell: Vec<FBlock>,
     pub(super) defs: Vec<CellDef>,
     pub(super) def_cur: CellDef,
-    pub(super) row_header: bool,
+    /// The row definition's table and row words, the row as it was before a tracked change
+    /// (`\oldtprops`), and the row set aside while that group is read.
+    pub(super) row_fmt: RowFmt,
+    pub(super) old_row: Option<Box<OldRow>>,
+    old_saved: Option<Box<SavedRow>>,
+    /// The table being read: its formatting beyond the cells and its tracked changes.
+    table_acc: TableAcc,
     pub(super) created: Option<(u32, u32, u32, u32, u32)>,
     pub(super) in_creatim: bool,
     pub(super) rule_pending: bool,
@@ -128,15 +139,19 @@ impl Reader {
         std::mem::swap(&mut o.cell, &mut self.cell);
         std::mem::swap(&mut o.defs, &mut self.defs);
         std::mem::swap(&mut o.def_cur, &mut self.def_cur);
-        std::mem::swap(&mut o.row_header, &mut self.row_header);
+        std::mem::swap(&mut o.row_fmt, &mut self.row_fmt);
+        std::mem::swap(&mut o.old_row, &mut self.old_row);
         std::mem::swap(&mut o.rule_pending, &mut self.rule_pending);
         std::mem::swap(&mut o.table_rights, &mut self.table_rights);
+        std::mem::swap(&mut o.table_acc, &mut self.table_acc);
         o
     }
 
     /// The border of the cell side being described, else of the paragraph side.
     pub(super) fn cell_border_slot(&mut self) -> Option<&mut Option<wordcraft_doc::props::Border>> {
+        // A table's sides (`\trbrdr…`) are kept upper case.
         let (b, side) = match self.cell_side {
+            Some(c) if c.is_ascii_uppercase() => (&mut self.row_fmt.borders, c.to_ascii_lowercase()),
             Some(c) => (&mut self.def_cur.borders, c),
             None => (&mut self.st.borders, self.st.border_side?),
         };
@@ -145,8 +160,84 @@ impl Reader {
             'l' => Some(&mut b.left),
             'b' => Some(&mut b.bottom),
             'r' => Some(&mut b.right),
+            'h' => Some(&mut b.between),
+            'v' => Some(&mut b.inside_v),
             _ => None,
         }
+    }
+
+    /// Whether groups nest deeper than the reader follows (their ends restore no state).
+    pub(super) fn overflowed(&self) -> bool {
+        self.overflow > 0
+    }
+
+    /// An `\oldsprops` group starts: its words are read over a copy of the section's formatting.
+    pub(super) fn start_old_section(&mut self) {
+        let mut old = self.sec.clone();
+        old.old = None;
+        self.sec_saved = Some(Box::new(std::mem::replace(&mut self.sec, old)));
+    }
+
+    /// The `\oldsprops` group ended: what it read is the section's formatting before its tracked
+    /// change.
+    fn end_old_section(&mut self) {
+        let Some(saved) = self.sec_saved.take() else { return };
+        let old = std::mem::replace(&mut self.sec, *saved);
+        // Who and when may be written in the group too (the spec's old properties syntax).
+        if old.auth.is_some() {
+            self.sec.auth = old.auth;
+        }
+        if old.date.is_some() {
+            self.sec.date = old.date;
+        }
+        self.sec.old = Some(Box::new(old));
+    }
+
+    /// A file that ends inside an `\oldsprops` or `\oldtprops` group: the section's and the row's
+    /// own formatting come back, and what the group read is no change (it may be incomplete).
+    pub(super) fn drop_open_old_groups(&mut self) {
+        if let Some(saved) = self.sec_saved.take() {
+            self.sec = *saved;
+        }
+        if let Some(saved) = self.old_saved.take() {
+            let saved = *saved;
+            (self.row_fmt, self.defs, self.def_cur, self.cell_side) = (saved.fmt, saved.defs, saved.def_cur, saved.cell_side);
+        }
+    }
+
+    /// The tracked change of the current section: who made it, and its properties before.
+    pub(super) fn section_change(&self) -> Option<(model::RevMark, wordcraft_doc::SectionProps)> {
+        let old = self.sec.old.as_deref()?;
+        Some((self.rev_mark(self.sec.auth.unwrap_or(0), self.sec.date.unwrap_or(0)), old.props(&self.page)))
+    }
+
+    /// An `\oldtprops` group starts: the row's table and row words are read over a copy of
+    /// them, its cell definitions from none.
+    pub(super) fn start_old_row(&mut self) {
+        let saved = SavedRow {
+            defs: std::mem::take(&mut self.defs),
+            def_cur: std::mem::take(&mut self.def_cur),
+            fmt: self.row_fmt.clone(),
+            cell_side: self.cell_side.take(),
+        };
+        self.old_saved = Some(Box::new(saved));
+    }
+
+    /// The `\oldtprops` group ended: what it read is the row definition before its tracked
+    /// change, and the row's own definition comes back.
+    fn end_old_row(&mut self) {
+        let Some(saved) = self.old_saved.take() else { return };
+        let saved = *saved;
+        let old = OldRow { fmt: std::mem::replace(&mut self.row_fmt, saved.fmt), defs: std::mem::replace(&mut self.defs, saved.defs) };
+        self.def_cur = saved.def_cur;
+        self.cell_side = saved.cell_side;
+        if old.fmt.auth.is_some() {
+            self.row_fmt.auth = old.fmt.auth;
+        }
+        if old.fmt.date.is_some() {
+            self.row_fmt.date = old.fmt.date;
+        }
+        self.old_row = Some(Box::new(old));
     }
 
     /// A header or footer group starts: read it into an output of its own.
@@ -271,9 +362,11 @@ impl Reader {
             return;
         }
         let props = self.sec.props(&self.page);
+        let change = self.section_change();
         if let Some(FBlock::Para(p)) = self.body.last_mut() {
             p.section = Some(Box::new(props));
             self.section_parts.push(std::mem::take(&mut self.hf_parts));
+            self.section_changes.push(change);
         }
     }
 
@@ -319,6 +412,9 @@ impl Reader {
             "pgnlcrm" => sec.pgn_fmt = NumFormat::LowerRoman,
             "pgnucltr" => sec.pgn_fmt = NumFormat::UpperLetter,
             "pgnlcltr" => sec.pgn_fmt = NumFormat::LowerLetter,
+            "srauth" => sec.auth = Some(pv),
+            // DTTMs are 32-bit patterns, written signed or unsigned.
+            "srdate" => sec.date = Some(pv as u32),
             _ => return false,
         }
         true
@@ -366,6 +462,14 @@ impl Reader {
             _ => {}
         }
         let Some(mut prev) = self.stack.pop() else { return };
+        // The end of a section's or a row's old formatting read in the body.
+        if prev.dest == Dest::Body {
+            match closing {
+                Dest::OldSect => self.end_old_section(),
+                Dest::OldRow => self.end_old_row(),
+                _ => {}
+            }
+        }
         // The end of old formatting read in the body: the formatting it holds is the change's
         // old formatting (nested old-formatting groups only change their parent's copy).
         if let Dest::OldProps(para) = closing
@@ -474,6 +578,11 @@ impl Reader {
         }
         let mut cells = std::mem::take(&mut self.row);
         let defs = self.defs.clone();
+        // The row's definition before a tracked change, and who made it when.
+        let old = self.old_row.take();
+        let mark = self.rev_mark(self.row_fmt.auth.unwrap_or(0), self.row_fmt.date.unwrap_or(0));
+        let mut changed = false;
+        let table_borders = self.row_fmt.visible_borders().is_some();
         let mut out: Vec<Cell> = Vec::new();
         let mut rights: Vec<i32> = Vec::new();
         for (i, mut c) in cells.drain(..).enumerate() {
@@ -487,9 +596,13 @@ impl Reader {
                 rights.push(d.right);
             }
             c.shading = d.shading;
-            c.borders = d.borders.any_visible().then_some(d.borders);
-            c.header = self.row_header;
+            c.borders = d.cell_borders(table_borders);
+            c.header = self.row_fmt.header;
             c.valign = d.valign;
+            c.fmt_change = old.as_ref().and_then(|o| cell_change(o.defs.get(i), &d, table_borders)).map(|old| {
+                changed = true;
+                Box::new(model::FmtChange { mark: mark.clone(), old })
+            });
             match d.vmerge {
                 1 => c.rowspan = 2,
                 2 => c.covered = true,
@@ -507,7 +620,35 @@ impl Reader {
             rights.truncate(out.len());
             self.table.push(out);
             self.table_rights.push(rights);
+            self.end_row_formatting(old.as_deref(), mark, changed);
         }
+    }
+
+    /// The table and row formatting of the row just read, and its tracked changes: the table's
+    /// when its alignment, width or borders were others (the first row's counts), the row's when
+    /// its height, keeping together or header flag were. `cells_changed`: one of its cells has a
+    /// change of its own. A change that alters none of these is kept as the row's, so who made it
+    /// and when stay.
+    fn end_row_formatting(&mut self, old: Option<&OldRow>, mark: model::RevMark, cells_changed: bool) {
+        let fmt = &self.row_fmt;
+        let acc = &mut self.table_acc;
+        acc.table.get_or_insert_with(|| fmt.clone());
+        acc.heights.push(fmt.row_height());
+        acc.keeps.push(fmt.keep);
+        let mut row_change = None;
+        if let Some(o) = old {
+            let o = &o.fmt;
+            let table_changed = (o.align, o.table_width(), o.visible_borders()) != (fmt.align, fmt.table_width(), fmt.visible_borders());
+            if table_changed && acc.change.is_none() {
+                acc.change = Some(Box::new(model::FmtChange { mark: mark.clone(), old: o.table_props() }));
+            }
+            let row_changed = (o.row_height(), o.keep, o.header) != (fmt.row_height(), fmt.keep, fmt.header);
+            if row_changed || (!table_changed && !cells_changed) {
+                let old = if row_changed { o.row_props() } else { fmt.row_props() };
+                row_change = Some(Box::new(model::FmtChange { mark, old }));
+            }
+        }
+        acc.row_changes.push(row_change);
     }
 
     pub(super) fn close_table(&mut self) {
@@ -518,12 +659,61 @@ impl Reader {
             }
             self.end_row();
         }
+        let acc = std::mem::take(&mut self.table_acc);
         if !self.table.is_empty() {
             let mut rows = std::mem::take(&mut self.table);
             let rights = std::mem::take(&mut self.table_rights);
             let widths = column_grid(&mut rows, &rights);
-            // Word draws only the borders the cells name: no grid style, each cell its own.
-            self.body.push(FBlock::Table(FTable { rows, widths, borderless: true, extra: None, kept: None, wrap: None }));
+            // Word draws only the borders the cells name (and the table's, `\trbrdr…`): no grid
+            // style, each cell its own.
+            self.body.push(FBlock::Table(FTable { rows, widths, borderless: true, extra: table_extra(acc), kept: None, wrap: None }));
         }
     }
+}
+
+/// The formatting before a tracked change of a cell defined as `now`, defined as `old` before:
+/// its shading, borders, vertical alignment and preferred width, when one of them was other.
+fn cell_change(old: Option<&CellDef>, now: &CellDef, table_borders: bool) -> Option<wordcraft_doc::props::CellProps> {
+    let old = old?;
+    let look = |d: &CellDef| (d.shading, d.visible_borders(), d.valign, d.width_pt());
+    if look(old) == look(now) {
+        return None;
+    }
+    // No width: the width it has now.
+    let width = old.width_pt().filter(|w| Some(*w) != now.width_pt());
+    Some(wordcraft_doc::props::CellProps {
+        shading: old.shading,
+        borders: old.cell_borders(table_borders),
+        valign: old.valign,
+        width,
+        ..Default::default()
+    })
+}
+
+/// What a table keeps beyond its cells, when it has any of it.
+fn table_extra(acc: TableAcc) -> Option<Box<model::TableExtra>> {
+    let t = acc.table.unwrap_or_default();
+    let (width, width_pct) = t.table_width();
+    let borders = t.visible_borders();
+    let any = t.align.is_some()
+        || width.is_some()
+        || width_pct.is_some()
+        || borders.is_some()
+        || acc.heights.iter().any(Option::is_some)
+        || acc.keeps.iter().any(|k| *k)
+        || acc.change.is_some()
+        || acc.row_changes.iter().any(Option::is_some);
+    any.then(|| {
+        Box::new(model::TableExtra {
+            align: t.align,
+            width,
+            width_pct,
+            heights: acc.heights,
+            keep_rows: acc.keeps,
+            borders,
+            fmt_change: acc.change,
+            row_changes: acc.row_changes,
+            ..Default::default()
+        })
+    })
 }

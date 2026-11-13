@@ -1059,6 +1059,91 @@ fn rtf_tracked_changes_accept_and_reject_after_opening_and_round_trip() {
     }
 }
 
+#[test]
+fn rtf_section_and_table_formatting_changes_accept_and_reject_after_opening_and_round_trip() {
+    // Gap 19 (#6334): an RTF file's tracked section and table formatting changes (RTF 1.9.1
+    // `\oldsprops` with `\srauth`/`\srdate`, `\oldtprops` with `\trauth`/`\trdate`) open as
+    // tracked changes Accept All keeps and Reject All undoes, also after a WordCraft → RTF →
+    // WordCraft round trip.
+    let rtf: &[u8] = br"{\rtf1\ansi{\colortbl;\red255\green0\blue0;\red0\green0\blue255;}{\*\revtbl {Unknown;}{Alice;}{Bob;}}
+\sectd\lndscpsxn\pgwsxn15840\pghsxn12240{\*\oldsprops \sectd\pgwsxn12240\pghsxn15840}\srauth2\srdate-2016341499
+\pard Text\par
+\trowd\trqc\trrh-600{\*\oldtprops \trowd\trql\clcbpat1\cellx2000\cellx4000}\trauth1\trdate-1480361314\clcbpat2\cellx2000\cellx4000
+\pard\intbl a\cell b\cell\row
+\pard After\par}";
+    let look = |d: &Document| {
+        let t = d.body.iter().find_map(|b| b.as_table()).expect("the table");
+        let (row, cell) = (&t.rows[0].props, &t.rows[0].cells[0].props);
+        let changes = d.last_section.fmt_change.is_some() as u8
+            + t.props.fmt_change.is_some() as u8
+            + row.fmt_change.is_some() as u8
+            + t.rows.iter().flat_map(|r| &r.cells).filter(|c| c.props.fmt_change.is_some()).count() as u8;
+        (d.last_section.landscape, t.props.align, row.height, cell.shading, changes)
+    };
+    let (red, blue) = (Some(wordcraft_doc::Rgb(255, 0, 0)), Some(wordcraft_doc::Rgb(0, 0, 255)));
+    let (left, center) = (Some(wordcraft_doc::Align::Left), Some(wordcraft_doc::Align::Center));
+    let opened = wordcraft_formats::rtf::import(rtf).unwrap();
+    assert_eq!(look(&opened), (true, center, Some(30.0), blue, 4), "the section's, table's, row's and cell's changes");
+    let again = wordcraft_formats::rtf::import(wordcraft_formats::rtf::export(&opened).as_bytes()).unwrap();
+    for doc in [opened, again] {
+        assert_eq!(look(&doc).4, 4);
+        for (cmd, want) in [("review.acceptAll", (true, center, Some(30.0), blue, 0)), ("review.rejectAll", (false, left, None, red, 0))] {
+            let mut s = Session::new(doc.clone());
+            s.run(cmd, &json!({})).unwrap();
+            assert_eq!(look(&s.doc), want, "{cmd}");
+        }
+    }
+}
+
+#[test]
+fn docx_section_and_table_formatting_changes_survive_a_trip_through_rtf() {
+    // Gap 19 (#6334): DOCX → RTF → DOCX keeps `w:sectPrChange`, `w:tblPrChange`, `w:trPrChange`
+    // and `w:tcPrChange` with their authors, dates and old formatting.
+    use wordcraft_doc::props::{Border, Borders, CellProps, HeightRule, PropChange, RowProps, TableProps};
+    use wordcraft_doc::{Align, Block, Revision, RevisionKind, Rgb, SectionProps, Table};
+    let mut doc = Document::from_text("Before\nAfter");
+    doc.revisions = vec![
+        Revision::new(RevisionKind::Format, "Alice", "2024-03-15T10:30:00Z"),
+        Revision::new(RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z"),
+        Revision::new(RevisionKind::Format, "Carol", "2023-06-01T12:00:00Z"),
+    ];
+    doc.last_section = SectionProps { page_w: 792.0, page_h: 612.0, landscape: true, margin_left: 54.0, ..Default::default() };
+    doc.last_section.fmt_change = PropChange::boxed(1, SectionProps::default());
+    // A third row without a change of its own carries the table's author (RTF keeps one per row).
+    let mut t = Table::new(3, 2, 300.0);
+    t.props.style = None;
+    let old_table = TableProps { width: Some(200.0), align: Some(Align::Left), ..t.props.clone() };
+    (t.props.width, t.props.align, t.props.borders) = (Some(300.0), Some(Align::Center), Some(Borders::all(Border::single(1.0))));
+    t.props.fmt_change = PropChange::boxed(0, old_table);
+    let row = &mut t.rows[0].props;
+    (row.height, row.height_rule) = (Some(30.0), HeightRule::Exact);
+    row.fmt_change = PropChange::boxed(1, RowProps::default());
+    let cell = &mut t.rows[1].cells[1].props;
+    let old_cell = cell.clone();
+    cell.shading = Some(Rgb(255, 255, 0));
+    cell.fmt_change = PropChange::boxed(2, CellProps { shading: None, ..old_cell });
+    doc.body.insert(1, std::sync::Arc::new(Block::Table(t)));
+    let docx = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let via_rtf = wordcraft_formats::rtf::import(wordcraft_formats::rtf::export(&docx).as_bytes()).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&via_rtf).unwrap()).unwrap();
+    let who = |rev: u32| back.revisions.get(rev as usize).map(|r| (r.kind, r.author.as_str(), r.date.as_str()));
+    let s = &back.last_section;
+    let c = s.fmt_change.as_deref().expect("w:sectPrChange");
+    assert_eq!(who(c.rev), Some((RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z")));
+    assert!(s.landscape && !c.old.landscape && (c.old.margin_left - 72.0).abs() < 0.1);
+    let t = back.body.iter().find_map(|b| b.as_table()).expect("the table");
+    let c = t.props.fmt_change.as_deref().expect("w:tblPrChange");
+    assert_eq!(who(c.rev), Some((RevisionKind::Format, "Alice", "2024-03-15T10:30:00Z")));
+    assert_eq!((t.props.width, t.props.align, c.old.width, c.old.align), (Some(300.0), Some(Align::Center), Some(200.0), Some(Align::Left)));
+    let c = t.rows[0].props.fmt_change.as_deref().expect("w:trPrChange");
+    assert_eq!(who(c.rev), Some((RevisionKind::Format, "Bob", "2025-01-02T08:05:00Z")));
+    assert_eq!((t.rows[0].props.height, c.old.height), (Some(30.0), None));
+    let cell = &t.rows[1].cells[1].props;
+    let c = cell.fmt_change.as_deref().expect("w:tcPrChange");
+    assert_eq!(who(c.rev), Some((RevisionKind::Format, "Carol", "2023-06-01T12:00:00Z")));
+    assert_eq!((cell.shading, c.old.shading), (Some(Rgb(255, 255, 0)), None));
+}
+
 #[cfg(test)]
 mod spelling_navigation_tests {
     use super::*;
