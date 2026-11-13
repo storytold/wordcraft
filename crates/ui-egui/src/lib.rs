@@ -86,6 +86,8 @@ pub mod window_geometry;
 pub mod wordart_menus;
 pub mod zotero;
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wordcraft_engine::Session;
@@ -225,6 +227,28 @@ fn paste_target(canvas_focused: bool, backstage: bool, dialog: bool) -> bool {
     canvas_focused && !backstage && !dialog
 }
 
+/// Where the reader left a file: the page at the top of the window and, for an editable
+/// document, the caret. Restored when the same file is opened again, like Word's "pick up
+/// where you left off". A PDF has no caret, so only its page and the offset into that page
+/// are kept.
+///
+/// Distances from a page's top edge are in document points, so a saved position survives a
+/// different zoom or window size. They are rounded to [`VIEW_TOP_STEP`] to keep the number of
+/// preference writes down while scrolling.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ViewPosition {
+    /// Zero-based page at the top of the viewport.
+    pub page: usize,
+    /// Points from that page's top edge to the top of the viewport.
+    pub top: f32,
+    /// The caret, as `caret.set`'s `pos`; `None` for a read-only PDF.
+    pub caret: Option<Value>,
+    /// Paragraphs in an editable document, or pages in a PDF. A file that changed since the
+    /// position was saved isn't restored at a stale character offset.
+    pub fingerprint: usize,
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -243,6 +267,10 @@ pub struct UiState {
     /// Ribbon › Quick Access Toolbar) brings it back. Kept between runs.
     pub quick_access_toolbar: bool,
     pub recent: Vec<String>,
+    /// Reading positions, keyed by the file's path (its name on the web, where files arrive as
+    /// bytes). Kept with the other preferences so a file opened again — in this run or the
+    /// next — returns to the page and caret the reader left it at.
+    pub positions: BTreeMap<String, ViewPosition>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
@@ -352,6 +380,19 @@ pub const MAX_DICTIONARY: usize = 10_000;
 pub const MAX_RECENT_FONTS: usize = 10;
 /// The longest family name Recently Used Fonts keeps, the longest `format.font` accepts.
 pub const MAX_FONT_NAME_BYTES: usize = 128;
+/// Most files whose reading position is kept, so `ui.json` stays small.
+pub const MAX_VIEW_POSITIONS: usize = 200;
+/// Longest file key read back from the preferences (`ui.json` is user-editable).
+const MAX_VIEW_KEY: usize = 2048;
+/// Sane bounds for a saved page, offset and content fingerprint.
+const MAX_VIEW_PAGE: usize = 1_000_000;
+const MAX_VIEW_TOP: f32 = 100_000.0;
+const MAX_VIEW_FINGERPRINT: usize = 10_000_000;
+/// The grid the offset from the page's top is rounded to, in document points.
+const VIEW_TOP_STEP: f32 = 8.0;
+/// How often a position changed only by scrolling or typing is captured (milliseconds). A
+/// document switch, a window close and every command that replaces the file capture at once.
+const VIEW_CAPTURE_MS: f64 = 1000.0;
 
 impl Default for UiState {
     fn default() -> Self {
@@ -363,6 +404,7 @@ impl Default for UiState {
             ribbon_collapsed: false,
             quick_access_toolbar: true,
             recent: Vec::new(),
+            positions: BTreeMap::new(),
             recent_symbols: Vec::new(),
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
@@ -414,13 +456,49 @@ impl UiState {
             return None;
         }
         migrate_units(&mut v);
-        Some(options::lenient(&v))
+        let mut ui: UiState = options::lenient(&v);
+        sanitize_positions(&mut ui.positions);
+        Some(ui)
     }
 
     /// How many recent documents to list.
     pub fn recent_shown(&self) -> usize {
         self.recent_count.min(MAX_RECENT)
     }
+}
+
+/// Keep only sane, small reading positions from a preferences file. `options::lenient` has
+/// already dropped fields of the wrong type; this bounds the numbers (a jump to page 1e9 is
+/// clamped by the canvas anyway, but a NaN would poison every scroll calculation) and the size
+/// of the map, and drops a caret that can't be parsed as a document position.
+fn sanitize_positions(map: &mut BTreeMap<String, ViewPosition>) {
+    map.retain(|key, p| {
+        let caret_ok = p.caret.as_ref().is_none_or(|c| {
+            serde_json::from_value::<wordcraft_engine::doc::Pos>(c.clone()).is_ok() && serde_json::to_string(c).is_ok_and(|s| s.len() <= 1024)
+        });
+        !key.is_empty()
+            && key.len() <= MAX_VIEW_KEY
+            && p.page <= MAX_VIEW_PAGE
+            && p.top.is_finite()
+            && p.top >= 0.0
+            && p.top <= MAX_VIEW_TOP
+            && p.fingerprint <= MAX_VIEW_FINGERPRINT
+            && caret_ok
+    });
+    for p in map.values_mut() {
+        p.top = (p.top / VIEW_TOP_STEP).round() * VIEW_TOP_STEP;
+    }
+    while map.len() > MAX_VIEW_POSITIONS {
+        let Some(first) = map.keys().next().cloned() else { break };
+        map.remove(&first);
+    }
+}
+
+/// The key a file's reading position is kept under. On the web a file arrives as bytes and
+/// `path` is only its name, which is the best identity the browser gives us.
+fn position_key(path: &std::path::Path) -> Option<String> {
+    let key = path.to_string_lossy().into_owned();
+    (!key.is_empty() && key.len() <= MAX_VIEW_KEY).then_some(key)
 }
 
 /// Put `name` first in the Recently Used Fonts list, dropping an earlier entry for the same
@@ -583,6 +661,9 @@ pub struct WordApp {
     pub autosave: bool,
     pub word_count: (u64, usize),
     last_autosave: f64,
+    /// Last time the open file's reading position was captured, throttled so the web host
+    /// doesn't write its preferences on every frame of a scroll.
+    last_view_capture: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
     /// SmartArt Text Pane: the item last focused (Promote, Demote and Add Shape act on it) and
@@ -698,6 +779,7 @@ impl WordApp {
             autosave: true,
             word_count: (0, 0),
             last_autosave: 0.0,
+            last_view_capture: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
             smart_art_typing: None,
@@ -817,6 +899,68 @@ impl WordApp {
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
     }
 
+    /// Remember where the reader left the open file. The page at the top of the window is kept
+    /// for Word documents and PDFs alike; an editable document also keeps its caret. Called
+    /// before the file is replaced, when the window closes, and about once a second while
+    /// reading, so pure scrolling and typing are covered without a preference write per frame.
+    pub fn capture_view_position(&mut self) {
+        self.last_view_capture = now_ms();
+        if !self.has_document() {
+            return;
+        }
+        let Some(key) = self.session.path.as_deref().and_then(position_key) else { return };
+        let pdf = self.session.pdf_view();
+        let fingerprint = pdf.as_ref().map_or_else(|| self.session.doc.paragraph_count(), |v| v.page_count());
+        let caret = if pdf.is_none() { serde_json::to_value(&self.session.sel.focus).ok() } else { None };
+        // Page rects are last frame's. Until the new file has been painted they still describe
+        // the file that was replaced, so keep its page out of the new file's record.
+        let rects_current = self.canvas.page_rects_document == Some(self.session.document_id());
+        let previous = self.ui.positions.get(&key);
+        let (page, top) = match rects_current.then(|| canvas::position_at_scroll(&self.canvas, self.session.view.read_mode)).flatten() {
+            Some((page, top)) => (page.min(MAX_VIEW_PAGE), (top / VIEW_TOP_STEP).round() * VIEW_TOP_STEP),
+            None => previous.map_or((0, 0.0), |p| (p.page, p.top)),
+        };
+        let position = ViewPosition { page, top, caret, fingerprint };
+        if previous == Some(&position) {
+            return;
+        }
+        if self.ui.positions.len() >= MAX_VIEW_POSITIONS && !self.ui.positions.contains_key(&key) {
+            let Some(oldest) = self.ui.positions.keys().next().cloned() else { return };
+            self.ui.positions.remove(&oldest);
+        }
+        self.ui.positions.insert(key, position);
+    }
+
+    /// Put back the position saved for the file that just opened. Runs after the engine replaced
+    /// the document, and only for `file.open`: a new document starts at its beginning.
+    fn restore_view_position(&mut self) {
+        let Some(key) = self.session.path.as_deref().and_then(position_key) else { return };
+        let Some(saved) = self.ui.positions.get(&key).cloned() else { return };
+        let pdf = self.session.pdf_view();
+        let fingerprint = pdf.as_ref().map_or_else(|| self.session.doc.paragraph_count(), |v| v.page_count());
+        // A file edited elsewhere since the last visit may not have the same text at the same
+        // offsets; opening it at its beginning is better than dropping the reader into the
+        // middle of a different document.
+        if saved.fingerprint != fingerprint {
+            return;
+        }
+        if pdf.is_none()
+            && let Some(caret) = saved.caret.as_ref()
+            && let Ok(pos) = serde_json::from_value::<wordcraft_engine::doc::Pos>(caret.clone())
+        {
+            let pos = self.session.doc.clamp(&pos);
+            self.session.sel = wordcraft_engine::Selection::caret(pos);
+            self.session.goal_x = None;
+            self.session.column = None;
+            self.session.column_mode = false;
+        }
+        // The canvas applies this on its first frame with the new file's page rects.
+        self.canvas.restore_view = Some((saved.page.min(MAX_VIEW_PAGE), saved.top.clamp(0.0, MAX_VIEW_TOP)));
+        self.canvas.scroll_to_caret = false;
+        self.canvas.nav_to_caret = false;
+        self.canvas.read_target_page = None;
+    }
+
     /// Select the picture or icon the person just inserted or pasted, so it shows its handles.
     /// `insert.picture` leaves the caret after it, which scripts and agents keep so their next
     /// typing doesn't replace it (#965).
@@ -915,6 +1059,10 @@ impl WordApp {
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
     /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // Before New/Open/Close replaces the document, keep the outgoing file's reading place.
+        if discards_document(id, &params) {
+            self.capture_view_position();
+        }
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
@@ -1016,6 +1164,7 @@ impl WordApp {
         let document = self.session.document_id();
         let old_path = self.session.path.clone();
         let r = self.session.run(id, &params).map_err(|e| e.to_string());
+        let replaced = self.session.document_id() != document;
         // Copy and Cut put what they took on the system clipboard, whichever control ran them
         // (the ribbon, a context menu, the native menu, or the Cmd+C/X event). Only the key event
         // used to write it, so a Cut button deleted the words without copying them.
@@ -1028,7 +1177,7 @@ impl WordApp {
         }
         // When the document has been replaced (not when Open only showed its picker), a pending
         // "Save changes?" and AutoSave's go-ahead were both about the old one.
-        if self.session.document_id() != document {
+        if replaced {
             self.autosave_path = None;
             if matches!(self.dialog, Some(dialogs::Dialog::SaveChanges { .. })) {
                 self.dialog = None;
@@ -1040,6 +1189,7 @@ impl WordApp {
             self.canvas.pdf_goto = None;
             self.canvas.pdf_current_page = None;
             self.canvas.pdf_doc_ptr = None;
+            self.canvas.restore_view = None;
             crate::table_pen::stop(self);
         }
         // An explicit save to the document's own file lets AutoSave keep writing there.
@@ -1065,6 +1215,11 @@ impl WordApp {
             self.keep_web_font(id, &params, v);
         }
         self.after_command(id);
+        // The file that just opened goes back to the page and caret it was left at. `after_command`
+        // asks the canvas to follow the caret; the saved scroll takes precedence.
+        if r.is_ok() && replaced && id == "file.open" {
+            self.restore_view_position();
+        }
         if let Err(e) = &r {
             self.status(e.clone());
         }
@@ -1314,6 +1469,9 @@ impl WordApp {
     /// The window's close button (or the system) asked to quit. Returns true to let the window
     /// close; with unsaved changes it asks first and returns false.
     pub fn close_requested(&mut self) -> bool {
+        // The desktop host writes its preferences on exit; the macOS quit path can bypass
+        // `on_exit`, so take the last reading place here as well.
+        self.capture_view_position();
         if self.printing.busy() {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
@@ -1750,6 +1908,19 @@ impl WordApp {
                 self.status(tl!("Click the empty text box the text should continue in (Esc cancels)"));
                 json!({"pending": "link"})
             }
+            // The reading place kept for the open file (control channel, scripts, tests).
+            // Without `clear` it only reads; clearing forgets every remembered file.
+            "ui.viewPosition" => {
+                let clear = p.get("clear").and_then(Value::as_bool) == Some(true);
+                if clear {
+                    self.ui.positions.clear();
+                } else {
+                    self.capture_view_position();
+                }
+                let key = self.session.path.as_deref().and_then(position_key);
+                let saved = key.as_deref().and_then(|k| self.ui.positions.get(k)).and_then(|v| serde_json::to_value(v).ok());
+                json!({"path": key, "saved": saved, "count": self.ui.positions.len()})
+            }
             // Read-only PDF navigation and selection. These live in the UI (like `ui.click`)
             // because a PDF has no `Document` to edit: `edit.goto` moves a caret and `edit.copy`
             // would read the blank placeholder document.
@@ -2100,7 +2271,13 @@ impl WordApp {
         if let Some(wait) = self.session.recovery_wait() {
             ctx.request_repaint_after(wait);
         }
-        self.autosave_tick(now_ms());
+        let now = now_ms();
+        // Scrolling and typing change the reading place without running a command. Capture it
+        // about once a second; document switches and window closing capture immediately.
+        if now - self.last_view_capture >= VIEW_CAPTURE_MS {
+            self.capture_view_position();
+        }
+        self.autosave_tick(now);
         if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
         }
@@ -2694,6 +2871,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.viewPosition"
     ) || id.starts_with("help.")
 }
 
@@ -2883,6 +3061,113 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    /// Opening a Word document again returns to the caret the reader left it at, even after a
+    /// whole restart (the positions travel with `ui.json`, like the other preferences).
+    #[test]
+    fn a_documents_caret_survives_a_restart() {
+        let dir = std::env::temp_dir().join(format!("wc-view-position-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, "first paragraph\nsecond paragraph\nthird paragraph").unwrap();
+        let name = path.to_string_lossy().to_string();
+
+        let mut first = app();
+        first.run("file.open", json!({"path": name})).unwrap();
+        first.run("caret.docEnd", json!({})).unwrap();
+        let caret = first.session.sel.focus.clone();
+        assert!(caret.off > 0, "the caret moved into the text: {caret:?}");
+        // No frame has painted this document headlessly, so the page stays at the beginning;
+        // the caret is remembered all the same.
+        first.capture_view_position();
+        let saved = serde_json::to_string(&first.prefs()).unwrap();
+        assert!(saved.contains(r#""positions""#), "{saved}");
+
+        let mut second = app();
+        second.apply_prefs(UiState::from_json(saved.as_bytes()).unwrap());
+        second.run("file.open", json!({"path": name})).unwrap();
+        assert_eq!(second.session.sel.focus, caret, "the caret is where it was left");
+        assert_eq!(second.canvas.restore_view, Some((0, 0.0)));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A PDF has no caret: its page and the distance into that page are what come back.
+    #[test]
+    fn a_pdfs_page_survives_a_restart() {
+        let mut first = app();
+        first.run("file.open", json!({"path": "book.pdf", "data": PDF_WITH_TEXT})).unwrap();
+        // A frame's page rects in content coordinates; the reader is 120 pt into page 3 (of a
+        // longer book than this one-page fixture, which the canvas clamps on restoration).
+        first.canvas.page_rects_document = Some(first.session.document_id());
+        first.canvas.page_content_rects =
+            (0..3).map(|i| egui::Rect::from_min_size(egui::pos2(18.0, 18.0 + i as f32 * 900.0), egui::vec2(600.0, 842.0))).collect();
+        first.canvas.scale = 1.0;
+        first.canvas.scroll_offset = egui::vec2(0.0, first.canvas.page_content_rects[2].min.y + 120.0 - 40.0);
+        first.capture_view_position();
+        assert_eq!(first.ui.positions.get("book.pdf").map(|p| (p.page, p.top)), Some((2, 120.0)));
+        let saved = serde_json::to_string(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(UiState::from_json(saved.as_bytes()).unwrap());
+        second.run("file.open", json!({"path": "book.pdf", "data": PDF_WITH_TEXT})).unwrap();
+        assert_eq!(second.canvas.restore_view, Some((2, 120.0)), "the page and its offset come back");
+        assert!(second.session.pdf.is_some());
+        // The blank placeholder behind a PDF keeps its own caret: only the view moved.
+        assert_eq!(second.session.sel.focus.off, 0);
+    }
+
+    /// Changing a file between visits must not drop the reader into the middle of different
+    /// text at a stale character offset.
+    #[test]
+    fn a_changed_file_is_opened_at_its_beginning() {
+        let dir = std::env::temp_dir().join(format!("wc-view-changed-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("notes.txt");
+        std::fs::write(&path, "one\ntwo\nthree").unwrap();
+        let name = path.to_string_lossy().to_string();
+        let mut first = app();
+        first.run("file.open", json!({"path": name})).unwrap();
+        first.run("caret.docEnd", json!({})).unwrap();
+        first.capture_view_position();
+        let saved = serde_json::to_string(&first.prefs()).unwrap();
+
+        std::fs::write(&path, "a completely different document with many more paragraphs\nand another\nand another\nand another").unwrap();
+        let mut second = app();
+        second.apply_prefs(UiState::from_json(saved.as_bytes()).unwrap());
+        second.run("file.open", json!({"path": name})).unwrap();
+        assert_eq!(second.session.sel.focus.off, 0, "a different file is not restored at a stale offset");
+        assert_eq!(second.canvas.restore_view, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `ui.json` is user-editable: junk reading positions are dropped, not trusted.
+    #[test]
+    fn hostile_view_positions_are_dropped() {
+        let ui = UiState::from_json(
+            br#"{"positions": {"bad.pdf": {"page": 1e9, "top": 1e30, "caret": {"nope": 1}, "fingerprint": 4}, "": {"page": 0}, "good.pdf": {"page": 2, "top": 41, "fingerprint": 4}}}"#,
+        )
+        .unwrap();
+        assert_eq!(ui.positions.len(), 1, "{:?}", ui.positions);
+        let good = ui.positions.get("good.pdf").unwrap();
+        assert_eq!((good.page, good.top, good.fingerprint), (2, 40.0, 4), "offsets are rounded to the grid");
+        // A saved file with a page far beyond anything real still restores clamped, never panics.
+        let ui = UiState::from_json(br#"{"positions": {"huge.pdf": {"page": 999999, "top": 99999.0, "fingerprint": 1}}}"#).unwrap();
+        assert_eq!(ui.positions.get("huge.pdf").map(|p| p.page), Some(999999));
+    }
+
+    /// The control channel can read and forget the remembered places.
+    #[test]
+    fn view_position_command_reads_and_clears() {
+        let mut a = app();
+        a.session.path = Some("notes.txt".into());
+        let r = a.run("ui.viewPosition", json!({})).unwrap();
+        assert_eq!(r["path"], json!("notes.txt"));
+        assert_eq!(r["count"], json!(1));
+        assert!(r["saved"]["caret"].is_object(), "{r}");
+        let r = a.run("ui.viewPosition", json!({"clear": true})).unwrap();
+        assert_eq!(r["count"], json!(0));
+        assert!(r["saved"].is_null());
     }
 
     /// Opening a PDF shows its pages through the ordinary canvas texture path and refuses edits.

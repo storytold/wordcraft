@@ -77,6 +77,8 @@ impl eframe::App for App {
             {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.0.quit_requested = false;
+                // This quit path saves preferences itself; take the last reading place first.
+                self.0.capture_view_position();
                 schedule_macos_terminate(&self.0, self.2.as_ref());
             }
             #[cfg(not(target_os = "macos"))]
@@ -94,6 +96,8 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
+        // The file's last page and caret go out with the other preferences.
+        self.0.capture_view_position();
         save_prefs(&self.0);
         if let Some(key_file) = &self.2 {
             key_file.remove();

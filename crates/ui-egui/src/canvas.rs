@@ -79,7 +79,7 @@ pub struct CanvasState {
     /// last frame's layout. Survives changing page sizes, even when the caret stays elsewhere.
     pub(crate) read_first_visible: Option<Pos>,
     /// An animated column-turn destination; intermediate offsets are allowed during the motion.
-    read_target_page: Option<usize>,
+    pub(crate) read_target_page: Option<usize>,
     pub caret_visible_since: f64,
     /// The caret's colour and the fingerprint of where it was worked out ([`caret_color_at`]).
     caret_bg: Option<(u64, Color32)>,
@@ -100,6 +100,10 @@ pub struct CanvasState {
     pub pdf_selection: Option<PdfSelection>,
     /// A clicked PDF link asks for a jump to (page, distance from the page top in points).
     pub pdf_goto: Option<(usize, f32)>,
+    /// A saved reading position (page, distance from the page top in points) waiting for the
+    /// first frame that has the new file's page rects. Unlike `pdf_goto` it survives the
+    /// document-change reset, because it is set for the file that just opened.
+    pub(crate) restore_view: Option<(usize, f32)>,
     /// The link under the pointer (page, link index), for hover feedback.
     pub pdf_hover_link: Option<(usize, usize)>,
     /// Identity of the PDF view last frame, so switching files drops the stale selection.
@@ -110,6 +114,13 @@ pub struct CanvasState {
     pub pdf_copy_text: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
+    /// The document those rects were laid out for. A freshly opened file has no rects of its
+    /// own until its first frame, and the previous file's must not describe its reading place.
+    pub(crate) page_rects_document: Option<u64>,
+    /// Last frame's page rects in **content** coordinates (before the scroll offset and the
+    /// canvas origin are applied). `page_rects` are screen coordinates; a saved reading place
+    /// has to be measured against the same coordinates as `scroll_offset`.
+    pub(crate) page_content_rects: Vec<Rect>,
     /// While the vertical scrollbar is dragged: the page at the top of the window (0-based),
     /// which a tip beside the pointer names (#2551).
     pub scrollbar_page: Option<usize>,
@@ -270,11 +281,14 @@ impl Default for CanvasState {
             open_url: None,
             pdf_selection: None,
             pdf_goto: None,
+            restore_view: None,
             pdf_hover_link: None,
             pdf_doc_ptr: None,
             pdf_current_page: None,
             pdf_copy_text: None,
             page_rects: Vec::new(),
+            page_rects_document: None,
+            page_content_rects: Vec::new(),
             scrollbar_page: None,
             scale: PX_PER_PT,
             canvas_rect: None,
@@ -1108,6 +1122,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     {
         app.session.page_hint = c.page;
     }
+    // A file opened with a saved reading place scrolls there on this first frame, instead of
+    // following the caret or the navigation pane. The offset may lie beyond the scroll range of
+    // the file open before, so work from this frame's geometry rather than last frame's maximum.
+    if app.canvas.restore_view.is_some() {
+        app.canvas.scroll_to_caret = false;
+        app.canvas.nav_to_caret = false;
+        app.canvas.read_target_page = None;
+        app.canvas.scroll_max = (geo.size - area.size()).max(egui::Vec2::ZERO);
+    }
     let mut scroll_target: Option<Rect> = None;
     if app.canvas.nav_to_caret {
         app.canvas.read_target_page = None;
@@ -1143,15 +1166,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         scroll_target = Some(r.expand2(vec2(40.0, 60.0)));
     }
     app.canvas.scroll_to_caret = false;
+    // The reading place saved for the file that just opened. It waits for a frame with this
+    // file's page rects; a link clicked in the same frame (`pdf_goto`) still wins below.
+    if let Some((page, top)) = app.canvas.restore_view
+        && let Some(to) = scroll_to_position(&geo.rects, geo.scale, page.min(geo.rects.len().saturating_sub(1)), top)
+    {
+        app.canvas.scroll_request = Some(to);
+        app.canvas.restore_view = None;
+    }
     // A clicked PDF link scrolls to its target page (and, for /XYZ destinations, its y offset).
     // `edit.goto` moves a caret and is refused in the read-only view, so PDF navigation stays
     // in the UI layer like the other page-turn requests.
     if let Some((page, top)) = app.canvas.pdf_goto.take()
-        && let Some(pr) = geo.rects.get(page)
+        && let Some(to) = scroll_to_position(&geo.rects, geo.scale, page, top)
     {
-        let x = (pr.left() - GAP).max(0.0);
-        let y = (pr.top() + top * geo.scale - 40.0).max(0.0);
-        app.canvas.scroll_request = Some(vec2(x, y));
+        app.canvas.scroll_request = Some(to);
     }
     let mut origin = area.min;
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
@@ -1480,6 +1509,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
         app.canvas.tiles.retain(|id, _| visible_tile_keys.contains(id));
         app.canvas.page_rects = rects.clone();
+        app.canvas.page_content_rects = geo.rects.clone();
+        app.canvas.page_rects_document = Some(app.session.document_id());
         let view_rect = ui.clip_rect();
         if floating_comments(app) {
             // Its own layer, so presses on the card never reach the canvas under it.
@@ -2303,6 +2334,38 @@ pub fn page_at(rects: &[Rect], layout: &DocLayout, scale: f32, p: Pos2) -> Optio
     let r = rects.get(i)?;
     let scale = layout.pages.get(i).map_or(scale, |page| page_screen_scale(*r, page, scale));
     Some((i, (p.x - r.min.x) / scale, (p.y - r.min.y) / scale))
+}
+
+/// The scroll offset that puts `page` at the top of the viewport, `top` document points into
+/// it. PDF link destinations and restored reading positions share this, so capturing a
+/// position ([`position_at_scroll`]) and putting it back are exact inverses.
+pub(crate) fn scroll_to_position(rects: &[Rect], scale: f32, page: usize, top: f32) -> Option<egui::Vec2> {
+    let pr = rects.get(page)?;
+    let x = (pr.left() - GAP).max(0.0);
+    let y = (pr.top() + top * scale - 40.0).max(0.0);
+    Some(vec2(x, y))
+}
+
+/// Inverse of [`scroll_to_position`]: the page and offset a scroll offset is showing. Read Mode
+/// turns whole columns sideways, so there the horizontal offset picks the page.
+pub(crate) fn position_at_scroll(c: &CanvasState, read_mode: bool) -> Option<(usize, f32)> {
+    let rects = &c.page_content_rects;
+    if rects.is_empty() || !c.scale.is_finite() || c.scale <= 0.0 || !c.scroll_offset.is_finite() {
+        return None;
+    }
+    let offset = c.scroll_offset;
+    let last = rects.len().saturating_sub(1);
+    let page = if read_mode {
+        rects.iter().position(|r| r.right() > offset.x).unwrap_or(last)
+    } else {
+        rects.iter().position(|r| r.bottom() > offset.y + 80.0).unwrap_or(last)
+    };
+    let pr = rects.get(page)?;
+    let top = if read_mode { offset.y - pr.top() } else { offset.y + 40.0 - pr.top() } / c.scale;
+    if !top.is_finite() {
+        return None;
+    }
+    Some((page, top.max(0.0)))
 }
 
 /// The page whose screen rect is under (or nearest to) a screen point.
@@ -3562,6 +3625,32 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+
+    /// Saving a reading place and putting it back are inverses, at any zoom: the page and its
+    /// offset describe document points, not the scroll offset in screen points.
+    #[test]
+    fn a_saved_reading_position_scrolls_back_to_the_same_place() {
+        let rects: Vec<Rect> = (0..3).map(|i| Rect::from_min_size(pos2(18.0, 18.0 + i as f32 * 860.0), vec2(600.0, 842.0))).collect();
+        for scale in [0.5_f32, 1.0, 1.5, 3.0] {
+            let mut c = CanvasState::default();
+            c.page_content_rects = rects.clone();
+            c.scale = scale;
+            for (page, top) in [(0, 96.0_f32), (1, 96.0), (2, 400.0)] {
+                c.scroll_offset = scroll_to_position(&rects, scale, page, top).unwrap();
+                let found = position_at_scroll(&c, false).unwrap();
+                assert_eq!(found, (page, top), "scale {scale}, page {page}, top {top}");
+            }
+            // At the very top the 40 pt breathing room is clamped away; restoring still lands
+            // within a couple of points of the beginning instead of jumping down the page.
+            c.scroll_offset = egui::Vec2::ZERO;
+            let (page, top) = position_at_scroll(&c, false).unwrap();
+            assert_eq!(page, 0);
+            assert!(top * scale < 40.0, "top of the document: {top} at {scale}");
+        }
+        // A page that no longer exists (a shorter file) is not a jump, just no scroll request.
+        assert_eq!(scroll_to_position(&rects, 1.0, 999, 0.0), None);
+        assert_eq!(position_at_scroll(&CanvasState::default(), false), None, "no rects yet");
+    }
 
     /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
     /// held while the window is dragged, applied once the size has been still for the settle time.

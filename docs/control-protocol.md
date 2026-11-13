@@ -90,6 +90,27 @@ instead of the blank document behind the view). Destinations come from
 `/A /URI`; external links reach the host only when they are web or mail URLs. See
 `docs/file-format-parity.md` for what is not supported.
 
+### Reading position
+
+WordCraft keeps the page at the top of the window and, for an editable document, the caret,
+for each file it has opened. Opening the file again — with `file.open`, from Recent, or as a
+command-line argument on the next launch — returns to that place. PDFs keep just the page and
+the distance into it, page points from the page's top edge. The positions live in `ui.json`
+(the browser's `localStorage` on the web) with the other preferences; a file whose paragraph or
+page count changed since is opened at its beginning instead.
+
+`ui.viewPosition` (through `engine.execute`) reads what is currently remembered, and
+`{"clear": true}` forgets every file:
+
+| Params | Result |
+|---|---|
+| — | `{path, saved: {page, top, caret?, fingerprint?} or null, count}` |
+| `clear: true` | `{path, saved: null, count: 0}` |
+
+`page` is 0-based; `top` is rounded to 8 pt. The canvas applies the restore on its first frame
+with the new file's page rects, so a jump requested in the same frame by `ui.pdf.goto` still
+wins.
+
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
 The `CharProps` and `ParaProps` that `format.set`, `para.set` and `styles.modify` take are listed
