@@ -87,7 +87,7 @@ impl Writer<'_> {
         }
         rels.add(rt::GLOSSARY, &file(part), false);
         push_part(entries, overrides, part, w.into_bytes(), GLOSSARY_CONTENT_TYPE, prels);
-        push_part(entries, overrides, styles, styles_xml(doc), &format!("{CT_WML}styles+xml"), PartRels::default());
+        push_part(entries, overrides, styles, styles_xml(self), &format!("{CT_WML}styles+xml"), PartRels::default());
         if lists {
             push_part(entries, overrides, numbering, numbering_xml(doc), &format!("{CT_WML}numbering+xml"), PartRels::default());
         }

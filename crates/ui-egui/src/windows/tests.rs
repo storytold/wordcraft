@@ -777,3 +777,16 @@ fn newly_opened_window_does_not_exceed_screen_width() {
     std::fs::remove_dir_all(doc1.parent().unwrap()).ok();
     std::fs::remove_dir_all(doc2.parent().unwrap()).ok();
 }
+
+/// Verifies that secondary viewports register ViewportInput and sync scroll speed settings even without queued control inputs.
+#[test]
+fn secondary_viewport_syncs_touchpad_scroll_speed_without_control_input() {
+    let ctx = backend();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    a.ui.scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    frame(&ctx, &mut a);
+    let (touchpad, wheel) = ctx.with_plugin(|p: &mut super::ViewportInput| (p.touchpad_speed, p.wheel_speed)).unwrap();
+    assert_eq!(touchpad, crate::scroll::ScrollSpeed::Fast);
+    assert_eq!(wheel, crate::scroll::ScrollSpeed::Fast);
+}
