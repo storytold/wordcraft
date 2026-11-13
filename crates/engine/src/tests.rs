@@ -877,6 +877,25 @@ fn thesaurus_at_a_caret_looks_up_a_quoted_word_without_its_quotes() {
 }
 
 #[test]
+fn a_synonym_replaces_the_word_and_keeps_its_quotes() {
+    // The range a chosen synonym replaces (the context menu's): the word without its quotes or the
+    // space after it, while an apostrophe inside a word stays part of it (#6517).
+    let word = |text: &str, caret: usize| {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": text, "raw": true}));
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": caret}}));
+        let (a, b) = crate::cmd::review::thesaurus_word(&s).unwrap();
+        s.sel = crate::Selection { anchor: a, focus: b };
+        run(&mut s, "text.insert", json!({"text": "fine", "raw": true}));
+        s.doc.plain_text(StoryRef::Body)
+    };
+    assert_eq!(word("a ‘good’ day", 6), "a ‘fine’ day");
+    assert_eq!(word("a 'good' day", 4), "a 'fine' day");
+    assert_eq!(word("a good day", 3), "a fine day");
+    assert_eq!(word("don’t go", 1), "fine go");
+}
+
+#[test]
 fn border_toggles_and_saves() {
     use wordcraft_doc::props::Border;
     let border = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border;

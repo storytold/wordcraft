@@ -12,6 +12,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 mod changes;
 mod comments;
 mod proofing;
+pub use proofing::thesaurus_word;
 
 pub(crate) use changes::StyleTarget;
 pub use changes::{
