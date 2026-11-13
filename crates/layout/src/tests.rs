@@ -13579,14 +13579,15 @@ fn an_empty_paragraph_after_a_table_ends_its_cell_without_a_line() {
         let h = row(blocks);
         assert!((h - alone - 24.0 * lines).abs() < 0.01, "{what}: {h}, {alone} for the table alone");
     }
-    // After a floating table the paragraph is laid out as before.
-    let floating = || {
-        let mut t = table(vec![vec![para("In", 12.0, 0.0)]]);
-        t.props.float = Some(Default::default());
-        Arc::new(Block::Table(t))
-    };
-    let h = row(vec![floating(), para("", 12.0, 0.0)]);
-    assert!(h >= 24.0 - 0.01, "after a floating table: {h}");
+    // Whatever its line: an empty paragraph with an exact 60 pt line, taller than anything else in
+    // the row, takes no room either. (After a floating table the cell's end is #5458's subject;
+    // `ends_with_table` leaves that case alone.)
+    let mut tall = para("", 12.0, 0.0);
+    if let Block::Para(p) = Arc::make_mut(&mut tall) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(60.0));
+    }
+    let h = row(vec![nested(), tall]);
+    assert!((h - alone).abs() < 0.01, "an empty paragraph with a 60 pt line: {h}, {alone} without");
 }
 
 #[test]
