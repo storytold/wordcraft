@@ -1530,7 +1530,10 @@ fn double_and_triple_click_select_in_a_note() {
             clicks(&mut h, at, 3);
             assert_eq!(h.state().session.sel.focus.story, note, "{case}: the triple-click stays in the note");
             let paragraph = h.state().session.selected_text();
-            assert!(paragraph.contains("Alpha bravo charlie") && !paragraph.contains("Delta"), "{case}: the first paragraph is selected: {paragraph:?}");
+            assert!(
+                paragraph.contains("Alpha bravo charlie") && !paragraph.contains("Delta"),
+                "{case}: the first paragraph is selected: {paragraph:?}"
+            );
             // With the caret in a footnote, a double-click on the page's blank space between the
             // body text and the footnote (on no story's text) is the body's: the caret leaves
             // the note, as it did before the note kept its double-clicks.
