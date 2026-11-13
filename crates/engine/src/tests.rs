@@ -97,7 +97,7 @@ fn aes_encrypted_packages_open_under_any_word_extension() {
     let agile = wordcraft_docx::encrypt_with_spin_count(&pkg, "letmein", 8).unwrap();
     for (kind, bytes) in [("standard", &standard), ("agile", &agile)] {
         for name in ["old.doc", "old.docx", "old.dot", "noext"] {
-            let (d, encrypted) = crate::io::open_bytes_with(name, bytes, Some("letmein")).unwrap_or_else(|e| panic!("{kind} {name}: {e}"));
+            let (d, encrypted, _) = crate::io::open_bytes_with(name, bytes, Some("letmein")).unwrap_or_else(|e| panic!("{kind} {name}: {e}"));
             assert!(encrypted, "{kind} {name}");
             assert!(d.plain_text(StoryRef::Body).contains("Old secret minutes"), "{kind} {name}");
             assert_eq!(d.core.title, "Minutes");
@@ -7830,7 +7830,7 @@ fn password_protected_documents_round_trip() {
     // Saving again keeps the password, as Word does.
     run(&mut t, "text.insert", json!({"text": "Q3 "}));
     run(&mut t, "file.save", json!({}));
-    let (doc, encrypted) = crate::io::open_path_with(&path, Some("hunter2")).unwrap();
+    let (doc, encrypted, _) = crate::io::open_path_with(&path, Some("hunter2")).unwrap();
     assert!(encrypted && doc.plain_text(StoryRef::Body).contains("Q3"));
 
     // Removing the password saves the document unencrypted.
@@ -11313,7 +11313,7 @@ fn json_open_repairs_hostile_run_lengths() {
             p.runs = lens.iter().map(|&len| wordcraft_doc::para::Run { len, props: Default::default() }).collect();
         }
         let bytes = serde_json::to_vec(&d).unwrap();
-        let (doc, _) = crate::io::open_bytes_with("x.json", &bytes, None).unwrap();
+        let (doc, _, _) = crate::io::open_bytes_with("x.json", &bytes, None).unwrap();
         let Some(Block::Para(p)) = doc.body.first().map(|b| &**b) else { panic!("no paragraph") };
         let mut end = 0;
         for (r, _) in p.run_ranges() {

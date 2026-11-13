@@ -149,7 +149,7 @@ fn encrypted_save_reopens_only_with_password_and_leaves_neighbours_alone() {
     std::fs::write(&neighbour, b"Keep this sibling.").unwrap();
     io::save_path_with(&path, &edited(), Some("synthetic-test-password"), &io::ExportOptions::default()).unwrap();
     assert!(io::needs_password(&io::open_path(&path).unwrap_err()));
-    let (doc, encrypted) = io::open_path_with(&path, Some("synthetic-test-password")).unwrap();
+    let (doc, encrypted, _) = io::open_path_with(&path, Some("synthetic-test-password")).unwrap();
     assert!(encrypted);
     assert_eq!(doc.plain_text(StoryRef::Body), edited().plain_text(StoryRef::Body));
     assert_eq!(std::fs::read(&neighbour).unwrap(), b"Keep this sibling.");

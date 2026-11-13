@@ -236,6 +236,9 @@ pub(crate) fn normal_document(s: &Session) -> Document {
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
         Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
     }
+    if let Some(np) = s.prefs.default_no_proof {
+        Arc::make_mut(&mut d.styles).default_chr.no_proof = Some(np);
+    }
     d
 }
 
@@ -256,7 +259,6 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         );
     }
     let password = p::str(v, "password");
-    // An empty file opens as a new blank document that saves back to it (#1384).
     let (doc, encrypted) = read_document(s, path, v)?;
     match s.used_because() {
         None => s.set_document(doc),
@@ -311,23 +313,27 @@ fn markdown_file_text(path: &str, v: &Value) -> super::md_source::FileText {
 /// in the editing language.
 fn read_document(s: &Session, path: &str, v: &Value) -> Result<(Document, bool), CmdError> {
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+    let (mut doc, encrypted, is_plain_text) = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
         if bytes.is_empty() {
-            (normal_document(s), false)
+            (normal_document(s), false, true)
         } else {
             crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
+        (normal_document(s), false, true)
     } else {
         crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
-    let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
+    let ext = path.rsplit(['/', '\\']).next().unwrap_or(path).rsplit_once('.').map(|(_, e)| e.to_ascii_lowercase()).unwrap_or_default();
+    let inherits_editing_lang = is_plain_text || ext == "md" || ext == "markdown";
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
-        && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
+        && inherits_editing_lang
     {
         Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
+    }
+    if is_plain_text && let Some(np) = s.prefs.default_no_proof {
+        Arc::make_mut(&mut doc.styles).default_chr.no_proof = Some(np);
     }
     Ok((doc, encrypted))
 }

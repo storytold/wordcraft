@@ -23,6 +23,10 @@ pub struct Prefs {
     /// blank documents and plain text. Older preferences keep following the interface.
     #[serde(deserialize_with = "lenient_default_language")]
     pub default_language: Option<String>,
+    /// When opening plain text or Markdown files, apply the saved "do not check spelling
+    /// or grammar" default. `None` means follow the interface default (proofing on).
+    #[serde(default)]
+    pub default_no_proof: Option<bool>,
     /// Typing over a selection replaces it; off, the typed text goes in front of it.
     pub typing_replaces_selection: bool,
     /// The Insert key switches overtype on and off.
@@ -87,6 +91,7 @@ impl Default for Prefs {
             ignore_internet: true,
             detect_language: true,
             default_language: None,
+            default_no_proof: None,
             autocorrect: Default::default(),
         }
     }

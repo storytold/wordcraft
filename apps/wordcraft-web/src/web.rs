@@ -5,7 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
-use wordcraft_engine::Session;
+use wordcraft_engine::{Session, normal_document};
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
@@ -84,10 +84,10 @@ pub fn start() {
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
-                    // A region chosen in File › Options replaces the browser's for the first blank
-                    // document too (#838).
-                    if !sample && app.session.prefs.region.is_some() {
-                        let doc = app.session.blank_document();
+                    // Apply Normal template preferences (default language, default_no_proof) to the
+                    // startup document when the Start screen is off (#838, CodeRabbit review).
+                    if !sample {
+                        let doc = normal_document(&app.session);
                         app.session.set_document(doc);
                     }
                     let mut prefs = crate::prefs::PrefsSync::new(stored);
