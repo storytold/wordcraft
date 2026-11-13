@@ -41,9 +41,10 @@ pub(crate) fn preset_kind(prst: &str) -> ShapeKind {
         "straightConnector1" => ShapeKind::StraightConnector,
         "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,
         "curvedConnector2" | "curvedConnector3" | "curvedConnector4" | "curvedConnector5" => ShapeKind::CurvedConnector,
-        "rightArrow" | "leftArrow" | "upArrow" | "downArrow" | "leftRightArrow" | "upDownArrow" | "notchedRightArrow" | "stripedRightArrow" => {
-            ShapeKind::Arrow
-        }
+        "rightArrow" | "leftRightArrow" | "upDownArrow" | "notchedRightArrow" | "stripedRightArrow" => ShapeKind::Arrow,
+        "leftArrow" => ShapeKind::ArrowLeft,
+        "upArrow" => ShapeKind::ArrowUp,
+        "downArrow" => ShapeKind::ArrowDown,
         "star4" | "star5" | "star6" | "star7" | "star8" | "star10" | "star12" | "star16" | "star24" | "star32" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
         _ => ShapeKind::Rectangle,
@@ -469,6 +470,15 @@ mod tests {
         assert_eq!(preset_kind("flowChartDecision"), ShapeKind::Diamond);
     }
 
+    /// #3919: Word's up, down and left block arrows were all read as the right-pointing arrow.
+    #[test]
+    fn block_arrows_keep_their_direction() {
+        assert_eq!(preset_kind("rightArrow"), ShapeKind::Arrow);
+        assert_eq!(preset_kind("leftArrow"), ShapeKind::ArrowLeft);
+        assert_eq!(preset_kind("upArrow"), ShapeKind::ArrowUp);
+        assert_eq!(preset_kind("downArrow"), ShapeKind::ArrowDown);
+    }
+
     #[test]
     fn vml_presets_map_like_drawingml_presets() {
         assert_eq!(vml_preset_kind(13), Some(ShapeKind::Arrow));
@@ -477,7 +487,7 @@ mod tests {
         assert_eq!(vml_preset_kind(202), Some(ShapeKind::TextBox));
         // The nearest shape, as `preset_kind` gives it: left arrow, right triangle, four-point
         // star, rounded callout, elbow connector, a bevel (its box).
-        assert_eq!(vml_preset_kind(66), Some(ShapeKind::Arrow));
+        assert_eq!(vml_preset_kind(66), Some(ShapeKind::ArrowLeft));
         assert_eq!(vml_preset_kind(6), Some(ShapeKind::RightTriangle));
         assert_eq!(vml_preset_kind(187), Some(ShapeKind::Star));
         assert_eq!(vml_preset_kind(62), Some(ShapeKind::RoundedRectangle));
