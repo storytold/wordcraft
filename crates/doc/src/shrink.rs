@@ -280,7 +280,7 @@ fn freeze_blocks_formatting(
 /// Clean-room typographical helper for Fit One Page. Preserves relative typography
 /// hierarchies between headings, body text, and direct run formatting.
 /// Clamps font sizes to `[4.0, 1638.0]` pt and rounds to 0.5 pt (half-points).
-/// Headers and footers are explicitly excluded and retain their exact original sizes.
+/// Headers, footers, and comments are explicitly excluded and retain their exact original sizes.
 /// Footnotes are included and shrink alongside body text.
 pub fn fit_document_typography(doc: &mut Document, delta_pt: f32, space_factor: f32) {
     if !delta_pt.is_finite() || !space_factor.is_finite() {
@@ -296,11 +296,12 @@ pub fn fit_document_typography(doc: &mut Document, delta_pt: f32, space_factor: 
     // 1. Find all text boxes reachable from Header and Footer parts (including nested text boxes and chains).
     let hf_boxes = header_footer_text_boxes(doc);
 
-    // Freeze header and footer font sizes and spacing (and reachable text boxes) before modifying styles,
-    // preserving table-style context so header/footer table cells retain their conditional table formatting.
+    // Freeze header, footer, and comment font sizes and spacing (and reachable text boxes) before modifying styles,
+    // preserving table-style context so header/footer table cells retain their conditional table formatting,
+    // and comment stories retain their inherited formatting from shared styles.
     let old_styles = doc.styles.clone();
     for (id, part) in doc.parts.iter_mut() {
-        if matches!(part.kind, PartKind::Header | PartKind::Footer) || hf_boxes.contains(id) {
+        if matches!(part.kind, PartKind::Header | PartKind::Footer | PartKind::Comment) || hf_boxes.contains(id) {
             freeze_blocks_formatting(&mut part.blocks, &old_styles, None, None, delta_pt, space_factor);
         }
     }
@@ -651,6 +652,40 @@ mod tests {
         let comment_part = doc.parts.get(&comment_id).unwrap();
         let p_after = comment_part.blocks[0].as_para().unwrap();
         assert_eq!(p_after.runs[0].props.size, Some(8.0), "comments must be excluded from typography shrink pass");
+    }
+
+    #[test]
+    fn test_shrink_preserves_comment_inherited_formatting() {
+        let mut doc = Document::new();
+        // Setup a named style "CommentText" with 12.0 pt font and 6.0 pt spacing after.
+        let comment_style = crate::styles::Style {
+            id: "CommentText".into(),
+            name: "Comment Text".into(),
+            kind: crate::styles::StyleKind::Paragraph,
+            chr: CharProps { size: Some(12.0), ..Default::default() },
+            para: ParaProps { space_after: Some(6.0), line_spacing: Some(LineSpacing::Multiple(1.2)), ..Default::default() },
+            ..Default::default()
+        };
+        Arc::make_mut(&mut doc.styles).upsert(comment_style);
+
+        // Comment paragraph inheriting from "CommentText" without explicit run size or paragraph spacing
+        let mut comment_p = Paragraph::with_text("Inherited comment text", CharProps::default());
+        comment_p.props.style = Some("CommentText".to_string());
+        let comment_id = doc.add_part(PartKind::Comment, vec![para_block(comment_p)]);
+
+        // Shrink with 1.0 pt delta and 0.94 space factor
+        fit_document_typography(&mut doc, 1.0, 0.94);
+
+        // Shared style "CommentText" is scaled (12.0 -> 11.0 pt)
+        let scaled_style = doc.styles.get("CommentText").unwrap();
+        assert_eq!(scaled_style.chr.size, Some(11.0));
+
+        // The comment story must have frozen its original inherited formatting before styles were modified
+        let comment_part = doc.parts.get(&comment_id).unwrap();
+        let p_after = comment_part.blocks[0].as_para().unwrap();
+        assert_eq!(p_after.runs[0].props.size, Some(12.0), "comment run size must remain 12.0 pt from old styles");
+        assert_eq!(p_after.props.space_after, Some(6.0), "comment paragraph space_after must remain 6.0 pt from old styles");
+        assert_eq!(p_after.props.line_spacing, Some(LineSpacing::Multiple(1.2)), "comment paragraph line_spacing must remain 1.2 from old styles");
     }
 
     #[test]
