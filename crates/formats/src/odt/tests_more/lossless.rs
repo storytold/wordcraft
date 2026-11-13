@@ -171,6 +171,25 @@ fn a_save_without_edits_loses_nothing() {
     }
 }
 
+/// The same gate after a page setup change: nothing goes but what the change replaces.
+#[test]
+fn a_page_setup_change_loses_nothing_else() {
+    for s in SAMPLES {
+        let orig = package(&s);
+        let mut d = import(&orig).unwrap();
+        d.last_section.margin_left += 3.0;
+        for b in &mut d.body {
+            if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
+                && let Some(sec) = &mut p.section
+            {
+                sec.margin_left += 3.0;
+            }
+        }
+        let lost: Vec<String> = losses(&orig, &export(&d).unwrap()).into_iter().filter(|l| !l.contains("fo:margin-left=")).collect();
+        assert!(lost.is_empty(), "{}: lost after changing a margin:\n  {}", s.name, lost.join("\n  "));
+    }
+}
+
 #[test]
 fn the_gate_sees_a_loss() {
     let with = Sample {
