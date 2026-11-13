@@ -1099,6 +1099,114 @@ fn clicking_and_dragging_outside_scrollbar_does_not_page() {
     assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "dragging outside the scrollbar track does not page");
 }
 
+/// #5680: 400 one-line paragraphs, pages full of lines, in a 1440×900 window with the caret at
+/// the start, after the view command `view` has run.
+fn paging_window(view: &str) -> H {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let text = (1..=400).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n");
+    a.run("document.setText", json!({"text": text})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    a.run(view, json!({})).unwrap();
+    a.run("caret.docStart", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    steps(&mut h, 8);
+    let pages = h.state_mut().session.layout().pages.len();
+    assert!(pages >= 8, "several rows of pages: {pages}");
+    assert!(h.state().canvas.focused, "the canvas has the keyboard");
+    assert_eq!(h.state().canvas.scroll_offset.y, 0.0, "starts at the top");
+    h
+}
+
+/// Press `key` on the canvas and let the view settle.
+fn press_paging_key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+    h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+    steps(h, 4);
+}
+
+/// The caret's page, how far it is below the window's top, and its height, on screen.
+fn caret_in_window(h: &mut H) -> (usize, f32, f32) {
+    let a = h.state_mut();
+    let page = a.session.layout().caret_on(&a.session.sel.focus, a.session.page_hint).expect("a caret").page;
+    let (at, height) = crate::canvas::caret_screen(a).expect("the caret on screen");
+    let top = a.canvas.viewport.expect("viewport").top();
+    (page, at.y - top, height)
+}
+
+/// #5680: in One Page, Page Down shows the next screen, which is the next page, and the caret
+/// keeps its place in the window, as in Word; Page Up comes back. Before, the caret went to the
+/// same spot on the next page and the view followed it only a few lines.
+#[test]
+fn page_down_in_one_page_moves_one_screen() {
+    let mut h = paging_window("view.onePage");
+    let screen = h.state().canvas.viewport.expect("viewport").height();
+    let (page, y, line) = caret_in_window(&mut h);
+    assert_eq!(page, 0);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    let offset = h.state().canvas.scroll_offset.y;
+    assert!((offset - screen).abs() < 2.0, "Page Down scrolls one screen: expected ~{screen}, got {offset}");
+    let (page, after, _) = caret_in_window(&mut h);
+    assert_eq!(page, 1, "a screen is a page here: the caret is on the next page");
+    assert!((after - y).abs() <= line, "the caret keeps its place in the window: {y} then {after}");
+    press_paging_key(&mut h, egui::Key::PageUp, egui::Modifiers::NONE);
+    let offset = h.state().canvas.scroll_offset.y;
+    assert!(offset.abs() < 2.0, "Page Up scrolls back to the top: {offset}");
+    assert_eq!(caret_in_window(&mut h).0, 0, "and the caret is back on the first page");
+}
+
+/// #5680: in Multiple Pages a screen is a row of pages, so Page Down goes to the page below the
+/// caret's, not to the one beside it.
+#[test]
+fn page_down_in_multiple_pages_goes_to_the_next_row() {
+    let mut h = paging_window("view.multiplePages");
+    let cols = h.state().canvas.cols;
+    assert!(cols >= 2, "the pages are side by side: {cols} columns");
+    let screen = h.state().canvas.viewport.expect("viewport").height();
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    let offset = h.state().canvas.scroll_offset.y;
+    assert!((offset - screen).abs() < 2.0, "Page Down scrolls one screen: expected ~{screen}, got {offset}");
+    assert_eq!(caret_in_window(&mut h).0, cols, "the caret is on the page below, in the next row");
+}
+
+/// #5680: Shift+Page Down at 100% selects one screen down, not a whole page: the anchor stays at
+/// the start, and the view scrolls one screen with the selection's end, which keeps its place in
+/// the window.
+#[test]
+fn shift_page_down_selects_one_screen() {
+    let mut h = paging_window("view.zoom100");
+    let start = h.state().session.sel.anchor.clone();
+    let screen = h.state().canvas.viewport.expect("viewport").height();
+    let (_, y, line) = caret_in_window(&mut h);
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::SHIFT);
+    let sel = h.state().session.sel.clone();
+    assert_eq!(sel.anchor, start, "the anchor stays at the start");
+    assert_ne!(sel.focus, start, "the selection grows");
+    let offset = h.state().canvas.scroll_offset.y;
+    assert!((offset - screen).abs() < 2.0, "Shift+Page Down scrolls one screen: expected ~{screen}, got {offset}");
+    let (page, after, _) = caret_in_window(&mut h);
+    assert_eq!(page, 0, "a screen is less than a page at 100%: the selection ends on the first page");
+    assert!((after - y).abs() <= line, "the selection's end keeps its place in the window: {y} then {after}");
+}
+
+/// #5680: in Full Screen at 100% the pages fill the window, nearly a page tall. Page Down scrolls
+/// one screen, and the caret is in the window afterwards.
+#[test]
+fn page_down_in_full_screen_moves_one_screen() {
+    let mut h = paging_window("view.fullScreenView");
+    let screen = h.state().canvas.viewport.expect("viewport").height();
+    press_paging_key(&mut h, egui::Key::PageDown, egui::Modifiers::NONE);
+    let offset = h.state().canvas.scroll_offset.y;
+    assert!((offset - screen).abs() < 2.0, "Page Down scrolls one screen: expected ~{screen}, got {offset}");
+    let (_, after, line) = caret_in_window(&mut h);
+    assert!(after >= 0.0 && after + line <= screen, "the caret is in the window: {after} of {screen}");
+}
+
 /// #3880: the status bar names the page being looked at. With the caret scrolled out of view, that
 /// is the page at the top of the window; while the caret is on screen, its page.
 #[test]
