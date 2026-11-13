@@ -407,6 +407,11 @@ impl Reader<'_> {
     /// original size (`w:dxaOrig`, `w:dyaOrig`). A picture that can't be written back is left out
     /// of the kept object. `None`, as before, when the object itself can't be kept.
     fn read_object_without_picture(&mut self, obj: &El, rels: &Rels, in_hf: bool) -> Option<InlineObject> {
+        // An ActiveX control (`w:control`) is not an OLE object: it is left out here as before,
+        // and keeping a control with no picture is #3597's own change.
+        if obj.child("w:control").is_some() {
+            return None;
+        }
         let ole = match self.keep_embedded(obj, rels, &[]) {
             Some(ole) => ole,
             None => self.keep_embedded(&without_vml_pictures(obj)?, rels, &[])?,
