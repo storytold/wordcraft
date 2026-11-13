@@ -204,7 +204,8 @@ fn para_extra(doc: &Document, p: &wordcraft_doc::props::ParaProps) -> Option<Box
         shading: p.shading,
         style,
         contextual_spacing: p.contextual_spacing,
-        bidi: p.bidi.filter(|b| *b),
+        // Left to right only where it overrides a right-to-left style.
+        bidi: p.bidi.filter(|b| *b || doc.styles.resolve_para(&wordcraft_doc::props::ParaProps { bidi: None, ..p.clone() }).bidi),
         drop_cap: p.drop_cap.filter(|l| *l > 1),
         drop_cap_distance: p.drop_cap_distance.filter(|_| p.drop_cap.is_some_and(|l| l > 1)),
         keep_lines: p.keep_lines.filter(|k| *k),
@@ -493,6 +494,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
         kind,
         list,
         align: p.props.align,
+        // Direction can come from the paragraph's style (`w:bidi` in the style's pPr).
+        rtl: doc.styles.resolve_para(&p.props).bidi,
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
@@ -536,6 +539,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, opts: FlowOpts) -> Vec<Para> {
                         kind,
                         list: None,
                         align: p.props.align,
+                        rtl: out.rtl,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),

@@ -913,8 +913,10 @@ impl Body<'_> {
         if let Some(c) = look.contextual {
             p.extra.get_or_insert_with(Default::default).contextual_spacing = Some(c);
         }
-        if look.rtl == Some(true) {
-            p.extra.get_or_insert_with(Default::default).bidi = Some(true);
+        // Right to left, or left to right over a custom style that reads right to left
+        // ([`super::styles`] gives no left to right otherwise).
+        if let Some(rtl) = look.rtl {
+            p.extra.get_or_insert_with(Default::default).bidi = Some(rtl);
         }
         if let Some((lines, distance)) = look.drop_cap {
             let x = p.extra.get_or_insert_with(Default::default);

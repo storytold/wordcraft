@@ -159,6 +159,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         out.numbering = Some(NumRef { num, level: li.level.min(8) });
     }
     out.align = p.align;
+    if p.rtl {
+        out.bidi = Some(true);
+    }
     let sp = p.spacing;
     out.space_before = sp.before;
     out.space_after = sp.after;
@@ -181,8 +184,8 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
     if let Some(c) = p.extra.as_ref().and_then(|x| x.contextual_spacing) {
         out.contextual_spacing = Some(c);
     }
-    if p.extra.as_ref().and_then(|x| x.bidi) == Some(true) {
-        out.bidi = Some(true);
+    if let Some(b) = p.extra.as_ref().and_then(|x| x.bidi) {
+        out.bidi = Some(b);
     }
     if let Some(x) = p.extra.as_ref().filter(|x| x.drop_cap.is_some_and(|l| l > 1)) {
         (out.drop_cap, out.drop_cap_distance) =
