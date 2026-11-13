@@ -217,6 +217,9 @@ pub(super) fn home(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.separator();
                         mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
+                        // Only an item that shows a number has one to set.
+                        let numbered = wordcraft_engine::cmd::lists::caret_number(&app.session).is_some();
+                        ui.add_enabled_ui(numbered, |ui| mi(ui, app, "Set Numbering Value…", "ui.dialog", json!({"name": "numberingValue"})));
                         mi(ui, app, "None", "para.numbering", json!({"off": true}));
                     },
                 );

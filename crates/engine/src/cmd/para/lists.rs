@@ -35,12 +35,26 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
             }
         });
     }
-    // Continue the list of the previous paragraph if it has the same kind; else a new list.
-    let prev_num = s
-        .doc
-        .prev_para(a.story, &a.path)
-        .and_then(|q| s.doc.para(a.story, &q).and_then(|x| x.props.numbering))
-        .filter(|n| n.num != 0 && same_kind(&NumRef { level: 0, ..*n }));
+    // Continue the nearest list above if it has the same kind, past unnumbered paragraphs in
+    // between (Word: 1., a paragraph, then Numbering gives 2.); else a new list. A heading
+    // numbered by its style counts as the nearest list. The paragraph right above continues
+    // whatever numbered list it is in; across a gap the list must look like `kind` (1. 2. 3.
+    // for the plain button), so a) b) further up isn't picked up by it.
+    let prev = s.doc.prev_para(a.story, &a.path);
+    let nearest = s.doc.para_paths(a.story).into_iter().rev().filter(|q| *q < a.path).find_map(|q| {
+        let x = s.doc.para(a.story, &q)?;
+        let n = x.props.numbering.or_else(|| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0)?;
+        Some((q, n, x.props.numbering.is_some()))
+    });
+    let looks_like_kind = |n: &NumRef| {
+        let want = wordcraft_doc::numbering::levels_for(kind);
+        s.doc.numbering.level(n.num, 0).zip(want.first()).is_some_and(|(l, w)| l.format == w.format && l.text == w.text)
+    };
+    let prev_num = nearest
+        .filter(|(_, _, direct)| *direct)
+        .map(|(q, n, _)| (q, NumRef { level: 0, ..n }))
+        .filter(|(q, n)| same_kind(n) && (Some(q) == prev.as_ref() || looks_like_kind(n)))
+        .map(|(_, n)| n);
     let num = match prev_num {
         Some(n) => n.num,
         None => match kind {
@@ -65,26 +79,55 @@ pub(super) fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
 }
 
 pub(super) fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
+    restart_at(s, None)
+}
+
+/// Restart the caret's list here, its level at `value` (`None`: the level's own start). This
+/// paragraph and every later one of the same list move to the new instance, past paragraphs in
+/// between, so the rest of the list counts on from here.
+pub(crate) fn restart_at(s: &mut Session, value: Option<u32>) -> CmdResult {
     let f = s.sel.focus.clone();
     let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
+    let effective = |s: &Session, path: &wordcraft_doc::Path| {
+        let x = s.doc.para(f.story, path)?;
+        x.props.numbering.or_else(|| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0)
+    };
+    // The deepest level of this list (any instance: they share counters) used above the caret;
+    // every level down to it has started counting.
+    let abs = s.doc.numbering.abstract_of(n.num).map(|a| a.id);
+    let paths = s.doc.para_paths(f.story);
+    let deepest_above = paths
+        .iter()
+        .filter(|q| **q < f.path)
+        .filter_map(|q| effective(s, q))
+        .filter(|x| s.doc.numbering.abstract_of(x.num).map(|a| a.id) == abs)
+        .map(|x| x.level)
+        .max();
+    let old_starts = s.doc.numbering.num(n.num).map(|x| x.start_overrides.clone()).unwrap_or_default();
     let new = Arc::make_mut(&mut s.doc.numbering).restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
-    // This paragraph and the following ones of the same list use the new instance.
-    let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
-    for path in paths {
-        let para = s.doc.para_mut(f.story, &path)?;
-        match para.props.numbering {
-            Some(x) if x.num == n.num => {
-                para.props.numbering = Some(NumRef { num: new, level: x.level });
-                para.touch();
-            }
-            _ => {
-                if para.props.numbering.is_none() && !para.is_empty() {
-                    break;
-                }
+    if let Some(num) = Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|x| x.id == new) {
+        // Only this level and the ones below start again: a level above that is already counting
+        // counts on (1., 2., a., then 3.); one that isn't keeps the start it had, old list's
+        // override included, for this item to begin.
+        num.start_overrides.retain(|(l, _)| *l >= n.level || deepest_above.is_none_or(|d| *l > d));
+        for (l, start) in num.start_overrides.iter_mut().filter(|(l, _)| *l < n.level) {
+            if let Some((_, old)) = old_starts.iter().find(|(k, _)| k == l) {
+                *start = *old;
             }
         }
+        if let Some(value) = value {
+            num.start_overrides.retain(|(l, _)| *l != n.level);
+            num.start_overrides.push((n.level, value));
+        }
+    }
+    // Items numbered by their style move too, given the new instance as their own numbering.
+    for path in paths.into_iter().filter(|p| *p >= f.path) {
+        let Some(x) = effective(s, &path).filter(|x| x.num == n.num) else { continue };
+        let para = s.doc.para_mut(f.story, &path)?;
+        para.props.numbering = Some(NumRef { num: new, level: x.level });
+        para.touch();
     }
     sel_result(s)
 }
