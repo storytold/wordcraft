@@ -77,7 +77,8 @@ impl Reader<'_> {
                 let end_props = pb.runs.last().map(|r| r.props.clone()).unwrap_or(props);
                 pb.push_obj(InlineObject::ControlEnd, &end_props);
             }
-            "w:smartTag" | "w:customXml" | "w:dir" | "w:bdo" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
+            "w:dir" | "w:bdo" => self.read_direction(sc, pb, k, rels, ctx, depth),
+            "w:smartTag" | "w:customXml" => self.read_inline_children(sc, pb, k, rels, ctx, depth + 1),
             "m:oMath" => {
                 let props = self.run_props_none(ctx);
                 self.emit_omath(sc, pb, k, Default::default(), false, &props);
@@ -128,6 +129,36 @@ impl Reader<'_> {
             }
             _ => {}
         }
+    }
+
+    /// A right-to-left / left-to-right embedding (`w:dir`, ECMA-376 Part 1 §17.3.2.8) or override
+    /// (`w:bdo`, §17.3.2.3): its content between the matching Unicode explicit formatting
+    /// character and U+202C POP DIRECTIONAL FORMATTING, which the layout's bidi algorithm honours.
+    /// The opening character takes the formatting of the first run inside, the closing one that
+    /// of the last. Without a known direction, or without runs, only the content is read.
+    fn read_direction(&mut self, sc: &mut StoryCtx, pb: &mut PB, k: &El, rels: &Rels, ctx: &RunCtx, depth: usize) {
+        let open = match (k.name.as_str(), k.attr("w:val")) {
+            ("w:dir", Some("rtl")) => Some('\u{202B}'),
+            ("w:dir", Some("ltr")) => Some('\u{202A}'),
+            ("w:bdo", Some("rtl")) => Some('\u{202E}'),
+            ("w:bdo", Some("ltr")) => Some('\u{202D}'),
+            _ => None,
+        };
+        let (Some(open), Some(first)) = (open, k.find("w:r")) else {
+            return self.read_inline_children(sc, pb, k, rels, ctx, depth + 1);
+        };
+        let props_of = |me: &mut Self, r: &El| match r.child("w:rPr") {
+            Some(p) => me.run_props(p, ctx),
+            None => me.run_props_none(ctx),
+        };
+        let first_props = props_of(self, first);
+        let last_props = match last_run(k, 0) {
+            Some(r) => props_of(self, r),
+            None => first_props.clone(),
+        };
+        self.emit_text(sc, pb, open.encode_utf8(&mut [0; 4]), &first_props);
+        self.read_inline_children(sc, pb, k, rels, ctx, depth + 1);
+        self.emit_text(sc, pb, "\u{202C}", &last_props);
     }
 
     fn run_props(&mut self, rpr: &El, ctx: &RunCtx) -> CharProps {
@@ -421,4 +452,12 @@ impl Reader<'_> {
             _ => pb.push_obj(o, props),
         }
     }
+}
+
+/// The last `w:r` inside `e` (depth-first, bounded).
+fn last_run(e: &El, depth: usize) -> Option<&El> {
+    if depth > crate::xml::MAX_DEPTH {
+        return None;
+    }
+    e.els().filter_map(|c| if c.name == "w:r" { Some(c) } else { last_run(c, depth + 1) }).last()
 }
