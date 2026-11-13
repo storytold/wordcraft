@@ -1,6 +1,8 @@
+> 2026-11-08 · #5964: paragraph formatting capture and destination selection follow the measured Mac matrix; toolbar brush and Paste Formatting differ on partial targets. See [reference observations](docs/format-painter-reference.md). No readiness estimate changes.
+
 # WordCraft roadmap
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-11-12 · **Change:** minor (added layout.fitOnePage and its Layout › Page Setup ribbon button to condense a multi-page document by one page while preserving typography hierarchy); previously trivial (#5964: measured Mac paragraph-selection rules for Copy Formatting and Format Painter; synthetic mark-selection coverage limit documented; readiness unchanged); previously minor (#3398: persistent screen paper colors; parity estimates unchanged); previously minor (#3693: additional Delete Previous Sentence command and shortcut; Word-parity estimates unchanged)
 > **CLI path update:** 2026-11-04 · Options before a non-Unicode input filename no longer make the CLI reject that filename; text option values still require Unicode; `run --file` and `run --script` retain native paths. No ranked gap or readiness estimate changes.
 > **Floating anchor row segments:** 2026-11-07 · A floating anchor after a manual page/column break counts visible content on the far side of the same wrapped row. Marker-only cover anchors retain their previous-page rule. Synthetic picture spacing, placement and history controls; no new native Word measurement. Readiness estimates unchanged.
 
@@ -919,6 +921,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 |---|---|---|
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
+| 2026-11-08 | trivial | #5964: Copy Formatting and Format Painter follow measured Mac paragraph-selection rules; synthetic mark cases do not establish real paragraph-mark selection coverage. Readiness unchanged. |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
