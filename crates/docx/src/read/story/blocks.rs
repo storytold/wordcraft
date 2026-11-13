@@ -26,6 +26,9 @@ impl Reader<'_> {
                         props.drop_cap = first.props.drop_cap;
                         props.drop_cap_margin = first.props.drop_cap_margin;
                         props.drop_cap_distance = first.props.drop_cap_distance;
+                        if props.drop_cap_margin == Some(true) && first.props.indent_first != props.indent_first {
+                            props.drop_cap_indent_first = first.props.indent_first;
+                        }
                         // A letter in a font of its own: the drop cap's font, the letter itself
                         // in the text's (so taking the drop cap away gives the letter its font back).
                         let cap_font = first.runs.first().and_then(|r| r.props.font.clone());

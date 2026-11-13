@@ -200,6 +200,7 @@ fn every_para_prop_round_trips() {
         drop_cap_margin: None,
         drop_cap_distance: None,
         drop_cap_font: None,
+        drop_cap_indent_first: None,
         frame: Some(wordcraft_doc::props::TextFrame {
             w: Some(144.0),
             h: Some(36.0),

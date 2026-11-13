@@ -207,6 +207,9 @@ pub struct ResolvedPara {
     /// The drop cap letter's font family; `None` = the text's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drop_cap_font: Option<String>,
+    /// The margin cap frame's first-line indent, points; negative = hanging.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop_cap_indent_first: Option<f32>,
     /// A text frame the paragraph sits in (see `ParaProps::frame`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<crate::props::TextFrame>,
@@ -293,6 +296,7 @@ impl ResolvedPara {
             drop_cap_margin: p.drop_cap_margin.unwrap_or(false),
             drop_cap_distance: p.drop_cap_distance.filter(|d| d.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_DROP_CAP_DISTANCE),
             drop_cap_font: p.drop_cap_font.clone().filter(|f| !f.trim().is_empty()),
+            drop_cap_indent_first: p.drop_cap_indent_first.filter(|v| v.is_finite()).map(|v| v.clamp(-MAX_INDENT, MAX_INDENT)),
             // Explicit zero dimensions cancel a frame; omitted dimensions still fit its text.
             frame: p.frame.clone().filter(|f| p.drop_cap.unwrap_or(0) == 0 && (f.w != Some(0.0) || f.h != Some(0.0))).map(|mut f| {
                 f.w = f.w.filter(|v| *v != 0.0);

@@ -12,6 +12,7 @@ use crate::{Session, cmd};
 
 mod bidi;
 mod documents;
+mod drop_cap_in_margin;
 mod find_apostrophes;
 mod fit_one_page;
 mod font_sizes;

@@ -921,6 +921,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |
+| 2026-11-07 | trivial | P0117: In margin moves first-line and hanging indents to the cap frame and restores them on None or Dropped; DOCX preserves the separate frame indent (#4173). Layout unchanged; readiness estimates unchanged. |
 | 2026-11-08 | trivial | Progress log: XML line ends in text normalised (#5897) |
 | 2026-11-08 | trivial | Progress log: contextual spacing drops the space after a cell's last Normal paragraph (#5450) |
 | 2026-11-06 | trivial | Progress log: the Arabic interface's Styles gallery reads from the right (#5566) |
