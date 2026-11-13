@@ -2093,6 +2093,40 @@ fn table_doc() -> Session {
     s
 }
 
+/// #6326: text typed into a row added by Insert Above, Insert Below or Tab in the last cell gets
+/// the font of the cells it was copied from, as in Word, not the default font.
+#[test]
+fn new_table_rows_type_in_the_rows_font() {
+    let mut s = table_doc();
+    for (text, font) in [("A1", "Courier New"), ("A2", "Courier New"), ("B1", "Georgia"), ("B2", "Georgia")] {
+        run(&mut s, "select.text", json!({"text": text}));
+        run(&mut s, "format.font", json!({"name": font}));
+        run(&mut s, "format.size", json!({"size": 16}));
+        run(&mut s, "format.bold", json!({}));
+    }
+    let typed = |s: &Session, r: usize, c: usize| {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        let p = t.rows[r].cells[c].blocks[0].as_para().unwrap();
+        (p.plain_text(), p.props_at(0).font.clone(), p.props_at(0).size, p.props_at(0).bold)
+    };
+    let courier = |t: &str| (t.to_string(), Some("Courier New".to_string()), Some(16.0), Some(true));
+    let georgia = |t: &str| (t.to_string(), Some("Georgia".to_string()), Some(16.0), Some(true));
+    // (command, the caret's row, the new row)
+    for (cmd, src, r) in [("table.insertRowBelow", 0, 1), ("table.insertRowAbove", 2, 2)] {
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, src, 0, 0], "off": 1}}));
+        run(&mut s, cmd, json!({}));
+        run(&mut s, "text.insert", json!({"text": "new"}));
+        run(&mut s, "text.tab", json!({}));
+        run(&mut s, "text.insert", json!({"text": "cell"}));
+        assert_eq!((typed(&s, r, 0), typed(&s, r, 1)), (courier("new"), georgia("cell")), "{cmd}");
+    }
+    // Tab in the last cell adds a row like the last one.
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [1, 3, 1, 0], "off": 2}}));
+    run(&mut s, "text.tab", json!({}));
+    run(&mut s, "text.insert", json!({"text": "tab"}));
+    assert_eq!(typed(&s, 4, 0), courier("tab"));
+}
+
 fn body_table_cells(s: &Session) -> Vec<Vec<String>> {
     s.doc
         .body
