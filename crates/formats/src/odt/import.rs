@@ -820,8 +820,8 @@ struct Parsed {
     kept: super::parts::Kept,
     /// Hidden form controls, kept for the next save.
     hidden_controls: Vec<String>,
-    /// The page background picture's bytes and fill.
-    page_image: Option<(Vec<u8>, &'static str)>,
+    /// The page background picture's bytes, fill, and optional fill image name.
+    page_image: Option<(Vec<u8>, &'static str, Option<String>)>,
 }
 
 /// Hyphenation is a paragraph's in ODF (`fo:hyphenate`) and the document's in WordCraft (as in
@@ -908,8 +908,14 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
-    // The page background picture's bytes.
-    let page_image = pages.doc.page_image.clone().and_then(|(href, fill)| fetch(&href).map(|b| (b, fill)));
+    // The page background picture's bytes. The modern fill is used only when its picture is an
+    // image; otherwise the legacy background is tried.
+    let page_image = pages
+        .doc
+        .page_image
+        .clone()
+        .and_then(|(href, fill, name)| fetch(&href).filter(|b| model::sniff_image(b).is_some()).map(|b| (b, fill, name)))
+        .or_else(|| pages.doc.page_image_legacy.clone().and_then(|(href, fill)| fetch(&href).map(|b| (b, fill, None))));
     let objects = (entries.as_slice(), &manifest);
     // One `text:s` budget for the headers and footers and then the body.
     let mut spaces_left = MAX_EXTRA_SPACES;
@@ -1093,11 +1099,15 @@ pub fn import_on(bytes: &[u8], page: &SectionProps) -> Result<Document, String> 
     doc.settings.odf = Some(wordcraft_doc::OdfLayout { tabs_from_indent });
     doc.settings.sum_paragraph_spacing = sum_spacing;
     // The page background picture (Design › Page Color › Fill Effects › Picture).
-    if let Some((bytes, fill)) = page_image
+    if let Some((bytes, fill, name)) = page_image
         && let Some(ext) = model::sniff_image(&bytes)
     {
         let media = doc.add_media(bytes, ext);
-        doc.settings.page_picture = Some(wordcraft_doc::PagePicture { media, fill_type: fill.to_string(), title: String::new() });
+        doc.settings.page_picture = Some(wordcraft_doc::PagePicture {
+            media,
+            fill_type: fill.to_string(),
+            title: name.map(|n| n.chars().take(255).collect()).unwrap_or_default(),
+        });
     }
     if let Some((fmt, props)) = page_doc.notes[0] {
         (doc.settings.footnote_format, doc.settings.footnote_pr) = (fmt, props);
@@ -1169,9 +1179,12 @@ pub(super) struct Pages {
 #[derive(Clone, Default)]
 pub(super) struct PageDoc {
     pub(super) page_color: Option<wordcraft_doc::props::Rgb>,
-    /// The first page style's background picture (§17.3 `style:background-image`): its package
-    /// path and WordCraft's fill for its repeat (tiled, stretched, or centred at its size).
-    pub(super) page_image: Option<(String, &'static str)>,
+    /// The first page style's background picture (§17.3 `style:background-image` or §16.42
+    /// `draw:fill-image` with `draw:fill="bitmap"`): package path, fill, and optional fill name.
+    pub(super) page_image: Option<(String, &'static str, Option<String>)>,
+    /// The same page style's legacy `style:background-image`, used when the modern fill's
+    /// picture can't be loaded (§17.3).
+    pub(super) page_image_legacy: Option<(String, &'static str)>,
     /// Footnotes', then endnotes', number format and options.
     pub(super) notes: [Option<(wordcraft_doc::section::NumFormat, wordcraft_doc::section::NoteProps)>; 2],
 }
@@ -1245,6 +1258,10 @@ struct Layout {
     attrs: Attrs,
     /// Its background picture: package path and fill (see [`PageDoc::page_image`]).
     image: Option<(String, &'static str)>,
+    /// Its legacy `style:background-image` (see [`PageDoc::page_image_legacy`]).
+    legacy_image: Option<(String, &'static str)>,
+    /// Its bitmap fill image name (`draw:fill-image-name`).
+    image_name: Option<String>,
     columns: Option<Columns>,
     column_specs: Vec<super::styles::ColumnSpec>,
     header: Band,
@@ -1266,8 +1283,38 @@ fn unstated_page(paper: (f32, f32)) -> SectionProps {
     }
 }
 
+/// The background fill picture and its fill-image name from `page-layout-properties`
+/// attributes `a` when modern `draw:fill="bitmap"` is declared (§16.42).
+fn page_layout_fill(a: &super::xml::Attrs, fill_images: &HashMap<String, String>) -> Option<((String, &'static str), String)> {
+    if get(a, "draw:fill") != Some("bitmap") {
+        return None;
+    }
+    let name = get(a, "draw:fill-image-name")?;
+    let href = fill_images.get(name)?;
+    let fill = match get(a, "style:repeat").map(str::trim) {
+        Some("no-repeat") => "center",
+        Some("stretch") => "frame",
+        _ => "tile",
+    };
+    Some(((href.clone(), fill), name.to_string()))
+}
+
+/// The page background picture and fill from legacy `background-image` attributes `a` (§17.3).
+fn legacy_background_fill(a: &super::xml::Attrs) -> Option<(String, &'static str)> {
+    let href = get(a, "xlink:href").map(str::trim).filter(|h| !h.is_empty() && h.len() <= 1024)?;
+    let fill = match get(a, "style:repeat").map(str::trim) {
+        Some("no-repeat") => "center",
+        Some("stretch") => "frame",
+        _ => "tile",
+    };
+    Some((href.trim_start_matches("./").to_string(), fill))
+}
+
+/// The page setups, background images, and master page definitions declared in `styles.xml` (§16.2),
+/// with default paper size `paper`.
 fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     let mut layouts: HashMap<String, Layout> = HashMap::new();
+    let mut fill_images: HashMap<String, String> = HashMap::new();
     let mut cur: Option<String> = None;
     // Inside a layout's footer style (else its header style).
     let mut in_footer = false;
@@ -1286,6 +1333,12 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
                 }
             }
             "linenumbering-configuration" if q.starts_with("text:") => lines = line_numbering(&a),
+            // Modern ODF 1.2/1.3 fill image definitions (§16.42 `draw:fill-image` in `office:styles`).
+            "fill-image" if q.starts_with("draw:") => {
+                if let (Some(name), Some(href)) = (get(&a, "draw:name"), get(&a, "xlink:href")) {
+                    fill_images.insert(name.to_string(), href.trim_start_matches("./").to_string());
+                }
+            }
             "page-layout" if q.starts_with("style:") => {
                 cur = get(&a, "style:name").map(String::from);
                 // A layout stating nothing is still one: the defaults' page.
@@ -1297,16 +1350,13 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
             }
             // A page background picture (§17.3, in `style:page-layout-properties`): §20.249
             // `style:repeat` (repeat is the default) as WordCraft's tile, stretch, or centre.
+            // The legacy fallback is kept beside a modern fill: the modern picture is used only
+            // if it loads, and the legacy one otherwise (§16.42).
             "background-image" if q.starts_with("style:") => {
-                if let (Some(l), Some(href)) =
-                    (cur.as_ref().and_then(|n| layouts.get_mut(n)), get(&a, "xlink:href").map(str::trim).filter(|h| !h.is_empty() && h.len() <= 1024))
+                if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n))
+                    && l.legacy_image.is_none()
                 {
-                    let fill = match get(&a, "style:repeat").map(str::trim) {
-                        Some("no-repeat") => "center",
-                        Some("stretch") => "frame",
-                        _ => "tile",
-                    };
-                    l.image = Some((href.trim_start_matches("./").to_string(), fill));
+                    l.legacy_image = legacy_background_fill(&a);
                 }
             }
             // A band whose height isn't stated is LibreOffice's default, 0.5 cm (measured; see
@@ -1324,6 +1374,10 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
             }
             "page-layout-properties" => {
                 if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n)) {
+                    if let Some((img, name)) = page_layout_fill(&a, &fill_images) {
+                        l.image = Some(img);
+                        l.image_name = Some(name);
+                    }
                     l.attrs = a;
                 }
             }
@@ -1377,14 +1431,18 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     });
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
-        let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image }) = layouts.get(&layout) else { continue };
+        let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image, image_name, legacy_image }) = layouts.get(&layout)
+        else {
+            continue;
+        };
         // What a layout leaves unsaid: the default paper, and no margins.
         let mut sec = unstated_page(paper);
         apply_layout(a, &mut sec);
         sec.line_numbers.clone_from(&lines);
         if pages.first.is_none() {
             pages.doc.page_color = get(a, "fo:background-color").and_then(model::parse_color);
-            pages.doc.page_image.clone_from(image);
+            pages.doc.page_image = image.as_ref().map(|(href, fill)| (href.clone(), *fill, image_name.clone()));
+            pages.doc.page_image_legacy.clone_from(legacy_image);
         }
         // ODF starts a header at the page margin and the text after the header's band; Word
         // measures the header's distance and the text's margin from the edge. How the band's

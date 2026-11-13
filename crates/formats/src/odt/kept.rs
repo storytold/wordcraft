@@ -307,7 +307,7 @@ fn with_as_read(
 /// graphic style (the `Graphics` and `Frame` styles drawings derive from) is the file's: its
 /// drawings written as read derive from it, and those written from the model derived from it
 /// when read (what WordCraft models of it is in theirs).
-fn drawing_def(xml: &str) -> bool {
+pub(super) fn drawing_def(xml: &str) -> bool {
     xml.split('>').next().unwrap_or("").starts_with("<draw:")
 }
 
