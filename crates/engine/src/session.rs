@@ -63,6 +63,9 @@ pub struct Session {
     /// `None`, so an agent's words stay in memory and never change the person's dictionary.
     /// Add to Dictionary and File › Options › Proofing save through it (#40).
     pub user_dict_path: Option<std::path::PathBuf>,
+    /// The default user dictionary path wired up by the host (usually `custom-dictionary.txt` in
+    /// the settings directory), used when [`Prefs::custom_dictionary`] is reset to auto (#5840).
+    pub default_user_dict_path: Option<std::path::PathBuf>,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,

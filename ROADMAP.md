@@ -166,6 +166,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 - 2026-11-05: ODT frames keep the page they are anchored to (gap 19): written without its number, a frame on page 3 came back on page 1 in LibreOffice after a save.
 - 2026-11-05: ODT documents keep their language (gap 19). It was lost on save after numbering or a new style, and LibreOffice then showed the document in its own default language; a document in another language was also proofed as English.
 - 2026-11-05: ODT table and row backgrounds are kept (gap 19): they were dropped, and gone in LibreOffice after a save.
+- 2026-11-08: Proofing: support freestanding custom.dic dictionary files in File › Options › Proofing (#5840). Plain UTF-8 and Word CUSTOM.DIC UTF-16LE with BOM are recognized, merged with disk additions on save, and bounded by byte and word caps. Readiness unchanged.
 - 2026-11-08: Layout: a turned inline picture whose file keeps no room for the turn (no or a zero `wp:effectExtent`, as other tools write) keeps its line to its frame and overhangs it, cut at the line's top and bottom, as Word does: the frame as it is in Word 2007 layout, with width and height exchanged from 45° to 135° and 225° to 315° in Word 2013+ layout. Such a file saves the same way. Pictures with the room recorded (Word's own files) still take their rotated bounds. Readiness unchanged.
 - 2026-11-08: XML text and CDATA read with their line ends normalised (XML 1.0 §2.11): CR LF and a lone CR are one line feed, `&#13;` stays a CR, so a line break inside `w:t` in a file saved with Windows line ends is one space, not two (#5897); readiness estimates unchanged.
 - 2026-11-08: Layout: contextual spacing drops the space after a table cell's last paragraph when that paragraph is in the Normal style, the end-of-cell mark counting as a Normal paragraph next to it; a last paragraph in another style keeps its space after. The rule is inferred from docxide-pdf's notes and its `cell-end-*` fixtures (`cell-end-text-context`, `cell-end-empty-context`); a Word comparison that tells it apart from the neighbouring paragraph's style is still open. Readiness unchanged.
@@ -918,6 +919,7 @@ MATH glyphs that reference the same construction now share its immutable variant
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-10 | trivial | Save As on Linux: the desktop portal's Save dialog reports the file type picked, updating the extension so saving as PDF writes a .pdf (#6180) |
+| 2026-11-08 | trivial | Progress log: freestanding custom.dic dictionary file support in File › Options › Proofing (#5840) |
 | 2026-11-04 | trivial | Progress log: #4501 refactor regressions restored (#4683) |
 | 2026-11-06 | trivial | Progress log: edited ODT paragraphs keep custom styles with an outline level (gap 19) |
 | 2026-10-31 | trivial | Control/MCP #2596 review fixes; readiness estimates unchanged |

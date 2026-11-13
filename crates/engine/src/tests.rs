@@ -263,6 +263,7 @@ fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
 
 #[test]
 fn custom_dictionary_words_persist_through_their_file() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: adding a word through a command writes it to the session's file, and loading
     // that file makes the word known (only the desktop app wires this up).
     let dir = std::env::temp_dir().join(format!("wc-engdict-{}", std::process::id()));
@@ -290,6 +291,7 @@ fn custom_dictionary_words_persist_through_their_file() {
 
 #[test]
 fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_their_roots() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #3737 (findings 34 and WC-35): the custom dictionary file and the folder settings are
     // held to the automation roots like any other path.
     let base = scratch_dir("dict-roots");
@@ -303,6 +305,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
     let confined = |s: &mut Session, cmd: &str, v: serde_json::Value| crate::file_access::confine(roots.as_ref(), || s.run(cmd, &v));
     assert!(confined(&mut s, "review.addToDictionary", json!({"word": "zxqengconfined"})).is_ok());
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengconfined".to_string()), "kept in memory");
+    wordcraft_proof::remove_word("zxqengconfined");
     assert!(!outside.exists(), "nothing written outside the write root");
     for key in ["dictionariesFolder", "userTemplatesFolder"] {
         assert!(confined(&mut s, "file.options", json!({key: base.join("outside").to_string_lossy()})).is_err(), "{key}");
@@ -317,6 +320,7 @@ fn confined_sessions_neither_save_the_dictionary_nor_choose_folders_outside_thei
 
 #[test]
 fn add_to_dictionary_takes_only_words_the_file_keeps() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     // #40: the same rule as loading the dictionary file, so nothing added is dropped on the next load.
     let mut s = s();
     for bad in ["two words", "tab\tword", "bell\u{7}", &"x".repeat(65)] {
@@ -325,6 +329,202 @@ fn add_to_dictionary_takes_only_words_the_file_keeps() {
     }
     run(&mut s, "review.addToDictionary", json!({"word": " zxqengtrimmed "}));
     assert!(wordcraft_proof::user_dictionary().contains(&"zxqengtrimmed".to_string()));
+    wordcraft_proof::remove_word("zxqengtrimmed");
+}
+
+/// #5840: WordCraft supports choosing a freestanding custom.dic dictionary file (including
+/// UTF-16LE with BOM as written by Microsoft Word), using it in conjunction with the main
+/// dictionary, and persisting additions back to it in the same encoding.
+#[test]
+fn custom_dictionary_freestanding_file_option() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic");
+    let dic_path = dir.path().join("custom.dic");
+
+    // Write a freestanding UTF-16LE dictionary file with BOM, as Word saves it on Windows.
+    let mut initial_bytes = vec![0xFF, 0xFE];
+    for u in "freestandingword\r\nmameui\r\n".encode_utf16() {
+        initial_bytes.extend_from_slice(&u.to_le_bytes());
+    }
+    std::fs::write(&dic_path, &initial_bytes).unwrap();
+
+    let mut s = s();
+    let default_path = dir.path().join("default.txt");
+    s.default_user_dict_path = Some(default_path.clone());
+    s.user_dict_path = Some(default_path.clone());
+
+    // Seed default dictionary with a default word.
+    std::fs::write(&default_path, "defaultword\n").unwrap();
+    crate::custom_dict::load_custom_dictionary(&default_path).unwrap();
+    assert!(wordcraft_proof::is_correct("defaultword"));
+
+    // Before binding, the word is unknown.
+    assert!(!wordcraft_proof::is_correct("freestandingword"));
+
+    // Set customDictionary in file.options: removes previous words and loads custom.dic.
+    let res = s.run("file.options", &json!({"customDictionary": dic_path.to_string_lossy()})).unwrap();
+    assert_eq!(res["customDictionary"], json!(dic_path.to_string_lossy()));
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(dic_path.to_string_lossy().as_ref()));
+    assert_eq!(s.user_dict_path.as_ref(), Some(&dic_path));
+    assert!(!wordcraft_proof::is_correct("defaultword"), "previous words removed on switch");
+    assert!(wordcraft_proof::is_correct("freestandingword"));
+    assert!(wordcraft_proof::is_correct("mameui"));
+
+    // Add a new word via review.addToDictionary: it persists back to custom.dic in UTF-16LE.
+    run(&mut s, "review.addToDictionary", json!({"word": "zxqaddedword"}));
+    let saved_raw = std::fs::read(&dic_path).unwrap();
+    assert_eq!(saved_raw[0..2], [0xFF, 0xFE], "persists as UTF-16LE with BOM");
+    let decoded = crate::custom_dict::decode_dictionary_bytes(&saved_raw).unwrap();
+    assert!(decoded.contains("freestandingword"));
+    assert!(decoded.contains("zxqaddedword"));
+
+    // Revert to "auto": removes custom dictionary words and restores default path.
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+    assert_eq!(s.user_dict_path.as_ref(), Some(&default_path));
+    assert!(!wordcraft_proof::is_correct("freestandingword"), "freestanding words removed on revert");
+    assert!(!wordcraft_proof::is_correct("zxqaddedword"));
+    assert!(wordcraft_proof::is_correct("defaultword"), "default words restored");
+
+    // Setting customDictionary to "auto" when user_dict_path is already default_path
+    // updates s.prefs.custom_dictionary even if it previously held a stale path.
+    s.prefs.custom_dictionary = Some("/stale/nonexistent.dic".to_string());
+    s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+    assert_eq!(s.prefs.custom_dictionary, None);
+
+    // Clean up test words from proofing dictionary
+    wordcraft_proof::remove_word("defaultword");
+
+    // Reject nonexistent files, folders, relative paths, or oversized files.
+    assert!(s.run("file.options", &json!({"customDictionary": dir.path().join("missing.dic").to_string_lossy()})).is_err());
+    let dir_err = s.run("file.options", &json!({"customDictionary": dir.path().to_string_lossy()})).unwrap_err();
+    assert!(format!("{dir_err:?}").contains("is a folder, not a file"));
+    let rel_err = s.run("file.options", &json!({"customDictionary": "relative/custom.dic"})).unwrap_err();
+    assert!(format!("{rel_err:?}").contains("isn't a full path"));
+
+    // Accept ~/ path expansion when HOME points to a directory.
+    if let Some(home) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        let home_dir = std::path::PathBuf::from(home);
+        let test_name = format!(".wordcraft-test-tilde-{}.dic", std::process::id());
+        let tilde_file = home_dir.join(&test_name);
+        struct CleanFile(std::path::PathBuf);
+        impl Drop for CleanFile {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        if let Ok(mut f) = opts.open(&tilde_file) {
+            use std::io::Write;
+            let _ = f.write_all(b"tildeword\n");
+            let _cleaner = CleanFile(tilde_file.clone());
+            let tilde_res = s.run("file.options", &json!({"customDictionary": format!("~/{test_name}")}));
+            assert!(tilde_res.is_ok(), "tilde expansion succeeds: {:?}", tilde_res.err());
+            assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(tilde_file.to_string_lossy().as_ref()));
+            assert!(wordcraft_proof::is_correct("tildeword"));
+            s.run("file.options", &json!({"customDictionary": "auto"})).unwrap();
+            wordcraft_proof::remove_word("tildeword");
+            wordcraft_proof::remove_word("defaultword");
+        }
+    }
+
+    let huge_dic = dir.path().join("huge.dic");
+    std::fs::write(&huge_dic, vec![b'a'; (crate::custom_dict::MAX_CUSTOM_FILE_BYTES + 1024) as usize]).unwrap();
+    assert!(s.run("file.options", &json!({"customDictionary": huge_dic.to_string_lossy()})).is_err());
+    assert_eq!(s.prefs.custom_dictionary, None, "oversized dictionary rejects without changing prefs");
+    wordcraft_proof::remove_word("defaultword");
+}
+
+/// #5840 review: a dictionary that passes the metadata and access checks but can't be decoded
+/// refuses the whole `file.options` call before any setting is applied, so a combined call leaves
+/// the preferences, the bound path and the proofing words as they were.
+#[test]
+fn refused_custom_dictionary_leaves_every_other_option_unchanged() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-refused");
+    let bound = dir.path().join("custom.dic");
+    std::fs::write(&bound, "boundword\n").unwrap();
+    // A lone 0xFF byte is neither UTF-8 nor a UTF-16LE BOM pair: the file is a readable, writable
+    // regular file, so only decoding refuses it.
+    let bad = dir.path().join("bad.dic");
+    std::fs::write(&bad, [b'h', b'i', 0xFF]).unwrap();
+
+    let mut s = s();
+    s.default_user_dict_path = Some(dir.path().join("custom-dictionary.txt"));
+    run(
+        &mut s,
+        "file.options",
+        json!({
+            "author": "Ada",
+            "initials": "AL",
+            "units": "centimeters",
+            "region": "pl-PL",
+            "dictionariesFolder": dir.path().to_string_lossy(),
+            "customDictionary": bound.to_string_lossy(),
+            "markGrammar": true,
+            "checkSpelling": true,
+        }),
+    );
+    assert!(wordcraft_proof::is_correct("boundword"));
+    let before = cmd::options::current(&s);
+
+    let err = s
+        .run(
+            "file.options",
+            &json!({
+                "author": "Grace",
+                "initials": "GH",
+                "units": "inches",
+                "region": "en-US",
+                "dictionariesFolder": "auto",
+                "customDictionary": bad.to_string_lossy(),
+                "markGrammar": false,
+                "checkSpelling": false,
+                "addWords": ["zxqrefusedword"],
+            }),
+        )
+        .unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a refused dictionary changes no setting");
+    assert_eq!(s.user_dict_path.as_ref(), Some(&bound), "the bound dictionary stays");
+    assert!(!wordcraft_proof::is_correct("zxqrefusedword"), "the refused call adds no words");
+
+    // `auto` decodes the default file before applying too, so a malformed default file is refused
+    // the same way and its companion settings stay as they were.
+    let default_path = dir.path().join("custom-dictionary.txt");
+    std::fs::write(&default_path, [b'x', 0xFF]).unwrap();
+    let before = cmd::options::current(&s);
+    let err = s.run("file.options", &json!({"customDictionary": "auto", "units": "points"})).unwrap_err();
+    assert!(format!("{err:?}").contains("malformed"), "reports the decode failure: {err:?}");
+    assert_eq!(cmd::options::current(&s), before, "a malformed default dictionary changes no setting");
+    assert_eq!(s.prefs.custom_dictionary.as_deref(), Some(bound.to_string_lossy().as_ref()));
+
+    wordcraft_proof::remove_word("boundword");
+}
+
+#[cfg(unix)]
+#[test]
+fn custom_dictionary_rejects_symlink_and_readonly_files() {
+    let _guard = crate::custom_dict::DICT_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = crate::custom_dict::TestDir::new("custom-dic-symlink");
+    let dic_path = dir.path().join("custom.dic");
+    std::fs::write(&dic_path, "word\n").unwrap();
+
+    let mut s = s();
+    let symlink_path = dir.path().join("symlink.dic");
+    let _ = std::os::unix::fs::symlink(&dic_path, &symlink_path);
+    let link_err = s.run("file.options", &json!({"customDictionary": symlink_path.to_string_lossy()})).unwrap_err();
+    assert!(format!("{link_err:?}").contains("is a symbolic link"));
+
+    let ro_path = dir.path().join("readonly.dic");
+    std::fs::write(&ro_path, "word\n").unwrap();
+    let mut perms = std::fs::metadata(&ro_path).unwrap().permissions();
+    perms.set_readonly(true);
+    let _ = std::fs::set_permissions(&ro_path, perms);
+    let ro_err = s.run("file.options", &json!({"customDictionary": ro_path.to_string_lossy()})).unwrap_err();
+    let ro_msg = format!("{ro_err:?}");
+    assert!(ro_msg.contains("read-only") || ro_msg.contains("Permission denied"));
 }
 
 #[test]
@@ -6315,6 +6515,21 @@ fn file_capped_read_refuses_content_over_the_cap() {
     assert!(over.unwrap_err().contains("larger than"));
     assert_eq!(head.unwrap(), vec![7u8; 10]);
     assert_eq!(whole.unwrap().len(), 100);
+}
+
+/// Web fallback for `read_file_capped` and `read_file_head` returns the expected browser error.
+#[test]
+fn wasm_read_file_fallback_returns_browser_error() {
+    let err = crate::io::wasm_read_file_fallback("sample.dic").unwrap_err();
+    assert!(err.contains("files are opened through the browser on the web"));
+}
+
+/// #5840: On wasm32 targets, `read_file_capped` and `read_file_head` return the browser fallback error.
+#[cfg(target_arch = "wasm32")]
+#[test]
+fn wasm_target_read_file_capped_and_head_return_browser_error() {
+    assert!(crate::io::read_file_capped("test.dic", 1024, "dictionary").unwrap_err().contains("browser on the web"));
+    assert!(crate::io::read_file_head("test.dic", 1024).unwrap_err().contains("browser on the web"));
 }
 
 /// #3666: `read_regular_file_within` (Paste Special's copied picture file) reads a file of up to
