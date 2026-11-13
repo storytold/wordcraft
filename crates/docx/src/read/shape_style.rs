@@ -12,9 +12,17 @@ use super::drawing_color::{color, color_alpha, fill as read_fill, fill_colour};
 use crate::units::{int, measure};
 use crate::xml::El;
 
-/// Outline widths of the theme's three line styles (`a:lnStyleLst`), points: what Word's
-/// default themes give (6 350, 12 700 and 19 050 EMU).
+/// Outline widths of a theme's three line styles (`a:lnStyleLst`), points, for a document whose
+/// theme gives none: what Word's default themes give (6 350, 12 700 and 19 050 EMU).
 const THEME_LINE_WIDTHS: [f32; 3] = [0.5, 1.0, 1.5];
+
+/// The width of a line style that states none (`a:ln` without `w`), points: Word draws it
+/// 0.75 pt wide.
+const DEFAULT_LINE_WIDTH: f32 = 0.75;
+
+/// Most line styles kept per theme: Word's themes have three. A hostile theme with millions of
+/// them keeps a bounded list, and a reference past the last one kept takes that one.
+const MAX_THEME_LINES: usize = 64;
 
 /// The shape kind drawn for DrawingML preset geometry `prst` (ECMA-376 Part 1 §20.1.10.56).
 /// Presets WordCraft has no shape for are drawn as the nearest one it has: callouts as the box,
@@ -123,16 +131,39 @@ pub(crate) struct ShapePaint {
 
 /// The theme's fill styles (`a:fmtScheme`): `a:fillStyleLst` and `a:bgFillStyleLst`, which a
 /// shape's `a:fillRef` 1–999 and 1001+ point to.
+/// Also the widths of its line styles (`a:lnStyleLst`), which a shape's `a:lnRef` points to.
 #[derive(Debug, Default)]
 pub(crate) struct ThemeFills {
     pub fill: Vec<El>,
     pub bg: Vec<El>,
+    /// The line styles' widths in points, in the theme's order.
+    pub lines: Vec<f32>,
 }
 
 impl ThemeFills {
     pub fn read(fmt: Option<&El>) -> ThemeFills {
         let list = |n: &str| fmt.and_then(|f| f.child(n)).map(|l| l.els().take(MAX_THEME_FILLS).cloned().collect()).unwrap_or_default();
-        ThemeFills { fill: list("a:fillStyleLst"), bg: list("a:bgFillStyleLst") }
+        let lines = fmt
+            .and_then(|f| f.child("a:lnStyleLst"))
+            .map(|l| {
+                l.els()
+                    .filter(|e| e.name == "a:ln")
+                    .take(MAX_THEME_LINES)
+                    .map(|ln| ln.attr("w").and_then(|v| measure(v, 12_700.0)).unwrap_or(DEFAULT_LINE_WIDTH).clamp(0.0, 100.0))
+                    .collect()
+            })
+            .unwrap_or_default();
+        ThemeFills { fill: list("a:fillStyleLst"), bg: list("a:bgFillStyleLst"), lines }
+    }
+    /// The width of line style `idx` (1-based, as `a:lnRef` names it), points: the document
+    /// theme's, or Word's default themes' when the theme lists none. An index past the last
+    /// style takes the last one. Measured in Word for Windows with themes of three and of five
+    /// line styles: `idx` 4 to 6 draw the third style's width in the one and the fourth, the
+    /// fifth and the fifth style's in the other.
+    fn line_width(&self, idx: i64) -> f32 {
+        let widths: &[f32] = if self.lines.is_empty() { &THEME_LINE_WIDTHS } else { &self.lines };
+        let i = usize::try_from(idx.max(1) - 1).unwrap_or(0).min(widths.len().saturating_sub(1));
+        widths.get(i).copied().unwrap_or(DEFAULT_LINE_WIDTH)
     }
     /// Style `idx` (1-based; 1001+ the background styles; 1000 names none).
     fn get(&self, idx: i64) -> Option<&El> {
@@ -186,7 +217,7 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb], 
         Some(l) if l.els().any(|c| matches!(c.name.as_str(), "a:solidFill" | "a:gradFill" | "a:pattFill")) => fill_colour(l, theme),
         _ => line_ref.and_then(|(_, r)| color(r, theme)),
     };
-    let themed_width = line_ref.and_then(|(idx, _)| THEME_LINE_WIDTHS.get(usize::try_from(idx.clamp(1, 3) - 1).unwrap_or(0)).copied());
+    let themed_width = line_ref.map(|(idx, _)| styles.line_width(idx));
     let stroke_width = ln
         .and_then(|l| l.attr("w"))
         .and_then(|v| measure(v, 12_700.0))
@@ -447,6 +478,49 @@ mod tests {
         ] {
             assert_eq!(shape_paint(None, Some(&st(idx)), &THEME_COLORS, &styles, None).fill, want, "idx {idx}");
         }
+    }
+
+    /// Measured in Word for Windows (16.0.20625) with rectangles styled `a:lnRef idx` 1 to 6 that
+    /// state no width of their own, in documents whose themes list line styles of 1, 1.5 and 2 pt,
+    /// of 0.75, 2 and 3 pt, of 1 to 5 pt, and of none stated, 4 and 1 pt: each outline is drawn as
+    /// wide as the theme's style `idx`, an index past the last style as wide as the last one, a
+    /// style without `w` 0.75 pt wide. WordCraft drew 0.5, 1 and 1.5 pt whatever the theme said.
+    #[test]
+    fn a_styled_outline_takes_its_width_from_the_documents_theme() {
+        let theme = |widths: &[Option<u32>]| {
+            let fill = r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>"#;
+            let lns: String =
+                widths.iter().map(|w| w.map_or(format!("<a:ln>{fill}</a:ln>"), |w| format!(r#"<a:ln w="{w}">{fill}</a:ln>"#))).collect();
+            ThemeFills::read(Some(&el(&format!(r#"<a:fmtScheme xmlns:wps="w" xmlns:a="a"><a:lnStyleLst>{lns}</a:lnStyleLst></a:fmtScheme>"#))))
+        };
+        // Whether the outline is drawn, and its width.
+        let outline = |styles: &ThemeFills, idx: i64, sppr: Option<&El>| {
+            let st = el(&format!(r#"<wps:style xmlns:wps="w" xmlns:a="a"><a:lnRef idx="{idx}"><a:srgbClr val="000000"/></a:lnRef></wps:style>"#));
+            let p = shape_paint(sppr, Some(&st), &THEME_COLORS, styles, None);
+            (p.stroke.is_some(), p.stroke_width)
+        };
+        let widths = |styles: &ThemeFills| (1..=6).map(|idx| outline(styles, idx, None).1).collect::<Vec<_>>();
+        assert_eq!(widths(&theme(&[Some(12_700), Some(19_050), Some(25_400)])), [1.0, 1.5, 2.0, 2.0, 2.0, 2.0]);
+        assert_eq!(widths(&theme(&[Some(9_525), Some(25_400), Some(38_100)])), [0.75, 2.0, 3.0, 3.0, 3.0, 3.0]);
+        assert_eq!(widths(&theme(&[Some(12_700), Some(25_400), Some(38_100), Some(50_800), Some(63_500)])), [1.0, 2.0, 3.0, 4.0, 5.0, 5.0]);
+        assert_eq!(widths(&theme(&[None, Some(50_800), Some(12_700)])), [0.75, 4.0, 1.0, 1.0, 1.0, 1.0]);
+        // A theme that lists no line styles, or no theme: the widths of Word's default themes.
+        assert_eq!(widths(&theme(&[])), [0.5, 1.0, 1.5, 1.5, 1.5, 1.5]);
+        assert_eq!(widths(&ThemeFills::default()), [0.5, 1.0, 1.5, 1.5, 1.5, 1.5]);
+        // The shape's own width wins. Without one, an outline that is not drawn and one with only
+        // a colour of its own take the theme's width too.
+        let styles = theme(&[Some(9_525), Some(25_400), Some(38_100)]);
+        let sppr = |ln: &str| el(&format!(r#"<wps:spPr xmlns:wps="w" xmlns:a="a">{ln}</wps:spPr>"#));
+        let red = r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#;
+        assert_eq!(outline(&styles, 2, Some(&sppr(&format!(r#"<a:ln w="50800">{red}</a:ln>"#)))), (true, 4.0));
+        assert_eq!(outline(&styles, 2, Some(&sppr("<a:ln><a:noFill/></a:ln>"))), (false, 2.0));
+        assert_eq!(outline(&styles, 2, Some(&sppr(&format!("<a:ln>{red}</a:ln>")))), (true, 2.0));
+        // Index 0 names no line. Hostile widths and lists stay bounded.
+        assert_eq!(outline(&styles, 0, None), (false, 0.0));
+        assert_eq!(widths(&theme(&[Some(u32::MAX), Some(0)]))[..2], [100.0, 0.0]);
+        let many =
+            format!(r#"<a:fmtScheme xmlns:wps="w" xmlns:a="a"><a:lnStyleLst>{}</a:lnStyleLst></a:fmtScheme>"#, r#"<a:ln w="12700"/>"#.repeat(5_000));
+        assert_eq!(ThemeFills::read(Some(&el(&many))).lines.len(), MAX_THEME_LINES);
     }
 
     #[test]
