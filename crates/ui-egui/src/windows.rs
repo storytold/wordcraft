@@ -246,18 +246,25 @@ pub(crate) struct ViewportInput {
     /// pass: [`WordApp::input_from_control`].
     pub(crate) injected: Option<ViewportId>,
     control_click: HashMap<ViewportId, bool>,
+    /// Touchpad scroll speed multiplier for secondary viewports (#6146).
+    pub(crate) touchpad_speed: crate::scroll::ScrollSpeed,
+    /// Mouse-wheel scroll speed multiplier for secondary viewports (#6146).
+    pub(crate) wheel_speed: crate::scroll::ScrollSpeed,
 }
 
 impl egui::Plugin for ViewportInput {
+    /// Plugin debug name for egui's diagnostics.
     fn debug_name(&self) -> &'static str {
         "wordcraft_viewport_input"
     }
 
+    /// Hooks raw input for non-root viewports, applying touchpad scroll speed and secondary clicks.
     fn input_hook(&mut self, _ctx: &egui::Context, input: &mut egui::RawInput) {
         let viewport = input.viewport_id;
         if viewport == ViewportId::ROOT {
             return;
         }
+        self.touchpad_speed.apply_input_scroll(input, self.wheel_speed);
         if cfg!(target_os = "macos") {
             crate::control_click_as_secondary(&mut input.events, self.control_click.entry(viewport).or_default());
         }
@@ -762,16 +769,31 @@ impl WordApp {
         }
     }
 
-    /// The control channel's next input, for the active window when it has a viewport of its own:
-    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
-    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
-        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+    /// Ensures [`ViewportInput`] is registered and keeps its touchpad scroll speed in sync with
+    /// user settings for secondary viewports (#6146).
+    pub(crate) fn sync_viewport_input(&mut self, ctx: &egui::Context) {
+        if !self.windows.native {
             return;
         }
         if !self.windows.input_plugin {
             ctx.add_plugin(ViewportInput::default());
             self.windows.input_plugin = true;
         }
+        let touchpad_speed = self.ui.touchpad_scroll_speed;
+        let wheel_speed = self.ui.scroll_speed;
+        ctx.with_plugin(|p: &mut ViewportInput| {
+            p.touchpad_speed = touchpad_speed;
+            p.wheel_speed = wheel_speed;
+        });
+    }
+
+    /// The control channel's next input, for the active window when it has a viewport of its own:
+    /// handed to [`ViewportInput`], which gives it to that viewport's next pass.
+    pub(crate) fn send_control_input(&mut self, ctx: &egui::Context) {
+        if self.synthetic.is_empty() || self.control_input_is_roots(ctx) {
+            return;
+        }
+        self.sync_viewport_input(ctx);
         self.settle_windows();
         let target = self.active_viewport();
         // Input queued for a window that has closed since (or moved into the root viewport)
