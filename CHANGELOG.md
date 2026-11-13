@@ -13,4 +13,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Fixed
 
 - Recognized custom formats render zero-padded like Word's own sample list (`[0001]`, `[0002]`, … from `w:lvlText "[%1]"`), including under a `none` or `bullet` file fallback, while legal numbering (`isLgl`) keeps decimal for every level.
-- A numbering tab (Word's "tab stop after number") carries the paragraph text when the position lies inside the first line's span (floats and margins respected); otherwise the ordinary tab stops apply, as in Word's PDF export.
+- A usable numbering tab (Word's "tab stop after number") carries text to its stop ahead of default stops; a patent-list position was compared with Word’s PDF export. Blocked, passed or out-of-span destinations use ordinary stops; float and boundary controls are synthetic, and the fallback is not itself span-guarded.
