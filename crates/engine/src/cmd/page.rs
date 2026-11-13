@@ -600,6 +600,7 @@ pub fn margins_fit(page: (f32, f32), (t, b, l, r): (f32, f32, f32, f32), gutter:
 pub const MIN_PAGE_SIDE: f32 = 7.2;
 pub const MAX_PAGE_SIDE: f32 = 1584.0;
 
+/// Change paper size of the selected section(s) to the given dimensions or preset name.
 fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = if let Some(n) = p::str(v, "name") {
         let (_, w, h) = wordcraft_geom::PAPER_SIZES
@@ -614,6 +615,9 @@ fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = (w.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE), h.clamp(MIN_PAGE_SIDE, MAX_PAGE_SIDE));
     // Each section keeps its orientation: the long side across in landscape, down in portrait.
     let oriented = |x: &SectionProps| if x.landscape { (w.max(h), w.min(h)) } else { (w.min(h), w.max(h)) };
+    if s.sel.focus.story != wordcraft_doc::StoryRef::Body {
+        let _ = s.layout();
+    }
     let sections = s.doc.sections();
     let fits = |block: usize| {
         sections

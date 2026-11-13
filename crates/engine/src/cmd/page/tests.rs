@@ -467,6 +467,13 @@ fn section_command_from_inherited_footer_targets_active_section() {
     let secs = s.doc.sections();
     assert!(!secs[0].1.landscape);
     assert!(secs[1].1.landscape);
+
+    // layout.size also targets the active section from an inherited footer.
+    s.run("layout.size", &json!({"name": "A5"})).unwrap();
+    let secs = s.doc.sections();
+    let a5 = wordcraft_geom::PAPER_SIZES.iter().find(|(n, _, _)| *n == "A5").unwrap();
+    assert_ne!((secs[0].1.page_w, secs[0].1.page_h), (a5.1.max(a5.2), a5.1.min(a5.2)));
+    assert_eq!((secs[1].1.page_w, secs[1].1.page_h), (a5.1.max(a5.2), a5.1.min(a5.2)));
 }
 
 /// Inserting a page number while editing an inherited footer preserves the inherited content
@@ -494,6 +501,18 @@ fn inherited_footer_preserves_content_when_numbering_from_inherited_footer() {
     let fid = secs[0].1.footers.default.expect("section 0 footer exists");
     let footer_text = s.doc.plain_text(wordcraft_doc::StoryRef::Part(fid));
     assert!(footer_text.contains("Footer on sec 0"), "inherited footer content was preserved");
+    let has_page_field = s.doc.story(wordcraft_doc::StoryRef::Part(fid)).is_some_and(|blocks| {
+        blocks.iter().any(|b| match &**b {
+            wordcraft_doc::Block::Para(p) => p.objects.iter().any(|obj| match obj {
+                wordcraft_doc::InlineObject::Field { instr, .. } | wordcraft_doc::InlineObject::FieldStart { instr, .. } => {
+                    instr.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("PAGE"))
+                }
+                _ => false,
+            }),
+            _ => false,
+        })
+    });
+    assert!(has_page_field, "footer contains the PAGE field");
 
     // Both page 0 and page 1 render the shared footer with page numbers.
     let l = s.layout();
@@ -532,6 +551,18 @@ fn inherited_footer_preserves_content_when_numbering_from_inherited_header() {
     let fid = secs[0].1.footers.default.expect("section 0 footer exists");
     let footer_text = s.doc.plain_text(wordcraft_doc::StoryRef::Part(fid));
     assert!(footer_text.contains("Footer on sec 0"), "inherited footer content was preserved");
+    let has_page_field = s.doc.story(wordcraft_doc::StoryRef::Part(fid)).is_some_and(|blocks| {
+        blocks.iter().any(|b| match &**b {
+            wordcraft_doc::Block::Para(p) => p.objects.iter().any(|obj| match obj {
+                wordcraft_doc::InlineObject::Field { instr, .. } | wordcraft_doc::InlineObject::FieldStart { instr, .. } => {
+                    instr.split_whitespace().next().is_some_and(|name| name.eq_ignore_ascii_case("PAGE"))
+                }
+                _ => false,
+            }),
+            _ => false,
+        })
+    });
+    assert!(has_page_field, "footer contains the PAGE field");
 
     // Both page 0 and page 1 render the shared footer with page numbers.
     let l = s.layout();
