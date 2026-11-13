@@ -317,6 +317,45 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_fields_in(s, false)
 }
 
+/// Each section's page number format (`w:pgNumType w:fmt`), by section index.
+pub(crate) fn page_formats(s: &Session) -> Vec<NumFormat> {
+    s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect()
+}
+
+/// The page holding `pos` in `l`: its index in the layout, its number, and its section's page
+/// number format (`formats` from [`page_formats`]). `None` when no page holds it.
+pub(crate) fn page_at(l: &wordcraft_layout::DocLayout, formats: &[NumFormat], pos: &Pos) -> Option<(usize, u32, NumFormat)> {
+    let c = l.caret(pos)?;
+    let page = l.pages.get(c.page)?;
+    Some((c.page, page.number, formats.get(page.section).copied().unwrap_or_default()))
+}
+
+/// A page number as the page's footer shows it (`ii` in a lowerRoman section), as the `PAGE`
+/// and `PAGEREF` fields write it without a `\*` switch.
+pub(crate) fn page_text(number: u32, fmt: NumFormat) -> String {
+    wordcraft_layout::fields::field_number("", fmt, number)
+}
+
+/// The page number of the page holding `pos`, in its section's number format: what generated
+/// lists (TOC, index, tables of figures and authorities) and page cross-references write. Page
+/// "1" when no page holds it.
+pub(crate) fn page_label(s: &mut Session, pos: &Pos) -> String {
+    let formats = page_formats(s);
+    let l = s.layout();
+    page_at(&l, &formats, pos).map_or_else(|| "1".into(), |(_, n, fmt)| page_text(n, fmt))
+}
+
+/// Where `PAGEREF` reads bookmark `name` (starting at `pos`): a hidden `_Ref` bookmark from the
+/// start of a heading that starts with page breaks reads the page its text is on, as when its
+/// cross-reference was inserted.
+fn bookmark_page_pos(doc: &wordcraft_doc::Document, name: &str, pos: Pos) -> Pos {
+    if pos.off == 0 && name.starts_with("_Ref") {
+        let off = crate::cmd::citations::leading_breaks(doc, &pos);
+        return Pos { off, ..pos };
+    }
+    pos
+}
+
 /// [`update_fields`], or with `all` the whole document: the body (with SEQ, citations and TOC) and
 /// every part story, wherever the caret is (what printing needs).
 pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
@@ -326,18 +365,12 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
         update_seq(s)?;
     }
     let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
-    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
+    let formats = page_formats(s);
     let marks = s.doc.bookmarks();
     for (name, pos) in marks {
+        let pos = bookmark_page_pos(&s.doc, &name, pos);
         let l = s.layout();
-        let page_info = l
-            .caret(&pos)
-            .and_then(|c| l.pages.get(c.page))
-            .map(|p| {
-                let format = formats.get(p.section).copied().unwrap_or_default();
-                (p.number, format)
-            })
-            .unwrap_or((1, NumFormat::Decimal));
+        let page_info = page_at(&l, &formats, &pos).map_or((1, NumFormat::Decimal), |(_, n, fmt)| (n, fmt));
         pages.entry(name).or_insert(page_info);
     }
     let stories: Vec<StoryRef> =
