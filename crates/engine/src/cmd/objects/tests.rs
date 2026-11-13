@@ -1295,10 +1295,11 @@ fn arrange_bounds_on_header_picture_writes_page_anchored_odt_frame() {
     assert!(styles.contains(r#"svg:x="10pt""#) && styles.contains(r#"svg:y="20pt""#), "{styles}");
 }
 
-/// Turning off `moveWithText` on a body picture anchors it to the page, and subsequent
-/// `arrange.bounds` retains page-relative anchoring and writes a page-anchored ODT frame.
+/// A body picture set to stay on the page (`moveWithText` off) is still placed by its paragraph
+/// once moved: the move is the placement, and the file keeps no page number to put it back
+/// (#5705). Header and footer pictures stay page-anchored (see above).
 #[test]
-fn body_picture_with_move_with_text_false_retains_page_anchor_and_coordinates() {
+fn a_moved_body_picture_is_placed_by_its_paragraph_even_when_fixed_to_the_page() {
     use wordcraft_doc::para::Anchor;
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.run("text.insert", &json!({"text": "First line of paragraph.\n"})).unwrap();
@@ -1310,24 +1311,25 @@ fn body_picture_with_move_with_text_false_retains_page_anchor_and_coordinates() 
     let float = obj.frame().unwrap().2;
     assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Column));
 
-    // Turn off moveWithText
+    // Turn off moveWithText: fixed on the page until it is moved.
     s.run("arrange.moveWithText", &json!({"value": false})).unwrap();
     let (_, obj) = selected(&s).unwrap();
     let float = obj.frame().unwrap().2;
     assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Page));
 
-    // Now call arrange.bounds on a page where a paragraph starts
     s.run("arrange.bounds", &json!({"page": 0, "x": 50.0, "y": 80.0})).unwrap();
-    let (_, obj) = selected(&s).unwrap();
+    let (pos, obj) = selected(&s).unwrap();
     let float = obj.frame().unwrap().2;
-    assert_eq!((float.h_rel, float.v_rel), (Anchor::Page, Anchor::Page));
-    assert_eq!((float.x, float.y), (50.0, 80.0));
+    assert_eq!((float.h_rel, float.v_rel), (Anchor::Column, Anchor::Paragraph));
+    assert_eq!(float.page, 0);
+    let hit = s.layout().object(&pos, 0).expect("laid out");
+    assert!((hit.rect.x - 50.0).abs() < 1.0 && (hit.rect.y - 80.0).abs() < 1.0, "dropped: {:?}", hit.rect);
 
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(wordcraft_formats::odt::export(&s.doc).unwrap())).unwrap();
     let mut content = String::new();
     std::io::Read::read_to_string(&mut z.by_name("content.xml").unwrap(), &mut content).unwrap();
-    assert!(content.contains(r#"text:anchor-type="page""#), "body picture should export with page anchor: {content}");
-    assert!(content.contains(r#"svg:x="50pt""#) && content.contains(r#"svg:y="80pt""#), "{content}");
+    assert!(content.contains(r#"text:anchor-type="paragraph""#), "body picture should export with paragraph anchor: {content}");
+    assert!(!content.contains("anchor-page-number"), "{content}");
 }
 
 /// Changing `moveWithText` on an object with `h_align` set preserves its horizontal
