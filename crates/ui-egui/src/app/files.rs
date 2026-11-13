@@ -43,7 +43,7 @@ impl WordApp {
                 // only a status-bar line the user has already stopped looking at.
                 Ok(PromptSave::NotSaved) => {
                     let message =
-                        tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.");
+                        tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.").to_string();
                     self.prompt_again(message, then, params, document);
                     return Ok(json!({"done": false}));
                 }
