@@ -1953,6 +1953,78 @@ fn ole_object_round_trips() {
     assert!(matches!(paras(&back)[0].objects.first(), Some(InlineObject::Image { w: 144.0, ole: Some(_), .. })));
 }
 
+/// An OLE object read from `bytes` is kept with no picture, `size` points large, and saving writes
+/// it back with its embedded data `ole`, again with no picture. Returns the saved document part.
+fn ole_object_kept_without_picture(bytes: &[u8], ole: &str, size: (f32, f32)) -> String {
+    let d = wordcraft_docx::read(bytes).unwrap();
+    let Some(InlineObject::Image { media, w, h, ole: Some(_), .. }) = paras(&d)[0].objects.first() else { panic!("{:?}", paras(&d)[0].objects) };
+    assert!(!d.media.contains_key(media), "no picture");
+    assert_eq!((*w, *h), size);
+    assert_eq!(paras(&d)[0].text, "Before \u{fffc} after");
+
+    let out = wordcraft_docx::write(&d).unwrap();
+    let files = unzip(&out);
+    let body = text(&files, "word/document.xml");
+    let rels = text(&files, "word/_rels/document.xml.rels");
+    let [ole_id] = attr_values(&body, "o:OLEObject", "r:id").try_into().unwrap();
+    let (kind, target) = rel(&rels, &ole_id);
+    assert!(kind.ends_with("/oleObject"), "{kind}");
+    assert_eq!(files.get(&part_at("word", &target)).map(Vec::as_slice), Some(ole.as_bytes()));
+    assert!(!body.contains("v:imagedata") && !body.contains("<w:drawing>"), "{body}");
+
+    let back = wordcraft_docx::read(&out).unwrap();
+    let Some(InlineObject::Image { w, h, ole: Some(_), .. }) = paras(&back)[0].objects.first() else { panic!("{:?}", paras(&back)[0].objects) };
+    assert_eq!((*w, *h), size);
+    body
+}
+
+/// An OLE object's picture is optional, and some producers leave it out: the object used to be
+/// dropped on opening, its embedded data with it (#6480). It is kept, as an empty box the size
+/// its VML shape gives it, or else its original size, and saving writes it back.
+#[test]
+fn an_ole_object_without_a_picture_round_trips() {
+    let ole_object = r#"<o:OLEObject Type="Embed" ProgID="Package" ShapeID="_x0000_i1025" DrawAspect="Content" ObjectID="_1000000001" r:id="rId9"/>"#;
+    let ole = "\u{d0}\u{cf} opaque OLE storage";
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
+    let shape = r##"<v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:100pt;height:50pt" o:ole="" alt="Data"></v:shape>"##;
+    // No VML shape: the original size, 2880 × 1440 twips. A shape without a picture: its size.
+    for (vml, size) in [("", (144.0, 72.0)), (shape, (100.0, 50.0))] {
+        let body = format!(
+            r#"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:object w:dxaOrig="2880" w:dyaOrig="1440">{vml}{ole_object}</w:object></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#
+        );
+        let bytes = docx(
+            &body,
+            &[("rId9", "oleObject", "embeddings/oleObject1.bin")],
+            &[("[Content_Types].xml", types), ("word/embeddings/oleObject1.bin", ole)],
+        );
+        let saved = ole_object_kept_without_picture(&bytes, ole, size);
+        if !vml.is_empty() {
+            assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:100pt;height:50pt"]);
+            assert_eq!(attr_values(&saved, "v:shape", "alt"), ["Data"]);
+        }
+    }
+}
+
+/// An OLE object whose picture's part, or relationship, is missing: the picture is reported
+/// missing, and the object is kept without it (it can't be written back) instead of being dropped
+/// with its embedded data (#6480).
+#[test]
+fn an_ole_object_whose_picture_is_missing_round_trips() {
+    let ole = "\u{d0}\u{cf} opaque OLE storage";
+    let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
+    let body = r##"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:object w:dxaOrig="2880" w:dyaOrig="1440"><v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:100pt;height:50pt" o:ole=""><v:imagedata r:id="rId8" o:title=""/></v:shape><o:OLEObject Type="Embed" ProgID="Package" ShapeID="_x0000_i1025" DrawAspect="Content" ObjectID="_1000000001" r:id="rId9"/></w:object></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"##;
+    let picture_rel = ("rId8", "image", "media/image1.png");
+    let ole_rel = ("rId9", "oleObject", "embeddings/oleObject1.bin");
+    // The picture's part is missing; the picture's relationship is missing.
+    for rels in [vec![picture_rel, ole_rel], vec![ole_rel]] {
+        let bytes = docx(body, &rels, &[("[Content_Types].xml", types), ("word/embeddings/oleObject1.bin", ole)]);
+        let d = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(d.missing_pictures.list.len(), 1, "{:?}", d.missing_pictures.list);
+        let saved = ole_object_kept_without_picture(&bytes, ole, (100.0, 50.0));
+        assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:100pt;height:50pt"]);
+    }
+}
+
 #[test]
 fn an_unqualified_relationship_attribute_round_trips() {
     // A producer that left the relationship prefix out: the VML picture names its image with an

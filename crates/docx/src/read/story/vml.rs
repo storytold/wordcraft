@@ -1,5 +1,5 @@
 use super::{
-    Anchor, Arc, CharProps, El, Float, FloatAlign, InlineObject, MAX_STORY_DEPTH, MAX_VML_GROUP_DEPTH, Paragraph, PartKind, Reader, Rels, Rgb,
+    Anchor, Arc, CharProps, El, Float, FloatAlign, InlineObject, MAX_STORY_DEPTH, MAX_VML_GROUP_DEPTH, Node, Paragraph, PartKind, Reader, Rels, Rgb,
     ShapeExtra, ShapeKind, StoryCtx, TextColor, TextWarp, Wrap, int, measure, para_block, vml_color, vml_fill, vml_fraction, vml_preset_kind,
 };
 
@@ -389,17 +389,43 @@ impl Reader<'_> {
     /// An OLE object (`w:object`, ECMA-376 §17.3.3.19): shown as its picture (VML, or a DrawingML
     /// picture in `w:drawing`), and kept whole so saving writes the object back.
     pub(super) fn read_object(&mut self, sc: &mut StoryCtx, obj: &El, rels: &Rels) -> Option<InlineObject> {
-        let mut o = match self.read_vml(sc, obj, rels) {
-            Some(o) => o,
-            None => {
-                let d = obj.child("w:drawing")?;
-                self.read_drawing(sc, d, rels)?
-            }
+        let drawn = match self.read_vml(sc, obj, rels) {
+            Some(o) => Some(o),
+            None => obj.child("w:drawing").and_then(|d| self.read_drawing(sc, d, rels)),
         };
+        let Some(mut o) = drawn else { return self.read_object_without_picture(obj, rels, sc.in_hf) };
         if let InlineObject::Image { ole, .. } = &mut o {
             *ole = self.keep_embedded(obj, rels, &[]);
         }
         Some(o)
+    }
+
+    /// An OLE object with no picture to show: it has none (the picture is optional), or its
+    /// picture's relationship or part is missing (reported as a missing picture). It is kept all
+    /// the same, so saving writes the object and its data back instead of dropping both (#6480),
+    /// and drawn as an empty box of the size its VML shape's style gives, or else of the object's
+    /// original size (`w:dxaOrig`, `w:dyaOrig`). A picture that can't be written back is left out
+    /// of the kept object. `None`, as before, when the object itself can't be kept.
+    fn read_object_without_picture(&mut self, obj: &El, rels: &Rels, in_hf: bool) -> Option<InlineObject> {
+        let ole = match self.keep_embedded(obj, rels, &[]) {
+            Some(ole) => ole,
+            None => self.keep_embedded(&without_vml_pictures(obj)?, rels, &[])?,
+        };
+        let shape = obj.child("v:shape");
+        let style = shape.and_then(|s| s.attr("style")).unwrap_or("");
+        let side = |key: &str, orig: &str| {
+            vml_style(style, key)
+                .and_then(|v| measure(v, 1.0))
+                .filter(|pt| *pt > 0.0)
+                .or_else(|| crate::units::tw(obj, orig))
+                .map_or(0.0, |pt| pt.clamp(0.0, crate::units::MAX_LEN_PT))
+        };
+        let (w, h) = (side("width", "w:dxaOrig"), side("height", "w:dyaOrig"));
+        let float = shape.map_or_else(Float::default, |s| vml_float(s, style, in_hf));
+        let alt = shape.and_then(|s| s.attr("alt")).unwrap_or("").to_string();
+        log::warn!("docx: an embedded object has no picture to show; it is kept and drawn as an empty box");
+        // No media key: drawn as the missing-picture box, like ink without a usable preview.
+        Some(InlineObject::Image { media: String::new(), w, h, alt, float, crop: [0.0; 4], fx: Default::default(), ole: Some(ole) })
     }
 
     /// A Word signature line (Insert › Signature Line): a `w:pict` whose one VML picture carries
@@ -464,6 +490,23 @@ const VML_TEXT_WARPS: [&str; 40] = [
     "textCanUp",
     "textCanDown",
 ];
+
+/// `obj` without the pictures (`v:imagedata`) of its VML shapes, to keep an object whose picture
+/// can't be written back; `None` when it has none to leave out.
+fn without_vml_pictures(obj: &El) -> Option<El> {
+    let mut bare = obj.clone();
+    let mut dropped = false;
+    for k in &mut bare.kids {
+        if let Node::El(shape) = k
+            && shape.name.starts_with("v:")
+        {
+            let before = shape.kids.len();
+            shape.kids.retain(|n| !matches!(n, Node::El(e) if e.name == "v:imagedata"));
+            dropped |= shape.kids.len() != before;
+        }
+    }
+    dropped.then_some(bare)
+}
 
 /// A VML shape's preset type (`o:spt`): its own, its shapetype's, or the number in Word's
 /// shapetype id `_x0000_tNN` (`type_id`), Word writing each shapetype only at its first use.
