@@ -142,6 +142,8 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
     };
     let mut budget = MAX_COMPARE_CELLS;
     let mut char_fallbacks = 0usize;
+    // This comparison owns the flags it turns on, not those a previous one recorded.
+    s.compare_hf_flags = None;
     let mut ctx = DiffCtx { ins, del, opts: &opts, budget: &mut budget, char_fallbacks: &mut char_fallbacks };
     let (out, body_changes, sources) = compare_blocks(&mut s.doc, &run, &mut ctx, &old, &new, true);
     s.doc.body = out;
@@ -316,22 +318,29 @@ fn map_result_sections_to_snapshots(
 /// so inserted First or Even stories remain selectable under layout. Precomputed `res_ends`
 /// avoids rescanning document sections on every slot assignment.
 fn assign_section_slot(s: &mut Session, res_ends: &[usize], res_si: usize, footer: bool, slot: HfSlot, id: u32, enable_flag: bool) {
+    let mut title_page_before = None;
     if res_si + 1 < res_ends.len()
         && let Some(&end) = res_ends.get(res_si)
     {
         let sect = s.doc.section_mut(end);
         set_hf_slot(sect, footer, slot, Some(id));
-        if enable_flag && slot == HfSlot::First {
+        if enable_flag && slot == HfSlot::First && !sect.title_page {
             sect.title_page = true;
+            title_page_before = Some((Some(end), false));
         }
     } else {
         set_hf_slot(&mut s.doc.last_section, footer, slot, Some(id));
-        if enable_flag && slot == HfSlot::First {
+        if enable_flag && slot == HfSlot::First && !s.doc.last_section.title_page {
             s.doc.last_section.title_page = true;
+            title_page_before = Some((None, false));
         }
     }
-    if enable_flag && slot == HfSlot::Even {
+    if let Some(entry) = title_page_before {
+        s.compare_hf_flags.get_or_insert_with(Default::default).title_page.push(entry);
+    }
+    if enable_flag && slot == HfSlot::Even && !s.doc.settings.even_odd_headers {
         s.doc.settings.even_odd_headers = true;
+        s.compare_hf_flags.get_or_insert_with(Default::default).even_odd.get_or_insert(false);
     }
 }
 
@@ -355,18 +364,15 @@ fn block_box_ids(b: &Block, ids: &mut Vec<u32>) {
     }
 }
 
-/// Adopts any text boxes contained within `blocks` from `revised` into `doc`, returning the adapted blocks.
-/// If `blocks` contains no text boxes, returns `blocks` directly without cloning `revised.parts`.
+/// Adopts the text boxes and media of `blocks` from `revised` into `doc`, returning blocks that
+/// belong to `doc`. Only the stories and media actually referenced are brought over; blocks with
+/// neither are returned as they are.
 fn adopt_hf_blocks(doc: &mut Document, revised: &Document, blocks: &[Arc<Block>], rev_has_text_boxes: bool) -> Vec<Arc<Block>> {
-    if !rev_has_text_boxes {
-        return blocks.to_vec();
-    }
     let mut todo = Vec::new();
-    for b in blocks {
-        block_box_ids(b, &mut todo);
-    }
-    if todo.is_empty() {
-        return blocks.to_vec();
+    if rev_has_text_boxes {
+        for b in blocks {
+            block_box_ids(b, &mut todo);
+        }
     }
     let mut parts = std::collections::BTreeMap::new();
     while let Some(id) = todo.pop() {
@@ -382,6 +388,9 @@ fn adopt_hf_blocks(doc: &mut Document, revised: &Document, blocks: &[Arc<Block>]
     }
     let blocks: Vec<Block> = blocks.iter().map(|b| (**b).clone()).collect();
     let media = revised.media_of_blocks(&blocks);
+    if parts.is_empty() && media.is_empty() {
+        return blocks.into_iter().map(Arc::new).collect();
+    }
     let frag = wordcraft_doc::edit::Fragment { blocks, parts, media };
     doc.adopt_fragment(&frag).into_iter().map(Arc::new).collect()
 }
@@ -721,6 +730,26 @@ fn compare_blocks(
                     if track_sources {
                         sources.push((Some(i), Some(j)));
                     }
+                } else if let (Some(x), Some(y)) = (a, b) {
+                    if x == y {
+                        out.push(y.clone());
+                        if track_sources {
+                            sources.push((Some(i), Some(j)));
+                        }
+                    } else {
+                        // Equal as compared (a table by its flattened text) but not the same
+                        // content or structure: a tracked replacement, so rejecting puts the
+                        // original table back instead of silently keeping the revised one.
+                        out.push(Arc::new(mark_block(x, &|c| c.del = Some(run.del), 0)));
+                        if track_sources {
+                            sources.push((Some(i), None));
+                        }
+                        out.push(Arc::new(mark_block(y, &|c| c.ins = Some(run.ins), 0)));
+                        if track_sources {
+                            sources.push((None, Some(j)));
+                        }
+                        changes += 1;
+                    }
                 } else if let Some(x) = b.or(a) {
                     out.push(x.clone());
                     if track_sources {
@@ -1011,39 +1040,51 @@ fn same_objects(doc: &Document, a: &Paragraph, b: &Paragraph) -> bool {
 
 /// Words with the spaces after them ("The ", "cat "), or single characters, and the objects
 /// between them. Objects with text (fields, equations…) count as their text.
-fn tokens(p: &Paragraph, characters: bool) -> Vec<Tok<'_>> {
-    fn push(v: &mut Vec<Tok<'_>>, cur: &mut String, c: char, characters: bool) {
+///
+/// Each token carries the byte offset in the paragraph's text where it starts, so the token
+/// keeps its own run's formatting when the diff puts it back.
+fn tokens(p: &Paragraph, characters: bool) -> Vec<(Tok<'_>, usize)> {
+    fn push(v: &mut Vec<(Tok<'_>, usize)>, cur: &mut String, start: &mut Option<usize>, off: usize, c: char, characters: bool) {
+        if start.is_none() {
+            *start = Some(off);
+        }
         cur.push(c);
-        if characters || c == ' ' {
-            v.push(Tok::Text(std::mem::take(cur)));
+        if (characters || c == ' ')
+            && let Some(at) = start.take()
+        {
+            v.push((Tok::Text(std::mem::take(cur)), at));
         }
     }
     let mut v = Vec::new();
     let mut cur = String::new();
+    let mut start = None;
     let mut objects = p.objects.iter();
+    let mut off = 0usize;
     for c in p.text.chars() {
         if c != OBJ {
-            push(&mut v, &mut cur, c, characters);
+            push(&mut v, &mut cur, &mut start, off, c, characters);
+            off += c.len_utf8();
             continue;
+        }
+        if let Some(at) = start.take() {
+            v.push((Tok::Text(std::mem::take(&mut cur)), at));
         }
         match objects.next() {
             Some(o) if o.plain_text().is_empty() => {
-                if !cur.is_empty() {
-                    v.push(Tok::Text(std::mem::take(&mut cur)));
-                }
-                v.push(Tok::Obj(o));
+                v.push((Tok::Obj(o), off));
             }
-            Some(o) => o.plain_text().chars().for_each(|c| push(&mut v, &mut cur, c, characters)),
+            Some(o) => o.plain_text().chars().for_each(|ch| push(&mut v, &mut cur, &mut start, off, ch, characters)),
             None => {
                 // A marker without its object (a broken paragraph): kept as a visible
                 // placeholder, so the loss shows in the result instead of vanishing.
                 log::warn!("compare: an object marker without its object");
-                push(&mut v, &mut cur, char::REPLACEMENT_CHARACTER, characters);
+                push(&mut v, &mut cur, &mut start, off, char::REPLACEMENT_CHARACTER, characters);
             }
         }
+        off += c.len_utf8();
     }
-    if !cur.is_empty() {
-        v.push(Tok::Text(cur));
+    if let Some(at) = start.take() {
+        v.push((Tok::Text(std::mem::take(&mut cur)), at));
     }
     v
 }
@@ -1090,7 +1131,7 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, run: &CompareRun<'_>,
         false
     };
     let (ta, tb) = (tokens(a, chars), tokens(b, chars));
-    let key = |t: &Tok<'_>| match t {
+    let key = |t: &(Tok<'_>, usize)| match &t.0 {
         Tok::Text(t) => Key::Text(ctx.opts.key(t)),
         Tok::Obj(o) => obj_key(doc, o),
     };
@@ -1105,25 +1146,38 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, run: &CompareRun<'_>,
     if let Some(sb) = p.section.as_mut() {
         sanitize_section_hf(a.section.as_deref(), sb, run, orig_idx);
     }
-    let base = a.runs.first().map(|r| r.props.clone()).unwrap_or_default();
     let (mut i, mut j) = (0, 0);
     for op in ops {
         match op {
             Op::Same => {
-                // Equal as compared (perhaps up to case or spacing): the revised text.
-                put(&mut p, tb.get(j), &base);
+                // Equal as compared (perhaps up to case or spacing): the revised text and its
+                // own formatting, so accepting the text keeps the revised runs.
+                put(&mut p, tb.get(j).map(|(t, _)| t), &token_props(b, tb.get(j)));
                 i += 1;
                 j += 1;
             }
             Op::Del => {
-                put(&mut p, ta.get(i), &CharProps { del: Some(ctx.del), ..base.clone() });
+                let mut props = token_props(a, ta.get(i));
+                props.del = Some(ctx.del);
+                put(&mut p, ta.get(i).map(|(t, _)| t), &props);
                 i += 1;
             }
             Op::Ins => {
-                put(&mut p, tb.get(j), &CharProps { ins: Some(ctx.ins), ..base.clone() });
+                let mut props = token_props(b, tb.get(j));
+                props.ins = Some(ctx.ins);
+                put(&mut p, tb.get(j).map(|(t, _)| t), &props);
                 j += 1;
             }
         }
     }
     p
+}
+
+/// The formatting of the run a token starts at, without the source paragraph's revision marks.
+fn token_props(p: &Paragraph, t: Option<&(Tok<'_>, usize)>) -> CharProps {
+    let mut props = t.map(|(_, off)| p.props_of_char(*off).clone()).unwrap_or_default();
+    props.ins = None;
+    props.del = None;
+    props.fmt_change = None;
+    props
 }

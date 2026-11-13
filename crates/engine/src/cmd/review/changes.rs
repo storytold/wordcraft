@@ -267,6 +267,23 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
             resolve_loose_blocks(blocks, accept)?;
         }
     }
+    // Compare turns on Different first page / Different odd & even pages so the First and Even
+    // stories it inserts can be shown; rejecting takes those stories back out, so the flags go
+    // back to what they were. Accepting keeps them, as the revised document had them.
+    if accept {
+        s.compare_hf_flags = None;
+    } else if let Some(flags) = s.compare_hf_flags.take() {
+        for (end, title_page) in flags.title_page {
+            let sect = match end {
+                Some(e) => s.doc.section_mut(e),
+                None => &mut s.doc.last_section,
+            };
+            sect.title_page = title_page;
+        }
+        if let Some(even_odd) = flags.even_odd {
+            s.doc.settings.even_odd_headers = even_odd;
+        }
+    }
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)

@@ -41,6 +41,17 @@ pub use snapshot_types::EditSnapshot;
 use snapshot_types::{LayoutSlots, RunSnapshot};
 pub use view::{StylesPaneDock, ViewState};
 
+/// The header/footer selection flags Compare turned on for inserted First/Even stories, with the
+/// values they had before, so rejecting all changes can put them back (#5837).
+#[derive(Clone, Debug, Default)]
+pub struct CompareHfFlags {
+    /// Sections whose `title_page` compare turned on: `(section end block, None = the last
+    /// section, the value before)`.
+    pub title_page: Vec<(Option<usize>, bool)>,
+    /// `even_odd_headers` before compare turned it on.
+    pub even_odd: Option<bool>,
+}
+
 /// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
 /// and the open documents. The active document's state is in the session's own fields, which
 /// every command works on; the other open documents wait in [`DocState`] values and are swapped
@@ -96,6 +107,10 @@ pub struct Session {
     pub new_header_parts: Vec<u32>,
     /// The body selection a command left for a header or footer: `insert.closeHeader` puts it back.
     pub hf_return: Option<Selection>,
+    /// The selection flags Compare turned on so inserted First/Even stories could be shown, with
+    /// the values they had before: `review.rejectAll` puts them back when it rejects those
+    /// stories (#5837).
+    pub compare_hf_flags: Option<CompareHfFlags>,
     /// The style-definition change Next / Previous Change selected, for the Accept or Reject that
     /// follows (`cmd::review`). It names its document and selection, so it is shared by the open
     /// documents and stops counting once either changes.

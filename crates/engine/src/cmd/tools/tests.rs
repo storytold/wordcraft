@@ -2389,3 +2389,178 @@ fn compare_tracks_text_box_content_changes_with_matching_ids() {
     });
     assert!(has_revised_box, "Revised text box content must survive acceptAll");
 }
+
+/// A header/footer table whose cells hold `rows`, row by row.
+fn header_table(rows: &[&[&str]]) -> Block {
+    let cols = rows.first().map_or(0, |r| r.len());
+    let mut t = wordcraft_doc::Table::new(rows.len(), cols, 300.0);
+    for (row, texts) in t.rows.iter_mut().zip(rows) {
+        for (cell, text) in row.cells.iter_mut().zip(*texts) {
+            cell.blocks = vec![para_block(Paragraph::with_text(text, CharProps::default()))];
+        }
+    }
+    Block::Table(t)
+}
+
+/// Whether any run in `b` (tables included) carries a tracked deletion (or insertion) mark.
+fn has_marked_run(b: &Block, del: bool) -> bool {
+    match b {
+        Block::Para(p) => p.run_ranges().any(|(_, c)| if del { c.del.is_some() } else { c.ins.is_some() }),
+        Block::Table(t) => t.rows.iter().flat_map(|r| r.cells.iter()).flat_map(|c| c.blocks.iter()).any(|b| has_marked_run(b, del)),
+    }
+}
+
+/// #6122 review: a header table whose flattened text matches the revised one but whose shape
+/// changed is a tracked replacement, not "unchanged"; rejecting puts the original table back.
+#[test]
+fn compare_tracks_a_header_table_whose_flattened_text_matches() {
+    let mut orig = Session::new(Document::from_text("Body text."));
+    // A trailing paragraph, as a DOCX header keeps after its table.
+    let h = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(header_table(&[&["A", "B"]])), para_block(Paragraph::new())]);
+    orig.doc.last_section.headers.default = Some(h);
+
+    let mut rev = Session::new(Document::from_text("Body text."));
+    let hr = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(header_table(&[&["A"], &["B"]])), para_block(Paragraph::new())]);
+    rev.doc.last_section.headers.default = Some(hr);
+    let rev_file = TempDocx::new("rev-header-table-shape");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_file.path_str()})).unwrap();
+    assert_eq!(r["changes"], 1, "a table with the same flattened text but another shape is one change");
+
+    let blocks = &s.doc.parts.get(&h).unwrap().blocks;
+    assert_eq!(blocks.len(), 3, "the deleted table, the inserted one, then the paragraph");
+    assert!(matches!(&*blocks[0], Block::Table(t) if t.rows.len() == 1), "the original table is kept deleted");
+    assert!(has_marked_run(&blocks[0], true), "the original table is marked deleted");
+    assert!(matches!(&*blocks[1], Block::Table(t) if t.rows.len() == 2), "the revised table is inserted");
+    assert!(has_marked_run(&blocks[1], false), "the revised table is marked inserted");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let blocks = &s.doc.parts.get(&h).unwrap().blocks;
+    assert!(matches!(&*blocks[0], Block::Table(t) if t.rows.len() == 1), "rejecting restores the original one-row table");
+}
+
+/// #6122 review: an image added to a revised header comes with its bytes, so the comparison's
+/// header story can draw it.
+#[test]
+fn compare_imports_an_image_added_to_a_header() {
+    let mut orig = Session::new(Document::from_text("Body text."));
+    let h = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Header", CharProps::default()))]);
+    orig.doc.last_section.headers.default = Some(h);
+
+    let mut rev = Session::new(Document::from_text("Body text."));
+    // A 1×1 PNG.
+    let bytes = vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xfc, 0xcf,
+        0xc0, 0x50, 0x0f, 0x00, 0x04, 0x85, 0x01, 0x80, 0x84, 0xa9, 0x8c, 0x21, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60,
+        0x82,
+    ];
+    let media = rev.doc.add_media(bytes.clone(), "png");
+    let mut p = Paragraph::with_text("Header", CharProps::default());
+    let at = p.len();
+    let image = InlineObject::Image {
+        media: media.clone(),
+        w: 10.0,
+        h: 10.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        fx: Default::default(),
+        ole: None,
+    };
+    p.insert_object(at, image, &CharProps::default()).unwrap();
+    let hr = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(p)]);
+    rev.doc.last_section.headers.default = Some(hr);
+    let rev_file = TempDocx::new("rev-header-image");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    let r = s.run("review.compare", &json!({"path": rev_file.path_str()})).unwrap();
+    assert_eq!(r["changes"], 1);
+
+    let part = s.doc.parts.get(&h).unwrap();
+    let para = part.blocks[0].as_para().unwrap();
+    let key = para
+        .objects
+        .iter()
+        .find_map(|o| match o {
+            InlineObject::Image { media, .. } => Some(media.clone()),
+            _ => None,
+        })
+        .expect("the revised image is in the compared header");
+    assert_eq!(
+        s.doc.media.get(&key).map(|b| b.as_slice()),
+        Some(bytes.as_slice()),
+        "the image bytes come with the comparison (key {key}, media {:?})",
+        s.doc.media.keys().collect::<Vec<_>>()
+    );
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert!(s.doc.para(StoryRef::Part(h), &wordcraft_doc::Path::top(0)).unwrap().plain_text() == "Header");
+}
+
+/// #6122 review: an inserted revised header keeps its own run formatting, so accepting the text
+/// edit leaves the revised formatting (a bold "New", not a plain one).
+#[test]
+fn compare_keeps_the_revised_runs_formatting_in_an_edited_header() {
+    let mut orig = Session::new(Document::from_text("Body text."));
+    let h = orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Old", CharProps::default()))]);
+    orig.doc.last_section.headers.default = Some(h);
+
+    let mut rev = Session::new(Document::from_text("Body text."));
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let hr = rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("New", bold))]);
+    rev.doc.last_section.headers.default = Some(hr);
+    let rev_file = TempDocx::new("rev-header-bold");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    s.run("review.compare", &json!({"path": rev_file.path_str()})).unwrap();
+    let part = s.doc.parts.get(&h).unwrap();
+    let para = part.blocks[0].as_para().unwrap();
+    assert!(para.run_ranges().any(|(_, c)| c.ins.is_some() && c.bold == Some(true)), "the inserted revised text keeps its bold run");
+
+    s.run("review.acceptAll", &json!({})).unwrap();
+    let para = s.doc.parts.get(&h).unwrap().blocks[0].as_para().unwrap();
+    assert_eq!(para.plain_text(), "New");
+    assert!(para.run_ranges().all(|(_, c)| c.bold == Some(true)), "accepting keeps the revised bold formatting");
+}
+
+/// #6122 review: rejecting the inserted First and Even stories puts back the layout flags
+/// Compare turned on, so the first page goes back to the original Default header.
+#[test]
+fn compare_rejecting_inserted_first_and_even_headers_restores_layout_flags() {
+    let mut orig = Session::new(Document::from_text("Body text."));
+    orig.doc.last_section.title_page = false;
+    orig.doc.settings.even_odd_headers = false;
+    let h_def =
+        orig.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Default Header", CharProps::default()))]);
+    orig.doc.last_section.headers.default = Some(h_def);
+
+    let mut rev = Session::new(Document::from_text("Body text."));
+    rev.doc.last_section.title_page = true;
+    rev.doc.settings.even_odd_headers = true;
+    let h_rev_def =
+        rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Original Default Header", CharProps::default()))]);
+    let h_first =
+        rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Inserted First Header", CharProps::default()))]);
+    let h_even =
+        rev.doc.add_part(wordcraft_doc::PartKind::Header, vec![para_block(Paragraph::with_text("Inserted Even Header", CharProps::default()))]);
+    rev.doc.last_section.headers.default = Some(h_rev_def);
+    rev.doc.last_section.headers.first = Some(h_first);
+    rev.doc.last_section.headers.even = Some(h_even);
+    let rev_file = TempDocx::new("rev-first-even-reject");
+    rev_file.save(&rev.doc);
+
+    let mut s = orig;
+    s.run("review.compare", &json!({"path": rev_file.path_str()})).unwrap();
+    assert!(s.doc.last_section.title_page, "compare turns Different first page on");
+    assert!(s.doc.settings.even_odd_headers, "compare turns Different odd & even pages on");
+
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert!(!s.doc.last_section.title_page, "rejecting the inserted First story turns the flag back off");
+    assert!(!s.doc.settings.even_odd_headers, "rejecting the inserted Even story turns the flag back off");
+    assert_eq!(s.doc.last_section.headers.default, Some(h_def), "the first page falls back to the original Default header");
+}
