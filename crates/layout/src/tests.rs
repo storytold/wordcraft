@@ -1893,6 +1893,46 @@ fn a_bookmark_before_a_left_tab_past_the_right_indent_is_not_a_line() {
     assert_eq!(lines(true), lines(false));
 }
 
+/// A right tab at the right margin keeps its text there when a left stop before it lies behind a
+/// centred floating object: the tab starts the span that reaches the stop rather than the one the
+/// object leaves, so the text ends on the margin instead of beginning beside the object (#3409).
+/// Measured in Word for Windows (compatibility mode 15) with a footer of `[Date]`, three tabs and
+/// `Page 1 of 1` on a 595.3 x 841.9 pt page with 56.7 pt margins, stops at 143.5 and 318.95 and a
+/// right stop at 481.9 (the right margin), and a 157.5 x 43.1 pt tightly wrapped object centred
+/// in the column: the text ends on the right margin whether the object is there or not.
+#[test]
+fn a_right_tab_at_the_margin_keeps_its_text_there_beside_a_float() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let stop = |pos: f32, align: TabAlign| TabStop { pos, align, leader: TabLeader::None };
+    // Where the paragraph's text ends, with the object and without it.
+    let text_end = |float: bool| {
+        let mut d = Document::from_text("[Date]\t\t\tPage 1 of 1");
+        d.last_section.page_w = 595.3;
+        d.last_section.margin_left = 56.7;
+        d.last_section.margin_right = 56.7;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(vec![stop(143.5, TabAlign::Left), stop(318.95, TabAlign::Left), stop(481.9, TabAlign::Right)]);
+        })
+        .unwrap();
+        if float {
+            // Centred in the column, leaving the spans 0..153.21 and 328.69..481.9: the second
+            // stop lies behind it, the right one past it.
+            let f = Float { wrap: Wrap::Tight, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 162.21, dist: 9.0, ..Default::default() };
+            d.insert_object(&Pos::body(0, 0), rect_shape(157.48, 43.09, f), &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        para.lines.last().and_then(|ln| ln.xs.last().copied()).unwrap_or(-1.0)
+    };
+    for float in [false, true] {
+        let end = text_end(float);
+        assert!((end - 481.9).abs() < 0.5, "object {float}: the text ends at {end}, not on the right stop at 481.9");
+    }
+}
+
 /// A bookmark is not text: where a line breaks is the same with it as without it. U+FFFC has the
 /// line-break class CB, which on its own would allow a break before and after it.
 #[test]

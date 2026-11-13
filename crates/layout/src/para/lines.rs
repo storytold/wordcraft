@@ -62,6 +62,9 @@ struct Breaker<'e> {
     skipped: usize,
     /// A left tab past the right indent that wrapped to start the next line.
     wrapped_tab: Option<usize>,
+    /// The stop such a tab wrapped towards: beside a floating object the line it starts on is
+    /// the span that can reach it (see [`Breaker::begin_line`]).
+    wrap_to: Option<f32>,
 }
 
 /// One line being broken: where it is, and what has been put on it.
@@ -213,6 +216,7 @@ impl<'e> Breaker<'e> {
             row_first: 0,
             skipped: 0,
             wrapped_tab: None,
+            wrap_to: None,
         }
     }
 
@@ -257,9 +261,21 @@ impl<'e> Breaker<'e> {
 
     /// The start of a line: its span, and the list label if it is the first.
     fn begin_line(&mut self, pl: &mut ParaLayout) -> Scan {
-        let beside = !self.row_rest.is_empty() && self.lines.len() > self.row_first;
         let row_lo = if self.first { self.first_left } else { self.rp.indent_left };
-        let (left, right_edge, narrowed) = self.next_span(pl);
+        // A left tab that wrapped (see `Scan::tab`) goes to a stop its own span could not reach.
+        // Beside a floating object a later span of the row can reach it, and that is where Word
+        // puts the tab, so its text lands on the stop instead of at the object's far edge (#3409,
+        // measured in Word for Windows in compatibility mode 15). The row's last span is taken
+        // whether or not it reaches: the tab then takes no room there, as it does on a line
+        // narrowed by nothing but the right indent.
+        let want = self.wrap_to.take();
+        let (beside, (left, right_edge, narrowed)) = loop {
+            let beside = !self.row_rest.is_empty() && self.lines.len() > self.row_first;
+            let span = self.next_span(pl);
+            if !(want.is_some_and(|pos| pos > span.1 + 0.01) && !self.row_rest.is_empty()) {
+                break (beside, span);
+            }
+        };
         let x = if self.first { self.place_label(pl, left) } else { left };
         Scan {
             left,
@@ -825,6 +841,7 @@ impl Scan {
                 self.xs.pop();
                 self.end = LineEnd::Wrap;
                 bk.wrapped_tab = Some(j);
+                bk.wrap_to = Some(stop.pos);
                 return true;
             }
             if bk.wrapped_tab == Some(j) {
