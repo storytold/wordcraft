@@ -924,6 +924,14 @@ mod tests {
     #[test]
     fn numbers_read_currency_and_separators_but_not_letters() {
         assert_eq!(parse_number("$1,200", None), Some(1200.0));
+        assert_eq!(parse_number("R$ 1,200.00", None), Some(1200.0), "the Brazilian real");
+        assert_eq!(parse_number("Bs. 1,200.00", None), Some(1200.0), "the Bolivian boliviano");
+        assert_eq!(parse_number("Bs.1,200.00", None), None, "the boliviano sign is a word of its own");
+        assert_eq!(parse_number("Q 1,200.00", None), Some(1200.0), "the Guatemalan quetzal");
+        let real = table(&[&["R$ 1,250.50"], &[""]]);
+        assert_eq!(ev(&real, 1, 0, "=SUM(ABOVE)"), Ok(1250.5), "a real cell sums");
+        let boliviano = table(&[&["Bs. 1,250.50"], &[""]]);
+        assert_eq!(ev(&boliviano, 1, 0, "=SUM(ABOVE)"), Ok(1250.5), "a boliviano cell sums");
         assert_eq!(parse_number("B/. 1,234.50", None), Some(1234.5), "the Panamanian balboa");
         assert_eq!(parse_number("1,234.50 B/.", None), Some(1234.5));
         assert_eq!(parse_number("(B/. 1,234.50)", None), Some(-1234.5), "an accounting negative");
