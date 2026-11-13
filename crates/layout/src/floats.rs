@@ -56,6 +56,23 @@ pub(crate) fn floating(o: &InlineObject) -> Option<(f32, f32, &Float)> {
     o.frame().filter(|(_, _, float)| float.wrap != Wrap::Inline)
 }
 
+/// A floating object's size and placement as laid out (see [`float_size`]).
+pub(crate) fn floating_sized<'o>(ctx: &mut Ctx, o: &'o InlineObject, depth: usize) -> Option<(f32, f32, &'o Float)> {
+    let (w, h, float) = floating(o)?;
+    let (w, h) = float_size(ctx, o, (w, h), depth);
+    Some((w, h, float))
+}
+
+/// The size floating object `o`, `w` by `h`, is laid out at: a text box that fits text it doesn't
+/// wrap takes that text's size (see [`textbox::fitted_size`]), one that fits text it wraps its
+/// text's height ([`Ctx::float_height`]).
+pub(crate) fn float_size(ctx: &mut Ctx, o: &InlineObject, (w, h): (f32, f32), depth: usize) -> (f32, f32) {
+    match textbox::fitted_size(ctx, o, depth) {
+        Some(size) => size,
+        None => (w, ctx.float_height(o, w, h)),
+    }
+}
+
 /// Where a floating object goes, in the coordinates of the box `frame` places on the page.
 /// `col` is the column (or cell) left edge and width, `y0` the anchor paragraph's top. Without a
 /// frame (table cells, text boxes, notes) positions relative to the page or margins fall back
@@ -421,8 +438,7 @@ pub(crate) fn fitting(pl: &ParaLayout, l0: usize, top: f32, bottom: f32, (mut mo
 /// positioned from `top`, where the paragraph continues; its wrap area joins the page's.
 pub(crate) fn place_late(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, oi: usize, top: f32, late: &mut LateFloats) {
     let Some(o) = p.objects.get(oi) else { return };
-    let Some((w, h, float)) = floating(o) else { return };
-    let h = ctx.float_height(o, w, h);
+    let Some((w, h, float)) = floating_sized(ctx, o, 0) else { return };
     let frame = PageFrame { sect: pb.sect, margin_top: None, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
     let rect = float_rect(Some(frame), (pb.col_x(), pb.col_w()), top, w, h, float);
     let outline = ctx.wrap_outline(o);
@@ -490,7 +506,6 @@ fn anchor_floats_but(
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
         for (oi, o) in p.objects.iter().enumerate() {
-            let Some((w, h, float)) = floating(o) else { continue };
             if left_out(oi) {
                 continue;
             }
@@ -498,7 +513,7 @@ fn anchor_floats_but(
                 ctx.floats_above.remove(&(block, oi));
                 continue;
             }
-            let h = ctx.float_height(o, w, h);
+            let Some((w, h, float)) = floating_sized(ctx, o, 0) else { continue };
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
@@ -755,7 +770,7 @@ pub(crate) fn place_objects(ctx: &mut Ctx, req: &ObjectPlacement) -> (Vec<Placed
                 match floats.get(&oi) {
                     Some(r) => *r,
                     None => {
-                        let h = ctx.float_height(obj, w, h);
+                        let (w, h) = float_size(ctx, obj, (w, h), depth);
                         float_rect(at.page, at.col, at.para_y, w, h, float)
                     }
                 }

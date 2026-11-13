@@ -61,6 +61,9 @@ fn direction_alignment_and_links_round_trip() {
         d.insert_object(&wordcraft_doc::Pos::body(i, 1), o, &Default::default()).unwrap();
     }
     let ids = boxes(&d);
+    // Wrap text in shape off and Resize shape to fit text (#2191).
+    let b = &mut d.parts.get_mut(&ids[1]).unwrap().body;
+    (b.no_wrap, b.auto_fit) = (true, true);
     d.parts.get_mut(&ids[0]).unwrap().body.next = Some(ids[1]);
     d.parts.get_mut(&ids[1]).unwrap().body.next = Some(ids[2]);
     let bytes = wordcraft_docx::write(&d).unwrap();
@@ -68,6 +71,7 @@ fn direction_alignment_and_links_round_trip() {
     assert!(xml.contains(r#"<wps:txbx id="1">"#), "{xml}");
     assert!(xml.contains(r#"<wps:linkedTxbx id="1" seq="1"/>"#) && xml.contains(r#"<wps:linkedTxbx id="1" seq="2"/>"#));
     assert!(xml.contains(r#"<wps:bodyPr vert="vert" anchor="ctr"/>"#) && xml.contains(r#"<wps:bodyPr vert="wordArtVert" anchor="b"/>"#));
+    assert!(xml.contains(r#"<wps:bodyPr wrap="none"><a:spAutoFit/></wps:bodyPr>"#), "{xml}");
     let r = wordcraft_docx::read(&bytes).unwrap();
     let got = boxes(&r);
     assert_eq!(r.text_box_chains(), vec![got.clone()]);
@@ -75,6 +79,8 @@ fn direction_alignment_and_links_round_trip() {
     let body = |id: u32| r.parts.get(&id).unwrap().body;
     assert_eq!((body(got[0]).vert, body(got[0]).anchor), (TextVert::Vert, VAlign::Center));
     assert_eq!((body(got[2]).vert, body(got[2]).anchor), (TextVert::Stacked, VAlign::Bottom));
+    assert!(body(got[1]).no_wrap && body(got[1]).auto_fit);
+    assert!(!body(got[0]).no_wrap && !body(got[2]).no_wrap);
 }
 
 /// A paragraph with an inline text box whose `wps:wsp` children are `inner`.
