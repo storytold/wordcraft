@@ -128,10 +128,10 @@ fn the_corner_handle_scales_the_table() {
     assert!(((d1.bottom() - a1.y) - h * 2.0).abs() < 0.5, "{h} → {}", d1.bottom() - a1.y);
 }
 
-/// #6438: a right-to-left table's columns run from its right edge, and Word drags their borders
-/// and its corner the mirrored way, which isn't built yet: they aren't grabbed, so a drag leaves
-/// its columns alone (one used to squeeze all but the first to nothing). Its rows' borders resize
-/// as in any table.
+/// #6438: a right-to-left table's columns run from its right edge, and mirrored drags for its
+/// column borders and corner aren't built yet: they aren't grabbed, so a drag leaves its columns
+/// alone (one used to squeeze all but the first to nothing). Its rows' borders resize as in any
+/// table.
 #[test]
 fn a_right_to_left_tables_columns_keep_their_widths() {
     let mut s = table_session(2, 3);

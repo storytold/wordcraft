@@ -95,7 +95,7 @@ pub struct InsertMark {
 }
 
 /// The move handle's square (page points), just past the table's top-left corner, or its
-/// top-right one when the table runs right to left, as in Word (#6438).
+/// top-right one when the table runs right to left (#6438).
 pub fn handle(geom: &ResizeTarget) -> Rect {
     let x = if geom.rtl { geom.right() + HANDLE_GAP } else { geom.left() - HANDLE_GAP - HANDLE };
     Rect::new(x, geom.top() - HANDLE_GAP - HANDLE, HANDLE, HANDLE)

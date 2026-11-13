@@ -143,9 +143,9 @@ impl ResizeTarget {
         if self.rtl { self.cols.len().saturating_sub(1).saturating_sub(line) } else { line }
     }
     /// Whether the table's column borders and resize handle are grabbed. Not a right-to-left
-    /// table's: Word drags those the mirrored way (the start edge on the right, the handle at the
-    /// bottom-left), and these drags, made for a grid running from the left, would put the new
-    /// widths on the wrong columns (#6438).
+    /// table's: its grid runs from its right edge, and these drags, made for a grid running from
+    /// the left, would put the new widths on the wrong columns. Mirrored ones aren't built yet
+    /// (#6438).
     pub fn resizable_columns(&self) -> bool {
         !self.rtl
     }

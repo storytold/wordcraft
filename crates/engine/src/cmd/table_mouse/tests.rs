@@ -386,8 +386,8 @@ fn rtl_table_session(rows: usize, cols: usize) -> Session {
 }
 
 /// #6438: a right-to-left table's first column is drawn at the right, and its move handle sits
-/// past its top-right corner, as in Word, not by the first cell's left edge in the middle of the
-/// table. The pointer finds the table's edges where they are drawn; the handle selects it.
+/// past its top-right corner, not by the first cell's left edge in the middle of the table. The
+/// pointer finds the table's edges where they are drawn; the handle selects it.
 #[test]
 fn a_right_to_left_tables_move_handle_is_past_its_top_right_corner() {
     let mut s = rtl_table_session(3, 4);
