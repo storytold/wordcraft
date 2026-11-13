@@ -40,6 +40,8 @@ pub use grid::{Exclusion, Grid, is_east_asian};
 use lines::break_lines;
 pub(crate) use lines::takes_room;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
+#[cfg(test)]
+pub(crate) use paragraph::glue_objects;
 pub use paragraph::layout_para;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;
