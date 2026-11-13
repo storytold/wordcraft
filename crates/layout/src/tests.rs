@@ -2900,6 +2900,58 @@ fn caret_after_hanging_spaces_stays_at_the_margin() {
     }
 }
 
+/// The selection highlight over spaces hanging past the right margin stops at the margin with the
+/// caret (#6434), on the paragraph's last line and on a line that wraps after the spaces. Selected
+/// through the paragraph's end, its mark shows just past the margin.
+#[test]
+fn selection_over_hanging_spaces_stops_at_the_margin() {
+    crate::test_fonts();
+    let spaces = format!("a{}", " ".repeat(200));
+    for text in [spaces.clone(), format!("{spaces}b")] {
+        let mut d = Document::new();
+        d.body = vec![
+            wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default())),
+            wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()),
+        ];
+        let right = d.last_section.page_w - d.last_section.margin_right;
+        let l = lay(&d);
+        for (end, mark) in [(Pos::body(0, text.len()), 0.0), (Pos::body(1, 0), crate::para::PARA_MARK_WIDTH)] {
+            let rects = l.selection_rects(&d, &Pos::body(0, 0), &end, 0);
+            assert!(rects.iter().any(|(_, r)| r.right() >= right - 0.5), "{text:?} to {end:?}: the highlight reaches the margin: {rects:?}");
+            for (_, r) in &rects {
+                assert!(r.right() <= right + mark + 0.5, "{text:?} to {end:?}: highlight {r:?} past the margin at {right}");
+            }
+        }
+    }
+}
+
+/// The grammar underline over a run of spaces hanging past the right margin ("Extra space") stops
+/// at the margin with the caret (#6434), on the paragraph's last line and on a line that wraps
+/// after the spaces.
+#[test]
+fn proofing_marks_over_hanging_spaces_stop_at_the_margin() {
+    crate::test_fonts();
+    let spaces = format!("a{}", " ".repeat(200));
+    for text in [spaces.clone(), format!("{spaces}b")] {
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        let right = d.last_section.page_w - d.last_section.margin_right;
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..Default::default() });
+        let issues = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para.issues.clone()) } else { None });
+        assert!(issues.as_ref().is_some_and(|v| v.contains(&(1, 201, true))), "{text:?}: the spaces are a grammar issue: {issues:?}");
+        let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+        let underlines: Vec<(f32, f32)> = items
+            .iter()
+            .filter_map(|i| match i {
+                display::Draw::Line { x0, x1, stroke: display::Stroke::Double, .. } => Some((*x0, *x1)),
+                _ => None,
+            })
+            .collect();
+        assert!(underlines.iter().any(|&(_, x1)| x1 >= right - 0.5), "{text:?}: the underline reaches the margin: {underlines:?}");
+        assert!(underlines.iter().all(|&(_, x1)| x1 <= right + 0.5), "{text:?}: {underlines:?} past the margin at {right}");
+    }
+}
+
 #[test]
 fn tall_first_page_header_pushes_body_down() {
     crate::test_fonts();
