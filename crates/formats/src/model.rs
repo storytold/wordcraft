@@ -19,6 +19,7 @@ mod media;
 pub mod odf_object;
 mod to_doc;
 mod types;
+pub use types::continues_list;
 
 pub use color::parse_color;
 pub use from_doc::{

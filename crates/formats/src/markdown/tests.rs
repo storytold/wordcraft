@@ -799,6 +799,77 @@ fn heading_trailing_hash_survives_round_trip() {
     }
 }
 
+/// A list item's further paragraph is read as a paragraph of its own in the item, with no number:
+/// written and read again, it stays one, and the list goes on after it.
+#[test]
+fn an_items_further_paragraph_round_trips() {
+    let src = "1. One\n\n   Cont\n\n2. Two\n    - Sub\n\n   More\n";
+    let shape = |d: &Document| {
+        d.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.numbering.map(|n| n.num), p.props.indent_left)).collect::<Vec<_>>()
+    };
+    let d = import(src);
+    let rows = shape(&d);
+    assert_eq!(rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), ["One", "Cont", "Two", "Sub", "More"], "{rows:?}");
+    for (t, at) in [("Cont", 36.0), ("More", 36.0)] {
+        let r = rows.iter().find(|r| r.0 == t).unwrap();
+        assert_eq!((r.1, r.2), (None, Some(at)), "{t}: no number, at the item's text: {rows:?}");
+    }
+    assert_eq!(rows[0].1, rows[2].1, "one list: {rows:?}");
+    let md = export(&d);
+    assert!(md.starts_with("1. One\n\n   Cont\n\n2. Two\n"), "{md}");
+    assert!(md.contains("\n\n   More"), "{md}");
+    assert_eq!(shape(&import(&md)), rows, "{md}");
+    // A numbered sublist after an item's further paragraph starts again.
+    let md = export(&import("1. One\n    1. a\n    2. b\n\n   More\n\n    1. c\n"));
+    assert!(md.contains("\n    1. c"), "{md}");
+}
+
+/// A code block, quote or heading inside a list item is no item of its own: it gets no number,
+/// and the list's next item keeps its number (#5723 review).
+#[test]
+fn a_block_inside_an_item_gets_no_number() {
+    let numbered =
+        |d: &Document| d.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.numbering.is_some()).map(|p| p.text.clone()).collect::<Vec<_>>();
+    for (src, last) in [
+        ("1. Install:\n\n   ```\n   cargo build\n   cargo test\n   ```\n\n2. Run\n", "2. Run"),
+        ("1. Install:\n\n   > quoted\n\n2. Run\n", "2. Run"),
+        ("1. Install:\n\n   # Heading\n\n2. Run\n", "2. Run"),
+        ("1. Install:\n\n   Cont\n\n   ```\n   cargo build\n   ```\n\n2. Run\n", "2. Run"),
+    ] {
+        let d = import(src);
+        let rows = numbered(&d);
+        assert_eq!(rows.len(), 2, "{src:?}: two numbered items: {rows:?}");
+        assert!(rows[0].starts_with("Install:"), "{src:?}: {rows:?}");
+        assert_eq!(rows[1], "Run", "{src:?}: {rows:?}");
+        let md = export(&d);
+        assert!(md.contains(&format!("\n{last}")), "{src:?}: {md}");
+        assert!(!md.contains("3."), "{src:?}: {md}");
+    }
+    let d = import("1. Install:\n\n   ```\n   cargo build\n   cargo test\n   ```\n\n2. Run\n");
+    assert!(numbered(&d)[0].contains("cargo build") && numbered(&d)[0].contains("cargo test"), "the code stays in its item: {:?}", numbered(&d));
+}
+
+/// A code block, quote or heading after a sublist in an item stays in the list: the list's next
+/// item keeps its number in Markdown and HTML (#5723 review).
+#[test]
+fn a_block_after_a_sublist_keeps_the_next_items_number() {
+    for src in
+        ["1. a\n   - sub\n\n   ```\n   code\n   ```\n2. b\n", "1. a\n   - sub\n\n   > quoted\n\n2. b\n", "1. a\n   - sub\n\n   # Heading\n\n2. b\n"]
+    {
+        let d = import(src);
+        let text: String = d.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect::<Vec<_>>().join("|");
+        for w in ["code", "quoted", "Heading"] {
+            if src.contains(w) {
+                assert!(text.contains(w), "{src:?}: the block's text stays: {text}");
+            }
+        }
+        let md = export(&d);
+        assert!(md.contains("\n2. b"), "{src:?}: {md}");
+        let html = crate::html::export(&d);
+        assert_eq!(html.matches("<ol").count(), 1, "{src:?}: one list: {html}");
+    }
+}
+
 /// Verifies that block line mapping tracks source-line indexes accurately across definitions.
 #[test]
 fn block_line_mapping() {

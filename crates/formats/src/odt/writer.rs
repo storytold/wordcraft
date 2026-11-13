@@ -107,9 +107,22 @@ fn list_run(blocks: &[FBlock], start: usize, wraps: bool) -> (usize, [ListOut; 9
     let mut kinds = [first; 9];
     let mut seen = [false; 9];
     let mut i = start;
+    // The level of the last item: an item's further paragraph goes in an item still open.
+    let mut last = 0usize;
     while let Some(FBlock::Para(q)) = blocks.get(i) {
-        let Some(li) = q.list else { break };
+        let Some(li) = q.list else {
+            match crate::model::continues_list(blocks, i).map(usize::from) {
+                Some(lv) if i > start && lv <= last => {
+                    // The items below it are closed.
+                    last = lv;
+                    i += 1;
+                    continue;
+                }
+                _ => break,
+            }
+        };
         let l = li.level.min(8) as usize;
+        last = l;
         if li.list != id || (id == 0 && l == 0 && seen[0] && kinds[0].ordered != li.ordered) {
             break;
         }
@@ -797,7 +810,9 @@ impl Writer {
         }
         // A list without its own `xml:id` (older files' lists) is given one, for a list going on
         // with it to name.
-        if p.list.is_some()
+        // (Its first numbered paragraph's: a list header has no number.)
+        let list = run.iter().find_map(|b| if let FBlock::Para(q) = b { q.list } else { None });
+        if list.is_some()
             && list_xml_id(&ix.0).is_none()
             && let Some(at) = markup.find("<text:list").map(|i| i + "<text:list".len())
         {
@@ -813,7 +828,7 @@ impl Writer {
         self.close_wrap(last.as_ref(), 0, out);
         self.master = None;
         // A list kept so: a list continuing it, written from the model, names it.
-        if let Some(l) = p.list
+        if let Some(l) = list
             && let Some(id) = markup.find("<text:list").and_then(|i| markup.get(i..)).and_then(list_xml_id)
         {
             if l.list != 0 {
@@ -940,6 +955,19 @@ impl Writer {
                     let mut stack: Vec<bool> = Vec::new();
                     for (qi, q) in blocks.get(start..i).unwrap_or(&[]).iter().enumerate() {
                         let FBlock::Para(q) = q else { continue };
+                        if q.list.is_none() {
+                            // An item's further paragraph (`list_run` took it only below an open
+                            // item at its level): in that item, its sublists ended first.
+                            let lv = q.item.map_or(0, |l| l.min(8) as usize);
+                            while stack.len() > lv + 1 {
+                                if stack.pop() == Some(true) {
+                                    out.push_str("</text:list-item>");
+                                }
+                                out.push_str("</text:list>");
+                            }
+                            self.para_in(q, chain(start + qi), out);
+                            continue;
+                        }
                         let lv = q.list.map(|l| l.level.min(8) as usize).unwrap_or(0);
                         while stack.len() > lv + 1 {
                             if stack.pop() == Some(true) {

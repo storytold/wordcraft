@@ -4036,3 +4036,30 @@ fn issues_1281_1045_english_dialects_proof_typed_text() {
     let words: Vec<&str> = issues.as_array().unwrap().iter().filter(|i| i["kind"] == "spelling").filter_map(|i| i["text"].as_str()).collect();
     assert_eq!(words, ["21th"]);
 }
+
+/// #5723 review: a list item's further paragraph (read from ODT or Markdown) that Enter splits
+/// and Decrease Indent moves to the margin is body text after the list, not part of the item, when
+/// saved as HTML or Markdown.
+#[test]
+fn text_outdented_from_a_list_items_further_paragraph_leaves_the_list() {
+    for name in ["l.md", "l.odt"] {
+        let md = crate::io::open_bytes("l.md", b"1. One\n\n   Cont\n").unwrap();
+        let doc = if name == "l.odt" { crate::io::open_bytes(name, &crate::io::save_bytes(name, &md).unwrap()).unwrap() } else { md };
+        let mut s = Session::new(doc);
+        run(&mut s, "caret.docEnd", json!({}));
+        typ(&mut s, "\n");
+        run(&mut s, "para.outdent", json!({}));
+        typ(&mut s, "After the list.");
+        let html = String::from_utf8(crate::io::save_bytes("x.html", &s.doc).unwrap()).unwrap();
+        let list_end = html.find("<p>Cont</p></li></ol>").unwrap_or_else(|| panic!("{name}: {html}"));
+        assert!(html.find("<p>After the list.</p>").is_some_and(|a| a > list_end), "{name}: {html}");
+        let md = String::from_utf8(crate::io::save_bytes("x.md", &s.doc).unwrap()).unwrap();
+        assert!(md.contains("1. One\n\n   Cont\n\nAfter the list."), "{name}: {md}");
+        // Enter alone keeps the new paragraph in the item, as the one it was split from.
+        let mut s = Session::new(crate::io::open_bytes("l.md", b"1. One\n\n   Cont\n").unwrap());
+        run(&mut s, "caret.docEnd", json!({}));
+        typ(&mut s, "\nMore");
+        let md = String::from_utf8(crate::io::save_bytes("x.md", &s.doc).unwrap()).unwrap();
+        assert!(md.contains("1. One\n\n   Cont\n\n   More"), "{name}: {md}");
+    }
+}
