@@ -87,12 +87,6 @@ struct Turned {
     top: f32,
 }
 
-/// The room a visible border takes across a table row: [`Border::band`] of its width, which is
-/// read up to 12 pt.
-fn border_band(b: &Border) -> f32 {
-    if b.is_visible() { Border { width: b.width.clamp(0.0, 12.0), ..*b }.band() } else { 0.0 }
-}
-
 /// The number of grid columns of `t` ([`Table::cols`]), which walks every row (each row counted
 /// as a step of [`crate::work`]).
 fn grid_cols(t: &Table) -> usize {
@@ -1542,6 +1536,12 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
         return;
     }
     grid.copy_from_slice(&widths);
+}
+
+/// The room a visible border takes across a table row: [`Border::band`] of its width, which is
+/// read up to 12 pt.
+fn border_band(b: &Border) -> f32 {
+    if b.is_visible() { Border { width: b.width.clamp(0.0, 12.0), ..*b }.band() } else { 0.0 }
 }
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
