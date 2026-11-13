@@ -470,7 +470,10 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
         .and_then(|bytes| app.open_from_platform(&name, Some(&wordcraft_engine::cmd::insert::base64_encode(&bytes))));
     match opened {
         // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => app.session.path = Some(path.into()),
+        Ok(r) if r.get("pending").is_none() && !wordcraft_ui_egui::documents::is_word_template(&name) => {
+            app.session.path = Some(path.into());
+            app.session.path_names_only = false;
+        }
         Ok(_) => {}
         Err(e) => {
             app.report_open_failure(&name, &e);

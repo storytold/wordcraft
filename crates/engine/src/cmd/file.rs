@@ -67,7 +67,7 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
         }
         if destination != *path {
             #[cfg(not(target_arch = "wasm32"))]
-            {
+            if !s.path_names_only {
                 crate::io::rename_file(path, &destination).map_err(CmdError::Failed)?;
             }
             s.path = Some(destination);
@@ -269,6 +269,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         super::view::restore_zoom(s, z);
     }
     s.path = Some(path.into());
+    s.path_names_only = p::str(v, "data").is_some();
     // A Markdown file's own text, for the view to show and Save to write back as it is.
     if super::md_source::is_markdown_file(std::path::Path::new(path)) {
         s.md_file = markdown_file_text(path, v);
@@ -455,6 +456,7 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let markdown_to_markdown = super::md_source::is_markdown_file(&path) && s.path.as_deref().is_some_and(super::md_source::is_markdown_file);
     if own_file || markdown_to_markdown || ["docx", "docm", "dotx", "dotm", "odt", "ott", "fodt", "rtf", "json", "xml"].contains(&ext.as_str()) {
         s.path = Some(path.clone());
+        s.path_names_only = false;
         s.dirty = false;
         s.relayout();
         // What the file holds now.
