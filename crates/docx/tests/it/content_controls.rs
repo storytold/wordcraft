@@ -346,7 +346,7 @@ fn toc_gallery_around_a_toc_whose_heading_is_in_a_block_control_round_trips() {
 #[test]
 fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
     let style = |s: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{s}"/></w:pPr>{inner}</w:p>"#);
-    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"><w:ffData><w:name w:val="TocForm1"/><w:enabled/></w:ffData></w:fldChar></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
     let content = format!(
         "{}{}{}<w:p><w:r><w:fldChar w:fldCharType=\"end\"/></w:r></w:p>",
         style("TOCHeading", &t("Contents")),
@@ -361,6 +361,7 @@ fn word_toc_gallery_with_field_end_after_entries_round_trips_without_update() {
         let xml = document_xml(&bytes);
         assert_eq!(xml.matches("<w:sdt>").count(), 1, "pass {pass}: {xml}");
         assert!(xml.contains(r#"<w:docPartGallery w:val="Table of Contents"/>"#), "pass {pass}: {xml}");
+        assert!(xml.contains(r#"<w:name w:val="TocForm1"/>"#), "pass {pass}: {xml}");
         assert!(xml.find("</w:sdt>").unwrap() < xml.rfind(">Chapter One<").unwrap(), "pass {pass}: {xml}");
     }
 }
