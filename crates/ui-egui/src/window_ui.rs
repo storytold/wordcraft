@@ -255,6 +255,7 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            clipboard_published: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
