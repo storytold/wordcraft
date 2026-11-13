@@ -153,7 +153,9 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | `w:fitText` | ❌ | ❌ | East Asian layout |
 | Glossary document (building blocks) | ✅ | ✅ | `w:docPart` entries (name, style, gallery, category, types, behaviours, description, guid, body) are read into `Document::glossary` and offered by Insert › Quick Parts and AutoText; `save` with `"in": "document"` stores one in the file. An untouched glossary is written back byte for byte with its own parts (styles, settings, fonts…); an edited one, or one whose parts weren't kept, is written from the model as `word/glossary1.xml` with copies of the document's styles and numbering. The glossary's own styles, settings and fonts, text boxes inside entries, and the notes and comments of a selection saved into the document don't survive an edit. Tests: `crates/docx/tests/it/glossary.rs` |
 | Sub-documents | ❌ | ❌ | |
-| Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard. Failed zip entries count against the size limit, case variants of a part name are one part, embedded fonts and charts are written within budgets, and Flat OPC inlines kept XML only when it is one well-formed element (2026-10-22) |
+| Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard. Failed zip entries count against the size limit, case variants of a part name are one part, embedded fonts and charts are written within budgets, and Flat OPC inlines kept XML only when it is one well-formed element (2026-10-22). Damaged DOCX parts are named when skipped; overwriting their source requires confirmation in the GUI, engine commands, and CLI (`--save`, `--cmd`, scripts; #3724) |
+| `w:altChunk`, sub-documents | ❌ | ❌ | |
+| Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard |
 | Document paragraph defaults (`w:pPrDefault`) | ✅ | ✅ | Omission and explicit empty defaults remain distinct across repeated saves; nonempty defaults and later default-spacing edits are written |
 
 ## Saving many content controls
@@ -277,6 +279,11 @@ in `w:compat` only `compatibilityMode` is replaced. Kept children that point at 
 
 ## Unmodelled-part preservation
 
+When a DOCX zip entry cannot be read, WordCraft skips that entry but keeps the readable document
+open. `file.open` returns the skipped part names and the status warning names up to three. Saving
+over the same source asks for explicit confirmation first; Cancel leaves the source unchanged.
+Headless callers receive the same skipped-part names, and the CLI reports them on stderr.
+
 Parts the package or the main document relate to that WordCraft neither models nor writes (web
 settings, styles-with-effects, add-in task panes, people, the thumbnail, future parts) are
 carried verbatim with their relationships and content types. The glossary document is carried the
@@ -355,6 +362,7 @@ For field results, the engine parser treats a backslash in quoted arguments as e
 | 2026-11-05 | trivial | ODT: a table row kept from breaking across pages (`fo:keep-together` on the row) is read and written; it came back from a save free to break A row whose style doesn't say follows the default style. A row free to break says so where the file's default row style, which stays, keeps rows together. |
 | 2026-11-05 | trivial | ODT: a watermark added, changed or removed, and Different Odd & Even Pages turned on or off, in a file read from ODT are saved. The file's own page definitions were written back whatever happened to these, so the change was gone from the saved file (`odt::tests_more::headers`). Such a change writes the page definitions from the model, as other changes to what a page is made of do, so what WordCraft doesn't model of the page (a header's background) doesn't survive that save. Over 79 LibreOffice-authored files with a watermark added: all 79 have it, with the same page count in LibreOffice 26.8. |
 | 2026-11-05 | trivial | ODT: a font the file declares stays declared as the file does. WordCraft's own guess at its kind replaced the declaration, so on a computer without the font LibreOffice picked another substitute: one document came back from a save with no edits at 70 pages instead of 83 In single quotes too, and with the name spaces their container declares. A font's name spelled another way in XML is the same declaration. So does a face named other than its family (`F1`, `Mystery`) for text written from the model. |
+| 2026-11-05 | trivial | #3724: skipped damaged DOCX parts are named; replacement of the damaged source requires confirmation. CLI --save, --cmd and script refusals now return an error instead of reporting success; regression coverage checks that the original remains unchanged |
 | 2026-11-05 | trivial | ODT: a frame offering one picture in several formats (LibreOffice's `.svm` metafile, then a PNG) shows the first WordCraft can read; it took the first whatever it was, and the picture was missing on screen and gone once the paragraph was rewritten An object's replacement picture coming before it is kept too. A readable picture after an unreadable replacement is shown, wherever the object comes, and a save from the model keeps both. |
 | 2026-11-04 | trivial | Engine field parsing and DOCX HYPERLINK targets consume quoted backslash escapes consistently |
 | 2026-11-03 | trivial | Quoted field arguments honor Word backslash escapes, including literal asterisks |

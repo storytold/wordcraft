@@ -75,6 +75,7 @@ impl Document {
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
+            skipped_parts: Vec::new(),
             media_index: MediaIndex::default(),
             kept: Default::default(),
             missing_pictures: Default::default(),
@@ -154,6 +155,7 @@ impl Document {
             media,
             passthrough,
             glossary,
+            skipped_parts,
             media_index: _,
             kept: _,
             missing_pictures: _,
@@ -176,6 +178,7 @@ impl Document {
             media: other_media,
             passthrough: other_passthrough,
             glossary: other_glossary,
+            skipped_parts: other_skipped_parts,
             media_index: _,
             kept: _,
             missing_pictures: _,
@@ -197,6 +200,7 @@ impl Document {
             && same_bytes(media, other_media)
             && same_bytes(passthrough, other_passthrough)
             && same_glossary(glossary, other_glossary)
+            && skipped_parts == other_skipped_parts
     }
 
     pub fn story(&self, s: StoryRef) -> Option<&Blocks> {
