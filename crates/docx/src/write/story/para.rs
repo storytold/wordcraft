@@ -51,6 +51,7 @@ impl Writer<'_> {
         w.close("w:rPr");
     }
 
+    /// Serialize an individual paragraph and its properties to the DOCX stream.
     fn para_inner(&mut self, w: &mut W, p: &Paragraph, rels: &mut PartRels, top: bool, depth: usize, framed: bool) {
         let para_id = self.take_para_id(p);
         match &para_id {
@@ -73,7 +74,16 @@ impl Writer<'_> {
             w.open("w:pPr", &[]);
             let num_change = pp.num_change.as_ref().map(|c| {
                 let mut a = self.change_attrs(c.rev);
-                a.push(("w:original", c.original.clone()));
+                // An imported value is kept as written; one this app recorded is cached from the
+                // previous list's definitions, in the format ECMA-376 §17.3.1.20 gives.
+                let orig = if !c.original.is_empty() {
+                    c.original.clone()
+                } else if let Some(nr) = c.snapshot {
+                    self.doc.numbering.change_original(nr.num, nr.level).unwrap_or_default()
+                } else {
+                    String::new()
+                };
+                a.push(("w:original", orig));
                 a
             });
             ppr_inner(w, &pp, framed, num_change.as_ref());

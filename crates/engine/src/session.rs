@@ -100,6 +100,9 @@ pub struct Session {
     /// follows (`cmd::review`). It names its document and selection, so it is shared by the open
     /// documents and stops counting once either changes.
     pub(crate) review_style: Option<crate::cmd::review::StyleTarget>,
+    pub(crate) review_para_fmt: Option<crate::cmd::review::ParaFmtTarget>,
+    pub(crate) review_para_num: Option<crate::cmd::review::ParaNumTarget>,
+    pub(crate) review_navigated: Option<crate::cmd::review::NavigatedTarget>,
     /// Undo and redo steps. Shared so `run` can snapshot both stacks cheaply (a pointer per
     /// step) and put them back exactly when a command fails.
     history: Vec<Arc<Undo>>,

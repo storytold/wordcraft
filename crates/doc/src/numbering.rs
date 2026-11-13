@@ -1,13 +1,17 @@
 //! Lists: abstract numbering definitions (9 levels each), numbering instances, and the counter
 //! state used to compute list labels.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
 
-use crate::props::{Align, CharProps};
+use crate::props::{Align, CharProps, NumRef};
 use crate::section::NumFormat;
 use crate::{DocError, free_id};
+
+/// Longest `w:numberingChange` `w:original` cache this app writes or keeps (bytes on write,
+/// characters on read). A longer previous definition gets no cache rather than a truncated one.
+pub const MAX_CHANGE_ORIGINAL: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -217,6 +221,69 @@ pub fn levels_for(kind: ListKind) -> Vec<Level> {
         .collect()
 }
 
+/// Resolve the effective level definition for `level` from a list instance and its abstract definition.
+fn level_for<'a>(num: &'a Num, abs: &'a AbstractNum, level: u8) -> Option<&'a Level> {
+    if let Some((_, l)) = num.level_overrides.iter().find(|(i, _)| *i == level) {
+        return Some(l);
+    }
+    abs.levels.get(level as usize)
+}
+
+/// The starting index for `level` from a list instance and its abstract definition,
+/// honoring any start overrides on `num`.
+fn start_for(num: &Num, abs: &AbstractNum, level: u8) -> u32 {
+    let level = level.min(8);
+    if let Some((_, start)) = num.start_overrides.iter().find(|(l, _)| (*l).min(8) == level) {
+        return *start;
+    }
+    level_for(num, abs, level).map_or(1, |l| l.start)
+}
+
+/// Compute the previous numbering cache (`w:original`) for `level` of `num` and `abs`
+/// in ECMA-376 §17.3.1.20 format.
+fn change_original_def(num: &Num, abs: &AbstractNum, level: u8) -> Option<String> {
+    let level = level.min(8);
+    let lvl = level_for(num, abs, level)?;
+    if lvl.text.len() > MAX_CHANGE_ORIGINAL {
+        return None;
+    }
+    let chars: Vec<char> = lvl.text.chars().collect();
+    let is_token = |i: usize| chars.get(i) == Some(&'%') && chars.get(i + 1).is_some_and(|c| ('1'..='9').contains(c));
+    let mut out = String::new();
+    let mut complete = true;
+    let mut i = 0;
+    while i + 1 < chars.len() {
+        if !is_token(i) {
+            i += 1;
+            continue;
+        }
+        let Some(k) = chars.get(i + 1).and_then(|c| c.to_digit(10)) else {
+            complete = false;
+            break;
+        };
+        // A template naming a level the list doesn't define has no faithful cache.
+        let Some(l) = level_for(num, abs, (k - 1) as u8) else {
+            complete = false;
+            break;
+        };
+        let mut j = i + 2;
+        while j < chars.len() && !is_token(j) {
+            j += 1;
+        }
+        let suffix: String = chars.get(i + 2..j).map_or_else(String::new, |slice| slice.iter().collect());
+        let segment = format!("%{k}:{}:{}:{suffix}", start_for(num, abs, (k - 1) as u8), l.format.nfc());
+        if out.len() + segment.len() > MAX_CHANGE_ORIGINAL {
+            return None;
+        }
+        out.push_str(&segment);
+        i = j;
+    }
+    if !complete || out.is_empty() {
+        out = format!("%{}:{}:{}:{}", level + 1, start_for(num, abs, level), lvl.format.nfc(), lvl.text);
+    }
+    (out.len() <= MAX_CHANGE_ORIGINAL).then_some(out)
+}
+
 impl Numbering {
     pub fn num(&self, id: u32) -> Option<&Num> {
         self.nums.iter().find(|n| n.id == id)
@@ -230,11 +297,76 @@ impl Numbering {
     pub fn shows_label(&self, num: u32, level: u8) -> bool {
         self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some()
     }
+    /// The definition of list `num`'s `level`, taking any level override on the list instance first.
     pub fn level(&self, num: u32, level: u8) -> Option<&Level> {
-        if let Some((_, l)) = self.num(num)?.level_overrides.iter().find(|(i, _)| *i == level) {
-            return Some(l);
+        let n = self.num(num)?;
+        let abs = self.abstract_of(num)?;
+        level_for(n, abs, level)
+    }
+    /// The previous numbering definition cached in `w:numberingChange`'s `w:original`
+    /// (ECMA-376 §17.3.1.20): one `%level:value:format:text` segment per level the label shows.
+    /// The value is the level's start; Word caches the item's current number there, which the
+    /// model does not keep.
+    pub fn change_original(&self, num: u32, level: u8) -> Option<String> {
+        let n = self.num(num)?;
+        let abs = self.abstract_of(num)?;
+        change_original_def(n, abs, level)
+    }
+    /// The list level whose [`Numbering::change_original`] cache is `original`, for reopening a
+    /// document this app wrote. Ambiguous definitions (shared across multiple lists or levels) are
+    /// treated as unresolved (`None`), avoiding attaching a paragraph to an unrelated list and
+    /// disrupting counter continuity. Work is bounded by [`MAX_ORIGINAL_CANDIDATES`]; if the candidate
+    /// budget is exhausted before all definitions can be inspected, the scan fails closed to avoid
+    /// returning incomplete collision results.
+    pub fn change_originals(&self) -> BTreeMap<String, NumRef> {
+        let abstracts: BTreeMap<u32, &AbstractNum> = self.abstracts.iter().map(|a| (a.id, a)).collect();
+        let mut map: BTreeMap<String, Option<NumRef>> = BTreeMap::new();
+        let mut candidates = 0;
+        let mut truncated = false;
+        for n in &self.nums {
+            if candidates >= MAX_ORIGINAL_CANDIDATES || map.len() >= MAX_ORIGINAL_CACHES {
+                truncated = true;
+                break;
+            }
+            let Some(abs) = abstracts.get(&n.abstract_id).copied() else {
+                continue;
+            };
+            for level in 0..=8u8 {
+                candidates += 1;
+                if candidates > MAX_ORIGINAL_CANDIDATES {
+                    truncated = true;
+                    break;
+                }
+                if let Some(s) = change_original_def(n, abs, level) {
+                    let s = s.trim().to_string();
+                    if s.is_empty() {
+                        continue;
+                    }
+                    let nr = NumRef { num: n.id, level };
+                    if !map.contains_key(&s) && map.len() >= MAX_ORIGINAL_CACHES {
+                        truncated = true;
+                        break;
+                    }
+                    match map.entry(s) {
+                        std::collections::btree_map::Entry::Vacant(e) => {
+                            e.insert(Some(nr));
+                        }
+                        std::collections::btree_map::Entry::Occupied(mut e) => {
+                            if e.get().as_ref() != Some(&nr) {
+                                e.insert(None);
+                            }
+                        }
+                    }
+                }
+            }
+            if truncated {
+                break;
+            }
         }
-        self.abstract_of(num)?.levels.get(level as usize)
+        if truncated {
+            return BTreeMap::new();
+        }
+        map.into_iter().filter_map(|(k, v)| v.map(|nr| (k, nr))).collect()
     }
     /// Create a new list of `kind`; returns the `num` id. List ids run out only past `u32::MAX`
     /// lists, more than memory holds; then nothing is added and the id is 0, "no list".
@@ -480,10 +612,121 @@ fn render_label(numbering: &Numbering, num: u32, def: &Level, vals: &[u32; 9], s
 const MAX_LEVEL_TEXT: usize = 64;
 /// Labels stop growing once they pass this many bytes.
 const MAX_LABEL_BYTES: usize = 256;
+/// Most list levels indexed for reopening `w:numberingChange` caches (hostile files).
+const MAX_ORIGINAL_CACHES: usize = 10_000;
+/// Upper bound on candidate (num, level) definitions evaluated when indexing previous numbering caches.
+const MAX_ORIGINAL_CANDIDATES: usize = 10_000;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `w:original` caches the previous level definitions in ECMA-376 §17.3.1.20's format, and
+    /// those caches name their list back when a file is reopened.
+    #[test]
+    fn change_original_caches_the_previous_definitions() {
+        let mut n = Numbering::default();
+        let numbered = n.add_list(ListKind::Numbered);
+        assert_eq!(n.change_original(numbered, 0).as_deref(), Some("%1:1:0:."));
+        assert_eq!(n.change_original(numbered, 1).as_deref(), Some("%2:1:4:."));
+        let bullet = n.add_list(ListKind::Bullet);
+        assert_eq!(n.change_original(bullet, 0).as_deref(), Some("%1:1:23:•"));
+        let legal = n.add_list(ListKind::Legal);
+        assert_eq!(n.change_original(legal, 2).as_deref(), Some("%1:1:0:.%2:1:0:.%3:1:0:."));
+        assert_eq!(n.change_original(u32::MAX, 0), None, "no such list");
+
+        let caches = n.change_originals();
+        assert_eq!(caches.get("%1:1:0:."), None, "colliding definitions are treated as unresolved instead of selecting an arbitrary list");
+        assert_eq!(caches.get("%2:1:4:."), Some(&NumRef { num: numbered, level: 1 }));
+        assert_eq!(caches.get("%1:1:23:•"), Some(&NumRef { num: bullet, level: 0 }));
+        assert_eq!(caches.get("%1:1:0:.%2:1:0:.%3:1:0:."), Some(&NumRef { num: legal, level: 2 }));
+        assert_eq!(caches.get("%3:1:0:."), None, "a mid-level segment is not a whole cache");
+    }
+
+    /// When many list IDs share identical definitions, work is bounded by candidate budget and
+    /// colliding definitions are treated as unresolved rather than selecting the first list.
+    #[test]
+    fn change_originals_bounds_work_with_many_identical_definitions() {
+        let mut n = Numbering::default();
+        let aid = 1;
+        n.abstracts.push(AbstractNum { id: aid, levels: levels_for(ListKind::Numbered), ..Default::default() });
+        for id in 1..=10_000 {
+            n.nums.push(Num { id, abstract_id: aid, ..Default::default() });
+        }
+        let caches = n.change_originals();
+        assert!(caches.is_empty(), "identical definitions collide and are treated as unresolved");
+    }
+
+    /// Unique list definitions are preserved even when surrounded by many identical lists.
+    #[test]
+    fn change_originals_preserves_unique_cache_among_many_identical_definitions() {
+        let mut n = Numbering::default();
+        let bullet = n.add_list(ListKind::Bullet);
+        let aid = 2;
+        n.abstracts.push(AbstractNum { id: aid, levels: levels_for(ListKind::Numbered), ..Default::default() });
+        for id in 10..=1010 {
+            n.nums.push(Num { id, abstract_id: aid, ..Default::default() });
+        }
+        let caches = n.change_originals();
+        assert_eq!(caches.get("%1:1:23:•"), Some(&NumRef { num: bullet, level: 0 }));
+        assert_eq!(caches.get("%1:1:0:."), None, "colliding numbered caches are unresolved");
+    }
+
+    /// When the candidate budget is exhausted, the scan fails closed so incomplete collision
+    /// checks do not return false-positive unique mappings.
+    #[test]
+    fn change_originals_fails_closed_when_candidate_budget_exhausted() {
+        let mut n = Numbering::default();
+        let bullet1 = n.add_list(ListKind::Bullet);
+        let aid = 2;
+        n.abstracts.push(AbstractNum { id: aid, levels: levels_for(ListKind::Numbered), ..Default::default() });
+        // Add 1,200 numbered lists (1,200 * 9 = 10,800 candidates > MAX_ORIGINAL_CANDIDATES).
+        for id in 10..=1210 {
+            n.nums.push(Num { id, abstract_id: aid, ..Default::default() });
+        }
+        // Place a second bullet list at the end (beyond the 10,000 candidate budget).
+        let bullet2 = n.add_list(ListKind::Bullet);
+        let caches = n.change_originals();
+        assert!(caches.is_empty(), "incomplete candidate scan fails closed");
+        assert_ne!(bullet1, bullet2);
+    }
+
+    /// Definitions differing only by whitespace normalize to the same cache key and collide.
+    #[test]
+    fn change_originals_normalizes_whitespace_to_detect_collisions() {
+        let mut n = Numbering::default();
+        let aid1 = 1;
+        let aid2 = 2;
+        n.abstracts.push(AbstractNum { id: aid1, levels: vec![Level { text: "%1.".into(), start: 1, ..Default::default() }], ..Default::default() });
+        n.abstracts.push(AbstractNum {
+            id: aid2,
+            levels: vec![Level { text: "%1.  ".into(), start: 1, ..Default::default() }],
+            ..Default::default()
+        });
+        n.nums.push(Num { id: 1, abstract_id: aid1, ..Default::default() });
+        n.nums.push(Num { id: 2, abstract_id: aid2, ..Default::default() });
+        let caches = n.change_originals();
+        assert_eq!(caches.get("%1:1:0:."), None, "whitespace difference normalizes and collides");
+    }
+
+    /// A cache longer than the DOCX reader used to keep is still written in one piece; one longer
+    /// than the shared limit is dropped instead of truncated.
+    #[test]
+    fn change_original_keeps_the_writer_and_reader_limits_aligned() {
+        let mut n = Numbering::default();
+        let list = n.add_list(ListKind::Numbered);
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == list) {
+            num.level_overrides = vec![(0, Level { text: "%1".repeat(32), start: 100, ..Level::default() })];
+        }
+        let cache = n.change_original(list, 0).expect("cache within the limit");
+        assert!(cache.len() > 256, "the old reader cap would truncate this cache: {}", cache.len());
+        assert!(cache.len() <= MAX_CHANGE_ORIGINAL);
+
+        if let Some(num) = n.nums.iter_mut().find(|x| x.id == list) {
+            num.level_overrides = vec![(0, Level { text: "x".repeat(MAX_CHANGE_ORIGINAL + 1), ..Level::default() })];
+        }
+        assert_eq!(n.change_original(list, 0), None, "an oversized cache is dropped, not truncated");
+    }
 
     /// Read-only counter APIs retain the renderer's bounds and never advance a list.
     #[test]

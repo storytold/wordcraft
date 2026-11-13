@@ -2197,6 +2197,74 @@ fn formatting_revisions_round_trip() {
     assert_eq!(again.revisions, d.revisions);
 }
 
+/// Tracked numbering-change metadata round-trips through DOCX even when active numbering is
+/// absent. A cache the file's lists cannot name is kept as written, and Reject keeps the active
+/// numbering rather than guessing.
+#[test]
+fn numbering_change_without_active_list_roundtrips() {
+    let body = r#"<w:p><w:pPr><w:numPr><w:numberingChange w:id="1" w:author="Alice" w:date="2026-10-01T00:00:00Z" w:original="%1:1:0:."/></w:numPr></w:pPr><w:r><w:t>Removed</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1);
+    assert!(p[0].props.numbering.is_none(), "no active list definition on paragraph");
+    let nc = p[0].props.num_change.as_deref().expect("numberingChange read back");
+    assert_eq!(nc.original, "%1:1:0:.");
+    assert_eq!(nc.previous_numbering(), None, "the package defines no list that cache names");
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let ap = paras(&again);
+    assert!(ap[0].props.numbering.is_none());
+    let anc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(anc.original, "%1:1:0:.", "an imported cache is kept as written");
+}
+
+/// `w:original` caches the previous numbering definition (ECMA-376 §17.3.1.20), not a list id;
+/// a change this app records writes that cache on save and reads the list back from it.
+#[test]
+fn numbering_change_caches_the_previous_definition() {
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="7"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="2"><w:abstractNumId w:val="7"/></w:num></w:numbering>"#
+    );
+    let package =
+        docx(r#"<w:p><w:r><w:t>Removed</w:t></w:r></w:p>"#, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let mut d = wordcraft_docx::read(&package).unwrap();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change =
+        Some(Box::new(wordcraft_doc::props::NumChange::for_numbering(0, Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }))));
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&out), "word/document.xml");
+    assert!(xml.contains("<w:numberingChange w:id="), "{xml}");
+    assert!(xml.contains(r#"w:original="%1:1:0:.""#), "the cache holds the previous definition: {xml}");
+    let again = wordcraft_docx::read(&out).unwrap();
+    let ap = paras(&again);
+    let nc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(nc.previous_numbering(), Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }));
+}
+
+/// A cache longer than the old 256-character read cap still matches its list and round-trips.
+#[test]
+fn a_long_numbering_change_cache_roundtrips() {
+    // 32 placeholders fill the reader's 64-character lvlText limit; a start of 100 makes the
+    // cache 288 characters, past the cap the reader used to apply.
+    let tokens = "%1".repeat(32);
+    let numbering = format!(
+        r#"<w:numbering {W_NS}><w:abstractNum w:abstractNumId="7"><w:lvl w:ilvl="0"><w:start w:val="100"/><w:numFmt w:val="decimal"/><w:lvlText w:val="{tokens}"/></w:lvl></w:abstractNum><w:num w:numId="2"><w:abstractNumId w:val="7"/></w:num></w:numbering>"#
+    );
+    let package =
+        docx(r#"<w:p><w:r><w:t>Removed</w:t></w:r></w:p>"#, &[("rId1", "numbering", "numbering.xml")], &[("word/numbering.xml", &numbering)]);
+    let mut d = wordcraft_docx::read(&package).unwrap();
+    d.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.num_change =
+        Some(Box::new(wordcraft_doc::props::NumChange::for_numbering(0, Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }))));
+    let cache = d.numbering.change_original(2, 0).expect("the cache fits the limit");
+    assert!(cache.len() > 256, "the old read cap would truncate it: {}", cache.len());
+    let out = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&out), "word/document.xml");
+    assert!(xml.contains(&format!(r#"w:original="{cache}""#)), "{xml}");
+    let again = wordcraft_docx::read(&out).unwrap();
+    let ap = paras(&again);
+    let nc = ap[0].props.num_change.as_deref().expect("numberingChange preserved after save");
+    assert_eq!(nc.previous_numbering(), Some(wordcraft_doc::props::NumRef { num: 2, level: 0 }));
+}
+
 /// A package with `styles`, a theme (accent1 4472C4, accent2 ED7D31, major font "Major Face") and,
 /// when given, `settings`.
 fn themed_docx(body: &str, styles: &str, settings: Option<&str>) -> Document {

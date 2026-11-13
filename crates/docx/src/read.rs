@@ -14,7 +14,7 @@ mod shape_style;
 mod story;
 mod wordart;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::control::{ControlEvent, ControlKind, control_events, pair_events};
@@ -118,6 +118,9 @@ pub(crate) struct Reader<'p> {
     pub theme_fills: shape_style::ThemeFills,
     /// The fill of the group being read (what its members' `a:grpFill` stands for).
     pub group_fill: Option<wordcraft_doc::fill::Fill>,
+    /// `w:numberingChange`'s `w:original` values → the list level they describe, built once
+    /// after `numbering.xml` is read.
+    num_change_originals: Option<BTreeMap<String, wordcraft_doc::props::NumRef>>,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -191,6 +194,7 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
         txbx_links: Vec::new(),
         theme_fills: Default::default(),
         group_fill: None,
+        num_change_originals: None,
         chunks,
     };
     r.doc.missing_pictures.main = main.clone();
@@ -367,6 +371,20 @@ pub(crate) struct MoveCtx {
 }
 
 impl Reader<'_> {
+    /// The list level whose previous-definition cache is `original` (`w:numberingChange`), for
+    /// rejecting a change this app wrote. A value that names no list here (a foreign cache, or a
+    /// list the file no longer defines) gives `None`, so rejection keeps the current list.
+    pub(crate) fn previous_numbering(&mut self, original: &str) -> Option<wordcraft_doc::props::NumRef> {
+        let original = original.trim();
+        if original.is_empty() || original.eq_ignore_ascii_case("none") {
+            return None;
+        }
+        if self.num_change_originals.is_none() {
+            self.num_change_originals = Some(self.doc.numbering.change_originals());
+        }
+        self.num_change_originals.as_ref().and_then(|m| m.get(original).copied())
+    }
+
     /// A `w:moveFromRangeStart/End` or `w:moveToRangeStart/End`.
     pub fn move_range(&mut self, e: &El) {
         let (side, start) = match e.name.as_str() {
