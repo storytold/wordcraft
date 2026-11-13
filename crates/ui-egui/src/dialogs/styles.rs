@@ -148,3 +148,25 @@ fn describe(st: &Value) -> String {
     }
     parts.join(", ")
 }
+
+/// Format menu shared by the paragraph and character style dialogs.
+/// New styles must exist before their shortcut can be selected in the document's style list.
+pub(super) fn shortcut_menu(app: &mut WordApp, ui: &mut Ui, style: Option<&str>) -> bool {
+    let mut open = false;
+    ui.menu_button(tl!("Format"), |ui| {
+        let shortcut = ui
+            .add_enabled(style.is_some(), egui::Button::new(tl!("Shortcut key…")))
+            .on_disabled_hover_text(tl!("Create the style before assigning a shortcut."));
+        if shortcut.clicked() {
+            open = true;
+            ui.close();
+        }
+    });
+    if open && let Some(style) = style {
+        let name = app.session.doc.styles.find(style).map(|s| s.name.clone()).unwrap_or_else(|| style.to_string());
+        let form =
+            crate::dialogs_keyboard::KeyboardForm { category: crate::dialogs_keyboard::STYLES.to_string(), command: name, ..Default::default() };
+        app.dialog = Some(Dialog::CustomizeKeyboard { form: Box::new(form), resume: None });
+    }
+    open
+}

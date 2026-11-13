@@ -6,6 +6,7 @@
 use egui::{Sense, Ui, vec2};
 use serde::Serialize;
 use serde_json::json;
+use wordcraft_engine::KeyTarget;
 use wordcraft_engine::keymap::normalize;
 
 use crate::WordApp;
@@ -14,6 +15,8 @@ use crate::widgets::key_text;
 
 /// The category listing every command.
 const ALL: &str = "";
+/// Paragraph and character styles, separate from command categories.
+pub(crate) const STYLES: &str = "Styles";
 
 /// The dialog's state.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -58,7 +61,7 @@ pub(crate) fn categories(app: &WordApp) -> Vec<String> {
         }
     }
     other.sort();
-    crate::ribbon::TABS.iter().filter(|t| tabs.contains(t)).map(|t| (*t).to_string()).chain(other).collect()
+    crate::ribbon::TABS.iter().filter(|t| tabs.contains(t)).map(|t| (*t).to_string()).chain(other).chain([STYLES.to_string()]).collect()
 }
 
 /// A category's commands as (id, label in the interface language), sorted by label.
@@ -81,6 +84,20 @@ pub(crate) fn commands(app: &WordApp, category: &str) -> Vec<(&'static str, Stri
 /// [`commands`].
 pub(crate) fn matching_commands(app: &WordApp, category: &str, query: &str) -> Vec<(String, String)> {
     let q = crate::i18n::lowercase(query.trim());
+    if category == STYLES {
+        let mut rows: Vec<(String, String)> = app
+            .session
+            .doc
+            .styles
+            .styles
+            .iter()
+            .filter(|s| matches!(s.kind, wordcraft_doc::StyleKind::Paragraph | wordcraft_doc::StyleKind::Character))
+            .map(|s| (s.name.clone(), crate::i18n::style_name(s)))
+            .filter(|(name, label)| crate::i18n::lowercase(name).contains(&q) || crate::i18n::lowercase(label).contains(&q))
+            .collect();
+        rows.sort_by(|a, b| crate::i18n::lowercase(&a.1).cmp(&crate::i18n::lowercase(&b.1)).then(a.0.cmp(&b.0)));
+        return rows;
+    }
     if q.is_empty() {
         return commands(app, category).into_iter().map(|(id, l)| (id.to_string(), l)).collect();
     }
@@ -182,6 +199,11 @@ fn change(app: &mut WordApp, params: serde_json::Value) -> bool {
     }
 }
 
+/// The selected target uses the same command API for both categories.
+fn binding(f: &KeyboardForm, key: &str) -> serde_json::Value {
+    if f.category == STYLES { json!({"style": f.command, "key": key}) } else { json!({"command": f.command, "key": key}) }
+}
+
 /// The dialog body; true closes it.
 pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) -> bool {
     let reg = app.session.registry.clone();
@@ -211,7 +233,7 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
             }
         });
         crate::rtl::vertical(ui, |ui| {
-            ui.label(tl!("Commands:"));
+            ui.label(if f.category == STYLES { tl!("Styles:") } else { tl!("Commands:") });
             if let Some(c) = list(ui, "kb_commands", vec2(right, 170.0), &cmds, &f.command) {
                 f.command = c;
                 f.current.clear();
@@ -220,14 +242,14 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
     });
 
     heading(ui, "Choose a shortcut");
-    let keys = app.session.keymap.keys_for(&reg, &f.command);
+    let keys = if f.category == STYLES { app.session.keymap.keys_for_style(&f.command) } else { app.session.keymap.keys_for(&reg, &f.command) };
     if !keys.contains(&f.current) {
         f.current = keys.first().cloned().unwrap_or_default();
     }
     let mut close = false;
     crate::rtl::horizontal_top(ui, |ui| {
         crate::rtl::vertical(ui, |ui| {
-            ui.label(tl!("Keys for this command:"));
+            ui.label(if f.category == STYLES { tl!("Current keys:") } else { tl!("Keys for this command:") });
             let rows: Vec<(String, String)> = keys.iter().map(|k| (k.clone(), key_text(k))).collect();
             if let Some(k) = list(ui, "kb_current", vec2(left, 70.0), &rows, &f.current) {
                 f.current = k;
@@ -238,15 +260,24 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
             close = capture(ui, f);
             ui.add_space(4.0);
             if !f.pressed.is_empty() {
-                let owner = match app.session.keymap.resolve(&reg, &f.pressed) {
-                    Some(s) => crate::i18n::fmt(tl!("Now used by {command}"), &[("command", tl!(s.label))]),
+                let owner = match app.session.keymap.resolve_target(&reg, &f.pressed) {
+                    Some(KeyTarget::Style(name)) => {
+                        let shown = app.session.doc.styles.find(&name).map(crate::i18n::style_name).unwrap_or(name);
+                        crate::i18n::fmt(tl!("Now used by {command}"), &[("command", &shown)])
+                    }
+                    Some(KeyTarget::Command(id)) => {
+                        let label = reg.get(&id).map(|s| tl!(s.label)).unwrap_or_default();
+                        crate::i18n::fmt(tl!("Now used by {command}"), &[("command", label)])
+                    }
                     None => tl!("Not used by any command").to_string(),
                 };
                 ui.label(owner);
             }
         });
     });
-    if let Some(spec) = reg.get(&f.command) {
+    if f.category != STYLES
+        && let Some(spec) = reg.get(&f.command)
+    {
         ui.add_space(4.0);
         ui.label(egui::RichText::new(format!("{} · {}", crate::i18n::location(spec.location), spec.id)).small().weak());
     }
@@ -267,13 +298,10 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
     }
     ui.horizontal(|ui| {
         let can_assign = !f.command.is_empty() && !f.pressed.is_empty() && !keys.contains(&f.pressed);
-        if ui.add_enabled(can_assign, egui::Button::new(tl!("Assign"))).clicked()
-            && change(app, json!({"assign": {"command": f.command, "key": f.pressed}}))
-        {
+        if ui.add_enabled(can_assign, egui::Button::new(tl!("Assign"))).clicked() && change(app, json!({"assign": binding(f, &f.pressed)})) {
             f.current = std::mem::take(&mut f.pressed);
         }
-        if ui.add_enabled(!f.current.is_empty(), egui::Button::new(tl!("Remove"))).clicked()
-            && change(app, json!({"remove": {"command": f.command, "key": f.current}}))
+        if ui.add_enabled(!f.current.is_empty(), egui::Button::new(tl!("Remove"))).clicked() && change(app, json!({"remove": binding(f, &f.current)}))
         {
             f.current.clear();
         }
@@ -347,6 +375,23 @@ mod tests {
         assert!(c.session.keymap.is_empty());
     }
 
+    /// #3910: the Styles category assigns through the same button as commands.
+    #[test]
+    fn styles_category_assigns_heading_key() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = harness(super::STYLES, Some("Heading 2"));
+        assert_eq!(h.state().1.command, "Heading 2");
+        h.state_mut().1.pressed = "Mod+Alt+Shift+H".to_string();
+        h.step();
+        h.get_by_label("Assign").click();
+        h.step();
+        assert_eq!(h.state().0.session.keymap.keys_for_style("Heading 2"), ["Mod+Alt+Shift+H"]);
+        let saved = serde_json::to_string(&h.state().0.prefs()).unwrap();
+        let mut reopened = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        reopened.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert_eq!(reopened.session.keymap.keys_for_style("Heading 2"), ["Mod+Alt+Shift+H"]);
+    }
+
     /// #1905: a command with no shortcut shows (none) instead of a blank keys box.
     #[test]
     fn keys_list_without_shortcuts_says_none() {
@@ -364,7 +409,7 @@ mod tests {
             .map(|s| s.id.to_string())
             .expect("a command with no shortcut");
         let mut form = match a.dialog.take() {
-            Some(crate::dialogs::Dialog::CustomizeKeyboard { form }) => form,
+            Some(crate::dialogs::Dialog::CustomizeKeyboard { form, .. }) => form,
             _ => panic!("expected the Customize Keyboard dialog"),
         };
         form.command = id;
@@ -377,7 +422,7 @@ mod tests {
             customize_keyboard(&mut a, ui, &mut form);
         });
         output.textures_delta.clear();
-        a.dialog = Some(crate::dialogs::Dialog::CustomizeKeyboard { form });
+        a.dialog = Some(crate::dialogs::Dialog::CustomizeKeyboard { form, resume: None });
         let texts: Vec<String> = output
             .shapes
             .iter()

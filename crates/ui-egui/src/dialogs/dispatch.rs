@@ -49,7 +49,7 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::DefineList { form } => crate::dialogs_lists::define_list(app, ui, form),
         Dialog::TrackOptions { form } => crate::dialogs_lists::track_options(app, ui, form),
         Dialog::Review(d) => crate::dialogs_review::body(app, ui, d),
-        Dialog::CustomizeKeyboard { form } => crate::dialogs_keyboard::customize_keyboard(app, ui, form),
+        Dialog::CustomizeKeyboard { form, .. } => crate::dialogs_keyboard::customize_keyboard(app, ui, form),
         Dialog::CustomizeRibbon { form } => crate::dialogs_ribbon::customize_ribbon(app, ui, form),
         Dialog::FieldCode { .. } => field_code_dialog(app, ui, d),
         Dialog::Control { form } => crate::dialogs_controls::body(app, ui, form),
@@ -971,6 +971,7 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         });
     });
     ui.label(egui::RichText::new(tl!("The new style takes the formatting of the current paragraph.")).small().weak());
+    super::styles::shortcut_menu(app, ui, None);
     let (ok, cancel) = buttons(ui, tl!("OK"));
     let mut created = None;
     if ok {
@@ -1028,6 +1029,13 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.checkbox(bold, tl!("Bold"));
         ui.checkbox(italic, tl!("Italic"));
     });
+    if super::styles::shortcut_menu(app, ui, Some(id)) {
+        let saved = d.clone();
+        if let Some(Dialog::CustomizeKeyboard { resume, .. }) = app.dialog.as_mut() {
+            *resume = Some(Box::new(saved));
+        }
+        return true;
+    }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
