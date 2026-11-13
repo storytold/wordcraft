@@ -5435,6 +5435,242 @@ fn copy_paste_text_box_makes_an_independent_copy() {
     assert_eq!(s.doc.parts.len(), parts);
 }
 
+/// Copying and pasting a selected custom text box duplicates its dimensions, styling, and text
+/// while giving the copy an independent story ID.
+#[test]
+fn copy_and_paste_selected_custom_text_box_duplicates_dimensions_styling_and_text() {
+    let mut s = s();
+    let id = run(
+        &mut s,
+        "insert.textBox",
+        json!({
+            "text": "Custom content",
+            "width": 180.0,
+            "height": 90.0
+        }),
+    )["story"]
+        .as_u64()
+        .unwrap() as u32;
+
+    // Apply custom styling (fill and outline).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "shape.fill", json!({"color": "FFEEDD"}));
+    run(&mut s, "shape.outline", json!({"color": "112233", "width": 2.5}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    let orig_obj = para.objects[0].clone();
+    let wordcraft_doc::InlineObject::Shape { w, h, stroke_width, fill, stroke, .. } = &orig_obj else { panic!("not a shape") };
+    assert_eq!((*w, *h), (180.0, 90.0));
+    assert_eq!(*stroke_width, 2.5);
+    assert!(fill.is_some());
+    assert!(stroke.is_some());
+
+    // Copy selected custom text box (non-collapsed, object_selection, #5785, #5859).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "Custom content");
+    assert_eq!(s.clipboard_text, "Custom content");
+    assert!(s.clipboard.is_some());
+
+    // Move caret after original and paste.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+    let pasted = &para.objects[1];
+
+    let wordcraft_doc::InlineObject::Shape { w: pw, h: ph, stroke_width: psw, fill: pfill, stroke: pstroke, story: pstory, .. } = pasted else {
+        panic!("pasted not a shape");
+    };
+
+    assert_eq!((*pw, *ph), (180.0, 90.0), "dimensions duplicated");
+    assert_eq!(*psw, 2.5, "stroke width duplicated");
+    assert_eq!(pfill, fill, "fill duplicated");
+    assert_eq!(pstroke, stroke, "stroke duplicated");
+    assert!(pstory.is_some());
+    assert_ne!(pstory.unwrap(), id, "independent story ID");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(pstory.unwrap())), "Custom content", "inner text duplicated");
+
+    // Cut the pasted text box by selecting it (non-collapsed, object_selection).
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 3), "focus": Pos::body(0, 6)}));
+    assert!(crate::cmd::objects::object_selection(&s).is_some());
+    let cut_res = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(cut_res["text"], "Custom content");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1);
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // Paste it back.
+    run(&mut s, "edit.paste", json!({}));
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 2);
+
+    // Copy and paste a shape without text.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 6)}));
+    run(&mut s, "insert.shape", json!({"kind": "star", "width": 64.0, "height": 48.0}));
+    run(&mut s, "shape.fill", json!({"color": "00FF00"}));
+
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 6), "focus": Pos::body(0, 9)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert!(s.clipboard.is_some());
+
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 9)}));
+    run(&mut s, "edit.paste", json!({}));
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 4);
+    let star_copy = &para.objects[3];
+    let wordcraft_doc::InlineObject::Shape { kind, w, h, fill, .. } = star_copy else { panic!("not a shape") };
+    assert_eq!(*kind, wordcraft_doc::para::ShapeKind::Star);
+    assert_eq!((*w, *h), (64.0, 48.0));
+    assert!(fill.is_some());
+}
+
+/// Cut and Copy with a bare caret beside an object (collapsed selection) change nothing (#5859).
+#[test]
+fn cut_and_copy_with_bare_caret_beside_object_change_nothing() {
+    let mut s = s();
+    let id = run(&mut s, "insert.textBox", json!({"text": "Box content"}))["story"].as_u64().unwrap() as u32;
+
+    // 1. Bare caret immediately before the object (Pos::body(0, 0)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+
+    // 2. Bare caret immediately after the object (Pos::body(0, 3)).
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, 3)}));
+    assert!(s.sel.is_collapsed());
+    assert!(crate::cmd::objects::object_selection(&s).is_none());
+
+    let copy_res = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(copy_res["text"], "", "copy on bare caret returns empty text");
+    assert!(s.clipboard.is_none(), "clipboard remains unset");
+
+    let cut_res = s.run("edit.cut", &json!({}));
+    assert!(matches!(cut_res, Err(crate::CmdError::Disabled(_))), "cut on bare caret is disabled");
+
+    let para = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+    assert_eq!(para.objects.len(), 1, "object was not deleted");
+    assert_eq!(para.objects[0].text_box(), Some(id));
+}
+
+/// Fallback plain text / clipboard text when paragraphs contain text boxes (#5785).
+#[test]
+fn fallback_plain_text_extracts_text_box_story_when_body_contains_paragraph_marks() {
+    let mut f = wordcraft_doc::edit::Fragment::default();
+    let mut p = wordcraft_doc::Paragraph::new();
+    p.text = format!("{}\n", wordcraft_doc::para::OBJ);
+    let mut part_p = wordcraft_doc::Paragraph::new();
+    part_p.text = "Box text".to_string();
+    let part = wordcraft_doc::Part {
+        kind: wordcraft_doc::PartKind::TextBox,
+        blocks: vec![std::sync::Arc::new(wordcraft_doc::Block::Para(part_p))],
+        body: Default::default(),
+    };
+    f.blocks = vec![wordcraft_doc::Block::Para(p)];
+    f.parts.insert(100, part);
+    assert_eq!(f.plain_text(), "Box text");
+    assert_eq!(f.clipboard_text(), "Box text");
+}
+
+/// Pasting formatted content with matching RTF but mismatched HTML from an external app prefers HTML (#5785).
+#[test]
+fn paste_content_prefers_external_html_when_rtf_matches_session_clipboard() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_rtf = s.clipboard_rtf.clone();
+    let external_html = "<p>External rich text</p>";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": external_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.plain_text(), "External rich text");
+    }
+}
+
+/// Pasting with no text payload or empty text but matching HTML and RTF uses WordCraft's session clipboard
+/// fragment, preserving custom text box parts (#5785, #5859).
+#[test]
+fn paste_content_uses_session_clipboard_when_html_and_rtf_match_without_text() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let my_rtf = s.clipboard_rtf.clone();
+    assert!(!my_html.is_empty());
+    assert!(!my_rtf.is_empty());
+    assert!(s.clipboard.as_ref().is_some_and(|f| !f.parts.is_empty()));
+
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    let pasted_with_empty_text = crate::cmd::paste::paste_content(&mut s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(matches!(pasted_with_empty_text, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_with_empty_text {
+        assert_eq!(frag.parts.len(), 1, "session text box parts preserved with empty text");
+        assert_eq!(frag.plain_text(), "Internal text box");
+    }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when text is empty but rich formats match");
+    let paste_special_res = s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(paste_special_res.is_ok(), "pasteSpecial as formatted succeeds with empty text and matching rich formats");
+}
+
+/// Pasting external RTF when HTML matches WordCraft's session clipboard does not return the old
+/// session fragment with its custom parts (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_html_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_html = s.clipboard_html.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"html": my_html, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+}
+
+/// Pasting external RTF when plain text matches WordCraft's session clipboard does not return the
+/// old session fragment with its custom parts (#5785, #5859).
+#[test]
+fn paste_content_does_not_use_session_clipboard_when_text_matches_but_rtf_differs() {
+    let mut s = s();
+    run(&mut s, "insert.textBox", json!({"text": "Internal text box"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, 3)}));
+    run(&mut s, "edit.copy", json!({}));
+    let my_text = s.clipboard_text.clone();
+    let external_rtf = "{\\rtf1\\ansi External rich text}";
+    let pasted_res = crate::cmd::paste::paste_content(&mut s, &json!({"text": my_text, "rtf": external_rtf}));
+    assert!(matches!(pasted_res, Ok(crate::cmd::paste::Pasted::Fragment(_))));
+    if let Ok(crate::cmd::paste::Pasted::Fragment(frag)) = pasted_res {
+        assert!(frag.parts.is_empty(), "session text box parts not reused when RTF differs");
+    }
+}
+
 #[test]
 fn word_count_includes_text_boxes_by_default() {
     let mut s = s();

@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::para::{InlineObject, Run};
+use crate::para::{InlineObject, OBJ, Run};
 use crate::props::{CharProps, ParaProps};
 use crate::{Block, Blocks, DocError, Document, Paragraph, Part, PartKind, Path, Pos, Result, para_block};
 use crate::{Table, table::MAX_TABLE_DEPTH};
@@ -26,8 +26,41 @@ pub struct Fragment {
 }
 
 impl Fragment {
+    /// Text box story IDs referenced by the fragment's objects in document order, falling
+    /// back to the parts map's keys if no inline objects reference them.
+    fn text_box_ids(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
+        for b in &self.blocks {
+            each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    for id in o.text_boxes() {
+                        if self.parts.get(&id).is_some_and(|part| part.kind == crate::PartKind::TextBox) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            });
+        }
+        if ids.is_empty() {
+            ids.extend(self.parts.iter().filter(|(_, p)| p.kind == crate::PartKind::TextBox).map(|(id, _)| *id));
+        }
+        ids
+    }
+
+    /// The plain text representation of the fragment's body, falling back to text box part stories
+    /// when the body text has no real text (empty or only whitespace/object markers).
     pub fn plain_text(&self) -> String {
-        self.to_document().plain_text(crate::StoryRef::Body)
+        let d = self.to_document();
+        let text = d.plain_text(crate::StoryRef::Body);
+        let has_body_text = text.chars().any(|c| !c.is_whitespace() && c != OBJ);
+        if !has_body_text && !self.parts.is_empty() {
+            let parts: Vec<String> =
+                self.text_box_ids().into_iter().map(|id| d.plain_text(crate::StoryRef::Part(id))).filter(|s| !s.is_empty()).collect();
+            if !parts.is_empty() {
+                return parts.join("\n");
+            }
+        }
+        text
     }
     /// The fragment as the body of a new document (default styles).
     pub fn to_document(&self) -> Document {
@@ -67,9 +100,20 @@ impl Fragment {
         found
     }
     /// The text a copy puts on the clipboard: [`Self::plain_text`] with symbol-font characters
-    /// (Wingdings…) as their Unicode equivalents.
+    /// (Wingdings…) as their Unicode equivalents. Falls back to text box part stories when body
+    /// text has no real text (empty or only whitespace/object markers).
     pub fn clipboard_text(&self) -> String {
-        self.to_document().shown_text(crate::StoryRef::Body)
+        let d = self.to_document();
+        let text = d.shown_text(crate::StoryRef::Body);
+        let has_body_text = text.chars().any(|c| !c.is_whitespace() && c != OBJ);
+        if !has_body_text && !self.parts.is_empty() {
+            let parts: Vec<String> =
+                self.text_box_ids().into_iter().map(|id| d.shown_text(crate::StoryRef::Part(id))).filter(|s| !s.is_empty()).collect();
+            if !parts.is_empty() {
+                return parts.join("\n");
+            }
+        }
+        text
     }
     /// Add `piece` at the end, followed by a paragraph mark unless it already ends with one: how
     /// Word's Spike collects what it cuts. The piece's text box stories get ids after this

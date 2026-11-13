@@ -32,7 +32,7 @@ fn has_text_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
 }
 
-/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
+/// Something to cut: text, an object, or whole table cells (an empty cell's selection has no length, #1744).
 fn has_sel(s: &Session) -> Option<&'static str> {
     if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
@@ -174,6 +174,7 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Copy the selected text, object, or table cells to the clipboard.
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     copy_with(s, whole.as_ref())
@@ -230,6 +231,7 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     r
 }
 
+/// Cut the selection, selected object, or whole table cells to the clipboard and remove it from the document.
 fn cut(s: &mut Session, _: &Value) -> CmdResult {
     let whole = super::table::selected_table(s);
     let r = copy_with(s, whole.as_ref())?;

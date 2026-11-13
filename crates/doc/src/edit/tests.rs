@@ -305,6 +305,33 @@ fn fragment_without_parts_never_shows_an_unrelated_story() {
 }
 
 #[test]
+fn fragment_extracts_text_box_stories_in_object_order() {
+    let mut p = Paragraph::new();
+    p.insert_object(0, box_shape(Some(20)), &CharProps::default()).unwrap();
+    p.insert_object(p.text.len(), box_shape(Some(10)), &CharProps::default()).unwrap();
+    let mut parts = BTreeMap::new();
+    parts.insert(
+        10,
+        crate::Part {
+            kind: PartKind::TextBox,
+            blocks: vec![para_block(Paragraph::with_text("Second", CharProps::default()))],
+            body: Default::default(),
+        },
+    );
+    parts.insert(
+        20,
+        crate::Part {
+            kind: PartKind::TextBox,
+            blocks: vec![para_block(Paragraph::with_text("First", CharProps::default()))],
+            body: Default::default(),
+        },
+    );
+    let f = Fragment { blocks: vec![Block::Para(p)], parts, ..Default::default() };
+    assert_eq!(f.plain_text(), "First\nSecond");
+    assert_eq!(f.clipboard_text(), "First\nSecond");
+}
+
+#[test]
 fn self_nested_text_box_paste_is_bounded() {
     let mut d = doc(&["x"]);
     let id = text_box(&mut d, &Pos::body(0, 1), "loop");
