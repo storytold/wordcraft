@@ -551,3 +551,26 @@ fn dialog_tabs_expose_the_selected_state_and_report_clicks() {
     h.run_steps(2);
     assert_eq!(h.state().1, Some(1));
 }
+
+/// Fit One Page button renders in the Layout ribbon across light and dark themes.
+#[test]
+fn layout_fit_one_page_button_renders_in_light_and_dark_themes() {
+    use egui_kittest::kittest::Queryable;
+    for theme in [crate::theme::Appearance::Light, crate::theme::Appearance::Dark] {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.ui.tab = "Layout".to_string();
+        app.ui.theme = theme;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        let button = h.get_by_label("Fit One Page");
+        assert!(button.rect().width() >= 40.0, "button must have allocated width in {theme:?}");
+        assert!(button.rect().height() >= 40.0, "button must have allocated height in {theme:?}");
+    }
+}

@@ -678,11 +678,12 @@ struct ScrollMotion {
     middle: egui::Vec2,
 }
 
+/// Computes this frame's scroll motion from mouse wheel/touchpad input, edge autoscroll, and middle-drag.
 fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> ScrollMotion {
     // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
     let wheel_area = if app.session.view.read_mode { full } else { view.area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
-    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT) * app.ui.scroll_speed.wheel_factor();
     let wheel_delta = if app.session.view.read_mode {
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
         for _ in 0..turns.unsigned_abs() {
@@ -824,6 +825,7 @@ struct CanvasFinish<'a> {
     vruler: Option<Rect>,
     scroll_base: f32,
     rescaled: bool,
+    scroll_style: egui::style::ScrollStyle,
 }
 
 /// What a window's own scrolling is measured against for Synchronous Scrolling (#322).
@@ -833,8 +835,11 @@ struct ScrollSync {
     base: f32,
     /// The zoom changed: the offset moved, nobody scrolled.
     rescaled: bool,
+    /// The scroll style applied to the canvas scroll area (#5853).
+    style: egui::style::ScrollStyle,
 }
 
+/// Update scroll offset, scrollbar tip, and current viewed page state for the canvas frame.
 fn update_canvas_scroll_state(
     app: &mut WordApp,
     ui: &mut Ui,
@@ -858,12 +863,13 @@ fn update_canvas_scroll_state(
         viewed_page(extent, &geo.rects, &geo.bands, app.canvas.scroll_offset.y, out.inner_rect.height()).min(layout.pages.len().saturating_sub(1))
     });
     crate::ink::replay_bar(app, ui, out.inner_rect);
+    app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
+    scrollbar_track_paging(app, ui, out, sync.style);
     // This window's own scrolling (wheel, scroll bar, keys, caret), for a partner window.
     let own = app.canvas.scroll_offset.y - sync.base;
     if app.session.windows.sync_scroll && !sync.rescaled && own.abs() > 0.01 && geo.scale > 0.0 {
         app.canvas.sync_out += own / geo.scale;
     }
-    app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     if app.session.view.read_mode {
         let step = app.session.view.read_width * geo.scale + GAP;
         if step.is_finite() && step > 0.0 {
@@ -874,6 +880,82 @@ fn update_canvas_scroll_state(
     // The viewport barely moves between frames; the auto-scroll decides this frame's scroll before
     // the scroll area is built, so it reads last frame's viewport.
     app.canvas.viewport = Some(out.inner_rect);
+}
+
+/// Advance the vertical scroll by one screen when clicking in the track above or below the elevator (#5853).
+///
+/// In Word, clicking in the vertical scrollbar track above the elevator moves one screen up,
+/// and clicking below it moves one screen down. Sensed here over the track regions outside the
+/// elevator so egui does not jump the scroll offset to the clicked position.
+///
+/// Paging regions track egui's selected vertical scrollbar side (`ui.style().right_to_left`)
+/// and allocated scrollbar width (`scroll_style.allocated_width()`), placing the paging bounds
+/// on the left in RTL and on the right in LTR across solid, floating, and thin scroll styles.
+fn scrollbar_track_paging(
+    app: &mut WordApp,
+    ui: &mut Ui,
+    out: &egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>,
+    scroll_style: egui::style::ScrollStyle,
+) {
+    let scroll_id = out.id.with(1usize);
+    let dragging_bar = ui.ctx().is_being_dragged(scroll_id);
+    if app.session.view.read_mode || !out.inner_rect.is_finite() || !out.content_size.is_finite() || app.canvas.scroll_max.y <= 0.0 || dragging_bar {
+        return;
+    }
+    let step = out.inner_rect.height();
+    if !step.is_finite() || step <= 0.0 {
+        return;
+    }
+    let inner_rect = out.inner_rect;
+    let full_width = scroll_style.bar_width;
+    let outer_margin = scroll_style.bar_outer_margin;
+    let allocated_width = scroll_style.allocated_width();
+    let vertical_bar_on_left = ui.style().right_to_left;
+    let (bar_left, bar_right) = if vertical_bar_on_left {
+        let outer_edge = (inner_rect.min.x - allocated_width).max(ui.clip_rect().min.x) + outer_margin;
+        (outer_edge, outer_edge + full_width)
+    } else {
+        let outer_edge = (inner_rect.max.x + allocated_width).min(ui.clip_rect().max.x) - outer_margin;
+        (outer_edge - full_width, outer_edge)
+    };
+    if !bar_left.is_finite() || !bar_right.is_finite() || bar_right <= bar_left {
+        return;
+    }
+    let handle_min_length = ui.spacing().scroll.handle_min_length;
+    let content_h = out.content_size.y;
+    let offset_y = app.canvas.scroll_offset.y;
+    let max_offset_y = app.canvas.scroll_max.y;
+
+    let from_content = |content: f32| egui::remap_clamp(content, 0.0..=content_h, inner_rect.min.y..=inner_rect.max.y);
+    let handle_size = (from_content(offset_y + step) - from_content(offset_y)).max(handle_min_length);
+    let handle_start = if max_offset_y > 0.0 {
+        egui::remap_clamp(offset_y, 0.0..=max_offset_y, inner_rect.min.y..=(inner_rect.max.y - handle_size))
+    } else {
+        inner_rect.min.y
+    };
+    let handle_end = handle_start + handle_size;
+
+    let track_above = Rect::from_min_max(pos2(bar_left, inner_rect.min.y), pos2(bar_right, handle_start));
+    if track_above.height() > 0.0 {
+        let resp = ui.interact(track_above, out.id.with("track_above"), Sense::click_and_drag());
+        if resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| track_above.contains(p)) {
+            let target_y = (offset_y - step).max(0.0);
+            app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
+            app.canvas.scroll_offset.y = target_y;
+            ui.ctx().request_repaint();
+        }
+    }
+
+    let track_below = Rect::from_min_max(pos2(bar_left, handle_end), pos2(bar_right, inner_rect.max.y));
+    if track_below.height() > 0.0 {
+        let resp = ui.interact(track_below, out.id.with("track_below"), Sense::click_and_drag());
+        if resp.clicked() && resp.interact_pointer_pos().is_some_and(|p| track_below.contains(p)) {
+            let target_y = (offset_y + step).min(max_offset_y);
+            app.canvas.scroll_request = Some(vec2(app.canvas.scroll_offset.x, target_y));
+            app.canvas.scroll_offset.y = target_y;
+            ui.ctx().request_repaint();
+        }
+    }
 }
 
 fn update_canvas_focus(app: &mut WordApp, ui: &mut Ui, resp: &egui::Response, ime_geometry: Option<(Rect, Rect)>, ime_interrupt: bool) {
@@ -1328,9 +1410,25 @@ fn handle_secondary_selection(app: &mut WordApp, resp: &egui::Response, rects: &
     }
 }
 
+/// Finish the canvas frame: update scroll state, handle focus, input, accessibility, and context menus.
 fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollAreaOutput<(egui::Response, Vec<Rect>)>) {
-    let CanvasFinish { app, ui, layout, geo, caret, ime_geometry, ime_interrupt, area, dim_body, hruler, vruler, scroll_base, rescaled } = finish;
-    update_canvas_scroll_state(app, ui, layout, geo, caret, &out, ScrollSync { base: scroll_base, rescaled });
+    let CanvasFinish {
+        app,
+        ui,
+        layout,
+        geo,
+        caret,
+        ime_geometry,
+        ime_interrupt,
+        area,
+        dim_body,
+        hruler,
+        vruler,
+        scroll_base,
+        rescaled,
+        scroll_style,
+    } = finish;
+    update_canvas_scroll_state(app, ui, layout, geo, caret, &out, ScrollSync { base: scroll_base, rescaled, style: scroll_style });
     let (resp, rects) = out.inner;
     // A click on the page leaves the selected comment balloon.
     dismiss_balloon_on_canvas_click(app, ui, &resp);
@@ -1526,6 +1624,7 @@ fn live_selection_screen_rects(app: &mut WordApp, rects: &[Rect], scale: f32) ->
         .collect()
 }
 
+/// Render the document canvas, pages, scroll bars, rulers, and interactive controls for the current frame.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     let full = ui.available_rect_before_wrap();
@@ -1539,7 +1638,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let mut ui_area = ui.new_child(egui::UiBuilder::new().max_rect(area));
     // The bars are drawn with `ui_area`'s style; what the pages draw gets the inherited one back.
     let inherited = std::sync::Arc::clone(ui_area.style());
-    ui_area.spacing_mut().scroll = canvas_scroll_style();
+    if ui.spacing().scroll == egui::style::ScrollStyle::floating() {
+        ui_area.spacing_mut().scroll = canvas_scroll_style();
+    }
     canvas_scroll_thumb(ui_area.visuals_mut(), &t);
     let mut ime_geometry: Option<(Rect, Rect)> = None;
     let mut ime_interrupt = false;
@@ -1828,6 +1929,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         crate::table_mouse::paint(app, &painter, &t, &layout, &rects, geo.scale);
         (resp, rects)
     });
+    let scroll_style = ui_area.spacing().scroll;
     finish_canvas_frame(
         CanvasFinish {
             app,
@@ -1843,6 +1945,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             vruler,
             scroll_base,
             rescaled,
+            scroll_style,
         },
         out,
     );
