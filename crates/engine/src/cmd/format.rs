@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::eq::{EncloseShape, EncloseStyle, Enclosure};
 use wordcraft_doc::props::{Border, CharProps, Highlight, Rgb, TextColor, Underline, VertAlign};
 use wordcraft_doc::resolve::ResolvedChar;
-use wordcraft_doc::{InlineObject, PartKind, Pos, RevisionKind, StoryRef};
+use wordcraft_doc::{InlineObject, PartKind, Path, Pos, RevisionKind, StoryRef};
 
 use super::sel_result;
 use super::tools::{is_turkic, lower_char, upper_char};
@@ -257,6 +257,13 @@ fn apply_to(s: &mut Session, target: fn(&Session) -> Option<(Pos, Pos)>, f: &dyn
     sel_result(s)
 }
 
+/// The formatting the table style gives text in the paragraph at `path` (the conditional
+/// formatting of its cell included), which the layout draws it with (#6430).
+fn cell_chr(s: &Session, story: StoryRef, path: &Path) -> Option<CharProps> {
+    let (tp, row, cell) = path.cell()?;
+    wordcraft_layout::cell_chr(&s.doc, s.doc.table(story, &tp)?, row, cell)
+}
+
 /// Resolved target formatting, sampled up to a paragraph/column-row boundary after 10,000 runs.
 /// Empty targets use pending caret formatting or the selected text box paragraph mark.
 fn resolved(s: &Session) -> Vec<ResolvedChar> {
@@ -264,13 +271,14 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
     if let Some(rows) = column_rows(s) {
         for (a, b) in rows {
             let Some(p) = s.doc.para_at(&a) else { continue };
+            let table = cell_chr(s, a.story, &a.path);
             // An empty cell: its mark's formatting.
             if a == b {
-                out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), &p.mark));
+                out.push(s.doc.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref(), &p.mark));
             }
             for (r, c) in p.run_ranges() {
                 if r.end > a.off && r.start < b.off {
-                    out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), c));
+                    out.push(s.doc.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref(), c));
                 }
             }
             if out.len() > 10_000 {
@@ -284,16 +292,18 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
     let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) else {
         let f = &s.sel.focus;
         let style = s.doc.para_at(f).and_then(|p| p.props.style.clone());
-        out.push(s.doc.styles.resolve_char(style.as_deref(), &s.typing_props()));
+        let table = cell_chr(s, f.story, &f.path);
+        out.push(s.doc.styles.resolve_char_in(style.as_deref(), table.as_ref(), &s.typing_props()));
         return out;
     };
     for path in s.doc.paths_between(&a, &b) {
         let Some(p) = s.doc.para(a.story, &path) else { continue };
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { p.len() };
+        let table = cell_chr(s, a.story, &path);
         for (r, c) in p.run_ranges() {
             if r.end > from && r.start < to {
-                out.push(s.doc.styles.resolve_char(p.props.style.as_deref(), c));
+                out.push(s.doc.styles.resolve_char_in(p.props.style.as_deref(), table.as_ref(), c));
             }
         }
         if out.len() > 10_000 {
@@ -305,7 +315,8 @@ fn resolved(s: &Session) -> Vec<ResolvedChar> {
         let style = p.and_then(|p| p.props.style.clone());
         // An empty selected text box has only its paragraph mark, which is what gets formatted.
         let empty_box = selected_text_box(s).and(p).map(|p| &p.mark);
-        out.push(s.doc.styles.resolve_char(style.as_deref(), empty_box.unwrap_or(&s.typing_props())));
+        let table = cell_chr(s, a.story, &a.path);
+        out.push(s.doc.styles.resolve_char_in(style.as_deref(), table.as_ref(), empty_box.unwrap_or(&s.typing_props())));
     }
     out
 }
