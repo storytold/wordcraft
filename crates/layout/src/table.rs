@@ -87,6 +87,12 @@ struct Turned {
     top: f32,
 }
 
+/// The room a visible border takes across a table row: [`Border::band`] of its width, which is
+/// read up to 12 pt.
+fn border_band(b: &Border) -> f32 {
+    if b.is_visible() { Border { width: b.width.clamp(0.0, 12.0), ..*b }.band() } else { 0.0 }
+}
+
 /// The number of grid columns of `t` ([`Table::cols`]), which walks every row (each row counted
 /// as a step of [`crate::work`]).
 fn grid_cols(t: &Table) -> usize {
@@ -578,11 +584,14 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 std::mem::swap(&mut borders.left, &mut borders.right);
             }
             // Word keeps the cell's text clear of its top border (and the last row's of its bottom
-            // border): the border's width sits on top of the cell margin.
-            let band = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            // border): the room the border takes ([`border_band`]) sits on top of the cell margin.
+            let band = |b: Option<Border>| b.as_ref().map_or(0.0, border_band);
             let (band_t, band_b) = (band(borders.top), if ri + 1 == nrows { band(borders.bottom) } else { 0.0 });
-            // A shared edge painted by the row above still clears this cell's text and minimum.
-            let band_t = if band_t > 0.0 || cell.props.vmerge == VMerge::Continue {
+            // The edge shared with the row above takes the room of the wider of the two borders on
+            // it, this cell's top one and the bottom ones of the cells above it (measured in Word
+            // for Windows: a double 0.5 pt border under a row and a single 0.25 pt one over the
+            // next take 1.5 pt, whichever cell has which).
+            let band_t = if cell.props.vmerge == VMerge::Continue {
                 band_t
             } else {
                 rows.last()
@@ -596,7 +605,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                             })
                     })
                     .map(|above| band(above.borders.bottom))
-                    .fold(0.0, f32::max)
+                    .fold(band_t, f32::max)
             };
             let insets = margins[0] + margins[2] + band_t + band_b;
             let turn = cell.props.text_direction;
@@ -860,7 +869,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 story,
                 clip: exact && c.h > span_h + 0.01,
             });
-            let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            let top = c.margins[0] + c.borders.top.as_ref().map_or(0.0, border_band);
             parts.push(CellPart { top, items: first..items.len(), end, align });
         }
         out.push(RowLayout {

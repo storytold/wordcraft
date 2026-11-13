@@ -6143,6 +6143,79 @@ fn at_least_rows_add_cell_margins_and_border_bands() {
     assert!((tops[0] - (72.0 + 0.5 + 5.0)).abs() < 0.01, "first cell text at {}", tops[0]);
 }
 
+/// A double border takes three times its width in a table row and a triple one five times: two
+/// or three lines and the gaps between them, each as wide as the line. Measured in Word for
+/// Windows (16.0.20625) on tables of three one-cell rows: between two rows a border of 0.5, 1,
+/// 1.5 and 3 pt moves the lower row down by its width when single, by 1.5, 3, 4.5 and 9 pt when
+/// double and by 2.5, 5, 7.5 and 15 pt when triple, whether the upper cell, the lower one or both
+/// have it; at the top of the table a double 0.5 pt border lowers the first row's text by 1.5
+/// pt, and at the bottom it lowers the text after the table by as much. WordCraft gave every
+/// border the width of one line.
+///
+/// When the two cells on an edge have different borders, the edge takes the room of the wider
+/// one, whichever cell has it: a double 0.5 pt border under a row and a single 0.25 pt one over
+/// the next take 1.5 pt, single 3 pt and double 0.5 pt 3 pt, double 1.5 pt and triple 0.5 pt
+/// 4.5 pt, single 1.5 pt and single 0.5 pt 1.5 pt. WordCraft took the lower cell's border.
+#[test]
+fn double_and_triple_borders_take_their_lines_and_gaps_in_a_row() {
+    crate::test_fonts();
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    // The tops of the three rows' text and of the paragraph after the table.
+    let tops = |borders: [Borders; 3]| {
+        let mut d = Document::from_text("");
+        let mut t = Table::new(3, 1, 200.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+        for ((r, text), b) in t.rows.iter_mut().zip(["one", "two", "three"]).zip(borders) {
+            r.cells[0].props.borders = Some(b);
+            r.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        }
+        let after = wordcraft_doc::Paragraph::with_text("after", Default::default());
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), wordcraft_doc::para_block(after)];
+        let tops = line_tops(&lay(&d));
+        assert_eq!(tops.len(), 4, "three rows and the paragraph after them");
+        tops
+    };
+    let none = Borders::default();
+    let plain = tops([none, none, none]);
+    for (style, lines) in [(BorderStyle::Single, 1.0), (BorderStyle::Double, 3.0), (BorderStyle::Triple, 5.0)] {
+        for width in [0.5, 1.0, 1.5, 3.0] {
+            let b = Some(Border { style, width, color: None, space: 0.0 });
+            let room = lines * width;
+            // Between the first and the second row: on the upper cell, the lower one, or both.
+            for (what, upper, lower) in [("both cells", b, b), ("the upper cell", b, None), ("the lower cell", None, b)] {
+                let got = tops([Borders { bottom: upper, ..none }, Borders { top: lower, ..none }, none]);
+                let moved: Vec<f32> = got.iter().zip(&plain).map(|(a, b)| a - b).collect();
+                let want = [0.0, room, room, room];
+                assert!(
+                    moved.iter().zip(want).all(|(a, b)| (a - b).abs() < 0.01),
+                    "{style:?} {width} pt between the rows, on {what}: the lines moved {moved:?}, expected {want:?}"
+                );
+            }
+            // At the top and at the bottom of the table.
+            let top = tops([Borders { top: b, ..none }, none, none]);
+            assert!((top[0] - plain[0] - room).abs() < 0.01, "{style:?} {width} pt at the top: the first row's text moved {}", top[0] - plain[0]);
+            let bottom = tops([none, none, Borders { bottom: b, ..none }]);
+            assert!((bottom[2] - plain[2]).abs() < 0.01, "{style:?} {width} pt at the bottom: the last row's text moved");
+            assert!((bottom[3] - plain[3] - room).abs() < 0.01, "{style:?} {width} pt at the bottom: the text after moved {}", bottom[3] - plain[3]);
+        }
+    }
+    // Different borders on the two sides of an edge: the wider one's room, either way round.
+    let border = |style, width| Some(Border { style, width, color: None, space: 0.0 });
+    for (one, other, room) in [
+        (border(BorderStyle::Double, 0.5), border(BorderStyle::Single, 0.25), 1.5),
+        (border(BorderStyle::Single, 3.0), border(BorderStyle::Double, 0.5), 3.0),
+        (border(BorderStyle::Double, 1.5), border(BorderStyle::Triple, 0.5), 4.5),
+        (border(BorderStyle::Single, 1.5), border(BorderStyle::Single, 0.5), 1.5),
+    ] {
+        for (upper, lower) in [(one, other), (other, one)] {
+            let got = tops([Borders { bottom: upper, ..none }, Borders { top: lower, ..none }, none]);
+            let moved = got[1] - plain[1];
+            assert!((moved - room).abs() < 0.01, "{upper:?} under a row, {lower:?} over the next: the row moved {moved}, expected {room}");
+        }
+    }
+}
+
 /// Word gives every cell in a row the row's largest top and bottom margins: a cell without its
 /// own lines up with a neighbour that has them, and the row is as tall as if all had them.
 #[test]
