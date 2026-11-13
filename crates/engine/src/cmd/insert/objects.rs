@@ -114,6 +114,40 @@ pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
     }
 }
 
+/// A picture file's natural size in points and the media extension it is stored under: pixels
+/// at 96 ppi, a metafile's own frame (WMF, EMF: #802), or an SVG's size (#1910).
+pub(crate) fn picture_size(bytes: &[u8]) -> Result<(f32, f32, &'static str), CmdError> {
+    match wordcraft_geom::picture::probe(bytes) {
+        Ok(pic) => Ok((pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(bytes))),
+        // A picture that is never decoded (a TIFF with JPEG strips, #3645) isn't inserted.
+        Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => Err(CmdError::Failed(why.into())),
+        Err(_) => {
+            if let Some(size) = wordcraft_render::metafile_size(bytes) {
+                Ok(size)
+            } else if let Some((w, h)) = wordcraft_svg::natural_size(bytes) {
+                Ok((w, h, "svg"))
+            } else {
+                Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF, SVG)".into()))
+            }
+        }
+    }
+}
+
+/// Store a picture's bytes as media; an SVG gets its PNG fallback made now and kept with it, so
+/// saves write it without drawing it again (#1910). An SVG the document already has keeps its
+/// fallback.
+pub(crate) fn add_picture_media(s: &mut Session, bytes: Vec<u8>, ext: &str) -> String {
+    let key = s.doc.add_media(bytes, ext);
+    if ext == "svg"
+        && !s.doc.svg_fallbacks.contains_key(&key)
+        && let Some(png) = s.doc.media.get(&key).and_then(|b| wordcraft_svg::fallback_png(b).ok())
+    {
+        let png_key = s.doc.add_media(png, "png");
+        s.doc.svg_fallbacks.insert(key.clone(), png_key);
+    }
+    key
+}
+
 /// Insert an encoded image at the selection as an inline picture, `width` points wide (default:
 /// its natural size at 96 ppi), never wider than the text column. The caret ends after it, so a
 /// script's next typing doesn't replace it (#965); Picture Format commands still act on it. The
@@ -122,17 +156,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
-    // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802). A picture that
-    // is never decoded (a TIFF with JPEG strips, #3645) isn't inserted.
-    let (natural_w, natural_h, ext) = match wordcraft_geom::picture::probe(&bytes) {
-        Ok(pic) => (pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(&bytes)),
-        Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => return Err(CmdError::Failed(why.into())),
-        Err(_) => match wordcraft_render::metafile_size(&bytes) {
-            Some(size) => size,
-            None => return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into())),
-        },
-    };
-    let key = s.doc.add_media(bytes, ext);
+    let (natural_w, natural_h, ext) = picture_size(&bytes)?;
+    let key = add_picture_media(s, bytes, ext);
     // Fitted to the text width.
     let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let (mut w, mut h) = (natural_w, natural_h);

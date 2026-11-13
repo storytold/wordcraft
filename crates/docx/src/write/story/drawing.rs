@@ -26,7 +26,8 @@ impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, fx, .. } = o else { return };
-        let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+        let svg_fallback = self.svg_fallback(media);
+        let rid = rels.add(rt::IMAGE, &format!("media/{}", svg_fallback.as_deref().unwrap_or(file)), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
@@ -37,9 +38,11 @@ impl Writer<'_> {
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
         // Brightness, contrast and transparency (#1711, #1766) as `a:blip` effects (ECMA-376
-        // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order).
+        // §20.1.8.13 CT_Blip: an unbounded choice of effects, in any order). An SVG picture's blip
+        // is its PNG fallback; the SVG rides in Word's extension ([MS-ODRAWXML]).
         let fx = fx.clamped();
-        if fx.is_identity() {
+        let svg_rid = svg_fallback.is_some().then(|| rels.add(rt::IMAGE, &format!("media/{file}"), false));
+        if fx.is_identity() && svg_rid.is_none() {
             w.empty("a:blip", &[("r:embed", &rid)]);
         } else {
             w.open("a:blip", &[("r:embed", &rid)]);
@@ -48,6 +51,13 @@ impl Writer<'_> {
             }
             if fx.bright != 0 || fx.contrast != 0 {
                 w.empty("a:lum", &[("bright", &n(i64::from(fx.bright))), ("contrast", &n(i64::from(fx.contrast)))]);
+            }
+            if let Some(svg_rid) = &svg_rid {
+                w.open("a:extLst", &[]);
+                w.open("a:ext", &[("uri", crate::xml::SVG_BLIP_EXT)]);
+                w.empty("asvg:svgBlip", &[("xmlns:asvg", crate::xml::SVG_BLIP_NS), ("r:embed", svg_rid)]);
+                w.close("a:ext");
+                w.close("a:extLst");
             }
             w.close("a:blip");
         }

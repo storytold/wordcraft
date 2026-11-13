@@ -1102,6 +1102,54 @@ impl Document {
         self.adopt_in(src, keep_styles, &mut 0)
     }
 
+    /// The media of `src` added to this document: its keys by the keys they have here. A PNG
+    /// fallback of an SVG that isn't in `src` (and that no picture shows) would be an orphan and
+    /// isn't brought; SVG pictures keep their PNG fallbacks under the new keys (#1910). An SVG
+    /// this document already has keeps its own fallback; the pasted one, then unused, isn't kept.
+    fn adopt_media(&mut self, src: &Document) -> BTreeMap<String, String> {
+        let mut shown = std::collections::BTreeSet::new();
+        src.objects_in_reading_order(&mut |o| {
+            if let InlineObject::Image { media, .. } = o {
+                shown.insert(media.clone());
+            }
+        });
+        let orphans: std::collections::BTreeSet<&String> =
+            src.svg_fallbacks.iter().filter(|(svg, _)| !src.media.contains_key(*svg)).map(|(_, png)| png).collect();
+        let mut media = BTreeMap::new();
+        // Keys added by this paste (rather than matched to a picture the document already has).
+        let mut added = std::collections::BTreeSet::new();
+        for (key, data) in &src.media {
+            if orphans.contains(key) && !shown.contains(key) {
+                continue;
+            }
+            let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
+            let before = self.media.len();
+            let new_key = self.add_media(data.to_vec(), ext);
+            if self.media.len() > before {
+                added.insert(new_key.clone());
+            }
+            media.insert(key.clone(), new_key);
+        }
+        let shown: std::collections::BTreeSet<&String> = shown.iter().filter_map(|k| media.get(k)).collect();
+        let mut unused = Vec::new();
+        for (src_svg, src_png) in &src.svg_fallbacks {
+            if let (Some(svg), Some(png)) = (media.get(src_svg), media.get(src_png)) {
+                let kept = self.svg_fallbacks.entry(svg.clone()).or_insert_with(|| png.clone());
+                if kept != png && added.contains(png) && !shown.contains(png) {
+                    unused.push(png.clone());
+                }
+            }
+        }
+        if !unused.is_empty() {
+            let fallbacks: std::collections::BTreeSet<&String> = self.svg_fallbacks.values().collect();
+            let unused: Vec<String> = unused.into_iter().filter(|png| !fallbacks.contains(png)).collect();
+            for png in unused {
+                self.media.remove(&png);
+            }
+        }
+        media
+    }
+
     /// [`Self::adopt_with`], its permission range ids from at least `perms` on (and past ours);
     /// `perms` moves past them.
     fn adopt_in(&mut self, mut src: Document, keep_styles: bool, perms: &mut u32) -> Fragment {
@@ -1132,11 +1180,7 @@ impl Document {
                 *id = Some(new.clone());
             }
         };
-        let mut media = BTreeMap::new();
-        for (key, data) in &src.media {
-            let ext = key.rsplit_once('.').map(|(_, e)| e).unwrap_or("png");
-            media.insert(key.clone(), self.add_media(data.to_vec(), ext));
-        }
+        let media = self.adopt_media(&src);
         let next_abs = self.numbering.abstracts.iter().map(|a| a.id.saturating_add(1)).max().unwrap_or(0);
         let mut abs_map = BTreeMap::new();
         for (i, a) in src.numbering.abstracts.iter().enumerate() {

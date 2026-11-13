@@ -565,6 +565,11 @@ impl Writer {
         let (data, blip) = match img.ext.as_str() {
             "png" => (img.data.to_vec(), "\\pngblip"),
             "jpeg" | "jpg" => (img.data.to_vec(), "\\jpegblip"),
+            // RTF has no SVG picture: a PNG of it (#1910), or nothing when it doesn't read.
+            "svg" => match wordcraft_svg::fallback_png(&img.data) {
+                Ok(png) => (png, "\\pngblip"),
+                Err(_) => return,
+            },
             // The bytes decide, as on reading: an EMF starts with its header record, type 1 (a
             // DOCX may store one under `.wmf`).
             "emf" | "wmf" if img.data.starts_with(&[1, 0, 0, 0]) => (img.data.to_vec(), "\\emfblip"),

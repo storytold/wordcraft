@@ -21,9 +21,9 @@ pub use items::{
 use items::{cover_page, date_time, drop_cap, drop_cap_off, field, page_number, symbol};
 use links::{bookmark, delete_bookmark, link, link_targets};
 pub use links::{bookmark_name_ok, bookmark_range, bookmark_span};
+pub(crate) use objects::{add_picture_media, picture, picture_size};
 pub use objects::{base64_decode, base64_encode};
 use objects::{icon, shape, table, text_box};
-pub(crate) use objects::{image_ext, picture};
 
 /// Command specifications for the Insert ribbon tab and menu.
 pub fn specs() -> Vec<CommandSpec> {

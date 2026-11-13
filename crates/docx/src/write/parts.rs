@@ -25,6 +25,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
+        svg_fallback_files: BTreeMap::new(),
+        svg_kept_fallbacks: BTreeMap::new(),
+        svg_fallbacks: BTreeMap::new(),
         bookmarks: HashMap::new(),
         next_rev_id: 0,
         open_moves: Vec::new(),
@@ -58,7 +61,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .collect(),
     };
     wr.assign_media();
-    wr.embeds.reserve_media(wr.media_files.values());
+    wr.embeds.reserve_media(wr.media_files.values().chain(wr.svg_fallback_files.values()));
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();
@@ -172,6 +175,12 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             let ext = file.rsplit('.').next().unwrap_or("bin").to_ascii_lowercase();
             media_types.insert(ext, content_type_for(file));
             entries.push((format!("word/media/{file}"), bytes.to_vec()));
+        }
+    }
+    for (file, png) in &wr.svg_fallbacks {
+        if let Some(png) = png {
+            media_types.insert("png".into(), "image/png");
+            entries.push((format!("word/media/{file}"), png.clone()));
         }
     }
 

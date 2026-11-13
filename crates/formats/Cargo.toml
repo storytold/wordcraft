@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true, features = ["image"] }
+wordcraft-svg = { workspace = true }
 wordcraft-metafile = { workspace = true }
 base64 = { workspace = true }
 image = { workspace = true }

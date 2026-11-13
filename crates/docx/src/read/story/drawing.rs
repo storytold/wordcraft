@@ -279,15 +279,33 @@ impl Reader<'_> {
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
         float.set_spin(xfrm_spin(pic.find("pic:spPr")));
-        let Some(embed) = blip.attr("r:embed") else {
-            // A linked picture holds no copy: nothing to draw, and nothing is fetched.
-            if let Some(link) = blip.attr("r:link") {
-                let target = rels.by_id(link).map_or_else(|| link.to_string(), |r| r.target.clone());
-                self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+        // An SVG picture (Word 2016+): the SVG when it reads, else the blip's PNG fallback.
+        let svg = blip
+            .child("a:extLst")
+            .and_then(|l| l.els().find(|e| e.name == "a:ext" && e.attr("uri") == Some(crate::xml::SVG_BLIP_EXT)))
+            .and_then(|e| e.child("asvg:svgBlip"))
+            .and_then(|e| e.attr("r:embed"))
+            .and_then(|id| self.svg_media_for(rels, id));
+        let fallback = blip.attr("r:embed").and_then(|id| self.media_for(rels, id));
+        let media = match svg {
+            Some(m) => {
+                // Word's PNG is kept with the SVG and written back on save (#1910).
+                if let Some(png) = fallback.filter(|png| *png != m) {
+                    self.doc.svg_fallbacks.insert(m.clone(), png);
+                }
+                m
             }
-            return None;
+            None => {
+                if blip.attr("r:embed").is_none() {
+                    // A linked picture holds no copy: nothing to draw, and nothing is fetched.
+                    if let Some(link) = blip.attr("r:link") {
+                        let target = rels.by_id(link).map_or_else(|| link.to_string(), |r| r.target.clone());
+                        self.note_missing_picture(&target, wordcraft_doc::MissingPictureReason::LinkOnly);
+                    }
+                }
+                fallback?
+            }
         };
-        let media = self.media_for(rels, embed)?;
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {

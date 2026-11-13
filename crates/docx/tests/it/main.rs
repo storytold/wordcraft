@@ -40,6 +40,7 @@ mod section_text_direction;
 mod section_valign;
 mod settings_merge;
 mod strict_drawings;
+mod svg_pictures;
 mod text_alignment;
 mod text_boxes;
 mod toc_ranges;

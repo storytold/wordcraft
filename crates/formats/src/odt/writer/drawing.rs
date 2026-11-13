@@ -189,7 +189,13 @@ pub(in crate::odt) const DEFAULT_BOX_INSET: [f32; 4] = [7.2, 3.6, 7.2, 3.6];
 
 impl Writer {
     pub(in crate::odt) fn picture(&mut self, img: &model::Img) -> String {
-        let ext = if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() };
+        // An SVG picture is stored as a PNG of it (#1910), which every ODF consumer shows; one
+        // that doesn't read is kept as it is.
+        let png = if img.ext == "svg" { wordcraft_svg::fallback_png(&img.data).ok() } else { None };
+        let (ext, data) = match png {
+            Some(png) => ("png".to_string(), std::sync::Arc::new(png)),
+            None => (if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() }, img.data.clone()),
+        };
         // Not a name the file's own pictures, kept as read, have, nor one an earlier picture
         // took (after skipping a reserved name, the count is behind the names taken).
         let mut n = self.pictures.len() + 1;
@@ -198,7 +204,7 @@ impl Writer {
             n += 1;
             name = format!("Pictures/{}image{n}.{ext}", self.prefix);
         }
-        self.pictures.push((name.clone(), img.data.clone(), mime_of(&img.ext).to_string()));
+        self.pictures.push((name.clone(), data, mime_of(&ext).to_string()));
         name
     }
 
