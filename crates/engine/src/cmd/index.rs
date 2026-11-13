@@ -1,5 +1,6 @@
-//! References › Index: Mark Entry (XE fields), Insert Index and Update Index (the INDEX field).
-//! Field switches follow ECMA-376 §17.16.5.32 (INDEX) and §17.16.5.79 (XE).
+//! References › Index: Mark Entry (XE fields), AutoMark (XE fields from a concordance file),
+//! Insert Index and Update Index (the INDEX field). Field switches follow ECMA-376 §17.16.5.32
+//! (INDEX) and §17.16.5.79 (XE).
 
 use std::collections::BTreeMap;
 
@@ -14,6 +15,10 @@ use super::references::{FieldCode, field_arg, leader};
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+mod automark;
+
+pub use automark::read_concordance;
+
 /// The paragraph style generated lists use for their entries (see `citations.rs`).
 const ENTRY_STYLE: &str = "ListEntry";
 
@@ -23,6 +28,9 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"entry"?: string (the selection), "subentry"?: string, "crossReference"?: "See …", "bookmark"?: page-range bookmark, "bold"?: bool, "italic"?: bool, "all"?: bool (Mark All: every paragraph's first match of "text" or the selection)}"#,
         )
         .key(super::non_mac("Alt+Shift+X")),
+        CommandSpec::new("references.autoMark", "AutoMark", "References › Index", automark::auto_mark).params(
+            r#"{"path"?: concordance file (a document whose two-column table pairs the text to find with its index entry, `Main:Sub` for a subentry, an empty entry marking the text itself; without a table, tab-separated lines; not a network path), "entries"?: [text | [text, entry]] instead of a file} → {"marked": XE fields inserted, "terms": rows used} (each row marks the first same-case, whole-word match in every paragraph)"#,
+        ),
         CommandSpec::new("references.index", "Insert Index", "References › Index", insert_index).params(
             r#"{"type"?: "indented|runIn", "columns"?: 1-4, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none", "headings"?: bool (letter headings)} (replaces an existing index's settings)"#,
         ),
@@ -81,26 +89,7 @@ fn mark_entry(s: &mut Session, v: &Value) -> CmdResult {
     if text.is_empty() {
         return Err(CmdError::Params("nothing to look for".into()));
     }
-    let mut marked = 0u32;
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(para) = s.doc.para(StoryRef::Body, &path) else { continue };
-        if para.props.style.as_deref().is_some_and(|st| st == ENTRY_STYLE || st.starts_with("TOC")) {
-            continue;
-        }
-        if para.objects.iter().any(|o| matches!(o, InlineObject::Field { instr: i, .. } if *i == instr)) {
-            continue;
-        }
-        let whole = |a: usize, b: usize| {
-            let before = para.text.get(..a).and_then(|t| t.chars().next_back()).is_none_or(|c| !c.is_alphanumeric());
-            let after = para.text.get(b..).and_then(|t| t.chars().next()).is_none_or(|c| !c.is_alphanumeric());
-            before && after
-        };
-        let Some(end) = para.text.match_indices(&text).map(|(a, m)| (a, a + m.len())).find(|(a, b)| whole(*a, *b)).map(|(_, b)| b) else {
-            continue;
-        };
-        s.doc.insert_object(&Pos { story: StoryRef::Body, path, off: end }, field(), &hidden)?;
-        marked += 1;
-    }
+    let marked = automark::mark_terms(s, &[automark::Term { text, instr }])?;
     s.clamp_selection();
     Ok(json!({"entry": main, "marked": marked}))
 }

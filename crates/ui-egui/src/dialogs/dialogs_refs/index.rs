@@ -49,7 +49,7 @@ impl IndexForm {
 }
 
 /// Draws the index preview and type, columns, right-alignment, tab-leader and heading controls,
-/// jumps to Mark Entry, and runs `references.index` on OK.
+/// jumps to Mark Entry, starts AutoMark (desktop), and runs `references.index` on OK.
 pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Next {
     let page = |p: &str| p.to_string();
     let lines: Vec<(usize, String, String)> = {
@@ -101,8 +101,23 @@ pub(super) fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Nex
         });
     });
     ui.add_space(4.0);
-    if ui.button(tl!("Mark Entry…")).clicked() {
-        return go(RefsDialog::MarkEntry(MarkForm::read(app)));
+    let mut next = Next::Stay;
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Mark Entry…")).clicked() {
+            next = go(RefsDialog::MarkEntry(MarkForm::read(app)));
+        }
+        // AutoMark… (desktop): the dialog closes and a concordance file is asked for, whose table
+        // lists the text to find and the entry to mark it with.
+        #[cfg(not(target_arch = "wasm32"))]
+        if ui.button(tl!("AutoMark…")).clicked() {
+            if let Err(e) = app.pick_concordance() {
+                app.status(e);
+            }
+            next = Next::Close;
+        }
+    });
+    if !matches!(next, Next::Stay) {
+        return next;
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok && let Err(e) = app.run("references.index", f.params()) {

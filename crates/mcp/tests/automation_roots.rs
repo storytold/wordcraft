@@ -96,6 +96,7 @@ fn commands_that_read_a_path_are_held_to_the_read_root() {
     // The injected-document scenario from the issue: pull a file in from outside, then read it back.
     for (command, params) in [
         ("insert.textFromFile", json!({"path": outside})),
+        ("references.autoMark", json!({"path": outside})),
         ("insert.object", json!({"path": outside})),
         ("insert.picture", json!({"path": s(&base.join("outside/pic.png"))})),
         ("mailings.recipients", json!({"path": outside})),
@@ -121,6 +122,16 @@ fn commands_that_read_a_path_are_held_to_the_read_root() {
     assert!(!error, "{text}");
     let (error, text) = run(&mut server, "mailings.recipients", json!({"path": s(&base.join("in/people.csv"))}));
     assert!(!error, "{text}");
+    std::fs::write(base.join("in/concordance.txt"), "Inside\tInterior").unwrap();
+    let (error, text) = run(&mut server, "references.autoMark", json!({"path": s(&base.join("in/concordance.txt"))}));
+    assert!(!error, "{text}");
+    assert_eq!(serde_json::from_str::<Value>(&text).unwrap()["marked"], 1, "{text}");
+    // A concordance file on another computer is refused before the roots look at it: resolving
+    // `\\host\share\…` would make Windows sign in to that host.
+    for network in [r"\\evil.example\share\c.docx", "//evil.example/share/c.docx"] {
+        let (error, text) = run(&mut server, "references.autoMark", json!({"path": network}));
+        assert!(error && text.contains("another computer"), "{network}: {text}");
+    }
 }
 
 #[test]
