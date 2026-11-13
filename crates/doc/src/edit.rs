@@ -1169,6 +1169,9 @@ impl Document {
         para_defaults.space_before.get_or_insert(0.0);
         para_defaults.space_after.get_or_insert(0.0);
         para_defaults.line_spacing.get_or_insert(crate::props::LineSpacing::Multiple(1.0));
+        let rev = u32::try_from(self.revisions.len()).unwrap_or(u32::MAX);
+        let revs = u32::try_from(src.revisions.len()).unwrap_or(u32::MAX);
+        let rev_id = |r: u32| if r < revs { rev.checked_add(r) } else { None };
         for st in &src.styles.styles {
             let mut st = st.clone();
             // Our defaults stay ours.
@@ -1185,18 +1188,65 @@ impl Document {
                 if st.based_on.is_none() && st.kind != crate::styles::StyleKind::Character {
                     let mut chr = src.styles.default_chr.clone();
                     chr.overlay(&st.chr);
+                    // Rejecting a tracked change restores the old values under this document's
+                    // defaults; give them the source defaults too, as the live values have.
+                    if let Some(c) = chr.fmt_change.as_mut() {
+                        let mut old = src.styles.default_chr.clone();
+                        old.overlay(&c.old);
+                        c.old = old;
+                    }
                     st.chr = chr;
                     let mut para = para_defaults.clone();
                     para.overlay(&st.para);
+                    para.fmt_change = st.para.fmt_change;
+                    para.num_change = st.para.num_change;
+                    if let Some(c) = para.fmt_change.as_mut() {
+                        let mut old = para_defaults.clone();
+                        old.overlay(&c.old);
+                        c.old = old;
+                    }
                     st.para = para;
                 }
             }
             if self.styles.get(&st.id).is_none() {
                 renumber(&mut st.para.numbering);
+                match (st.para_change.as_ref().and_then(|c| rev_id(c.rev)), st.para_change.as_mut()) {
+                    (Some(v), Some(c)) => {
+                        c.rev = v;
+                        restyle(&mut c.old.style);
+                        renumber(&mut c.old.numbering);
+                    }
+                    _ => st.para_change = None,
+                }
+                match (st.chr_change.as_ref().and_then(|c| rev_id(c.rev)), st.chr_change.as_mut()) {
+                    (Some(v), Some(c)) => {
+                        c.rev = v;
+                        restyle(&mut c.old.style);
+                    }
+                    _ => st.chr_change = None,
+                }
+                match (st.para.fmt_change.as_ref().and_then(|c| rev_id(c.rev)), st.para.fmt_change.as_mut()) {
+                    (Some(v), Some(c)) => {
+                        c.rev = v;
+                        restyle(&mut c.old.style);
+                        renumber(&mut c.old.numbering);
+                    }
+                    _ => st.para.fmt_change = None,
+                }
+                match (st.para.num_change.as_ref().and_then(|c| rev_id(c.rev)), st.para.num_change.as_mut()) {
+                    (Some(v), Some(c)) => c.rev = v,
+                    _ => st.para.num_change = None,
+                }
+                match (st.chr.fmt_change.as_ref().and_then(|c| rev_id(c.rev)), st.chr.fmt_change.as_mut()) {
+                    (Some(v), Some(c)) => {
+                        c.rev = v;
+                        restyle(&mut c.old.style);
+                    }
+                    _ => st.chr.fmt_change = None,
+                }
                 Arc::make_mut(&mut self.styles).upsert(st);
             }
         }
-        let rev = u32::try_from(self.revisions.len()).unwrap_or(u32::MAX);
         self.revisions.extend(src.revisions.iter().cloned());
         // Notes and comments get stories (and comments ids) of their own here; their text is
         // relinked below, once every new id is known.
@@ -1225,7 +1275,7 @@ impl Document {
             boxes: &boxes,
             perms: first_perm,
             rev,
-            revs: u32::try_from(src.revisions.len()).unwrap_or(u32::MAX),
+            revs,
             styles: &renamed,
             default_style: default_style.as_deref(),
         };

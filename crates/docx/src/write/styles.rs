@@ -18,6 +18,7 @@ fn file_style_name(name: &str) -> String {
     name.to_string()
 }
 
+/// Serialize a document's style sheet and document defaults to `word/styles.xml`.
 pub(super) fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
     let doc = wr.doc;
     let s = &doc.styles;
@@ -175,11 +176,12 @@ fn style_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style, flagged: &[StyleKind]) 
     w.close("w:style");
 }
 
+/// Write a style's paragraph and run properties, including tracked property changes.
 fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
-    let para_change = st.para_change.as_deref().filter(|ch| ch.old.formatting() != st.para.formatting());
+    let para_change = st.para_change.as_deref().or(st.para.fmt_change.as_deref()).filter(|ch| ch.old.formatting() != st.para.formatting());
     if (!st.para.is_empty() || para_change.is_some()) && st.kind != StyleKind::Character {
         w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
+        props::ppr_inner_style(w, &st.para, false, None, st.numbering_from_base);
         if let Some(ch) = para_change {
             let a = wr.change_attrs(ch.rev);
             open_change(w, "w:pPrChange", &a);
@@ -190,7 +192,7 @@ fn style_property_xml(wr: &mut Writer<'_>, w: &mut W, st: &Style) {
         }
         w.close("w:pPr");
     }
-    let run_change = st.chr_change.as_deref().filter(|ch| ch.old.formatting() != st.chr.formatting());
+    let run_change = st.chr_change.as_deref().or(st.chr.fmt_change.as_deref()).filter(|ch| ch.old.formatting() != st.chr.formatting());
     if (props::has_rpr(&st.chr) || run_change.is_some()) && st.kind != StyleKind::Numbering {
         w.open("w:rPr", &[]);
         props::rpr_inner(w, &st.chr);

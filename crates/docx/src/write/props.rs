@@ -1,5 +1,6 @@
 //! Property writers, in ECMA-376 schema element order.
 
+use wordcraft_doc::Document;
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CellProps, CharProps, EastAsianLayout, HeightRule, Highlight, LineSpacing, ParaProps, RowProps, TabAlign,
     TabLeader, TableFloat, TableLook, TableProps, TextColor, VAlign, VMerge, VertAlign,
@@ -168,6 +169,29 @@ pub fn has_rpr(c: &CharProps) -> bool {
 /// Attributes of a tracked change element: `w:id`, `w:author`, `w:date`.
 pub type ChangeAttrs = Vec<(&'static str, String)>;
 
+/// Format `w:id`, `w:author`, and `w:date` of a tracked change by revision `idx`.
+///
+/// Increments and uses `next_rev_id` as the XML `w:id` attribute identifier, distinct from `idx`
+/// which indexes `doc.revisions` to look up author and timestamp metadata.
+pub fn rev_attrs(doc: &Document, next_rev_id: &mut u32, idx: u32) -> (String, String, String) {
+    *next_rev_id += 1;
+    let r = doc.revisions.get(idx as usize);
+    let author = crate::write::annotation_author(doc, r.map_or("", |r| r.author.as_str())).to_string();
+    // Remove date and time (§17.15.1.69): tracked changes are saved without `w:date`.
+    let date = if doc.settings.remove_date_time { String::new() } else { r.map(|r| r.date.clone()).unwrap_or_default() };
+    (next_rev_id.to_string(), author, date)
+}
+
+/// Format tracked change attributes `w:id`, `w:author`, and optionally `w:date` for revision `idx`.
+pub fn change_attrs(doc: &Document, next_rev_id: &mut u32, idx: u32) -> ChangeAttrs {
+    let (id, author, date) = rev_attrs(doc, next_rev_id, idx);
+    let mut a = vec![("w:id", id), ("w:author", author)];
+    if !date.is_empty() {
+        a.push(("w:date", date));
+    }
+    a
+}
+
 /// Open a tracked change element (`w:rPrChange`, `w:pPrChange`, `w:tblPrChange`…).
 pub fn open_change(w: &mut W, tag: &str, a: &ChangeAttrs) {
     let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -253,6 +277,17 @@ pub fn borders(w: &mut W, tag: &str, b: &Borders, inner: Option<&str>, extra: &[
 /// `w:pPr` content (without the wrapper); `num_change` are the attributes of a tracked list
 /// numbering change (`w:numberingChange`, written in `w:numPr`).
 pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>) {
+    ppr_inner_with(w, p, framed, num_change, false);
+}
+
+/// `w:pPr` content for a style definition. `inherit_numbering` omits `w:numId`, keeping only
+/// `w:ilvl`, so reloading restores the list from the style's based-on chain.
+pub fn ppr_inner_style(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>, inherit_numbering: bool) {
+    ppr_inner_with(w, p, framed, num_change, inherit_numbering);
+}
+
+/// Write inner `w:pPr` elements, optionally omitting `w:numId` if numbering is inherited from base.
+fn ppr_inner_with(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&ChangeAttrs>, inherit_numbering: bool) {
     if let Some(s) = &p.style {
         w.val("w:pStyle", s);
     }
@@ -264,7 +299,9 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     if let Some(nr) = p.numbering {
         w.open("w:numPr", &[]);
         w.val("w:ilvl", &n(nr.level.min(8) as i64));
-        w.val("w:numId", &n(nr.num as i64));
+        if !inherit_numbering {
+            w.val("w:numId", &n(nr.num as i64));
+        }
         if let Some(a) = num_change {
             let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
             w.empty("w:numberingChange", &refs);

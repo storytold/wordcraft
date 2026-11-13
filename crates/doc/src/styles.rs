@@ -57,6 +57,15 @@ pub struct Style {
     /// the default character, table and list styles something other than the English ids.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub default: bool,
+    /// The style's list came from a based-on style's level-only numbering at read time; rejecting
+    /// a change in that style recomputes it. Native JSON keeps it; DOCX writes the style with
+    /// level-only numbering, and the reader derives it again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub numbering_from_base: bool,
+    /// The old side of the style's paragraph change named only a level; rejecting keeps that
+    /// list inherited from the based-on style, while an explicit old list stays explicit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub old_numbering_from_base: bool,
     /// Table style: conditional formatting for header row, banding etc.
     pub table: Option<TableStyleParts>,
 }
@@ -827,6 +836,7 @@ impl StyleSheet {
         }
         out.para.style = None;
         out.chr.style = None;
+        out.chr.fmt_change = None;
         Some(out)
     }
     /// Add or replace a style.
@@ -974,6 +984,15 @@ fn table_styles() -> Vec<Style> {
 mod tests {
     use super::*;
     use crate::resolve::ResolvedPara;
+
+    #[test]
+    fn inherited_numbering_flag_survives_json() {
+        let st = Style { id: "Mid".into(), numbering_from_base: true, ..Default::default() };
+        let json = serde_json::to_string(&st).unwrap_or_default();
+        assert!(json.contains("\"numberingFromBase\":true"), "{json}");
+        let back: Style = serde_json::from_str(&json).unwrap_or_default();
+        assert!(back.numbering_from_base, "the inheritance flag is persisted in native JSON");
+    }
 
     #[test]
     fn adjust_right_indent_inherits_and_can_be_overridden() {

@@ -136,6 +136,20 @@ pub(crate) fn chain_list(sheet: &wordcraft_doc::styles::StyleSheet, style: &str)
     sheet.chain(style).iter().rev().filter_map(|s| s.para.numbering).map(|n| n.num).find(|n| *n != LEVEL_ONLY)
 }
 
+/// The list a level-only `numPr` referred to before the tracked style changes: the nearest
+/// numbering in `style`'s based-on chain (its own included) that names a list in its pre-change
+/// properties, which is its current numbering when the style has no tracked change. `None` when
+/// no style in the chain had one.
+pub(crate) fn chain_list_before(sheet: &wordcraft_doc::styles::StyleSheet, style: &str) -> Option<u32> {
+    sheet
+        .chain(style)
+        .iter()
+        .rev()
+        .filter_map(|s| s.para.fmt_change.as_ref().map_or(s.para.numbering, |ch| ch.old.numbering))
+        .map(|n| n.num)
+        .find(|n| *n != LEVEL_ONLY)
+}
+
 /// Resolve level-only numbering in `p` against its style chain (`style` when it has none).
 pub(crate) fn resolve_level_only(sheet: &wordcraft_doc::styles::StyleSheet, p: &mut ParaProps, style: &str) {
     if let Some(n) = p.numbering.as_mut().filter(|n| n.num == LEVEL_ONLY) {

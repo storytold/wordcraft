@@ -771,6 +771,54 @@ fn table_style_whole_table_shading_and_margins() {
     assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
 }
 
+/// The `wholeTable` region applies whether or not a style's own tracked formatting change is
+/// rejected: its paragraph and run properties stay in the old values too.
+#[test]
+fn table_style_whole_table_formatting_survives_rejecting_a_style_change() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="table" w:default="1" w:styleId="TableNormal"><w:name w:val="Normal Table"/></w:style>
+ <w:style w:type="table" w:styleId="Whole"><w:name w:val="Whole"/>
+  <w:pPr><w:jc w:val="left"/><w:pPrChange w:id="1" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:pPr><w:jc w:val="right"/></w:pPr></w:pPrChange></w:pPr>
+  <w:rPr><w:i/><w:rPrChange w:id="2" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr>
+  <w:tblStylePr w:type="wholeTable"><w:pPr><w:jc w:val="center"/></w:pPr><w:rPr><w:color w:val="1F4E79"/></w:rPr></w:tblStylePr>
+ </w:style>
+</w:styles>"#
+    );
+    let d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let st = d.styles.get("Whole").expect("Whole style");
+    assert_eq!(st.para.align, Some(Align::Center), "wholeTable wins in the live properties");
+    let pch = st.para.fmt_change.as_ref().expect("pPrChange read");
+    assert_eq!(pch.old.align, Some(Align::Center), "rejecting keeps wholeTable alignment");
+    assert_eq!(st.chr.color, Some(TextColor::Rgb(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79))));
+    let rch = st.chr.fmt_change.as_ref().expect("rPrChange read");
+    assert_eq!(rch.old.color, Some(TextColor::Rgb(wordcraft_doc::Rgb(0x1F, 0x4E, 0x79))), "rejecting keeps wholeTable colour");
+    assert_eq!(rch.old.bold, Some(true), "old values keep their own formatting");
+}
+
+/// A built-in heading's tracked change keeps the implicit outline level in its old snapshot, so
+/// rejecting the change leaves the heading in the Navigation pane and TOC.
+#[test]
+fn builtin_heading_change_old_snapshot_keeps_its_outline_level() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+ <w:style w:type="paragraph" w:styleId="Heading1">
+  <w:name w:val="heading 1"/>
+  <w:basedOn w:val="Normal"/>
+  <w:pPr>
+   <w:pPrChange w:id="1" w:author="Editor" w:date="2026-01-01T00:00:00Z"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange>
+  </w:pPr>
+ </w:style>
+</w:styles>"#
+    );
+    let d = wordcraft_docx::read(&docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let st = d.styles.get("Heading1").expect("Heading1 style");
+    assert_eq!(st.para.outline_level, Some(0), "the built-in heading gets its level");
+    let ch = st.para.fmt_change.as_deref().expect("pPrChange read");
+    assert_eq!(ch.old.outline_level, Some(0), "the old snapshot keeps the built-in level");
+}
+
 fn gallery_ids(styles: &str) -> Vec<String> {
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)]);
     let d = wordcraft_docx::read(&bytes).unwrap();

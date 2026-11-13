@@ -903,3 +903,723 @@ fn inspect_removals_work_when_the_document_does_not_track_changes() {
     assert!(!text.contains("Hidden"), "the hidden text is still there: {text}");
     assert!(text.contains("Visible text."), "{text}");
 }
+
+/// #5841: style definition changes are diffed and tracked as property-change revisions.
+#[test]
+fn compare_style_definition_changes() {
+    let mut original = Document::from_text("Title text\nBody text");
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.chr.size = Some(16.0);
+        h.para.space_after = Some(6.0);
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-style-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Title text\nBody text");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.chr.size = Some(24.0);
+        h.para.space_after = Some(18.0);
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-style-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    // The text didn't change, but Heading1 style definition changed.
+    assert_eq!(r["changes"], 1);
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(h1.chr.size, Some(24.0));
+    let chr_change = h1.chr.fmt_change.as_deref().expect("Heading1 has character format revision");
+    assert_eq!(chr_change.old.size, Some(16.0));
+    assert_eq!(h1.para.space_after, Some(18.0));
+    let para_change = h1.para.fmt_change.as_deref().expect("Heading1 has paragraph format revision");
+    assert_eq!(para_change.old.space_after, Some(6.0));
+
+    // Saving to docx preserves the revisions in styles.xml.
+    let saved_docx = wordcraft_docx::write(&s.doc).unwrap();
+    let read_back = wordcraft_docx::read(&saved_docx).unwrap();
+    let rb_h1 = read_back.styles.get("Heading1").expect("Heading1 in saved docx");
+    assert_eq!(rb_h1.chr.size, Some(24.0));
+    assert_eq!(rb_h1.chr.fmt_change.as_deref().map(|c| c.old.size), Some(Some(16.0)));
+    assert_eq!(rb_h1.para.space_after, Some(18.0));
+    assert_eq!(rb_h1.para.fmt_change.as_deref().map(|c| c.old.space_after), Some(Some(6.0)));
+
+    // Rejecting all changes reverts the style definition to the original properties.
+    let mut rejected_s = Session::new(s.doc.clone());
+    rejected_s.run("review.rejectAll", &json!({})).unwrap();
+    let rej_h1 = rejected_s.doc.styles.get("Heading1").expect("Heading1 after reject");
+    assert_eq!(rej_h1.chr.size, Some(16.0));
+    assert!(rej_h1.chr.fmt_change.is_none());
+    assert_eq!(rej_h1.para.space_after, Some(6.0));
+    assert!(rej_h1.para.fmt_change.is_none());
+
+    // Accepting all changes keeps the revised properties and drops the revision.
+    let mut accepted_s = Session::new(s.doc.clone());
+    accepted_s.run("review.acceptAll", &json!({})).unwrap();
+    let acc_h1 = accepted_s.doc.styles.get("Heading1").expect("Heading1 after accept");
+    assert_eq!(acc_h1.chr.size, Some(24.0));
+    assert!(acc_h1.chr.fmt_change.is_none());
+    assert_eq!(acc_h1.para.space_after, Some(18.0));
+    assert!(acc_h1.para.fmt_change.is_none());
+
+    // With formatting: false, style differences are ignored.
+    let mut no_fmt_s = Session::new(Document::new());
+    let r_no_fmt = no_fmt_s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "formatting": false,
+            }),
+        )
+        .unwrap();
+    assert_eq!(r_no_fmt["changes"], 0);
+    let no_fmt_h1 = no_fmt_s.doc.styles.get("Heading1").expect("Heading1 exists");
+    assert_eq!(no_fmt_h1.chr.size, Some(16.0));
+    assert!(no_fmt_h1.chr.fmt_change.is_none());
+    assert_eq!(no_fmt_h1.para.space_after, Some(6.0));
+    assert!(no_fmt_h1.para.fmt_change.is_none());
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: style comparison imports numbering definitions and remaps style numbering references.
+#[test]
+fn compare_style_numbering_remapped() {
+    let original = Document::from_text("Original text");
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-num-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Original text");
+    let list_id = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: list_id, level: 0 });
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-num-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(r["changes"], 1);
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    let num_ref = h1.para.numbering.expect("Heading1 has numbering");
+    assert_ne!(num_ref.num, 0);
+    // Numbering definition must exist in s.doc.numbering (imported and not dangling)
+    assert!(s.doc.numbering.num(num_ref.num).is_some());
+    assert!(s.doc.numbering.abstract_of(num_ref.num).is_some());
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: a revised style whose list is missing from its own document imports without a numbering
+/// reference instead of binding to this document's unrelated list with that ID.
+#[test]
+fn compare_style_drops_numbering_missing_from_the_revised_document() {
+    let original = Document::from_text("Original text");
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-orphan-num-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Original text");
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "OrphanList".into(),
+        name: "Orphan List".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9999, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-orphan-num-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let _ = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    let st = s.doc.styles.get("OrphanList").expect("OrphanList style imported");
+    assert_eq!(st.para.numbering, None, "a list missing from the revised document is not kept");
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: a revised numbering instance whose abstract definition is missing imports without a
+/// numbering reference, rather than reusing an unrelated abstract with that ID or dangling.
+#[test]
+fn compare_style_drops_numbering_with_missing_abstract() {
+    let original = Document::from_text("Original text");
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-orphan-abs-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Original text");
+    Arc::make_mut(&mut revised.numbering).nums.push(wordcraft_doc::numbering::Num {
+        id: 9999,
+        abstract_id: 8888,
+        start_overrides: Vec::new(),
+        level_overrides: Vec::new(),
+    });
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "OrphanAbstract".into(),
+        name: "Orphan Abstract".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9999, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-orphan-abs-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let _ = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    let st = s.doc.styles.get("OrphanAbstract").expect("OrphanAbstract style imported");
+    assert_eq!(st.para.numbering, None, "an instance without its abstract list is not kept");
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: numbering IDs are document-local. The same numeric ID with a different list definition
+/// is still a style difference, and Accept All/Reject All must switch between the two lists.
+#[test]
+fn compare_style_remaps_same_id_with_different_list_definition() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    let old_abstract = original.numbering.abstract_of(num).cloned().expect("original list definition");
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-same-id-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 });
+    }
+    let new_abstract = revised.numbering.abstract_of(revised_num).cloned().expect("revised list definition");
+    assert_ne!(new_abstract.levels, old_abstract.levels, "the definitions differ");
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-same-id-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(r["changes"], 1, "the differing list is a style change");
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    let imported = h1.para.numbering.expect("style still numbered").num;
+    assert_ne!(imported, num, "the revised list is imported under its own ID");
+    assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_abstract.levels));
+    let ch = h1.para.fmt_change.as_deref().expect("style change recorded");
+    assert_eq!(ch.old.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+
+    let accepted = s.doc.clone();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let rej = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(rej.para.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert_eq!(s.doc.numbering.abstract_of(num).map(|a| &a.levels), Some(&old_abstract.levels));
+
+    let mut acc = Session::new(accepted);
+    acc.run("review.acceptAll", &json!({})).unwrap();
+    let acc_h = acc.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(acc_h.para.numbering, Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }));
+    assert_eq!(acc.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_abstract.levels));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: an unchanged matching style and a revised-only style that share a list keep sharing it
+/// after the import, so their counters stay one sequence.
+#[test]
+fn compare_style_reuses_a_shared_list_for_a_revised_only_style() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-shared-list-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    assert_eq!(revised.numbering.abstract_of(revised_num), original.numbering.abstract_of(num), "same list definition");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 });
+    }
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "RevisedOnly".into(),
+        name: "Revised Only".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-shared-list-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["changes"], 0, "the shared list itself is not a formatting difference");
+
+    let numberings = |doc: &wordcraft_doc::Document| {
+        let h = doc.styles.get("Heading1").and_then(|st| st.para.numbering);
+        let ro = doc.styles.get("RevisedOnly").and_then(|st| st.para.numbering);
+        (h, ro)
+    };
+    let (h1, ro) = numberings(&s.doc);
+    assert_eq!(h1, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert_eq!(ro, Some(wordcraft_doc::props::NumRef { num, level: 0 }), "the revised-only style reuses the shared list");
+    let h1_aid = s.doc.numbering.num(num).expect("shared list exists").abstract_id;
+    let ro_aid = s.doc.numbering.num(num).expect("shared list exists").abstract_id;
+    assert_eq!(h1_aid, ro_aid, "both styles count on one abstract list");
+
+    let accepted = s.doc.clone();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(numberings(&s.doc), numberings(&accepted));
+
+    let mut acc = Session::new(accepted);
+    acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(numberings(&acc.doc), numberings(&s.doc));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: a revised paragraph's direct list reference is imported through the same mapping as
+/// its style, so Accept All keeps one definition and Reject All restores the original one.
+#[test]
+fn compare_remaps_direct_numbering_with_the_style_mapping() {
+    fn numbered(doc: &mut Document, num: u32) {
+        if let Some(b) = doc.body.first_mut()
+            && let Block::Para(p) = &mut *Arc::make_mut(b)
+        {
+            p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        }
+        if let Some(h) = Arc::make_mut(&mut doc.styles).get_mut("Heading1") {
+            h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        }
+    }
+    fn first_numbering(doc: &Document) -> Option<wordcraft_doc::props::NumRef> {
+        match doc.body.first().map(|b| &**b) {
+            Some(Block::Para(p)) => p.props.numbering,
+            _ => None,
+        }
+    }
+
+    let mut original = Document::from_text("Alpha");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    numbered(&mut original, num);
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-direct-num-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Alpha");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    numbered(&mut revised, revised_num);
+    let new_levels = revised.numbering.abstract_of(revised_num).expect("revised list definition").levels.clone();
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-direct-num-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["changes"], 2, "the paragraph and the style both change list");
+
+    let imported = first_numbering(&s.doc).expect("the revised paragraph is numbered").num;
+    assert_ne!(imported, num, "the revised list is imported under its own ID");
+    assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_levels));
+    assert_eq!(
+        s.doc.styles.get("Heading1").and_then(|st| st.para.numbering),
+        Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }),
+        "the style shares the imported list"
+    );
+    let change = s.doc.body.first().and_then(|b| match &**b {
+        Block::Para(p) => p.props.fmt_change.as_deref(),
+        _ => None,
+    });
+    assert_eq!(change.expect("numbering change recorded").old.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+
+    let accepted = s.doc.clone();
+    s.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(first_numbering(&s.doc), Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert_eq!(s.doc.styles.get("Heading1").and_then(|st| st.para.numbering), Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+
+    let mut acc = Session::new(accepted);
+    acc.run("review.acceptAll", &json!({})).unwrap();
+    assert_eq!(first_numbering(&acc.doc), Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }));
+    assert_eq!(acc.doc.styles.get("Heading1").and_then(|st| st.para.numbering), Some(wordcraft_doc::props::NumRef { num: imported, level: 0 }));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: importing into a document whose largest numbering IDs are `u32::MAX` allocates unused
+/// IDs instead of saturating onto an occupied one.
+#[test]
+fn compare_style_import_allocates_free_ids_past_saturation() {
+    let mut original = Document::from_text("Item");
+    let num = 1;
+    {
+        let numbering = Arc::make_mut(&mut original.numbering);
+        numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id: 0, ..Default::default() });
+        numbering.abstracts.push(wordcraft_doc::numbering::AbstractNum { id: u32::MAX, ..Default::default() });
+        // List 1 and the maximum list both name abstract 1, which this document does not define:
+        // its ID must still be reserved when an imported definition is allocated.
+        for id in [num, u32::MAX] {
+            numbering.nums.push(wordcraft_doc::numbering::Num { id, abstract_id: 1, start_overrides: Vec::new(), level_overrides: Vec::new() });
+        }
+    }
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-free-id-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    assert_eq!(revised_num, num, "both documents use the same numeric ID");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.para.numbering = Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 });
+    }
+    let new_levels = revised.numbering.abstract_of(revised_num).expect("revised list definition").levels.clone();
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-free-id-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["changes"], 1, "the differing list is a style change");
+
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    let imported = h1.para.numbering.expect("style still numbered").num;
+    assert_ne!(imported, u32::MAX, "the imported instance must not reuse the occupied maximum ID");
+    assert_eq!(s.doc.numbering.nums.iter().filter(|n| n.id == imported).count(), 1, "the imported instance ID is unique");
+    let aid = s.doc.numbering.num(imported).expect("imported list exists").abstract_id;
+    assert_ne!(aid, u32::MAX, "the imported abstract must not reuse the occupied maximum ID");
+    assert_ne!(aid, 1, "the imported abstract must not reuse an ID an existing list references");
+    assert_eq!(s.doc.numbering.abstracts.iter().filter(|a| a.id == aid).count(), 1, "the imported abstract ID is unique");
+    assert!(s.doc.numbering.abstract_of(num).is_none(), "the original list still has no definition of its own");
+    assert_eq!(s.doc.numbering.abstract_of(imported).map(|a| &a.levels), Some(&new_levels));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: carried-forward fmt_change markers do not increment the change count when formatting is identical.
+#[test]
+fn compare_style_carried_forward_fmt_change_no_extra_count() {
+    let mut original = Document::from_text("Same text");
+    // Simulate original style already carrying a fmt_change
+    original.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "PriorAuthor".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.chr.size = Some(20.0);
+        h.chr.fmt_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::props::CharProps { size: Some(16.0), ..Default::default() });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-carried-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    // Revised document has the exact same style formatting (size 20.0) without revisions
+    let mut revised = Document::from_text("Same text");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.chr.size = Some(20.0);
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-carried-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    // No formatting difference between original and revised for Heading1, so changes must be 0
+    assert_eq!(r["changes"], 0);
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(h1.chr.size, Some(20.0));
+    // Carried-forward revision marker is preserved
+    assert!(h1.chr.fmt_change.is_some());
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: a style change the same author already made keeps the formatting from before their first
+/// change, so rejecting the comparison restores that rather than the original's current formatting.
+#[test]
+fn compare_style_same_author_keeps_the_first_old_value() {
+    let mut original = Document::from_text("Same text");
+    original.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Reviewer".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    });
+    if let Some(h) = Arc::make_mut(&mut original.styles).get_mut("Heading1") {
+        h.chr.size = Some(20.0);
+        h.chr.fmt_change = wordcraft_doc::props::PropChange::boxed(0, wordcraft_doc::props::CharProps { size: Some(16.0), ..Default::default() });
+    }
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-own-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Same text");
+    if let Some(h) = Arc::make_mut(&mut revised.styles).get_mut("Heading1") {
+        h.chr.size = Some(18.0);
+    }
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-own-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let r = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+
+    assert_eq!(r["changes"], 1);
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(h1.chr.size, Some(18.0));
+    let ch = h1.chr.fmt_change.as_deref().expect("Heading1 change recorded");
+    assert_eq!(ch.old.size, Some(16.0), "keeps the value before the author's first change");
+    assert_eq!(ch.rev, 0, "reuses the author's existing revision");
+    assert_eq!(s.doc.revisions[ch.rev as usize].author, "Reviewer");
+
+    let mut rejected = Session::new(s.doc.clone());
+    rejected.run("review.rejectAll", &json!({})).unwrap();
+    assert_eq!(rejected.doc.styles.get("Heading1").unwrap().chr.size, Some(16.0));
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
+
+/// #5841: comparing against plain text input skips style synchronization to keep customized styles intact.
+#[test]
+fn compare_text_preserves_customized_styles() {
+    let mut s = Session::new(Document::from_text("Original text"));
+    if let Some(h) = Arc::make_mut(&mut s.doc.styles).get_mut("Heading1") {
+        h.chr.size = Some(28.0);
+        h.para.space_after = Some(14.0);
+    }
+    let _ = s
+        .run(
+            "review.compare",
+            &json!({
+                "text": "Revised text",
+                "formatting": true,
+            }),
+        )
+        .unwrap();
+
+    let h1 = s.doc.styles.get("Heading1").expect("Heading1 style exists");
+    assert_eq!(h1.chr.size, Some(28.0));
+    assert_eq!(h1.para.space_after, Some(14.0));
+    assert!(h1.chr.fmt_change.is_none());
+    assert!(h1.para.fmt_change.is_none());
+}
+
+/// #5841: a compare-recorded style change carries the provenance of the old side it recorded,
+/// not a stale flag from the revised style.
+#[test]
+fn compare_style_records_old_numbering_provenance() {
+    let old = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 7, level: 0 }), ..Default::default() },
+        numbering_from_base: false,
+        old_numbering_from_base: true,
+        ..Default::default()
+    };
+    let mut new = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9, level: 0 }), ..Default::default() },
+        numbering_from_base: true,
+        old_numbering_from_base: true,
+        ..Default::default()
+    };
+    let mut revisions = Vec::new();
+    let changed = crate::cmd::fmt_revisions::compare_style(&old, &mut new, &[], &mut revisions, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(changed);
+    assert_eq!(new.para.fmt_change.as_deref().expect("change recorded").old.numbering, Some(wordcraft_doc::props::NumRef { num: 7, level: 0 }));
+    assert!(!new.old_numbering_from_base, "the old side is the original's explicit current list");
+
+    let old = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps {
+            numbering: Some(wordcraft_doc::props::NumRef { num: 7, level: 0 }),
+            fmt_change: wordcraft_doc::props::PropChange::boxed(
+                0,
+                wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 5, level: 0 }), ..Default::default() },
+            ),
+            ..Default::default()
+        },
+        numbering_from_base: true,
+        old_numbering_from_base: false,
+        ..Default::default()
+    };
+    let before = vec![wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Reviewer".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    }];
+    let mut revisions = before.clone();
+    let mut new = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9, level: 0 }), ..Default::default() },
+        numbering_from_base: true,
+        old_numbering_from_base: true,
+        ..Default::default()
+    };
+    let changed = crate::cmd::fmt_revisions::compare_style(&old, &mut new, &before, &mut revisions, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(changed);
+    assert_eq!(new.para.fmt_change.as_deref().expect("change kept").old.numbering, Some(wordcraft_doc::props::NumRef { num: 5, level: 0 }));
+    assert!(!new.old_numbering_from_base, "the earlier change's old side was explicit");
+}
+
+/// #5841: compare records the original current list as the old side of a style change, and
+/// rejecting it writes that list explicitly rather than as inherited.
+#[test]
+fn compare_style_rejected_change_keeps_the_original_list_explicit() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    Arc::make_mut(&mut original.styles).styles.push(wordcraft_doc::Style {
+        id: "Child".into(),
+        name: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-old-prov-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "Child".into(),
+        name: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 }), ..Default::default() },
+        numbering_from_base: true,
+        old_numbering_from_base: true,
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-old-prov-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let _ = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    let child = s.doc.styles.get("Child").expect("Child style");
+    assert!(!child.old_numbering_from_base, "the recorded old side is the original's current list");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let child = s.doc.styles.get("Child").expect("Child style after reject");
+    assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert!(!child.numbering_from_base);
+
+    let reloaded = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).expect("reload");
+    let child = reloaded.styles.get("Child").expect("Child style after reload");
+    assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert!(!child.numbering_from_base);
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}
