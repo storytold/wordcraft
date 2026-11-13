@@ -5630,6 +5630,11 @@ fn paste_content_uses_session_clipboard_when_html_and_rtf_match_without_text() {
         assert_eq!(frag.parts.len(), 1, "session text box parts preserved with empty text");
         assert_eq!(frag.plain_text(), "Internal text box");
     }
+
+    let avail = crate::cmd::paste::available(&s, &json!({"text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(avail.contains(&"formatted"), "formatted format is available for pasteSpecial when text is empty but rich formats match");
+    let paste_special_res = s.run("edit.pasteSpecial", &json!({"as": "formatted", "text": "", "html": my_html, "rtf": my_rtf}));
+    assert!(paste_special_res.is_ok(), "pasteSpecial as formatted succeeds with empty text and matching rich formats");
 }
 
 /// Pasting external RTF when HTML matches WordCraft's session clipboard does not return the old

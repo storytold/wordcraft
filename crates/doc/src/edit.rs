@@ -26,6 +26,27 @@ pub struct Fragment {
 }
 
 impl Fragment {
+    /// Text box story IDs referenced by the fragment's objects in document order, falling
+    /// back to the parts map's keys if no inline objects reference them.
+    fn text_box_ids(&self) -> Vec<u32> {
+        let mut ids = Vec::new();
+        for b in &self.blocks {
+            each_para(b, 0, &mut |p| {
+                for o in &p.objects {
+                    for id in o.text_boxes() {
+                        if self.parts.get(&id).is_some_and(|part| part.kind == crate::PartKind::TextBox) {
+                            ids.push(id);
+                        }
+                    }
+                }
+            });
+        }
+        if ids.is_empty() {
+            ids.extend(self.parts.iter().filter(|(_, p)| p.kind == crate::PartKind::TextBox).map(|(id, _)| *id));
+        }
+        ids
+    }
+
     /// The plain text representation of the fragment's body, falling back to text box part stories
     /// when the body text has no real text (empty or only whitespace/object markers).
     pub fn plain_text(&self) -> String {
@@ -33,13 +54,8 @@ impl Fragment {
         let text = d.plain_text(crate::StoryRef::Body);
         let has_body_text = text.chars().any(|c| !c.is_whitespace() && c != OBJ);
         if !has_body_text && !self.parts.is_empty() {
-            let parts: Vec<String> = self
-                .parts
-                .iter()
-                .filter(|(_, p)| p.kind == crate::PartKind::TextBox)
-                .map(|(id, _)| d.plain_text(crate::StoryRef::Part(*id)))
-                .filter(|s| !s.is_empty())
-                .collect();
+            let parts: Vec<String> =
+                self.text_box_ids().into_iter().map(|id| d.plain_text(crate::StoryRef::Part(id))).filter(|s| !s.is_empty()).collect();
             if !parts.is_empty() {
                 return parts.join("\n");
             }
@@ -91,13 +107,8 @@ impl Fragment {
         let text = d.shown_text(crate::StoryRef::Body);
         let has_body_text = text.chars().any(|c| !c.is_whitespace() && c != OBJ);
         if !has_body_text && !self.parts.is_empty() {
-            let parts: Vec<String> = self
-                .parts
-                .iter()
-                .filter(|(_, p)| p.kind == crate::PartKind::TextBox)
-                .map(|(id, _)| d.shown_text(crate::StoryRef::Part(*id)))
-                .filter(|s| !s.is_empty())
-                .collect();
+            let parts: Vec<String> =
+                self.text_box_ids().into_iter().map(|id| d.shown_text(crate::StoryRef::Part(id))).filter(|s| !s.is_empty()).collect();
             if !parts.is_empty() {
                 return parts.join("\n");
             }

@@ -67,18 +67,30 @@ fn owns_clipboard(v: &Value) -> bool {
     p::bool(v, "privateClipboard").unwrap_or(true)
 }
 
+/// Whether the clipboard payload matches WordCraft's session clipboard copy, so the session's
+/// formatted fragment can be used.
+pub(crate) fn matches_session_clipboard(s: &Session, v: &Value) -> bool {
+    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
+    let html = p::str(v, "html");
+    let rtf = p::str(v, "rtf");
+    let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
+    let html_matches = html.is_none_or(|h| h == s.clipboard_html);
+    let rtf_matches = rtf.is_none_or(|r| r == s.clipboard_rtf);
+
+    owns_clipboard(v)
+        && s.clipboard.as_ref().is_some_and(|f| {
+            text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
+                && html_matches
+                && rtf_matches
+                && (text.is_some() || has_rich || (html.is_none() && rtf.is_none()))
+        })
+}
+
 /// The source for a format, if the clipboard has it.
 fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
-        "formatted" if owns_clipboard(v) => {
-            let f = s.clipboard.as_ref()?;
-            // System clipboard text that isn't our own copy means someone else copied since.
-            match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
-                _ => Some(String::new()),
-            }
-        }
+        "formatted" if matches_session_clipboard(s, v) => Some(String::new()),
         "formatted" => None,
         "rtf" => p::str(v, "rtf").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_rtf(t))).and_then(non_empty),
         "html" => p::str(v, "html").map(str::to_string).or_else(|| clip_text(s, v).filter(|t| looks_like_html(t))).and_then(non_empty),
@@ -283,25 +295,15 @@ pub enum Pasted {
 /// that knows another program owns the clipboard passes `privateClipboard: false`, which keeps
 /// the fragment out even when the text matches.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
-    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
-    let html = p::str(v, "html");
-    let rtf = p::str(v, "rtf");
-    let has_rich = html.is_some_and(|h| !h.is_empty()) || rtf.is_some_and(|r| !r.is_empty());
-    let html_matches = html.is_none_or(|h| h == s.clipboard_html);
-    let rtf_matches = rtf.is_none_or(|r| r == s.clipboard_rtf);
-
-    if owns_clipboard(v)
+    if matches_session_clipboard(s, v)
         && let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t || (t.is_empty() && has_rich))
-        && html_matches
-        && rtf_matches
-        && (text.is_some() || has_rich || (html.is_none() && rtf.is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));
     }
     if let Some(f) = rich_fragment(s, v) {
         return Ok(Pasted::Fragment(f));
     }
+    let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     match text {
         Some(t) if !t.is_empty() => Ok(Pasted::Text(t)),
         _ => Err(CmdError::Failed("the clipboard is empty".into())),
