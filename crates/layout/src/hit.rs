@@ -142,7 +142,7 @@ fn all_objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '
 
 fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
     items.iter().rev().filter_map(move |it| match it {
-        Placed::Object { rect, spin, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
+        Placed::Object { rect, spin, story, path, off, text_box, wrap, origin, .. } => Some(ObjectHit {
             page: index,
             rect: *rect,
             spin: *spin,
@@ -155,6 +155,35 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
             member: None,
         }),
         _ => None,
+    })
+}
+
+/// A text box inside a group, on the page: the group's place (`story`, `path`, `off`), the box's
+/// upright page frame and the story it shows.
+struct GroupBox<'a> {
+    story: StoryRef,
+    path: &'a Path,
+    off: usize,
+    rect: Rect,
+    part: u32,
+}
+
+/// The text boxes of the groups among `items`, topmost first (as [`objects_in`]).
+fn group_boxes_in(items: &[Placed]) -> impl Iterator<Item = GroupBox<'_>> + '_ {
+    items.iter().rev().flat_map(|it| {
+        let boxes = match it {
+            Placed::Object { rect, story, path, off, group_boxes, .. } => Some((rect, story, path, off, group_boxes)),
+            _ => None,
+        };
+        boxes.into_iter().flat_map(|(rect, story, path, off, group_boxes)| {
+            group_boxes.iter().rev().map(move |(r, part)| GroupBox {
+                story: *story,
+                path,
+                off: *off,
+                rect: Rect::new(rect.x + r.x, rect.y + r.y, r.w, r.h),
+                part: *part,
+            })
+        })
     })
 }
 
@@ -437,8 +466,24 @@ impl DocLayout {
     /// body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
+        // A group's text boxes count as text boxes too (#6027).
+        // Topmost first, a text box on its own or one in a group alike (a group's last member is painted on top).
         let text_box = |behind: bool| {
-            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(o.unspin(x, y))).and_then(|o| o.text_box)
+            p.items.iter().rev().find_map(|it| {
+                let Placed::Object { rect, spin, text_box, wrap, group_boxes, .. } = it else { return None };
+                if (*wrap == Wrap::BehindText) != behind {
+                    return None;
+                }
+                let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                let (ux, uy) = spin.unapply(centre.x, centre.y, x, y);
+                text_box.filter(|_| rect.contains(Point::new(ux, uy))).or_else(|| {
+                    group_boxes
+                        .iter()
+                        .rev()
+                        .find(|(r, _)| Rect::new(rect.x + r.x, rect.y + r.y, r.w, r.h).contains(Point::new(x, y)))
+                        .map(|(_, id)| *id)
+                })
+            })
         };
         text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
     }
@@ -472,12 +517,23 @@ impl DocLayout {
         // (a form scanned as a picture, with text boxes laid over it to fill in). The same holds
         // among the objects behind the text.
         let inside_text_box = |o: &ObjectHit| o.text_box.is_some() && !grabs(o) && o.rect.contains(o.unspin(x, y));
+        // Inside one of a group's text boxes (off its border) is that box's text too (#6027).
+        let in_group_box = |o: &ObjectHit| {
+            let items: [&[Placed]; 3] = [&p.items, &p.header, &p.footer];
+            items.into_iter().flat_map(group_boxes_in).any(|b| {
+                b.story == o.story
+                    && *b.path == o.path
+                    && b.off == o.off
+                    && b.rect.w.min(b.rect.h) > edge * 3.0
+                    && b.rect.expand(-edge).contains(Point::new(x, y))
+            })
+        };
         let topmost = |behind: bool| cands.iter().find(|o| o.behind() == behind && (grabs(o) || inside_text_box(o)));
         match topmost(false) {
-            Some(o) if inside_text_box(o) => None,
+            Some(o) if inside_text_box(o) || in_group_box(o) => None,
             Some(o) => Some(o.clone()),
             None if text_here => None,
-            None => topmost(true).filter(|o| !inside_text_box(o)).cloned(),
+            None => topmost(true).filter(|o| !inside_text_box(o) && !in_group_box(o)).cloned(),
         }
     }
 
@@ -488,6 +544,7 @@ impl DocLayout {
             .chain(objects_in(&p.footer, page))
             .find(|o| o.text_box.is_some() && o.rect.contains(Point::new(x, y)))
             .and_then(|o| o.text_box)
+            .or_else(|| group_boxes_in(&p.header).chain(group_boxes_in(&p.footer)).find(|b| b.rect.contains(Point::new(x, y))).map(|b| b.part))
     }
 
     /// Where the object at `pos` (its U+FFFC) is laid out.
@@ -514,6 +571,18 @@ impl DocLayout {
     /// Where the text box showing story `part` is laid out.
     pub fn text_box(&self, part: u32, page_hint: usize) -> Option<ObjectHit> {
         self.find_object(page_hint, |o| o.text_box == Some(part))
+    }
+
+    /// The story the text box showing `part` sits in (where the box or its group is).
+    pub fn text_box_story(&self, part: u32, page_hint: usize) -> Option<StoryRef> {
+        self.text_box(part, page_hint).map(|o| o.story).or_else(|| {
+            let on = |i: usize| {
+                let p = self.pages.get(i)?;
+                let items: [&[Placed]; 3] = [&p.items, &p.header, &p.footer];
+                items.into_iter().flat_map(group_boxes_in).find(|b| b.part == part).map(|b| b.story)
+            };
+            on(page_hint).or_else(|| (0..self.pages.len()).filter(|i| *i != page_hint).find_map(on))
+        })
     }
 
     /// The first object matching `f`, looking on `page_hint` first (where the caret is: one page
@@ -1018,6 +1087,7 @@ mod object_index_tests {
             text_box: None,
             wrap: Wrap::InFrontOfText,
             origin: Point::new(5.0, 6.0),
+            group_boxes: Vec::new(),
         };
         let layout = DocLayout {
             pages: vec![

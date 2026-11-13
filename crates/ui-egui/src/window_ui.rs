@@ -185,6 +185,8 @@ impl WordApp {
             synthetic: _,
             synthetic_pending: _,
             synthetic_injected: _,
+            raw_scroll_events_scaled: _,
+            last_scaled_scroll_events: _,
             // The current command's origin, set and cleared around it.
             ime_origin: _,
             styled: _,
@@ -260,6 +262,7 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            clipboard_published: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while
@@ -268,6 +271,9 @@ impl WordApp {
             quick_access_toolbar: _,
             recent: _,
             recent_symbols: _,
+            date_time_format: _,
+            date_time_language: _,
+            date_time_update: _,
             recent_colors: _,
             recent_fonts: _,
             theme: _,
@@ -278,6 +284,8 @@ impl WordApp {
             nav_tab: _,
             display_server: _,
             status_count: _,
+            scroll_speed: _,
+            touchpad_scroll_speed: _,
             nav_pane: _,
             show_discord: _,
             author: _,
