@@ -215,7 +215,8 @@ pub(super) fn table_layout(app: &mut WordApp, ui: &mut Ui) {
         crate::widgets::big_toggle(ui, app, "drawTable", "Draw\nTable", "table.draw", tool == Some(TableTool::Draw));
         crate::widgets::big_toggle(ui, app, "eraser", "Eraser", "table.eraser", tool == Some(TableTool::Erase));
     });
-    group(ui, "Rows & Columns", None, app, |ui, app| {
+    // The launcher opens Insert Cells, as in Word.
+    group(ui, "Rows & Columns", Some("table.insertCells"), app, |ui, app| {
         menu_button(
             ui,
             app,

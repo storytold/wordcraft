@@ -3366,6 +3366,23 @@ fn the_context_menu_in_a_table_follows_the_selection() {
     assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()));
 }
 
+/// #6330: the table menu's Insert › Insert Cells… and Delete › Delete Cells open Word's
+/// dialogs instead of changing the table at once.
+#[test]
+fn the_table_menu_opens_insert_cells_and_delete_cells() {
+    let mut h = table_window();
+    let b = cell(&mut h, 1, 2);
+    let at = screen(&mut h, b.x + b.w / 2.0, b.y + b.h / 2.0);
+    for (path, name) in [(["Insert", "Insert Cells…"], "insertCells"), (["Delete", "Delete Cells"], "deleteCells")] {
+        let before = h.state().session.doc.clone();
+        right_click(&mut h, at);
+        pick(&mut h, &path);
+        assert!(matches!(&h.state().dialog, Some(crate::dialogs::Dialog::Layout(d)) if d.name() == name), "{name}: {:?}", h.state().dialog);
+        assert!(h.state().session.doc == before, "{name}: the table changed before OK");
+        h.state_mut().dialog = None;
+    }
+}
+
 /// #1230: right-clicking a picture offers Insert Caption…, as in Word. For a picture in a
 /// table cell the dialog proposes a Figure caption (not Table), and the caption goes under
 /// the picture in that cell.

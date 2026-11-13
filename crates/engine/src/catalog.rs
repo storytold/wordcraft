@@ -388,6 +388,7 @@ Table Layout|Rows & Columns|Insert Above|table.insertRowAbove
 Table Layout|Rows & Columns|Insert Below|table.insertRowBelow
 Table Layout|Rows & Columns|Insert Left|table.insertColumnLeft
 Table Layout|Rows & Columns|Insert Right|table.insertColumnRight
+Table Layout|Rows & Columns|Insert Cells|table.insertCells
 Table Layout|Merge|Merge Cells|table.merge
 Table Layout|Merge|Split Cells|table.split
 Table Layout|Merge|Split Table|table.splitTable

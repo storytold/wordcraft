@@ -594,7 +594,7 @@ fn move_left_edge(t: &mut Table, by: f32) -> bool {
 /// widths, left to right; the other rows keep their cells' borders where they are drawn (the
 /// grid lines at `cols`). The grid gets a line wherever a row has a cell border, and each cell
 /// spans the columns between its own.
-fn regrid(t: &mut Table, cols: &[f32], rows: &[(usize, Vec<f32>)]) -> Result<(), CmdError> {
+pub(in crate::cmd) fn regrid(t: &mut Table, cols: &[f32], rows: &[(usize, Vec<f32>)]) -> Result<(), CmdError> {
     let left = cols.first().copied().unwrap_or(0.0);
     let last = cols.len().saturating_sub(1);
     // Every row's cell borders, measured from the table's left edge.

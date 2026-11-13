@@ -278,6 +278,63 @@ pub(super) fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsF
 }
 
 // ---------------------------------------------------------------------------------------------
+// Insert Cells and Delete Cells
+
+/// The Insert Cells dialog (`insert`, from Table Layout › Rows & Columns' launcher and the table
+/// menu's Insert) or the Delete Cells dialog (Delete › Delete Cells…), as in Word (#6330): one of
+/// four ways, `shift`, for the selected cells or the caret's. Insert starts on Shift cells down,
+/// Delete on Shift cells left.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShiftCellsForm {
+    pub insert: bool,
+    pub shift: &'static str,
+}
+
+impl ShiftCellsForm {
+    /// The dialog for the caret's table; none outside a table.
+    pub fn read(app: &WordApp, insert: bool) -> Option<ShiftCellsForm> {
+        app.session.sel.focus.path.cell()?;
+        Some(ShiftCellsForm { insert, shift: if insert { "down" } else { "left" } })
+    }
+
+    pub fn name(&self) -> &'static str {
+        if self.insert { "insertCells" } else { "deleteCells" }
+    }
+
+    /// The window title (English; the caller translates it).
+    pub fn title(&self) -> &'static str {
+        if self.insert { "Insert Cells" } else { "Delete Cells" }
+    }
+
+    /// The options in Word's order: the `shift` value and its label.
+    pub fn options(&self) -> [(&'static str, &'static str); 4] {
+        if self.insert {
+            [("right", "Shift cells right"), ("down", "Shift cells down"), ("row", "Insert entire row"), ("column", "Insert entire column")]
+        } else {
+            [("left", "Shift cells left"), ("up", "Shift cells up"), ("row", "Delete entire row"), ("column", "Delete entire column")]
+        }
+    }
+
+    /// The command OK runs and its parameters.
+    pub fn command(&self) -> (&'static str, Value) {
+        (if self.insert { "table.insertCells" } else { "table.deleteCells" }, json!({"shift": self.shift}))
+    }
+}
+
+pub(super) fn shift_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ShiftCellsForm) -> bool {
+    for (value, label) in f.options() {
+        ui.radio_value(&mut f.shift, value, tl!(label));
+    }
+    let (ok, cancel) = buttons(ui, "OK", true);
+    if ok {
+        let (id, params) = f.command();
+        return run(app, id, params);
+    }
+    cancel
+}
+
+// ---------------------------------------------------------------------------------------------
 // Convert Text to Table
 
 /// The Convert Text to Table dialog's fields: the selected paragraphs (`lines`), where to
