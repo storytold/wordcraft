@@ -305,9 +305,11 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
 /// The Text Pane button on the left edge of the selected graphic's frame, as in Word, while
 /// the pane is closed.
 pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, clip: Rect) {
-    // The pane goes with the graphic: it opens again only on request.
+    // The pane and the picked item go with the graphic: the pane opens again only on request.
     if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_none() {
         app.session.view.smart_art_pane = false;
+        app.smart_art_item = None;
+        app.smart_art_typing = None;
         return;
     }
     if app.session.view.smart_art_pane {
@@ -332,6 +334,104 @@ pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_l
     });
 }
 
+/// The item of the selected SmartArt graphic whose shape is under screen point `at`.
+fn item_under(app: &WordApp, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, at: egui::Pos2) -> Option<usize> {
+    let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session)?;
+    let (hit, _) = crate::objects::active(app, layout)?;
+    let frame = crate::frame::to_screen(*pages.get(hit.page)?, scale, hit.rect);
+    if !(frame.width() > 0.0 && frame.height() > 0.0) {
+        return None;
+    }
+    // Into the graphic's own points: turned back and unflipped.
+    let p = crate::frame::turn(at, frame.center(), -hit.spin.deg);
+    let (mut u, mut v) = ((p.x - frame.min.x) / frame.width(), (p.y - frame.min.y) / frame.height());
+    if hit.spin.flip_h {
+        u = 1.0 - u;
+    }
+    if hit.spin.flip_v {
+        v = 1.0 - v;
+    }
+    wordcraft_engine::cmd::smart_art::item_at_point(&g, hit.rect.w, hit.rect.h, u * hit.rect.w, v * hit.rect.h)
+}
+
+/// The picked item belongs to one graphic: when another is selected (from the keyboard, the
+/// Selection Pane, an undo), it is forgotten, so typing, Backspace and the outline never use its
+/// index in the other graphic.
+pub fn follow_selection(app: &mut WordApp) {
+    let owner = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).and(crate::objects::selected(app)).map(|(p, _)| p);
+    if owner != app.smart_art_owner {
+        app.smart_art_item = None;
+        app.smart_art_typing = None;
+        app.smart_art_owner = owner;
+    }
+}
+
+/// A click on the selected SmartArt graphic picks the item whose shape is under the pointer (none
+/// on its background), as clicking a shape in Word does: typing then goes into that item.
+pub fn pick_item(app: &mut WordApp, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32, at: egui::Pos2) {
+    follow_selection(app);
+    if wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_none() {
+        return;
+    }
+    let item = item_under(app, layout, pages, scale, at);
+    if item != app.smart_art_item {
+        app.smart_art_typing = None;
+    }
+    app.smart_art_item = item;
+}
+
+/// The picked item's shape, outlined inside the selected graphic's frame.
+pub fn paint_item(app: &WordApp, painter: &Painter, t: &Tokens, layout: &wordcraft_layout::DocLayout, pages: &[Rect], scale: f32) {
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return };
+    let Some(i) = app.smart_art_item else { return };
+    let Some((hit, _)) = crate::objects::active(app, layout) else { return };
+    let Some(page) = pages.get(hit.page) else { return };
+    let Some([x, y, w, h]) = wordcraft_engine::cmd::smart_art::item_box(&g, hit.rect.w, hit.rect.h, i) else { return };
+    let frame = crate::frame::to_screen(*page, scale, hit.rect);
+    let corner = |u: f32, v: f32| {
+        let u = if hit.spin.flip_h { hit.rect.w - u } else { u };
+        let v = if hit.spin.flip_v { hit.rect.h - v } else { v };
+        crate::frame::turn(pos2(frame.min.x + u * scale, frame.min.y + v * scale), frame.center(), hit.spin.deg)
+    };
+    let pts = vec![corner(x, y), corner(x + w, y), corner(x + w, y + h), corner(x, y + h)];
+    painter.add(egui::Shape::closed_line(pts, Stroke::new(1.25, t.accent)));
+}
+
+/// With an item of the selected graphic picked (clicked, or typed in): Backspace erases its last
+/// character, since typing goes at its end, and Escape goes back to the whole graphic (Delete
+/// still removes the graphic). False for other keys, or when no item is picked.
+pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
+    if !m.is_none() || !matches!(key, egui::Key::Backspace | egui::Key::Escape) {
+        return false;
+    }
+    follow_selection(app);
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return false };
+    let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()) else { return false };
+    if key == egui::Key::Escape {
+        app.smart_art_item = None;
+        app.smart_art_typing = None;
+        return true;
+    }
+    let mut text = g.items.get(i).map_or(String::new(), |it| it.text.clone());
+    if text.is_empty() {
+        return true;
+    }
+    // As in body text: a whole grapheme (an emoji sequence, a letter with its combining marks),
+    // or one character in the scripts whose Backspace removes a sign at a time.
+    let from = match text.chars().next_back() {
+        Some(c) if wordcraft_doc::cluster::backspaces_by_char(c) => text.len() - c.len_utf8(),
+        _ => wordcraft_doc::cluster::prev_cluster(&text, text.len()),
+    };
+    text.truncate(from);
+    if app.smart_art_typing == Some(i) {
+        app.session.join_next_undo();
+    }
+    if app.run("smartArt.items", items_with(&g, i, &text)).is_ok() {
+        app.smart_art_typing = Some(i);
+    }
+    true
+}
+
 /// Text typed with a SmartArt graphic selected goes at the end of its current item (the first,
 /// before any is picked), and the Text Pane opens, as Word does; it never replaces the graphic.
 ///
@@ -352,6 +452,7 @@ pub(crate) enum SmartArtTypeResult {
 /// Appends typing to the selected SmartArt item, joining an active typing undo, and returns
 /// whether the input was unhandled, consumed without a change, or changed an item.
 pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
+    follow_selection(app);
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
         return SmartArtTypeResult::NotHandled;
     };
@@ -564,6 +665,71 @@ mod tests {
         let area = ctx.memory(|m| m.area_rect(popup)).expect("the grid is drawn again");
         click(&ctx, pos2(area.min.x + 30.0, area.max.y - 14.0), &mut a, &mut frame);
         assert_eq!(colour(&a), None, "Style Color clears it");
+    }
+
+    /// #2467 review: a graphic turned or mirrored (from a file: SmartArt can't be turned here)
+    /// still picks the item whose shape is under the pointer. The point is worked out on its own:
+    /// the item's centre in the graphic, mirrored, then turned about the frame's centre.
+    #[test]
+    fn a_turned_or_flipped_graphic_picks_the_item_under_the_pointer() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("insert.smartArt", json!({"layout": "hierarchy"})).unwrap();
+        for (deg, flip_h, flip_v) in [(90.0, false, false), (0.0, true, false), (0.0, false, true), (45.0, true, false), (200.0, false, true)] {
+            let (pos, _) = wordcraft_engine::cmd::objects::selected(&app.session).expect("the graphic is selected");
+            let para = app.session.doc.para_mut(pos.story, &pos.path).unwrap();
+            let float = para.objects.iter_mut().find_map(|o| o.float_mut()).expect("the graphic's frame");
+            float.set_spin(wordcraft_geom::Spin::new(deg, flip_h, flip_v));
+            para.touch();
+            app.session.relayout();
+            let layout = app.session.layout();
+            let (hit, _) = crate::objects::active(&app, &layout).expect("the graphic is on the page");
+            assert_eq!((hit.spin.flip_h, hit.spin.flip_v), (flip_h, flip_v), "the layout carries the spin");
+            let (scale, page) = (1.5, Rect::from_min_size(pos2(40.0, 30.0), vec2(918.0, 1188.0)));
+            let pages = vec![page; hit.page + 1];
+            let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).unwrap();
+            for item in [0, 3] {
+                let [x, y, w, h] = wordcraft_engine::cmd::smart_art::item_box(&g, hit.rect.w, hit.rect.h, item).unwrap();
+                let (mut u, mut v) = (x + w / 2.0, y + h / 2.0);
+                if flip_h {
+                    u = hit.rect.w - u;
+                }
+                if flip_v {
+                    v = hit.rect.h - v;
+                }
+                let frame = crate::frame::to_screen(page, scale, hit.rect);
+                let (sin, cos) = deg.to_radians().sin_cos();
+                let (dx, dy) = (frame.min.x + u * scale - frame.center().x, frame.min.y + v * scale - frame.center().y);
+                let at = pos2(frame.center().x + dx * cos - dy * sin, frame.center().y + dx * sin + dy * cos);
+                assert_eq!(item_under(&app, &layout, &pages, scale, at), Some(item), "item {item} at {deg}° flip {flip_h}/{flip_v}");
+            }
+        }
+    }
+
+    /// #2467 review: Backspace in a picked item erases what it does in body text: a whole letter
+    /// with its combining marks, a whole emoji sequence; one sign at a time in Thai.
+    #[test]
+    fn backspace_in_a_picked_item_erases_a_whole_grapheme() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        app.run("insert.smartArt", json!({"layout": "hierarchy"})).unwrap();
+        let text = |app: &WordApp| wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).unwrap().items[3].text.clone();
+        let set = |app: &mut WordApp, t: &str| {
+            let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).unwrap();
+            app.run("smartArt.items", items_with(&g, 3, t)).unwrap();
+        };
+        // As a frame does: the picked item is the selected graphic's.
+        follow_selection(&mut app);
+        app.smart_art_item = Some(3);
+        // "Việt" with the ệ's two marks apart, then a family emoji (a ZWJ sequence).
+        set(&mut app, "Vie\u{302}\u{323}t\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}");
+        assert!(key(&mut app, egui::Key::Backspace, egui::Modifiers::NONE));
+        assert_eq!(text(&app), "Vie\u{302}\u{323}t", "the whole emoji sequence goes");
+        for _ in 0..2 {
+            key(&mut app, egui::Key::Backspace, egui::Modifiers::NONE);
+        }
+        assert_eq!(text(&app), "Vi", "the letter goes with both its marks");
+        set(&mut app, "\u{0E01}\u{0E35}");
+        key(&mut app, egui::Key::Backspace, egui::Modifiers::NONE);
+        assert_eq!(text(&app), "\u{0E01}", "Thai: one sign at a time, as in body text");
     }
 
     /// #2832: the separators between the picker's columns made the dialog as tall as the window.

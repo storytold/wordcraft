@@ -431,6 +431,9 @@ fn key_press(app: &mut WordApp, ctx: &egui::Context, key: Key, modifiers: Modifi
         }
         return;
     }
+    if crate::dialogs_smart_art::key(app, key, modifiers) {
+        return;
+    }
     if crate::objects::key(app, key, modifiers) {
         return;
     }

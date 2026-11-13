@@ -187,6 +187,18 @@ pub fn smart_art_graphic(spec: SmartArtSpec, theme: &[Rgb], w: f32, h: f32) -> G
     Graphic { kind: GraphicKind::Diagram, items, w, h, source: None, chart: None, smart_art: Some(Arc::new(spec)) }
 }
 
+/// The item of `spec` drawn `w` × `h` points whose shape is at (`x`, `y`), points from the
+/// graphic's top-left corner (an item listed in its parent's shape gives the parent).
+pub fn item_at_point(spec: &SmartArtSpec, w: f32, h: f32, x: f32, y: f32) -> Option<usize> {
+    wordcraft_docx::smart_art_item_at(spec, w, h, x, y)
+}
+
+/// The box (x, y, width, height in points from the graphic's top-left corner) of the shape that
+/// shows item `i` of `spec` drawn `w` × `h`.
+pub fn item_box(spec: &SmartArtSpec, w: f32, h: f32, i: usize) -> Option<[f32; 4]> {
+    wordcraft_docx::smart_art_item_box(spec, w, h, i)
+}
+
 /// Lay the SmartArt graphic of `o` out again at its current size (after a resize), if it has a model.
 pub fn redraw(o: &mut InlineObject, theme: &[Rgb]) {
     if let InlineObject::Graphic { w, h, graphic, .. } = o

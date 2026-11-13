@@ -17,7 +17,7 @@
 
 use wordcraft_doc::graphic::GraphicItem;
 use wordcraft_doc::props::Rgb;
-use wordcraft_doc::smart_art::{MAX_ITEMS, SmartArtColors, SmartArtItem, SmartArtLayout, SmartArtSpec};
+use wordcraft_doc::smart_art::{MAX_ITEMS, MAX_LEVEL, SmartArtColors, SmartArtItem, SmartArtLayout, SmartArtSpec};
 
 use crate::read::diagram::{text_width, wrap};
 use crate::xml::{self, El, MAX_DEPTH, Node, W};
@@ -112,6 +112,8 @@ struct Sh {
     /// Where the text goes.
     tb: [f32; 4],
     dark_text: bool,
+    /// The item whose text the shape shows.
+    item: Option<usize>,
 }
 
 impl Sh {
@@ -130,6 +132,7 @@ impl Sh {
             text: Vec::new(),
             tb: inset(b, 0.06),
             dark_text: false,
+            item: None,
         }
     }
 
@@ -149,6 +152,7 @@ impl Sh {
             text: Vec::new(),
             tb: b,
             dark_text: false,
+            item: None,
         }
     }
 
@@ -168,8 +172,10 @@ impl Sh {
         self
     }
 
-    fn with_text(mut self, text: Vec<(String, bool)>) -> Sh {
-        self.text = text;
+    /// The shape of item `i`: its text, and the items under it as sub-items when `with_children`.
+    fn for_item(mut self, spec: &SmartArtSpec, i: usize, with_children: bool) -> Sh {
+        self.text = paras(spec, i, with_children);
+        self.item = Some(i);
         self
     }
 
@@ -244,7 +250,7 @@ fn basic_list(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         let in_row = if r + 1 == rows { n - r * cols } else { cols };
         let x0 = (w - (in_row as f32 * bw + (in_row - 1) as f32 * gx)) / 2.0;
         let b = [x0 + c as f32 * (bw + gx), y0 + r as f32 * (bh + gy), bw, bh];
-        out.push(Sh::node("rect", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)));
+        out.push(Sh::node("rect", b, spec.colors.accent(k)).item(spec, i).for_item(spec, i, true));
     }
     out
 }
@@ -272,7 +278,7 @@ fn process(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     }
     for (k, &i) in tops.iter().enumerate() {
         let b = [k as f32 * (nw + gap), y, nw, nh];
-        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)));
+        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).item(spec, i).for_item(spec, i, true));
     }
     out
 }
@@ -325,7 +331,7 @@ fn cycle(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     for (k, &i) in tops.iter().enumerate() {
         let (x, y) = if n == 1 { (cx, cy) } else { polar(cx, cy, r, angle(k, n)) };
         let b = [x - d / 2.0, y - d / 2.0, d, d];
-        out.push(Sh::node("ellipse", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)).text_box(inset(b, ROUND_INSET)));
+        out.push(Sh::node("ellipse", b, spec.colors.accent(k)).item(spec, i).for_item(spec, i, true).text_box(inset(b, ROUND_INSET)));
     }
     out
 }
@@ -396,7 +402,7 @@ fn hierarchy(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     }
     for i in 0..n {
         let b = [cx(i) - nw / 2.0, top(i), nw, nh];
-        out.push(Sh::node("roundRect", b, spec.colors.accent(i)).item(spec, i).with_text(paras(spec, i, false)));
+        out.push(Sh::node("roundRect", b, spec.colors.accent(i)).item(spec, i).for_item(spec, i, false));
     }
     out
 }
@@ -424,7 +430,7 @@ fn pyramid(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
             let mid_w = (top_w + bot_w) / 2.0 * 0.8;
             s.text_box([w / 2.0 - mid_w / 2.0, b[1] + bh * 0.08, mid_w, bh * 0.84])
         };
-        out.push(sh.item(spec, i).with_text(paras(spec, i, true)));
+        out.push(sh.item(spec, i).for_item(spec, i, true));
     }
     out
 }
@@ -442,7 +448,7 @@ fn radial(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     if n == 0 {
         let d = m * 0.5;
         let b = [cx - d / 2.0, cy - d / 2.0, d, d];
-        out.push(Sh::node("ellipse", b, spec.colors.accent(0)).item(spec, 0).with_text(paras(spec, 0, false)).text_box(inset(b, ROUND_INSET)));
+        out.push(Sh::node("ellipse", b, spec.colors.accent(0)).item(spec, 0).for_item(spec, 0, false).text_box(inset(b, ROUND_INSET)));
         return out;
     }
     let step = if n == 1 { 1.0 } else { (std::f32::consts::PI / n as f32).sin() };
@@ -459,11 +465,11 @@ fn radial(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         out.push(Sh::line(cx, cy, x, y, spec.colors.accent(0)).item(spec, 0));
     }
     let bc = [cx - dc / 2.0, cy - dc / 2.0, dc, dc];
-    out.push(Sh::node("ellipse", bc, spec.colors.accent(0)).item(spec, 0).with_text(paras(spec, 0, false)).text_box(inset(bc, ROUND_INSET)));
+    out.push(Sh::node("ellipse", bc, spec.colors.accent(0)).item(spec, 0).for_item(spec, 0, false).text_box(inset(bc, ROUND_INSET)));
     for (k, &i) in spokes.iter().enumerate() {
         let (x, y) = at(k);
         let b = [x - ds / 2.0, y - ds / 2.0, ds, ds];
-        out.push(Sh::node("ellipse", b, spec.colors.accent(k + 1)).item(spec, i).with_text(paras(spec, i, true)).text_box(inset(b, ROUND_INSET)));
+        out.push(Sh::node("ellipse", b, spec.colors.accent(k + 1)).item(spec, i).for_item(spec, i, true).text_box(inset(b, ROUND_INSET)));
     }
     out
 }
@@ -481,7 +487,7 @@ fn matrix(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
     for (k, &i) in tops.iter().enumerate() {
         let (r, c) = (k / cols, k % cols);
         let b = [x0 + c as f32 * cell + gap / 2.0, y0 + r as f32 * cell + gap / 2.0, cell - gap, cell - gap];
-        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).item(spec, i).with_text(paras(spec, i, true)).text_box(inset(b, 0.1)));
+        out.push(Sh::node("roundRect", b, spec.colors.accent(k)).item(spec, i).for_item(spec, i, true).text_box(inset(b, 0.1)));
     }
     out
 }
@@ -517,14 +523,18 @@ fn venn(spec: &SmartArtSpec, w: f32, h: f32) -> Vec<Sh> {
         s.fill = Paint::None;
         s.line = Paint::Accent(spec.colors.accent(j), None);
         s.line_w = 1.5;
-        out.push(s.item(spec, i));
+        // The circle is the item's shape (a click anywhere on it picks the item, and it is what's
+        // outlined); its text is drawn by the text box below.
+        let mut s = s.item(spec, i);
+        s.item = Some(i);
+        out.push(s);
     }
     for (j, &i) in tops.iter().enumerate() {
         let (x, y, deg) = place(j);
         let (tx, ty) = if n == 1 { (x, y) } else { polar(x, y, r * 0.35, deg) };
         let (bw, bh) = (r * 1.1, r * 0.8);
         let b = [tx - bw / 2.0, ty - bh / 2.0, bw, bh];
-        let mut s = Sh::node("rect", b, spec.colors.accent(j)).with_text(paras(spec, i, true)).text_box(b);
+        let mut s = Sh::node("rect", b, spec.colors.accent(j)).for_item(spec, i, true).text_box(b);
         s.fill = Paint::None;
         s.line = Paint::None;
         s.dark_text = true;
@@ -743,6 +753,42 @@ pub fn smart_art_items(spec: &SmartArtSpec, theme: &[Rgb], w: f32, h: f32) -> Ve
         Ok(d) => crate::read::diagram::diagram_items(&d, theme, w, h, &mut |_| None),
         Err(_) => Vec::new(),
     }
+}
+
+/// The item whose shape is at (`x`, `y`), points from the top-left corner of `spec` drawn `w` ×
+/// `h`: the frontmost shape there. An item listed in its parent's shape gives the parent.
+pub fn smart_art_item_at(spec: &SmartArtSpec, w: f32, h: f32, x: f32, y: f32) -> Option<usize> {
+    layout(spec, w, h).iter().rev().find(|sh| sh.item.is_some() && hits(sh, x, y)).and_then(|sh| sh.item)
+}
+
+/// The box (x, y, width, height in points) of the shape that shows item `i` of `spec` drawn `w` ×
+/// `h`: its own, or its parent's when it is listed there.
+pub fn smart_art_item_box(spec: &SmartArtSpec, w: f32, h: f32, i: usize) -> Option<[f32; 4]> {
+    let parents = spec.parents();
+    let shapes = layout(spec, w, h);
+    let mut at = Some(i);
+    // Up the tree to an item with a shape; levels are at most `MAX_LEVEL` deep.
+    for _ in 0..=usize::from(MAX_LEVEL) {
+        let k = at?;
+        if let Some(sh) = shapes.iter().find(|sh| sh.item == Some(k)) {
+            return Some(sh.b);
+        }
+        at = parents.get(k).copied().flatten();
+    }
+    None
+}
+
+/// Whether (`x`, `y`) is inside `sh` (its ellipse for round shapes, else its box).
+fn hits(sh: &Sh, x: f32, y: f32) -> bool {
+    let [bx, by, bw, bh] = sh.b;
+    if !(bw > 0.0 && bh > 0.0) {
+        return false;
+    }
+    if sh.prst == "ellipse" {
+        let (dx, dy) = ((x - bx - bw / 2.0) / (bw / 2.0), (y - by - bh / 2.0) / (bh / 2.0));
+        return dx * dx + dy * dy <= 1.0;
+    }
+    x >= bx && x <= bx + bw && y >= by && y <= by + bh
 }
 
 /// Ids of the points and connections of item `i`: (node, connection, parent transition, sibling
@@ -1254,5 +1300,48 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_point_on_an_item_shape_finds_that_item() {
+        let g = SmartArtSpec::sample(SmartArtLayout::Hierarchy);
+        for i in 0..g.items.len() {
+            let b = smart_art_item_box(&g, 432.0, 252.0, i).unwrap();
+            assert_eq!(smart_art_item_at(&g, 432.0, 252.0, b[0] + b[2] / 2.0, b[1] + b[3] / 2.0), Some(i), "item {i}");
+        }
+        // The corners between the boxes hold no item.
+        assert_eq!(smart_art_item_at(&g, 432.0, 252.0, 1.0, 1.0), None);
+        // Circles hit inside their round outline only.
+        let c = SmartArtSpec::sample(SmartArtLayout::Cycle);
+        let b = smart_art_item_box(&c, 432.0, 252.0, 0).unwrap();
+        assert_eq!(smart_art_item_at(&c, 432.0, 252.0, b[0] + b[2] / 2.0, b[1] + b[3] / 2.0), Some(0));
+        assert_eq!(smart_art_item_at(&c, 432.0, 252.0, b[0] + 1.0, b[1] + 1.0), None);
+    }
+
+    #[test]
+    fn an_item_listed_in_its_parent_shape_takes_the_parent_box() {
+        let mut g = SmartArtSpec::sample(SmartArtLayout::BasicList);
+        g.items = vec![SmartArtItem::new("Ada", 0), SmartArtItem::new("note", 1), SmartArtItem::new("Bea", 0)];
+        let (parent, sub) = (smart_art_item_box(&g, 432.0, 252.0, 0).unwrap(), smart_art_item_box(&g, 432.0, 252.0, 1).unwrap());
+        assert_eq!(parent, sub);
+        assert_eq!(smart_art_item_at(&g, 432.0, 252.0, parent[0] + 2.0, parent[1] + parent[3] - 2.0), Some(0));
+        assert_eq!(smart_art_item_box(&g, 432.0, 252.0, 99), None);
+        for (w, h) in [(0.0, 0.0), (f32::NAN, 10.0), (f32::INFINITY, -5.0)] {
+            assert_eq!(smart_art_item_at(&g, w, h, 1.0, 1.0), None);
+        }
+    }
+
+    #[test]
+    fn a_venn_circle_is_its_items_shape() {
+        // Review: only the small text box over each circle held its item.
+        let mut g = SmartArtSpec::sample(SmartArtLayout::Venn);
+        for i in 0..g.items.len() {
+            let b = smart_art_item_box(&g, 432.0, 252.0, i).unwrap();
+            assert_eq!(b[2], b[3], "item {i} is outlined by its circle: {b:?}");
+        }
+        g.items.truncate(1);
+        let [x, y, w, h] = smart_art_item_box(&g, 432.0, 252.0, 0).unwrap();
+        // Inside the circle, above its text.
+        assert_eq!(smart_art_item_at(&g, 432.0, 252.0, x + w / 2.0, y + h * 0.05), Some(0));
     }
 }
