@@ -132,9 +132,7 @@ pub fn outline_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], current: Opti
     ui.separator();
     ui.menu_button(crate::tl!("Weight"), |ui| {
         let color = current.map_or(Rgb::BLACK, |c| c.0).hex();
-        for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0] {
-            mi(ui, app, &format!("{w} pt"), "format.textEffects", json!({"outline": {"color": color, "width": w}}));
-        }
+        crate::ribbon::weight_menu(ui, app, "format.textEffects", current.map(|c| c.1), |w| json!({"outline": {"color": color, "width": w}}));
     });
 }
 
@@ -209,14 +207,75 @@ pub fn transform_menu(ui: &mut Ui, app: &mut WordApp) {
     });
 }
 
-/// The selected shape's text outline (colour, width), for the Weight menu.
+/// The text outline (colour, width) Text Outline would change, for its Weight menu: read where
+/// `format.textEffects` applies, so choosing a weight keeps that text's colour. A selected shape,
+/// or a caret in a text box, formats the box's whole text, read from its start; otherwise the
+/// selection, read as typing reads it (the first selected character, or the caret's).
 pub fn current_outline(app: &WordApp) -> Option<(Rgb, f32)> {
-    let story = match wordcraft_engine::cmd::objects::object_selection(&app.session) {
-        Some((_, wordcraft_doc::InlineObject::Shape { story: Some(id), .. })) => wordcraft_doc::StoryRef::Part(*id),
-        _ => app.session.sel.focus.story,
+    let s = &app.session;
+    let props = match wordcraft_engine::cmd::wordart::box_story(s) {
+        Some(id) => s.doc.para_at(&s.doc.start_of(wordcraft_doc::StoryRef::Part(id)))?.props_at(0).clone(),
+        None => s.typing_props(),
     };
-    let start = app.session.doc.start_of(story);
-    let para = app.session.doc.para_at(&start)?;
-    let fx = para.props_at(0).text_effects.as_deref()?;
+    let fx = props.text_effects.as_deref()?;
     fx.outline.and_then(|o| o.color.map(|c| (c, o.width)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_engine::Session;
+
+    fn outline_at(app: &WordApp, para: usize) -> Option<(Rgb, f32)> {
+        let p = app.session.doc.para_at(&wordcraft_doc::Pos::body(para, 0))?;
+        let fx = p.props_of_char(0).text_effects.as_deref()?;
+        fx.outline.and_then(|o| o.color.map(|c| (c, o.width)))
+    }
+
+    /// #3917 review: the Weight menu reads the outline where Text Outline applies, the selection,
+    /// not the first character of the story. Its highlight is the selected text's weight, and a
+    /// new weight keeps that text's colour and leaves other paragraphs alone.
+    #[test]
+    fn the_weight_menu_reads_and_keeps_the_selected_texts_outline() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let rgb = |h: &str| Rgb::parse(h);
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Red line\nBlue line")), crate::Services::default());
+        a.run("select.text", json!({"text": "Red line"})).unwrap();
+        a.run("format.textEffects", json!({"outline": {"color": "C00000", "width": 1.0}})).unwrap();
+        a.run("select.text", json!({"text": "Blue line"})).unwrap();
+        a.run("format.textEffects", json!({"outline": {"color": "1F4E79", "width": 3.0}})).unwrap();
+        assert_eq!(current_outline(&a), rgb("1F4E79").map(|c| (c, 3.0)), "the selection's outline, not the first paragraph's");
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 700.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let theme = app.session.doc.settings.theme_colors.clone();
+                let current = current_outline(app);
+                outline_menu(ui, app, &theme, current);
+            },
+            a,
+        );
+        h.run_steps(2);
+        h.get_by_label("Weight").hover();
+        h.run();
+        h.get_by_label("Weight").click();
+        h.run();
+        assert_eq!(h.get_by_label("3 pt").accesskit_node().toggled(), Some(Toggled::True), "the selected text's weight");
+        assert_eq!(h.get_by_label("1 pt").accesskit_node().toggled(), Some(Toggled::False));
+        h.get_by_label("6 pt").click();
+        h.run_steps(2);
+        assert_eq!(outline_at(h.state(), 1), rgb("1F4E79").map(|c| (c, 6.0)), "the new weight keeps the selected text's colour");
+        assert_eq!(outline_at(h.state(), 0), rgb("C00000").map(|c| (c, 1.0)), "the other paragraph is untouched");
+    }
+
+    /// A caret in a text box formats the box's whole text, so its outline is read from the box's
+    /// start; back in the body, the body text's (none here).
+    #[test]
+    fn a_caret_in_a_text_box_reads_the_boxs_outline() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Body")), crate::Services::default());
+        a.run("insert.textBox", json!({"text": "Boxed words"})).unwrap();
+        a.run("format.textEffects", json!({"outline": {"color": "00B050", "width": 2.25}})).unwrap();
+        assert_eq!(current_outline(&a), Rgb::parse("00B050").map(|c| (c, 2.25)));
+        a.run("caret.set", json!({"pos": wordcraft_doc::Pos::body(0, 2)})).unwrap();
+        assert_eq!(current_outline(&a), None, "the body text has no outline");
+    }
 }

@@ -200,6 +200,68 @@ fn design_style_set_gallery_reads_from_the_right_in_rtl() {
     }
 }
 
+/// #3917: an outline's Weight submenu offers Word's nine weights, each a named entry with a
+/// line sample drawn at its weight; the current weight is highlighted, and choosing one sets it.
+#[test]
+fn weight_menu_draws_each_weight_and_applies_it() {
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.run("select.all", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let current = crate::wordart_menus::current_outline(app).map(|c| c.1);
+            weight_menu(ui, app, "format.textEffects", current, |w| json!({"outline": {"color": "1F4E79", "width": w}}));
+        },
+        a,
+    );
+    h.run_steps(2);
+    let labels = ["0.25 pt", "0.5 pt", "0.75 pt", "1 pt", "1.5 pt", "2.25 pt", "3 pt", "4.5 pt", "6 pt"];
+    for label in labels {
+        let node = h.get_by_label(label);
+        assert_eq!(node.accesskit_node().toggled(), Some(Toggled::False), "{label} not highlighted with no outline set");
+    }
+    // One line sample per weight, at that weight.
+    let widths: Vec<f32> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::LineSegment { stroke, .. } => Some(stroke.width),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(widths, [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0].map(|w: f32| w.max(1.0)), "samples, a pixel at least");
+    let outline = |h: &egui_kittest::Harness<'_, WordApp>| crate::wordart_menus::current_outline(h.state());
+    for (label, width) in [("6 pt", 6.0), ("0.25 pt", 0.25)] {
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert_eq!(outline(&h), Some((wordcraft_doc::Rgb::parse("1F4E79").unwrap(), width)), "{label}");
+        assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} is highlighted once chosen");
+        assert_eq!(h.get_by_label("1 pt").accesskit_node().toggled(), Some(Toggled::False));
+    }
+}
+
+/// #3917 review: Shape Outline › Weight on a drawing canvas reads the canvas's border, so its
+/// weight is highlighted and a new weight keeps the border's colour instead of turning it black.
+#[test]
+fn shape_outline_weight_keeps_a_canvas_borders_colour() {
+    use super::shape::{selected_outline, shape_weight_menu};
+    use egui::accesskit::Toggled;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    a.run("insert.canvas", json!({})).unwrap();
+    a.run("shape.outline", json!({"color": "1F4E79", "width": 1.5})).unwrap();
+    let blue = wordcraft_doc::Rgb::parse("1F4E79");
+    assert_eq!(selected_outline(&a.session), blue.map(|c| (c, 1.5)), "the canvas's border");
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| shape_weight_menu(ui, app), a);
+    h.run_steps(2);
+    assert_eq!(h.get_by_label("1.5 pt").accesskit_node().toggled(), Some(Toggled::True), "the border's weight");
+    h.get_by_label("3 pt").click();
+    h.run_steps(2);
+    assert_eq!(selected_outline(&h.state().session), blue.map(|c| (c, 3.0)), "a new weight keeps the border blue");
+}
+
 /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
 /// technology, tooltips) that applies its own style; Words only, None and Underline Color ›
 /// Automatic do what they say.

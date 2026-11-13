@@ -1,5 +1,5 @@
 use super::arrange::{align_menu, rotate_menu, rotation_field, wrap_menu};
-use super::common::{mi, size_field, stack};
+use super::common::{mi, size_field, stack, weight_menu};
 use super::language::mi_check;
 use super::{Target, Ui, WordApp, big, group, json, menu_button, small, vec2};
 
@@ -43,12 +43,28 @@ pub(crate) fn gradient_menu(ui: &mut Ui, app: &mut WordApp, fill: Option<&wordcr
     }
 }
 
+/// The outline (colour, width) Shape Outline changes: the selected shape's, or the selected
+/// drawing canvas's border.
+pub(super) fn selected_outline(s: &wordcraft_engine::Session) -> Option<(wordcraft_doc::Rgb, f32)> {
+    match wordcraft_engine::cmd::objects::selected(s)?.1 {
+        wordcraft_doc::para::InlineObject::Shape { stroke, stroke_width, .. } => stroke.map(|c| (c, stroke_width)),
+        o => o.canvas_style().and_then(|c| c.stroke.map(|stroke| (stroke, c.stroke_width))),
+    }
+}
+
+/// Shape Outline › Weight: a new weight keeps the outline's colour (black when it has none).
+pub(super) fn shape_weight_menu(ui: &mut Ui, app: &mut WordApp) {
+    let outline = selected_outline(&app.session);
+    let color = outline.map_or(wordcraft_doc::Rgb::BLACK, |o| o.0).hex();
+    weight_menu(ui, app, "shape.outline", outline.map(|o| o.1), |w| json!({"color": color, "width": w}));
+}
+
 /// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
 pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
-    let (stroke, glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Shape { stroke, effects, fill, .. })) => (stroke, effects.glow.map(|g| g.size), fill),
-        Some((_, o)) => (None, None, o.canvas_style().and_then(|c| c.fill.clone())),
-        _ => (None, None, None),
+    let (glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, wordcraft_doc::para::InlineObject::Shape { effects, fill, .. })) => (effects.glow.map(|g| g.size), fill),
+        Some((_, o)) => (None, o.canvas_style().and_then(|c| c.fill.clone())),
+        _ => (None, None),
     };
     let theme = app.session.doc.settings.theme_colors.clone();
     group(ui, "Shape Styles", None, app, |ui, app| {
@@ -72,12 +88,7 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "No Color", "shape.outline", json!({"color": null}));
                     crate::colors::menu(ui, app, &theme, Target::cmd("shape.outline"));
                     ui.separator();
-                    ui.menu_button(tl!("Weight"), |ui| {
-                        let color = stroke.unwrap_or(wordcraft_doc::Rgb::BLACK).hex();
-                        for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
-                            mi(ui, app, &format!("{w} pt"), "shape.outline", json!({"color": color, "width": w}));
-                        }
-                    });
+                    ui.menu_button(tl!("Weight"), |ui| shape_weight_menu(ui, app));
                 },
             );
             menu_button(
