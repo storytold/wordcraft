@@ -1051,6 +1051,8 @@ fn language_document_scope_is_refused_under_protection() {
         assert!(s.doc == before, "{mode}: nothing changed");
         assert!(s.prefs.detect_language, "{mode}: the detect preference is untouched");
     }
+}
+
 // ============================================================================================
 // Compare Documents: formatting property changes (`w:tcPrChange`, `w:trPrChange`,
 // `w:tblPrChange`, `w:sectPrChange`, `w:pPrChange`).
@@ -1192,7 +1194,7 @@ fn compare_table_layout_and_margins_keep_live_revised_and_record_base() {
             t.props.cell_margins = Some([5.0, 108.0, 0.0, 108.0]);
         })
     };
-    let (mut s, r) = compare_saved("tbllayout", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("tbllayout", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert!(!t.props.fixed, "live tblPr is autofit (revised)");
@@ -1595,7 +1597,6 @@ fn compare_bytes(tag: &str, original: Document, bytes: &[u8], opts: Value) -> (S
 /// sections only on body-level paragraphs, so an embedded (cell) section can't be produced by a
 /// save/open round trip; the fixture is written by hand to give the revised document one.
 fn revised_cell_section_docx(header: &str) -> Vec<u8> {
-    use std::io::Write as _;
     const NS: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
     let document = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document {NS}><w:body><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rIdHdr"/></w:sectPr></w:pPr><w:r><w:t>A</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:body></w:document>"#
@@ -1605,8 +1606,7 @@ fn revised_cell_section_docx(header: &str) -> Vec<u8> {
     let types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>"#;
     let root_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc_rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdHdr" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header" Target="header1.xml"/></Relationships>"#;
-    let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-    let o = zip::write::SimpleFileOptions::default();
+    let mut z = craft_zip::Writer::new();
     for (name, bytes) in [
         ("[Content_Types].xml", types),
         ("_rels/.rels", root_rels),
@@ -1614,10 +1614,9 @@ fn revised_cell_section_docx(header: &str) -> Vec<u8> {
         ("word/_rels/document.xml.rels", doc_rels),
         ("word/header1.xml", header_part.as_str()),
     ] {
-        z.start_file(name, o).unwrap();
-        z.write_all(bytes.as_bytes()).unwrap();
+        z.add(name, bytes.as_bytes(), craft_zip::Compression::Deflated).unwrap();
     }
-    z.finish().unwrap().into_inner()
+    z.finish().unwrap()
 }
 
 /// A matched TABLE whose only difference is a cell paragraph's embedded-section header/footer
@@ -1764,7 +1763,7 @@ fn compare_run_change_keeps_live_revised_and_record_base() {
         d.format_range(&d.start_of(StoryRef::Body), &d.end_of(StoryRef::Body), &|c| c.bold = Some(true)).unwrap();
         d
     };
-    let (mut s, r) = compare_saved("runfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("runfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let p = s.doc.body[0].as_para().unwrap();
     let run = p.runs.iter().find(|run| run.props.fmt_change.is_some()).expect("a run formatting change yields w:rPrChange");
@@ -1794,7 +1793,7 @@ fn compare_mark_change_keeps_live_revised_and_record_base() {
         d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.bold = Some(true);
         d
     };
-    let (mut s, r) = compare_saved("markfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("markfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let p = s.doc.body[0].as_para().unwrap();
     assert_eq!(p.mark.bold, Some(true), "live paragraph mark is bold (revised)");
@@ -1821,7 +1820,7 @@ fn compare_para_change_keeps_live_revised_and_record_base() {
         d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.align = Some(Align::Center);
         d
     };
-    let (mut s, r) = compare_saved("parafmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("parafmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
     assert_eq!(p.props.align, Some(Align::Center), "live paragraph is centred (revised)");
@@ -1849,7 +1848,7 @@ fn compare_row_change_keeps_live_revised_and_record_base() {
             t.rows[0].props.height_rule = HeightRule::AtLeast;
         })
     };
-    let (mut s, r) = compare_saved("rowfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("rowfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows[0].props.height, Some(30.0), "live row height is revised");
@@ -1874,7 +1873,7 @@ fn compare_cell_change_keeps_live_revised_and_record_base() {
     use wordcraft_doc::props::Rgb;
     let original = || table_doc(|_| {});
     let revised = || table_doc(|t| t.rows[0].cells[0].props.shading = Some(Rgb(0xFF, 0, 0)));
-    let (mut s, r) = compare_saved("cellfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("cellfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.rows[0].cells[0].props.shading, Some(Rgb(0xFF, 0, 0)), "live cell shading is revised");
@@ -1904,7 +1903,7 @@ fn compare_table_change_keeps_live_revised_and_record_base() {
             t.props.align = Some(Align::Center);
         })
     };
-    let (mut s, r) = compare_saved("tblfmt", original(), &revised(), json!({}));
+    let (s, r) = compare_saved("tblfmt", original(), &revised(), json!({}));
     assert_eq!(r["changes"], 1, "{r}");
     let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
     assert_eq!(t.props.style.as_deref(), Some("TableGrid"), "live table style is revised");

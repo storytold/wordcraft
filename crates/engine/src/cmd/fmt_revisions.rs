@@ -80,20 +80,6 @@ impl Recorder<'_> {
     /// The tracked change `after` should carry, given the props `before` the command (`f` strips
     /// everything that isn't formatting); `None` when it already carries the right one.
     fn change<T: Clone + PartialEq>(&mut self, before: &T, after: &T, f: fn(&T) -> T, get: fn(&T) -> &Slot<T>) -> Option<Replacement<T>> {
-        self.change_keeping(before, after, f, f, get)
-    }
-
-    /// As [`change`], but `snap` builds the stored original where `before` carries no earlier
-    /// change: a comparison can ignore properties the snapshot must keep, so rejecting restores
-    /// them.
-    fn change_keeping<T: Clone + PartialEq>(
-        &mut self,
-        before: &T,
-        after: &T,
-        f: fn(&T) -> T,
-        snap: fn(&T) -> T,
-        get: fn(&T) -> &Slot<T>,
-    ) -> Option<Replacement<T>> {
         let (fb, fa) = (f(before), f(after));
         let (had, has) = (get(before), get(after));
         self.change_values(fb, fa, had, has)
@@ -110,8 +96,8 @@ impl Recorder<'_> {
             // The author's own earlier change keeps the formatting before it; another author's
             // is superseded by this one.
             let own = had.as_ref().filter(|c| self.own(c.rev));
-            let old = own.map(|c| c.old.clone()).unwrap_or_else(|| snap(before));
-            if f(&old) == fa {
+            let old = own.map(|c| c.old.clone()).unwrap_or(fb);
+            if old == fa {
                 None
             } else {
                 let rev = own.map(|c| c.rev).unwrap_or_else(|| self.rid());
