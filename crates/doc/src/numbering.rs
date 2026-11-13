@@ -387,8 +387,10 @@ impl Counters {
         let started = *fl;
         // A recognized custom pattern is the active format (MS-OI29500 17.9.17), rendering even
         // where the file's fallback is `bullet` - the Fallback's numFmt only steers readers
-        // without w14, so it must not suppress the padded number here.
-        let custom_active = !def.legal && def.custom_format.as_deref().is_some_and(|p| custom_pad_width(p).is_some());
+        // without w14, so it must not suppress the padded number here. Legal numbering (isLgl)
+        // legalizes the padding away (in render_label), not the number: classification is
+        // independent of `legal` so a legal level keeps its decimal and its reference label.
+        let custom_active = def.custom_format.as_deref().is_some_and(|p| custom_pad_width(p).is_some());
         let numeric = def.format != NumFormat::Bullet;
         let label = if numeric || custom_active { render_label(numbering, num, &def, &vals, &started) } else { def.text.clone() };
         // A "none" level shows its literal text, but has no number of its own for a reference to
@@ -887,6 +889,25 @@ mod tests {
             list_with(Level { text: "[%1]".into(), format: NumFormat::Bullet, custom_format: Some("0001, 0008, ...".into()), ..Level::default() });
         let mut c = Counters::default();
         assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[%1]", "unrecognized pattern with a bullet fallback shows the raw text");
+    }
+
+    #[test]
+    fn a_legal_level_keeps_its_custom_number_on_a_bullet_or_none_fallback() {
+        // isLgl legalizes the padding away (Word shows [1], not [0001]), not the number: a
+        // recognized custom pattern on a legal level renders a decimal - never the raw template -
+        // and a reference to the level shows that number.
+        for fallback in [NumFormat::None, NumFormat::Bullet] {
+            let (n, id) = list_with(Level {
+                text: "[%1]".into(),
+                format: fallback,
+                legal: true,
+                custom_format: Some("0001, 0002, 0003, ...".into()),
+                ..Level::default()
+            });
+            let mut c = Counters::default();
+            assert_eq!(c.next_label(&n, id, 0).unwrap().0, "[1]", "{fallback:?} fallback legalizes the padding, not the number");
+            assert_eq!(c.current_label(&n, id, 0).as_deref(), Some("[1]"), "{fallback:?} fallback still stores a reference label");
+        }
     }
 
     #[test]
