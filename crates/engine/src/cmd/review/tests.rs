@@ -1192,8 +1192,8 @@ fn accept_or_reject_at_the_caret_resolves_a_section_break_change() {
 type ChangeFixture = (&'static str, fn() -> (Session, Vec<crate::Selection>));
 
 /// Every kind of change `change_at_selection` looks for: tracked deletion and formatting runs, a
-/// paragraph's formatting and numbering, a paragraph mark's formatting, and a table's, row's and
-/// cell's formatting.
+/// paragraph's formatting and numbering, a paragraph mark's formatting, a table's, row's and
+/// cell's formatting, and a style definition's (where navigation left it, or with the whole body).
 fn changes_of_each_kind() -> Vec<ChangeFixture> {
     use crate::Selection;
     use wordcraft_doc::props::{NumChange, PropChange};
@@ -1291,6 +1291,16 @@ fn changes_of_each_kind() -> Vec<ChangeFixture> {
         ("a table's formatting", || table(0)),
         ("a row's formatting", || table(1)),
         ("a cell's formatting", || table(2)),
+        ("a style definition's change, navigated to", || {
+            let mut s = tracked("one\ntwo");
+            s.run("styles.modify", &json!({"style": "Heading1", "chr": {"bold": true}})).unwrap();
+            s.run("caret.set", &json!({"pos": {"block": 1, "off": 3}})).unwrap();
+            s.run("review.nextChange", &json!({})).unwrap();
+            assert_eq!(s.sel, Selection::caret(Pos::body(0, 0)), "navigation selects the style change at the document start");
+            let mut sel = selections(&s, 2, (0, 0));
+            sel.push(Selection { anchor: s.doc.start_of(StoryRef::Body), focus: s.doc.end_of(StoryRef::Body) });
+            (s, sel)
+        }),
     ]
 }
 
