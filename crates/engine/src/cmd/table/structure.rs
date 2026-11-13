@@ -13,6 +13,10 @@ pub(in crate::cmd) fn row(s: &mut Session, below: bool) -> CmdResult {
     let like = if below { rows.last() } else { rows.first() }.copied().unwrap_or(r);
     let at = if below { like + 1 } else { like };
     let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
+    // All of them or none: `insert_row` stops quietly at the limit.
+    if t.rows.len().saturating_add(n) > wordcraft_doc::table::MAX_ROWS {
+        return Err(CmdError::Failed(format!("a table can't have more than {} rows", wordcraft_doc::table::MAX_ROWS)));
+    }
     for _ in 0..n {
         t.insert_row(at, like);
     }

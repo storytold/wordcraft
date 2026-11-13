@@ -286,3 +286,21 @@ fn inserting_columns_past_the_limit_is_refused_and_changes_nothing() {
     run(&mut s, "table.insertCells", json!({"shift": "column"}));
     assert_eq!(table(&s).unwrap().grid.len(), 63);
 }
+
+#[test]
+fn inserting_rows_past_the_limit_is_refused_and_changes_nothing() {
+    let mut s = filled_table(1, &["x"]);
+    let t = s.doc.table_mut(StoryRef::Body, &Path(vec![0])).unwrap();
+    let row = t.rows[0].clone();
+    t.rows.resize(wordcraft_doc::table::MAX_ROWS - 1, row);
+    // Two selected rows would make one too many: none is added, rather than one of the two.
+    select(&mut s, (0, 1), (0, 0));
+    for (id, params) in [("table.insertRowAbove", json!({})), ("table.insertCells", json!({"shift": "row"}))] {
+        assert!(s.run(id, &params).is_err(), "{id}");
+        assert_eq!(table(&s).unwrap().rows.len(), wordcraft_doc::table::MAX_ROWS - 1, "{id}");
+    }
+    // One still fits.
+    caret_in(&mut s, 0, 0, 0);
+    run(&mut s, "table.insertRowBelow", json!({}));
+    assert_eq!(table(&s).unwrap().rows.len(), wordcraft_doc::table::MAX_ROWS);
+}
