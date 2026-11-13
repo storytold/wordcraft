@@ -28,6 +28,10 @@ impl WordApp {
     /// Close, Envelopes, Labels and Finish & Merge on a document with unsaved changes first ask
     /// Save / Don't Save / Cancel, and the command runs once that is answered (`ui.saveChanges`).
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        // While Markdown Source is open, Undo and Redo work on its typing, as Ctrl+Z does there.
+        if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
+            return crate::md_source::undo(self, id == "edit.redo");
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -256,6 +260,13 @@ impl WordApp {
         {
             self.autosave_path = self.session.path.clone();
         }
+        // A Markdown file edited in the formatted view was written out again, not kept as it was.
+        if let Ok(v) = &r
+            && matches!(id, "file.save" | "file.saveAs")
+            && v.get("rewritten").and_then(Value::as_bool) == Some(true)
+        {
+            self.status_long(tl!("Saved. Edits in the formatted view meant writing the Markdown out again, so its own layout wasn't kept."));
+        }
         // A renamed file is the same file: AutoSave keeps covering it, and Recent drops the old name.
         if r.is_ok()
             && id == "file.rename"
@@ -397,6 +408,9 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
+        // The open document goes to the front of the recent list after every command. The recent
+        // commands (`ui.recentRemove`, `ui.recentClear`) return from `ui_command` before this
+        // runs, so taking a document off the list is never undone by the re-add (#2716).
         if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
             && self.ui.recent.first() != Some(&p)
         {
@@ -474,6 +488,7 @@ impl WordApp {
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+        crate::windows::arrange::request(self, req);
     }
 
     /// A request made for document `document`, which isn't shown and which no other window
@@ -677,6 +692,28 @@ impl WordApp {
                 }
                 json!({"statusCount": self.ui.status_count.code()})
             }
+            "ui.scrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: mouse-wheel scroll speed (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.scroll_speed = s,
+                        None => return Some(Err(format!("unknown scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"scrollSpeed": self.ui.scroll_speed.code(), "factor": self.ui.scroll_speed.wheel_factor()})
+            }
+            "ui.touchpadScrollSpeed" => {
+                // `slow`, `normal` (the default) or `fast`: touchpad scroll speed on Wayland (#6146);
+                // no value reads it.
+                if let Some(v) = s("value") {
+                    match crate::scroll::ScrollSpeed::from_code(v) {
+                        Some(s) => self.ui.touchpad_scroll_speed = s,
+                        None => return Some(Err(format!("unknown touchpad scroll speed {v:?}; use slow, normal or fast"))),
+                    }
+                }
+                json!({"touchpadScrollSpeed": self.ui.touchpad_scroll_speed.code(), "factor": self.ui.touchpad_scroll_speed.touchpad_factor()})
+            }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
                 if let Some(v) = s("value") {
@@ -798,6 +835,38 @@ impl WordApp {
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"startScreen": self.ui.start_screen})
+            }
+            "ui.recentRemove" => {
+                // Backstage ▸ Home/Open ▸ Recent: take one document off the list (Word's context
+                // menu Remove). The path must be an entry that is on the list (#2716).
+                let Some(path) = p.get("path").and_then(Value::as_str) else {
+                    return Some(Err("`path` must name a document on the recent list".into()));
+                };
+                let before = self.ui.recent.len();
+                self.ui.recent.retain(|r| r != path);
+                if self.ui.recent.len() == before {
+                    return Some(Err(format!("`{path}` is not on the recent list")));
+                }
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
+                    self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
+                }
+                let mut r = json!({"removed": 1, "recent": self.ui.recent});
+                add_saved(&mut r, saved);
+                r
+            }
+            "ui.recentClear" => {
+                // Clear the whole list, as Word's registry clear does for recent documents (#2716).
+                let removed = self.ui.recent.len();
+                self.ui.recent.clear();
+                let saved = self.save_prefs_now();
+                if !matches!(saved, Some(Err(_))) {
+                    self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
+                }
+                let mut r = json!({"removed": removed, "recent": self.ui.recent});
+                add_saved(&mut r, saved);
+                r
             }
             "ui.displayServer" => {
                 // File › Options › Advanced › Linux display server (#2184): `value` `auto`,
@@ -1021,6 +1090,19 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
     }
 }
 
+/// The result fields of a command that saves the preferences at once: `saved` is true when the
+/// write worked, false with `saveError` when it failed (the change still holds for this run) and
+/// null when the host has no preferences hook or wrote nothing.
+fn add_saved(r: &mut Value, saved: Option<Result<(), String>>) {
+    r["saved"] = match &saved {
+        None => Value::Null,
+        Some(res) => json!(res.is_ok()),
+    };
+    if let Some(Err(e)) = saved {
+        r["saveError"] = json!(e);
+    }
+}
+
 /// Commands that work while no document is open (#1129): opening or creating one, closing the
 /// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
 /// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
@@ -1046,6 +1128,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
+            | "view.paperColor"
             | "view.marks"
             | "view.ruler"
             | "view.numeral"
@@ -1069,8 +1152,12 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.recentRemove"
+            | "ui.recentClear"
             | "ui.displayServer"
             | "ui.statusCount"
+            | "ui.scrollSpeed"
+            | "ui.touchpadScrollSpeed"
             | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
