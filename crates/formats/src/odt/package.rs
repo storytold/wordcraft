@@ -1367,9 +1367,25 @@ fn variables(doc: &Document) -> std::collections::BTreeSet<String> {
     out
 }
 
+/// The start tag `xml` begins with, up to (not including) the `>` that closes it. A `>` inside
+/// a quoted attribute value does not close the tag.
+fn start_tag(xml: &str) -> Option<&str> {
+    let mut quote = None;
+    for (i, c) in xml.char_indices() {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if matches!(c, '"' | '\'') => quote = Some(c),
+            None if c == '>' => return xml.get(..i),
+            None => {}
+        }
+    }
+    None
+}
+
 /// A `draw:fill-image` definition's name and picture path, when `xml` starts with one.
 fn fill_image_of(xml: &str) -> Option<(String, String)> {
-    let tag = xml.split('>').next()?;
+    let tag = start_tag(xml)?;
     if !tag.trim_start_matches('<').starts_with("draw:fill-image") {
         return None;
     }

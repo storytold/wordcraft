@@ -761,7 +761,12 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         pictures.get(&mut z, path)
     };
     // The page background picture's bytes.
-    let page_image = pages.doc.page_image.clone().and_then(|(href, fill, name)| fetch(&href).map(|b| (b, fill, name)));
+    let page_image = pages
+        .doc
+        .page_image
+        .clone()
+        .and_then(|(href, fill, name)| fetch(&href).map(|b| (b, fill, name)))
+        .or_else(|| pages.doc.page_image_legacy.clone().and_then(|(href, fill)| fetch(&href).map(|b| (b, fill, None))));
     let objects = (entries.as_slice(), &manifest);
     // One `text:s` budget for the headers and footers and then the body.
     let mut spaces_left = MAX_EXTRA_SPACES;
@@ -1022,6 +1027,9 @@ pub(super) struct PageDoc {
     /// The first page style's background picture (§17.3 `style:background-image` or §16.42
     /// `draw:fill-image` with `draw:fill="bitmap"`): package path, fill, and optional fill name.
     pub(super) page_image: Option<(String, &'static str, Option<String>)>,
+    /// The same page style's legacy `style:background-image`, used when the modern fill's
+    /// picture can't be loaded (§17.3).
+    pub(super) page_image_legacy: Option<(String, &'static str)>,
     /// Footnotes', then endnotes', number format and options.
     pub(super) notes: [Option<(wordcraft_doc::section::NumFormat, wordcraft_doc::section::NoteProps)>; 2],
 }
@@ -1095,6 +1103,8 @@ struct Layout {
     attrs: Attrs,
     /// Its background picture: package path and fill (see [`PageDoc::page_image`]).
     image: Option<(String, &'static str)>,
+    /// Its legacy `style:background-image` (see [`PageDoc::page_image_legacy`]).
+    legacy_image: Option<(String, &'static str)>,
     /// Its bitmap fill image name (`draw:fill-image-name`).
     image_name: Option<String>,
     columns: Option<Columns>,
@@ -1185,12 +1195,13 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
             }
             // A page background picture (§17.3, in `style:page-layout-properties`): §20.249
             // `style:repeat` (repeat is the default) as WordCraft's tile, stretch, or centre.
-            // Ignored when modern `draw:fill="bitmap"` has already set the layout's image (§16.42).
+            // The legacy fallback is kept beside a modern fill: the modern picture is used only
+            // if it loads, and the legacy one otherwise (§16.42).
             "background-image" if q.starts_with("style:") => {
                 if let Some(l) = cur.as_ref().and_then(|n| layouts.get_mut(n))
-                    && l.image.is_none()
+                    && l.legacy_image.is_none()
                 {
-                    l.image = legacy_background_fill(&a);
+                    l.legacy_image = legacy_background_fill(&a);
                 }
             }
             // A band whose height isn't stated is LibreOffice's default, 0.5 cm (measured; see
@@ -1265,7 +1276,8 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
     });
     let mut pages = Pages { doc, next: nexts, ..Default::default() };
     for (name, layout, header, footer) in masters {
-        let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image, image_name }) = layouts.get(&layout) else {
+        let Some(Layout { attrs: a, columns: cols, column_specs, header: hb, footer: fb, image, image_name, legacy_image }) = layouts.get(&layout)
+        else {
             continue;
         };
         // What a layout leaves unsaid: the default paper, and no margins.
@@ -1275,6 +1287,7 @@ fn read_pages(xml: &[u8], paper: (f32, f32)) -> Pages {
         if pages.first.is_none() {
             pages.doc.page_color = get(a, "fo:background-color").and_then(model::parse_color);
             pages.doc.page_image = image.as_ref().map(|(href, fill)| (href.clone(), *fill, image_name.clone()));
+            pages.doc.page_image_legacy.clone_from(legacy_image);
         }
         // ODF starts a header at the page margin and the text after the header's band; Word
         // measures the header's distance and the text's margin from the edge. How the band's
