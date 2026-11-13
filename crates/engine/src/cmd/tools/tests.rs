@@ -1504,3 +1504,122 @@ fn compare_text_preserves_customized_styles() {
     assert!(h1.chr.fmt_change.is_none());
     assert!(h1.para.fmt_change.is_none());
 }
+
+/// #5841: a compare-recorded style change carries the provenance of the old side it recorded,
+/// not a stale flag from the revised style.
+#[test]
+fn compare_style_records_old_numbering_provenance() {
+    let old = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 7, level: 0 }), ..Default::default() },
+        numbering_from_base: false,
+        old_numbering_from_base: true,
+        ..Default::default()
+    };
+    let mut new = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9, level: 0 }), ..Default::default() },
+        numbering_from_base: true,
+        old_numbering_from_base: true,
+        ..Default::default()
+    };
+    let mut revisions = Vec::new();
+    let changed = crate::cmd::fmt_revisions::compare_style(&old, &mut new, &[], &mut revisions, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(changed);
+    assert_eq!(new.para.fmt_change.as_deref().expect("change recorded").old.numbering, Some(wordcraft_doc::props::NumRef { num: 7, level: 0 }));
+    assert!(!new.old_numbering_from_base, "the old side is the original's explicit current list");
+
+    let old = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps {
+            numbering: Some(wordcraft_doc::props::NumRef { num: 7, level: 0 }),
+            fmt_change: wordcraft_doc::props::PropChange::boxed(
+                0,
+                wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 5, level: 0 }), ..Default::default() },
+            ),
+            ..Default::default()
+        },
+        numbering_from_base: true,
+        old_numbering_from_base: false,
+        ..Default::default()
+    };
+    let before = vec![wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Format,
+        author: "Reviewer".into(),
+        date: "2026-01-01T00:00:00Z".into(),
+        move_name: None,
+    }];
+    let mut revisions = before.clone();
+    let mut new = wordcraft_doc::Style {
+        id: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: 9, level: 0 }), ..Default::default() },
+        numbering_from_base: true,
+        old_numbering_from_base: true,
+        ..Default::default()
+    };
+    let changed = crate::cmd::fmt_revisions::compare_style(&old, &mut new, &before, &mut revisions, "Reviewer", "2026-01-01T00:00:00Z");
+    assert!(changed);
+    assert_eq!(new.para.fmt_change.as_deref().expect("change kept").old.numbering, Some(wordcraft_doc::props::NumRef { num: 5, level: 0 }));
+    assert!(!new.old_numbering_from_base, "the earlier change's old side was explicit");
+}
+
+/// #5841: compare records the original current list as the old side of a style change, and
+/// rejecting it writes that list explicitly rather than as inherited.
+#[test]
+fn compare_style_rejected_change_keeps_the_original_list_explicit() {
+    let mut original = Document::from_text("Item");
+    let num = Arc::make_mut(&mut original.numbering).add_list(wordcraft_doc::numbering::ListKind::Numbered);
+    Arc::make_mut(&mut original.styles).styles.push(wordcraft_doc::Style {
+        id: "Child".into(),
+        name: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    let orig_path = std::env::temp_dir().join(format!("wc-compare-old-prov-orig-{}.docx", std::process::id()));
+    std::fs::write(&orig_path, wordcraft_docx::write(&original).unwrap()).unwrap();
+
+    let mut revised = Document::from_text("Item");
+    let revised_num = Arc::make_mut(&mut revised.numbering).add_list(wordcraft_doc::numbering::ListKind::Bullet);
+    Arc::make_mut(&mut revised.styles).styles.push(wordcraft_doc::Style {
+        id: "Child".into(),
+        name: "Child".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: wordcraft_doc::props::ParaProps { numbering: Some(wordcraft_doc::props::NumRef { num: revised_num, level: 0 }), ..Default::default() },
+        numbering_from_base: true,
+        old_numbering_from_base: true,
+        ..Default::default()
+    });
+    let rev_path = std::env::temp_dir().join(format!("wc-compare-old-prov-rev-{}.docx", std::process::id()));
+    std::fs::write(&rev_path, wordcraft_docx::write(&revised).unwrap()).unwrap();
+
+    let mut s = Session::new(Document::new());
+    let _ = s
+        .run(
+            "review.compare",
+            &json!({
+                "original": orig_path.to_string_lossy(),
+                "path": rev_path.to_string_lossy(),
+                "author": "Reviewer"
+            }),
+        )
+        .unwrap();
+    let child = s.doc.styles.get("Child").expect("Child style");
+    assert!(!child.old_numbering_from_base, "the recorded old side is the original's current list");
+    s.run("review.rejectAll", &json!({})).unwrap();
+    let child = s.doc.styles.get("Child").expect("Child style after reject");
+    assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert!(!child.numbering_from_base);
+
+    let reloaded = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).expect("reload");
+    let child = reloaded.styles.get("Child").expect("Child style after reload");
+    assert_eq!(child.para.numbering, Some(wordcraft_doc::props::NumRef { num, level: 0 }));
+    assert!(!child.numbering_from_base);
+
+    let _ = std::fs::remove_file(orig_path);
+    let _ = std::fs::remove_file(rev_path);
+}

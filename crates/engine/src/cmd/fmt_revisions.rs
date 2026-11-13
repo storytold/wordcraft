@@ -287,6 +287,13 @@ pub(crate) fn compare_style(
     if new.kind != wordcraft_doc::StyleKind::Character
         && let Some(Replacement(want)) = r.change(&old.para, &new.para, ParaProps::formatting, |p| &p.fmt_change)
     {
+        // The recorded old side is either the original style's earlier change (kept when the
+        // formatting matches or belongs to this author) or its current properties. Carry the
+        // matching provenance so rejecting writes the right list.
+        let same_formatting = old.para.formatting() == new.para.formatting();
+        let own = old.para.fmt_change.as_deref().is_some_and(|c| before.get(c.rev as usize).is_some_and(|r| r.author == author));
+        let from_old_change = old.para.fmt_change.is_some() && (same_formatting || own);
+        new.old_numbering_from_base = if from_old_change { old.old_numbering_from_base } else { old.numbering_from_base };
         new.para.fmt_change = want;
         changed = true;
     }
