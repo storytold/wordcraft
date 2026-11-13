@@ -7,7 +7,15 @@ pub(super) const HYPHENATION_ZONE: f32 = wordcraft_doc::DEFAULT_HYPHENATION_ZONE
 
 /// How much of their width the spaces of a justified line may give up to fit more text (Word
 /// 2013+, compatibility mode 15).
-const MAX_SPACE_SHRINK: f32 = 0.25;
+pub(super) const MAX_SPACE_SHRINK: f32 = 0.25;
+
+/// How much of their width the single spaces of a line may give up in a document opened from
+/// RTF: just under half (Word keeps the word at 49.2% and wraps it at 50%).
+pub(super) const RTF_MAX_SPACE_SHRINK: f32 = 0.5;
+
+/// Points inside the right edge the space before the overrunning word must start, for widths
+/// summed in `f32`: Word wraps the word when that space starts exactly on the edge.
+const RTF_EDGE_TOLERANCE: f32 = 0.01;
 
 /// How far a word (with the space before it) may overrun a justified line and still be fitted
 /// onto it by shrinking the line's spaces, as a share of its own width.
@@ -22,12 +30,58 @@ pub(super) fn space_room(spaces: f32, word: f32) -> f32 {
     (spaces * MAX_SPACE_SHRINK).min(word.max(0.0) * MAX_WORD_OVERRUN)
 }
 
+/// How far a line of a document opened from RTF may run past its right edge, its inner single
+/// spaces (`spaces` wide in all, up to and including the one before the word) shrinking to make
+/// room, when the word ending the line ends `overrun` past the edge and the space before it
+/// starts at `space_from`. Measured in Word (synthetic RTF files, Courier New 8 to 20 pt, left,
+/// right, centred and justified alike): the word stays when the space before it starts inside the
+/// line and the overrun is less than half the width of the line's single spaces, however many
+/// there are; the word's own width doesn't limit it. Otherwise nothing (the word wraps). Only
+/// single spaces count: a run of two or more keeps its width. The caller squeezes only lines whose
+/// single spaces are all in fixed-pitch fonts: in Times New Roman an overrun of 0.125 pt wraps.
+///
+/// With `\wraptrsp` (`Settings::wrap_trail_spaces`, measured for justified lines only) `first` is
+/// how far the word's first character ends past the edge and the width of the space before the
+/// word: Word keeps the word only when that character overruns by less than half that space.
+pub(super) fn rtf_space_room(spaces: f32, overrun: f32, space_from: f32, right_edge: f32, first: Option<(f32, f32)>) -> f32 {
+    let first_ok = first.is_none_or(|(over, space)| over < space * 0.5);
+    let starts_inside = space_from < right_edge - RTF_EDGE_TOLERANCE;
+    if first_ok && starts_inside && overrun > 0.0 && overrun < spaces * RTF_MAX_SPACE_SHRINK { overrun } else { 0.0 }
+}
+
+/// Whether the space cluster `k` stands alone: no space next to it (markers between don't
+/// separate them).
+fn single_space(pl: &ParaLayout, k: usize) -> bool {
+    let is_space = |c: Option<&super::model::Cluster>| c.is_some_and(|c| c.kind == ClKind::Space);
+    let before = pl.clusters.get(..k).and_then(|cs| cs.iter().rev().find(|c| c.kind != ClKind::Marker));
+    let after = pl.clusters.get(k + 1..).and_then(|cs| cs.iter().find(|c| c.kind != ClKind::Marker));
+    !is_space(before) && !is_space(after)
+}
+
 /// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
-/// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone.
-pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1: usize, content_end: f32, slack: f32) {
-    let spaces: Vec<(usize, f32)> = (c0..c1)
+/// never more than `cap` of them ([`MAX_SPACE_SHRINK`], or [`RTF_MAX_SPACE_SHRINK`]). Trailing
+/// spaces hang and are left alone; with `skip_leading`, so are the spaces before the line's
+/// first character. With `singles_only` (RTF) a run of two or more spaces keeps its width and
+/// only single spaces shrink.
+pub(super) fn shrink_line_spaces(
+    pl: &ParaLayout,
+    xs: &mut [f32],
+    (c0, c1): (usize, usize),
+    (content_end, slack): (f32, f32),
+    cap: f32,
+    (skip_leading, singles_only): (bool, bool),
+) {
+    let first = if skip_leading {
+        (c0..c1).find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind != ClKind::Space && c.kind != ClKind::Marker)).unwrap_or(c1)
+    } else {
+        c0
+    };
+    let spaces: Vec<(usize, f32)> = (first..c1)
         .filter_map(|k| {
             let c = pl.clusters.get(k).filter(|c| c.kind == ClKind::Space)?;
+            if singles_only && !single_space(pl, k) {
+                return None;
+            }
             (xs.get(k - c0).copied().unwrap_or(f32::MAX) < content_end - 0.01).then_some((k, c.adv))
         })
         .collect();
@@ -35,7 +89,7 @@ pub(super) fn shrink_line_spaces(pl: &ParaLayout, xs: &mut [f32], c0: usize, c1:
     if total <= 0.0 || !slack.is_finite() {
         return;
     }
-    let ratio = (-slack / total).clamp(0.0, MAX_SPACE_SHRINK);
+    let ratio = (-slack / total).clamp(0.0, cap);
     let mut take = 0.0;
     let mut next = spaces.iter().peekable();
     for k in c0..c1 {

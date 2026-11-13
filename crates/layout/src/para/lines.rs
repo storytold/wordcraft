@@ -1,6 +1,6 @@
 use super::bidi::{even_row, reorder_line};
 use super::grid::{Exclusion, Grid};
-use super::justify::{HYPHENATION_ZONE, hyphen_glyph, shrink_line_spaces, space_room};
+use super::justify::{HYPHENATION_ZONE, MAX_SPACE_SHRINK, RTF_MAX_SPACE_SHRINK, hyphen_glyph, rtf_space_room, shrink_line_spaces, space_room};
 use super::model::{ClKind, Cluster, Line, LineEnd, ParaEnv};
 use super::paragraph::word_widths;
 use super::tabs::{next_tab, pl_text_at, ptab_stop, resolve_tab};
@@ -27,6 +27,16 @@ struct Breaker<'e> {
     /// Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     /// spaces (`space_room`); never on lines with tabs.
     shrink_spaces: bool,
+    /// A left, right, centred or justified paragraph of a document opened from RTF fits the word
+    /// that overruns the line by shrinking its single spaces (`rtf_space_room`) instead, when
+    /// they are all in fixed-pitch fonts; never on lines with tabs. With `\wraptrsp` justified
+    /// paragraphs only (the only ones measured).
+    rtf_squeeze: bool,
+    /// Whether each of the paragraph's styles is in a fixed-pitch font (for `rtf_squeeze` only).
+    fixed_pitch: Vec<bool>,
+    /// With `\wraptrsp` (`Settings::wrap_trail_spaces`) that word stays only when its first
+    /// character overruns the edge by less than half the space before it.
+    wrap_trail_spaces: bool,
     /// Word stretches a justified line ending in a manual line break unless the document says not to.
     expand_break: bool,
     /// Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
@@ -85,6 +95,10 @@ struct Scan {
     last_plain: Option<(usize, f32)>,
     /// Where the space before the current word starts.
     word_from: f32,
+    /// The width of the space before the current word (0 after another break).
+    word_space: f32,
+    /// Where the current word's first character ends, once it is placed.
+    word_first_end: Option<f32>,
     /// After `hyph_limit` hyphenated lines in a row this one may not end with a hyphen.
     hyph_ok: bool,
     end: LineEnd,
@@ -96,6 +110,17 @@ struct Scan {
     decimal: Option<DecimalScan>,
     /// The width of the spaces so far on this line.
     space_w: f32,
+    /// The width of the spaces before the line's first character.
+    lead_space_w: f32,
+    /// The width of the line's single inner spaces so far (a run of two or more spaces doesn't
+    /// count: in RTF it keeps its width), how many of them are in a font that isn't fixed-pitch,
+    /// and the length, first space's width and whether that space is in a proportional font, of
+    /// the run of spaces just placed.
+    single_space_w: f32,
+    proportional_spaces: usize,
+    space_run: (usize, f32, bool),
+    /// Whether anything but spaces and markers is on the line yet.
+    text_seen: bool,
     has_tab: bool,
     /// The first word doesn't fit a span narrowed by a floating object: it moves on whole.
     skip: bool,
@@ -189,7 +214,15 @@ impl<'e> Breaker<'e> {
             default_tab: settings.default_tab,
             hanging_at: if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None },
             tab_origin: if settings.odf.is_some_and(|o| o.tabs_from_indent) { rp.indent_left } else { 0.0 },
-            shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT,
+            shrink_spaces: rp.align == Align::Justify && settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT && !settings.rtf_justification,
+            rtf_squeeze: settings.rtf_justification
+                && match rp.align {
+                    Align::Justify => true,
+                    Align::Left | Align::Right | Align::Center => !settings.wrap_trail_spaces,
+                    Align::Distribute => false,
+                },
+            fixed_pitch: if settings.rtf_justification { pl.styles.iter().map(|st| st.face.is_fixed_pitch()).collect() } else { Vec::new() },
+            wrap_trail_spaces: settings.wrap_trail_spaces,
             expand_break: !settings.do_not_expand_shift_return,
             zone: Some(settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0),
             hyph_limit: settings.consecutive_hyphen_limit as usize,
@@ -275,12 +308,19 @@ impl<'e> Breaker<'e> {
             last_break: None,
             last_plain: None,
             word_from: left,
+            word_space: 0.0,
+            word_first_end: None,
             hyph_ok: self.hyph_limit == 0 || self.lines.iter().rev().take_while(|l| l.hyphen.is_some()).count() < self.hyph_limit,
             end: LineEnd::Para,
             j: self.i,
             pending_tab: None,
             decimal: None,
             space_w: 0.0,
+            lead_space_w: 0.0,
+            single_space_w: 0.0,
+            proportional_spaces: 0,
+            space_run: (0, 0.0, false),
+            text_seen: false,
             has_tab: false,
             skip: false,
         }
@@ -576,9 +616,11 @@ impl<'e> Breaker<'e> {
         let stretch_end = sc.end == LineEnd::Wrap || (sc.end == LineEnd::LineBreak && self.expand_break);
         let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
-        let shrink = display.is_none() && self.shrink_spaces && slack < 0.0 && last_tab.is_none();
+        let rtf_squeeze = self.rtf_squeeze && sc.proportional_spaces == 0;
+        let shrink = display.is_none() && (self.shrink_spaces || rtf_squeeze) && slack < 0.0 && last_tab.is_none();
         if shrink {
-            shrink_line_spaces(pl, &mut sc.xs, c0, c1, content_end, slack);
+            let cap = if rtf_squeeze { RTF_MAX_SPACE_SHRINK } else { MAX_SPACE_SHRINK };
+            shrink_line_spaces(pl, &mut sc.xs, (c0, c1), (content_end, slack), cap, (rtf_squeeze, rtf_squeeze));
         } else if justify && slack > 0.0 {
             justify_line(pl, &mut sc.xs, (c0, c1, align_from), (content_end, slack), rp.align == Align::Distribute);
         }
@@ -888,7 +930,17 @@ impl Scan {
         // each segment's font, glyphs and position for painting.
         let advance = pl.atomic_advance(j);
         let absorbs = self.absorbs(pl, advance);
-        let shrink = if bk.shrink_spaces && !self.has_tab {
+        let shrink = if bk.rtf_squeeze && !self.has_tab && self.proportional_spaces == 0 {
+            // The whole word decides, from the character that first crosses the edge on.
+            let word_end = self.x + bk.widths.get(j).copied().unwrap_or(advance) - pl.auto_space_after(j);
+            let first_end = match self.word_first_end {
+                Some(e) => e,
+                None if c.kind != ClKind::Space && c.kind != ClKind::Marker => self.x + advance,
+                None => f32::NEG_INFINITY,
+            };
+            let first = bk.wrap_trail_spaces.then_some((first_end - self.right_edge, self.word_space));
+            rtf_space_room(self.single_space_w, word_end - self.right_edge, self.word_from, self.right_edge, first)
+        } else if bk.shrink_spaces && !self.has_tab {
             space_room(self.space_w, self.x + advance - pl.auto_space_after(j) - self.word_from)
         } else {
             0.0
@@ -904,7 +956,33 @@ impl Scan {
         self.xs.push(self.x);
         self.x += c.adv;
         if c.kind == ClKind::Space {
+            if !self.text_seen {
+                self.lead_space_w += c.adv;
+            } else {
+                // A space joining a single one makes a run: neither counts any more.
+                match self.space_run.0 {
+                    0 => {
+                        let proportional = bk.rtf_squeeze && !bk.fixed_pitch.get(c.style as usize).copied().unwrap_or(false);
+                        self.single_space_w += c.adv;
+                        self.proportional_spaces = self.proportional_spaces.saturating_add(usize::from(proportional));
+                        self.space_run.1 = c.adv;
+                        self.space_run.2 = proportional;
+                    }
+                    1 => {
+                        self.single_space_w -= self.space_run.1;
+                        self.proportional_spaces = self.proportional_spaces.saturating_sub(usize::from(self.space_run.2));
+                    }
+                    _ => {}
+                }
+                self.space_run.0 = self.space_run.0.saturating_add(1);
+            }
             self.space_w += c.adv;
+        } else if c.kind != ClKind::Marker {
+            self.text_seen = true;
+            self.space_run = (0, 0.0, false);
+            if self.word_first_end.is_none() {
+                self.word_first_end = Some(self.x);
+            }
         }
         self.shift_pending_tab(pl);
         if is_display {
@@ -985,6 +1063,8 @@ impl Scan {
             self.last_break = Some(j);
             self.last_plain = Some((j, self.x));
             self.word_from = if c.kind == ClKind::Space { self.x - c.adv } else { self.x };
+            self.word_space = if c.kind == ClKind::Space { c.adv } else { 0.0 };
+            self.word_first_end = None;
         } else if self.hyph_ok
             && !pl.clusters.get(j + 1).is_some_and(|n| n.kind == ClKind::Text && n.g1 <= n.g0)
             && self.x + hyphen_glyph(pl, c.style, &mut bk.hcache).2 <= self.right_edge + shrink + 0.01

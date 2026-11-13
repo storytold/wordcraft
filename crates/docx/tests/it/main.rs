@@ -48,3 +48,5 @@ mod undefined_style;
 mod vml_shapes;
 mod word_xml;
 mod wordml2003_write;
+mod wrap_trail_spaces;
+mod wrap_trail_spaces_merge;

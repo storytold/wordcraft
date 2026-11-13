@@ -391,6 +391,19 @@ impl FontFace {
     pub fn is_east_asian(&self) -> bool {
         self.skrifa().is_some_and(|f| east_asian_font(&f))
     }
+    /// Is this a fixed-pitch (monospaced) font? Its `post` table says so (`isFixedPitch`), or,
+    /// without one, every printable ASCII character it maps has the same advance.
+    pub fn is_fixed_pitch(&self) -> bool {
+        use skrifa::raw::TableProvider;
+        let Some(f) = self.skrifa() else { return false };
+        if let Ok(post) = f.post() {
+            return post.is_fixed_pitch() != 0;
+        }
+        let (cmap, metrics) = (f.charmap(), f.glyph_metrics(Size::unscaled(), self.location()));
+        let mut advances = (' '..='~').filter_map(|c| cmap.map(c)).filter_map(|g| metrics.advance_width(g));
+        let Some(first) = advances.next() else { return false };
+        advances.all(|a| (a - first).abs() < 0.5)
+    }
 }
 
 pub(super) static NEXT_ID: AtomicU32 = AtomicU32::new(1);

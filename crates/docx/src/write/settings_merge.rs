@@ -8,7 +8,7 @@
 //! tag (namespace declarations, `mc:Ignorable`) and every child the model doesn't own are kept
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
-//! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
+//! `w:compat` only the `compatibilityMode` setting and the `w:wrapTrailSpaces` switch are replaced. Kept children that refer to a
 //! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
 //! carried. Anything unexpected returns `None`, and the generated part is written as before.
 
@@ -227,8 +227,89 @@ fn children(xml: &str, root: &str) -> Option<(usize, usize, Vec<Child>)> {
     Some((open_end, close, out))
 }
 
-/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+/// CT_Compat children that come after `w:wrapTrailSpaces` (ECMA-376 Part 1, §17.15.3, wml.xsd
+/// `CT_Compat`), for placing an inserted switch.
+const AFTER_WRAP_TRAIL_SPACES: &[&str] = &[
+    "w:footnoteLayoutLikeWW8",
+    "w:shapeLayoutLikeWW8",
+    "w:alignTablesRowByRow",
+    "w:forgetLastTabAlignment",
+    "w:adjustLineHeightInTable",
+    "w:autoSpaceLikeWord95",
+    "w:noSpaceRaiseLower",
+    "w:doNotUseHTMLParagraphAutoSpacing",
+    "w:layoutRawTableWidth",
+    "w:layoutTableRowsApart",
+    "w:useWord97LineBreakRules",
+    "w:doNotBreakWrappedTables",
+    "w:doNotSnapToGridInCell",
+    "w:selectFldWithFirstOrLastChar",
+    "w:applyBreakingRules",
+    "w:doNotWrapTextWithPunct",
+    "w:doNotUseEastAsianBreakRules",
+    "w:useWord2002TableStyleRules",
+    "w:growAutofit",
+    "w:useFELayout",
+    "w:useNormalStyleForList",
+    "w:doNotUseIndentAsNumberingTabStop",
+    "w:useAltKinsokuLineBreakRules",
+    "w:allowSpaceOfSameStyleInTable",
+    "w:doNotSuppressIndentation",
+    "w:doNotAutofitConstrainedTables",
+    "w:autofitToFirstFixedWidthCell",
+    "w:underlineTabInNumList",
+    "w:displayHangulFixedWidth",
+    "w:splitPgBreakAndParaMark",
+    "w:doNotVertAlignCellWithSp",
+    "w:doNotBreakConstrainedForcedTable",
+    "w:doNotVertAlignInTxbx",
+    "w:useAnsiKerningForTwoByteTabs",
+    "w:cachedColBalance",
+    "w:compatSetting",
+];
+
+const WRAP_TRAIL_SPACES: &str = "w:wrapTrailSpaces";
+
+/// `compat` (a `w:compat` element) with a self-closing `<w:compat/>` written as start and end tags.
+fn expand_compat(compat: &str) -> Option<String> {
+    let open = compat.find("<w:compat")?;
+    let end = open + tag_end(compat.get(open..)?)? + 1;
+    let head = compat.get(..end)?;
+    match head.strip_suffix("/>") {
+        Some(start) => Some(format!("{}></w:compat>{}", start.trim_end(), compat.get(end..)?)),
+        None => Some(compat.to_string()),
+    }
+}
+
+/// `orig` (a `w:compat` element) with its `w:wrapTrailSpaces` switches replaced by the generated
+/// one, if any, at its CT_Compat position.
+fn merge_wrap_trail_spaces(orig: &str, generated: &str) -> Option<String> {
+    let generated = expand_compat(generated)?;
+    let (_, _, g_kids) = children(&generated, "w:compat")?;
+    let wanted = match g_kids.iter().find(|k| k.name == WRAP_TRAIL_SPACES) {
+        Some(k) => Some(generated.get(k.start..k.end)?),
+        None => None,
+    };
+    let mut s = expand_compat(orig)?;
+    let (_, _, kids) = children(&s, "w:compat")?;
+    for k in kids.iter().rev().filter(|k| k.name == WRAP_TRAIL_SPACES) {
+        s = format!("{}{}", s.get(..k.start)?, s.get(k.end..)?);
+    }
+    let Some(wanted) = wanted else { return Some(s) };
+    let (_, close, kids) = children(&s, "w:compat")?;
+    let at = kids.iter().find(|k| AFTER_WRAP_TRAIL_SPACES.contains(&k.name.as_str())).map_or(close, |k| k.start);
+    Some(format!("{}{wanted}{}", s.get(..at)?, s.get(at..)?))
+}
+
+/// The original `w:compat` with its `compatibilityMode` and `w:wrapTrailSpaces` taken from the
+/// generated one.
 fn merge_compat(orig: &str, generated: &str) -> Option<String> {
+    let with_mode = merge_compat_mode(orig, generated)?;
+    merge_wrap_trail_spaces(&with_mode, generated)
+}
+
+/// The original `w:compat` with its `compatibilityMode` taken from the generated one.
+fn merge_compat_mode(orig: &str, generated: &str) -> Option<String> {
     let mode = |s: &str| -> Option<(usize, usize)> {
         let at = s.find("w:name=\"compatibilityMode\"")?;
         let tag_start = s.get(..at)?.rfind('<')?;
@@ -385,5 +466,35 @@ mod tests {
         let out = String::from_utf8(merge(orig.as_bytes(), GEN.as_bytes()).unwrap()).unwrap();
         assert!(out.contains("<w:compat><w:compatSetting") && out.contains("</w:compat>"), "{out}");
         assert!(out.contains("<w:rsidRoot w:val=\"00112233\"/>"), "{out}");
+    }
+
+    fn merged(orig_compat: &str, gen_compat: &str) -> String {
+        let orig = format!(r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r">{orig_compat}<w:rsids/></w:settings>"#);
+        let gen_s = format!(r#"<w:settings xmlns:w="w" xmlns:m="m" xmlns:r="r">{gen_compat}</w:settings>"#);
+        String::from_utf8(merge(orig.as_bytes(), gen_s.as_bytes()).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn a_self_closing_compat_block_gets_the_generated_wrap_trail_spaces() {
+        let out = merged("<w:compat/>", "<w:compat><w:wrapTrailSpaces/></w:compat>");
+        assert!(out.contains("<w:compat><w:wrapTrailSpaces/></w:compat>"), "{out}");
+        let out = merged("<w:compat/>", r#"<w:compat><w:wrapTrailSpaces/><w:compatSetting w:name="compatibilityMode" w:val="15"/></w:compat>"#);
+        assert!(out.contains(r#"<w:compat><w:wrapTrailSpaces/><w:compatSetting w:name="compatibilityMode""#), "{out}");
+        assert_eq!(out.matches("<w:wrapTrailSpaces").count(), 1, "{out}");
+    }
+
+    #[test]
+    fn a_longer_name_with_the_same_prefix_is_kept() {
+        let out = merged("<w:compat><w:wrapTrailSpacesX/><w:useFELayout/></w:compat>", "<w:compat/>");
+        assert!(out.contains("<w:compat><w:wrapTrailSpacesX/><w:useFELayout/></w:compat>"), "{out}");
+        let out = merged("<w:compat><w:wrapTrailSpacesX/><w:useFELayout/></w:compat>", "<w:compat><w:wrapTrailSpaces/></w:compat>");
+        assert!(out.contains("<w:compat><w:wrapTrailSpacesX/><w:wrapTrailSpaces/><w:useFELayout/></w:compat>"), "{out}");
+    }
+
+    #[test]
+    fn the_open_close_form_is_removed() {
+        let out = merged(r#"<w:compat><w:wrapTrailSpaces w:val="1"></w:wrapTrailSpaces><w:useFELayout/></w:compat>"#, "<w:compat></w:compat>");
+        assert!(!out.contains("wrapTrailSpaces"), "{out}");
+        assert!(out.contains("<w:compat><w:useFELayout/></w:compat>"), "{out}");
     }
 }

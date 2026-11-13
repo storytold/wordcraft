@@ -1827,3 +1827,6 @@ fn compound_borders_round_trip() {
     let back = import(export(&d).as_bytes()).unwrap();
     assert_eq!(tops(&back), want);
 }
+mod jexpand;
+mod justification_flag;
+mod wrap_trail_spaces;

@@ -913,10 +913,10 @@ pub fn export(doc: &Document) -> String {
         w.sections = secs;
     }
     w.blocks(&flow.blocks, false, "\\par", &mut body, 0);
-    export_with(&flow.meta, &w, &body, &doc.last_section)
+    export_with(&flow.meta, &w, &body, &doc.last_section, &doc.settings)
 }
 
-fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionProps) -> String {
+fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionProps, settings: &wordcraft_doc::Settings) -> String {
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
@@ -969,8 +969,12 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     out.push_str("}\n");
     let tw = |v: f32| (v * 20.0).round() as i64;
     let landscape = if sec.landscape { "\\landscape" } else { "" };
+    let wraptrsp = if settings.wrap_trail_spaces { "\\wraptrsp" } else { "" };
+    // A document that does not squeeze spaces to keep an overrunning word (one not from RTF, or
+    // an RTF one that said so) tells Word with `\jexpand`; `\jcompress` is the default.
+    let jexpand = if settings.rtf_justification { "" } else { "\\jexpand" };
     out.push_str(&format!(
-        "\\paperw{}\\paperh{}\\margl{}\\margr{}\\margt{}\\margb{}{landscape}\\viewkind4\n",
+        "\\paperw{}\\paperh{}\\margl{}\\margr{}\\margt{}\\margb{}{landscape}\\viewkind4{wraptrsp}{jexpand}\n",
         tw(sec.page_w),
         tw(sec.page_h),
         tw(sec.margin_left),

@@ -258,6 +258,15 @@ impl Reader {
             "margt" => self.page.top = Some(pv),
             "margb" => self.page.bottom = Some(pv),
             "landscape" => self.page.landscape = on,
+            "wraptrsp" => self.wrap_trail_spaces = on,
+            // `\jexpand` and `\jcompress` only count among the document's own formatting words: in
+            // a style, a header or a note they are swallowed, so they can't change how the whole
+            // document justifies.
+            "jexpand" | "jcompress" => {
+                if self.st.dest == Dest::Body && self.sub.is_none() && self.hf.is_none() {
+                    self.expand_justification = w == "jexpand";
+                }
+            }
             _ if self.section_word(w, p) => {}
             "cellx" => {
                 self.cell_side = None;
@@ -585,4 +594,21 @@ impl Reader {
 /// The target of a `HYPERLINK` field instruction; `%22` is a quote, as the writer stores one.
 pub(super) fn hyperlink(instr: &str) -> Option<String> {
     wordcraft_doc::link::hyperlink_target(instr).map(|t| t.replace("%22", "\""))
+}
+
+#[cfg(test)]
+mod jexpand_scope_tests {
+    use super::super::import;
+
+    /// `\jexpand` in a style, a header or a footnote is not the document's own word.
+    #[test]
+    fn jexpand_outside_the_document_formatting_does_not_count() {
+        for rtf in [
+            r"{\rtf1\ansi{\stylesheet{\s0\jexpand Normal;}}\pard Text.\par}",
+            r"{\rtf1\ansi{\header\jexpand\pard Head\par}\pard Text.\par}",
+            r"{\rtf1\ansi\pard Text{\footnote\jexpand\pard Note\par}.\par}",
+        ] {
+            assert!(import(rtf.as_bytes()).unwrap().settings.rtf_justification, "{rtf}");
+        }
+    }
 }
