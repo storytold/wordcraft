@@ -921,6 +921,164 @@ fn applying_a_heading_clears_list_numbering() {
     }
 }
 
+/// Make the first `upto` bytes of body paragraph `block` 20 pt, red and bold.
+fn formatted_words(s: &mut Session, block: usize, upto: usize) {
+    select(s, (block, 0), (block, upto));
+    run(s, "format.size", json!({"size": 20}));
+    run(s, "format.color", json!({"color": "FF0000"}));
+    run(s, "format.bold", json!({"value": true}));
+}
+
+/// 39 characters, 40 with the paragraph mark.
+const WORDS: &str = "keep this text and some more words here";
+
+fn select(s: &mut Session, from: (usize, usize), to: (usize, usize)) {
+    run(s, "select.range", json!({"anchor": {"block": from.0, "off": from.1}, "focus": {"block": to.0, "off": to.1}}));
+}
+
+/// Size, colour and bold set directly on the character at `off` of body paragraph `block`.
+fn direct(s: &Session, block: usize, off: usize) -> (Option<f32>, bool, Option<bool>) {
+    let c = s.doc.para_at(&Pos::body(block, 0)).unwrap().props_of_char(off);
+    (c.size, c.color.is_some(), c.bold)
+}
+
+const KEPT: (Option<f32>, bool, Option<bool>) = (Some(20.0), true, Some(true));
+const RESET: (Option<f32>, bool, Option<bool>) = (None, false, None);
+
+#[test]
+fn a_paragraph_style_keeps_direct_formatting_on_less_than_half_the_paragraph() {
+    // #5947, as in Word: "keep" is 4 of 40 characters (the paragraph mark counts), so Heading 1
+    // keeps its size, colour and bold with the caret or the whole paragraph selected. Its size and
+    // colour used to go.
+    for (case, from, to) in [("caret", 37, 37), ("whole paragraph", 0, 39)] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": WORDS}));
+        formatted_words(&mut s, 0, 4);
+        select(&mut s, (0, from), (0, to));
+        run(&mut s, "para.heading1", json!({}));
+        assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"), "{case}");
+        assert_eq!(direct(&s, 0, 0), KEPT, "{case}");
+        let doc = crate::io::open_bytes("k.docx", &crate::io::save_bytes("k.docx", &s.doc).unwrap()).unwrap();
+        let back = doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(0);
+        assert_eq!((back.size, back.bold), (Some(20.0), Some(true)), "{case}: saved and reopened");
+    }
+    // Characters, not bytes: 6 of 16 characters, but 12 of 22 bytes.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "\u{e9}\u{e9}\u{e9}\u{e9}\u{e9}\u{e9} abcdefgh"}));
+    formatted_words(&mut s, 0, 12);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 20}}));
+    run(&mut s, "para.heading1", json!({}));
+    assert_eq!(direct(&s, 0, 0), KEPT);
+}
+
+#[test]
+fn a_paragraph_style_resets_direct_formatting_on_half_the_paragraph_or_more() {
+    // As in Word: "keep this text and some more" is 28 of 40 characters, so Heading 1 resets its
+    // size, colour and bold everywhere in the paragraph, wherever the caret is. Each property
+    // counts on its own: italic on "keep" alone stays, and highlight always stays.
+    {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": WORDS}));
+        formatted_words(&mut s, 0, 28);
+        run(&mut s, "format.highlight", json!({"color": "yellow"}));
+        select(&mut s, (0, 0), (0, 4));
+        run(&mut s, "format.italic", json!({"value": true}));
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 37}}));
+        run(&mut s, "para.heading1", json!({}));
+        for off in [0, 10, 27] {
+            assert_eq!(direct(&s, 0, off), RESET, "offset {off}");
+        }
+        let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+        assert_eq!(p.props_of_char(0).italic, Some(true), "italic on 4 characters stays");
+        assert!(p.props_of_char(10).highlight.is_some(), "highlight stays");
+    }
+    // Exactly half resets: 11 of 22. 10 of 21 doesn't, but a formatted paragraph mark makes the
+    // size 11 of 21.
+    for (text, upto, mark, want) in [
+        ("aaaa bbbb cccc ddddd.", 11, false, RESET),
+        ("aaaa bbbb cccc dddd.", 10, false, KEPT),
+        ("aaaa bbbb cccc dddd.", 10, true, (None, true, Some(true))),
+    ] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": text}));
+        formatted_words(&mut s, 0, upto);
+        if mark {
+            s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().mark.size = Some(20.0);
+        }
+        run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 18}}));
+        run(&mut s, "para.heading1", json!({}));
+        assert_eq!(direct(&s, 0, 0), want, "{upto} of {}, mark formatted: {mark}", text.len() + 1);
+    }
+}
+
+#[test]
+fn a_paragraph_style_on_part_of_a_paragraph_resets_only_the_selection() {
+    // As in Word: with part of one paragraph selected, the selection loses its direct formatting
+    // and nothing outside it changes, however much of the paragraph it covers. First the #5947
+    // case: "keep" formatted, "this" selected. Then 28 of 40 formatted: "words" selected keeps it
+    // all, "this" selected loses only its own. Checked at "keep", "this" and "more".
+    for (upto, from, to, want) in [(4, 5, 9, (KEPT, RESET, RESET)), (28, 29, 34, (KEPT, KEPT, KEPT)), (28, 5, 9, (KEPT, RESET, KEPT))] {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": WORDS}));
+        formatted_words(&mut s, 0, upto);
+        select(&mut s, (0, from), (0, to));
+        run(&mut s, "para.heading1", json!({}));
+        assert_eq!(para_style(&s, 0).as_deref(), Some("Heading1"));
+        assert_eq!((direct(&s, 0, 0), direct(&s, 0, 6), direct(&s, 0, 24)), want, "{upto} formatted, {from}..{to} selected");
+    }
+}
+
+#[test]
+fn a_paragraph_style_on_several_paragraphs_follows_the_first() {
+    // As in Word: the selection from its start to the end of its first paragraph decides, and
+    // what it resets goes from every selected paragraph. Nothing was reset across paragraphs
+    // before. One undo takes it all back.
+    let two = |first: usize, second: usize| {
+        let mut s = s();
+        run(&mut s, "document.setText", json!({"text": format!("{WORDS}\n{WORDS}")}));
+        formatted_words(&mut s, 0, first);
+        formatted_words(&mut s, 1, second);
+        s
+    };
+    // 4 of 40 in the first: both keep theirs, the second's 28 of 40 too.
+    let mut s = two(4, 28);
+    select(&mut s, (0, 0), (1, 2));
+    run(&mut s, "para.heading1", json!({}));
+    assert_eq!((para_style(&s, 0).as_deref(), para_style(&s, 1).as_deref()), (Some("Heading1"), Some("Heading1")));
+    assert_eq!((direct(&s, 0, 0), direct(&s, 1, 0), direct(&s, 1, 10)), (KEPT, KEPT, KEPT));
+    // 28 of 40 in the first: both lose it, the second's 4 of 40 too.
+    let mut s = two(28, 4);
+    let before = s.doc.body.clone();
+    select(&mut s, (0, 0), (1, 2));
+    run(&mut s, "para.heading1", json!({}));
+    assert_eq!((direct(&s, 0, 0), direct(&s, 0, 10), direct(&s, 1, 0)), (RESET, RESET, RESET));
+    let after = s.doc.body.clone();
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.body, before, "one undo");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(s.doc.body, after, "redo");
+    // From "here" (unformatted, 5 characters with the mark) in the first: nothing is reset.
+    let mut s = two(28, 28);
+    select(&mut s, (0, 35), (1, 2));
+    run(&mut s, "para.heading1", json!({}));
+    assert_eq!((direct(&s, 0, 0), direct(&s, 1, 0)), (KEPT, KEPT));
+}
+
+#[test]
+fn a_style_created_from_formatted_text_carries_its_formatting() {
+    // New Style from the selection: the style takes the paragraph's look, so its direct
+    // formatting (all of the paragraph) goes and the text looks the same.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": WORDS}));
+    formatted_words(&mut s, 0, 39);
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 6}}));
+    let id = run(&mut s, "styles.create", json!({"name": "Loud"}))["id"].as_str().unwrap().to_string();
+    let st = s.doc.styles.get(&id).unwrap();
+    assert_eq!((st.chr.size, st.chr.color.is_some(), st.chr.bold), KEPT);
+    assert_eq!(para_style(&s, 0).as_deref(), Some(id.as_str()));
+    assert_eq!(direct(&s, 0, 6), RESET, "the style carries it now");
+}
+
 #[test]
 fn find_replace() {
     let mut s = s();
