@@ -13517,6 +13517,78 @@ fn footer_float_wraps_body() {
     }
 }
 
+/// An empty last paragraph right after a table in a cell takes no room. Measured in Word for
+/// Windows (16.0.20625) on synthetic 1 x 2 tables whose second cell holds a one-row table and
+/// then the paragraph the cell has to end with: the row is as tall as with the nested table
+/// alone, whatever the empty paragraph's font size (20 pt), spacing (10 pt before or after),
+/// exact line height, shading or border, and a centred or bottom-aligned cell places the nested
+/// table as if it were the cell's last block. A paragraph with text, even one space, takes its
+/// line; so does an empty one that another paragraph follows, and one after a table in the body.
+/// WordCraft gave the empty paragraph a line, so the row was that much taller.
+#[test]
+fn an_empty_paragraph_after_a_table_ends_its_cell_without_a_line() {
+    use wordcraft_doc::props::LineSpacing;
+    crate::test_fonts();
+    // A paragraph of `text` with 24 pt lines and `space` before and after.
+    let para = |text: &str, size: f32, space: f32| {
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(size), ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        p.mark = chr;
+        p.props =
+            ParaProps { space_before: Some(space), space_after: Some(space), line_spacing: Some(LineSpacing::Exactly(24.0)), ..Default::default() };
+        wordcraft_doc::para_block(p)
+    };
+    let table = |cells: Vec<Blocks>| {
+        let mut t = Table::new(1, cells.len(), 400.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([0.0; 4]);
+        for (cell, blocks) in t.rows[0].cells.iter_mut().zip(cells) {
+            cell.blocks = blocks;
+        }
+        t
+    };
+    let nested = || Arc::new(Block::Table(table(vec![vec![para("In", 12.0, 0.0)]])));
+    // The height of the outer row whose second cell holds `blocks`.
+    let row = |blocks: Blocks| {
+        let mut d = Document::new();
+        d.body = vec![Arc::new(Block::Table(table(vec![vec![para("Left", 12.0, 0.0)], blocks])))];
+        let l = lay(&d);
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|i| if let Placed::Cell { rect, table, .. } = i { (*table == Path::top(0)).then_some(rect.h) } else { None })
+            .unwrap()
+    };
+    let alone = row(vec![nested(), para("", 12.0, 0.0)]);
+    assert!((alone - 24.0).abs() < 0.01, "the cell ends where its nested table does: {alone}");
+    // Whatever the empty paragraph is like.
+    for (what, last) in [("20 pt", para("", 20.0, 0.0)), ("10 pt before and after", para("", 12.0, 10.0))] {
+        let h = row(vec![nested(), last]);
+        assert!((h - alone).abs() < 0.01, "an empty paragraph, {what}: {h}, {alone} without");
+    }
+    // Text before the table changes nothing about the paragraph after it.
+    let h = row(vec![para("Before", 12.0, 0.0), nested(), para("", 12.0, 0.0)]);
+    assert!((h - alone - 24.0).abs() < 0.01, "text, the table, an empty paragraph: {h}");
+    // A paragraph with text takes its line, a space too; so does an empty one that is not last.
+    for (what, blocks, lines) in [
+        ("text after the table", vec![nested(), para("After", 12.0, 0.0)], 1.0),
+        ("a space after the table", vec![nested(), para(" ", 12.0, 0.0)], 1.0),
+        ("two empty paragraphs", vec![nested(), para("", 12.0, 0.0), para("", 12.0, 0.0)], 2.0),
+        ("an empty paragraph between two tables", vec![nested(), para("", 12.0, 0.0), nested(), para("", 12.0, 0.0)], 2.0),
+    ] {
+        let h = row(blocks);
+        assert!((h - alone - 24.0 * lines).abs() < 0.01, "{what}: {h}, {alone} for the table alone");
+    }
+    // After a floating table the paragraph is laid out as before.
+    let floating = || {
+        let mut t = table(vec![vec![para("In", 12.0, 0.0)]]);
+        t.props.float = Some(Default::default());
+        Arc::new(Block::Table(t))
+    };
+    let h = row(vec![floating(), para("", 12.0, 0.0)]);
+    assert!(h >= 24.0 - 0.01, "after a floating table: {h}");
+}
+
 #[test]
 fn footer_table_wrap_bounds() {
     crate::test_fonts();
