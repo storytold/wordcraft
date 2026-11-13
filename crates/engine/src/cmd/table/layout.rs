@@ -1,7 +1,7 @@
 use super::cells::{cell, selected_cells, with_cells, with_table};
 use super::{
-    Align, Border, BorderStyle, Borders, CmdError, CmdResult, HeightRule, Path, Pos, Rgb, Selection, Session, Table, TextDirection, VAlign, Value,
-    json, p, sel_result,
+    Align, BORDER_KINDS, Border, BorderStyle, Borders, CmdError, CmdResult, HashSet, HeightRule, Path, Pos, Selection, Session, Table, TextDirection,
+    VAlign, VMerge, Value, border_color, border_style, border_width, json, opt_num, opt_str, p, sel_result,
 };
 
 /// Table Layout › AutoFit: Contents sizes the columns to their text, Window spreads them across
@@ -237,11 +237,34 @@ pub(super) fn fix_caret(s: &mut Session, tp: &Path, r: usize, c: usize) -> CmdRe
 }
 
 pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
-    let kind = p::str(v, "kind").unwrap_or("all");
-    let w = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
-    let color = p::str(v, "color").and_then(Rgb::parse);
-    let b = Border { style: BorderStyle::Single, width: w, color, space: 0.0 };
+    let kind = opt_str(v, "kind")?.unwrap_or("all");
+    if !BORDER_KINDS.contains(&kind) {
+        return Err(CmdError::Params(format!("unknown border kind `{kind}`")));
+    }
+    let pen = s.table_pen;
+    let style = match opt_str(v, "style")? {
+        Some(name) => border_style(name)?,
+        None => pen.style,
+    };
+    let w = opt_num(v, "width")?.map_or(pen.width, border_width);
+    let color = border_color(v)?.unwrap_or(pen.color);
     let none = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    let b = if style == BorderStyle::None { none } else { Border { style, width: w, color, space: 0.0 } };
+    let apply_to = opt_str(v, "applyTo")?;
+    let (tp, _, _) = cell(s)?;
+    let cells = selected_cells(s);
+    let whole = match apply_to {
+        Some("table") => true,
+        Some("cells") => false,
+        None => s.doc.table(s.sel.focus.story, &tp).is_some_and(|t| covers_table(t, &cells)),
+        Some(x) => return Err(CmdError::Params(format!("unknown applyTo `{x}`"))),
+    };
+    if !whole {
+        if cells.is_empty() {
+            return Err(CmdError::Failed("no table cells are selected".into()));
+        }
+        return with_table(s, |t| cell_borders(t, &cells, kind, Some(b)));
+    }
     with_table(s, |t| {
         let mut cur = t.props.borders.unwrap_or_default();
         match kind {
@@ -269,13 +292,184 @@ pub(super) fn borders(s: &mut Session, v: &Value) -> CmdResult {
             "bottom" => cur.bottom = Some(b),
             "left" => cur.left = Some(b),
             "right" => cur.right = Some(b),
+            "insideH" => cur.between = Some(b),
+            "insideV" => cur.inside_v = Some(b),
             _ => {}
         }
         t.props.borders = Some(cur);
-        for r in &mut t.rows {
-            for c in &mut r.cells {
-                c.props.borders = None;
+        // The cells' own lines on the sides the kind covers give way to the table's; the rest
+        // (a double line under the header row, say) stay.
+        let all: Vec<(usize, usize)> = t.rows.iter().enumerate().flat_map(|(r, row)| (0..row.cells.len()).map(move |c| (r, c))).collect();
+        cell_borders(t, &all, kind, None);
+    })
+}
+
+/// Whether `cells` are every cell of `t`.
+fn covers_table(t: &Table, cells: &[(usize, usize)]) -> bool {
+    let n: usize = t.rows.iter().map(|r| r.cells.len()).sum();
+    let mut seen: Vec<_> = cells.iter().filter(|(r, c)| t.rows.get(*r).is_some_and(|row| *c < row.cells.len())).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen.len() == n
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum Side {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl Side {
+    fn facing(self) -> Side {
+        match self {
+            Side::Top => Side::Bottom,
+            Side::Bottom => Side::Top,
+            Side::Left => Side::Right,
+            Side::Right => Side::Left,
+        }
+    }
+}
+
+/// Lines on the selected cells (row, cell index): the stretches of the selection's edges `kind`
+/// names, outer (`top`, `bottom`, `left`, `right`, `outside`) or between selected cells
+/// (`inside`, `insideH`, `insideV`); `all` and `none` every one. `line` is the border to set, or
+/// `None` to take the cells' own away there. A cell merged down is selected whole. Where a side
+/// faces cells of both kinds (a merged cell partly selected) only the cells across get the line;
+/// the cell across an outer side gets the facing side too, also when it is wider than one
+/// selected cell but every cell along it has the line, so the shared line is one border.
+fn cell_borders(t: &mut Table, cells: &[(usize, usize)], kind: &str, line: Option<Border>) {
+    // Every cell's grid columns, by row.
+    let ranges: Vec<Vec<(usize, usize)>> = t
+        .rows
+        .iter()
+        .map(|row| {
+            let mut at = 0usize;
+            row.cells
+                .iter()
+                .map(|c| {
+                    let r = (at, at.saturating_add(c.span()));
+                    at = r.1;
+                    r
+                })
+                .collect()
+        })
+        .collect();
+    let range = |r: usize, c: usize| ranges.get(r).and_then(|row| row.get(c)).copied();
+    let at_grid = |r: usize, g: usize| ranges.get(r).and_then(|row| row.iter().position(|&(a, _)| a == g));
+    let vmerge = |r: usize, c: usize| t.rows.get(r).and_then(|row| row.cells.get(c)).map(|x| x.props.vmerge);
+    let mut selected: HashSet<(usize, usize)> = cells.iter().copied().filter(|&(r, c)| range(r, c).is_some()).collect();
+    // A vertical merge: from its first cell down through the cells continuing it.
+    let mut order: Vec<(usize, usize)> = selected.iter().copied().collect();
+    order.sort_unstable();
+    let mut chained: HashSet<(usize, usize)> = HashSet::new();
+    for &(r, c) in &order {
+        let Some((g, _)) = range(r, c) else { continue };
+        if vmerge(r, c).is_none_or(|v| v == VMerge::None) || chained.contains(&(r, c)) {
+            continue;
+        }
+        let mut first = (r, c);
+        while vmerge(first.0, first.1) == Some(VMerge::Continue)
+            && let Some(up) = first.0.checked_sub(1)
+            && let Some(cu) = at_grid(up, g)
+        {
+            first = (up, cu);
+        }
+        let mut at = Some(first);
+        while let Some((rr, cc)) = at {
+            chained.insert((rr, cc));
+            at = at_grid(rr + 1, g).filter(|&cn| vmerge(rr + 1, cn) == Some(VMerge::Continue)).map(|cn| (rr + 1, cn));
+        }
+    }
+    selected.extend(chained);
+    let mut order: Vec<(usize, usize)> = selected.iter().copied().collect();
+    order.sort_unstable();
+    // The cells across `side` of (r, c), each with whether it lies within (r, c)'s columns.
+    let across = |r: usize, c: usize, side: Side| -> Vec<(usize, usize, bool)> {
+        let Some((g0, g1)) = range(r, c) else { return Vec::new() };
+        let row_across = match side {
+            Side::Top => r.checked_sub(1),
+            Side::Bottom => Some(r + 1),
+            Side::Left => return c.checked_sub(1).map(|cl| vec![(r, cl, true)]).unwrap_or_default(),
+            Side::Right => return range(r, c + 1).map(|_| vec![(r, c + 1, true)]).unwrap_or_default(),
+        };
+        let Some(ra) = row_across else { return Vec::new() };
+        ranges
+            .get(ra)
+            .map(|row| row.iter().enumerate().filter(|&(_, &(a, z))| z > g0 && a < g1).map(|(ca, &(a, z))| (ra, ca, a >= g0 && z <= g1)).collect())
+            .unwrap_or_default()
+    };
+    let wants = |side: Side| -> (bool, bool) {
+        let (outer_kind, inner_kind) = match side {
+            Side::Top => ("top", "insideH"),
+            Side::Bottom => ("bottom", "insideH"),
+            Side::Left => ("left", "insideV"),
+            Side::Right => ("right", "insideV"),
+        };
+        match kind {
+            "all" | "none" => (true, true),
+            "outside" => (true, false),
+            "inside" => (false, true),
+            k => (k == outer_kind, k == inner_kind),
+        }
+    };
+    let mut own: HashSet<(usize, usize, Side)> = HashSet::new();
+    let mut writes: Vec<(usize, usize, Side)> = Vec::new();
+    // Unselected cells across an outer side that are wider than the selected cell: (row, cell,
+    // facing side, the selected cell's row).
+    let mut wide: Vec<(usize, usize, Side, usize)> = Vec::new();
+    for &(r, c) in &order {
+        for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+            let (want_outer, want_inner) = wants(side);
+            if !want_outer && !want_inner {
+                continue;
+            }
+            let others = across(r, c, side);
+            let is_selected = |n: &(usize, usize, bool)| selected.contains(&(n.0, n.1));
+            let outer = others.iter().all(|n| !is_selected(n));
+            let inner = !others.is_empty() && others.iter().all(is_selected);
+            if (outer && want_outer) || (inner && want_inner) {
+                own.insert((r, c, side));
+                writes.push((r, c, side));
+                for n in &others {
+                    if n.2 {
+                        writes.push((n.0, n.1, side.facing()));
+                    } else if !is_selected(n) {
+                        wide.push((n.0, n.1, side.facing(), r));
+                    }
+                }
+            } else if !outer && !inner {
+                for n in others.iter().filter(|n| n.2 && if is_selected(n) { want_inner } else { want_outer }) {
+                    writes.push((n.0, n.1, side.facing()));
+                }
             }
         }
-    })
+    }
+    for (nr, nc, nside, row) in wide {
+        let Some((a, z)) = range(nr, nc) else { continue };
+        let side = nside.facing();
+        let along =
+            ranges.get(row).map(|cs| cs.iter().enumerate().filter(|&(_, &(x0, x1))| x1 > a && x0 < z).all(|(cc, _)| own.contains(&(row, cc, side))));
+        if along == Some(true) {
+            writes.push((nr, nc, nside));
+        }
+    }
+    for (r, c, side) in writes {
+        let Some(cell) = t.rows.get_mut(r).and_then(|row| row.cells.get_mut(c)) else { continue };
+        if line.is_none() && cell.props.borders.is_none() {
+            continue;
+        }
+        let b = cell.props.borders.get_or_insert_with(Borders::default);
+        let slot = match side {
+            Side::Top => &mut b.top,
+            Side::Bottom => &mut b.bottom,
+            Side::Left => &mut b.left,
+            Side::Right => &mut b.right,
+        };
+        *slot = line;
+        if *b == Borders::default() {
+            cell.props.borders = None;
+        }
+    }
 }

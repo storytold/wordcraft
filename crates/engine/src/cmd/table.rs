@@ -1,9 +1,11 @@
 //! Table Design and Table Layout tabs.
 
+use std::collections::HashSet;
+
 use super::table_formula::parse_number;
 use serde_json::{Value, json};
 use wordcraft_doc::collate::{SortKey, sort_key};
-use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, HeightRule, Rgb, TextDirection, VAlign};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph, Path, Pos, RevisionKind, StoryRef, Table, para_block};
 
 use super::sel_result;
@@ -36,6 +38,81 @@ pub(super) use structure::{delete_table_at, selected_table};
 
 fn in_table(s: &Session) -> Option<&'static str> {
     if s.sel.focus.path.cell().is_some() { None } else { Some("the cursor isn't in a table") }
+}
+
+/// The line Table Design › Borders draws with: Line Style, Line Weight and Pen Color. Session
+/// state, as in Word; it is not saved with the document.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TablePen {
+    pub style: BorderStyle,
+    /// Points.
+    pub width: f32,
+    /// `None` is automatic (black).
+    pub color: Option<Rgb>,
+}
+
+impl Default for TablePen {
+    fn default() -> Self {
+        TablePen { style: BorderStyle::Single, width: 0.5, color: None }
+    }
+}
+
+impl TablePen {
+    /// The pen as the pen commands report it.
+    pub fn json(&self) -> Value {
+        json!({"style": self.style.name(), "width": self.width, "color": self.color.map(|c| c.hex())})
+    }
+
+    /// `table.borders` params drawing this pen on `kind`, so a recorded macro step doesn't
+    /// depend on the pen at the time it is played.
+    pub fn params(&self, kind: &str) -> Value {
+        let mut v = self.json();
+        v["kind"] = json!(kind);
+        v
+    }
+}
+
+/// `table.borders` sides, as its `kind` names them.
+const BORDER_KINDS: [&str; 10] = ["all", "outside", "inside", "none", "top", "bottom", "left", "right", "insideH", "insideV"];
+
+/// Word's line weights, in points (Table Design › Line Weight).
+pub const BORDER_WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
+
+/// An optional string param: absent or `null` is `None`; another type is an error.
+fn opt_str<'a>(v: &'a Value, k: &str) -> Result<Option<&'a str>, CmdError> {
+    match v.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(x)) => Ok(Some(x)),
+        Some(_) => Err(CmdError::Params(format!("`{k}` must be a string"))),
+    }
+}
+
+/// An optional number param: absent or `null` is `None`; another type is an error.
+fn opt_num(v: &Value, k: &str) -> Result<Option<f32>, CmdError> {
+    match v.get(k) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Number(n)) => Ok(n.as_f64().map(|x| x as f32)),
+        Some(_) => Err(CmdError::Params(format!("`{k}` must be a number"))),
+    }
+}
+
+fn border_style(name: &str) -> Result<BorderStyle, CmdError> {
+    BorderStyle::parse(name).ok_or_else(|| CmdError::Params(format!("unknown border style `{name}`")))
+}
+
+fn border_width(w: f32) -> f32 {
+    if w.is_finite() { w.clamp(0.25, 6.0) } else { 0.5 }
+}
+
+/// A `color` param: absent is `None`; `null`, `auto` or `automatic` is automatic; else `RRGGBB`.
+fn border_color(v: &Value) -> Result<Option<Option<Rgb>>, CmdError> {
+    match v.get("color") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(c)) if c.eq_ignore_ascii_case("auto") || c.eq_ignore_ascii_case("automatic") => Ok(Some(None)),
+        Some(Value::String(c)) => Rgb::parse(c).map(|c| Some(Some(c))).ok_or_else(|| CmdError::Params(format!("bad colour `{c}`"))),
+        Some(_) => Err(CmdError::Params("`color` must be \"RRGGBB\", \"auto\" or null".into())),
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -96,8 +173,33 @@ pub fn specs() -> Vec<CommandSpec> {
             with_cells(s, |cl| cl.props.shading = c)
         })
         .params(r#"{"color": "RRGGBB" | null}"#)),
-        t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders)
-            .params(r#"{"kind": "all|outside|inside|none|top|bottom|left|right", "width"?: pt, "color"?: "RRGGBB"}"#)),
+        t(CommandSpec::new("table.borders", "Borders", "Table Design › Borders", borders).params(
+            r#"{"kind": "all|outside|inside|none|top|bottom|left|right|insideH|insideV", "style"?: "none|single|double|triple|dotted|dashed|dotDash|thick|wave", "width"?: pt (¼ to 6), "color"?: "RRGGBB" | "auto" | null (automatic), "applyTo"?: "cells|table"} (style, width and colour default to the pen set by table.borderStyle, table.borderWidth and table.borderColor. Like Word, it applies to the selected cells, or the caret's cell (a cell merged down whole; a selection reaching outside the table takes whole rows): the sides of the selection the kind names, the facing side of the cell across too; when the whole table is selected, or with applyTo table, it sets the table's borders and takes the cells' own lines away on the sides it covers)"#,
+        )),
+        CommandSpec::new("table.borderStyle", "Line Style", "Table Design › Borders", |s, v| {
+            if let Some(name) = opt_str(v, "value")? {
+                s.table_pen.style = border_style(name)?;
+            }
+            Ok(s.table_pen.json())
+        })
+        .params(r#"{"value"?: "none|single|double|triple|dotted|dashed|dotDash|thick|wave"} (the line the Borders menu and the Border Painter draw with; no value reads the pen)"#)
+        .pure(),
+        CommandSpec::new("table.borderWidth", "Line Weight", "Table Design › Borders", |s, v| {
+            if let Some(w) = opt_num(v, "value")? {
+                s.table_pen.width = border_width(w);
+            }
+            Ok(s.table_pen.json())
+        })
+        .params(r#"{"value"?: pt (¼ to 6)} (no value reads the pen)"#)
+        .pure(),
+        CommandSpec::new("table.borderColor", "Pen Color", "Table Design › Borders", |s, v| {
+            if let Some(c) = border_color(v)? {
+                s.table_pen.color = c;
+            }
+            Ok(s.table_pen.json())
+        })
+        .params(r#"{"color"?: "RRGGBB" | "auto" | null (automatic)} (no color reads the pen)"#)
+        .pure(),
         t(CommandSpec::new("table.cellAlign", "Alignment", "Table Layout › Alignment", |s, v| {
             let (h, va) = match p::str(v, "value").unwrap_or("topLeft") {
                 "topLeft" => (Align::Left, VAlign::Top),
