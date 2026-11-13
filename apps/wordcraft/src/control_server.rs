@@ -369,8 +369,11 @@ mod tests {
 
     impl Conn {
         fn open(port: u16) -> Self {
+            Self::open_within(port, Duration::from_secs(5))
+        }
+        fn open_within(port: u16, read_timeout: Duration) -> Self {
             let s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            s.set_read_timeout(Some(read_timeout)).unwrap();
             Self(BufReader::new(s.try_clone().unwrap()), s)
         }
         fn send(&mut self, line: &str) {
@@ -388,7 +391,24 @@ mod tests {
         /// The server closed the connection.
         fn closed(&mut self) -> bool {
             let mut r = String::new();
-            matches!(self.0.read_line(&mut r), Ok(0))
+            closed_by_peer(self.0.read_line(&mut r))
+        }
+    }
+
+    /// Whether a read means the peer closed the connection. End of stream does; so does a reset,
+    /// which is how Windows can deliver a close when the writer had nothing to read back (the
+    /// Windows Print job failed here). Any other error, such as `InvalidData` for bytes that are
+    /// not UTF-8, leaves the connection open.
+    fn closed_by_peer(read: std::io::Result<usize>) -> bool {
+        match read {
+            Ok(n) => n == 0,
+            Err(e) => matches!(
+                e.kind(),
+                std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::NotConnected
+                    | std::io::ErrorKind::BrokenPipe
+            ),
         }
     }
 
@@ -474,12 +494,28 @@ mod tests {
     }
 
     #[test]
+    fn only_closure_errors_mean_the_peer_closed() {
+        use std::io::{Error, ErrorKind};
+        assert!(closed_by_peer(Ok(0)), "end of stream");
+        for kind in [ErrorKind::ConnectionReset, ErrorKind::ConnectionAborted, ErrorKind::NotConnected, ErrorKind::BrokenPipe] {
+            assert!(closed_by_peer(Err(Error::new(kind, "closed"))), "{kind:?}");
+        }
+        assert!(!closed_by_peer(Ok(1)), "a reply arrived");
+        // Not UTF-8, a timeout or a would-block leave the socket open.
+        for kind in [ErrorKind::InvalidData, ErrorKind::TimedOut, ErrorKind::WouldBlock] {
+            assert!(!closed_by_peer(Err(Error::new(kind, "still open"))), "{kind:?}");
+        }
+    }
+
+    #[test]
     fn a_silent_connection_is_closed() {
         let (port, rx) = boot_with(Duration::from_millis(300));
-        let mut quiet = Conn::open(port);
+        // A loaded Windows CI runner can take seconds to schedule the connection thread. The
+        // production deadline is 30 s, so 10 s still proves the server's own budget fired.
+        let mut quiet = Conn::open_within(port, Duration::from_secs(20));
         let t0 = Instant::now();
         assert!(quiet.closed());
-        assert!(t0.elapsed() < Duration::from_secs(3));
+        assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
         // After an authorised request the connection may stay idle.
         let mut busy = Conn::open(port);
         assert_eq!(busy.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
