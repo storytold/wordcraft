@@ -146,6 +146,13 @@ pub struct Cluster {
     pub dot: bool,
 }
 
+/// Glyphs `glyphs` of a cluster, drawn in style `style`'s face (see [`super::ParaLayout::faces`]).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceRun {
+    pub style: u32,
+    pub glyphs: std::ops::Range<u32>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LineEnd {
     /// Wrapped (or last line).

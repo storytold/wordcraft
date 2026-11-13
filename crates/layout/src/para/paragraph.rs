@@ -659,6 +659,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         clusters: Vec::new(),
         levels,
         shown: Vec::new(),
+        faces: Vec::new(),
         substituted: Vec::new(),
     };
     let mut cx =
@@ -690,6 +691,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         glyphs: b.glyphs,
         clusters: b.clusters,
         shown: b.shown,
+        faces: b.faces,
         lines: Vec::new(),
         label,
         height: 0.0,

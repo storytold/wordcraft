@@ -10307,6 +10307,90 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+/// #2491: a field result mixing Latin and Chinese text (a cached table of contents entry's
+/// HYPERLINK result, "1 春日花园") is one cluster, and it was drawn in the face of its first glyph:
+/// the Chinese glyph ids were drawn in the Latin face, as blanks or unrelated letters. Each glyph
+/// is now drawn in the face it was shaped in, and the drawn text still reads as the result. The
+/// pinned test fonts have no Chinese face, so the result mixes Latin text with box-drawing
+/// characters the Latin face lacks and a fallback face draws: the same split into faces.
+#[test]
+fn a_field_result_mixing_scripts_draws_each_glyph_in_its_own_face() {
+    crate::test_fonts();
+    let latin = wordcraft_doc::styles::BODY_FONT;
+    if wordcraft_fonts::word::resolve(latin, false, false).face.covers('─') || wordcraft_fonts::FontDb::global().fallback_for('─', 0).is_none() {
+        eprintln!("skipped: no fallback face for box drawing apart from the Latin one");
+        return;
+    }
+    let result = "1 ──┼──";
+    let field = InlineObject::Field {
+        instr: "HYPERLINK \\l \"_Sample1\"".into(),
+        result: result.into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("");
+    d.insert_object(&Pos::body(0, 0), field, &Default::default()).unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, wordcraft_doc::para::OBJ.len_utf8()), &|c| c.font = Some(latin.into())).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &Default::default());
+    let (mut text, mut faces) = (String::new(), Vec::new());
+    for it in &items {
+        let display::Draw::Glyphs { face, glyphs, text: t, ranges, .. } = it else { continue };
+        for (k, (gid, ..)) in glyphs.iter().enumerate() {
+            let Some(ch) = ranges.get(k).and_then(|r| t.get(r.clone())).and_then(|s| s.chars().next()).filter(|c| !c.is_whitespace()) else {
+                continue;
+            };
+            assert_eq!(*gid, face.glyph_for(ch), "{ch:?} drawn in a face it isn't a glyph of");
+            if !faces.contains(&face.id()) {
+                faces.push(face.id());
+            }
+        }
+        text.push_str(t);
+    }
+    assert_eq!(text, result, "the drawn text reads as the result");
+    assert!(faces.len() >= 2, "Latin and box drawing in faces of their own: {faces:?}");
+}
+
+/// #2491 review: a field result's glyphs in a second, taller face make its line as tall as that
+/// face's text would: each face run counts toward the line's ascent and descent, as separate
+/// clusters of the same text would.
+#[test]
+fn a_field_result_mixing_scripts_sizes_its_line_by_every_face() {
+    crate::test_fonts();
+    let latin = wordcraft_doc::styles::BODY_FONT;
+    if wordcraft_fonts::word::resolve(latin, false, false).face.covers('─') || wordcraft_fonts::FontDb::global().fallback_for('─', 0).is_none() {
+        eprintln!("skipped: no fallback face for box drawing apart from the Latin one");
+        return;
+    }
+    let field = InlineObject::Field {
+        instr: "HYPERLINK \\l \"_Sample1\"".into(),
+        result: "1 ──┼──".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut d = Document::from_text("");
+    d.insert_object(&Pos::body(0, 0), field, &Default::default()).unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, wordcraft_doc::para::OBJ.len_utf8()), &|c| c.font = Some(latin.into())).unwrap();
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let line = &para.lines[0];
+    let runs: Vec<_> = para.faces.iter().flat_map(|(_, r)| r.iter()).collect();
+    assert!(runs.len() >= 2, "the result is drawn in two faces: {runs:?}");
+    for r in runs {
+        let (a, dsc) = para.styles[r.style as usize].line_extent();
+        assert!(
+            line.text_asc >= a - 0.01 && line.text_desc >= dsc - 0.01,
+            "line {}/{} fits face run {r:?} ({a}/{dsc})",
+            line.text_asc,
+            line.text_desc
+        );
+    }
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]

@@ -86,12 +86,22 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
     }
 }
 
+/// The face runs of cluster `k`, when its glyphs come from several faces (see
+/// [`crate::para::ParaLayout::faces`]).
+fn faces_of(pl: &crate::para::ParaLayout, k: usize) -> Option<&[crate::para::FaceRun]> {
+    pl.faces.binary_search_by_key(&k, |(i, _)| *i).ok().and_then(|i| pl.faces.get(i)).map(|(_, r)| r.as_slice())
+}
+
+/// The glyphs of one run from cluster `start`, all in style `style_index`, and the cluster and
+/// face run (`seg`) after it. A cluster whose glyphs come from several faces (a field result
+/// mixing scripts, #2491) is a run of its own per face: `face_run` is the one drawn.
 fn collect_glyph_run(
     ctx: &LineContext<'_, '_, '_>,
     start: usize,
     style_index: u32,
     style: &crate::para::StyleRun,
-) -> (usize, Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
+    (face_run, seg): (Option<&crate::para::FaceRun>, usize),
+) -> ((usize, usize), Vec<(u32, f32, f32)>, String, Vec<std::ops::Range<usize>>) {
     let (pl, para, line, x, base) = (ctx.pl, ctx.para, ctx.line, ctx.x, ctx.base);
     let si = style_index;
     let st = style;
@@ -110,7 +120,7 @@ fn collect_glyph_run(
     let symbol_font = wordcraft_doc::symbol_fonts::is_symbol_font(&st.rc.font);
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
-        if c.style != si {
+        if k != start && (c.style != si || faces_of(pl, k).is_some() || face_run.is_some()) {
             break;
         }
         let cx = x + line.cl_left(k).unwrap_or(0.0);
@@ -163,8 +173,24 @@ fn collect_glyph_run(
                             from..to
                         }
                     };
+                    // Of a cluster in several faces, only this run's glyphs.
+                    if face_run.is_some_and(|f| !f.glyphs.contains(&(c.g0 + n as u32))) {
+                        continue;
+                    }
                     glyphs.push((g.gid, cx + g.dx, base - st.shift - g.dy));
                     ranges.push(r.start..r.end.max(r.start));
+                }
+                if face_run.is_some() {
+                    // Its text: what these glyphs were shaped from.
+                    let from = ranges.iter().map(|r| r.start).min().unwrap_or(a);
+                    let to = ranges.iter().map(|r| r.end).max().unwrap_or(from).max(from);
+                    text = text.get(from..to).unwrap_or("").to_string();
+                    for r in &mut ranges {
+                        *r = r.start.saturating_sub(from)..r.end.saturating_sub(from);
+                    }
+                    // The cluster's next run, or the cluster after it.
+                    let next = if faces_of(pl, k).is_some_and(|r| seg + 1 < r.len()) { (k, seg + 1) } else { (k + 1, 0) };
+                    return (next, glyphs, text, ranges);
                 }
                 k += 1;
                 continue;
@@ -184,23 +210,24 @@ fn collect_glyph_run(
         }
         k += 1;
     }
-    (k, glyphs, text, ranges)
+    ((k, 0), glyphs, text, ranges)
 }
 
 fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
     let (doc, pl, line, x, base, opts, authors, alpha, down) =
         (ctx.doc, ctx.pl, ctx.line, ctx.x, ctx.base, ctx.opts, ctx.authors, ctx.alpha, ctx.down);
-    let mut k = line.c0;
+    let (mut k, mut seg) = (line.c0, 0);
     while k < line.c1 {
         let Some(c) = pl.clusters.get(k) else { break };
-        let si = c.style;
+        let face_run = faces_of(pl, k).and_then(|r| r.get(seg));
+        let si = face_run.map_or(c.style, |r| r.style);
         let Some(st) = pl.styles.get(si as usize) else {
-            k += 1;
+            (k, seg) = (k + 1, 0);
             continue;
         };
         let run_start = k;
-        let (run_end, mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st);
-        k = run_end;
+        let ((run_end, next_seg), mut glyphs, text, ranges) = collect_glyph_run(ctx, run_start, si, st, (face_run, seg));
+        (k, seg) = (run_end, next_seg);
         let rc = &st.rc;
         let m = &opts.revisions;
         // Without markup a deletion is never drawn as ordinary text, even in a layout that
