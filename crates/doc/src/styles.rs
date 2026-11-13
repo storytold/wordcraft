@@ -39,7 +39,38 @@ pub struct Style {
     pub priority: Option<u32>,
     /// Shown in the Styles gallery on the Home tab.
     pub quick: bool,
+    /// Not offered in the Styles gallery or pane: the file's `w:semiHidden` or `w:hidden`.
     pub hidden: bool,
+    /// The file's own `w:semiHidden` (hidden from the main user interface). With no visibility
+    /// flag read (`semi_hidden`, `unhide_when_used` and `hidden_everywhere` all off), a hidden
+    /// style is written as `w:semiHidden` + `w:unhideWhenUsed`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub semi_hidden: bool,
+    /// `w:unhideWhenUsed`: shown again once used.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub unhide_when_used: bool,
+    /// `w:hidden`: hidden from every part of the user interface.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub hidden_everywhere: bool,
+    /// Other names of the style, comma separated (`w:aliases`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<String>,
+    /// Automatically update: direct formatting of a paragraph redefines the style
+    /// (`w:autoRedefine`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub auto_redefine: bool,
+    /// E-mail message style (`w:personal`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub personal: bool,
+    /// E-mail compose style (`w:personalCompose`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub personal_compose: bool,
+    /// E-mail reply style (`w:personalReply`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub personal_reply: bool,
+    /// Revision save id of the last edit (`w:rsid`): eight hexadecimal digits, upper case.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rsid: Option<String>,
     /// Built in (cannot be deleted).
     pub builtin: bool,
     /// Can't be applied while Restrict Editing limits formatting to a selection of styles
