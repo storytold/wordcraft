@@ -171,7 +171,8 @@ fn target(s: &Session) -> Option<(Pos, Pos)> {
         return Some((a, b));
     }
     let p = s.doc.para_at(&a)?;
-    let is_w = |c: char| c.is_alphanumeric() || c == '\'' || c == '_';
+    // Word takes a typographic apostrophe (’) like `'` here (#6517).
+    let is_w = |c: char| c.is_alphanumeric() || matches!(c, '\'' | '’' | '_');
     let before = p.text.get(..a.off)?.chars().next_back();
     let after = p.text.get(a.off..)?.chars().next();
     if before.is_some_and(is_w) && after.is_some_and(is_w) {
