@@ -248,6 +248,47 @@ pub fn system_arabic_ui_font() -> Option<SystemUiFont> {
     find_ui_font(&crate::system_font_dirs(), arabic_candidates(), &['ع'], Region::Other)
 }
 
+/// Font files to look for when no Hebrew craft-fonts face is embedded, best first.
+fn hebrew_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["arial.ttf", "david.ttf", "segoeui.ttf", "NotoSansHebrew-Regular.ttf"]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "/System/Library/Fonts/Supplemental/Arial Hebrew.ttf",
+            "Arial Hebrew.ttf",
+            "/System/Library/Fonts/GeezaPro.ttc",
+            "GeezaPro.ttc",
+            "NotoSansHebrew-Regular.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "Arial.ttf",
+        ]
+    } else {
+        &[
+            "noto/NotoSansHebrew-Regular.ttf",
+            "opentype/noto/NotoSansHebrew-Regular.ttf",
+            "truetype/noto/NotoSansHebrew-Regular.ttf",
+            "google-noto/NotoSansHebrew-Regular.ttf",
+            "NotoSansHebrew-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "DejaVuSans.ttf",
+            "truetype/freefont/FreeSans.ttf",
+            "gnu-free/FreeSans.ttf",
+            "FreeSans.ttf",
+        ]
+    }
+}
+
+/// An installed Hebrew-capable UI font when built without `CRAFT_FONTS_DIR` (so
+/// [`ui_hebrew_fonts`](crate::ui_hebrew_fonts) is empty). Returns `None` when embedded Hebrew UI
+/// faces are already present or no installed candidate maps Hebrew letters.
+pub fn system_hebrew_ui_font() -> Option<SystemUiFont> {
+    if crate::ui_hebrew_fonts().next().is_some() {
+        return None;
+    }
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), hebrew_candidates(), &['א', 'ב', 'ת'], false)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`
@@ -337,6 +378,7 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], region: Region) -> Option<
 mod tests {
     use super::*;
 
+    /// Verifies that Korean UI fallback looks for Korean system fonts first.
     #[test]
     fn korean_interface_uses_korean_first_system_font_candidates() {
         let names = candidates(false, true);
@@ -351,6 +393,23 @@ mod tests {
             })
         );
         assert_eq!(probe(false, true), '한');
+    }
+
+    /// Verifies that Hebrew UI fallback lists platform-appropriate Hebrew system font candidates.
+    #[test]
+    fn hebrew_interface_uses_hebrew_system_font_candidates() {
+        let names = hebrew_candidates();
+        assert!(!names.is_empty());
+        assert_eq!(
+            names.first(),
+            Some(&if cfg!(windows) {
+                "arial.ttf"
+            } else if cfg!(target_os = "macos") {
+                "/System/Library/Fonts/Supplemental/Arial Hebrew.ttf"
+            } else {
+                "noto/NotoSansHebrew-Regular.ttf"
+            })
+        );
     }
 
     #[test]
