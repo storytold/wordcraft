@@ -67,11 +67,15 @@ const MAX_WORK: u64 = 200_000_000;
 
 /// `p`'s key derivation added to `spent`, an error once the package's work passes [`MAX_WORK`].
 /// An Argon2id derivation counts its memory (KiB) times its passes, which takes about as long as
-/// that many PBKDF2 blocks.
+/// that many PBKDF2 blocks. The derivation charged is the one [`file_key`] runs: chosen by its name.
 fn charge(spent: &mut u64, p: &Params) -> Result<(), CryptError> {
     let cost = match p.argon2 {
-        Some(a) => u64::from(a.memory.min(MAX_ARGON2_MEMORY)).saturating_mul(u64::from(a.passes.min(MAX_ARGON2_PASSES))),
-        None => u64::from(p.iterations.min(MAX_ITERATIONS)).saturating_mul(p.key_size.unwrap_or(16).clamp(16, 32).div_ceil(20) as u64),
+        Some(a) if is_argon2id(&p.derivation) => {
+            u64::from(a.memory.min(MAX_ARGON2_MEMORY)).saturating_mul(u64::from(a.passes.min(MAX_ARGON2_PASSES)))
+        }
+        // Argon2id without its costs is refused before deriving: nothing to charge.
+        None if is_argon2id(&p.derivation) => 0,
+        _ => u64::from(p.iterations.min(MAX_ITERATIONS)).saturating_mul(p.key_size.unwrap_or(16).clamp(16, 32).div_ceil(20) as u64),
     };
     *spent = spent.saturating_add(cost);
     if *spent > MAX_WORK {
@@ -153,6 +157,8 @@ fn read_manifest(xml: &[u8]) -> Vec<(String, Params)> {
                     p.iterations = get(&a, "manifest:iteration-count").and_then(|s| s.trim().parse().ok()).unwrap_or(1024);
                     p.salt = b64(get(&a, "manifest:salt"));
                     p.key_size = get(&a, "manifest:key-size").and_then(|s| s.trim().parse().ok());
+                    // A later key derivation replaces an earlier one, Argon2id costs and all.
+                    p.argon2 = None;
                     if is_argon2id(&p.derivation) {
                         // LibreOffice's `loext:` attributes, or ODF 1.4's `manifest:` ones.
                         let cost = |n: &str| {
@@ -535,5 +541,24 @@ mod work_tests {
         let mut spent = 0;
         let ok = (0..30).take_while(|_| charge(&mut spent, &hostile).is_ok()).count();
         assert_eq!(ok, 20);
+    }
+
+    /// An Argon2id key derivation followed by a PBKDF2 one: PBKDF2 is what runs, so it is what is
+    /// charged, not the earlier Argon2id's small costs.
+    #[test]
+    fn a_later_key_derivation_replaces_an_earlier_argon2id_one() {
+        let xml = format!(
+            r#"<manifest:manifest xmlns:manifest="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0" xmlns:loext="urn:org:documentfoundation:names:experimental:office:xmlns:loext:1.0"><manifest:file-entry manifest:full-path="content.xml"><manifest:encryption-data><manifest:algorithm manifest:algorithm-name="{AES256_CBC}"/><manifest:key-derivation manifest:key-derivation-name="urn:org:documentfoundation:names:experimental:office:manifest:argon2id" loext:argon2-iterations="1" loext:argon2-memory="64" loext:argon2-lanes="1"/><manifest:key-derivation manifest:key-derivation-name="PBKDF2" manifest:iteration-count="{MAX_ITERATIONS}" manifest:key-size="32"/></manifest:encryption-data></manifest:file-entry></manifest:manifest>"#
+        );
+        let files = read_manifest(xml.as_bytes());
+        let p = &files.first().unwrap().1;
+        assert_eq!((p.derivation.as_str(), p.argon2), ("PBKDF2", None));
+        // Even with stale Argon2id costs, a PBKDF2 derivation is charged as PBKDF2.
+        let stale = Params { argon2: Some(Argon2Costs { passes: 1, memory: 64, lanes: 1 }), ..p.clone() };
+        for q in [p, &stale] {
+            let mut spent = 0;
+            assert!(charge(&mut spent, q).is_ok());
+            assert_eq!(spent, u64::from(MAX_ITERATIONS) * 2);
+        }
     }
 }
