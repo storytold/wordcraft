@@ -760,12 +760,13 @@ fn parse_tracked(bytes: &[u8], paper: (f32, f32)) -> Result<Parsed, String> {
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
-    // The page background picture's bytes.
+    // The page background picture's bytes. The modern fill is used only when its picture is an
+    // image; otherwise the legacy background is tried.
     let page_image = pages
         .doc
         .page_image
         .clone()
-        .and_then(|(href, fill, name)| fetch(&href).map(|b| (b, fill, name)))
+        .and_then(|(href, fill, name)| fetch(&href).filter(|b| model::sniff_image(b).is_some()).map(|b| (b, fill, name)))
         .or_else(|| pages.doc.page_image_legacy.clone().and_then(|(href, fill)| fetch(&href).map(|b| (b, fill, None))));
     let objects = (entries.as_slice(), &manifest);
     // One `text:s` budget for the headers and footers and then the body.

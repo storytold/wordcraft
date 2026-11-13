@@ -886,3 +886,33 @@ fn a_missing_modern_page_picture_falls_back_to_the_legacy_one() {
     assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
     assert_eq!(pic.fill_type, "center", "the legacy repeat is kept");
 }
+
+/// A modern bitmap fill whose picture isn't an image falls back to the legacy
+/// `style:background-image` when that one is (#5856).
+#[test]
+fn an_invalid_modern_page_picture_falls_back_to_the_legacy_one() {
+    let png = {
+        let img = image::RgbImage::from_pixel(8, 4, image::Rgb([200, 30, 30]));
+        let mut out = std::io::Cursor::new(Vec::new());
+        img.write_to(&mut out, image::ImageFormat::Png).unwrap();
+        out.into_inner()
+    };
+    let ns = crate::odt::tests::NS_T;
+    let nsd = r#"xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:xlink="http://www.w3.org/1999/xlink""#;
+    let styles = format!(
+        r#"<office:document-styles {ns} {nsd}><office:styles><draw:fill-image draw:name="Bg1" xlink:href="Pictures/not-an-image.png" xlink:type="simple"/></office:styles><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="8.5in" fo:page-height="11in" draw:fill="bitmap" draw:fill-image-name="Bg1" style:repeat="stretch"><style:background-image xlink:href="Pictures/legacy.png" xlink:type="simple" xlink:actuate="onLoad" style:repeat="no-repeat"/></style:page-layout-properties></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+    );
+    let content = format!(
+        r#"<office:document-content {ns}><office:body><office:text><text:p>Body text.</text:p></office:text></office:body></office:document-content>"#
+    );
+    let pkg = crate::odt::tests::zip_of(&[
+        ("content.xml", content.as_bytes()),
+        ("styles.xml", styles.as_bytes()),
+        ("Pictures/not-an-image.png", b"not an image"),
+        ("Pictures/legacy.png", &png),
+    ]);
+    let d = import(&pkg).unwrap();
+    let pic = d.settings.page_picture.as_ref().expect("the legacy background is used");
+    assert_eq!(d.media.get(&pic.media).map(|b| b.as_slice()), Some(png.as_slice()));
+    assert_eq!(pic.fill_type, "center", "the legacy repeat is kept");
+}
