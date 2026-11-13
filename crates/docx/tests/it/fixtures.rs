@@ -1994,8 +1994,10 @@ fn an_ole_object_without_a_picture_round_trips() {
     let ole = "\u{d0}\u{cf} opaque OLE storage";
     let types = r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/></Types>"#;
     let shape = r##"<v:shape id="_x0000_i1025" type="#_x0000_t75" style="width:100pt;height:50pt" o:ole="" alt="Data"></v:shape>"##;
-    // No VML shape: the original size, 2880 × 1440 twips. A shape without a picture: its size.
-    for (vml, size) in [("", (144.0, 72.0)), (shape, (100.0, 50.0))] {
+    let unstyled = r##"<v:shape id="_x0000_i1025" type="#_x0000_t75" o:ole=""/>"##;
+    // No VML shape, or one with no style: the original size, 2880 × 1440 twips, where a new size
+    // is saved too. A shape without a picture: its size, saved in its style.
+    for (vml, size) in [("", (144.0, 72.0)), (unstyled, (144.0, 72.0)), (shape, (100.0, 50.0))] {
         let body = format!(
             r#"<w:p><w:r><w:t xml:space="preserve">Before </w:t></w:r><w:r><w:object w:dxaOrig="2880" w:dyaOrig="1440">{vml}{ole_object}</w:object></w:r><w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>"#
         );
@@ -2005,7 +2007,7 @@ fn an_ole_object_without_a_picture_round_trips() {
             &[("[Content_Types].xml", types), ("word/embeddings/oleObject1.bin", ole)],
         );
         let saved = ole_object_kept_without_picture(&bytes, ole, size);
-        if vml.is_empty() {
+        if vml != shape {
             assert_eq!(attr_values(&saved, "w:object", "w:dxaOrig"), ["5760"]);
         } else {
             assert_eq!(attr_values(&saved, "v:shape", "style"), ["width:200pt;height:100pt"]);

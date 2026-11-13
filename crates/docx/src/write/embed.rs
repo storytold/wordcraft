@@ -498,9 +498,14 @@ impl super::Writer<'_> {
                 set_attr(e, "alt", alt);
             }
             "wp:extent" => set_size_attrs(e, w, h),
-            // An object with no shape or drawing to carry its size (one kept without a picture,
-            // #6480) is read at its original size, so a new size is written there.
-            "w:object" if !e.els().any(|c| c.name == "v:shape" || c.name == "w:drawing") => {
+            // An object kept without a picture (#6480) whose size no shape's style carries is read
+            // at its original size, so a new size is written there. One with a picture keeps its
+            // original size whatever its shape says.
+            "w:object"
+                if !e
+                    .els()
+                    .any(|c| c.name == "w:drawing" || (c.name == "v:shape" && (c.attr("style").is_some() || c.find("v:imagedata").is_some()))) =>
+            {
                 for (k, pt) in [("w:dxaOrig", w), ("w:dyaOrig", h)] {
                     if pt > 0.0 || e.attr(k).is_some() {
                         set_attr(e, k, &crate::units::twips(pt.max(0.0)));
