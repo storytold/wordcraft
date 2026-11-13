@@ -271,6 +271,9 @@
 	First line:	Pierwszy wiersz:
 	Fixed Column Width	Stała szerokość kolumn
 	Focus	Skupienie
+	Full Screen View	Widok pełnoekranowy
+	Show the ribbon	Pokaż wstążkę
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Stare klawisze menu: Alt, {keys}. Pisz dalej lub naciśnij Esc, aby anulować.
 	Font	Czcionka
 	Font Color	Kolor czcionki
 	Font Dialog	Okno dialogowe Czcionka
@@ -1059,6 +1062,12 @@
 	Preview	Podgląd
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
 	English (United Kingdom)	Angielski (Wielka Brytania)
+	English (Australia)	Angielski (Australia)
+	English (Canada)	Angielski (Kanada)
+	English (India)	Angielski (Indie)
+	English (Ireland)	Angielski (Irlandia)
+	English (New Zealand)	Angielski (Nowa Zelandia)
+	English (South Africa)	Angielski (Republika Południowej Afryki)
 	Polish	Polski
 	Do Not Check Spelling or Grammar	Nie sprawdzaj pisowni ani gramatyki
 	Possible spelling mistake	Możliwy błąd pisowni
@@ -2704,3 +2713,54 @@ preview	Title	Tytuł
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Wpisz rozmiar w dowolnej jednostce, np. 5 cm lub 300 px. Druga strona dopasuje się, więc obraz zachowa proporcje.
 
 	Import…	Importuj…
+
+# Personal templates (#2852)
+	Personal	Osobiste
+	Personal Templates	Szablony osobiste
+	Templates you save in your templates folder show up here.	Tutaj pojawiają się szablony zapisane w folderze szablonów.
+	Save as Word Template…	Zapisz jako szablon programu Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Zapisuje szablon .dotx w folderze szablonów. Pojawia się w Plik › Nowy w sekcji Osobiste.
+	File locations	Lokalizacje plików
+	User templates:	Szablony użytkownika:
+	Not set	Nie ustawiono
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Plik › Nowy pokazuje stąd szablony .dotx i .dotm w sekcji Osobiste; Zapisz jako szablon programu Word zaczyna tutaj.
+	Format Shape Pane	Okienko Formatowanie kształtu
+	Format Shape	Formatowanie kształtu
+	Format Shape…	Formatuj kształt…
+	No fill	Brak wypełnienia
+	Solid fill	Wypełnienie pełne
+	Gradient fill	Wypełnienie gradientowe
+	Preset gradients	Gotowe gradienty
+	Radial	Radialny
+	Rectangular	Prostokątny
+	Path	Ścieżka
+	Direction	Kierunek
+	Angle	Kąt
+	Gradient stops	Punkty gradientu
+	Add gradient stop	Dodaj punkt gradientu
+	Remove gradient stop	Usuń punkt gradientu
+	Rotate with shape	Obracaj z kształtem
+	Gradient	Gradient
+	No Gradient	Bez gradientu
+	Light Variations	Jasne warianty
+	Dark Variations	Ciemne warianty
+	More Gradients…	Więcej gradientów…
+	Select a shape, text box or drawing canvas to format its fill.	Zaznacz kształt, pole tekstowe lub kanwę rysunku, aby sformatować wypełnienie.
+	Linear Right	Liniowy w prawo
+	Linear Diagonal - Top Left to Bottom Right	Liniowy ukośny – z: lewy górny do: prawy dolny
+	Linear Down	Liniowy w dół
+	Linear Diagonal - Top Right to Bottom Left	Liniowy ukośny – z: prawy górny do: lewy dolny
+	Linear Left	Liniowy w lewo
+	Linear Diagonal - Bottom Right to Top Left	Liniowy ukośny – z: prawy dolny do: lewy górny
+	Linear Up	Liniowy w górę
+	Linear Diagonal - Bottom Left to Top Right	Liniowy ukośny – z: lewy dolny do: prawy górny
+	From Top Left Corner	Z narożnika: lewy górny
+	From Top Right Corner	Z narożnika: prawy górny
+	From Bottom Left Corner	Z narożnika: lewy dolny
+	From Bottom Right Corner	Z narożnika: prawy dolny
+	From Center	Ze środka
+	Soft	Miękki
+	Lit from Top	Oświetlony z góry
+	Deep	Głęboki
+	Lit from Bottom	Oświetlony z dołu
+	Center Glow	Blask ze środka

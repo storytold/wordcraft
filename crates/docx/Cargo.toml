@@ -15,6 +15,7 @@ quick-xml = { workspace = true }
 zip = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 unicode-bidi = { workspace = true }
 cfb = { workspace = true }
 aes = { workspace = true }

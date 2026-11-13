@@ -123,6 +123,7 @@
 	Number alignment:	Justering av nummer:
 	Number format	Nummerformat
 	Number style for this level:	Numreringsstil för den här nivån:
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Gamla menytangenter: Alt, {keys}. Fortsätt skriva eller tryck på Esc för att avbryta.
 	Outside border	Yttre kantlinje
 	Overtype	Överskrivning
 	Overtype (typing replaces the characters after the caret)	Överskrivning (det du skriver ersätter tecknen efter markören)
@@ -406,6 +407,8 @@
 	First line:	Första raden:
 	Fixed Column Width	Fast kolumnbredd
 	Focus	Fokus
+	Full Screen View	Helskärmsvisning
+	Show the ribbon	Visa menyfliksområdet
 	Font	Typsnitt
 	Font Color	Teckenfärg
 	Font Dialog	Dialogrutan Typsnitt
@@ -1770,6 +1773,12 @@
 	Reading Line Spacing	Radavstånd vid läsning
 	Reading Text Size	Textstorlek vid läsning
 	English (United Kingdom)	Engelska (Storbritannien)
+	English (Australia)	Engelska (Australien)
+	English (Canada)	Engelska (Kanada)
+	English (India)	Engelska (Indien)
+	English (Ireland)	Engelska (Irland)
+	English (New Zealand)	Engelska (Nya Zeeland)
+	English (South Africa)	Engelska (Sydafrika)
 	Polish	Polska
 	Do Not Check Spelling or Grammar	Kontrollera inte stavning eller grammatik
 
@@ -2714,3 +2723,54 @@ preview	Title	Titel
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Skriv en storlek i valfri enhet, till exempel 5 cm eller 300 px. Den andra sidan följer med, så att bilden behåller sina proportioner.
 
 	Import…	Importera…
+
+# Personal templates (#2852)
+	Personal	Personliga
+	Personal Templates	Personliga mallar
+	Templates you save in your templates folder show up here.	Mallar som du sparar i din mallmapp visas här.
+	Save as Word Template…	Spara som Word-mall…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Sparar en .dotx-mall i din mallmapp. Den visas i Arkiv › Ny under Personliga.
+	File locations	Filplatser
+	User templates:	Användarmallar:
+	Not set	Inte angivet
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Arkiv › Ny visar .dotx- och .dotm-mallarna härifrån under Personliga; Spara som Word-mall börjar här.
+	Format Shape Pane	Fönstret Formatera form
+	Format Shape	Formatera form
+	Format Shape…	Formatera form…
+	No fill	Ingen fyllning
+	Solid fill	Heldragen fyllning
+	Gradient fill	Toningsfyllning
+	Preset gradients	Förinställda toningar
+	Radial	Radiell
+	Rectangular	Rektangulär
+	Path	Bana
+	Direction	Riktning
+	Angle	Vinkel
+	Gradient stops	Toningsstopp
+	Add gradient stop	Lägg till toningsstopp
+	Remove gradient stop	Ta bort toningsstopp
+	Rotate with shape	Rotera med form
+	Gradient	Toning
+	No Gradient	Ingen toning
+	Light Variations	Ljusa varianter
+	Dark Variations	Mörka varianter
+	More Gradients…	Fler toningar…
+	Select a shape, text box or drawing canvas to format its fill.	Markera en form, en textruta eller en ritarea för att formatera fyllningen.
+	Linear Right	Linjär åt höger
+	Linear Diagonal - Top Left to Bottom Right	Linjär diagonal – uppifrån vänster till nedtill höger
+	Linear Down	Linjär nedåt
+	Linear Diagonal - Top Right to Bottom Left	Linjär diagonal – uppifrån höger till nedtill vänster
+	Linear Left	Linjär åt vänster
+	Linear Diagonal - Bottom Right to Top Left	Linjär diagonal – nedtill höger till uppifrån vänster
+	Linear Up	Linjär uppåt
+	Linear Diagonal - Bottom Left to Top Right	Linjär diagonal – nedtill vänster till uppifrån höger
+	From Top Left Corner	Från övre vänstra hörnet
+	From Top Right Corner	Från övre högra hörnet
+	From Bottom Left Corner	Från nedre vänstra hörnet
+	From Bottom Right Corner	Från nedre högra hörnet
+	From Center	Från mitten
+	Soft	Mjuk
+	Lit from Top	Belyst uppifrån
+	Deep	Djup
+	Lit from Bottom	Belyst nedifrån
+	Center Glow	Glöd i mitten

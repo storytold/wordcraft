@@ -267,7 +267,7 @@ pub enum Placed {
     Shape {
         rect: Rect,
         kind: wordcraft_doc::para::ShapeKind,
-        fill: Option<Rgb>,
+        fill: Option<wordcraft_doc::fill::Fill>,
         stroke: Option<Rgb>,
         stroke_width: f32,
         /// A freeform's paths (ink strokes among them).
@@ -677,10 +677,12 @@ impl Totals {
 /// count (its digits pushing text to another page) is tried again, this many times at most.
 const MAX_TOTAL_PASSES: usize = 3;
 
-/// A layout pass: finished, or to be done again with the page totals it found.
+/// A layout pass: finished, or to be done again with the page totals it found, or with the
+/// floats placed above their anchors it found ([`EarlyFloats`]).
 enum Pass {
     Done(DocLayout),
     Again(Totals),
+    Rewrap(EarlyFloats),
 }
 
 /// Walk state while paginating.
@@ -727,6 +729,9 @@ struct Ctx<'a> {
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     fitted: HashMap<(u32, u32), Option<f32>>,
+    /// Each body float's latest placement: on which page and with what wrap area, when it is
+    /// above its anchor paragraph with text before it ([`EarlyFloats`]).
+    floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -1634,6 +1639,13 @@ struct PageBuilder<'a> {
     /// Top of the footer of the pages being started: a footer reaching above the bottom margin
     /// pushes the body up (`f32::MAX`: no footer).
     foot_top: f32,
+    /// The wrap areas pages start with ([`EarlyFloats`]) ...
+    early: &'a EarlyFloats,
+    /// ... and how many of the current page's `excl` they are (its first ones).
+    seeded: usize,
+    /// No layout pass follows for floats found above their anchors: each is kept clear of the
+    /// text laid out before it ([`settle_early`]).
+    settle: bool,
 }
 
 /// Gap above the footnote separator and its length.
@@ -2027,6 +2039,10 @@ impl PageBuilder<'_> {
         self.flush_notes();
         self.beneath = self.sect_beneath;
         self.excl.clear();
+        // Floats placed above their anchors further down this page are known from its start.
+        let early = self.early;
+        self.excl.extend(early.get(&self.pages.len()).into_iter().flatten().map(|(_, _, a)| a.clone()));
+        self.seeded = self.excl.len();
         self.float_tables.clear();
         if self.sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Page) {
             self.line_no = 0;
@@ -2132,11 +2148,16 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut note_passes = 1;
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
+    let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES) {
+        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
+            }
+            Pass::Rewrap(found) => {
+                merge_early(&mut early, found);
+                rewraps += 1;
             }
             Pass::Done(l) => {
                 if per_page && note_passes < MAX_NOTE_PASSES {
@@ -2158,7 +2179,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
 
 /// One layout pass, numbering footnotes restarted on each page by `note_pages` ([`note_info`]),
 /// with `totals` assumed for the page totals in the body. With `may_repeat`, a pass whose body
-/// shows totals that turn out different asks to be done again.
+/// shows totals that turn out different asks to be done again. Pages start with the wrap areas
+/// of the `early` floats; with `may_rewrap`, a pass that finds others asks to be done again.
 fn layout_pass(
     doc: &Document,
     cache: &mut LayoutCache,
@@ -2166,6 +2188,7 @@ fn layout_pass(
     note_pages: &HashMap<u32, usize>,
     totals: &Totals,
     may_repeat: bool,
+    (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
     let env = env_hash(doc, opts);
     if env != cache.env {
@@ -2213,6 +2236,7 @@ fn layout_pass(
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
         pin: None,
+        floats_above: HashMap::new(),
     };
     let sections = doc.sections();
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
@@ -2294,6 +2318,9 @@ fn layout_pass(
         sect_beneath: false,
         beneath: false,
         foot_top: f32::MAX,
+        early,
+        seeded: 0,
+        settle: !may_rewrap && !reflow,
     };
     // Endnotes in document order, with the section of their reference; placed at the end of a
     // section that keeps them there, else at the end of the document.
@@ -2483,6 +2510,18 @@ fn layout_pass(
         p.h = bottom + 36.0;
     }
     ctx.grid = para::Grid::default();
+    if !reflow && may_rewrap {
+        let mut above: Vec<((usize, usize), usize, WrapArea)> =
+            ctx.floats_above.drain().filter_map(|(k, v)| v.map(|(page, area)| (k, page, area))).collect();
+        above.sort_by_key(|(k, ..)| *k);
+        let mut found = EarlyFloats::new();
+        for ((block, oi), page, area) in above {
+            found.entry(page).or_default().push((block, oi, area));
+        }
+        if !early_covered(&found, early) {
+            return Pass::Rewrap(found);
+        }
+    }
     if !reflow {
         let found = Totals::of(&pages, &sections);
         if ctx.uses_totals && may_repeat && found != *totals {
@@ -2959,6 +2998,84 @@ fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<F
 /// (Tight and Through wrapping) the outline text follows inside it, and the sides text may go on.
 type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText);
 
+/// Wrap areas a page starts with (#2048): by page index, the floating objects (block, object
+/// index) placed above the top of their anchor paragraph, with text before it on the page, and
+/// their areas. Layout places a float only when it reaches its anchor, so the text above that
+/// was laid out without it: the pass is done again with these known from the page's start.
+type EarlyFloats = HashMap<usize, Vec<(usize, usize, WrapArea)>>;
+
+/// Layout passes made again at most for [`EarlyFloats`] (a float moving with the text it pushes
+/// down may move again). The pass after the last one keeps each float clear of the text laid
+/// out before it ([`settle_early`]).
+const MAX_REWRAP_PASSES: usize = 3;
+
+/// Whether the text kept clear of `seed` is kept clear of `area` too: the same wrap side, `area`
+/// inside `seed`, and no outline on `seed` other than `area`'s own in the same place.
+fn covers(seed: &WrapArea, area: &WrapArea) -> bool {
+    let (s, r) = (seed.0, area.0);
+    let inside = r.x >= s.x - 0.5 && r.y >= s.y - 0.5 && r.right() <= s.right() + 0.5 && r.bottom() <= s.bottom() + 0.5;
+    let same_place = (r.x - s.x).abs() < 0.5 && (r.y - s.y).abs() < 0.5 && (r.w - s.w).abs() < 0.5 && (r.h - s.h).abs() < 0.5;
+    let outline = seed.2.is_none() || (same_place && seed.2 == area.2);
+    (seed.3 == area.3 || seed.1) && (seed.1 || !area.1) && inside && outline
+}
+
+/// In a pass no other follows ([`MAX_REWRAP_PASSES`]), a float at `r` with wrap area `area`
+/// placed above the top of its paragraph (`top`), beside text laid out before it, that the page
+/// did not start with room for: it moves into the room the page started with for it (`seed`), or
+/// else down to its paragraph's top, so no text laid out before it runs under it. `wrap` gives
+/// the wrap area of a rectangle.
+fn settle_early(
+    r: Rect,
+    area: Option<WrapArea>,
+    seed: Option<&WrapArea>,
+    top: f32,
+    wrap: impl Fn(Rect) -> Option<WrapArea>,
+) -> (Rect, Option<WrapArea>) {
+    let Some(a) = area.as_ref().filter(|a| a.0.y < top - 0.5) else { return (r, area) };
+    if seed.is_some_and(|s| covers(s, a)) {
+        return (r, area);
+    }
+    if let Some(s) = seed {
+        let moved = Rect { x: r.x + (s.0.x - a.0.x), y: r.y + (s.0.y - a.0.y), ..r };
+        let moved_area = wrap(moved);
+        if moved_area.as_ref().is_some_and(|m| covers(s, m)) {
+            return (moved, moved_area);
+        }
+    }
+    let down = Rect { y: r.y + (top - a.0.y), ..r };
+    (down, wrap(down))
+}
+
+/// The early floats a pass found, `found`, are all among those the pass started with, `early`,
+/// each inside the area the page started with for it.
+fn early_covered(found: &EarlyFloats, early: &EarlyFloats) -> bool {
+    found.iter().all(|(page, v)| {
+        v.iter().all(|(b, k, area)| early.get(page).is_some_and(|w| w.iter().any(|(eb, ek, seed)| (eb, ek) == (b, k) && covers(seed, area))))
+    })
+}
+
+/// Adds the early floats a pass found to those pages start with (#2048). Nothing is taken away:
+/// a float whose wrap area pushes its own anchor onto the next page has no settled place (back
+/// on the first page, its anchor fits there again), so the first page keeps the room it was
+/// given and the float goes on the next, rather than the passes swapping between the two. A
+/// float found somewhere else on the same page keeps text clear of both places (one plain
+/// rectangle around them), so the areas only grow.
+fn merge_early(early: &mut EarlyFloats, found: EarlyFloats) {
+    for (page, v) in found {
+        let have = early.entry(page).or_default();
+        for (b, k, area) in v {
+            match have.iter_mut().find(|(eb, ek, _)| (*eb, *ek) == (b, k)) {
+                Some((_, _, seed)) if !covers(seed, &area) => {
+                    let beside = seed.3 == area.3 && !seed.1 && !area.1;
+                    *seed = (seed.0.union(&area.0), !beside, None, area.3);
+                }
+                Some(_) => {}
+                None => have.push((b, k, area)),
+            }
+        }
+    }
+}
+
 /// The area text keeps clear of around a floating object at `r` (its rectangle grown by the
 /// distances from text; Tight and Through: around `outline`, unit coordinates across `r`, when
 /// it has one), and whether text may only go above and below it. `None` when text flows over
@@ -3011,7 +3128,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
             vec![Placed::Shape {
                 rect,
                 kind: *kind,
-                fill: *fill,
+                fill: fill.clone(),
                 stroke: *stroke,
                 stroke_width: *stroke_width,
                 effects: *effects,
@@ -3039,7 +3156,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                         Placed::Shape {
                             rect,
                             kind: wordcraft_doc::para::ShapeKind::Rectangle,
-                            fill: c.fill,
+                            fill: c.fill.clone(),
                             stroke: c.stroke,
                             stroke_width: c.stroke_width,
                             effects: Default::default(),
@@ -3078,21 +3195,35 @@ fn group_members(o: &InlineObject, rect: Rect) -> Vec<(Rect, &InlineObject)> {
 
 /// Position the floating objects anchored in `p` for a paragraph whose text starts at `y0` in
 /// the current column, add their wrap areas to the page (replacing any from an earlier attempt,
-/// from `excl_mark` on) and lay the paragraph out around them, with its list `label`.
+/// from `excl_mark` on) and lay the paragraph out around them, with its list `label`. `p` is
+/// body block `block`. A float the page started with ([`EarlyFloats`]) keeps its place among the
+/// page's wrap areas (its area as placed now). Without `place` (a later piece of the paragraph
+/// broken again for another column) the floats stay where its first piece placed and drew them:
+/// they aren't placed again in the new column, and their record for the page they are drawn on
+/// ([`EarlyFloats`]) stands.
+#[allow(clippy::too_many_arguments)]
 fn anchor_floats(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
     p: &Paragraph,
+    block: usize,
     y0: f32,
     before: f32,
     excl_mark: usize,
     label: &Option<(String, Level)>,
+    place: bool,
 ) -> (HashMap<usize, Rect>, Arc<ParaLayout>, Vec<para::Exclusion>) {
-    pb.excl.truncate(excl_mark);
     ctx.fields.page = pb.number;
     let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
-    if !pb.web {
+    if !pb.web && place {
+        // (A mark from a page before may be short of the areas this page started with.)
+        pb.excl.truncate(excl_mark.max(pb.seeded));
+        let page = pb.pages.len().saturating_sub(1);
+        let early = pb.early.get(&page);
+        // The paragraph's top, and whether text was placed before it on the page.
+        let top = y0 - before;
+        let text_before = top > pb.top + 0.5 || pb.col > 0;
         let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
@@ -3103,11 +3234,28 @@ fn anchor_floats(
                 continue;
             }
             // Positions relative to the paragraph start above its space before (Word for Windows).
-            let r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
-            rects.insert(oi, r);
+            let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
-            if let Some(area) = wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())) {
-                pb.excl.push(area);
+            let outline = outline.as_deref().map(|v| v.as_slice());
+            let mut area = wrap_area(r, float, outline);
+            if pb.settle && text_before {
+                let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
+                (r, area) = settle_early(r, area, seed, top, |r| wrap_area(r, float, outline));
+            }
+            rects.insert(oi, r);
+            // Above the paragraph, beside text laid out before it: the page is laid out again
+            // with it known from the start (#2048).
+            let above = area.as_ref().filter(|a| text_before && a.0.y < top - 0.5).map(|a| (page, a.clone()));
+            ctx.floats_above.insert((block, oi), above);
+            if let Some(area) = area {
+                match early.and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == (block, oi))).filter(|k| *k < pb.seeded) {
+                    Some(k) => {
+                        if let Some(slot) = pb.excl.get_mut(k) {
+                            *slot = area;
+                        }
+                    }
+                    None => pb.excl.push(area),
+                }
             }
         }
     }
@@ -3426,7 +3574,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut page_map: Vec<(usize, u32)> = Vec::new();
     // Where its automatic equation numbers start: each layout of it again counts from here.
     let eq_start = ctx.eq_count;
-    let (mut float_rects, mut pl, mut rel) = anchor_floats(ctx, pb, p, guess, space_before, excl_mark, &label);
+    let (mut float_rects, mut pl, mut rel) = anchor_floats(ctx, pb, p, block, guess, space_before, excl_mark, &label, true);
     // The page its fields were laid out for (and the width), and how many times it was laid out again for a later
     // page (bounded: a paragraph over hundreds of pages keeps the last number it got).
     let (mut laid_page, mut laid_width) = (pb.number, pb.col_w());
@@ -3512,7 +3660,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !pb.excl.is_empty()) {
         let y0 = pb.y;
-        (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, applied_before, excl_mark, &label));
+        (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, block, y0, applied_before, excl_mark, &label, true));
         (laid_page, laid_width) = (pb.number, pb.col_w());
         anchor_y = y0 - applied_before;
     }
@@ -3687,7 +3835,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 pb.advance(block, body_top);
                 if l0 == 0 {
                     let y0 = pb.y;
-                    (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, 0.0, excl_mark, &label));
+                    (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, block, y0, 0.0, excl_mark, &label, true));
                     (laid_page, laid_width) = (pb.number, pb.col_w());
                     anchor_y = y0;
                     n = pl.lines.len();
@@ -3799,8 +3947,10 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                     && let Some(resume) = pl.lines.get(l0).map(|l| l.start)
                 {
                     let y0 = pb.y;
-                    let (rects, relaid, relaid_rel) =
-                        with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, 0.0, excl_mark, &label)));
+                    // The floats were placed and drawn with the first piece: they stay there.
+                    let (rects, relaid, relaid_rel) = with_page_map(ctx, &mut page_map, |ctx| {
+                        again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, block, y0, 0.0, excl_mark, &label, false))
+                    });
                     if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
                         (float_rects, pl, rel) = (rects, relaid, relaid_rel);
                         (laid_page, laid_width) = (pb.number, pb.col_w());

@@ -47,9 +47,9 @@ use wordcraft_doc::para::{InlineObject, ShapeKind};
 use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
+use wordcraft_layout::display::Paint;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
 use wordcraft_layout::para::{ClKind, LineEnd};
-use wordcraft_layout::wordart::ArtPaint;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
 
@@ -458,19 +458,26 @@ fn now_unix() -> Option<i64> {
 }
 
 /// Unix seconds (UTC) → civil time (proleptic Gregorian).
+///
+/// The year is returned unclamped (the caller clamps it to the PDF `DateTime` range 0..=9999);
+/// month, day and time of day always come through correctly. Past chrono's ±262143-year range the
+/// Gregorian 400-year cycle (146_097 days) keeps the result exact — chrono converts the day within
+/// one cycle and whole cycles go back into the year (an `i128` so the extremes can't overflow) —
+/// rather than falling back to the epoch, so the date never changes for a value the old
+/// hand-rolled converter accepted. 1970-01-01 is `num_days_from_ce` 719_163.
 fn civil(t: i64) -> Civil {
-    let days = t.div_euclid(86_400);
-    let secs = t.rem_euclid(86_400);
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year, month as u8, day as u8, (secs / 3600) as u8, (secs / 60 % 60) as u8, (secs % 60) as u8)
+    use chrono::Datelike;
+    let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
+    let (cycles, rest) = (days.div_euclid(146_097), days.rem_euclid(146_097));
+    // `rest + 719_163` is 719_163..865_259, always a valid CE day.
+    let (y, m, d) = match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(date) => {
+            let y = i128::from(date.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), date.month() as u8, date.day() as u8)
+        }
+        None => (1970, 1, 1), // unreachable
+    };
+    (y, m, d, (secs / 3600) as u8, (secs / 60 % 60) as u8, (secs % 60) as u8)
 }
 
 fn norm(v: f32) -> NormalizedF32 {
@@ -479,6 +486,44 @@ fn norm(v: f32) -> NormalizedF32 {
 
 fn fill(c: Rgb, alpha: f32) -> Fill {
     Fill { paint: rgb::Color::new(c.0, c.1, c.2).into(), opacity: norm(alpha), rule: FillRule::NonZero }
+}
+
+/// A fill in paint `p`: a colour with its opacity, or a gradient whose stops carry theirs.
+fn paint_fill(p: &Paint) -> Fill {
+    let stops = |stops: &[(f32, Rgb, f32)]| -> Vec<krilla::paint::Stop> {
+        stops
+            .iter()
+            .map(|(o, c, a)| krilla::paint::Stop { offset: norm(*o), color: rgb::Color::new(c.0, c.1, c.2).into(), opacity: norm(*a) })
+            .collect()
+    };
+    let paint: krilla::paint::Paint = match p {
+        Paint::Solid(c, a) => return fill(*c, *a),
+        Paint::Linear { p0, p1, stops: st } => krilla::paint::LinearGradient {
+            x1: p0.0,
+            y1: p0.1,
+            x2: p1.0,
+            y2: p1.1,
+            transform: Transform::default(),
+            spread_method: krilla::paint::SpreadMethod::Pad,
+            stops: stops(st),
+            anti_alias: true,
+        }
+        .into(),
+        Paint::Radial { c, r, stops: st } => krilla::paint::RadialGradient {
+            fx: c.0,
+            fy: c.1,
+            fr: 0.0,
+            cx: c.0,
+            cy: c.1,
+            cr: *r,
+            transform: Transform::default(),
+            spread_method: krilla::paint::SpreadMethod::Pad,
+            stops: stops(st),
+            anti_alias: true,
+        }
+        .into(),
+    };
+    Fill { paint, opacity: NormalizedF32::ONE, rule: FillRule::NonZero }
 }
 
 fn ok(v: f32) -> bool {
@@ -962,7 +1007,7 @@ impl Exporter<'_> {
                 let mut pb = PathBuilder::new();
                 append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
                 let Some(p) = pb.finish() else { return };
-                s.set_fill(f.map(|c| fill(c, 1.0)));
+                s.set_fill(f.as_ref().map(paint_fill));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),
                     // Width 0 (or none) is a hairline.
@@ -1014,19 +1059,19 @@ impl Exporter<'_> {
                     shape_effects(s, *kind, *corner, rect, &fx, f.is_some() && can_fill, stroke.is_some(), *stroke_width);
                 }
                 // Soft edges: the fill fades out toward the outline (which fades with it).
-                if let (Some(rad), Some(c), true) = (fx.soft_edge, f, can_fill) {
+                if let (Some(rad), Some(c), true) = (fx.soft_edge, f.as_ref(), can_fill) {
                     let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
                     s.set_stroke(None);
                     for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
                         if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0), *corner) {
-                            s.set_fill(Some(fill(*c, a)));
+                            s.set_fill(Some(paint_fill(&c.faded(a))));
                             s.draw_path(&p);
                         }
                     }
                     s.set_fill(None);
                     return;
                 }
-                s.set_fill(f.filter(|_| can_fill).map(|c| fill(c, 1.0)));
+                s.set_fill(f.as_ref().filter(|_| can_fill).map(paint_fill));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),
                     width: if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
@@ -1044,44 +1089,21 @@ impl Exporter<'_> {
                     let mut pb = PathBuilder::new();
                     append_path(&mut pb, &l.path);
                     let Some(p) = pb.finish() else { continue };
-                    let (paint, opacity): (krilla::paint::Paint, f32) = match &l.paint {
-                        ArtPaint::Solid(c, a) => (rgb::Color::new(c.0, c.1, c.2).into(), *a),
-                        ArtPaint::Linear { p0, p1, stops } => {
-                            let stops = stops
-                                .iter()
-                                .map(|(o, c, a)| krilla::paint::Stop {
-                                    offset: norm(*o),
-                                    color: rgb::Color::new(c.0, c.1, c.2).into(),
-                                    opacity: norm(*a),
-                                })
-                                .collect();
-                            let g = krilla::paint::LinearGradient {
-                                x1: p0.0,
-                                y1: p0.1,
-                                x2: p1.0,
-                                y2: p1.1,
-                                transform: Transform::default(),
-                                spread_method: krilla::paint::SpreadMethod::Pad,
-                                stops,
-                                anti_alias: true,
-                            };
-                            (g.into(), 1.0)
-                        }
-                    };
+                    let Fill { paint, opacity, .. } = paint_fill(&l.paint);
                     match l.stroke {
                         Some(w) => {
                             s.set_fill(None);
                             s.set_stroke(Some(Stroke {
                                 paint,
                                 width: w.clamp(0.1, 400.0),
-                                opacity: norm(opacity),
+                                opacity,
                                 line_join: LineJoin::Round,
                                 ..Default::default()
                             }));
                         }
                         None => {
                             s.set_stroke(None);
-                            s.set_fill(Some(Fill { paint, opacity: norm(opacity), rule: FillRule::NonZero }));
+                            s.set_fill(Some(Fill { paint, opacity, rule: FillRule::NonZero }));
                         }
                     }
                     s.draw_path(&p);
@@ -1166,6 +1188,16 @@ impl Exporter<'_> {
                 let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
                 s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Butt)));
                 seg(s, nx, ny);
+                seg(s, -nx, -ny);
+            }
+            LineStyle::Triple => {
+                // Three thin lines, spaced as a double's, across the line's direction.
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+                let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
+                s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Butt)));
+                seg(s, nx, ny);
+                seg(s, 0.0, 0.0);
                 seg(s, -nx, -ny);
             }
             LineStyle::Wave => {

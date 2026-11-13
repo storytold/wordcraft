@@ -73,7 +73,7 @@ fn has_group(s: &Session) -> Option<&'static str> {
     }
 }
 /// Shape Fill and Shape Outline: a shape, or a Drawing Canvas's background and border.
-fn has_shape_or_canvas(s: &Session) -> Option<&'static str> {
+pub(crate) fn has_shape_or_canvas(s: &Session) -> Option<&'static str> {
     match selected(s) {
         Some((_, o)) if o.is_canvas() => None,
         _ => has_shape(s),
@@ -357,24 +357,14 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"index"?: n}"#)
         .pure(),
-        CommandSpec::new("shape.fill", "Shape Fill", "Shape Format › Shape Styles", |s, v| {
-            let c = p::str(v, "color").and_then(Rgb::parse);
-            with_obj(s, |o| {
-                if let InlineObject::Shape { fill, .. } = o {
-                    *fill = c;
-                } else if let Some(style) = super::canvas::style_mut(o) {
-                    style.fill = c;
-                }
-            })
-        })
-        .params(r#"{"color": "RRGGBB" | null}  (a selected drawing canvas: its background)"#)
-        .when(has_shape_or_canvas),
         CommandSpec::new("shape.outline", "Shape Outline", "Shape Format › Shape Styles", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
             let w = p::f32(v, "width").map(|w| w.clamp(0.0, 72.0));
             with_obj(s, |o| {
-                if let InlineObject::Shape { stroke, stroke_width, .. } = o {
+                if let InlineObject::Shape { stroke, stroke_width, extra, .. } = o {
                     *stroke = c;
+                    // A colour chosen here replaces an outline gradient from a file.
+                    extra.outline_fill = None;
                     if let Some(w) = w {
                         *stroke_width = w;
                     }
@@ -945,7 +935,7 @@ fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
 }
 
 /// Change the object at `pos`; returns it afterwards.
-fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
+pub(crate) fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
     let para = s.doc.para_mut(pos.story, &pos.path)?;
     let o = para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     f(o);
@@ -1611,7 +1601,7 @@ fn shown_members(group: &InlineObject, [x, y, w, h]: [f32; 4]) -> Vec<([f32; 4],
         .collect()
 }
 
-fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
+pub(crate) fn all_objects(s: &Session) -> Vec<(Pos, InlineObject)> {
     let mut v = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };

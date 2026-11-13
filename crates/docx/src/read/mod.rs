@@ -96,6 +96,10 @@ pub(crate) struct Reader<'p> {
     /// Linked text boxes as read: (`wps:txbx/@id` or `wps:linkedTxbx/@id`, `seq` (0 for the box
     /// holding the text), text box part). See [`link_text_boxes`].
     pub txbx_links: Vec<(u32, u32, u32)>,
+    /// The theme's fill styles, which shapes' style references point to.
+    pub theme_fills: shape_style::ThemeFills,
+    /// The fill of the group being read (what its members' `a:grpFill` stands for).
+    pub group_fill: Option<wordcraft_doc::fill::Fill>,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -159,6 +163,8 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         content_types: None,
         embedded: EmbeddedManifest::default(),
         txbx_links: Vec::new(),
+        theme_fills: Default::default(),
+        group_fill: None,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -717,6 +723,7 @@ impl Reader<'_> {
             self.pc.theme_colors = colors.clone();
             self.doc.settings.theme_colors = colors;
         }
+        self.theme_fills = shape_style::ThemeFills::read(el.child("a:fmtScheme"));
         if let Some(fs) = el.child("a:fontScheme") {
             let face =
                 |n: &str| fs.child(n).and_then(|f| f.child("a:latin")).and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty()).map(str::to_string);

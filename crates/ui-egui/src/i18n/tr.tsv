@@ -274,6 +274,9 @@
 	First line:	İlk satır:
 	Fixed Column Width	Sabit Sütun Genişliği
 	Focus	Odak
+	Full Screen View	Tam Ekran Görünümü
+	Show the ribbon	Şeridi göster
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Eski menü tuşları: Alt, {keys}. Yazmaya devam edin ya da iptal etmek için Esc tuşuna basın.
 	Font	Yazı Tipi
 	Font Color	Yazı Tipi Rengi
 	Font color:	Yazı tipi rengi:
@@ -1735,6 +1738,12 @@ preview	Title	Örnek
 	Go Back	Geri Git
 	Do Not Check Spelling or Grammar	Yazım veya dilbilgisini denetleme
 	English (United Kingdom)	İngilizce (Birleşik Krallık)
+	English (Australia)	İngilizce (Avustralya)
+	English (Canada)	İngilizce (Kanada)
+	English (India)	İngilizce (Hindistan)
+	English (Ireland)	İngilizce (İrlanda)
+	English (New Zealand)	İngilizce (Yeni Zelanda)
+	English (South Africa)	İngilizce (Güney Afrika)
 	Polish	Lehçe
 	Insert Date Field	Tarih Alanı Ekle
 	Insert Page Field	Sayfa Alanı Ekle
@@ -2696,3 +2705,54 @@ preview	Title	Örnek
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Herhangi bir birimde bir boyut yazın, örneğin 5 cm veya 300 px. Diğer kenar da buna uyar, böylece resim oranlarını korur.
 
 	Import…	İçe aktar…
+
+# Personal templates (#2852)
+	Personal	Kişisel
+	Personal Templates	Kişisel şablonlar
+	Templates you save in your templates folder show up here.	Şablon klasörünüze kaydettiğiniz şablonlar burada görünür.
+	Save as Word Template…	Word şablonu olarak kaydet…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Şablon klasörünüze bir .dotx şablonu kaydeder. Dosya › Yeni altında Kişisel bölümünde görünür.
+	File locations	Dosya konumları
+	User templates:	Kullanıcı şablonları:
+	Not set	Ayarlanmadı
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Dosya › Yeni, buradaki .dotx ve .dotm şablonlarını Kişisel altında listeler; Word şablonu olarak kaydet buradan başlar.
+	Format Shape Pane	Şekli Biçimlendir bölmesi
+	Format Shape	Şekli Biçimlendir
+	Format Shape…	Şekli Biçimlendir…
+	No fill	Dolgu yok
+	Solid fill	Düz dolgu
+	Gradient fill	Degrade dolgu
+	Preset gradients	Hazır degradeler
+	Radial	Dairesel
+	Rectangular	Dikdörtgen
+	Path	Yol
+	Direction	Yön
+	Angle	Açı
+	Gradient stops	Degrade durakları
+	Add gradient stop	Degrade durağı ekle
+	Remove gradient stop	Degrade durağını kaldır
+	Rotate with shape	Şekille birlikte döndür
+	Gradient	Degrade
+	No Gradient	Degrade yok
+	Light Variations	Açık çeşitler
+	Dark Variations	Koyu çeşitler
+	More Gradients…	Diğer degradeler…
+	Select a shape, text box or drawing canvas to format its fill.	Dolgusunu biçimlendirmek için bir şekil, metin kutusu veya çizim tuvali seçin.
+	Linear Right	Doğrusal sağa
+	Linear Diagonal - Top Left to Bottom Right	Doğrusal çapraz – sol üst köşeden sağ alt köşeye
+	Linear Down	Doğrusal aşağı
+	Linear Diagonal - Top Right to Bottom Left	Doğrusal çapraz – sağ üst köşeden sol alt köşeye
+	Linear Left	Doğrusal sola
+	Linear Diagonal - Bottom Right to Top Left	Doğrusal çapraz – sağ alt köşeden sol üst köşeye
+	Linear Up	Doğrusal yukarı
+	Linear Diagonal - Bottom Left to Top Right	Doğrusal çapraz – sol alt köşeden sağ üst köşeye
+	From Top Left Corner	sol üst köşeden
+	From Top Right Corner	sağ üst köşeden
+	From Bottom Left Corner	sol alt köşeden
+	From Bottom Right Corner	sağ alt köşeden
+	From Center	Merkezden
+	Soft	Yumuşak
+	Lit from Top	Üstten aydınlatılmış
+	Deep	Koyu
+	Lit from Bottom	Alttan aydınlatılmış
+	Center Glow	Merkez parıltısı

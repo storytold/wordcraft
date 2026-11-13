@@ -416,6 +416,9 @@
 	First line:	第一行：
 	Fixed Column Width	固定欄寬
 	Focus	專注
+	Full Screen View	全螢幕檢視
+	Show the ribbon	顯示功能區
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	舊功能表鍵: Alt, {keys}。繼續輸入，或按 Esc 取消。
 	Font	字型
 	Font Color	字型色彩
 	Font color:	字型色彩：
@@ -1751,6 +1754,12 @@
 	Reading Line Spacing	閱讀行距
 	Reading Text Size	閱讀字級
 	English (United Kingdom)	英文（英國）
+	English (Australia)	英文（澳洲）
+	English (Canada)	英文（加拿大）
+	English (India)	英文（印度）
+	English (Ireland)	英文（愛爾蘭）
+	English (New Zealand)	英文（紐西蘭）
+	English (South Africa)	英文（南非）
 	Polish	波蘭文
 	Do Not Check Spelling or Grammar	不檢查拼字及文法
 
@@ -2289,3 +2298,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	可用任何單位輸入大小，例如 5 cm 或 300 px。另一邊隨之調整，圖片保持原有比例。
 
 	Import…	匯入…
+
+# Personal templates (#2852)
+	Personal	個人
+	Personal Templates	個人範本
+	Templates you save in your templates folder show up here.	儲存到範本資料夾的範本會顯示在這裡。
+	Save as Word Template…	另存為 Word 範本…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	將 .dotx 範本儲存到你的範本資料夾。它會顯示在「檔案 › 新增」的「個人」下。
+	File locations	檔案位置
+	User templates:	使用者範本：
+	Not set	未設定
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	「檔案 › 新增」會在「個人」下列出此處的 .dotx 和 .dotm 範本；「另存為 Word 範本」從這裡開始。
+	Format Shape Pane	設定圖形格式窗格
+	Format Shape	設定圖形格式
+	Format Shape…	設定圖形格式…
+	No fill	無填滿
+	Solid fill	實心填滿
+	Gradient fill	漸層填滿
+	Preset gradients	預設漸層
+	Radial	放射狀
+	Rectangular	矩形
+	Path	路徑
+	Direction	方向
+	Angle	角度
+	Gradient stops	漸層停駐點
+	Add gradient stop	新增漸層停駐點
+	Remove gradient stop	移除漸層停駐點
+	Rotate with shape	隨圖形旋轉
+	Gradient	漸層
+	No Gradient	無漸層
+	Light Variations	淺色變化
+	Dark Variations	深色變化
+	More Gradients…	其他漸層…
+	Select a shape, text box or drawing canvas to format its fill.	請選取圖形、文字方塊或繪圖畫布以設定其填滿格式。
+	Linear Right	線性 向右
+	Linear Diagonal - Top Left to Bottom Right	線性對角 - 左上到右下
+	Linear Down	線性 向下
+	Linear Diagonal - Top Right to Bottom Left	線性對角 - 右上到左下
+	Linear Left	線性 向左
+	Linear Diagonal - Bottom Right to Top Left	線性對角 - 右下到左上
+	Linear Up	線性 向上
+	Linear Diagonal - Bottom Left to Top Right	線性對角 - 左下到右上
+	From Top Left Corner	從左上角
+	From Top Right Corner	從右上角
+	From Bottom Left Corner	從左下角
+	From Bottom Right Corner	從右下角
+	From Center	從中央
+	Soft	柔和
+	Lit from Top	頂部照亮
+	Deep	深沉
+	Lit from Bottom	底部照亮
+	Center Glow	中央光暈

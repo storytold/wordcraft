@@ -427,6 +427,9 @@
 	First line:	首行：
 	Fixed Column Width	固定列宽
 	Focus	专注
+	Full Screen View	全屏视图
+	Show the ribbon	显示功能区
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	旧菜单键: Alt, {keys}。继续输入，或按 Esc 取消。
 	Font	字体
 	Font Color	字体颜色
 	Font color:	字体颜色：
@@ -1762,6 +1765,12 @@
 	Reading Line Spacing	阅读行距
 	Reading Text Size	阅读字号
 	English (United Kingdom)	英语（英国）
+	English (Australia)	英语（澳大利亚）
+	English (Canada)	英语（加拿大）
+	English (India)	英语（印度）
+	English (Ireland)	英语（爱尔兰）
+	English (New Zealand)	英语（新西兰）
+	English (South Africa)	英语（南非）
 	Polish	波兰语
 	Do Not Check Spelling or Grammar	不检查拼写和语法
 
@@ -2300,3 +2309,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	可用任意单位输入大小，例如 5 cm 或 300 px。另一边随之调整，图片保持原有比例。
 
 	Import…	导入…
+
+# Personal templates (#2852)
+	Personal	个人
+	Personal Templates	个人模板
+	Templates you save in your templates folder show up here.	保存到模板文件夹中的模板会显示在这里。
+	Save as Word Template…	另存为 Word 模板…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	将 .dotx 模板保存到你的模板文件夹。它会显示在“文件 › 新建”的“个人”下。
+	File locations	文件位置
+	User templates:	用户模板：
+	Not set	未设置
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	“文件 › 新建”在“个人”下列出此处的 .dotx 和 .dotm 模板；“另存为 Word 模板”从这里开始。
+	Format Shape Pane	设置形状格式窗格
+	Format Shape	设置形状格式
+	Format Shape…	设置形状格式…
+	No fill	无填充
+	Solid fill	纯色填充
+	Gradient fill	渐变填充
+	Preset gradients	预设渐变
+	Radial	径向
+	Rectangular	矩形
+	Path	路径
+	Direction	方向
+	Angle	角度
+	Gradient stops	渐变光圈
+	Add gradient stop	添加渐变光圈
+	Remove gradient stop	删除渐变光圈
+	Rotate with shape	与形状一起旋转
+	Gradient	渐变
+	No Gradient	无渐变
+	Light Variations	浅色变体
+	Dark Variations	深色变体
+	More Gradients…	其他渐变…
+	Select a shape, text box or drawing canvas to format its fill.	请选择一个形状、文本框或绘图画布来设置其填充格式。
+	Linear Right	线性 向右
+	Linear Diagonal - Top Left to Bottom Right	线性对角 - 左上到右下
+	Linear Down	线性 向下
+	Linear Diagonal - Top Right to Bottom Left	线性对角 - 右上到左下
+	Linear Left	线性 向左
+	Linear Diagonal - Bottom Right to Top Left	线性对角 - 右下到左上
+	Linear Up	线性 向上
+	Linear Diagonal - Bottom Left to Top Right	线性对角 - 左下到右上
+	From Top Left Corner	从左上角
+	From Top Right Corner	从右上角
+	From Bottom Left Corner	从左下角
+	From Bottom Right Corner	从右下角
+	From Center	从中心
+	Soft	柔和
+	Lit from Top	顶部照亮
+	Deep	深沉
+	Lit from Bottom	底部照亮
+	Center Glow	中心光晕

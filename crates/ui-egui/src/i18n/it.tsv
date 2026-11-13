@@ -350,6 +350,9 @@
 	First line:	Prima riga:
 	Fixed Column Width	Larghezza colonna fissa
 	Focus	Concentrazione
+	Full Screen View	Visualizzazione a schermo intero
+	Show the ribbon	Mostra la barra multifunzione
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Vecchi tasti dei menu: Alt, {keys}. Continua a digitare o premi Esc per annullare.
 	Font	Carattere
 	Font Color	Colore carattere
 	Font Dialog	Finestra di dialogo Carattere
@@ -2057,6 +2060,12 @@
 	Do not check spelling or grammar	Non controllare ortografia e grammatica
 	Dutch	Olandese
 	English (United Kingdom)	Inglese (Regno Unito)
+	English (Australia)	Inglese (Australia)
+	English (Canada)	Inglese (Canada)
+	English (India)	Inglese (India)
+	English (Ireland)	Inglese (Irlanda)
+	English (New Zealand)	Inglese (Nuova Zelanda)
+	English (South Africa)	Inglese (Sudafrica)
 	Envelope size:	Dimensioni busta:
 	Estonian	Estone
 	Finnish	Finlandese
@@ -2708,3 +2717,54 @@ preview	Title	Esempio
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Scrivi una dimensione in qualsiasi unità, ad esempio 5 cm o 300 px. L'altro lato si adegua, così l'immagine mantiene le proporzioni.
 
 	Import…	Importa…
+
+# Personal templates (#2852)
+	Personal	Personali
+	Personal Templates	Modelli personali
+	Templates you save in your templates folder show up here.	I modelli che salvi nella cartella dei modelli compaiono qui.
+	Save as Word Template…	Salva come modello di Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Salva un modello .dotx nella cartella dei modelli. Compare in File › Nuovo, in Personali.
+	File locations	Percorsi dei file
+	User templates:	Modelli utente:
+	Not set	Non impostato
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	File › Nuovo elenca qui i modelli .dotx e .dotm in Personali; Salva come modello di Word parte da qui.
+	Format Shape Pane	Riquadro Formato forma
+	Format Shape	Formato forma
+	Format Shape…	Formato forma…
+	No fill	Nessun riempimento
+	Solid fill	Riempimento a tinta unita
+	Gradient fill	Riempimento sfumato
+	Preset gradients	Sfumature predefinite
+	Radial	Radiale
+	Rectangular	Rettangolare
+	Path	Percorso
+	Direction	Direzione
+	Angle	Angolo
+	Gradient stops	Punti di sfumatura
+	Add gradient stop	Aggiungi punto di sfumatura
+	Remove gradient stop	Rimuovi punto di sfumatura
+	Rotate with shape	Ruota con la forma
+	Gradient	Sfumatura
+	No Gradient	Nessuna sfumatura
+	Light Variations	Varianti chiare
+	Dark Variations	Varianti scure
+	More Gradients…	Altre sfumature…
+	Select a shape, text box or drawing canvas to format its fill.	Seleziona una forma, una casella di testo o un'area di disegno per formattarne il riempimento.
+	Linear Right	Lineare verso destra
+	Linear Diagonal - Top Left to Bottom Right	Lineare diagonale - da in alto a sinistra a in basso a destra
+	Linear Down	Lineare verso il basso
+	Linear Diagonal - Top Right to Bottom Left	Lineare diagonale - da in alto a destra a in basso a sinistra
+	Linear Left	Lineare verso sinistra
+	Linear Diagonal - Bottom Right to Top Left	Lineare diagonale - da in basso a destra a in alto a sinistra
+	Linear Up	Lineare verso l'alto
+	Linear Diagonal - Bottom Left to Top Right	Lineare diagonale - da in basso a sinistra a in alto a destra
+	From Top Left Corner	Dall'angolo in alto a sinistra
+	From Top Right Corner	Dall'angolo in alto a destra
+	From Bottom Left Corner	Dall'angolo in basso a sinistra
+	From Bottom Right Corner	Dall'angolo in basso a destra
+	From Center	Dal centro
+	Soft	Morbido
+	Lit from Top	Illuminato dall'alto
+	Deep	Profondo
+	Lit from Bottom	Illuminato dal basso
+	Center Glow	Bagliore centrale

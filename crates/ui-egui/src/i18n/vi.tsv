@@ -349,6 +349,9 @@
 	First line:	Dòng đầu:
 	Fixed Column Width	Cố định độ rộng cột
 	Focus	Tập trung
+	Full Screen View	Chế độ xem toàn màn hình
+	Show the ribbon	Hiện dải lệnh
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Phím menu cũ: Alt, {keys}. Tiếp tục gõ hoặc nhấn Esc để hủy.
 	Font	Phông chữ
 	Font Color	Màu phông chữ
 	Font Dialog	Hộp thoại phông chữ
@@ -1709,6 +1712,12 @@
 	Do not check spelling or grammar	Không kiểm tra chính tả hoặc ngữ pháp
 	Dutch	Tiếng Hà Lan
 	English (United Kingdom)	Tiếng Anh (Anh)
+	English (Australia)	Tiếng Anh (Úc)
+	English (Canada)	Tiếng Anh (Canada)
+	English (India)	Tiếng Anh (Ấn Độ)
+	English (Ireland)	Tiếng Anh (Ireland)
+	English (New Zealand)	Tiếng Anh (New Zealand)
+	English (South Africa)	Tiếng Anh (Nam Phi)
 	Envelope size:	Cỡ phong bì:
 	Estonian	Tiếng Estonia
 	Finnish	Tiếng Phần Lan
@@ -2739,3 +2748,54 @@ template	Letter	Thư
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Nhập kích thước theo đơn vị bất kỳ, ví dụ 5 cm hoặc 300 px. Cạnh còn lại thay đổi theo, nên ảnh giữ nguyên tỷ lệ.
 
 	Import…	Nhập…
+
+# Personal templates (#2852)
+	Personal	Cá nhân
+	Personal Templates	Mẫu cá nhân
+	Templates you save in your templates folder show up here.	Các mẫu bạn lưu vào thư mục mẫu sẽ xuất hiện ở đây.
+	Save as Word Template…	Lưu dưới dạng mẫu Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Lưu một mẫu .dotx vào thư mục mẫu của bạn. Mẫu xuất hiện trong Tệp › Mới, mục Cá nhân.
+	File locations	Vị trí tệp
+	User templates:	Mẫu người dùng:
+	Not set	Chưa đặt
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Tệp › Mới liệt kê các mẫu .dotx và .dotm ở đây trong mục Cá nhân; Lưu dưới dạng mẫu Word bắt đầu từ đây.
+	Format Shape Pane	Ngăn Định dạng hình
+	Format Shape	Định dạng hình
+	Format Shape…	Định dạng hình…
+	No fill	Không tô
+	Solid fill	Tô đặc
+	Gradient fill	Tô chuyển màu
+	Preset gradients	Chuyển màu đặt sẵn
+	Radial	Hướng tâm
+	Rectangular	Hình chữ nhật
+	Path	Đường dẫn
+	Direction	Hướng
+	Angle	Góc
+	Gradient stops	Điểm dừng chuyển màu
+	Add gradient stop	Thêm điểm dừng chuyển màu
+	Remove gradient stop	Xóa điểm dừng chuyển màu
+	Rotate with shape	Xoay cùng hình
+	Gradient	Chuyển màu
+	No Gradient	Không chuyển màu
+	Light Variations	Biến thể sáng
+	Dark Variations	Biến thể tối
+	More Gradients…	Thêm chuyển màu…
+	Select a shape, text box or drawing canvas to format its fill.	Chọn một hình, hộp văn bản hoặc khung vẽ để định dạng phần tô.
+	Linear Right	Tuyến tính sang phải
+	Linear Diagonal - Top Left to Bottom Right	Tuyến tính chéo - từ trên trái xuống dưới phải
+	Linear Down	Tuyến tính xuống
+	Linear Diagonal - Top Right to Bottom Left	Tuyến tính chéo - từ trên phải xuống dưới trái
+	Linear Left	Tuyến tính sang trái
+	Linear Diagonal - Bottom Right to Top Left	Tuyến tính chéo - từ dưới phải lên trên trái
+	Linear Up	Tuyến tính lên
+	Linear Diagonal - Bottom Left to Top Right	Tuyến tính chéo - từ dưới trái lên trên phải
+	From Top Left Corner	Từ góc trên bên trái
+	From Top Right Corner	Từ góc trên bên phải
+	From Bottom Left Corner	Từ góc dưới bên trái
+	From Bottom Right Corner	Từ góc dưới bên phải
+	From Center	Từ giữa
+	Soft	Mềm
+	Lit from Top	Chiếu sáng từ trên
+	Deep	Sâu
+	Lit from Bottom	Chiếu sáng từ dưới
+	Center Glow	Phát sáng ở giữa

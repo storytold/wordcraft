@@ -25,8 +25,9 @@ pub enum FileDialogRequest {
     Open { purpose: String },
     /// Pick one or more files (Add Font…); the answer lists every one picked.
     OpenMany { purpose: String },
-    /// Pick a path to save to, given a suggested file name.
-    Save { name: String },
+    /// Pick a path to save to, given a suggested file name and, if it matters, the folder to
+    /// start in (Save as Word Template starts in the user templates folder, #2852).
+    Save { name: String, dir: Option<String> },
 }
 
 /// The host's answer to a [`FileDialogRequest`]: the picked paths (one for everything but
@@ -146,7 +147,7 @@ impl WordApp {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 self.services.pick_open.as_ref().and_then(|f| f(purpose))
             }
-            FileDialogRequest::Save { name } => self.services.pick_save.as_ref().and_then(|f| f(name)),
+            FileDialogRequest::Save { name, .. } => self.services.pick_save.as_ref().and_then(|f| f(name)),
         };
         Asked::Done(self.finish_pick(after, picked))
     }
@@ -355,14 +356,52 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        self.ask_file(FileDialogRequest::Save { name }, AfterPick::SaveAs { after, document: self.session.document_id() })
+        self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
+    }
+
+    /// The user templates folder (#2852): the one File › Options names, else the app's own.
+    /// `None` on the web, which has no folders.
+    pub fn user_templates_dir(&self) -> Option<std::path::PathBuf> {
+        // The saved folder is checked again (the settings file may have been edited, the folder
+        // removed): a network folder is never looked at, and one that's gone gives way to the
+        // app's own.
+        let saved = self.session.prefs.user_templates_folder.as_deref().map(str::trim).filter(|f| !f.is_empty());
+        match saved {
+            Some(f) if wordcraft_engine::cmd::user_templates::check_dir(f).is_ok() && std::path::Path::new(f).is_dir() => {
+                Some(std::path::PathBuf::from(f))
+            }
+            Some(f) => {
+                log::debug!("user templates folder {f:?} isn't usable; using the app's own");
+                self.services.templates_dir.clone()
+            }
+            None => self.services.templates_dir.clone(),
+        }
+    }
+
+    /// File › Save As › Save as Word Template (#2852): ask where to save a `.dotx`, starting in
+    /// the user templates folder (the app's own is made on first use), then save there as Save As
+    /// does. Returns the folder the dialog starts in.
+    pub(crate) fn save_as_template_dialog(&mut self) -> Option<String> {
+        let dir = self.user_templates_dir();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(d) = &dir
+            && !d.is_dir()
+            && let Err(e) = std::fs::create_dir_all(d)
+        {
+            log::warn!("couldn't make the templates folder {}: {e}", d.display());
+        }
+        let dir = dir.filter(|d| d.is_dir()).map(|d| d.to_string_lossy().into_owned());
+        let name = format!("{}.dotx", self.title_stem());
+        let after = AfterPick::SaveAs { after: AfterSave::Nothing, document: self.session.document_id() };
+        let _ = self.ask_file(FileDialogRequest::Save { name, dir: dir.clone() }, after);
+        dir
     }
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
         let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
         let name = format!("{}.{file_ext}", self.title_stem());
-        let _ = self.ask_file(FileDialogRequest::Save { name }, AfterPick::Export { ext: ext.to_string() });
+        let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 
     /// File › Print › Save these pages as PDF: ask where, then write the pages the print
@@ -370,7 +409,7 @@ impl WordApp {
     pub(crate) fn print_pdf_dialog(&mut self) {
         let name = format!("{}.pdf", self.title_stem());
         let settings = self.ui.print.params();
-        let _ = self.ask_file(FileDialogRequest::Save { name }, AfterPick::PrintPdf { settings });
+        let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::PrintPdf { settings });
     }
 
     pub(crate) fn open_dialog(&mut self) {
@@ -466,7 +505,7 @@ mod tests {
             let revision = a.session.rev();
             let result = a.run("file.save", json!({})).unwrap();
             assert_eq!(result["pending"], "saveAs");
-            assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into() });
+            assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
             answer(&shown, None);
             assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
             assert_eq!(a.session.doc, draft);
@@ -615,7 +654,7 @@ mod tests {
         h.get_by_label("Save").click();
         h.run_steps(3);
         assert!(h.state().file_dialog_open(), "the Save button asks for a supported target");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into() });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
         answer(&shown, None);
         h.run_steps(3);
 
@@ -626,7 +665,7 @@ mod tests {
         h.event(egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
         h.run_steps(3);
         assert!(h.state().file_dialog_open(), "the focused editor's Mod+S asks too");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into() });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
         answer(&shown, None);
         h.run_steps(3);
         assert!(h.state().session.dirty);
@@ -683,6 +722,42 @@ mod tests {
         wordcraft_engine::io::open_path(path).unwrap().plain_text(wordcraft_doc::StoryRef::Body)
     }
 
+    /// Save as Word Template (#2852) suggests a .dotx in the user templates folder, which is made
+    /// on first use; the picked path is saved as a template. A folder named in File › Options
+    /// replaces the app's own.
+    #[test]
+    fn save_as_template_starts_in_the_templates_folder() {
+        let dir = scratch("save-template");
+        let own = dir.join("Templates");
+        let (mut a, shown) = async_app();
+        a.services.templates_dir = Some(own.clone());
+        typed(&mut a);
+        let r = a.run("ui.saveAsTemplate", json!({})).unwrap();
+        assert!(own.is_dir(), "the app's templates folder is made on first use");
+        assert_eq!(r["dir"], json!(own.to_string_lossy()));
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.dotx".into(), dir: Some(own.to_string_lossy().into_owned()) });
+        let path = own.join("Memo.dotx");
+        answer(&shown, Some(&path.to_string_lossy()));
+        let ctx = egui::Context::default();
+        ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
+        assert!(path.is_file(), "saved as a template");
+        assert_eq!(saved_text(&path), UNSAVED);
+        let listed = wordcraft_engine::cmd::user_templates::list_templates(&own.to_string_lossy()).unwrap();
+        assert_eq!(listed.templates.iter().map(|t| t.label.as_str()).collect::<Vec<_>>(), ["Memo"]);
+
+        // A folder chosen in Options wins.
+        let chosen = dir.join("Chosen");
+        std::fs::create_dir_all(&chosen).unwrap();
+        a.run("file.options", json!({"userTemplatesFolder": chosen.to_string_lossy()})).unwrap();
+        assert_eq!(a.user_templates_dir(), Some(chosen.clone()));
+        a.run("ui.saveAsTemplate", json!({})).unwrap();
+        assert!(
+            matches!(&shown.borrow()[0].0, FileDialogRequest::Save { name, dir: Some(d) } if name == "Memo.dotx" && *d == chosen.to_string_lossy())
+        );
+        answer(&shown, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Save As returns at once (the UI keeps running); the frame loop saves once the answer arrives.
     #[test]
     fn save_as_answer_arriving_later_is_saved() {
@@ -692,7 +767,7 @@ mod tests {
         typed(&mut a);
         a.save_as_dialog();
         assert!(a.file_dialog_open());
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into() });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into(), dir: None });
         let ctx = egui::Context::default();
         let frame = |a: &mut WordApp| ctx.run_ui(egui::RawInput::default(), |ui| a.logic(ui.ctx())).drop_without_applying_deltas();
         frame(&mut a);
@@ -730,7 +805,7 @@ mod tests {
         let r = a.run("file.saveAs", json!({})).unwrap();
         assert_eq!(r, json!({"saved": false}));
         assert!(a.file_dialog_open(), "F12's saveAs request opens the dialog");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into() });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: None });
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -760,7 +835,7 @@ mod tests {
         let (mut a, shown) = async_app();
         let r = a.run("file.exportPdf", json!({})).unwrap();
         assert_eq!(r, json!({"exported": false}));
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{}.pdf", a.title_stem()) });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{}.pdf", a.title_stem()), dir: None });
         let dir = scratch("export-pdf");
         let picked = dir.join("out.pdf");
         answer(&shown, Some(&picked.to_string_lossy()));
@@ -785,7 +860,7 @@ mod tests {
         answer(&shown, None);
         a.poll_file_dialog();
         a.run("file.exportPng", json!({})).unwrap();
-        assert!(matches!(shown.borrow()[0].0, FileDialogRequest::Save { ref name } if name.ends_with(".png")));
+        assert!(matches!(shown.borrow()[0].0, FileDialogRequest::Save { ref name, .. } if name.ends_with(".png")));
     }
 
     /// #1445: "Save changes?" → Save on a new document while another file dialog is still open:

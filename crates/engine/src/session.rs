@@ -131,7 +131,11 @@ pub struct ViewState {
     pub zoom: f32,
     pub mode: ViewMode,
     pub read_mode: bool,
+    /// View › Focus (#1678): the document alone on screen, with a slim bar to drop the ribbon down.
     pub focus_mode: bool,
+    /// Full Screen View (#1678): the pages alone on screen. Never on together with `focus_mode`.
+    #[serde(default)]
+    pub full_screen_view: bool,
     pub marks: bool,
     pub ruler: bool,
     /// View › Show › Gridlines: the drawing grid over the page's text area (on screen only).
@@ -157,6 +161,10 @@ pub struct ViewState {
     /// The Alt Text pane (Picture/Shape Format › Alt Text): the selected object's or table's alt text.
     #[serde(default)]
     pub alt_text_pane: bool,
+    /// The Format Shape pane (Shape Fill › More Gradients…, a shape's Format Shape…): the
+    /// selected shapes' fill.
+    #[serde(default)]
+    pub format_shape_pane: bool,
     pub multi_page: bool,
     /// One Page or Page Width was chosen last: keep one page per row when a typed or wheel zoom replaces the fit mode.
     #[serde(default)]
@@ -244,6 +252,7 @@ impl Default for ViewState {
             mode: ViewMode::Print,
             read_mode: false,
             focus_mode: false,
+            full_screen_view: false,
             marks: false,
             ruler: true,
             gridlines: false,
@@ -256,6 +265,7 @@ impl Default for ViewState {
             smart_art_pane: false,
             accessibility_pane: false,
             alt_text_pane: false,
+            format_shape_pane: false,
             multi_page: false,
             single_column: false,
             fit: String::new(),
@@ -555,6 +565,10 @@ pub struct Prefs {
     /// Proofing, #1063): an app started from Finder or the Dock doesn't see
     /// `WORDCRAFT_DICTIONARIES`. `None` searches the system locations only.
     pub dictionaries_folder: Option<String>,
+    /// The user templates folder File › New lists personal templates from and Save as Word
+    /// Template starts in (File › Options › Advanced › File locations, #2852). `None`: the app's
+    /// own `Templates` folder in its settings folder.
+    pub user_templates_folder: Option<String>,
     /// Formatting marks shown even while Show/Hide ¶ is off.
     pub marks: wordcraft_layout::display::FormattingMarks,
     /// Mark grammar errors as you type (with Check spelling as you type on).
@@ -580,6 +594,7 @@ impl Default for Prefs {
             units: Default::default(),
             region: None,
             dictionaries_folder: None,
+            user_templates_folder: None,
             marks: Default::default(),
             mark_grammar: true,
             ignore_uppercase: true,
@@ -1029,6 +1044,16 @@ impl Session {
     pub fn undo_depth(&self) -> usize {
         self.history.len()
     }
+    /// Where the undo history stands, for [`Session::merge_undo_since`].
+    pub fn undo_mark(&self) -> u64 {
+        (self.history.len() as u64).saturating_add(self.undo_evicted)
+    }
+    /// Makes the steps recorded since `mark` one undo step, the first: a drag that applied its
+    /// value as it went (a slider in a pane) undoes in one go.
+    pub fn merge_undo_since(&mut self, mark: u64) {
+        let keep = mark.saturating_sub(self.undo_evicted).saturating_add(1);
+        self.history.truncate(usize::try_from(keep).unwrap_or(usize::MAX));
+    }
     pub fn undo_labels(&self) -> Vec<String> {
         self.history.iter().rev().map(|u| u.label.clone()).collect()
     }
@@ -1101,6 +1126,17 @@ impl Session {
             Some(tag) => wordcraft_geom::Region::from_tag(tag),
             None => self.system_region.clone(),
         }
+    }
+
+    /// The English of the region in effect (`en-GB` for a British region), or `None` when the
+    /// region's language isn't English, it names no territory, or it is the United States (US
+    /// English is the default anyway). An English interface writes new documents in it, as Word
+    /// does on a British or Canadian system (#1045).
+    pub fn region_english(&self) -> Option<String> {
+        let r = self.region();
+        (r.language == "en" && !r.territory.is_empty() && r.territory != "US")
+            .then(|| format!("en-{}", r.territory))
+            .and_then(|t| wordcraft_proof::lang::normalize_tag(&t))
     }
 
     /// The unit rulers and dialogs show lengths in: the user's choice, else the region's.
@@ -1439,8 +1475,10 @@ impl Session {
                 }
                 // Outline view: collapsed headings follow edits; the caret stays where it shows.
                 crate::cmd::outline::after_command(self, &sel_before);
-                // Extra selected objects last until something else is edited or selected.
-                if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
+                // Extra selected objects last until something else is edited or selected; formatting
+                // them keeps them selected, as in Word.
+                if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != sel_before)
+                {
                     self.also_selected.clear();
                 }
                 self.note_typing(id, before_doc.as_ref().map(|b| &b.0), &sel_before);

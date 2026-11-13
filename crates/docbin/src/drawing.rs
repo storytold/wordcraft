@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, GroupChild, InlineObject, ShapeKind, Wrap};
 use wordcraft_doc::props::Rgb;
 
@@ -201,7 +202,7 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, pics: &mut Pictures) -
         kind = ShapeKind::TextBox;
     }
     let line = kind == ShapeKind::Line;
-    let fill = if line || p.filled == Some(false) { None } else { Some(p.fill_color.unwrap_or(Rgb::WHITE)) };
+    let fill = if line || p.filled == Some(false) { None } else { Some(Fill::solid(p.fill_color.unwrap_or(Rgb::WHITE))) };
     let stroke = if p.line == Some(false) { None } else { Some(p.line_color.unwrap_or(Rgb::BLACK)) };
     // Line widths are EMUs; Word's default is 0.75 pt.
     let stroke_width = p.line_width.map_or(0.75, |e| (e as f32 / 12_700.0).clamp(0.0, 100.0));

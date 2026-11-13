@@ -2,6 +2,7 @@
 
 use std::io::Write;
 
+use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Rgb, TextColor, Underline, VMerge};
 use wordcraft_doc::{Block, Document, InlineObject, Paragraph, RevisionKind};
@@ -2138,7 +2139,7 @@ fn theme_styled_connectors_and_callout_boxes_keep_their_paint() {
     assert_eq!(objs.len(), 5);
     let shape = |i: usize| match &objs[i] {
         InlineObject::Shape { kind, fill, stroke, stroke_width, extra, story, .. } => {
-            (*kind, *fill, *stroke, *stroke_width, extra.arrow_end, story.is_some())
+            (*kind, fill.as_ref().map(Fill::main_color), *stroke, *stroke_width, extra.arrow_end, story.is_some())
         }
         o => panic!("{o:?}"),
     };
@@ -2211,7 +2212,10 @@ fn vml_lines_and_rectangles() {
         }
         o => panic!("{o:?}"),
     }
-    assert!(matches!(&objs[1], InlineObject::Shape { kind: ShapeKind::Rectangle, fill: Some(Rgb(255, 0, 0)), stroke: None, w: 30.0, h: 20.0, .. }));
+    assert!(matches!(
+        &objs[1],
+        InlineObject::Shape { kind: ShapeKind::Rectangle, fill: Some(Fill::Solid { color: Rgb(255, 0, 0), .. }), stroke: None, w: 30.0, h: 20.0, .. }
+    ));
 }
 
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
@@ -2263,7 +2267,7 @@ fn vml_preset_shapes_are_drawn() {
     let ps = paras(&d);
     let shape = |i: usize| match ps[i].objects.first() {
         Some(InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, story, .. }) => {
-            Some((*kind, *w, *h, *fill, *stroke, *stroke_width, float.wrap == Wrap::Inline, story.is_some()))
+            Some((*kind, *w, *h, fill.as_ref().map(Fill::main_color), *stroke, *stroke_width, float.wrap == Wrap::Inline, story.is_some()))
         }
         _ => None,
     };
@@ -2339,7 +2343,14 @@ fn vml_preset_shape_survives_saving() {
     assert!(
         matches!(
             &paras(&again)[0].objects[..],
-            [InlineObject::Shape { kind: ShapeKind::Arrow, w: 120.0, h: 40.0, fill: Some(Rgb(0xFF, 0xA5, 0x00)), stroke: Some(Rgb::BLACK), .. }]
+            [InlineObject::Shape {
+                kind: ShapeKind::Arrow,
+                w: 120.0,
+                h: 40.0,
+                fill: Some(Fill::Solid { color: Rgb(0xFF, 0xA5, 0x00), .. }),
+                stroke: Some(Rgb::BLACK),
+                ..
+            }]
         ),
         "{:?}",
         paras(&again)[0].objects
@@ -2360,7 +2371,7 @@ fn vml_nearest_preset_shape_survives_saving() {
     assert!(
         matches!(
             &paras(&again)[0].objects[..],
-            [InlineObject::Shape { kind: ShapeKind::Arrow, w: 60.0, h: 20.0, fill: Some(Rgb(0xFF, 0xA5, 0x00)), .. }]
+            [InlineObject::Shape { kind: ShapeKind::Arrow, w: 60.0, h: 20.0, fill: Some(Fill::Solid { color: Rgb(0xFF, 0xA5, 0x00), .. }), .. }]
         ),
         "{:?}",
         paras(&again)[0].objects
@@ -2417,7 +2428,7 @@ fn cover_page_group_fills_freeforms_and_text_box_margins() {
         let InlineObject::Group { children, .. } = &objs[0] else { panic!("{:?}", objs[0]) };
         assert_eq!(children.len(), 3);
         let shape = |i: usize| match &children[i].obj {
-            InlineObject::Shape { kind, fill, freeform, story, .. } => (*kind, *fill, freeform.is_some(), *story),
+            InlineObject::Shape { kind, fill, freeform, story, .. } => (*kind, fill.as_ref().map(Fill::main_color), freeform.is_some(), *story),
             o => panic!("{o:?}"),
         };
         let (kind, fill, free, _) = shape(0);
@@ -2469,7 +2480,7 @@ fn drawingml_shapes_survive_saving() {
             .iter()
             .map(|o| match o {
                 InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, extra, .. } => {
-                    (*kind, *w, *h, *fill, *stroke, *stroke_width, float.x, float.y, float.wrap, extra.arrow_end)
+                    (*kind, *w, *h, fill.clone(), *stroke, *stroke_width, float.x, float.y, float.wrap, extra.arrow_end)
                 }
                 o => panic!("{o:?}"),
             })
@@ -2492,7 +2503,7 @@ fn drawingml_shapes_survive_saving() {
         ]
     );
     for s in &read[..5] {
-        assert_eq!(s.3, Some(accent), "{:?} is filled from the theme", s.0);
+        assert_eq!(s.3, Some(wordcraft_doc::fill::Fill::solid(accent)), "{:?} is filled from the theme", s.0);
         assert!(s.4.is_some() && s.5 > 0.0, "{:?} has its outline", s.0);
         assert_eq!((s.6, s.7, s.8), (1.0, 2.0, Wrap::InFrontOfText), "{:?} keeps its place", s.0);
     }
@@ -3207,7 +3218,7 @@ fn vml_freeform_rule_in_header() {
         let shapes: Vec<&InlineObject> = d.parts.get(&hid).unwrap().blocks.iter().filter_map(|b| b.as_para()).flat_map(|p| &p.objects).collect();
         let [rule, tri] = shapes.as_slice() else { panic!("{shapes:?}") };
         let InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, freeform: Some(f), .. } = rule else { panic!("{rule:?}") };
-        assert_eq!((*kind, *fill, *stroke), (ShapeKind::Freeform, None, Some(Rgb(0x33, 0x66, 0xCC))));
+        assert_eq!((*kind, fill.as_ref().map(Fill::main_color), *stroke), (ShapeKind::Freeform, None, Some(Rgb(0x33, 0x66, 0xCC))));
         assert!(near(*w, 360.0) && near(*h, 12.0) && near(*stroke_width, 1.5), "{w} x {h}, {stroke_width}");
         assert_eq!((float.h_rel, float.v_rel, float.wrap), (Anchor::Margin, Anchor::Margin, Wrap::InFrontOfText));
         assert!(near(float.y, 30.0), "{float:?}");
@@ -3539,4 +3550,105 @@ fn equation_in_alternate_content_is_read() {
     let p = paras(&d)[0];
     assert_eq!(equations(p), vec![("x+1".to_string(), false)]);
     assert!(!p.plain_text().contains("[picture]"));
+}
+
+/// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
+/// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
+/// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the
+/// file states it and survives saving.
+#[test]
+fn shape_gradients_and_transparency_are_read_and_survive_saving() {
+    use std::sync::Arc;
+    use wordcraft_doc::fill::{Gradient, GradientFlip, GradientKind, PathShape};
+    use wordcraft_doc::wordart::GradStop;
+    let theme = r#"<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="T"><a:themeElements><a:fmtScheme name="T"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="50000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></a:fillStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"><a:srgbClr val="000000"/></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>"#;
+    let rect = r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#;
+    let wsp = |sppr: &str, style: &str| anchored_wsp("S", 914400, 914400, &format!("{rect}{sppr}"), style, "<wps:cNvSpPr/>");
+    let fill_ref = |idx: u32| {
+        format!(
+            r#"<wps:style><a:lnRef idx="0"><a:srgbClr val="4080C0"/></a:lnRef><a:fillRef idx="{idx}"><a:srgbClr val="4080C0"/></a:fillRef><a:effectRef idx="0"><a:srgbClr val="4080C0"/></a:effectRef><a:fontRef idx="minor"/></wps:style>"#
+        )
+    };
+    let gs = |pos: u32, c: &str| format!(r#"<a:gs pos="{pos}"><a:srgbClr val="{c}"/></a:gs>"#);
+    let shapes = [
+        // A: 30%-opaque white.
+        wsp(r#"<a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30000"/></a:srgbClr></a:solidFill>"#, ""),
+        // B: two stops top to bottom, the second 40% opaque.
+        wsp(&format!(r#"<a:gradFill rotWithShape="1"><a:gsLst>{}<a:gs pos="100000"><a:srgbClr val="0000FF"><a:alpha val="40000"/></a:srgbClr></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill>"#, gs(0, "FF0000")), ""),
+        // C: three stops at 45°.
+        wsp(&format!(r#"<a:gradFill><a:gsLst>{}{}{}</a:gsLst><a:lin ang="2700000" scaled="0"/></a:gradFill>"#, gs(0, "FF0000"), gs(50000, "00FF00"), gs(100000, "0000FF")), ""),
+        // D: circular from the centre.
+        wsp(&format!(r#"<a:gradFill rotWithShape="1"><a:gsLst>{}{}</a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill>"#, gs(0, "FFFFFF"), gs(100000, "000000")), ""),
+        // E: rectangular from a corner, flipped and tiled, not turning with the shape.
+        wsp(&format!(r#"<a:gradFill flip="xy" rotWithShape="0"><a:gsLst>{}{}</a:gsLst><a:path path="rect"><a:fillToRect l="100000" t="100000" r="0" b="0"/></a:path><a:tileRect l="-100000" t="-100000" r="0" b="0"/></a:gradFill>"#, gs(0, "FFFFFF"), gs(100000, "000000")), ""),
+        // F, G: the theme's fill style 3 and background style 3 in the reference's colour.
+        wsp("", &fill_ref(3)),
+        wsp("", &fill_ref(1003)),
+        // H: an outline gradient.
+        wsp(&format!(r#"<a:noFill/><a:ln w="12700"><a:gradFill><a:gsLst>{}{}{}</a:gsLst><a:lin ang="0" scaled="0"/></a:gradFill></a:ln>"#, gs(0, "FF0000"), gs(50000, "00FF00"), gs(100000, "0000FF")), ""),
+    ]
+    .concat();
+    let member = |id: u32, paint: &str| {
+        format!(
+            r#"<wps:wsp><wps:cNvPr id="{id}" name="M{id}"/><wps:cNvSpPr/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>{rect}{paint}</wps:spPr><wps:bodyPr/></wps:wsp>"#
+        )
+    };
+    // I: a group with a gradient fill; one member takes it (`a:grpFill`), one has its own, and
+    // one in a nested group without a fill of its own takes the outer group's.
+    let group = format!(
+        r#"<w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="9" name="G"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup"><wpg:wgp><wpg:cNvGrpSpPr/><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="914400" cy="914400"/></a:xfrm><a:gradFill><a:gsLst>{}{}</a:gsLst><a:lin ang="0" scaled="0"/></a:gradFill></wpg:grpSpPr>{}{}<wpg:grpSp><wpg:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/><a:chOff x="0" y="0"/><a:chExt cx="914400" cy="914400"/></a:xfrm></wpg:grpSpPr>{}</wpg:grpSp></wpg:wgp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#,
+        gs(0, "112233"),
+        gs(100000, "445566"),
+        member(10, "<a:grpFill/>"),
+        member(11, r#"<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>"#),
+        member(12, "<a:grpFill/>")
+    );
+    // VML: a linear gradient to `color2`, half opaque.
+    let vml = r##"<w:r><w:pict><v:rect style="width:72pt;height:72pt" fillcolor="#ff0000" stroked="f"><v:fill type="gradient" color2="#0000ff" opacity="0.5"/></v:rect></w:pict></w:r>"##;
+    let bytes = docx(&format!("<w:p>{shapes}{group}{vml}</w:p>"), &[("rId2", "theme", "theme/theme1.xml")], &[("word/theme/theme1.xml", theme)]);
+
+    let stop = |pos: f32, c: Rgb, transparency: f32| GradStop { pos, color: c, transparency };
+    let (red, green, blue, white, black) = (Rgb(255, 0, 0), Rgb(0, 255, 0), Rgb(0, 0, 255), Rgb::WHITE, Rgb::BLACK);
+    let grad = |stops: Vec<GradStop>, kind: GradientKind, rot: bool| {
+        Fill::Gradient(Arc::new(Gradient { stops, kind, tile: None, rot_with_shape: rot, flip: GradientFlip::None }))
+    };
+    let lin = |angle: f32, scaled: bool| GradientKind::Linear { angle, scaled };
+    let centre = GradientKind::Path { shape: PathShape::Circle, focus: [50.0; 4] };
+    let ph = Rgb(0x40, 0x80, 0xC0);
+    let expected = [
+        Some(Fill::Solid { color: white, transparency: 70.0 }),
+        Some(grad(vec![stop(0.0, red, 0.0), stop(100.0, blue, 60.0)], lin(90.0, true), true)),
+        Some(grad(vec![stop(0.0, red, 0.0), stop(50.0, green, 0.0), stop(100.0, blue, 0.0)], lin(45.0, false), false)),
+        Some(grad(vec![stop(0.0, white, 0.0), stop(100.0, black, 0.0)], centre, true)),
+        Some(Fill::Gradient(Arc::new(Gradient {
+            stops: vec![stop(0.0, white, 0.0), stop(100.0, black, 0.0)],
+            kind: GradientKind::Path { shape: PathShape::Rect, focus: [100.0, 100.0, 0.0, 0.0] },
+            tile: Some([-100.0, -100.0, 0.0, 0.0]),
+            rot_with_shape: false,
+            flip: GradientFlip::Xy,
+        }))),
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, Rgb(0x20, 0x40, 0x60), 0.0)], lin(90.0, false), true)),
+        Some(grad(vec![stop(0.0, ph, 0.0), stop(100.0, black, 0.0)], centre, true)),
+        None,
+    ];
+    let check = |d: &Document| {
+        let objs = &paras(d)[0].objects;
+        assert_eq!(objs.len(), expected.len() + 2);
+        for (i, want) in expected.iter().enumerate() {
+            let InlineObject::Shape { fill, .. } = &objs[i] else { panic!("{:?}", objs[i]) };
+            assert_eq!(fill, want, "shape {i}");
+        }
+        let InlineObject::Shape { stroke, extra, .. } = &objs[7] else { panic!() };
+        let outline = grad(vec![stop(0.0, red, 0.0), stop(50.0, green, 0.0), stop(100.0, blue, 0.0)], lin(0.0, false), false);
+        assert_eq!((*stroke, extra.outline_fill.as_ref()), (Some(green), Some(&outline)), "outline drawn in its middle stop");
+        let InlineObject::Group { children, .. } = &objs[8] else { panic!("{:?}", objs[8]) };
+        let fills: Vec<_> = children.iter().map(|c| if let InlineObject::Shape { fill, .. } = &c.obj { fill.clone() } else { None }).collect();
+        let group_fill = grad(vec![stop(0.0, Rgb(0x11, 0x22, 0x33), 0.0), stop(100.0, Rgb(0x44, 0x55, 0x66), 0.0)], lin(0.0, false), false);
+        assert_eq!(fills, [Some(group_fill.clone()), Some(Fill::solid(green)), Some(group_fill)], "a:grpFill takes the group's fill");
+        let InlineObject::Shape { fill, .. } = &objs[9] else { panic!("{:?}", objs[9]) };
+        assert_eq!(fill.as_ref(), Some(&grad(vec![stop(0.0, red, 50.0), stop(100.0, blue, 0.0)], lin(90.0, false), true)), "VML gradient");
+    };
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    check(&d);
+    check(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap());
 }

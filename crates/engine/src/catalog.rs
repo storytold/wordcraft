@@ -30,6 +30,7 @@ File|Backstage|Version History|file.versions
 File|Backstage|Recover Unsaved|file.recover
 File|Backstage|New from Template|file.newFromTemplate
 File|Backstage|Save as Template|file.saveTemplate
+File|Backstage|Personal Templates|file.listTemplates
 Quick Access|Toolbar|Undo|edit.undo
 Quick Access|Toolbar|Undo List|edit.undoTo
 Quick Access|Toolbar|Redo|edit.redo
@@ -455,6 +456,8 @@ Chart Design|Chart Layouts|Chart Title|chart.title
 Chart Design|Chart Layouts|Legend|chart.legend
 Chart Design|Chart Layouts|Data Labels|chart.dataLabels
 Shape Format|Shape Styles|Shape Fill|shape.fill
+Shape Format|Shape Styles|Shape Fill Gradient|shape.fill
+Shape Format|Shape Styles|Format Shape Pane|view.formatShapePane
 Shape Format|Shape Styles|Shape Outline|shape.outline
 Shape Format|Shape Styles|Shape Effects|shape.effects
 Shape Format|WordArt Styles|WordArt Quick Styles|wordArt.style
@@ -515,6 +518,7 @@ Tools|Customize|Customize Ribbon|tools.customizeRibbon
 Tools|Customize|Customize Keyboard|tools.customizeKeyboard
 Tools|Protection|Encrypt with Password|file.encrypt
 Tools|Templates|Templates and Add-ins|tools.templates
+Tools|Views|Full Screen View|view.fullScreenView
 ";
 
 /// Catalog entries: (tab, group, feature, id).

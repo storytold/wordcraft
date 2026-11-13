@@ -13,7 +13,7 @@ use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKi
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use super::shape_style::{preset_kind, shape_paint, vml_color, vml_preset_kind};
+use super::shape_style::{own_fill, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
 use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
 use crate::xml::{El, Node};
@@ -1246,7 +1246,10 @@ impl Reader<'_> {
         };
         let (cx, cy) = x.ch_off.unwrap_or((0.0, 0.0));
         let mut children = Vec::new();
+        let outer = self.group_fill.take();
+        self.group_fill = own_fill(g.child("wpg:grpSpPr"), &self.doc.settings.theme_colors, None).flatten();
         self.group_members(sc, g, rels, (-cx, -cy, 1.0, 1.0), 0, &mut children);
+        self.group_fill = outer;
         if children.is_empty() {
             return None;
         }
@@ -1266,7 +1269,7 @@ impl Reader<'_> {
         };
         let ln = c.child("wpc:whole").and_then(|e| e.child("a:ln"));
         let style = wordcraft_doc::para::CanvasStyle {
-            fill: solid(c.child("wpc:bg")),
+            fill: own_fill(c.child("wpc:bg"), &self.doc.settings.theme_colors, None).flatten(),
             stroke: solid(ln),
             stroke_width: ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0),
         };
@@ -1332,7 +1335,12 @@ impl Reader<'_> {
                 let (cw, ch) = x.ch_ext.filter(|(cw, ch)| *cw > 0.0 && *ch > 0.0).unwrap_or((ew.max(1.0), eh.max(1.0)));
                 let (kx, ky) = (ew / cw, eh / ch);
                 let nt = (x0 + (ox - cox * kx) * sx, y0 + (oy - coy * ky) * sy, sx * kx, sy * ky);
+                // Its own fill, for its members' `a:grpFill` (#1500).
+                // One without a fill of its own passes its group's on.
+                let own = own_fill(sppr, &self.doc.settings.theme_colors, self.group_fill.as_ref()).unwrap_or_else(|| self.group_fill.clone());
+                let outer = std::mem::replace(&mut self.group_fill, own);
                 self.group_members(sc, e, rels, nt, depth + 1, out);
+                self.group_fill = outer;
                 continue;
             }
             let max = crate::units::MAX_LEN_PT;
@@ -1380,7 +1388,7 @@ impl Reader<'_> {
             kind = ShapeKind::TextBox;
         }
         // Explicit paint, else the theme's through the style references (#611).
-        let paint = shape_paint(sppr, wsp.child("wps:style"), &self.doc.settings.theme_colors);
+        let paint = shape_paint(sppr, wsp.child("wps:style"), &self.doc.settings.theme_colors, &self.theme_fills, self.group_fill.as_ref());
         let (stroke, stroke_width) = (paint.stroke, paint.stroke_width);
         let fill = if kind.is_open() { None } else { paint.fill };
         let ln = sppr.and_then(|s| s.child("a:ln"));
@@ -1441,7 +1449,7 @@ impl Reader<'_> {
         {
             part.body.auto_color = Some(rgb);
         }
-        let mut extra = ShapeExtra { dash: super::shape_style::line_dash(ln), ..Default::default() };
+        let mut extra = ShapeExtra { dash: super::shape_style::line_dash(ln), outline_fill: paint.outline_fill, ..ShapeExtra::default() };
         // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as
         // rounded rectangles keep the default.
         if prst == "roundRect" {
@@ -1489,7 +1497,10 @@ impl Reader<'_> {
     fn read_textbox(&mut self, sc: &StoryCtx, content: &El, rels: &Rels) -> u32 {
         let mut inner = StoryCtx { story_depth: sc.story_depth + 1, ..Default::default() };
         let mut blocks = Blocks::new();
+        // Shapes in the text aren't members of a group the box may be in.
+        let group = self.group_fill.take();
         self.read_blocks(&mut inner, content, rels, &mut blocks, 0);
+        self.group_fill = group;
         self.flush_pending(&mut inner, &mut blocks);
         self.doc.add_part(PartKind::TextBox, blocks)
     }
@@ -1627,7 +1638,7 @@ impl Reader<'_> {
         let on = |name: &str| attr(name).is_none_or(|v| !matches!(v, "f" | "false" | "0"));
         let stroke = on("stroked").then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
         let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
-        let fill = on("filled").then(|| attr("fillcolor").map_or(Some(Rgb::WHITE), vml_color)).flatten();
+        let fill = vml_fill(shape, shapetype);
         let kind = match shape.local() {
             "line" => Some(ShapeKind::Line),
             "rect" => Some(ShapeKind::Rectangle),
@@ -1737,7 +1748,7 @@ impl Reader<'_> {
             && let Some(path) = shape.attr("path")
             && let Some(vp) = super::freeform::vml_path(path, shape.attr("coordsize"), shape.attr("coordorigin"), w, h)
         {
-            let opacity = |el: &str| shape.child(el).and_then(|e| e.attr("opacity")).and_then(vml_fraction).unwrap_or(1.0);
+            let opacity = |el: &str| shape.child(el).and_then(|e| e.attr("opacity")).and_then(vml_opacity).unwrap_or(1.0);
             let fill = fill.filter(|_| !vp.no_fill && opacity("v:fill") > 0.0);
             let stroke = stroke.filter(|_| !vp.no_stroke);
             if stroke.is_none() && fill.is_none() {
@@ -2207,21 +2218,13 @@ fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
         .filter(|f| !f.is_empty())
         .unwrap_or(default.font);
     let color = shape.attr("fillcolor").and_then(vml_color).unwrap_or(default.color);
-    let opacity = shape.child("v:fill").and_then(|f| f.attr("opacity")).and_then(vml_fraction).unwrap_or(1.0);
+    let opacity = shape.child("v:fill").and_then(|f| f.attr("opacity")).and_then(vml_opacity).unwrap_or(1.0);
     Some(wordcraft_doc::Watermark { text, font, color, diagonal: vml_spin(style).deg != 0.0, semitransparent: opacity < 1.0 })
 }
 
-/// A VML fraction (`opacity`): a number, a percentage, or 65536ths with an `f` suffix; 0..=1.
-fn vml_fraction(v: &str) -> Option<f32> {
-    let v = v.trim();
-    let f = if let Some(n) = v.strip_suffix('f') {
-        n.trim().parse::<f32>().ok()? / 65_536.0
-    } else if let Some(n) = v.strip_suffix('%') {
-        n.trim().parse::<f32>().ok()? / 100.0
-    } else {
-        v.parse::<f32>().ok()?
-    };
-    f.is_finite().then(|| f.clamp(0.0, 1.0))
+/// A VML `opacity`, 0..=1.
+fn vml_opacity(v: &str) -> Option<f32> {
+    vml_fraction(v).map(|f| f.clamp(0.0, 1.0))
 }
 
 /// A VML shape's turn: `rotation` in degrees, or 65536ths of one with an `fd` suffix; `flip`: `x`

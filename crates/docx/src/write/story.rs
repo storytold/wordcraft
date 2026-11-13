@@ -1,6 +1,7 @@
 //! Blocks, paragraphs, runs, objects and tables → WordprocessingML.
 
 use wordcraft_doc::effects::ShapeEffects;
+use wordcraft_doc::fill::{Fill, GradientFlip, GradientKind, PathShape};
 use wordcraft_doc::para::{AltText, Anchor, Float, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, PropChange, Rgb, TextColor};
 use wordcraft_doc::section::{LineNumberRestart, NoteProps, SectionProps, SectionStart};
@@ -720,14 +721,14 @@ impl Writer<'_> {
                         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas")]);
                         w.open("wpc:wpc", &[]);
                         w.open("wpc:bg", &[]);
-                        solid_fill(w, c.fill);
+                        write_fill(w, c.fill.as_ref());
                         w.close("wpc:bg");
                         w.open("wpc:whole", &[]);
                         match c.stroke {
                             Some(_) => w.open("a:ln", &[("w", &emu(c.stroke_width.clamp(0.0, 100.0)))]),
                             None => w.open("a:ln", &[]),
                         }
-                        solid_fill(w, c.stroke);
+                        write_fill(w, c.stroke.map(Fill::solid).as_ref());
                         w.close("a:ln");
                         w.close("wpc:whole");
                         "wpc:wpc"
@@ -1074,28 +1075,27 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        match fill.filter(|_| !ink && !kind.is_open()) {
-            Some(c) => {
-                w.open("a:solidFill", &[]);
-                w.empty("a:srgbClr", &[("val", &c.hex())]);
-                w.close("a:solidFill");
-            }
-            None => w.empty("a:noFill", &[]),
-        }
+        write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));
                 let ln: &[(&str, &str)] = if ink { &[("w", width.as_str()), ("cap", "rnd")] } else { &[("w", width.as_str())] };
                 w.open("a:ln", ln);
-                w.open("a:solidFill", &[]);
-                if alpha < 1.0 {
-                    w.open("a:srgbClr", &[("val", &c.hex())]);
-                    w.empty("a:alpha", &[("val", &n((alpha.clamp(0.0, 1.0) * 100_000.0).round() as i64))]);
-                    w.close("a:srgbClr");
+                // An outline gradient read from a file, while the outline keeps its colour (#1500).
+                let grad = extra.outline_fill.as_ref().filter(|f| !ink && f.main_color() == *c);
+                if grad.is_some() {
+                    write_fill(w, grad);
                 } else {
-                    w.empty("a:srgbClr", &[("val", &c.hex())]);
+                    w.open("a:solidFill", &[]);
+                    if alpha < 1.0 {
+                        w.open("a:srgbClr", &[("val", &c.hex())]);
+                        w.empty("a:alpha", &[("val", &n((alpha.clamp(0.0, 1.0) * 100_000.0).round() as i64))]);
+                        w.close("a:srgbClr");
+                    } else {
+                        w.empty("a:srgbClr", &[("val", &c.hex())]);
+                    }
+                    w.close("a:solidFill");
                 }
-                w.close("a:solidFill");
                 line_dash(w, &extra.dash);
                 if ink {
                     w.empty("a:round", &[]);
@@ -1734,15 +1734,68 @@ pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, 
     w.close(tag);
 }
 
-/// A DrawingML `a:solidFill` in `c`, or `a:noFill`.
-fn solid_fill(w: &mut W, c: Option<wordcraft_doc::props::Rgb>) {
-    match c {
-        Some(c) => {
-            w.open("a:solidFill", &[]);
+/// A shape's fill: `a:solidFill` (with `a:alpha` when transparent), `a:gradFill` with everything
+/// read from the file, or `a:noFill`.
+fn write_fill(w: &mut W, f: Option<&Fill>) {
+    let pct = |v: f32| n((v * 1000.0).round() as i64);
+    let color = |w: &mut W, c: Rgb, transparency: f32| {
+        if transparency > 0.0 {
+            w.open("a:srgbClr", &[("val", &c.hex())]);
+            w.empty("a:alpha", &[("val", &pct(100.0 - transparency))]);
+            w.close("a:srgbClr");
+        } else {
             w.empty("a:srgbClr", &[("val", &c.hex())]);
+        }
+    };
+    let rect = |r: [f32; 4]| [("l", pct(r[0])), ("t", pct(r[1])), ("r", pct(r[2])), ("b", pct(r[3]))];
+    match f.and_then(Fill::sanitized) {
+        None => w.empty("a:noFill", &[]),
+        Some(Fill::Solid { color: c, transparency }) => {
+            w.open("a:solidFill", &[]);
+            color(w, c, transparency);
             w.close("a:solidFill");
         }
-        None => w.empty("a:noFill", &[]),
+        Some(Fill::Gradient(g)) => {
+            // `rotWithShape` and `scaled` are written only when set: an absent one reads back off.
+            let mut attrs = if g.rot_with_shape { vec![("rotWithShape", "1")] } else { vec![] };
+            match g.flip {
+                GradientFlip::None => {}
+                GradientFlip::X => attrs.insert(0, ("flip", "x")),
+                GradientFlip::Y => attrs.insert(0, ("flip", "y")),
+                GradientFlip::Xy => attrs.insert(0, ("flip", "xy")),
+            }
+            w.open("a:gradFill", &attrs);
+            w.open("a:gsLst", &[]);
+            for s in &g.stops {
+                w.open("a:gs", &[("pos", &pct(s.pos))]);
+                color(w, s.color, s.transparency);
+                w.close("a:gs");
+            }
+            w.close("a:gsLst");
+            match g.kind {
+                GradientKind::Linear { angle, scaled } => {
+                    let ang = n((angle * 60_000.0).round() as i64);
+                    let attrs: &[(&str, &str)] = if scaled { &[("ang", &ang), ("scaled", "1")] } else { &[("ang", &ang)] };
+                    w.empty("a:lin", attrs)
+                }
+                GradientKind::Path { shape, focus } => {
+                    let path = match shape {
+                        PathShape::Circle => "circle",
+                        PathShape::Rect => "rect",
+                        PathShape::Shape => "shape",
+                    };
+                    w.open("a:path", &[("path", path)]);
+                    let r = rect(focus);
+                    w.empty("a:fillToRect", &r.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+                    w.close("a:path");
+                }
+            }
+            if let Some(t) = g.tile {
+                let r = rect(t);
+                w.empty("a:tileRect", &r.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+            }
+            w.close("a:gradFill");
+        }
     }
 }
 

@@ -415,6 +415,9 @@
 	First line:	最初の行:
 	Fixed Column Width	列の幅を固定する
 	Focus	フォーカス
+	Full Screen View	全画面ビュー
+	Show the ribbon	リボンを表示
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	旧メニュー キー: Alt, {keys}。続けて入力するか、Esc キーで取り消します。
 	Font	フォント
 	Font Color	フォントの色
 	Font color:	フォントの色:
@@ -1750,6 +1753,12 @@
 	Reading Line Spacing	閲覧時の行間
 	Reading Text Size	閲覧時の文字サイズ
 	English (United Kingdom)	英語（英国）
+	English (Australia)	英語（オーストラリア）
+	English (Canada)	英語（カナダ）
+	English (India)	英語（インド）
+	English (Ireland)	英語（アイルランド）
+	English (New Zealand)	英語（ニュージーランド）
+	English (South Africa)	英語（南アフリカ）
 	Polish	ポーランド語
 	Do Not Check Spelling or Grammar	スペル チェックと文章校正を行わない
 
@@ -2288,3 +2297,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	5 cm や 300 px など、任意の単位でサイズを入力します。もう一方の辺も合わせて変わるため、図の縦横比は保たれます。
 
 	Import…	インポート…
+
+# Personal templates (#2852)
+	Personal	個人用
+	Personal Templates	個人用テンプレート
+	Templates you save in your templates folder show up here.	テンプレート フォルダーに保存したテンプレートがここに表示されます。
+	Save as Word Template…	Word テンプレートとして保存…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	.dotx テンプレートをテンプレート フォルダーに保存します。[ファイル] › [新規] の [個人用] に表示されます。
+	File locations	ファイルの場所
+	User templates:	ユーザー テンプレート:
+	Not set	未設定
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	[ファイル] › [新規] の [個人用] に、ここにある .dotx と .dotm のテンプレートが表示されます。[Word テンプレートとして保存] はここから始まります。
+	Format Shape Pane	図形の書式設定ウィンドウ
+	Format Shape	図形の書式設定
+	Format Shape…	図形の書式設定…
+	No fill	塗りつぶしなし
+	Solid fill	単色の塗りつぶし
+	Gradient fill	グラデーションの塗りつぶし
+	Preset gradients	グラデーションのプリセット
+	Radial	放射
+	Rectangular	四角
+	Path	パス
+	Direction	方向
+	Angle	角度
+	Gradient stops	グラデーションの分岐点
+	Add gradient stop	分岐点を追加
+	Remove gradient stop	分岐点を削除
+	Rotate with shape	図形と一緒に回転する
+	Gradient	グラデーション
+	No Gradient	グラデーションなし
+	Light Variations	明るいバリエーション
+	Dark Variations	暗いバリエーション
+	More Gradients…	その他のグラデーション…
+	Select a shape, text box or drawing canvas to format its fill.	塗りつぶしを設定する図形、テキスト ボックス、または描画キャンバスを選択してください。
+	Linear Right	線形 右方向
+	Linear Diagonal - Top Left to Bottom Right	線形 (斜め) - 左上から右下
+	Linear Down	線形 下方向
+	Linear Diagonal - Top Right to Bottom Left	線形 (斜め) - 右上から左下
+	Linear Left	線形 左方向
+	Linear Diagonal - Bottom Right to Top Left	線形 (斜め) - 右下から左上
+	Linear Up	線形 上方向
+	Linear Diagonal - Bottom Left to Top Right	線形 (斜め) - 左下から右上
+	From Top Left Corner	左上の角から
+	From Top Right Corner	右上の角から
+	From Bottom Left Corner	左下の角から
+	From Bottom Right Corner	右下の角から
+	From Center	中央から
+	Soft	ソフト
+	Lit from Top	上から照明
+	Deep	ディープ
+	Lit from Bottom	下から照明
+	Center Glow	中央の光彩

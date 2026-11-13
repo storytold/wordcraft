@@ -355,6 +355,9 @@
 	First line:	Първи ред:
 	Fixed Column Width	Фиксирана ширина на колоните
 	Focus	Фокус
+	Full Screen View	Изглед на цял екран
+	Show the ribbon	Показване на лентата
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Стари клавиши за менюта: Alt, {keys}. Продължете да пишете или натиснете Esc за отказ.
 	Font	Шрифт
 	Font Color	Цвят на шрифта
 	Font Dialog	Диалогов прозорец за шрифт
@@ -1720,6 +1723,12 @@
 	Do not check spelling or grammar	Без проверка на правописа и граматиката
 	Dutch	Нидерландски
 	English (United Kingdom)	Английски (Обединеното кралство)
+	English (Australia)	Английски (Австралия)
+	English (Canada)	Английски (Канада)
+	English (India)	Английски (Индия)
+	English (Ireland)	Английски (Ирландия)
+	English (New Zealand)	Английски (Нова Зеландия)
+	English (South Africa)	Английски (Южна Африка)
 	Envelope size:	Размер на плика:
 	Estonian	Естонски
 	Finnish	Финландски
@@ -2688,3 +2697,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Въведете размер в произволна единица, например 5 cm или 300 px. Другата страна се променя съответно, така че картината запазва пропорциите си.
 
 	Import…	Импортиране…
+
+# Personal templates (#2852)
+	Personal	Лични
+	Personal Templates	Лични шаблони
+	Templates you save in your templates folder show up here.	Шаблоните, които запишете в папката си с шаблони, се показват тук.
+	Save as Word Template…	Запиши като шаблон на Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Записва шаблон .dotx в папката ви с шаблони. Той се показва във Файл › Нов под Лични.
+	File locations	Местоположения на файлове
+	User templates:	Потребителски шаблони:
+	Not set	Не е зададено
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Файл › Нов показва шаблоните .dotx и .dotm оттук под Лични; „Запиши като шаблон на Word“ започва оттук.
+	Format Shape Pane	Екран „Форматиране на фигура“
+	Format Shape	Форматиране на фигура
+	Format Shape…	Форматиране на фигура…
+	No fill	Без запълване
+	Solid fill	Плътно запълване
+	Gradient fill	Преливащо запълване
+	Preset gradients	Готови преливания
+	Radial	Радиално
+	Rectangular	Правоъгълно
+	Path	Контур
+	Direction	Посока
+	Angle	Ъгъл
+	Gradient stops	Точки на преливането
+	Add gradient stop	Добавяне на точка на преливане
+	Remove gradient stop	Премахване на точка на преливане
+	Rotate with shape	Завъртане с фигурата
+	Gradient	Преливане
+	No Gradient	Без преливане
+	Light Variations	Светли варианти
+	Dark Variations	Тъмни варианти
+	More Gradients…	Още преливания…
+	Select a shape, text box or drawing canvas to format its fill.	Изберете фигура, текстово поле или платно за рисуване, за да форматирате запълването му.
+	Linear Right	Линейно надясно
+	Linear Diagonal - Top Left to Bottom Right	Линейно диагонално – от горе вляво към долу вдясно
+	Linear Down	Линейно надолу
+	Linear Diagonal - Top Right to Bottom Left	Линейно диагонално – от горе вдясно към долу вляво
+	Linear Left	Линейно наляво
+	Linear Diagonal - Bottom Right to Top Left	Линейно диагонално – от долу вдясно към горе вляво
+	Linear Up	Линейно нагоре
+	Linear Diagonal - Bottom Left to Top Right	Линейно диагонално – от долу вляво към горе вдясно
+	From Top Left Corner	От ъгъла горе вляво
+	From Top Right Corner	От ъгъла горе вдясно
+	From Bottom Left Corner	От ъгъла долу вляво
+	From Bottom Right Corner	От ъгъла долу вдясно
+	From Center	От центъра
+	Soft	Меко
+	Lit from Top	Осветено отгоре
+	Deep	Наситено
+	Lit from Bottom	Осветено отдолу
+	Center Glow	Сияние от центъра

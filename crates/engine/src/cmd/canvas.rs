@@ -58,7 +58,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let w = p::f32(v, "width").unwrap_or(432.0).clamp(MIN_SIDE, MAX_SIDE);
     let h = p::f32(v, "height").unwrap_or(216.0).clamp(MIN_SIDE, MAX_SIDE);
     let style = CanvasStyle {
-        fill: p::str(v, "fill").and_then(wordcraft_doc::props::Rgb::parse),
+        fill: p::str(v, "fill").and_then(wordcraft_doc::props::Rgb::parse).map(wordcraft_doc::fill::Fill::solid),
         stroke: p::str(v, "outline").and_then(wordcraft_doc::props::Rgb::parse),
         stroke_width: 0.75,
     };
@@ -275,10 +275,14 @@ mod tests {
         // Fill and outline colour the canvas.
         s.run("shape.fill", &json!({"color": "FFF2CC"})).unwrap();
         s.run("shape.outline", &json!({"color": "1F4E79", "width": 1.5})).unwrap();
-        let style = *canvas(&s).canvas_style().unwrap();
+        let style = canvas(&s).canvas_style().unwrap().clone();
         assert_eq!(
             style,
-            CanvasStyle { fill: wordcraft_doc::props::Rgb::parse("FFF2CC"), stroke: wordcraft_doc::props::Rgb::parse("1F4E79"), stroke_width: 1.5 }
+            CanvasStyle {
+                fill: wordcraft_doc::props::Rgb::parse("FFF2CC").map(wordcraft_doc::fill::Fill::solid),
+                stroke: wordcraft_doc::props::Rgb::parse("1F4E79"),
+                stroke_width: 1.5
+            }
         );
         // Members move, resize and go within the canvas.
         s.run("canvas.member", &json!({"index": 1, "x": 10, "y": 20, "width": 30})).unwrap();

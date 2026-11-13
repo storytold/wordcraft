@@ -342,38 +342,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                         }
                         ui.add_space(8.0);
                     }
-                    // Search ("Tell me").
-                    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
-                    ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
-                    icons::paint(
-                        ui.painter(),
-                        Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)),
-                        "search",
-                        t.text_dim,
-                        t.accent,
-                    );
-                    let ph = tl!("Search commands and help");
-                    let pfont = TypeRung::Control.regular();
-                    let ptrack = TypeRung::Control.tracking();
-                    paint_text(
-                        ui.painter(),
-                        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
-                        Align2::LEFT_TOP,
-                        ph,
-                        &pfont,
-                        ptrack,
-                        t.text_dim,
-                    );
-                    if app.ui.keytips == crate::keytips::Phase::Tabs {
-                        app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
-                    }
-                    let tip = match crate::widgets::shortcut_text(app, "tools.search") {
-                        k if k.is_empty() => tl!("Search").to_string(),
-                        k => format!("{} ({k})", tl!("Search")),
-                    };
-                    if resp.on_hover_text(tip).clicked() {
-                        let _ = app.run("tools.search", json!({}));
-                    }
+                    search_box(app, ui, control_h);
                     right_start = ui.min_rect().min.x;
                 });
             });
@@ -427,6 +396,118 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 );
             }
         });
+}
+
+/// Search ("Tell me"): a box that opens command search. In the title bar, and in the Commands bar
+/// of Full Screen (#1678).
+fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
+    let ph = tl!("Search commands and help");
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, ph));
+    ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
+    icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
+    let pfont = TypeRung::Control.regular();
+    let ptrack = TypeRung::Control.tracking();
+    paint_text(
+        ui.painter(),
+        pos2(r.min.x + 30.0, r.center().y - TypeRung::Control.line_height() / 2.0),
+        Align2::LEFT_TOP,
+        ph,
+        &pfont,
+        ptrack,
+        t.text_dim,
+    );
+    if app.ui.keytips == crate::keytips::Phase::Tabs {
+        app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
+    }
+    let tip = match crate::widgets::shortcut_text(app, "tools.search") {
+        k if k.is_empty() => tl!("Search").to_string(),
+        k => format!("{} ({k})", tl!("Search")),
+    };
+    if resp.on_hover_text(tip).clicked() {
+        let _ = app.run("tools.search", json!({}));
+    }
+}
+
+/// What fills the screen (#1678): the usual window, Focus (the document on black, a slim bar to
+/// drop the ribbon down) or Full Screen (the pages alone, a slim bar with Search). Both of the
+/// latter take the whole screen and hide the title bar, ribbon, status bar, panes and rulers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Screen {
+    Normal,
+    Focus,
+    FullScreen,
+}
+
+impl Screen {
+    pub fn of(v: &wordcraft_engine::ViewState) -> Self {
+        if v.focus_mode {
+            Screen::Focus
+        } else if v.full_screen_view {
+            Screen::FullScreen
+        } else {
+            Screen::Normal
+        }
+    }
+
+    /// The command that leaves this screen, if it isn't the usual window.
+    pub fn exit_command(self) -> Option<&'static str> {
+        match self {
+            Screen::Normal => None,
+            Screen::Focus => Some("view.focus"),
+            Screen::FullScreen => Some("view.fullScreenView"),
+        }
+    }
+}
+
+/// Focus's background around the page, in both themes (our own value, #1678).
+pub const FOCUS_CANVAS: egui::Color32 = egui::Color32::BLACK;
+
+/// Height of the slim bar Focus and Full Screen View show in place of the chrome (#1678).
+pub const SCREEN_BAR_HEIGHT: f32 = 30.0;
+
+/// The slim bar across the top in Focus ("⋯" drops the ribbon down over the page) and Full
+/// Screen View (Search, which finds and runs any command).
+pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
+    let t = Tokens::get(ui.ctx());
+    let fill = if screen == Screen::Focus { FOCUS_CANVAS } else { t.title_bar };
+    egui::Panel::top("screen_bar").exact_size(SCREEN_BAR_HEIGHT).show_separator_line(false).frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
+        let full = ui.max_rect();
+        if screen == Screen::Focus {
+            let r = Rect::from_center_size(full.center(), vec2(40.0, 20.0));
+            let resp = ui.allocate_rect(r, Sense::click());
+            let shade = if resp.hovered() || app.focus_ribbon { egui::Color32::from_gray(70) } else { egui::Color32::from_gray(40) };
+            ui.painter().rect_filled(r, 4.0, shade);
+            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), "more", egui::Color32::from_gray(220), t.accent);
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Show the ribbon")));
+            if resp.on_hover_text(tl!("Show the ribbon")).clicked() {
+                let _ = app.run("ui.focusRibbon", json!({}));
+            }
+        } else {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {
+                search_box(app, ui, 22.0);
+            });
+        }
+    });
+}
+
+/// Focus: the ribbon dropped down from the bar, drawn over the page so the page doesn't move. A
+/// click on the page puts it away; Focus stays on.
+pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
+    let width = ctx.content_rect().width();
+    egui::Area::new(egui::Id::new("focus_ribbon")).fixed_pos(pos2(0.0, SCREEN_BAR_HEIGHT)).order(egui::Order::Middle).show(ctx, |ui| {
+        ui.set_width(width);
+        ui.set_max_width(width);
+        crate::ribbon::show(app, ui);
+    });
+    let click = ctx.input(|i| if i.pointer.any_click() { i.pointer.interact_pos() } else { None });
+    if let Some(pos) = click
+        && app.canvas.viewport.is_some_and(|v| v.contains(pos))
+        && ctx.layer_id_at(pos).is_none_or(|l| l.order == egui::Order::Background)
+    {
+        let _ = app.run("ui.focusRibbon", json!({"value": false}));
+    }
 }
 
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {

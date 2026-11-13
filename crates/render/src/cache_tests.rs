@@ -49,3 +49,35 @@ fn wave_stroke_at_a_huge_coordinate_ends() {
     assert!(wave_path(0.0, 0.0, 100.0, 0.0, 1.0).elements().len() > 10);
     assert!(wave_path(0.0, 0.0, 0.0, 100.0, 1.0).elements().len() > 10, "vertical wave strokes produce elements");
 }
+
+/// #1740: a triple stroke is three lines across its direction, horizontal or vertical.
+#[test]
+fn triple_strokes_draw_three_lines() {
+    let line = |x0: f32, y0: f32, x1: f32, y1: f32, stroke: Stroke| Draw::Line {
+        x0,
+        y0,
+        x1,
+        y1,
+        width: 1.0,
+        color: Rgb::BLACK,
+        stroke,
+        alpha: 1.0,
+        text_bg: None,
+    };
+    // Dark runs met walking across the line at its middle.
+    let runs = |it: Draw, vertical: bool| {
+        let r = render_items(&Document::new(), &[it], 0.0, 0.0, 20.0, 20.0, 8.0, &RenderOptions::default());
+        let mut n = 0;
+        let mut inside = false;
+        for i in 0..r.width.min(r.height) {
+            let px = if vertical { r.pixel(i, 80) } else { r.pixel(80, i) };
+            let dark = px[3] > 128;
+            n += usize::from(dark && !inside);
+            inside = dark;
+        }
+        n
+    };
+    assert_eq!(runs(line(2.0, 10.0, 18.0, 10.0, Stroke::Triple), false), 3, "horizontal triple");
+    assert_eq!(runs(line(10.0, 2.0, 10.0, 18.0, Stroke::Triple), true), 3, "vertical triple");
+    assert_eq!(runs(line(2.0, 10.0, 18.0, 10.0, Stroke::Double), false), 2, "horizontal double");
+}

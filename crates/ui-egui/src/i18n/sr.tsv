@@ -467,6 +467,9 @@
 	First line:	Први ред:
 	Fixed Column Width	Фиксна ширина колоне
 	Focus	Фокус
+	Full Screen View	Приказ преко целог екрана
+	Show the ribbon	Прикажи траку
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Стари тастери менија: Alt, {keys}. Наставите да куцате или притисните Esc да откажете.
 	Font	Фонт
 	Font Color	Боја фонта
 	Font color:	Боја фонта:
@@ -1764,6 +1767,12 @@
 	Reading Line Spacing	Проређеност при читању
 	Reading Text Size	Величина текста за читање
 	English (United Kingdom)	Енглески (Велика Британија)
+	English (Australia)	Енглески (Аустралија)
+	English (Canada)	Енглески (Канада)
+	English (India)	Енглески (Индија)
+	English (Ireland)	Енглески (Ирска)
+	English (New Zealand)	Енглески (Нови Зеланд)
+	English (South Africa)	Енглески (Јужна Африка)
 	Polish	Пољски
 	Do Not Check Spelling or Grammar	Не проверавај правопис и граматику
 
@@ -2302,3 +2311,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Унесите величину у било којој јединици, на пример 5 cm или 300 px. Друга страна се прилагођава, па слика задржава своје пропорције.
 
 	Import…	Увези…
+
+# Personal templates (#2852)
+	Personal	Лични
+	Personal Templates	Лични шаблони
+	Templates you save in your templates folder show up here.	Овде се приказују шаблони које сачувате у фасцикли шаблона.
+	Save as Word Template…	Сачувај као Word шаблон…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Чува .dotx шаблон у фасцикли шаблона. Приказује се у Фајл › Ново под Лични.
+	File locations	Локације датотека
+	User templates:	Кориснички шаблони:
+	Not set	Није постављено
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Фајл › Ново приказује .dotx и .dotm шаблоне одавде под Лични; Сачувај као Word шаблон почиње овде.
+	Format Shape Pane	Окно „Формат облика“
+	Format Shape	Формат облика
+	Format Shape…	Форматирај облик…
+	No fill	Без попуне
+	Solid fill	Једнобојна попуна
+	Gradient fill	Преливајућа попуна
+	Preset gradients	Унапред задати преливи
+	Radial	Радијални
+	Rectangular	Правоугаони
+	Path	Путања
+	Direction	Смер
+	Angle	Угао
+	Gradient stops	Тачке прелива
+	Add gradient stop	Додај тачку прелива
+	Remove gradient stop	Уклони тачку прелива
+	Rotate with shape	Ротирај са обликом
+	Gradient	Прелив
+	No Gradient	Без прелива
+	Light Variations	Светле варијанте
+	Dark Variations	Тамне варијанте
+	More Gradients…	Још прелива…
+	Select a shape, text box or drawing canvas to format its fill.	Изаберите облик, оквир за текст или платно за цртање да бисте форматирали попуну.
+	Linear Right	Линеарни удесно
+	Linear Diagonal - Top Left to Bottom Right	Линеарни дијагонални – горе лево ка доле десно
+	Linear Down	Линеарни надоле
+	Linear Diagonal - Top Right to Bottom Left	Линеарни дијагонални – горе десно ка доле лево
+	Linear Left	Линеарни улево
+	Linear Diagonal - Bottom Right to Top Left	Линеарни дијагонални – доле десно ка горе лево
+	Linear Up	Линеарни нагоре
+	Linear Diagonal - Bottom Left to Top Right	Линеарни дијагонални – доле лево ка горе десно
+	From Top Left Corner	Из угла горе лево
+	From Top Right Corner	Из угла горе десно
+	From Bottom Left Corner	Из угла доле лево
+	From Bottom Right Corner	Из угла доле десно
+	From Center	Из средине
+	Soft	Мек
+	Lit from Top	Осветљен одозго
+	Deep	Дубок
+	Lit from Bottom	Осветљен одоздо
+	Center Glow	Сјај из средине

@@ -1509,38 +1509,37 @@ impl Ctx {
             segs_rows.push(segs.into_iter().map(hcat).collect());
         }
         let ncols = segs_rows.iter().map(|r| r.len()).max().unwrap_or(1);
+        // Rows without `&` are centred below, so they don't widen the aligned columns.
         let mut col_w = vec![0.0f32; ncols];
+        let mut lone_w = 0.0f32;
         for r in &segs_rows {
+            if let [b] = r.as_slice() {
+                lone_w = lone_w.max(b.w);
+                continue;
+            }
             for (i, b) in r.iter().enumerate() {
                 if let Some(c) = col_w.get_mut(i) {
                     *c = c.max(b.w);
                 }
             }
         }
-        let total: f32 = col_w.iter().sum();
+        let cols: f32 = col_w.iter().sum();
+        let total = cols.max(lone_w);
         let mut placed = Vec::new();
         for (r, path) in segs_rows.into_iter().zip(row_paths) {
             let mut row = Bx::default();
             let mut x = 0.0f32;
-            let single = r.len() == 1 && ncols > 1;
+            // A row without `&` is centred in the array, as Word does (#2617).
+            let single = r.len() == 1;
             for (i, b) in r.into_iter().enumerate() {
                 let cw = col_w.get(i).copied().unwrap_or(0.0);
                 let bw = b.w;
-                let dx = if ncols == 1 {
-                    0.0
-                } else if single {
-                    // A row without `&` aligns with the first column's right edge.
-                    cw - bw
-                } else if i % 2 == 0 {
-                    cw - bw
-                } else {
-                    0.0
-                };
+                let dx = if single || i % 2 == 1 { 0.0 } else { cw - bw };
                 row.put(b, x + dx, 0.0);
-                x += cw;
+                x += if single { bw } else { cw };
                 row.w = row.w.max(x);
             }
-            let rx = if ncols == 1 { (total - row.w) / 2.0 } else { 0.0 };
+            let rx = (total - if single { row.w } else { cols }) / 2.0;
             finalize(&mut row, &path, em);
             placed.push((row, rx.max(0.0)));
         }
@@ -2004,6 +2003,36 @@ mod tests {
 
     fn lay_in(math: &Math, lin: &str, display: bool, avail: f32, mp: &MathProps) -> MathLayout {
         layout_equation(math, lin, &rc(), display, avail, mp, &mut 0)
+    }
+
+    #[test]
+    fn eq_array_rows_without_ampersand_are_centred() {
+        // Word centres a row with no `&` in the array (#2617: a case row "a, n odd" above
+        // "|a|, &n even"), whether or not the other rows have one.
+        use wordcraft_doc::math::*;
+        let run = |s: &str| vec![MNode::Run(MRun::new(s))];
+        let w_a = lay("a", true).width;
+        for other in ["bbbbbb&c", "bbbbbbc"] {
+            let math = Math { nodes: vec![MNode::EqArr { rows: vec![run("a"), run(other)] }], ..Default::default() };
+            let m = lay_in(&math, "", true, 400.0, &MathProps::default());
+            let ls = lines(&m);
+            let xa = ls.first().and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+            let x0 = ls.get(1).and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+            let want = x0 + (m.width - x0 - w_a) / 2.0;
+            assert!((xa - want).abs() < 1.0, "{other}: a at {xa}, want {want} ({ls:?}, width {})", m.width);
+            // The lone row doesn't widen the aligned columns.
+            assert!(x0.abs() < 0.5 && m.width < lay("bbbbbbc", true).width + 1.0, "{other}: {ls:?}, width {}", m.width);
+        }
+        // A lone row wider than the aligned columns sets the array's width; the aligned
+        // rows are centred under it as one block.
+        let math = Math { nodes: vec![MNode::EqArr { rows: vec![run("bbbbbbbbbb"), run("a&c")] }], ..Default::default() };
+        let m = lay_in(&math, "", true, 400.0, &MathProps::default());
+        let ls = lines(&m);
+        let xw = ls.first().and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+        let x0 = ls.get(1).and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+        assert!(xw.abs() < 0.5 && (m.width - lay("bbbbbbbbbb", true).width).abs() < 1.0, "wide lone row: {ls:?}, width {}", m.width);
+        let want = (m.width - w_a - lay("c", true).width) / 2.0;
+        assert!(want > 1.0 && (x0 - want).abs() < 1.0, "aligned row at {x0}, want {want} ({ls:?})");
     }
 
     #[test]

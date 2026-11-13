@@ -17,6 +17,7 @@ miniz_oxide = { workspace = true }
 sha1 = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }

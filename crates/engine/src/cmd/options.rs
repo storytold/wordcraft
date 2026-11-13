@@ -11,7 +11,7 @@ pub const PANES: [&str; 8] = ["general", "display", "proofing", "save", "languag
 
 /// Longest initials kept, in characters.
 pub const MAX_INITIALS_CHARS: usize = 9;
-/// Longest dictionaries folder path taken, in characters.
+/// Longest folder path (dictionaries, user templates) taken, in characters.
 const MAX_FOLDER_CHARS: usize = 4096;
 /// Longest word the custom dictionary takes, in characters.
 pub const MAX_WORD_CHARS: usize = 64;
@@ -22,7 +22,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.options", "Options", "File", options)
             .params(
-                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
+                r#"{"pane"?: "general|display|proofing|save|language|accessibility|advanced|agents", "author"?: string, "initials"?: string, "units"?: "inches|centimeters|millimeters|points|picas|auto" (auto: the region's), "region"?: string (a locale tag like pl-PL, saved: the paper File › New starts on, the default units and the decimal separator; auto: the system's), "typingReplacesSelection"?: bool, "insertKeyOvertype"?: bool, "overtype"?: bool, "marks"?: {"tabs"?: bool, "spaces"?: bool, "paragraphs"?: bool, "hidden"?: bool}, "checkSpelling"?: bool, "markGrammar"?: bool, "ignoreUppercase"?: bool, "ignoreNumbers"?: bool, "ignoreInternet"?: bool, "dictionariesFolder"?: string (a folder of Hunspell .aff/.dic files searched first, saved; auto: the system locations only), "userTemplatesFolder"?: string (the folder File › New lists personal templates from, saved; auto: the app's own Templates folder; not a network folder), "addWords"?: [string], "removeWords"?: [string]} — with any setting it changes them and opens nothing; without, it opens File › Options (at `pane`). Returns the settings."#,
             )
             .pure(),
         CommandSpec::new("text.overtype", "Overtype", "File › Options › Advanced", |s, v| {
@@ -117,8 +117,14 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     };
     let folder = match v.get("dictionariesFolder") {
         None | Some(Value::Null) => None,
-        Some(Value::String(f)) => Some(dictionaries_folder(f)?),
+        Some(Value::String(f)) => Some(folder_setting("dictionariesFolder", f, false)?),
         Some(_) => return Err(CmdError::Params("`dictionariesFolder` must be a folder path, or auto".into())),
+    };
+    let templates_folder = match v.get("userTemplatesFolder") {
+        None | Some(Value::Null) => None,
+        // Never a folder on another machine (#2852): listing it would make Windows authenticate there.
+        Some(Value::String(f)) => Some(folder_setting("userTemplatesFolder", f, true)?),
+        Some(_) => return Err(CmdError::Params("`userTemplatesFolder` must be a folder path, or auto".into())),
     };
     let mut flag_values = Vec::new();
     for (k, f) in flags() {
@@ -147,6 +153,7 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
         || units.is_some()
         || region.is_some()
         || folder.is_some()
+        || templates_folder.is_some()
         || !flag_values.is_empty()
         || !mark_values.is_empty()
         || check_spelling.is_some()
@@ -167,6 +174,9 @@ fn options(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(f) = folder {
         use_dictionaries_folder(f.as_deref());
         s.prefs.dictionaries_folder = f;
+    }
+    if let Some(f) = templates_folder {
+        s.prefs.user_templates_folder = f;
     }
     for (f, b) in flag_values {
         *f(&mut s.prefs) = b;
@@ -221,6 +231,7 @@ pub fn current(s: &Session) -> Value {
         "ignoreInternet": pr.ignore_internet,
         "dictionary": wordcraft_proof::user_dictionary(),
         "dictionariesFolder": pr.dictionaries_folder,
+        "userTemplatesFolder": pr.user_templates_folder,
         "dictionaries": wordcraft_proof::installed_dictionaries()
             .into_iter()
             .map(|(lang, dic)| json!({"language": lang.code(), "file": dic.map(|d| d.to_string_lossy().into_owned())}))
@@ -228,23 +239,28 @@ pub fn current(s: &Session) -> Value {
     })
 }
 
-/// The `dictionariesFolder` setting: `auto` (or nothing) forgets it; otherwise an existing
-/// folder, given as an absolute path or one starting with `~/`.
-fn dictionaries_folder(f: &str) -> Result<Option<String>, CmdError> {
+/// A folder setting (`dictionariesFolder`, `userTemplatesFolder`): `auto` (or nothing) forgets
+/// it; otherwise an existing folder, given as an absolute path or one starting with `~/`. With
+/// `local_only`, a network folder is refused before anything looks at it (#2852): even checking
+/// that it exists would make Windows authenticate to that host.
+fn folder_setting(key: &str, f: &str, local_only: bool) -> Result<Option<String>, CmdError> {
     let f = f.trim();
     if f.is_empty() || f.eq_ignore_ascii_case("auto") {
         return Ok(None);
     }
     if f.chars().count() > MAX_FOLDER_CHARS || f.chars().any(char::is_control) {
-        return Err(CmdError::Params("`dictionariesFolder` isn't a folder path".into()));
+        return Err(CmdError::Params(format!("`{key}` isn't a folder path")));
     }
     let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map(std::path::PathBuf::from);
     let path = match (f.strip_prefix("~/"), home) {
         (Some(rest), Some(h)) => h.join(rest),
         _ => std::path::PathBuf::from(f),
     };
+    if local_only && (super::templates::is_network_path(f) || super::templates::is_network_path(&path.to_string_lossy())) {
+        return Err(CmdError::Params(format!("`{key}` can't be a network folder")));
+    }
     if !path.is_absolute() {
-        return Err(CmdError::Params(format!("`dictionariesFolder`: {f:?} isn't a full path")));
+        return Err(CmdError::Params(format!("`{key}`: {f:?} isn't a full path")));
     }
     if !path.is_dir() {
         return Err(CmdError::Failed(format!("no folder at {}", path.display())));

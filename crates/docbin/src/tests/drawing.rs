@@ -2,6 +2,7 @@
 //! specification, with tiny pictures generated in code. No file produced by Word is used.
 
 use proptest::prelude::*;
+use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::{Anchor, InlineObject, ShapeKind, Wrap};
 use wordcraft_doc::props::Rgb;
 
@@ -173,10 +174,10 @@ fn shapes_keep_kind_colours_wrap_and_text_box_text() {
     assert_eq!(p0.objects.len(), 2, "{:?}", p0.objects);
     let Some(InlineObject::Shape { kind, w, h, fill, stroke, stroke_width, float, .. }) = p0.objects.first() else { panic!("{:?}", p0.objects) };
     assert_eq!((*kind, *w, *h), (ShapeKind::Ellipse, 72.0, 72.0));
-    assert_eq!((*fill, *stroke, *stroke_width), (Some(Rgb(255, 0, 0)), Some(Rgb(0, 0, 255)), 2.0));
+    assert_eq!((fill.clone(), *stroke, *stroke_width), (Some(Fill::solid(Rgb(255, 0, 0))), Some(Rgb(0, 0, 255)), 2.0));
     assert_eq!((float.wrap, float.h_rel, float.v_rel), (Wrap::BehindText, Anchor::Column, Anchor::Paragraph));
     let Some(InlineObject::Shape { kind, fill, float, story, .. }) = p0.objects.get(1) else { panic!("{:?}", p0.objects) };
-    assert_eq!((*kind, *fill, float.wrap), (ShapeKind::TextBox, None, Wrap::TopAndBottom));
+    assert_eq!((*kind, fill.clone(), float.wrap), (ShapeKind::TextBox, None, Wrap::TopAndBottom));
     let part = story.and_then(|id| doc.parts.get(&id)).expect("text box story part");
     assert_eq!(part.kind, wordcraft_doc::PartKind::TextBox);
     assert_eq!(part.blocks.first().and_then(|b| b.as_para()).map(|p| p.text.as_str()), Some("Inside"));

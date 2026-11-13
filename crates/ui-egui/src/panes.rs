@@ -1,5 +1,5 @@
 //! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector,
-//! Accessibility and Alt Text (see `a11y_pane`), Restrict Editing ([`crate::dialogs_review`]), Comments,
+//! Accessibility and Alt Text (see `a11y_pane`), Format Shape (see `format_shape`), Restrict Editing ([`crate::dialogs_review`]), Comments,
 //! and the SmartArt Text Pane.
 
 use std::collections::BTreeMap;
@@ -68,6 +68,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .resizable(true)
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| crate::a11y_pane::alt_text(app, ui));
+    }
+    if !app.session.view.format_shape_pane {
+        crate::format_shape::forget_drag(ui.ctx());
+    } else {
+        egui::Panel::right("format_shape_pane")
+            .default_size(280.0)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
+            .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui)));
     }
     if app.restrict.open {
         egui::Panel::right("restrict_pane")

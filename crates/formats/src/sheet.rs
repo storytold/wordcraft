@@ -757,17 +757,22 @@ fn serial_date(serial: f64, date1904: bool, kind: DateKind) -> Option<String> {
 }
 
 /// Days since 1970-01-01 to a proleptic Gregorian (year, month, day).
-fn civil(z: i64) -> (i64, i64, i64) {
-    let z = z + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    (y, m, d)
+///
+/// The caller's serial guard keeps `z` inside chrono's range, but the Gregorian calendar repeats
+/// every 400 years (146_097 days), so this stays exact for any `z` without hand-rolled calendar
+/// math: chrono converts the day within its cycle and whole cycles go back into the year (an
+/// i128 so the extremes can't overflow). 1970-01-01 is `num_days_from_ce` 719_163.
+pub(crate) fn civil(z: i64) -> (i64, i64, i64) {
+    use chrono::Datelike;
+    let (cycles, rest) = (z.div_euclid(146_097), z.rem_euclid(146_097));
+    match i32::try_from(rest + 719_163).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(d) => {
+            let y = i128::from(d.year()) + i128::from(cycles) * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), i64::from(d.month()), i64::from(d.day()))
+        }
+        // Unreachable: `rest + 719_163` is always a valid CE day.
+        None => (1970, 1, 1),
+    }
 }
 
 /// An ISO 8601 date or date-time (`2024-03-05`, `2024-03-05T13:45:00.000`) as `yyyy-mm-dd`,
@@ -1126,5 +1131,18 @@ mod tests {
         assert_eq!(iso_datetime("2024-03-5T13:45:00").as_deref(), Some("2024-03-05 13:45"));
         assert_eq!(iso_datetime("2024-3-1").as_deref(), Some("2024-03-01"));
         assert_eq!(iso_datetime("2024-03-05Z").as_deref(), Some("2024-03-05"));
+    }
+
+    #[test]
+    fn civil_is_exact_beyond_chronos_range() {
+        assert_eq!(civil(0), (1970, 1, 1));
+        // Past `NaiveDate`'s ±262143 the 400-year cycles carry the year, exactly, both sides of
+        // the epoch; values from the pre-chrono proleptic Gregorian formula.
+        assert_eq!(civil(95_026_602), (262_144, 1, 1));
+        assert_eq!(civil(99_000_000), (273_022, 10, 18));
+        assert_eq!(civil(-96_465_964), (-262_145, 3, 1));
+        assert_eq!(civil(-99_000_000), (-269_083, 3, 17));
+        // The extremes must not overflow or panic (i128 intermediates).
+        let _ = (civil(i64::MAX), civil(i64::MIN));
     }
 }

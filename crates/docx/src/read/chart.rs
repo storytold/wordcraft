@@ -803,18 +803,27 @@ fn excel_stamp(serial: f64, date1904: bool) -> Option<Stamp> {
     Some(Stamp { y, m, d, weekday: (day - 1).rem_euclid(7) as u32, secs })
 }
 
-/// Calendar date (year, month, day) of day `n` counted from 30 December 1899 (Howard Hinnant's
-/// civil-from-days algorithm).
+/// Calendar date (year, month, day) of day `n` counted from 30 December 1899 (an Excel serial
+/// day number). Serial `n` is `n - 25_569` days from 1970-01-01.
+///
+/// The caller's serial guard keeps `n` inside chrono's range, but the Gregorian calendar repeats
+/// every 400 years (146_097 days), so this stays exact for any `n` without hand-rolled calendar
+/// math: chrono converts the day within its cycle and whole cycles go back into the year (an
+/// i128 so the extremes can't overflow). 1970-01-01 is `num_days_from_ce` 719_163, so serial `n`
+/// is CE day `n - 25_569 + 719_163`.
 fn civil(n: i64) -> (i64, u32, u32) {
-    let z = n - 25_569 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
+    use chrono::Datelike;
+    // CE day of serial `n`, in i128 so no `n` overflows.
+    let from_ce = i128::from(n) - 25_569 + 719_163;
+    let (cycles, rest) = (from_ce.div_euclid(146_097), from_ce.rem_euclid(146_097));
+    match i32::try_from(rest).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(date) => {
+            let y = i128::from(date.year()) + cycles * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), date.month(), date.day())
+        }
+        // Unreachable: every `rest` in 0..146_097 is a valid CE day.
+        None => (1900, 1, 1),
+    }
 }
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -1973,6 +1982,18 @@ mod tests {
         let ymd = |v: f64| excel_stamp(v, false).map(|t| (t.y, t.m, t.d));
         assert_eq!(ymd(61.0), Some((1900, 3, 1)));
         assert_eq!(ymd(45292.0), Some((2024, 1, 1)));
+    }
+
+    #[test]
+    fn civil_is_exact_beyond_chronos_range() {
+        // Serial 1 is 1899-12-31, serial 60 Excel's phantom 1900-02-29 handled by `excel_stamp`.
+        assert_eq!(civil(1), (1899, 12, 31));
+        // Past `NaiveDate`'s ±262143 the 400-year cycles carry the year, exactly, both sides of
+        // the epoch; values from the pre-chrono proleptic Gregorian formula.
+        assert_eq!(civil(100_000_000), (275_690, 9, 11));
+        assert_eq!(civil(-100_000_000), (-271_891, 4, 18));
+        // The extremes must not overflow or panic (i128 intermediates).
+        let _ = (civil(i64::MAX), civil(i64::MIN));
     }
 
     #[test]

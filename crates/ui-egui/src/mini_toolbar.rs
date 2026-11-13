@@ -573,8 +573,8 @@ mod tests {
     }
 
     /// Scrolled until the selection went under the ribbon, the bar went with it and drew over the
-    /// ribbon and the ruler. It stays in the document area: the part past its edge neither shows
-    /// nor takes the pointer.
+    /// ribbon and the ruler (#1069). With no part of the selection on screen it has no anchor
+    /// (`visible_anchor`, #1501), so it hides: nothing over the ruler, which still takes the drag.
     #[test]
     // #1069 lets the bar slide under the ribbon with a selection scrolled past the document's
     // top; #1501, landed first, anchors it to the visible part of the selection only and drops it
@@ -583,8 +583,7 @@ mod tests {
     fn the_bar_scrolls_under_the_ribbon_not_over_it() {
         let mut h = bar_over("The quick");
         let page = h.state().canvas.canvas_rect.expect("the document is shown");
-        // Scroll the selection's line to 45 points above the document area: the bar, below the
-        // line now, has its first row past the edge, over the ruler, and its second showing.
+        // Scroll the selection's line to 45 points above the document area, under the ruler.
         let target = page.min.y - 45.0;
         let line = h.state().canvas.mini_anchor.expect("the selection is on screen");
         h.event(egui::Event::PointerMoved(page.center()));
@@ -594,22 +593,12 @@ mod tests {
         h.step();
         h.state_mut().canvas.wheel = Default::default();
         steps(&mut h);
-        let line = h.state().canvas.mini_anchor.expect("the selection is still laid out");
-        assert!((line.min.y - target).abs() < 1.0, "the line scrolled to {}, not {target}", line.min.y);
-        let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar still shows in part");
-        assert!(bar.min.y < page.min.y && bar.max.y > page.min.y, "the bar {bar:?} should straddle the document's top {}", page.min.y);
+        assert!(h.state().canvas.mini_anchor.is_none(), "the selection scrolled off the document area");
+        assert!(bar_layer(&h).is_none(), "the bar hides with its selection, not over the ribbon");
 
-        let drawn: Vec<Rect> =
-            h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::epaint::Shape::Rect(r) if r.rect == bar)).map(|s| s.clip_rect).collect();
-        assert!(!drawn.is_empty(), "the bar's background is painted");
-        for clip in drawn {
-            assert!(page.expand(0.5).contains_rect(clip), "the bar paints outside the document area {page:?}, over the ribbon: {clip:?}");
-        }
-
-        // The ruler's left-indent marker sits under the hidden part, at the line's start and the
-        // ruler's foot (`canvas::rulers`); dragging it still moves the indent.
+        // The ruler's left-indent marker sits at the line's start and the ruler's foot
+        // (`canvas::rulers`); dragging it moves the indent.
         let marker = pos2(line.min.x, page.min.y - 6.0);
-        assert!(bar.contains(marker), "the bar {bar:?} should cover the left-indent marker {marker:?}");
         h.event(egui::Event::PointerMoved(marker));
         h.event(egui::Event::PointerButton { pos: marker, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
         h.step();
@@ -622,7 +611,7 @@ mod tests {
         steps(&mut h);
         let s = &h.state().session;
         let indent = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).indent_left).unwrap_or_default();
-        assert!(indent > 0.0, "dragging the ruler's left-indent marker under the bar's hidden part left the indent at {indent}");
+        assert!(indent > 0.0, "dragging the ruler's left-indent marker where the bar was left the indent at {indent}");
     }
 
     /// Picking from one of the bar's own lists (popups below it) keeps the bar up.

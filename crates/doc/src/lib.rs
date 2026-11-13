@@ -22,6 +22,7 @@ pub mod effects;
 pub mod encoding;
 pub mod eq;
 pub mod fields;
+pub mod fill;
 pub mod freeform;
 pub mod graphic;
 pub mod legacy_form;

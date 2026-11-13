@@ -413,6 +413,9 @@
 	First line:	Primera línea:
 	Fixed Column Width	Ancho de columna fijo
 	Focus	Modo concentración
+	Full Screen View	Vista de pantalla completa
+	Show the ribbon	Mostrar la cinta
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Teclas de menú antiguas: Alt, {keys}. Siga escribiendo o pulse Esc para cancelar.
 	Font	Fuente
 	Font Color	Color de fuente
 	Font Dialog	Cuadro de diálogo Fuente
@@ -1790,6 +1793,12 @@
 	Reading Line Spacing	Interlineado de lectura
 	Reading Text Size	Tamaño del texto de lectura
 	English (United Kingdom)	Inglés (Reino Unido)
+	English (Australia)	Inglés (Australia)
+	English (Canada)	Inglés (Canadá)
+	English (India)	Inglés (India)
+	English (Ireland)	Inglés (Irlanda)
+	English (New Zealand)	Inglés (Nueva Zelanda)
+	English (South Africa)	Inglés (Sudáfrica)
 	Polish	Polaco
 	Do Not Check Spelling or Grammar	No revisar la ortografía ni la gramática
 
@@ -2654,3 +2663,54 @@ preview	Title	Título
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Escribe un tamaño en cualquier unidad, como 5 cm o 300 px. El otro lado se ajusta, así que la imagen conserva sus proporciones.
 
 	Import…	Importar…
+
+# Personal templates (#2852)
+	Personal	Personal
+	Personal Templates	Plantillas personales
+	Templates you save in your templates folder show up here.	Las plantillas que guarde en su carpeta de plantillas aparecen aquí.
+	Save as Word Template…	Guardar como plantilla de Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Guarda una plantilla .dotx en su carpeta de plantillas. Aparece en Archivo › Nuevo, en Personal.
+	File locations	Ubicación de archivos
+	User templates:	Plantillas de usuario:
+	Not set	Sin definir
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Archivo › Nuevo muestra aquí las plantillas .dotx y .dotm en Personal; Guardar como plantilla de Word empieza aquí.
+	Format Shape Pane	Panel Formato de forma
+	Format Shape	Formato de forma
+	Format Shape…	Formato de forma…
+	No fill	Sin relleno
+	Solid fill	Relleno sólido
+	Gradient fill	Relleno degradado
+	Preset gradients	Degradados predefinidos
+	Radial	Radial
+	Rectangular	Rectangular
+	Path	Trazado
+	Direction	Dirección
+	Angle	Ángulo
+	Gradient stops	Puntos de degradado
+	Add gradient stop	Agregar punto de degradado
+	Remove gradient stop	Quitar punto de degradado
+	Rotate with shape	Girar con la forma
+	Gradient	Degradado
+	No Gradient	Sin degradado
+	Light Variations	Variaciones claras
+	Dark Variations	Variaciones oscuras
+	More Gradients…	Más degradados…
+	Select a shape, text box or drawing canvas to format its fill.	Seleccione una forma, un cuadro de texto o un lienzo de dibujo para dar formato a su relleno.
+	Linear Right	Lineal hacia la derecha
+	Linear Diagonal - Top Left to Bottom Right	Lineal diagonal: de superior izquierda a inferior derecha
+	Linear Down	Lineal hacia abajo
+	Linear Diagonal - Top Right to Bottom Left	Lineal diagonal: de superior derecha a inferior izquierda
+	Linear Left	Lineal hacia la izquierda
+	Linear Diagonal - Bottom Right to Top Left	Lineal diagonal: de inferior derecha a superior izquierda
+	Linear Up	Lineal hacia arriba
+	Linear Diagonal - Bottom Left to Top Right	Lineal diagonal: de inferior izquierda a superior derecha
+	From Top Left Corner	Desde la esquina superior izquierda
+	From Top Right Corner	Desde la esquina superior derecha
+	From Bottom Left Corner	Desde la esquina inferior izquierda
+	From Bottom Right Corner	Desde la esquina inferior derecha
+	From Center	Desde el centro
+	Soft	Suave
+	Lit from Top	Iluminado desde arriba
+	Deep	Profundo
+	Lit from Bottom	Iluminado desde abajo
+	Center Glow	Brillo central

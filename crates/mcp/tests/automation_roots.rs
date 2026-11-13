@@ -102,6 +102,7 @@ fn commands_that_read_a_path_are_held_to_the_read_root() {
         ("insert.picture", json!({"path": s(&base.join("outside/pic.png"))})),
         ("mailings.recipients", json!({"path": outside})),
         ("file.newFromTemplate", json!({"path": outside})),
+        ("file.listTemplates", json!({"dir": s(&base.join("outside"))})),
         ("review.compare", json!({"path": outside})),
         ("review.compare", json!({"text": "x", "original": outside})),
         ("file.open", json!({"path": outside})),

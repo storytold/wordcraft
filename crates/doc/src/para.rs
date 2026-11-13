@@ -459,7 +459,7 @@ pub enum InlineObject {
         kind: ShapeKind,
         w: f32,
         h: f32,
-        fill: Option<crate::props::Rgb>,
+        fill: Option<crate::fill::Fill>,
         stroke: Option<crate::props::Rgb>,
         #[serde(default)]
         stroke_width: f32,
@@ -641,10 +641,10 @@ pub struct GroupChild {
 pub const MAX_GROUP_CHILDREN: usize = 1000;
 
 /// The background fill and outline of a Drawing Canvas (an [`InlineObject::Group`] with `canvas`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct CanvasStyle {
-    pub fill: Option<crate::props::Rgb>,
+    pub fill: Option<crate::fill::Fill>,
     pub stroke: Option<crate::props::Rgb>,
     /// Outline width, points.
     pub stroke_width: f32,

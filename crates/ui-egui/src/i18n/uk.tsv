@@ -425,6 +425,9 @@
 	First line:	Перший рядок:
 	Fixed Column Width	Фіксована ширина стовпця
 	Focus	Зосередження
+	Full Screen View	Повноекранний режим
+	Show the ribbon	Показати стрічку
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Старі клавіші меню: Alt, {keys}. Продовжуйте вводити або натисніть Esc, щоб скасувати.
 	Font	Шрифт
 	Font Color	Колір шрифту
 	Font color:	Колір шрифту:
@@ -1762,6 +1765,12 @@
 	Reading Line Spacing	Міжрядковий інтервал для читання
 	Reading Text Size	Розмір тексту для читання
 	English (United Kingdom)	Англійська (Велика Британія)
+	English (Australia)	Англійська (Австралія)
+	English (Canada)	Англійська (Канада)
+	English (India)	Англійська (Індія)
+	English (Ireland)	Англійська (Ірландія)
+	English (New Zealand)	Англійська (Нова Зеландія)
+	English (South Africa)	Англійська (Південна Африка)
 	Polish	Польська
 	Do Not Check Spelling or Grammar	Не перевіряти правопис і граматику
 
@@ -2300,3 +2309,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Введіть розмір у будь-яких одиницях, наприклад 5 cm або 300 px. Інша сторона зміниться разом із нею, тож зображення збереже пропорції.
 
 	Import…	Імпортувати…
+
+# Personal templates (#2852)
+	Personal	Особисті
+	Personal Templates	Особисті шаблони
+	Templates you save in your templates folder show up here.	Тут з’являються шаблони, які ви зберігаєте в теці шаблонів.
+	Save as Word Template…	Зберегти як шаблон Word…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Зберігає шаблон .dotx у вашій теці шаблонів. Він з’являється в розділі Файл › Новий, у групі «Особисті».
+	File locations	Розташування файлів
+	User templates:	Шаблони користувача:
+	Not set	Не задано
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Файл › Новий показує звідси шаблони .dotx і .dotm у групі «Особисті»; «Зберегти як шаблон Word» починає тут.
+	Format Shape Pane	Область «Формат фігури»
+	Format Shape	Формат фігури
+	Format Shape…	Формат фігури…
+	No fill	Без заливки
+	Solid fill	Суцільна заливка
+	Gradient fill	Градієнтна заливка
+	Preset gradients	Готові градієнти
+	Radial	Радіальний
+	Rectangular	Прямокутний
+	Path	Контур
+	Direction	Напрямок
+	Angle	Кут
+	Gradient stops	Точки градієнта
+	Add gradient stop	Додати точку градієнта
+	Remove gradient stop	Видалити точку градієнта
+	Rotate with shape	Обертати разом із фігурою
+	Gradient	Градієнт
+	No Gradient	Без градієнта
+	Light Variations	Світлі варіанти
+	Dark Variations	Темні варіанти
+	More Gradients…	Інші градієнти…
+	Select a shape, text box or drawing canvas to format its fill.	Виберіть фігуру, текстове поле або полотно, щоб налаштувати заливку.
+	Linear Right	Лінійний праворуч
+	Linear Diagonal - Top Left to Bottom Right	Лінійний по діагоналі — зліва вгорі → справа внизу
+	Linear Down	Лінійний вниз
+	Linear Diagonal - Top Right to Bottom Left	Лінійний по діагоналі — справа вгорі → зліва внизу
+	Linear Left	Лінійний ліворуч
+	Linear Diagonal - Bottom Right to Top Left	Лінійний по діагоналі — справа внизу → зліва вгорі
+	Linear Up	Лінійний вгору
+	Linear Diagonal - Bottom Left to Top Right	Лінійний по діагоналі — зліва внизу → справа вгорі
+	From Top Left Corner	Із кута зліва вгорі
+	From Top Right Corner	Із кута справа вгорі
+	From Bottom Left Corner	Із кута зліва внизу
+	From Bottom Right Corner	Із кута справа внизу
+	From Center	Із центру
+	Soft	М'який
+	Lit from Top	Освітлення згори
+	Deep	Глибокий
+	Lit from Bottom	Освітлення знизу
+	Center Glow	Сяйво з центру

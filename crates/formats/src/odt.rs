@@ -794,16 +794,10 @@ fn join_deleted_marks(blocks: &[FBlock]) -> Option<(Vec<FBlock>, HashMap<usize, 
 fn now_iso() -> String {
     let t = now_unix();
     let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
-    // Days since 1970-01-01 → civil date (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
+    // Reuse the crate's 400-year-cycle converter (chrono within a cycle, cycles carried in the
+    // year) so a clock past chrono's range keeps the proleptic Gregorian date the old hand-rolled
+    // code gave, never the epoch. `{y:04}` rather than `%Y`, which writes a `+` before year 10000.
+    let (y, m, d) = crate::sheet::civil(days);
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 

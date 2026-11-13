@@ -774,6 +774,12 @@
 	Endnotes	Bilješke na kraju
 	Endnotes to footnotes	Bilješke na kraju u fusnote
 	English (United Kingdom)	Engleski (Ujedinjeno Kraljevstvo)
+	English (Australia)	Engleski (Australija)
+	English (Canada)	Engleski (Kanada)
+	English (India)	Engleski (Indija)
+	English (Ireland)	Engleski (Irska)
+	English (New Zealand)	Engleski (Novi Zeland)
+	English (South Africa)	Engleski (Južna Afrika)
 	English (United States)	Engleski (Sjedinjene Američke Države)
 	Engrave	Urez
 	Enlarge symbol	Povećaj simbol
@@ -875,6 +881,8 @@
 	Flip Vertical	Okreni okomito
 	Floor	Donje cijelo
 	Focus	Fokus
+	Full Screen View	Prikaz preko cijelog zaslona
+	Show the ribbon	Prikaži vrpcu
 	Follow number with:	Iza broja slijedi:
 	Font	Font
 	Font Color	Boja fonta
@@ -1496,6 +1504,7 @@ template	Letter	Pismo
 	Offset: Top	Pomak: gore
 	Offset: Top Left	Pomak: gore lijevo
 	Offset: Top Right	Pomak: gore desno
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Stare tipke izbornika: Alt, {keys}. Nastavite tipkati ili pritisnite Esc za odustajanje.
 	Omit	Izostavi
 	On	Uključeno
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Uključeno: WordCraft se otvara na Datoteka › Početna, s praznim dokumentom, predlošcima i vašim nedavnim dokumentima. Isključeno: otvara prazan dokument.
@@ -2699,3 +2708,54 @@ preview	Title	Naslov
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Upišite veličinu u bilo kojoj jedinici, npr. 5 cm ili 300 px. Druga se strana prilagođava pa slika zadržava svoje proporcije.
 
 	Import…	Uvezi…
+
+# Personal templates (#2852)
+	Personal	Osobno
+	Personal Templates	Osobni predlošci
+	Templates you save in your templates folder show up here.	Ovdje se prikazuju predlošci koje spremite u mapu predložaka.
+	Save as Word Template…	Spremi kao Wordov predložak…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Sprema predložak .dotx u vašu mapu predložaka. Prikazuje se u Datoteka › Novo pod Osobno.
+	File locations	Mjesta datoteka
+	User templates:	Korisnički predlošci:
+	Not set	Nije postavljeno
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Datoteka › Novo prikazuje predloške .dotx i .dotm odavde pod Osobno; Spremi kao Wordov predložak počinje ovdje.
+	Format Shape Pane	Okno Oblikovanje oblika
+	Format Shape	Oblikovanje oblika
+	Format Shape…	Oblikuj oblik…
+	No fill	Bez ispune
+	Solid fill	Puna ispuna
+	Gradient fill	Gradijentna ispuna
+	Preset gradients	Unaprijed postavljeni gradijenti
+	Radial	Radijalno
+	Rectangular	Pravokutno
+	Path	Putanja
+	Direction	Smjer
+	Angle	Kut
+	Gradient stops	Točke gradijenta
+	Add gradient stop	Dodaj točku gradijenta
+	Remove gradient stop	Ukloni točku gradijenta
+	Rotate with shape	Zakreni s oblikom
+	Gradient	Gradijent
+	No Gradient	Bez gradijenta
+	Light Variations	Svijetle varijacije
+	Dark Variations	Tamne varijacije
+	More Gradients…	Više gradijenata…
+	Select a shape, text box or drawing canvas to format its fill.	Odaberite oblik, tekstni okvir ili crtaće platno da biste oblikovali ispunu.
+	Linear Right	Linearno udesno
+	Linear Diagonal - Top Left to Bottom Right	Linearno dijagonalno – od gore lijevo prema dolje desno
+	Linear Down	Linearno prema dolje
+	Linear Diagonal - Top Right to Bottom Left	Linearno dijagonalno – od gore desno prema dolje lijevo
+	Linear Left	Linearno ulijevo
+	Linear Diagonal - Bottom Right to Top Left	Linearno dijagonalno – od dolje desno prema gore lijevo
+	Linear Up	Linearno prema gore
+	Linear Diagonal - Bottom Left to Top Right	Linearno dijagonalno – od dolje lijevo prema gore desno
+	From Top Left Corner	Iz gornjeg lijevog kuta
+	From Top Right Corner	Iz gornjeg desnog kuta
+	From Bottom Left Corner	Iz donjeg lijevog kuta
+	From Bottom Right Corner	Iz donjeg desnog kuta
+	From Center	Iz središta
+	Soft	Meko
+	Lit from Top	Osvijetljeno odozgo
+	Deep	Duboko
+	Lit from Bottom	Osvijetljeno odozdo
+	Center Glow	Sjaj u središtu

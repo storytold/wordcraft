@@ -31,7 +31,6 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
 
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let recovery = app.ui.backstage_page == "recover";
     // No document open (#1129): only the pages that open or create one, and Options.
     let has_document = app.has_document();
     if !has_document && !works_without_document(&app.ui.backstage_page) {
@@ -42,12 +41,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         .exact_size(200.0)
         // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
         .resizable(false)
-        .frame(egui::Frame::NONE.fill(if recovery { egui::Color32::BLACK } else { APP_COLOR }).inner_margin(egui::Margin {
-            left: 0,
-            right: 0,
-            top: if mac { 0 } else { 12 },
-            bottom: 12,
-        }))
+        .frame(egui::Frame::NONE.fill(APP_COLOR).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
         .show(ui, |ui| {
             let back = if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
@@ -146,31 +140,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default()
-        .frame(egui::Frame::NONE.fill(if recovery { egui::Color32::BLACK } else { t.ribbon }).inner_margin(egui::Margin::symmetric(40, 30)))
-        .show(ui, |ui| {
-            // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
-            if app.ui.backstage_page == "print" {
-                export_page(app, ui);
-                return;
-            }
-            egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
-                "home" => home_page(app, ui),
-                "new" => new_page(app, ui),
-                "open" => open_page(app, ui),
-                "saveAs" => save_as_page(app, ui),
-                "info" => info_page(app, ui),
-                "recover" => recovery_page(app, ui),
-                "print" | "export" => export_page(app, ui),
-                "options" => crate::options::page(app, ui),
-                _ => home_page(app, ui),
-            });
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
+        // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
+        if app.ui.backstage_page == "print" {
+            export_page(app, ui);
+            return;
+        }
+        egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
+            "home" => home_page(app, ui),
+            "new" => new_page(app, ui),
+            "open" => open_page(app, ui),
+            "saveAs" => save_as_page(app, ui),
+            "info" => info_page(app, ui),
+            "recover" => recovery_page(app, ui),
+            "print" | "export" => export_page(app, ui),
+            "options" => crate::options::page(app, ui),
+            _ => home_page(app, ui),
         });
+    });
 }
 
 /// Recovery is a separate copy. Leaving this page never discards it.
 fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
-    ui.visuals_mut().override_text_color = Some(egui::Color32::WHITE);
     heading(ui, "Recover documents");
     ui.label(tl!("Restore opens an unsaved copy. Your original file stays unchanged."));
     ui.add_space(20.0);
@@ -198,9 +189,6 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
             ui.label(&doc.name);
             ui.label(&doc.saved_at);
             ui.add_enabled_ui(!busy, |ui| {
-                // Buttons keep the theme's own text colour: the page-wide white override is
-                // for labels on the black background and would bleach button labels (#1895).
-                ui.visuals_mut().override_text_color = None;
                 ui.horizontal(|ui| {
                     if ui.button(tl!("Restore")).clicked() {
                         let _ = app.run("file.recover", json!({"restore": doc.id}));
@@ -215,7 +203,6 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
     });
     ui.add_space(20.0);
     ui.horizontal(|ui| {
-        ui.visuals_mut().override_text_color = None;
         if ui.button(tl!("Continue without restoring")).clicked() {
             let _ = app.run("ui.backstage", json!({"value": false}));
             app.canvas.want_focus = true;
@@ -330,7 +317,8 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
     open_list(app, ui);
 }
 
-/// New: the whole template gallery with a search box; no Recent list (that is on Home and Open).
+/// New: the whole template gallery with a search box, then the personal templates (#2852); no
+/// Recent list (that is on Home and Open). The search covers both.
 fn new_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     heading(ui, "New");
@@ -342,16 +330,173 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     let found = matching_templates(&query);
-    if found.is_empty() {
+    let (folder, personal) = personal_templates(app, ui);
+    let personal_found = matching_personal(&query, &personal);
+    if found.is_empty() && personal_found.is_empty() {
         ui.label(egui::RichText::new(tl!("No templates match your search.")).color(t.text_dim));
         return;
     }
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
-        for (label, template) in found {
-            template_tile(ui, app, label, template);
+    if !found.is_empty() {
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
+            for (label, template) in found {
+                template_tile(ui, app, label, template);
+            }
+        });
+    }
+    // Personal: the user templates folder's templates; a folder per category, as in Word.
+    let Some(folder) = folder else { return };
+    if !query.trim().is_empty() && personal_found.is_empty() {
+        return;
+    }
+    ui.add_space(24.0);
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Personal")).font(semibold(16.0)));
+        ui.add_space(8.0);
+        if ui.small_button(tl!("Refresh")).on_hover_text(folder.to_string_lossy()).clicked() {
+            refresh_personal_templates(ui.ctx());
         }
     });
+    ui.add_space(8.0);
+    let error = ui.ctx().data(|d| d.get_temp::<String>(personal_error_id())).unwrap_or_default();
+    if !error.is_empty() {
+        ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
+        ui.add_space(6.0);
+    }
+    if personal.is_empty() {
+        ui.label(egui::RichText::new(tl!("Templates you save in your templates folder show up here.")).color(t.text_dim));
+        ui.label(egui::RichText::new(folder.to_string_lossy()).font(regular(11.5)).color(t.text_dim));
+        return;
+    }
+    let mut categories: Vec<&str> = Vec::new();
+    for p in &personal_found {
+        if !categories.contains(&p.category.as_str()) {
+            categories.push(&p.category);
+        }
+    }
+    for category in categories {
+        if !category.is_empty() {
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new(category).font(medium(13.5)).color(t.text));
+            ui.add_space(6.0);
+        }
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = vec2(18.0, 18.0);
+            for p in personal_found.iter().filter(|p| p.category == category) {
+                personal_tile(ui, app, p);
+            }
+        });
+    }
+}
+
+/// A personal template: what the gallery needs of a [`PersonalTemplate`] listing entry.
+type PersonalTemplate = wordcraft_engine::cmd::user_templates::PersonalTemplate;
+
+/// The templates folder setting and listing File › New shows, and the pass it was last shown in.
+#[derive(Clone)]
+struct PersonalListing {
+    key: (Option<String>, Option<std::path::PathBuf>),
+    pass: u64,
+    folder: Option<std::path::PathBuf>,
+    templates: Vec<PersonalTemplate>,
+}
+
+fn personal_listing_id() -> egui::Id {
+    egui::Id::new("backstage_personal_templates")
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has listed the templates folder (tests check it isn't every frame).
+    static PERSONAL_LISTINGS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The user templates folder and its templates (#2852). The folder is read when New is shown (so
+/// a template saved meanwhile, or a folder chosen in Options, appears), when its setting changes
+/// and on Refresh; never on every frame, as reading a big or synced folder would stall the window.
+/// A folder that isn't there lists nothing.
+fn personal_templates(app: &WordApp, ui: &Ui) -> (Option<std::path::PathBuf>, Vec<PersonalTemplate>) {
+    let key = (app.session.prefs.user_templates_folder.clone(), app.services.templates_dir.clone());
+    let pass = ui.ctx().cumulative_pass_nr();
+    let cached = ui.ctx().data(|d| d.get_temp::<PersonalListing>(personal_listing_id()));
+    // Still on New since the last pass: the listing stands.
+    if let Some(mut l) = cached
+        && l.key == key
+        && l.pass.saturating_add(1) >= pass
+    {
+        l.pass = pass;
+        let out = (l.folder.clone(), l.templates.clone());
+        ui.ctx().data_mut(|d| d.insert_temp(personal_listing_id(), l));
+        return out;
+    }
+    let folder = app.user_templates_dir();
+    let templates = match &folder {
+        Some(f) if f.is_dir() => {
+            #[cfg(test)]
+            PERSONAL_LISTINGS.with(|n| n.set(n.get().saturating_add(1)));
+            wordcraft_engine::cmd::user_templates::list_templates(&f.to_string_lossy()).map(|l| l.templates).unwrap_or_else(|e| {
+                log::debug!("personal templates: {e}");
+                Vec::new()
+            })
+        }
+        _ => Vec::new(),
+    };
+    let l = PersonalListing { key, pass, folder: folder.clone(), templates: templates.clone() };
+    ui.ctx().data_mut(|d| d.insert_temp(personal_listing_id(), l));
+    (folder, templates)
+}
+
+/// Read the templates folder again on the next pass (File › New › Personal's Refresh).
+fn refresh_personal_templates(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<PersonalListing>(personal_listing_id()));
+    ctx.request_repaint();
+}
+
+/// The personal templates whose name, title or category contains `query` (case-insensitive);
+/// all of them for an empty query.
+fn matching_personal(query: &str, list: &[PersonalTemplate]) -> Vec<PersonalTemplate> {
+    let q = query.trim().to_lowercase();
+    let has = |s: &str| s.to_lowercase().contains(&q);
+    list.iter().filter(|p| q.is_empty() || has(&p.label) || has(&p.category) || p.title.as_deref().is_some_and(has)).cloned().collect()
+}
+
+/// A personal template's tile: a page with the template mark (no thumbnail) and its name; a
+/// click makes a new document from it.
+fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
+    let t = Tokens::get(ui.ctx());
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.set_max_width(150.0);
+        let (r, resp) = ui.allocate_exact_size(vec2(150.0, 194.0), Sense::click());
+        ui.painter().rect(
+            r,
+            2.0,
+            egui::Color32::WHITE,
+            Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border_strong }),
+            egui::StrokeKind::Inside,
+        );
+        let mark = egui::Color32::from_gray(150);
+        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(44.0, 44.0)), "documentTemplate", mark, t.accent);
+        let resp = resp.on_hover_text(&p.path);
+        let caption = ui.add(egui::Label::new(egui::RichText::new(&p.label).font(regular(12.5))).truncate().sense(Sense::click()));
+        if resp.clicked() || caption.clicked() {
+            let failed = open_personal(app, &p.path).err();
+            ui.ctx().data_mut(|d| d.insert_temp(personal_error_id(), failed.unwrap_or_default()));
+        }
+    });
+}
+
+/// Make a new document from the personal template at `path` and close File; a template that
+/// can't be read keeps File open so the gallery can say why.
+fn open_personal(app: &mut WordApp, path: &str) -> Result<(), String> {
+    app.run("file.newFromTemplate", json!({"path": path}))?;
+    app.ui.backstage = false;
+    app.canvas.want_focus = true;
+    Ok(())
+}
+
+fn personal_error_id() -> egui::Id {
+    egui::Id::new("backstage_personal_error")
 }
 
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
@@ -388,7 +533,10 @@ fn open_error_id() -> egui::Id {
 
 /// Drop the Recent list's open error once File is closed, so it doesn't come back next time.
 pub(crate) fn forget_open_error(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<String>(open_error_id()));
+    ctx.data_mut(|d| {
+        d.remove::<String>(open_error_id());
+        d.remove::<String>(personal_error_id());
+    });
 }
 
 /// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
@@ -425,6 +573,15 @@ fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Save As");
     if ui.button(egui::RichText::new(tl!("Browse…")).font(medium(14.0))).clicked() {
         app.save_as_dialog();
+    }
+    // A Word template in the user templates folder, which File › New lists under Personal (#2852).
+    ui.add_space(8.0);
+    if ui
+        .button(egui::RichText::new(tl!("Save as Word Template…")).font(medium(14.0)))
+        .on_hover_text(tl!("Saves a .dotx template in your templates folder. It shows up in File › New under Personal."))
+        .clicked()
+    {
+        let _ = app.run("ui.saveAsTemplate", json!({}));
     }
 }
 
@@ -627,6 +784,56 @@ mod tests {
         h.run_steps(4);
     }
 
+    /// #3243: the Recover page uses the app theme like every other Backstage page: no black
+    /// fill, and its labels are not forced white (unreadable on the light theme).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recovery_page_follows_the_theme() {
+        for theme in [egui::Theme::Light, egui::Theme::Dark] {
+            let (mut app, root) = recovery_app();
+            let ctx = egui::Context::default();
+            crate::theme::apply(&ctx, crate::theme::Appearance::System);
+            ctx.set_theme(theme);
+            let mut shapes = Vec::new();
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            for frame in 0..1000 {
+                let input = egui::RawInput {
+                    time: Some(f64::from(frame) * 0.01),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1440.0, 900.0))),
+                    ..Default::default()
+                };
+                let mut out = ctx.run_ui(input, |ui| {
+                    app.logic(&ctx.clone());
+                    app.ui(ui);
+                });
+                out.textures_delta.clear();
+                shapes = out.shapes;
+                if frame > 4 && app.session.recovery_ready() && !app.session.recovery_busy() && !app.session.recovery_documents().is_empty() {
+                    break;
+                }
+                assert!(std::time::Instant::now() < end);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(app.ui.backstage && app.ui.backstage_page == "recover");
+            let mut texts = 0;
+            for s in &shapes {
+                match &s.shape {
+                    egui::Shape::Rect(r) => {
+                        assert_ne!(r.fill, egui::Color32::BLACK, "{theme:?}: the Recover page is filled black");
+                    }
+                    egui::Shape::Text(t) if t.galley.job.text == "Document" || t.galley.job.text == "Recovery copy" => {
+                        texts += 1;
+                        assert_ne!(t.override_text_color, Some(egui::Color32::WHITE), "{theme:?}: header forced white");
+                    }
+                    _ => {}
+                }
+            }
+            assert_eq!(texts, 2, "{theme:?}: both column headers drawn");
+            drop(app);
+            let _ = std::fs::remove_dir_all(root);
+        }
+    }
+
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
     fn recovery_page_keeps_dismissed_copies_and_confirms_discard() {
@@ -694,6 +901,180 @@ mod tests {
         assert_eq!(ids("re"), ["resume", "report"]);
         assert_eq!(ids("résumé"), ["resume"]);
         assert!(ids("no such template").is_empty());
+    }
+
+    fn personal_dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("wc-ui-personal-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn write_template(path: &std::path::Path, text: &str) {
+        let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        s.run("document.setText", &json!({"text": text})).unwrap();
+        wordcraft_engine::io::save_path(path, &s.doc).unwrap();
+    }
+
+    fn new_page_harness(templates: Option<std::path::PathBuf>) -> egui_kittest::Harness<'static, WordApp> {
+        let services = Services { templates_dir: templates, ..Default::default() };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        a.run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h
+    }
+
+    /// File › New lists the user templates folder's templates under Personal (#2852), by
+    /// category; the search covers them; a click makes an untitled document attached to the
+    /// template.
+    #[test]
+    fn new_lists_personal_templates_and_opens_one() {
+        let dir = personal_dir("gallery");
+        let memo = dir.join("Team memo.dotx");
+        write_template(&memo, "Memo from the template");
+        std::fs::create_dir_all(dir.join("Legal")).unwrap();
+        write_template(&dir.join("Legal").join("Contract.dotx"), "Contract");
+        let mut h = new_page_harness(Some(dir.clone()));
+        assert!(h.query_by_label("Personal").is_some(), "New has a Personal section");
+        assert!(h.query_by_label("Team memo").is_some(), "{:?}", h.state().user_templates_dir());
+        assert!(h.query_by_label("Legal").is_some(), "a subfolder is a category");
+        assert!(h.query_by_label("Report").is_some(), "the built-in templates stay");
+
+        // The search covers both.
+        h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("backstage_template_search"), "memo".to_string()));
+        h.run_steps(3);
+        assert!(h.query_by_label("Team memo").is_some(), "search finds a personal template");
+        assert!(h.query_by_label("Contract").is_none() && h.query_by_label("Report").is_none());
+        h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("backstage_template_search"), "zzz".to_string()));
+        h.run_steps(3);
+        assert!(h.query_by_label("No templates match your search.").is_some());
+        h.ctx.data_mut(|d| d.insert_temp(egui::Id::new("backstage_template_search"), String::new()));
+        h.run_steps(3);
+
+        h.get_by_label("Team memo").click();
+        h.run_steps(4);
+        let a = h.state();
+        assert!(!a.ui.backstage, "File closes");
+        assert_eq!(a.session.path, None, "an untitled document");
+        assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(memo.to_string_lossy().as_ref()));
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Memo from the template"));
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An empty (or not yet made) templates folder says where templates come from; no folder (the
+    /// web) shows no Personal section. Home keeps only the built-ins.
+    #[test]
+    fn personal_section_empty_state_and_no_folder() {
+        let dir = personal_dir("empty").join("Templates");
+        let h = new_page_harness(Some(dir.clone()));
+        assert!(h.query_by_label("Templates you save in your templates folder show up here.").is_some());
+        assert!(!dir.exists(), "listing doesn't make the folder");
+        drop(h);
+        let h = new_page_harness(None);
+        assert!(h.query_by_label("Personal").is_none());
+    }
+
+    /// A folder chosen in File › Options › Advanced › File locations replaces the app's own.
+    #[test]
+    fn the_options_folder_replaces_the_default() {
+        let own = personal_dir("own");
+        write_template(&own.join("Own.dotx"), "x");
+        let chosen = personal_dir("chosen");
+        write_template(&chosen.join("Chosen.dotx"), "y");
+        let mut h = new_page_harness(Some(own.clone()));
+        assert!(h.query_by_label("Own").is_some());
+        h.state_mut().run("file.options", json!({"userTemplatesFolder": chosen.to_string_lossy()})).unwrap();
+        h.run_steps(3);
+        assert!(h.query_by_label("Chosen").is_some(), "the chosen folder is listed");
+        assert!(h.query_by_label("Own").is_none());
+        drop(h);
+        let _ = std::fs::remove_dir_all(&own);
+        let _ = std::fs::remove_dir_all(&chosen);
+    }
+
+    /// A personal template replaces the document like New does: unsaved changes are asked about
+    /// first, and nothing is replaced until that is answered.
+    #[test]
+    fn a_personal_template_asks_about_unsaved_changes_first() {
+        let dir = personal_dir("dirty");
+        let memo = dir.join("Memo.dotx");
+        write_template(&memo, "From the template");
+        let mut h = new_page_harness(Some(dir.clone()));
+        h.state_mut().run("document.setText", json!({"text": "Unsaved work"})).unwrap();
+        assert!(h.state().session.dirty);
+        h.get_by_label("Memo").click();
+        h.run_steps(3);
+        let body = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "Save changes is asked");
+        assert_eq!(body(&h), "Unsaved work", "the document stays until the question is answered");
+        h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        h.run_steps(2);
+        assert_eq!(body(&h), "Unsaved work", "Cancel keeps it");
+        assert_eq!(h.state().session.doc.settings.attached_template, None);
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("Memo").click();
+        h.run_steps(3);
+        h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        h.run_steps(2);
+        assert!(body(&h).contains("From the template"), "Don't Save makes the document from the template");
+        assert_eq!(h.state().session.doc.settings.attached_template.as_deref(), Some(memo.to_string_lossy().as_ref()));
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The templates folder is read when New is shown and on Refresh, not on every frame.
+    #[test]
+    fn personal_templates_are_listed_once_per_visit_and_on_refresh() {
+        let dir = personal_dir("refresh");
+        write_template(&dir.join("First.dotx"), "x");
+        let count = || super::PERSONAL_LISTINGS.with(std::cell::Cell::get);
+        let before = count();
+        let mut h = new_page_harness(Some(dir.clone()));
+        let after_open = count();
+        assert_eq!(after_open, before + 1, "listed once when New is shown");
+        write_template(&dir.join("Second.dotx"), "y");
+        h.run_steps(20);
+        assert_eq!(count(), after_open, "not listed again while New stays open");
+        assert!(h.query_by_label("Second").is_none());
+        h.get_by_label("Refresh").click();
+        h.run_steps(3);
+        assert_eq!(count(), after_open + 1, "Refresh lists once");
+        assert!(h.query_by_label("Second").is_some(), "Refresh shows the new template");
+        // Leaving New and coming back reads the folder again.
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+        h.run_steps(2);
+        write_template(&dir.join("Third.dotx"), "z");
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
+        h.run_steps(3);
+        assert_eq!(count(), after_open + 2);
+        assert!(h.query_by_label("Third").is_some());
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A saved templates folder that is a network path, or gone, gives way to the app's own.
+    #[test]
+    fn an_unusable_saved_folder_falls_back_to_the_apps_own() {
+        let own = personal_dir("fallback");
+        let services = Services { templates_dir: Some(own.clone()), ..Default::default() };
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+        for bad in [r"\\host\share".to_string(), "//host/share".into(), own.join("gone").to_string_lossy().into_owned(), "relative".into()] {
+            a.session.prefs.user_templates_folder = Some(bad.clone());
+            assert_eq!(a.user_templates_dir(), Some(own.clone()), "{bad}");
+        }
+        a.session.prefs.user_templates_folder = Some(own.to_string_lossy().into_owned());
+        assert_eq!(a.user_templates_dir(), Some(own.clone()));
+        let _ = std::fs::remove_dir_all(&own);
     }
 
     /// Home and New are different pages (#141): Home has the short template row, the link to New

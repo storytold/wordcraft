@@ -489,17 +489,20 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.newFromTemplate", "New from Template", "File › New", |s, v| {
             let path = p::req_str(v, "path")?;
-            let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+            let mut doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
+            // As in Word, the new document is attached to the template it came from (#2852).
+            doc.settings.attached_template = Some(path.to_string());
             s.set_document(doc);
             s.path = None;
             s.dirty = true;
             sel_result(s)
         })
-        .params(r#"{"path": string}"#)
+        .params(r#"{"path": string} → a new, untitled document from the template, attached to it"#)
         .pure(),
         CommandSpec::new("file.saveTemplate", "Save as Template", "File › Save As", |s, v| {
             let path = p::req_str(v, "path")?;
-            let path = if path.ends_with(".dotx") { path.to_string() } else { format!("{path}.dotx") };
+            // A .dotm keeps its name (#2852); anything else becomes a .dotx.
+            let path = if super::user_templates::is_template_name(path) { path.to_string() } else { format!("{path}.dotx") };
             crate::io::save_path(std::path::Path::new(&path), &s.doc).map_err(CmdError::Failed)?;
             Ok(json!({"path": path}))
         })
@@ -892,8 +895,8 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
         word = format!("{}{fixed}{}", word.get(..at).unwrap_or(""), word.get(at + letters.len()..).unwrap_or(""));
     }
     // A whole-word replacement, else "wait..." → "wait…". Proofing decides what is English the
-    // same way (#835).
-    let english = s.doc.para_at(&f).is_none_or(|_| wordcraft_proof::ProofLang::from_tag(lang.as_deref()) == wordcraft_proof::ProofLang::En);
+    // same way (#835); every English (en-GB, en-CA…) counts (#1281).
+    let english = s.doc.para_at(&f).is_none_or(|_| wordcraft_proof::ProofLang::from_tag(lang.as_deref()).is_english());
     let found = if ac.replace_text { ac.replacement_in(&word, english) } else { None };
     let (from, rep) = match found {
         Some(r) => (start, Some(r)),

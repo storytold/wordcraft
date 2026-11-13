@@ -447,6 +447,12 @@ fn shapes_have_paths() {
     assert_eq!(parse_iso("2024-02-03T04:05:06Z"), Some((2024, 2, 3, 4, 5, 6)));
     assert_eq!(parse_iso("garbage"), None);
     assert_eq!(civil(0), (1970, 1, 1, 0, 0, 0));
+    // Past chrono's ±262143-year range `civil` keeps the proleptic Gregorian date the old
+    // hand-rolled converter gave (only the caller's 0..=9999 PDF year clamp applies later), rather
+    // than falling back to the epoch. Values pinned from the old formula.
+    assert_eq!(civil(10_000_000_000_000), (318857, 5, 20, 17, 46, 40));
+    assert_eq!(civil(-10_000_000_000_000), (-314918, 8, 13, 6, 13, 20));
+    assert_eq!(civil(253_402_300_800), (10000, 1, 1, 0, 0, 0));
 }
 
 #[test]
@@ -619,6 +625,43 @@ fn filled_paths(bytes: &[u8]) -> Vec<kurbo::BezPath> {
     fills.0
 }
 
+/// The straight stroked segments drawn, over every page, in page space: `((x0, y0), (x1, y1), width)`.
+fn stroked_segments(bytes: &[u8]) -> Vec<(kurbo::Point, kurbo::Point, f64)> {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Strokes(Vec<(kurbo::Point, kurbo::Point, f64)>);
+    impl Device<'_> for Strokes {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, path: &kurbo::BezPath, transform: kurbo::Affine, _: &Paint<'_>, mode: &PathDrawMode) {
+            use kurbo::PathEl;
+            let PathDrawMode::Stroke(props) = mode else { return };
+            if let [PathEl::MoveTo(a), PathEl::LineTo(b)] = path.elements() {
+                let width = f64::from(props.line_width) * transform.determinant().abs().sqrt();
+                self.0.push((transform * *a, transform * *b, width));
+            }
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let mut strokes = Strokes(Vec::new());
+    for page in pdf.pages().iter() {
+        let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut strokes);
+    }
+    strokes.0
+}
+
 #[test]
 fn rounded_rectangle_corners_follow_their_radius() {
     // `roundRect` with its own `adj`: Word's address boxes use small corners (adj 3565: 3.6% of
@@ -631,7 +674,7 @@ fn rounded_rectangle_corners_follow_their_radius() {
             kind: ShapeKind::RoundedRectangle,
             w: 200.0,
             h: 100.0,
-            fill: Some(wordcraft_doc::props::Rgb(0xD9, 0xD9, 0xD9)),
+            fill: Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::props::Rgb(0xD9, 0xD9, 0xD9))),
             stroke: None,
             stroke_width: 0.0,
             float,
@@ -719,6 +762,47 @@ fn flat_lines_in_a_group_are_drawn() {
         GroupChild { x: 20.0, y: 20.0, obj: line(0.0, 0.0) },
     ]));
     assert_eq!(flat, empty + 2, "the horizontal and the vertical line, not the one without length");
+}
+
+/// #1740: a triple border is three lines in the PDF (it was drawn as a double one).
+#[test]
+fn triple_borders_export_three_lines() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let pdf = |style: BorderStyle| {
+        let mut p = Paragraph::with_text("Ruled", CharProps::default());
+        p.props.borders = Some(Borders { bottom: Some(Border { style, width: 0.75, color: None, space: 1.0 }), ..Default::default() });
+        let mut d = Document::new();
+        d.body = vec![para_block(p)];
+        export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap()
+    };
+    let paths = |style: BorderStyle| count_glyphs_and_paths(&pdf(style)).1;
+    let single = paths(BorderStyle::Single);
+    assert_eq!(paths(BorderStyle::Double), single + 1);
+    assert_eq!(paths(BorderStyle::Triple), single + 2);
+
+    // The three lines run along the border, side by side: one on the single line's centre and one
+    // either side of it, each 3 stroke widths away (1.8 x the line width apart, drawn 0.6 x wide).
+    let flat = |style: BorderStyle| -> Vec<(kurbo::Point, kurbo::Point, f64)> {
+        stroked_segments(&pdf(style)).into_iter().filter(|(a, b, _)| (a.y - b.y).abs() < 1e-3 && (a.x - b.x).abs() > 1.0).collect()
+    };
+    let centre = match flat(BorderStyle::Single).as_slice() {
+        [(a, _, _)] => a.y,
+        other => panic!("one single border line, got {other:?}"),
+    };
+    let mut triple = flat(BorderStyle::Triple);
+    assert_eq!(triple.len(), 3, "three horizontal strokes: {triple:?}");
+    triple.sort_by(|l, r| l.0.y.total_cmp(&r.0.y));
+    let (x0, x1) = (triple[0].0.x, triple[0].1.x);
+    for (a, b, _) in &triple {
+        assert!((a.x - x0).abs() < 1e-3 && (b.x - x1).abs() < 1e-3, "the lines span the same run: {triple:?}");
+    }
+    let width = triple[0].2;
+    assert!(width > 0.0 && triple.iter().all(|t| (t.2 - width).abs() < 1e-3), "equally thin lines: {triple:?}");
+    let ys: Vec<f64> = triple.iter().map(|t| t.0.y).collect();
+    assert!((ys[1] - centre).abs() < 1e-2, "the middle line sits on the border's centre: {ys:?} vs {centre}");
+    for gap in [ys[1] - ys[0], ys[2] - ys[1]] {
+        assert!((gap - 3.0 * width).abs() < 1e-2, "the lines are 3 stroke widths apart across the border: {ys:?}, width {width}");
+    }
 }
 
 #[test]
@@ -1859,4 +1943,41 @@ fn pages_print_scaled_to_other_paper() {
         let bytes = export(&d, &PdfOptions { paper: Some(paper), ..Default::default() }).unwrap();
         assert_eq!(size(&bytes), size(&plain));
     }
+}
+
+/// #1500: gradient shape fills are exported as PDF shadings (axial and radial), and a
+/// transparent fill with its opacity.
+#[test]
+fn shape_gradients_export_as_shadings() {
+    use wordcraft_doc::fill::{Fill as ShapeFill, Gradient, GradientFlip, GradientKind, PathShape};
+    use wordcraft_doc::wordart::GradStop;
+    let stops = vec![GradStop { pos: 0.0, color: Rgb::BLACK, transparency: 0.0 }, GradStop { pos: 100.0, color: Rgb::WHITE, transparency: 0.0 }];
+    let grad =
+        |kind| ShapeFill::Gradient(Arc::new(Gradient { stops: stops.clone(), kind, tile: None, rot_with_shape: true, flip: GradientFlip::None }));
+    let mut d = Document::from_text("");
+    let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+    for fill in [
+        grad(GradientKind::Linear { angle: 90.0, scaled: false }),
+        grad(GradientKind::Path { shape: PathShape::Circle, focus: [50.0; 4] }),
+        ShapeFill::Solid { color: Rgb::WHITE, transparency: 70.0 },
+    ] {
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 50.0,
+            h: 50.0,
+            fill: Some(fill),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        d.insert_object(&at, shape, &Default::default()).unwrap();
+    }
+    let raw = String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned();
+    assert!(raw.contains("/ShadingType 2"), "axial shading");
+    assert!(raw.contains("/ShadingType 3"), "radial shading");
+    assert!(raw.contains("/ca 0.3"), "30% opaque fill");
 }

@@ -114,6 +114,7 @@
 	Number alignment:	번호 맞춤:
 	Number format	번호 서식
 	Number style for this level:	이 수준의 번호 스타일:
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	이전 메뉴 키: Alt, {keys}. 계속 입력하거나 Esc 키를 눌러 취소하세요.
 	Outside border	바깥쪽 테두리
 	Overtype	겹쳐쓰기
 	Overtype (typing replaces the characters after the caret)	겹쳐쓰기(입력한 문자가 커서 뒤의 문자를 대체함)
@@ -406,6 +407,8 @@
 	First line:	첫 줄:
 	Fixed Column Width	고정 열 너비
 	Focus	집중
+	Full Screen View	전체 화면 보기
+	Show the ribbon	리본 표시
 	Font	글꼴
 	Font Color	글꼴 색
 	Font color:	글꼴 색:
@@ -1726,6 +1729,12 @@
 	Reading Line Spacing	읽기 줄 간격
 	Reading Text Size	읽기 텍스트 크기
 	English (United Kingdom)	영어(영국)
+	English (Australia)	영어(오스트레일리아)
+	English (Canada)	영어(캐나다)
+	English (India)	영어(인도)
+	English (Ireland)	영어(아일랜드)
+	English (New Zealand)	영어(뉴질랜드)
+	English (South Africa)	영어(남아프리카 공화국)
 	Polish	폴란드어
 	Do Not Check Spelling or Grammar	맞춤법 또는 문법 검사 안 함
 	Documents	문서
@@ -2542,3 +2551,54 @@ preview	Title	제목
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	5 cm 또는 300 px처럼 원하는 단위로 크기를 입력하세요. 다른 쪽도 함께 바뀌어 그림의 비율이 유지됩니다.
 
 	Import…	가져오기…
+
+# Personal templates (#2852)
+	Personal	개인
+	Personal Templates	개인 서식 파일
+	Templates you save in your templates folder show up here.	서식 파일 폴더에 저장한 서식 파일이 여기에 표시됩니다.
+	Save as Word Template…	Word 서식 파일로 저장…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	.dotx 서식 파일을 서식 파일 폴더에 저장합니다. 파일 › 새로 만들기의 개인 아래에 표시됩니다.
+	File locations	파일 위치
+	User templates:	사용자 서식 파일:
+	Not set	설정 안 됨
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	파일 › 새로 만들기의 개인 아래에 이 폴더의 .dotx 및 .dotm 서식 파일이 표시됩니다. Word 서식 파일로 저장은 여기에서 시작합니다.
+	Format Shape Pane	도형 서식 창
+	Format Shape	도형 서식
+	Format Shape…	도형 서식…
+	No fill	채우기 없음
+	Solid fill	단색 채우기
+	Gradient fill	그라데이션 채우기
+	Preset gradients	미리 설정된 그라데이션
+	Radial	방사형
+	Rectangular	사각형
+	Path	경로
+	Direction	방향
+	Angle	각도
+	Gradient stops	그라데이션 중지점
+	Add gradient stop	그라데이션 중지점 추가
+	Remove gradient stop	그라데이션 중지점 제거
+	Rotate with shape	도형과 함께 회전
+	Gradient	그라데이션
+	No Gradient	그라데이션 없음
+	Light Variations	밝은 그라데이션
+	Dark Variations	어두운 그라데이션
+	More Gradients…	기타 그라데이션…
+	Select a shape, text box or drawing canvas to format its fill.	채우기 서식을 지정할 도형, 텍스트 상자 또는 그리기 캔버스를 선택하세요.
+	Linear Right	선형 오른쪽
+	Linear Diagonal - Top Left to Bottom Right	선형 대각선 - 왼쪽 위에서 오른쪽 아래
+	Linear Down	선형 아래쪽
+	Linear Diagonal - Top Right to Bottom Left	선형 대각선 - 오른쪽 위에서 왼쪽 아래
+	Linear Left	선형 왼쪽
+	Linear Diagonal - Bottom Right to Top Left	선형 대각선 - 오른쪽 아래에서 왼쪽 위
+	Linear Up	선형 위쪽
+	Linear Diagonal - Bottom Left to Top Right	선형 대각선 - 왼쪽 아래에서 오른쪽 위
+	From Top Left Corner	왼쪽 위 모서리에서
+	From Top Right Corner	오른쪽 위 모서리에서
+	From Bottom Left Corner	왼쪽 아래 모서리에서
+	From Bottom Right Corner	오른쪽 아래 모서리에서
+	From Center	가운데에서
+	Soft	부드럽게
+	Lit from Top	위에서 조명
+	Deep	진하게
+	Lit from Bottom	아래에서 조명
+	Center Glow	가운데 광선

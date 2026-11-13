@@ -150,7 +150,7 @@ impl FileBrowser {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
-            FileDialogRequest::Save { name } => {
+            FileDialogRequest::Save { name, .. } => {
                 let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty());
                 let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
                 f.push(("All files".into(), vec!["*".into()]));
@@ -258,11 +258,13 @@ impl FileBrowser {
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
-        let start = self
-            .file_browser
-            .last_dir
-            .clone()
-            .filter(|d| d.is_dir())
+        // A folder the request names (the user templates folder, #2852) comes first.
+        let asked = match &req {
+            FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
+            _ => None,
+        };
+        let start = asked
+            .or_else(|| self.file_browser.last_dir.clone().filter(|d| d.is_dir()))
             .or_else(|| self.session.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf).filter(|d| d.is_dir()))
             .or_else(home)
             .or_else(|| std::env::current_dir().ok())
@@ -281,7 +283,7 @@ impl WordApp {
             "picture" => (FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture),
             "recipients" => (FileDialogRequest::Open { purpose: "recipients".into() }, AfterPick::Recipients),
             "save" => (
-                FileDialogRequest::Save { name: self.default_save_name() },
+                FileDialogRequest::Save { name: self.default_save_name(), dir: None },
                 AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
             ),
             _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument),
@@ -526,7 +528,7 @@ mod tests {
         let dir = scratch("save");
         std::fs::create_dir(dir.join("drafts")).unwrap();
         std::fs::write(dir.join("drafts").join("old.docx"), b"x").unwrap();
-        let req = FileDialogRequest::Save { name: "Document1.docx".into() };
+        let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
         let mut b = FileBrowser::new(req, AfterPick::OpenDocument, dir.clone(), false);
         b.name = "drafts".into();
         assert_eq!(b.accept(), Step::Stay);

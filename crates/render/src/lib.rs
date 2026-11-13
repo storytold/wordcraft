@@ -12,8 +12,8 @@ use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::props::Rgb;
 use wordcraft_fonts::FontDb;
 use wordcraft_layout::Page;
+use wordcraft_layout::display::Paint;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_display};
-use wordcraft_layout::wordart::ArtPaint;
 use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
 
 mod color_glyph;
@@ -104,6 +104,27 @@ impl Rendered {
         }
         let un = |c: u8| ((c as u32 * 255 + a / 2) / a).min(255) as u8;
         [un(p[0]), un(p[1]), un(p[2]), p[3]]
+    }
+}
+
+/// Paint `p` as the context's paint (gradients in page points, under the view transform).
+fn set_paint(ctx: &mut RenderContext, p: &Paint, opts: &RenderOptions) {
+    set_paint_inked(ctx, p, |c| opts.ink(c));
+}
+
+/// [`set_paint`] with each colour passed through `ink` (a dark page's text inking, #1252).
+fn set_paint_inked(ctx: &mut RenderContext, p: &Paint, ink: impl Fn(Rgb) -> Rgb) {
+    let stops = |stops: &[(f32, Rgb, f32)]| -> Vec<peniko::ColorStop> {
+        stops.iter().map(|(o, c, a)| peniko::ColorStop::from((o.clamp(0.0, 1.0), color(ink(*c), *a)))).collect()
+    };
+    match p {
+        Paint::Solid(c, a) => ctx.set_paint(color(ink(*c), *a)),
+        Paint::Linear { p0, p1, stops: s } => ctx.set_paint(
+            peniko::Gradient::new_linear((f64::from(p0.0), f64::from(p0.1)), (f64::from(p1.0), f64::from(p1.1))).with_stops(stops(s).as_slice()),
+        ),
+        Paint::Radial { c, r, stops: s } => {
+            ctx.set_paint(peniko::Gradient::new_radial((f64::from(c.0), f64::from(c.1)), *r).with_stops(stops(s).as_slice()))
+        }
     }
 }
 
@@ -736,15 +757,15 @@ fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOpti
     for it in items {
         let (color, alpha) = match it {
             Draw::Fill { rect, color, alpha, .. } if rect.contains(p) => (*color, *alpha),
-            // The shape's own outline (an ellipse's corners are not inside it). Shape fills are
-            // drawn opaque (the model has no fill transparency), so they cover what's beneath.
+            // The shape's own outline (an ellipse's corners are not inside it), in its fill's
+            // colour and opacity there (#1500: gradients and transparency).
             Draw::Shape { rect, kind, fill: Some(fill), corner, .. }
                 if *kind != ShapeKind::Line && rect.contains(p) && {
                     let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
                     kurbo::Shape::contains(&shape_path(*kind, r, *corner), kurbo::Point::new(p.x as f64, p.y as f64))
                 } =>
             {
-                (*fill, 1.0)
+                fill.at(p.x, p.y)
             }
             Draw::Clip { rect, items } if rect.contains(p) => {
                 blend_backgrounds(items, p, opts, bg, depth + 1);
@@ -934,6 +955,18 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.stroke_path(&p);
                 return;
             }
+            if *stroke == Stroke::Triple {
+                // Three thin lines, spaced as a double's, across the line's direction (so a
+                // vertical border's lines stand side by side).
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+                let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
+                ctx.set_stroke(kurbo::Stroke::new(w * 0.6));
+                for k in [-1.0, 0.0, 1.0] {
+                    line(ctx, nx * k, ny * k);
+                }
+                return;
+            }
             if *stroke == Stroke::Double {
                 let (dx, dy) = (x1 - x0, y1 - y0);
                 let len = (dx * dx + dy * dy).sqrt().max(1e-3);
@@ -1084,7 +1117,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             }
             ctx.set_transform(view);
             if let Some(f) = fill {
-                ctx.set_paint(color(opts.ink(*f), 1.0));
+                set_paint(ctx, f, opts);
                 ctx.fill_path(&path);
             }
             if let Some(s) = stroke {
@@ -1104,16 +1137,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             for l in wordcraft_layout::wordart::art_layers(path, fx, *c, *alpha) {
                 // The letters read against their highlight like plain text (#1252); shadows don't.
                 let ink = |c: Rgb| if l.letters { opts.ink_text(c, *text_bg) } else { opts.ink(c) };
-                match &l.paint {
-                    ArtPaint::Solid(c, a) => ctx.set_paint(color(ink(*c), *a)),
-                    ArtPaint::Linear { p0, p1, stops } => {
-                        let stops: Vec<peniko::ColorStop> =
-                            stops.iter().map(|(o, c, a)| peniko::ColorStop::from((o.clamp(0.0, 1.0), color(ink(*c), *a)))).collect();
-                        let g = peniko::Gradient::new_linear((f64::from(p0.0), f64::from(p0.1)), (f64::from(p1.0), f64::from(p1.1)))
-                            .with_stops(stops.as_slice());
-                        ctx.set_paint(g);
-                    }
-                }
+                set_paint_inked(ctx, &l.paint, ink);
                 match l.stroke {
                     Some(w) => {
                         ctx.set_stroke(kurbo::Stroke::new(f64::from(w.clamp(0.1, 400.0))).with_join(kurbo::Join::Round));
@@ -1176,14 +1200,14 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
                     let rr = r.inflate(g as f64, g as f64);
                     if rr.width() > 0.0 && rr.height() > 0.0 {
-                        ctx.set_paint(color(opts.ink(*f), a));
+                        set_paint(ctx, &f.faded(a), opts);
                         ctx.fill_path(&shape_path(*kind, rr, *corner));
                     }
                 }
                 return;
             }
             if let Some(f) = fill {
-                ctx.set_paint(color(opts.ink(*f), 1.0));
+                set_paint(ctx, f, opts);
                 ctx.fill_path(&path);
             }
             if let Some(s) = stroke {
@@ -1459,7 +1483,7 @@ mod tests {
         let ellipse = Draw::Shape {
             rect: wordcraft_geom::Rect::new(100.0, 100.0, 200.0, 100.0),
             kind: ShapeKind::Ellipse,
-            fill: Some(Rgb::BLACK),
+            fill: Some(wordcraft_layout::display::Paint::solid(Rgb::BLACK)),
             stroke: None,
             stroke_width: 0.0,
             effects: Default::default(),
@@ -1523,7 +1547,7 @@ mod tests {
                 kind: ShapeKind::Rectangle,
                 w: 100.0,
                 h: 60.0,
-                fill: Some(Rgb(0, 0, 255)),
+                fill: Some(wordcraft_doc::fill::Fill::solid(Rgb(0, 0, 255))),
                 stroke: None,
                 stroke_width: 0.0,
                 float: Default::default(),
@@ -1566,6 +1590,61 @@ mod tests {
         let img = draw(ShapeEffects { glow: Some(Glow { color: Rgb(255, 0, 0), size: 6.0, transparency: 0.0 }), ..Default::default() });
         let reddish = |x: u32, y: u32| matches!(img.pixel(x, y), [r, g, _, _] if r > 200 && g < 200);
         assert!(reddish(x1 + 2, (y0 + y1) / 2) && reddish(x0 - 2, (y0 + y1) / 2), "glow on both sides");
+    }
+
+    /// #1500: gradient fills shade across the shape, circular ones from the centre out, and a
+    /// transparent fill lets what is behind show through.
+    #[test]
+    fn shape_gradients_and_transparency_are_drawn() {
+        use std::sync::Arc;
+        use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
+        use wordcraft_doc::para::{Float, InlineObject, Wrap};
+        use wordcraft_doc::wordart::GradStop;
+        let shape = |fill: Fill, x: f32| InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 100.0,
+            h: 100.0,
+            fill: Some(fill),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::InFrontOfText, x, y: 0.0, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let stops = vec![GradStop { pos: 0.0, color: Rgb::BLACK, transparency: 0.0 }, GradStop { pos: 100.0, color: Rgb::WHITE, transparency: 0.0 }];
+        let grad =
+            |kind| Fill::Gradient(Arc::new(Gradient { stops: stops.clone(), kind, tile: None, rot_with_shape: true, flip: GradientFlip::None }));
+        let mut d = Document::from_text("");
+        let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+        // Left to right: top-to-bottom linear, circular, navy under 30%-opaque white.
+        let objs = [
+            shape(grad(GradientKind::Linear { angle: 90.0, scaled: false }), 0.0),
+            shape(grad(GradientKind::Path { shape: PathShape::Circle, focus: [50.0; 4] }), 150.0),
+            shape(Fill::solid(Rgb(0, 0, 0x80)), 300.0),
+            shape(Fill::Solid { color: Rgb::WHITE, transparency: 70.0 }, 300.0),
+        ];
+        for o in objs.into_iter().rev() {
+            d.insert_object(&at, o, &Default::default()).unwrap();
+        }
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+        // Each shape's frame (the dark corner of the linear one is its top-left pixel).
+        let dark = |x0: u32, x1: u32| -> Vec<(u32, u32)> {
+            (x0..x1).flat_map(|x| (0..400).map(move |y| (x, y))).filter(|(x, y)| img.pixel(*x, *y)[0] < 40).collect()
+        };
+        let lin = dark(60, 200);
+        let (lx, ly) = (lin.iter().map(|p| p.0).min().unwrap(), lin.iter().map(|p| p.1).min().unwrap());
+        let luma = |x: u32, y: u32| img.pixel(x, y)[0];
+        assert!(
+            luma(lx + 50, ly + 5) < luma(lx + 50, ly + 50) && luma(lx + 50, ly + 50) < luma(lx + 50, ly + 95),
+            "dark at the top, light at the bottom"
+        );
+        let (cx, cy) = (lx + 150 + 50, ly + 50);
+        assert!(luma(cx, cy) < 30 && luma(cx - 48, cy - 48) > 200, "black at the centre, white at the corners");
+        let [r, _, b, _] = img.pixel(lx + 300 + 50, cy);
+        assert!((150..230).contains(&b) && (60..120).contains(&r), "white over navy blends: {r} {b}");
     }
 
     #[test]
@@ -2356,7 +2435,7 @@ mod tests {
                 kind: ShapeKind::RoundedRectangle,
                 w: 200.0,
                 h: 200.0,
-                fill: Some(wordcraft_doc::props::Rgb(0, 0, 0)),
+                fill: Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::props::Rgb(0, 0, 0))),
                 stroke: None,
                 stroke_width: 0.0,
                 float,

@@ -46,6 +46,7 @@ pub mod affix;
 pub mod bg;
 pub mod cs;
 pub mod dict;
+pub mod en_variants;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -496,22 +497,76 @@ pub fn suggest(word: &str, max: usize) -> Vec<String> {
         }
     }
     scored.sort_by(|a, b| (a.0, a.1, a.2.len().abs_diff(n)).cmp(&(b.0, b.1, b.2.len().abs_diff(n))).then(a.2.cmp(&b.2)));
+    scored.into_iter().take(max).map(|(_, _, w)| match_case(word, w)).collect()
+}
+
+/// `w` (lower case) in the case of `word`: all capitals, an initial capital, or as it is.
+fn match_case(word: &str, w: String) -> String {
     let cap = word.chars().next().is_some_and(char::is_uppercase);
     let upper = word.chars().all(|c| !c.is_lowercase());
-    scored
-        .into_iter()
-        .take(max)
-        .map(|(_, _, w)| {
-            if upper && n > 1 {
-                w.to_uppercase()
-            } else if cap {
-                let mut c = w.chars();
-                c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or(w)
-            } else {
-                w
+    if upper && word.chars().count() > 1 {
+        w.to_uppercase()
+    } else if cap {
+        let mut c = w.chars();
+        c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or(w)
+    } else {
+        w
+    }
+}
+
+/// `lower` in the spelling `lang` (an English) wants, when it or a part of a hyphenated compound
+/// is the other dialect's spelling (`colour-blind` → `color-blind` in American English).
+fn english_preferred(lower: &str, lang: ProofLang) -> Option<String> {
+    let mut changed = false;
+    let parts: Vec<String> = lower
+        .split('-')
+        .map(|p| match en_variants::preferred(p, lang) {
+            Some(n) => {
+                changed = true;
+                n
             }
+            None => p.to_string(),
         })
-        .collect()
+        .collect();
+    changed.then(|| parts.join("-"))
+}
+
+/// Is `word` spelled right in the English `lang` ([`ProofLang::En`], [`ProofLang::EnGb`],
+/// [`ProofLang::EnCa`])? The shared word list's words, less the other dialect's spellings
+/// (`colour` in American English, `color` in British), plus this dialect's spellings of the
+/// list's words ([`en_variants`]). The user dictionary overrules both.
+fn is_correct_english(word: &str, lang: ProofLang, opts: &Options) -> bool {
+    let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'').trim_matches('\'');
+    if accepted_by_options(w, opts) {
+        return true;
+    }
+    let lower = w.to_lowercase().replace('’', "'");
+    if in_user_dictionary(&lower) {
+        return true;
+    }
+    let parts: Vec<&str> = lower.split('-').filter(|p| !p.is_empty()).collect();
+    if parts.iter().any(|p| en_variants::is_foreign(p, lang)) {
+        return false;
+    }
+    is_correct_with(word, opts) || (!parts.is_empty() && parts.iter().all(|p| known_core(p) || en_variants::known_variant(p, lang, known_core)))
+}
+
+/// Spelling suggestions in the English `lang`: this dialect's spelling first when `word` is the
+/// other dialect's, then the shared suggestions in this dialect's spelling.
+fn suggest_english(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
+    let lower = word.to_lowercase().replace('’', "'");
+    let mut out: Vec<String> = Vec::new();
+    if let Some(p) = english_preferred(&lower, lang) {
+        out.push(match_case(word, p));
+    }
+    for s in suggest(word, max.saturating_add(2)) {
+        let s = english_preferred(&s.to_lowercase(), lang).map_or(s, |p| match_case(word, p));
+        if !out.contains(&s) {
+            out.push(s);
+        }
+    }
+    out.truncate(max);
+    out
 }
 
 /// Optimal string alignment distance, early-exit at 3.
@@ -631,7 +686,7 @@ fn enclosing_token(text: &str, a: usize, b: usize) -> (usize, usize, bool) {
 fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool) -> Option<Issue> {
     let w = text.get(a..b)?;
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
-    if (opts.ignore_internet && internet) || (lang == ProofLang::En && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
+    if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
         return None;
     }
     let message = match lang {
@@ -656,7 +711,7 @@ pub fn is_correct_in(word: &str, lang: ProofLang) -> bool {
 /// [`is_correct_in`] with the File › Options › Proofing choices.
 pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
     match lang {
-        ProofLang::En => is_correct_with(word, opts),
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => is_correct_english(word, lang, opts),
         ProofLang::Pl => accepted_by_options(word, opts) || pl::is_correct(word),
         ProofLang::Hr => accepted_by_options(word, opts) || hr::is_correct(word),
         ProofLang::Pt => accepted_by_options(word, opts) || pt::is_correct(word),
@@ -672,7 +727,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
 /// Spelling suggestions for a word misspelled in `lang` (best first, at most `max`).
 pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
     match lang {
-        ProofLang::En => suggest(word, max),
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => suggest_english(word, max, lang),
         ProofLang::Pl => pl::suggest(word, max),
         ProofLang::Hr => hr::suggest(word, max),
         ProofLang::Pt => pt::suggest(word, max),
@@ -697,6 +752,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
     match lang {
         ProofLang::En => grammar_en(text, capital_first),
+        ProofLang::EnGb | ProofLang::EnCa => grammar_en(text, capital_first).into_iter().map(|i| Issue { lang, ..i }).collect(),
         ProofLang::Pl => pl::grammar::check_with(text, capital_first),
         ProofLang::Hr => hr::grammar::check_with(text, capital_first),
         ProofLang::Pt => pt::grammar::check_with(text, capital_first),
@@ -739,7 +795,7 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
     // A paragraph typed in Vietnamese under the default English language is Vietnamese, which
     // has no proofing tools: no marks (Word detects the language the same way).
     let default = if vi::looks_vietnamese(text) {
-        for (_, l) in merged.iter_mut().filter(|(_, l)| *l == ProofLang::En) {
+        for (_, l) in merged.iter_mut().filter(|(_, l)| l.is_english()) {
             *l = ProofLang::Other;
         }
         ProofLang::Other
@@ -1100,7 +1156,197 @@ mod tests {
         ] {
             assert!(is_correct(w), "{w}");
         }
-        assert!(check_spelling("The programme honoured her rigour and prioritised colourful, paediatric care.").is_empty());
+        let text = "The programme honoured her rigour and prioritised colourful, paediatric care.";
+        for lang in [ProofLang::EnGb, ProofLang::EnCa] {
+            let flagged: Vec<&str> = check_spelling_in(text, lang).iter().map(|i| &text[i.start..i.end]).collect();
+            let expect: &[&str] = if lang == ProofLang::EnCa { &["prioritised"] } else { &[] };
+            assert_eq!(flagged, expect, "{lang:?}");
+        }
+        // American English flags the British spellings (#1281).
+        let flagged: Vec<&str> = check_spelling(text).iter().map(|i| &text[i.start..i.end]).collect();
+        assert_eq!(flagged, ["programme", "honoured", "rigour", "prioritised", "colourful", "paediatric"]);
+    }
+
+    /// Each English accepts its own spellings and flags the other dialect's, suggesting its own
+    /// first, as Word does (#1281, #1045).
+    #[test]
+    fn english_dialects_flag_each_others_spellings() {
+        let (us, gb, ca) = (ProofLang::En, ProofLang::EnGb, ProofLang::EnCa);
+        // (word, right in en-US, right in en-CA, right in en-GB)
+        let cases = [
+            ("color", true, false, false),
+            ("colour", false, true, true),
+            ("colours", false, true, true),
+            ("coloured", false, true, true),
+            ("Colourful", false, true, true),
+            ("colour's", false, true, true),
+            ("honorable", true, false, false),
+            ("neighbourhood", false, true, true),
+            ("center", true, false, false),
+            ("centre", false, true, true),
+            ("centred", false, true, true),
+            ("centring", false, true, true),
+            ("centering", true, false, false),
+            ("theater", true, false, false),
+            ("theatre", true, true, true),
+            ("organize", true, true, true),
+            ("organise", false, false, true),
+            ("organisation", false, false, true),
+            ("organisations", false, false, true),
+            ("realised", false, false, true),
+            ("recognising", false, false, true),
+            ("analyze", true, true, false),
+            ("analyse", false, true, true),
+            ("paralysed", false, true, true),
+            ("defense", true, false, false),
+            ("defence", false, true, true),
+            ("licence", false, true, true),
+            ("license", true, true, true),
+            ("practise", false, true, true),
+            ("traveled", true, false, false),
+            ("travelled", true, true, true),
+            ("catalog", true, false, false),
+            ("catalogue", true, true, true),
+            ("anaemia", false, true, true),
+            ("anemia", true, true, false),
+            ("tire", true, true, true),
+            ("tyre", false, false, true),
+            ("programme", false, true, true),
+            ("program", true, true, true),
+            ("meter", true, true, true),
+            ("metre", false, true, true),
+            ("plough", false, true, true),
+            ("colour-blind", false, true, true),
+            // Words spelled alike everywhere, and real misspellings, are unaffected.
+            ("humorous", true, true, true),
+            ("honorary", true, true, true),
+            ("tour", true, true, true),
+            ("four", true, true, true),
+            ("programmed", true, true, true),
+            ("colourr", false, false, false),
+            ("colorr", false, false, false),
+            ("organisationz", false, false, false),
+        ];
+        for (w, in_us, in_ca, in_gb) in cases {
+            assert_eq!(is_correct_in(w, us), in_us, "en-US: {w}");
+            assert_eq!(is_correct_in(w, ca), in_ca, "en-CA: {w}");
+            assert_eq!(is_correct_in(w, gb), in_gb, "en-GB: {w}");
+            assert_eq!(is_correct_for(w, Some("en-AU")), in_gb, "en-AU follows British spelling: {w}");
+        }
+        // The dialect's own spelling comes first, in the word's case.
+        assert_eq!(suggest_in("colour", 5, us).first().map(String::as_str), Some("color"));
+        assert_eq!(suggest_in("Colours", 5, us).first().map(String::as_str), Some("Colors"));
+        assert_eq!(suggest_in("color", 5, gb).first().map(String::as_str), Some("colour"));
+        assert_eq!(suggest_in("organisation", 5, us).first().map(String::as_str), Some("organization"));
+        assert_eq!(suggest_in("organisation", 5, ca).first().map(String::as_str), Some("organization"));
+        assert_eq!(suggest_in("analyze", 5, gb).first().map(String::as_str), Some("analyse"));
+        assert_eq!(suggest_in("CENTER", 5, gb).first().map(String::as_str), Some("CENTRE"));
+        assert_eq!(suggest_in("colour's", 5, us).first().map(String::as_str), Some("color's"));
+        assert_eq!(suggest_in("colour-blind", 5, us).first().map(String::as_str), Some("color-blind"));
+        // Shared suggestions come in the dialect's spelling, never the other one's.
+        let gb_sugg = suggest_in("colouur", 8, gb);
+        assert!(gb_sugg.contains(&"colour".to_string()) && !gb_sugg.contains(&"color".to_string()), "{gb_sugg:?}");
+        let us_sugg = suggest_in("colouur", 8, us);
+        assert!(us_sugg.contains(&"color".to_string()) && !us_sugg.contains(&"colour".to_string()), "{us_sugg:?}");
+        // A word in the user dictionary is right in every English.
+        add_word("zzcolourzz");
+        assert!(is_correct_in("zzcolourzz", us));
+        // Issues carry the dialect, so suggestions on demand come from the same one.
+        let issues = check_text("The color is nice.", &[(0..18, gb)]);
+        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert_eq!((issues[0].lang, &"The color is nice."[issues[0].start..issues[0].end]), (gb, "color"));
+        let grammar = check_text("the colour is nice.", &[(0..19, gb)]);
+        assert!(grammar.iter().any(|i| i.kind == IssueKind::Grammar && i.lang == gb), "{grammar:?}");
+    }
+
+    /// The words #40 (folded into #1281) reported as flagged in British English, with their
+    /// inflections: right in en-GB, and in en-US flagged or not as `en-variants.txt` decides.
+    #[test]
+    fn british_words_reported_in_issue_40_are_right_in_en_gb() {
+        let (us, gb, ca) = (ProofLang::En, ProofLang::EnGb, ProofLang::EnCa);
+        // (word, right in en-US, right in en-CA, right in en-GB)
+        let cases = [
+            // Both spellings are right everywhere: `judgment` is also British legal usage, and
+            // American dictionaries list `judgement` as a variant.
+            ("judgement", true, true, true),
+            ("judgements", true, true, true),
+            ("judgment", true, true, true),
+            ("judgments", true, true, true),
+            ("defence", false, true, true),
+            ("defences", false, true, true),
+            ("defense", true, false, false),
+            // `license` is the British verb, so only American English flags `licence`.
+            ("licence", false, true, true),
+            ("licences", false, true, true),
+            ("license", true, true, true),
+            ("licensed", true, true, true),
+            ("licenses", true, true, true),
+            // `program` is British for computing.
+            ("programme", false, true, true),
+            ("programmes", false, true, true),
+            ("program", true, true, true),
+            ("programs", true, true, true),
+            // American English accepts both.
+            ("catalogue", true, true, true),
+            ("catalogues", true, true, true),
+            ("catalogued", true, true, true),
+            ("cataloguing", true, true, true),
+            ("catalog", true, false, false),
+            ("catalogs", true, false, false),
+        ];
+        for (w, in_us, in_ca, in_gb) in cases {
+            assert_eq!(is_correct_in(w, us), in_us, "en-US: {w}");
+            assert_eq!(is_correct_in(w, ca), in_ca, "en-CA: {w}");
+            assert_eq!(is_correct_in(w, gb), in_gb, "en-GB: {w}");
+        }
+        let text = "The judgement on the defence licence put the programme in the catalogue.";
+        assert!(check_spelling_in(text, gb).is_empty(), "{:?}", check_spelling_in(text, gb));
+        assert_eq!(suggest_in("licences", 5, us).first().map(String::as_str), Some("licenses"));
+        assert_eq!(suggest_in("programmes", 5, us).first().map(String::as_str), Some("programs"));
+    }
+
+    /// More British spellings that must stay right in en-GB and en-AU (#1281): -re, single l, ae,
+    /// with their inflections.
+    #[test]
+    fn more_british_spellings_are_right_in_en_gb() {
+        let gb = ProofLang::EnGb;
+        assert_eq!(ProofLang::from_tag(Some("en-AU")), gb);
+        for w in [
+            "goitre",
+            "goitres",
+            "reconnoitre",
+            "sceptre",
+            "sceptres",
+            "enrol",
+            "enrols",
+            "enrolled",
+            "enrolment",
+            "fulfil",
+            "fulfils",
+            "fulfilled",
+            "fulfilment",
+            "instalment",
+            "instalments",
+            "skilful",
+            "skilfully",
+            "wilful",
+            "wilfully",
+            "encyclopaedia",
+            "encyclopaedias",
+        ] {
+            assert!(is_correct_in(w, gb), "en-GB: {w}");
+        }
+        let text = "The wilful knight took the sceptre to fulfil his enrolment, paid the instalment and read the encyclopaedia.";
+        assert!(check_spelling_in(text, gb).is_empty(), "{:?}", check_spelling_in(text, gb));
+    }
+
+    #[test]
+    fn user_dictionary_accepts_the_other_dialects_spelling() {
+        add_word("savour");
+        assert!(is_correct_in("savour", ProofLang::En), "a word the user added is never flagged");
+        assert!(!is_correct_in("savor", ProofLang::EnGb));
+        remove_word("savour");
+        assert!(!is_correct_in("savour", ProofLang::En));
     }
 
     #[test]
@@ -1416,7 +1662,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1460,11 +1706,25 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..9), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Other];
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..11), 0..6)) {
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
+            }
+        }
+    }
+
+    proptest::proptest! {
+        // Suggestions scan the whole word list: fewer cases keep the test quick.
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(24))]
+        #[test]
+        fn english_dialect_suggestions_never_panic(s in "[a-zA-Zéß'’ -]{0,16}|(colou?r|cent(er|re)|organi[sz]ation)['’s-]{0,4}") {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa] {
+                let _ = suggest_in(&s, 4, lang);
+                let _ = is_correct_in(&s, lang);
+                let _ = en_variants::preferred(&s, lang);
+                let _ = en_variants::known_variant(&s, lang, |_| true);
             }
         }
     }

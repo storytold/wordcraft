@@ -455,6 +455,9 @@
 	Flip Horizontal	Převrátit vodorovně
 	Flip Vertical	Převrátit svisle
 	Focus	Soustředění
+	Full Screen View	Zobrazení na celou obrazovku
+	Show the ribbon	Zobrazit pás karet
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Staré klávesy nabídek: Alt, {keys}. Pokračujte v psaní, nebo zrušte klávesou Esc.
 	Follow number with:	Znak za číslem:
 	Font	Písmo
 	Font Color	Barva písma
@@ -2019,6 +2022,12 @@ preview	Title	Ukázka
 	Do not check spelling or grammar	Nekontrolovat pravopis ani mluvnici
 	Dutch	Nizozemština
 	English (United Kingdom)	Angličtina (Spojené království)
+	English (Australia)	Angličtina (Austrálie)
+	English (Canada)	Angličtina (Kanada)
+	English (India)	Angličtina (Indie)
+	English (Ireland)	Angličtina (Irsko)
+	English (New Zealand)	Angličtina (Nový Zéland)
+	English (South Africa)	Angličtina (Jihoafrická republika)
 	Envelope size:	Velikost obálky:
 	Estonian	Estonština
 	Finnish	Finština
@@ -2691,3 +2700,54 @@ preview	Title	Ukázka
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Zadejte velikost v libovolné jednotce, například 5 cm nebo 300 px. Druhá strana se přizpůsobí, takže obrázek zachová své proporce.
 
 	Import…	Importovat…
+
+# Personal templates (#2852)
+	Personal	Osobní
+	Personal Templates	Osobní šablony
+	Templates you save in your templates folder show up here.	Zde se zobrazí šablony, které uložíte do složky šablon.
+	Save as Word Template…	Uložit jako šablonu Wordu…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Uloží šablonu .dotx do vaší složky šablon. Zobrazí se v nabídce Soubor › Nový v části Osobní.
+	File locations	Umístění souborů
+	User templates:	Uživatelské šablony:
+	Not set	Nenastaveno
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Soubor › Nový zobrazuje šablony .dotx a .dotm odsud v části Osobní; Uložit jako šablonu Wordu začíná zde.
+	Format Shape Pane	Podokno Formát obrazce
+	Format Shape	Formát obrazce
+	Format Shape…	Formátovat obrazec…
+	No fill	Bez výplně
+	Solid fill	Plná výplň
+	Gradient fill	Přechodová výplň
+	Preset gradients	Předdefinované přechody
+	Radial	Paprskový
+	Rectangular	Obdélníkový
+	Path	Cesta
+	Direction	Směr
+	Angle	Úhel
+	Gradient stops	Zarážky přechodu
+	Add gradient stop	Přidat zarážku přechodu
+	Remove gradient stop	Odebrat zarážku přechodu
+	Rotate with shape	Otáčet s obrazcem
+	Gradient	Přechod
+	No Gradient	Bez přechodu
+	Light Variations	Světlé varianty
+	Dark Variations	Tmavé varianty
+	More Gradients…	Další přechody…
+	Select a shape, text box or drawing canvas to format its fill.	Vyberte obrazec, textové pole nebo kreslicí plátno a naformátujte jeho výplň.
+	Linear Right	Lineární doprava
+	Linear Diagonal - Top Left to Bottom Right	Lineární úhlopříčný – vlevo nahoře do vpravo dole
+	Linear Down	Lineární dolů
+	Linear Diagonal - Top Right to Bottom Left	Lineární úhlopříčný – vpravo nahoře do vlevo dole
+	Linear Left	Lineární doleva
+	Linear Diagonal - Bottom Right to Top Left	Lineární úhlopříčný – vpravo dole do vlevo nahoře
+	Linear Up	Lineární nahoru
+	Linear Diagonal - Bottom Left to Top Right	Lineární úhlopříčný – vlevo dole do vpravo nahoře
+	From Top Left Corner	Z rohu vlevo nahoře
+	From Top Right Corner	Z rohu vpravo nahoře
+	From Bottom Left Corner	Z rohu vlevo dole
+	From Bottom Right Corner	Z rohu vpravo dole
+	From Center	Ze středu
+	Soft	Jemný
+	Lit from Top	Osvětlený shora
+	Deep	Sytý
+	Lit from Bottom	Osvětlený zdola
+	Center Glow	Záře ze středu

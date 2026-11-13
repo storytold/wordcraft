@@ -52,6 +52,22 @@ pub fn read_xml(bytes: &[u8]) -> Result<wordcraft_doc::Document, DocxError> {
     }
 }
 
+/// The title (`dc:title`) in a package's core properties part (`docProps/core.xml`, ECMA-376
+/// Part 2 §11), trimmed; `None` when the part can't be read or has no title. Only the package's
+/// directory and at most `max_part` bytes of that part are read: for listing templates by name
+/// without reading the whole package.
+pub fn package_title<R: std::io::Read + std::io::Seek>(package: R, max_part: u64) -> Option<String> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(package).ok()?;
+    let part = zip.by_name("docProps/core.xml").ok()?;
+    let mut xml = Vec::new();
+    part.take(max_part).read_to_end(&mut xml).ok()?;
+    let root = xml::parse(&xml).ok()?;
+    let title = root.child("dc:title")?.text();
+    let title = title.trim();
+    (!title.is_empty()).then(|| title.to_string())
+}
+
 /// What [`DocxError::PasswordRequired`] says.
 pub const PASSWORD_REQUIRED: &str = "this document is protected with a password";
 /// What [`DocxError::WrongPassword`] says.

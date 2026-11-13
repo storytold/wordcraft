@@ -276,6 +276,9 @@
 	First line:	Első sor:
 	Fixed Column Width	Rögzített oszlopszélesség
 	Focus	Fókusz
+	Full Screen View	Teljes képernyős nézet
+	Show the ribbon	Menüszalag megjelenítése
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Régi menübillentyűk: Alt, {keys}. Gépeljen tovább, vagy a megszakításhoz nyomja meg az Esc billentyűt.
 	Font	Betűtípus
 	Font Color	Betűszín
 	Font color:	Betűszín:
@@ -2198,6 +2201,12 @@
 	Do not check spelling or grammar	Nincs helyesírás- és nyelvhelyesség-ellenőrzés
 	Dutch	Holland
 	English (United Kingdom)	Angol (Egyesült Királyság)
+	English (Australia)	Angol (Ausztrália)
+	English (Canada)	Angol (Kanada)
+	English (India)	Angol (India)
+	English (Ireland)	Angol (Írország)
+	English (New Zealand)	Angol (Új-Zéland)
+	English (South Africa)	Angol (Dél-Afrika)
 	Envelope size:	Borítékméret:
 	Estonian	Észt
 	Finnish	Finn
@@ -2695,3 +2704,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Írj be egy méretet bármilyen mértékegységben, például 5 cm vagy 300 px. A másik oldal követi, így a kép megtartja az arányait.
 
 	Import…	Importálás…
+
+# Personal templates (#2852)
+	Personal	Saját
+	Personal Templates	Saját sablonok
+	Templates you save in your templates folder show up here.	A sablonmappájába mentett sablonok itt jelennek meg.
+	Save as Word Template…	Mentés Word-sablonként…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Egy .dotx sablont ment a sablonmappájába. A Fájl › Új lapon, a Saját csoportban jelenik meg.
+	File locations	Fájlok helye
+	User templates:	Felhasználói sablonok:
+	Not set	Nincs megadva
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	A Fájl › Új a Saját csoportban sorolja fel az itteni .dotx és .dotm sablonokat; a Mentés Word-sablonként innen indul.
+	Format Shape Pane	Alakzat formázása munkaablak
+	Format Shape	Alakzat formázása
+	Format Shape…	Alakzat formázása…
+	No fill	Nincs kitöltés
+	Solid fill	Egyszínű kitöltés
+	Gradient fill	Színátmenetes kitöltés
+	Preset gradients	Előre beállított színátmenetek
+	Radial	Sugaras
+	Rectangular	Téglalap alakú
+	Path	Útvonal
+	Direction	Irány
+	Angle	Szög
+	Gradient stops	Színátmenet-pontok
+	Add gradient stop	Színátmenet-pont hozzáadása
+	Remove gradient stop	Színátmenet-pont eltávolítása
+	Rotate with shape	Forgatás az alakzattal
+	Gradient	Színátmenet
+	No Gradient	Nincs színátmenet
+	Light Variations	Világos változatok
+	Dark Variations	Sötét változatok
+	More Gradients…	További színátmenetek…
+	Select a shape, text box or drawing canvas to format its fill.	Jelöljön ki egy alakzatot, szövegdobozt vagy rajzvásznat a kitöltés formázásához.
+	Linear Right	Lineáris jobbra
+	Linear Diagonal - Top Left to Bottom Right	Lineáris átlós – bal felső sarokból jobb alsó sarokba
+	Linear Down	Lineáris lefelé
+	Linear Diagonal - Top Right to Bottom Left	Lineáris átlós – jobb felső sarokból bal alsó sarokba
+	Linear Left	Lineáris balra
+	Linear Diagonal - Bottom Right to Top Left	Lineáris átlós – jobb alsó sarokból bal felső sarokba
+	Linear Up	Lineáris felfelé
+	Linear Diagonal - Bottom Left to Top Right	Lineáris átlós – bal alsó sarokból jobb felső sarokba
+	From Top Left Corner	A(z) bal felső sarokból
+	From Top Right Corner	A(z) jobb felső sarokból
+	From Bottom Left Corner	A(z) bal alsó sarokból
+	From Bottom Right Corner	A(z) jobb alsó sarokból
+	From Center	Középről
+	Soft	Lágy
+	Lit from Top	Felülről megvilágított
+	Deep	Mély
+	Lit from Bottom	Alulról megvilágított
+	Center Glow	Középső ragyogás

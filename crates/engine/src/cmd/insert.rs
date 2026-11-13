@@ -340,8 +340,19 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         Float { wrap: Wrap::Inline, ..Default::default() }
     };
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
-    let obj =
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width: 1.0, float, story: None, freeform: None, effects: Default::default(), extra };
+    let obj = InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill: fill.map(wordcraft_doc::fill::Fill::solid),
+        stroke,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra,
+    };
     // A selected Drawing Canvas takes it in (and stays selected for the next one).
     if super::canvas::add_member(s, obj.clone())?.is_some() {
         return sel_result(s);
@@ -365,7 +376,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         kind: ShapeKind::TextBox,
         w,
         h,
-        fill: Some(Rgb::WHITE),
+        fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
         stroke: Some(Rgb::BLACK),
         stroke_width: 0.75,
         float: Float::default(),

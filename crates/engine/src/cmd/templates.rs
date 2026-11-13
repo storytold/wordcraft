@@ -240,7 +240,7 @@ pub fn local_path(target: &str, base: Option<&Path>) -> Option<PathBuf> {
     Some(p)
 }
 
-fn is_network_path(p: &str) -> bool {
+pub(crate) fn is_network_path(p: &str) -> bool {
     let b = p.as_bytes();
     matches!((b.first(), b.get(1)), (Some(b'\\' | b'/'), Some(b'\\' | b'/')))
 }

@@ -277,6 +277,9 @@
 	First line:	Esimene rida:
 	Fixed Column Width	Fikseeritud veerulaius
 	Focus	Keskendu
+	Full Screen View	Täisekraanvaade
+	Show the ribbon	Kuva menüülint
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Vanad menüüklahvid: Alt, {keys}. Jätkake tippimist või tühistage Esc-klahviga.
 	Font	Font
 	Font Color	Fondi värv
 	Font Dialog	Fondi dialoog
@@ -1752,6 +1755,12 @@
 	Reading Text Size	Lugemisteksti suurus
 	Do Not Check Spelling or Grammar	Ära kontrolli õigekirja ega grammatikat
 	English (United Kingdom)	Inglise (Ühendkuningriik)
+	English (Australia)	Inglise (Austraalia)
+	English (Canada)	Inglise (Kanada)
+	English (India)	Inglise (India)
+	English (Ireland)	Inglise (Iirimaa)
+	English (New Zealand)	Inglise (Uus-Meremaa)
+	English (South Africa)	Inglise (Lõuna-Aafrika)
 	Polish	Poola
 
 # Built-in file browser when the system file dialog is unavailable (#576)
@@ -2322,3 +2331,54 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Sisesta suurus mis tahes ühikus, näiteks 5 cm või 300 px. Teine külg muutub kaasa, nii et pilt säilitab oma proportsioonid.
 
 	Import…	Impordi…
+
+# Personal templates (#2852)
+	Personal	Isiklik
+	Personal Templates	Isiklikud mallid
+	Templates you save in your templates folder show up here.	Siin kuvatakse mallid, mille salvestate oma mallide kausta.
+	Save as Word Template…	Salvesta Wordi mallina…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Salvestab .dotx-malli teie mallide kausta. See kuvatakse jaotises Fail › Uus all Isiklik.
+	File locations	Failide asukohad
+	User templates:	Kasutaja mallid:
+	Not set	Määramata
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Fail › Uus loetleb siinsed .dotx- ja .dotm-mallid jaotises Isiklik; Salvesta Wordi mallina alustab siit.
+	Format Shape Pane	Kujundi vormindamise paan
+	Format Shape	Kujundi vormindamine
+	Format Shape…	Vorminda kujund…
+	No fill	Täiteta
+	Solid fill	Ühtlane täide
+	Gradient fill	Üleminekutäide
+	Preset gradients	Valmisüleminekud
+	Radial	Radiaalne
+	Rectangular	Ristkülikukujuline
+	Path	Rada
+	Direction	Suund
+	Angle	Nurk
+	Gradient stops	Ülemineku punktid
+	Add gradient stop	Lisa ülemineku punkt
+	Remove gradient stop	Eemalda ülemineku punkt
+	Rotate with shape	Pööra koos kujundiga
+	Gradient	Üleminek
+	No Gradient	Üleminekuta
+	Light Variations	Heledad variandid
+	Dark Variations	Tumedad variandid
+	More Gradients…	Veel üleminekuid…
+	Select a shape, text box or drawing canvas to format its fill.	Valige kujund, tekstiväli või joonistuslõuend, et selle täidet vormindada.
+	Linear Right	Lineaarne paremale
+	Linear Diagonal - Top Left to Bottom Right	Lineaarne diagonaal – ülal vasakul → all paremal
+	Linear Down	Lineaarne alla
+	Linear Diagonal - Top Right to Bottom Left	Lineaarne diagonaal – ülal paremal → all vasakul
+	Linear Left	Lineaarne vasakule
+	Linear Diagonal - Bottom Right to Top Left	Lineaarne diagonaal – all paremal → ülal vasakul
+	Linear Up	Lineaarne üles
+	Linear Diagonal - Bottom Left to Top Right	Lineaarne diagonaal – all vasakul → ülal paremal
+	From Top Left Corner	Nurgast (ülal vasakul)
+	From Top Right Corner	Nurgast (ülal paremal)
+	From Bottom Left Corner	Nurgast (all vasakul)
+	From Bottom Right Corner	Nurgast (all paremal)
+	From Center	Keskelt
+	Soft	Pehme
+	Lit from Top	Ülalt valgustatud
+	Deep	Sügav
+	Lit from Bottom	Alt valgustatud
+	Center Glow	Keskne kuma

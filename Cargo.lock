@@ -705,6 +705,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "chrono"
+version = "0.4.45"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "cipher"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5222,6 +5231,7 @@ name = "wordcraft"
 version = "0.9.0"
 dependencies = [
  "arboard",
+ "chrono",
  "clipboard-win",
  "craft-print",
  "dispatch2",
@@ -5284,6 +5294,7 @@ name = "wordcraft-docbin"
 version = "0.9.0"
 dependencies = [
  "cfb",
+ "chrono",
  "image",
  "log",
  "miniz_oxide 0.8.9",
@@ -5302,6 +5313,7 @@ dependencies = [
  "aes",
  "base64",
  "cfb",
+ "chrono",
  "getrandom 0.3.4",
  "hmac",
  "image",
@@ -5323,6 +5335,7 @@ name = "wordcraft-engine"
 version = "0.9.0"
 dependencies = [
  "cfb",
+ "chrono",
  "encoding_rs",
  "getrandom 0.3.4",
  "image",
@@ -5367,6 +5380,7 @@ version = "0.9.0"
 dependencies = [
  "cfb",
  "chardetng",
+ "chrono",
  "encoding_rs",
  "image",
  "js-sys",
@@ -5428,6 +5442,7 @@ dependencies = [
 name = "wordcraft-pdf"
 version = "0.9.0"
 dependencies = [
+ "chrono",
  "craft-pdf",
  "hayro-cmap",
  "hayro-interpret",

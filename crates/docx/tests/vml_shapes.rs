@@ -183,8 +183,8 @@ fn a_pict_of_a_rect_a_text_box_and_a_group_all_come_through() {
     assert_eq!(kinds(&ps[1].objects), [ShapeKind::TextBox]);
     let InlineObject::Group { children, .. } = &ps[2].objects[0] else { panic!("{:?}", ps[2].objects) };
     assert_eq!(kinds(&children.iter().map(|c| c.obj.clone()).collect::<Vec<_>>()), [ShapeKind::Rectangle], "the green rectangle is read");
-    let InlineObject::Shape { fill, .. } = children[0].obj else { panic!() };
-    assert_eq!(fill, Some(wordcraft_doc::Rgb(0x00, 0xff, 0x00)), "with its colour");
+    let InlineObject::Shape { fill, .. } = children[0].obj.clone() else { panic!() };
+    assert_eq!(fill, Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::Rgb(0x00, 0xff, 0x00))), "with its colour");
     // And it is still there after a save, which is what the round trip lost.
     let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(paras(&back).iter().map(|p| p.objects.len()).collect::<Vec<_>>(), [1, 1, 1]);
@@ -255,9 +255,9 @@ fn a_group_member_finds_its_shapetype_beside_the_group() {
     )));
     let InlineObject::Group { children, .. } = &objects(&d)[0] else { panic!("{:?}", objects(&d)) };
     assert_eq!(children.len(), 1, "the member is read");
-    let InlineObject::Shape { kind, fill, .. } = children[0].obj else { panic!("{:?}", children[0].obj) };
+    let InlineObject::Shape { kind, fill, .. } = children[0].obj.clone() else { panic!("{:?}", children[0].obj) };
     assert_eq!(kind, ShapeKind::Diamond, "the preset comes from the shapetype's o:spt");
-    assert_eq!(fill, Some(wordcraft_doc::Rgb(0x00, 0x00, 0xff)), "and the fill from its fillcolor");
+    assert_eq!(fill, Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::Rgb(0x00, 0x00, 0xff))), "and the fill from its fillcolor");
 }
 
 #[test]
@@ -267,6 +267,32 @@ fn a_top_level_shape_still_finds_its_shapetype() {
         r##"<v:shapetype id="_x0000_t4" o:spt="4" fillcolor="#00ff00"/>"##,
         r##"<v:shape style="width:40pt;height:40pt" type="#_x0000_t4"/>"##,
     )));
-    let InlineObject::Shape { kind, fill, .. } = objects(&d)[0] else { panic!("{:?}", objects(&d)) };
-    assert_eq!((kind, fill), (ShapeKind::Diamond, Some(wordcraft_doc::Rgb(0x00, 0xff, 0x00))));
+    let InlineObject::Shape { kind, fill, .. } = objects(&d)[0].clone() else { panic!("{:?}", objects(&d)) };
+    assert_eq!((kind, fill), (ShapeKind::Diamond, Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::Rgb(0x00, 0xff, 0x00)))));
+}
+
+#[test]
+fn a_preset_takes_its_gradient_from_the_shapetype() {
+    // #1500: the shape states nothing but its shapetype; the shapetype's `v:fill` (a gradient to
+    // `color2`, its opacity in 65536ths) is the shape's fill, and it survives saving.
+    use std::sync::Arc;
+    use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind};
+    use wordcraft_doc::wordart::GradStop;
+    let d = read_body(&pict(concat!(
+        r##"<v:shapetype id="_x0000_t4" o:spt="4" fillcolor="#ff0000"><v:fill type="gradient" color2="#0000ff" opacity="32768f"/></v:shapetype>"##,
+        r##"<v:shape style="width:40pt;height:40pt" type="#_x0000_t4"/>"##,
+    )));
+    let stop = |pos: f32, color, transparency: f32| GradStop { pos, color, transparency };
+    let want = Fill::Gradient(Arc::new(Gradient {
+        stops: vec![stop(0.0, wordcraft_doc::Rgb(0xff, 0, 0), 50.0), stop(100.0, wordcraft_doc::Rgb(0, 0, 0xff), 0.0)],
+        kind: GradientKind::Linear { angle: 90.0, scaled: false },
+        tile: None,
+        rot_with_shape: true,
+        flip: GradientFlip::None,
+    }));
+    let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    for doc in [&d, &saved] {
+        let InlineObject::Shape { kind, fill, .. } = objects(doc)[0].clone() else { panic!("{:?}", objects(doc)) };
+        assert_eq!((kind, fill), (ShapeKind::Diamond, Some(want.clone())));
+    }
 }
