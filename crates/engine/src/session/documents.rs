@@ -69,6 +69,7 @@ pub struct DocState {
     pub(super) cache: LayoutCache,
     pub(super) layout: LayoutSlots,
     pub(super) typing: Option<TypedWord>,
+    pub(super) lead_in: Option<crate::cmd::text::LeadIn>,
     pub(super) originals: std::collections::HashMap<String, String>,
     pub(super) md_source: Option<crate::cmd::md_source::MdSource>,
     pub(super) md_file: crate::cmd::md_source::FileText,
@@ -125,6 +126,7 @@ impl DocState {
             cache: LayoutCache::new(),
             layout: Default::default(),
             typing: None,
+            lead_in: None,
             originals: Default::default(),
             md_source: None,
             md_file: Default::default(),
@@ -228,6 +230,7 @@ impl Session {
             cache: _,
             layout: _,
             typing: _,
+            lead_in: _,
             originals: _,
             md_source: _,
             md_file: _,
@@ -326,6 +329,7 @@ impl Session {
             cache,
             layout,
             typing,
+            lead_in,
             originals,
             md_source,
             md_file,
@@ -375,6 +379,7 @@ impl Session {
         swap(&mut self.cache, cache);
         swap(&mut self.layout, layout);
         swap(&mut self.typing, typing);
+        swap(&mut self.lead_in, lead_in);
         swap(&mut self.originals, originals);
         swap(&mut self.md_source, md_source);
         swap(&mut self.md_file, md_file);
