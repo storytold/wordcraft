@@ -118,9 +118,10 @@ pub(super) fn not_in_equation(s: &Session) -> Option<&'static str> {
 }
 
 impl Session {
-    /// The accent key waiting for its letter in the active document, if any.
+    /// The accent key waiting for its letter in the active document, at the selection it was
+    /// pressed at, if any.
     pub fn accent_waiting(&self) -> Option<Accent> {
-        self.accent_prefix.as_ref().filter(|(_, _, doc)| *doc == self.document_id()).map(|(a, _, _)| *a)
+        self.accent_prefix.as_ref().filter(|(_, at, doc)| *doc == self.document_id() && *at == self.sel).map(|(a, _, _)| *a)
     }
 
     /// Forget a waiting accent key (Escape, or a key that types nothing).
@@ -132,6 +133,12 @@ impl Session {
     /// first character; any other edit, caret move or selection forgets it. The accent is used up
     /// only once a `text.insert` that types a character succeeds ([`Self::accent_typed`]).
     pub(crate) fn accent_params<'a>(&mut self, id: &str, mutates: bool, params: &'a Value) -> Cow<'a, Value> {
+        // A click moves the selection without a command. Whatever command runs next in the
+        // accent's document (the front end runs queries as it draws) forgets the accent, so a
+        // click back to where it was pressed doesn't bring it back.
+        if self.accent_prefix.as_ref().is_some_and(|(_, at, doc)| *doc == self.document_id() && *at != self.sel) {
+            self.accent_prefix = None;
+        }
         if id != "text.insert" {
             if mutates || id.starts_with("caret.") || id.starts_with("select.") {
                 self.accent_prefix = None;

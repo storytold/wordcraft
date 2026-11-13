@@ -458,9 +458,12 @@ impl Session {
     /// already is). A Read Aloud reading of another document stops. An id that isn't open is an
     /// error.
     pub fn activate(&mut self, id: u64) -> Result<(), CmdError> {
+        let switches = id != self.document_id;
         self.switch_to(id)?;
         // Switching documents by hand forgets a waiting accent key (#6328).
-        self.accent_prefix = None;
+        if switches {
+            self.accent_prefix = None;
+        }
         self.stop_reading_elsewhere();
         Ok(())
     }

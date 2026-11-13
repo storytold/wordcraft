@@ -2183,6 +2183,32 @@ fn an_accent_waits_while_another_window_draws_and_stays_in_its_document() {
     assert_eq!(raw_texts(&s), ["eé"], "the second document, after the first one drew");
 }
 
+/// #6368 review: a click elsewhere forgets a waiting accent key at once (Escape then does its
+/// usual job), and a click back to where it was pressed doesn't bring it back; activating the
+/// document that is already active keeps it.
+#[test]
+fn an_accent_is_forgotten_by_a_click_away_and_back_but_not_by_activating_its_document() {
+    let mut s = s();
+    typ(&mut s, "ab");
+    run(&mut s, "text.accentAcute", json!({}));
+    let pressed_at = s.sel.clone();
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    assert_eq!(s.accent_waiting(), None, "after a click elsewhere");
+    // The front end draws between the two clicks.
+    run(&mut s, "format.state", json!({}));
+    s.sel = pressed_at;
+    assert_eq!(s.accent_waiting(), None, "after a click back");
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["abe"]);
+
+    run(&mut s, "text.accentAcute", json!({}));
+    let id = s.document_id();
+    s.activate(id).unwrap();
+    assert_eq!(s.accent_waiting(), Some(crate::cmd::text::Accent::Acute));
+    typ(&mut s, "e");
+    assert_eq!(raw_texts(&s), ["abeé"]);
+}
+
 /// #6328: the accented letter is typing: it joins the typing undo step around it, takes
 /// AutoCorrect, and Repeat and macros replay the accented letter, not the plain one.
 #[test]
