@@ -82,6 +82,18 @@ impl Session {
         l
     }
 
+    /// Which tracked deletions in the body the view leaves out ([`LayoutOptions::hides_deleted`]):
+    /// all of them with No Markup or in balloons, else those Track Changes Options mark Hidden.
+    pub(crate) fn body_hides_deleted(&self) -> wordcraft_layout::HideDeleted {
+        let opts = LayoutOptions {
+            hide_deleted: !self.view.show_markup,
+            hide_marked: self.prefs.markup.hidden_deletions(),
+            deletions_in_balloons: self.revisions_in_balloons(),
+            ..Default::default()
+        };
+        opts.hides_deleted(StoryRef::Body)
+    }
+
     /// The recorded word while the caret and the word are as typing left them; else drops it.
     fn typing_word(&mut self) -> Option<wordcraft_layout::TypingWord> {
         let t = self.typing.as_ref()?;
@@ -164,7 +176,8 @@ impl Session {
     /// area with the comments in balloons. Fields Word fills in for output show their fresh
     /// results ([`crate::cmd::references::output_fields`]).
     pub fn export_layout_with(&self, markup: bool) -> Arc<DocLayout> {
-        let out = crate::cmd::references::output_fields(&self.doc);
+        // This layout keeps every deletion (see `export_layout_of`), and so do the fields.
+        let out = crate::cmd::references::output_fields(&self.doc, Default::default());
         self.export_layout_of(out.as_ref().unwrap_or(&self.doc), markup)
     }
 

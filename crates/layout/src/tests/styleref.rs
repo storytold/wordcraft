@@ -102,6 +102,44 @@ fn character_styles_and_paragraph_numbers() {
     assert_eq!(h[3], ["two", "3", "3.a", "3"]);
 }
 
+/// #6263: a STYLEREF result leaves out the tracked deletions the body hides and keeps the ones
+/// shown struck through, as plain text (a result can't mark text deleted). Measured in Word for
+/// Windows: with Deletions marked Hidden the header and a body field show `Alpha Gamma` and
+/// `Word`; with them struck through, `Alpha Beta Gamma` and `Strong Word`.
+#[test]
+fn styleref_results_follow_which_deletions_are_hidden() {
+    crate::test_fonts();
+    let codes = [r#"STYLEREF "Heading 1""#, "STYLEREF Strong"];
+    let mut d = doc(&[("Heading1", "Alpha Beta Gamma", false), ("Normal", "Key Strong Word", false)], &codes);
+    let del = |c: &mut CharProps| c.del = Some(0);
+    d.format_range(&Pos::body(0, 6), &Pos::body(0, 11), &del).unwrap();
+    d.format_range(&Pos::body(1, 4), &Pos::body(1, 15), &|c: &mut CharProps| c.style = Some("Strong".into())).unwrap();
+    d.format_range(&Pos::body(1, 4), &Pos::body(1, 11), &del).unwrap();
+    let hidden = ["Alpha Gamma", "Word"];
+    let struck = ["Alpha Beta Gamma", "Strong Word"];
+    let views = [
+        (LayoutOptions { hide_marked: HideDeleted::ALL, ..LayoutOptions::default() }, hidden),
+        (LayoutOptions::default(), struck),
+        (LayoutOptions { hide_deleted: true, ..LayoutOptions::default() }, hidden),
+        (LayoutOptions { deletions_in_balloons: true, ..LayoutOptions::default() }, hidden),
+        (LayoutOptions { hide_marked: HideDeleted { plain: false, moved_from: true }, ..LayoutOptions::default() }, struck),
+    ];
+    // One cache throughout: the header's index is built again when the hidden deletions change.
+    let mut c = LayoutCache::new();
+    for (opts, want) in &views {
+        let l = layout(&d, &mut c, opts);
+        assert_eq!(shown(&l.pages[0].header), *want, "{opts:?}");
+    }
+    // A body field's result, as updating fields and output fill it in.
+    let at = styleref::At::Body(1);
+    let results = |hide| {
+        let ix = styleref::StyleIndex::build(&d, hide);
+        codes.map(|c| ix.eval(c, at))
+    };
+    assert_eq!(results(HideDeleted::ALL), hidden);
+    assert_eq!(results(HideDeleted::default()), struck);
+}
+
 /// #4985: a heading on a "none" list level (its label is its text, `Note`) shows its parent's
 /// number in full context (`\w`): the parent is not taken for the heading's own level, which
 /// has no number to list.
@@ -169,7 +207,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
     crate::test_fonts();
     let mut d = doc(CHAPTERS, &[r#"STYLEREF "Heading 1""#]);
     let mut c = LayoutCache::new();
-    let index = |c: &LayoutCache| c.styleref.as_ref().map(|(_, _, ix)| ix.clone()).unwrap();
+    let index = |c: &LayoutCache| c.styleref.as_ref().map(|(_, _, _, _, ix)| ix.clone()).unwrap();
     let pages =
         |d: &Document, c: &mut LayoutCache| layout(d, c, &LayoutOptions::default()).pages.iter().map(|p| shown(&p.header)).collect::<Vec<_>>();
     let before = pages(&d, &mut c);

@@ -219,7 +219,8 @@ impl Session {
         }
         // Print Markup (File › Print) decides whether tracked changes and comments print.
         let markup = crate::cmd::file::export_options(self, v);
-        let out = crate::cmd::references::output_fields(&self.doc);
+        // The print layout keeps every deletion (see `export_layout_of`), and so do the fields.
+        let out = crate::cmd::references::output_fields(&self.doc, Default::default());
         let doc = out.as_ref().unwrap_or(&self.doc);
         let lay = self.export_layout_of(doc, markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;

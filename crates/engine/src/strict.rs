@@ -196,6 +196,12 @@ pub(crate) fn pdf_options(opts: &ExportOptions) -> wordcraft_pdf::PdfOptions {
     wordcraft_pdf::PdfOptions { include_markup: opts.markup, comments: opts.markup && opts.comments, numeral: opts.numeral, ..Default::default() }
 }
 
+/// Which body deletions the PDF export of `opts` leaves out (all of them without Print Markup),
+/// for the fields it fills in ([`crate::cmd::references::output_fields`]).
+pub(crate) fn pdf_hides_deleted(opts: &ExportOptions) -> wordcraft_layout::HideDeleted {
+    pdf_options(opts).layout_options().hides_deleted(wordcraft_doc::StoryRef::Body)
+}
+
 /// What a page image shows: the display options `file.exportPng` renders with.
 pub(crate) fn png_display() -> DisplayOptions {
     // A page image is the printed page: headers and footers at full strength.

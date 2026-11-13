@@ -680,7 +680,7 @@ fn output_shows_fresh_seq_styleref_and_ref_results() {
     // Once the fields are current, output copies nothing.
     update_seq(&mut s).unwrap();
     update_fields(&mut s).unwrap();
-    assert!(output_fields(&s.doc).is_none());
+    assert!(output_fields(&s.doc, Default::default()).is_none());
 }
 
 #[test]
@@ -720,7 +720,7 @@ fn output_numbers_text_box_captions_where_their_boxes_are_anchored() {
         std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
     }
     let s = Session::new(crate::io::open_bytes("boxes.docx", &zw.finish().unwrap().into_inner()).unwrap());
-    let out = crate::cmd::references::output_fields(&s.doc).expect("fresh numbers");
+    let out = crate::cmd::references::output_fields(&s.doc, Default::default()).expect("fresh numbers");
     // The SEQ and REF results in reading order, text boxes where they are anchored.
     let mut results = Vec::new();
     out.objects_in_reading_order(&mut |o| {
@@ -780,7 +780,7 @@ fn output_shows_references_to_bookmarks_outside_the_body() {
         std::io::Write::write_all(&mut zw, text.as_bytes()).unwrap();
     }
     let s = Session::new(crate::io::open_bytes("stories.docx", &zw.finish().unwrap().into_inner()).unwrap());
-    let out = crate::cmd::references::output_fields(&s.doc).expect("fresh references");
+    let out = crate::cmd::references::output_fields(&s.doc, Default::default()).expect("fresh references");
     let mut results = Vec::new();
     for path in out.para_paths(StoryRef::Body) {
         for o in &out.para(StoryRef::Body, &path).unwrap().objects {
@@ -817,7 +817,7 @@ fn output_counts_locked_seq_fields_and_not_deleted_ones() {
     let off = s.doc.para(StoryRef::Body, &top).unwrap().object_offsets()[1];
     let at = |off| Pos { story: StoryRef::Body, path: top.clone(), off };
     s.doc.format_range(&at(off), &at(off + '\u{FFFC}'.len_utf8()), &|c| c.del = Some(1)).unwrap();
-    let out = output_fields(&s.doc).expect("the stale results change");
+    let out = output_fields(&s.doc, Default::default()).expect("the stale results change");
     let shown: Vec<String> = out
         .para(StoryRef::Body, &top)
         .unwrap()
@@ -887,7 +887,7 @@ fn output_keeps_paragraph_number_references_as_stored() {
         }
     }
     para.touch();
-    let out = output_fields(&s.doc).expect("the plain REF changes");
+    let out = output_fields(&s.doc, Default::default()).expect("the plain REF changes");
     let results: Vec<String> = out
         .para(StoryRef::Body, &last)
         .unwrap()
@@ -945,7 +945,7 @@ fn output_keeps_a_reference_to_a_bookmark_over_paragraphs_as_stored() {
         s.run("text.insert", &json!({"text": " "})).unwrap();
     }
     let last = stale_last_paragraph(&mut s, "stored");
-    let out = output_fields(&s.doc).expect("the short bookmark's REF changes");
+    let out = output_fields(&s.doc, Default::default()).expect("the short bookmark's REF changes");
     assert_eq!(results_in(&out, &last), ["stored", "Short mark"]);
 }
 
@@ -970,11 +970,105 @@ fn a_style_reference_reads_the_headings_new_sequence_number() {
     }
     para.touch();
     let last = stale_last_paragraph(&mut s, "stale");
-    let out = output_fields(&s.doc).expect("the fields change");
+    let out = output_fields(&s.doc, Default::default()).expect("the fields change");
     assert_eq!(results_in(&out, &heading), ["1"]);
     assert_eq!(results_in(&out, &last), ["Chapter 1"]);
     update_seq(&mut s).unwrap();
     assert_eq!(results_in(&s.doc, &last), ["Chapter 1"], "F9's renumbering too");
+}
+
+/// #6263: a body STYLEREF leaves out the tracked deletions that are hidden and keeps the ones
+/// struck through, as plain text: after Update Fields, those the view hides; in a PDF, those its
+/// layout leaves out (all of them without Print Markup). Measured in Word for Windows: `Alpha
+/// Gamma` and `Word` with Deletions marked Hidden, `Alpha Beta Gamma` and `Strong Word` with them
+/// struck through.
+#[test]
+fn style_references_leave_out_the_deletions_that_are_hidden() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha Beta Gamma\nKey Strong Word\nRefs "));
+    s.run("select.text", &json!({"text": "Alpha Beta Gamma"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("select.text", &json!({"text": "Strong Word"})).unwrap();
+    s.run("styles.apply", &json!({"style": "Strong"})).unwrap();
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    for t in ["Beta ", "Strong "] {
+        s.run("select.text", &json!({"text": t})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+    }
+    s.run("review.trackChanges", &json!({"value": false})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    s.run("insert.field", &json!({"instr": "STYLEREF \"Heading 1\""})).unwrap();
+    s.run("text.insert", &json!({"text": " "})).unwrap();
+    s.run("insert.field", &json!({"instr": "STYLEREF Strong"})).unwrap();
+    let (hidden, struck) = (["Alpha Gamma", "Word"], ["Alpha Beta Gamma", "Strong Word"]);
+    let last = stale_last_paragraph(&mut s, "stale");
+    update_seq(&mut s).unwrap();
+    assert_eq!(results_in(&s.doc, &last), struck, "deletions struck through");
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    update_seq(&mut s).unwrap();
+    assert_eq!(results_in(&s.doc, &last), hidden, "deletions marked Hidden");
+    stale_last_paragraph(&mut s, "stale");
+    let pdf = |markup| crate::strict::pdf_hides_deleted(&crate::io::ExportOptions { markup, ..Default::default() });
+    for (markup, want) in [(false, hidden), (true, struck)] {
+        let out = output_fields(&s.doc, pdf(markup)).expect("the stale results change");
+        assert_eq!(results_in(&out, &last), want, "Print Markup {markup}");
+    }
+}
+
+/// Review of #6263: a tracked cut in the body pasted into a text box makes the cut text the
+/// source of a move without changing the body's blocks (only its revision gets a move name). With
+/// Deletions marked Hidden the header's STYLEREF leaves the text out while it is a deletion, and
+/// shows it again once it is moved text, which is struck through, not hidden.
+#[test]
+fn a_header_style_reference_follows_a_deletion_becoming_a_move() {
+    use wordcraft_doc::{CharProps, Paragraph, PartKind};
+    let mut doc = wordcraft_doc::Document::from_text("Keep this. Move these words.\nBody ");
+    let field = InlineObject::Field {
+        instr: "STYLEREF \"Heading 1\"".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, field, &CharProps::default()).unwrap();
+    let id = doc.add_part(PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+    doc.last_section.headers.default = Some(id);
+    let mut s = Session::new(doc);
+    s.run("select.text", &json!({"text": "Keep this."})).unwrap();
+    s.run("styles.apply", &json!({"style": "Heading 1"})).unwrap();
+    s.run("caret.docEnd", &json!({})).unwrap();
+    let story = s.run("insert.textBox", &json!({"text": "Box "})).unwrap()["story"].as_u64().unwrap() as u32;
+    let in_box = s.sel.focus.clone();
+    assert_eq!(in_box.story, StoryRef::Part(story));
+    s.run("review.trackChanges", &json!({"value": true})).unwrap();
+    s.run("review.trackingOptions", &json!({"deleteMark": "hidden"})).unwrap();
+    let header = |s: &mut Session| -> String {
+        let l = s.layout();
+        let items = l.pages.first().map(|p| p.header.clone()).unwrap_or_default();
+        items
+            .iter()
+            .filter_map(|it| {
+                if let wordcraft_layout::Placed::Lines { para, .. } = it {
+                    Some(para.shown.iter().map(|x| x.1.clone()).collect::<String>())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    assert_eq!(header(&mut s), "Keep this. Move these words.");
+    s.run("caret.set", &json!({"pos": Pos::body(0, 0)})).unwrap();
+    s.run("select.text", &json!({"text": "Move these words."})).unwrap();
+    s.run("edit.cut", &json!({})).unwrap();
+    assert_eq!(header(&mut s), "Keep this.", "a deletion, hidden");
+    let body = s.doc.body.clone();
+    s.run("caret.set", &json!({"pos": in_box})).unwrap();
+    s.run("edit.paste", &json!({})).unwrap();
+    assert_eq!(s.doc.plain_text(StoryRef::Part(story)), "Box Move these words.");
+    assert!(body.iter().zip(s.doc.body.iter()).all(|(a, b)| std::sync::Arc::ptr_eq(a, b)), "the body's blocks are the same");
+    assert_eq!(s.doc.revisions.iter().filter(|r| r.move_name.is_some()).count(), 2, "a move");
+    assert_eq!(header(&mut s), "Keep this. Move these words.", "moved text, struck through");
 }
 
 /// Output looks the bookmarks up once for all of a document's REF fields: several fields to one
@@ -1001,7 +1095,7 @@ fn output_gives_every_reference_its_bookmarks_text() {
         }
     }
     para.touch();
-    let out = output_fields(&s.doc).expect("the stale results change");
+    let out = output_fields(&s.doc, Default::default()).expect("the stale results change");
     let results: Vec<String> = out
         .para(StoryRef::Body, &last)
         .unwrap()
