@@ -866,6 +866,17 @@ fn select_word_takes_a_typographic_apostrophe() {
 }
 
 #[test]
+fn thesaurus_at_a_caret_looks_up_a_quoted_word_without_its_quotes() {
+    // The word unit now takes `’`, so `‘good’` gives `good’`; the lookup drops enclosing quotes.
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "a ‘good’ day"}));
+    run(&mut s, "caret.set", json!({"pos": {"story": "body", "path": [0], "off": 6}}));
+    let r = run(&mut s, "review.thesaurus", json!({}));
+    assert_eq!(r["word"], json!("good"));
+    assert!(r["synonyms"].as_array().is_some_and(|a| !a.is_empty()), "{r}");
+}
+
+#[test]
 fn border_toggles_and_saves() {
     use wordcraft_doc::props::Border;
     let border = |s: &Session| s.doc.para_at(&Pos::body(0, 0)).unwrap().props_of_char(5).border;

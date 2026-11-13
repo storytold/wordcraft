@@ -167,7 +167,9 @@ pub(super) fn thesaurus(s: &mut Session, v: &Value) -> CmdResult {
             let f = s.sel.focus.clone();
             let p = s.doc.para_at(&f).ok_or_else(|| CmdError::Failed("no word".into()))?;
             let (a, b) = p.word_at(f.off);
-            p.text.get(a..b).unwrap_or("").trim().to_lowercase()
+            // The word unit keeps quotes at its ends (`‘good’` → `good’`); look the word up without
+            // them, keeping an apostrophe inside it (`don’t`) (#6517).
+            p.text.get(a..b).unwrap_or("").trim().trim_matches(|c| matches!(c, '’' | '‘' | '\'')).to_lowercase()
         }
     };
     let syn = T.iter().find(|(w, _)| *w == word).map(|(_, l)| l.to_vec()).unwrap_or_default();
