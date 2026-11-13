@@ -1,4 +1,4 @@
-use super::{ENVELOPE_SIZES, LABEL_PRODUCTS, Serialize, Ui, Value, WordApp, buttons, heading, json, run};
+use super::{ENVELOPE_SIZES, LABEL_PRODUCTS, Serialize, Ui, Value, WordApp, buttons, json, run};
 
 // ---------------------------------------------------------------------------------------------
 // Envelopes
@@ -163,15 +163,16 @@ pub(super) fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> b
         });
     });
     let (rows, cols) = LABEL_PRODUCTS.get(f.product).map_or((1, 1), |p| (p.rows, p.cols));
-    heading(ui, "Print");
-    ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.single, true, tl!("Single label"));
-        ui.add_enabled_ui(f.single, |ui| {
-            ui.label(tl!("Row:"));
-            ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
-            ui.label(tl!("Column:"));
-            ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+    crate::widgets::section(ui, tl!("Print"), |ui| {
+        ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.single, true, tl!("Single label"));
+            ui.add_enabled_ui(f.single, |ui| {
+                ui.label(tl!("Row:"));
+                ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
+                ui.label(tl!("Column:"));
+                ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+            });
         });
     });
     f.row = f.row.clamp(1, rows.max(1));
