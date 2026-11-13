@@ -15471,6 +15471,59 @@ fn field_result_unbroken_long_word_emergency_breaks_like_plain_text() {
     assert_eq!(placed_field, unbroken);
 }
 
+/// A field word narrower than the floating-object span threshold (20pt) in an even narrower
+/// line still emergency-breaks like plain text instead of overflowing the margin (#5838).
+#[test]
+fn field_result_in_narrow_line_below_min_span_breaks_like_plain_text() {
+    // Two graphemes of 12pt Source Sans 3 are about 12pt wide: wider than the 8pt line and
+    // narrower than MIN_SPAN.
+    let word = "xx";
+    let narrow_doc = |as_field: bool| {
+        let mut doc = Document::new();
+        doc.last_section.margin_left = 0.0;
+        doc.last_section.margin_right = 0.0;
+        Arc::make_mut(&mut doc.styles).default_chr.font = Some(WRAP_TEST_FONT.into());
+        Arc::make_mut(&mut doc.styles).default_chr.size = Some(12.0);
+        let indent = ((doc.last_section.text_width() - 8.0) / 2.0).max(0.0);
+        let mut p = Paragraph::new();
+        p.props.indent_left = Some(indent);
+        p.props.indent_right = Some(indent);
+        if as_field {
+            p.insert_object(
+                0,
+                InlineObject::Field {
+                    instr: "MERGEFIELD narrow".into(),
+                    result: word.into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &Default::default(),
+            )
+            .unwrap();
+        } else {
+            p.insert_text(0, word, &Default::default()).unwrap();
+        }
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        doc
+    };
+
+    let l_field = lay(&narrow_doc(true));
+    let l_text = lay(&narrow_doc(false));
+    let Placed::Lines { para: para_field, .. } = &l_field.pages[0].items[0] else { panic!("expected field lines") };
+    let Placed::Lines { para: para_text, .. } = &l_text.pages[0].items[0] else { panic!("expected text lines") };
+
+    assert!(para_text.lines.len() >= 2, "a two-grapheme word must not fit an 8pt line, got {}", para_text.lines.len());
+    assert_eq!(para_field.lines.len(), para_text.lines.len(), "field lines count matches plain text");
+    for (i, (lf, lt)) in para_field.lines.iter().zip(&para_text.lines).enumerate() {
+        assert!(lf.end_x() <= lf.right + 0.5, "field line {i} exceeds the narrow right edge: {} > {}", lf.end_x(), lf.right);
+        assert!((lf.end_x() - lt.end_x()).abs() < 1.0, "line {i} end_x matches plain text: {} vs {}", lf.end_x(), lt.end_x());
+    }
+    let placed_field: String = para_field.shown.iter().map(|s| s.1.as_str()).collect();
+    assert_eq!(placed_field, word);
+}
+
 /// Clicking an earlier line of a wrapped field places the caret on that fragment,
 /// and selecting the field highlights all its lines.
 #[test]

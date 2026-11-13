@@ -4,7 +4,7 @@ use super::chars::{
     reported_font_name, thai_run_face, upper_char,
 };
 use super::grid::east_asian;
-use super::lines::{mirrored_exclusions, row_spans};
+use super::lines::{MIN_LINE_WIDTH, MIN_SPAN, mirrored_exclusions, row_spans};
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::paragraph::break_positions;
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, ResolvedPara, RubyAlign, SOFT_HYPHEN};
@@ -74,10 +74,14 @@ fn isolate_base_level(surrounding: u8, rtl_base: bool) -> u8 {
 /// single line (such as on either side of a centered float, or beside side-restricted or overlapping
 /// exclusions). To prevent field words from remaining an indivisible cluster that overflows into an
 /// exclusion, this derives the narrowest valid span width across all vertical exclusion slices.
+///
+/// Narrow lines are still lines: the bound keeps the line breaker's [`MIN_LINE_WIDTH`] floor, not
+/// the wider `MIN_SPAN` below which text avoids a floating object, so a field word narrower than
+/// 20pt in a narrower cell still breaks like plain text.
 fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara) -> f32 {
-    let width = env.width.max(20.0);
+    let width = env.width.max(MIN_LINE_WIDTH);
     let indents = rp.indent_left + rp.indent_right + rp.indent_first.abs();
-    let mut bound = (width - indents).max(20.0);
+    let mut bound = (width - indents).max(MIN_LINE_WIDTH);
     if env.exclusions.is_empty() {
         return bound;
     }
@@ -87,7 +91,7 @@ fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara
 
     let lo1 = rp.indent_left + rp.indent_first;
     let lo2 = rp.indent_left;
-    let hi = (width - rp.indent_right).max(1.0);
+    let hi = (width - rp.indent_right).max(MIN_LINE_WIDTH);
 
     let mut y_points: Vec<f32> = Vec::new();
     for ex in exclusions {
@@ -116,7 +120,8 @@ fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara
         let sample_y = [y0, (y0 + y1) * 0.5, (y1 - est_h * 0.5).max(y0), (y1 - 1.0).max(y0)];
         for top in sample_y {
             for &lo in &[lo1, lo2] {
-                if hi <= lo + 20.0 {
+                // Below MIN_SPAN the breaker goes under the object instead of beside it.
+                if hi <= lo + MIN_SPAN {
                     continue;
                 }
                 if let Ok(spans) = row_spans(exclusions, top, est_h, table_h, lo, hi) {
@@ -128,7 +133,7 @@ fn conservative_span_bound(env: &ParaEnv, styles: &[StyleRun], rp: &ResolvedPara
         }
     }
 
-    bound.max(20.0)
+    bound.max(MIN_LINE_WIDTH)
 }
 
 impl<'a> Builder<'a> {
