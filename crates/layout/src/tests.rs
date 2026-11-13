@@ -14031,6 +14031,127 @@ fn nested_spans_use_grid_weights() {
     assert!((widths[0] - widths[1]).abs() < 0.01, "equivalent nested grids changed outer fitting: {widths:?}");
 }
 
+/// The widths of four cells (150, 100, 25 and 25 pt preferred, no margins) under a cell spanning
+/// them with a picture `banner` pt wide, in a 300 pt table with `border` pt borders all round
+/// (none at 0). The cells hold `A`, or `wide` (cell, width) holds a picture that wide.
+fn columns_under_a_banner(banner: f32, border: f32, wide: Option<(usize, f32)>) -> Vec<f32> {
+    let widths = [150.0, 100.0, 25.0, 25.0];
+    let mut t = Table::new(2, widths.len(), 300.0);
+    t.grid = widths.to_vec();
+    t.props.style = None;
+    t.props.width = Some(300.0);
+    t.props.cell_margins = Some([0.0; 4]);
+    t.props.borders = (border > 0.0).then(|| Borders::all(Border::single(border)));
+    t.rows[0].cells.truncate(1);
+    t.rows[0].cells[0].props.span = 4;
+    t.rows[0].cells[0].props.width = Some(300.0);
+    let with_picture = |w: f32| {
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, picture(w, 30.0, Default::default()), &Default::default()).unwrap();
+        vec![wordcraft_doc::para_block(p)]
+    };
+    t.rows[0].cells[0].blocks = with_picture(banner);
+    for (i, (cell, w)) in t.rows[1].cells.iter_mut().zip(widths).enumerate() {
+        cell.props.width = Some(w);
+        cell.blocks = match wide {
+            Some((at, w)) if at == i => with_picture(w),
+            _ => vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("A", Default::default()))],
+        };
+    }
+    let mut d = Document::new();
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, row: 1, .. } = it { Some(rect.w) } else { None }).collect()
+}
+
+/// A cell spanning columns that fits their preferred widths leaves them alone; only one that
+/// doesn't fit shares its minimum among them. Measured in Word for Windows (16.0.20625) with a
+/// picture in a cell spanning a 300 pt table of 150, 100, 25 and 25 pt columns without cell
+/// margins: without borders the columns keep their widths under a picture of 290, 299.5 and 300
+/// pt, and come out 144.2, 98.2 and 29.1 pt (the first three) under one of 300.5 pt. Borders
+/// take half their width on each side, less a quarter of a point: with 0.5, 1.5, 3 and 6 pt
+/// borders the columns stay under a picture of 299.7, 298.7, 297.2 and 294.1 pt and move under
+/// one of 299.8, 298.9, 297.3 and 294.5 pt. WordCraft shared the minimum whatever the picture's
+/// width: under a 290 pt picture the columns came out 146.4, 96.4, 28.6 and 28.6 pt.
+#[test]
+fn a_spanning_cell_that_fits_its_columns_leaves_them_alone() {
+    let kept = |w: &[f32]| w.iter().zip([150.0, 100.0, 25.0, 25.0]).all(|(got, want)| (got - want).abs() < 0.01);
+    for (border, fits, too_wide) in [(0.0, 300.0, 300.5), (0.5, 299.7, 299.8), (1.5, 298.7, 298.9), (3.0, 297.2, 297.3), (6.0, 294.1, 294.5)] {
+        let w = columns_under_a_banner(fits, border, None);
+        assert_eq!(w.len(), 4, "{border} pt borders");
+        assert!(kept(&w), "{border} pt borders, a {fits} pt picture fits: the columns keep their widths, not {w:?}");
+        let w = columns_under_a_banner(too_wide, border, None);
+        let narrow = w.get(2).copied().unwrap_or_default();
+        assert!(narrow > 28.0, "{border} pt borders, a {too_wide} pt picture doesn't fit: the narrow columns grow, {w:?}");
+    }
+    assert!(kept(&columns_under_a_banner(290.0, 0.0, None)), "a 290 pt picture, no borders");
+    assert!(kept(&columns_under_a_banner(290.0, 0.5, None)), "a 290 pt picture, 0.5 pt borders");
+}
+
+/// Under a spanning cell that fits, a column whose own content is wider than its preferred
+/// width takes that room from the other columns: the table keeps its width and the column is
+/// as wide as its content. Measured in Word for Windows with the table of
+/// [`columns_under_a_banner`], no borders: under a 300 pt picture, a 50 pt picture in the third
+/// cell gives columns of 150.1, 75.0, 50.1 and 25 pt, one of 30 pt 150.1, 95.0, 30.1 and 25 pt,
+/// and a 160 pt picture in the first cell 160.1, 91.8, 24.8 and 23.3 pt; under a 250 pt picture
+/// the 50 pt one gives 140.1, 85.0, 50.1 and 25 pt. Which columns give the room differs from
+/// Word's choice (the donors here give equal shares, #2464); the wide column and the table are
+/// as wide as Word's. WordCraft made the third column 69.2 pt for its 50 pt picture, and the
+/// first one 220 pt for its 160 pt picture.
+#[test]
+fn under_a_fitting_span_a_column_with_wide_content_takes_room_from_the_others() {
+    for (banner, cell, content) in [(300.0, 2, 50.0), (300.0, 2, 30.0), (300.0, 0, 160.0), (250.0, 2, 50.0), (290.0, 2, 50.0)] {
+        let w = columns_under_a_banner(banner, 0.0, Some((cell, content)));
+        let case = format!("a {banner} pt picture above, a {content} pt picture in cell {cell}: {w:?}");
+        assert_eq!(w.len(), 4, "{case}");
+        assert!((w.iter().sum::<f32>() - 300.0).abs() < 0.01, "the table keeps its 300 pt: {case}");
+        assert!((w.get(cell).copied().unwrap_or_default() - content).abs() < 0.01, "the column is as wide as its picture: {case}");
+        for (i, (got, preferred)) in w.iter().zip([150.0, 100.0, 25.0, 25.0]).enumerate() {
+            assert!(i == cell || *got <= preferred + 0.01, "no other column grows: {case}");
+        }
+    }
+}
+
+/// A narrow grid column that a row leaves empty at its end (`w:gridAfter` with `w:wAfter`) and
+/// the other rows' last cell spans together with the column before it: the spanning cell fits
+/// the two columns' widths, so every column keeps its own, as in Word (measured in Word for
+/// Windows with columns of 220.65, 82.35, 105.35, 87.2 and 0.5 pt; the same with the narrow
+/// column 15 pt wide, skipped or under a cell of its own). WordCraft gave the narrow column a
+/// share of the spanning cell's longest word on top of its own width and took the difference
+/// from the other columns: 0.1 pt each there, 2.8 pt each with the 15 pt column.
+#[test]
+fn a_spanned_narrow_column_with_a_width_of_its_own_takes_nothing_from_the_others() {
+    for narrow in [0.5f32, 15.0] {
+        let grid = [200.0, 80.0, 100.0, 60.0 - narrow, narrow];
+        let mut t = Table::new(2, 4, 440.0);
+        t.grid = grid.to_vec();
+        t.props.style = None;
+        t.props.width = None;
+        // The title row: one cell over the first four columns, the narrow one left empty.
+        t.rows[0].cells.truncate(1);
+        t.rows[0].cells[0].props.span = 4;
+        t.rows[0].cells[0].props.width = Some(440.0 - narrow);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Title", Default::default()))];
+        t.rows[0].props.grid_after = 1;
+        t.rows[0].props.w_after = Some(narrow);
+        // The other row: its last cell spans the fourth column and the narrow one.
+        for (i, (cell, w)) in t.rows[1].cells.iter_mut().zip([200.0, 80.0, 100.0, 60.0]).enumerate() {
+            cell.props.width = Some(w);
+            cell.props.span = if i == 3 { 2 } else { 1 };
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Some text", Default::default()))];
+        }
+        let mut d = Document::new();
+        d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let got: Vec<f32> =
+            l.pages[0].items.iter().filter_map(|it| if let Placed::Cell { rect, row: 1, .. } = it { Some(rect.w) } else { None }).collect();
+        assert_eq!(got.len(), 4, "a {narrow} pt column");
+        for (w, want) in got.iter().zip([200.0, 80.0, 100.0, 60.0]) {
+            assert!((w - want).abs() < 0.01, "a {narrow} pt column: the cells are {got:?} pt wide, expected 200, 80, 100 and 60");
+        }
+    }
+}
+
 /// #2048: a picture anchored in a later paragraph but placed higher up the page (fixed on the
 /// page, or moved up from its paragraph) keeps the text of the paragraphs above its anchor clear
 /// too, as in Word, not just its own paragraph's.
