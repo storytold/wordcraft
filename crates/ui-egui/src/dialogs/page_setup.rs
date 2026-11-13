@@ -33,13 +33,15 @@ pub(super) fn page_layout_commands(
     (paper, was): ((f32, f32), (f32, f32)),
     landscape: bool,
     (top, bottom, left, right): (f32, f32, f32, f32),
+    (gutter, header, footer): (f32, f32, f32),
 ) -> Result<Vec<(&'static str, Value)>, &'static str> {
     use wordcraft_engine::cmd::page::{MARGINS_DONT_FIT, margins_fit, sect};
     let ppu = crate::options::unit().pt_per_unit();
     let (paper, was) = ((paper.0 * ppu, paper.1 * ppu), (was.0 * ppu, was.1 * ppu));
     let m = (top * ppu, bottom * ppu, left * ppu, right * ppu);
+    let gutter = gutter * ppu;
     let cur = sect(&app.session);
-    if !margins_fit(paper, m, cur.gutter) {
+    if !margins_fit(paper, m, gutter) {
         return Err(MARGINS_DONT_FIT);
     }
     let turned = |on: bool, (a, b): (f32, f32)| if on { (a.max(b), a.min(b)) } else { (a.min(b), a.max(b)) };
@@ -47,16 +49,20 @@ pub(super) fn page_layout_commands(
     let new_size = (w0 - w1).abs() >= 0.01 || (h0 - h1).abs() >= 0.01;
     let size = ("layout.size", json!({"width": paper.0, "height": paper.1}));
     let orientation = ("layout.orientation", json!({"value": if landscape { "landscape" } else { "portrait" }}));
-    let margins = ("layout.margins", json!({"top": m.0, "bottom": m.1, "left": m.2, "right": m.3}));
+    // The gutter and the header and footer distances go with the margins, in points.
+    let margins = (
+        "layout.margins",
+        json!({"top": m.0, "bottom": m.1, "left": m.2, "right": m.3, "gutter": gutter, "header": header * ppu, "footer": footer * ppu}),
+    );
     let old_margins = (cur.margin_top, cur.margin_bottom, cur.margin_left, cur.margin_right);
-    Ok(if !new_size || margins_fit(turned(cur.landscape, paper), old_margins, cur.gutter) {
+    Ok(if !new_size || margins_fit(turned(cur.landscape, paper), old_margins, gutter) {
         let mut v = if new_size { vec![size] } else { Vec::new() };
         v.extend([orientation, margins]);
         v
-    } else if margins_fit(turned(landscape, (cur.page_w, cur.page_h)), m, cur.gutter) {
+    } else if margins_fit(turned(landscape, (cur.page_w, cur.page_h)), m, gutter) {
         vec![orientation, margins, size]
     } else {
-        vec![orientation, ("layout.margins", json!({"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0})), size, margins]
+        vec![orientation, ("layout.margins", json!({"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0, "gutter": 0.0})), size, margins]
     })
 }
 
@@ -142,6 +148,41 @@ pub(super) fn page_valign_combo(ui: &mut egui::Ui, valign: &mut wordcraft_doc::s
         });
         combo.response.labelled_by(label.id);
     });
+}
+
+/// Page Setup's "Section start:" box (Word's Layout tab): the section's break type
+/// (`layout.sectionStart`, DOCX `w:type` ST_SectionMark).
+pub(super) fn page_section_start_combo(ui: &mut egui::Ui, start: &mut wordcraft_doc::section::SectionStart) {
+    use wordcraft_doc::section::SectionStart;
+    const CHOICES: [(SectionStart, &str); 5] = [
+        (SectionStart::Continuous, "Continuous"),
+        (SectionStart::NextColumn, "New column"),
+        (SectionStart::NextPage, "New page"),
+        (SectionStart::EvenPage, "Even page"),
+        (SectionStart::OddPage, "Odd page"),
+    ];
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Section start:"));
+        let shown = CHOICES.iter().find(|(v, _)| v == start).map_or("", |(_, l)| tl!(l));
+        let combo = craft_ui::ComboBox::from_id_salt("ps_section_start").selected_text(shown).show_ui(ui, |ui| {
+            for (v, l) in CHOICES {
+                ui.selectable_value(start, v, tl!(l));
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+}
+
+/// `layout.sectionStart`'s name for a value.
+pub(super) fn page_section_start_value(v: wordcraft_doc::section::SectionStart) -> &'static str {
+    use wordcraft_doc::section::SectionStart;
+    match v {
+        SectionStart::NextPage => "nextPage",
+        SectionStart::Continuous => "continuous",
+        SectionStart::EvenPage => "evenPage",
+        SectionStart::OddPage => "oddPage",
+        SectionStart::NextColumn => "nextColumn",
+    }
 }
 
 /// `layout.verticalAlign`'s name for a value.
