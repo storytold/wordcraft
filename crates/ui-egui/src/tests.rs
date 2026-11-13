@@ -1742,6 +1742,145 @@ fn wheel_notches_land_at_once_with_animation_effects_off() {
     assert!(first > 0.0 && first < notch, "a notch eases in again: {first}");
 }
 
+/// A Ctrl+wheel notch eases in over several frames, each a new size: those pages are drawn
+/// unhinted (they show for a moment, and hinting each size would fill the hint caches), and
+/// the first frame after the zoom stops draws them hinted, as the platform draws text.
+#[test]
+fn an_easing_zoom_draws_unhinted_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let platform = crate::canvas::screen_render_options().hinting;
+    assert_eq!(a.canvas.pages_hinted, platform, "at rest");
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    let before = a.canvas.scale;
+    frame(&mut a, vec![wheel]);
+    // The wheel's own frame already starts the zoom, unhinted.
+    assert_ne!(a.canvas.scale, before, "the zoom starts in the wheel's frame");
+    assert!(!platform || !a.canvas.pages_hinted, "the wheel's frame is unhinted");
+    let (mut eased, mut unhinted) = (0, 0);
+    let mut last = a.canvas.scale;
+    for _ in 0..60 {
+        frame(&mut a, Vec::new());
+        if a.canvas.scale != last {
+            eased += 1;
+            unhinted += usize::from(!a.canvas.pages_hinted);
+            last = a.canvas.scale;
+        } else {
+            break;
+        }
+    }
+    assert!(a.canvas.scale > before && eased >= 2, "the notch eased in over frames: {eased}");
+    if platform {
+        assert_eq!(unhinted, eased, "every in-between size unhinted");
+    }
+    // The frame after the zoom stops: hinted again, at the size it ended on.
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.scale, last);
+    assert_eq!(a.canvas.pages_hinted, platform, "hinted once the zoom stops");
+}
+
+/// A pointer zoom stretches the pages' last rasters rather than rendering each in-between
+/// size: a notch (22 %) renders nothing until it stops, then the page once; a long zoom renders
+/// again only when a raster would be stretched past half again its size. A zoom that isn't a
+/// gesture (View › Zoom) renders at once.
+#[test]
+fn a_pointer_zoom_stretches_pages_until_it_stops() {
+    let ctx = egui::Context::default();
+    let system = std::rc::Rc::new(std::cell::Cell::new(Some(true)));
+    let mut a = app_with_system_animations(&system);
+    let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+    let mut t = 0.0;
+    let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+        t += 1.0 / 60.0;
+        // A GPU's texture size, as on desktops: at egui's 2048 default the zoomed page would
+        // be drawn in tiles (for very long Web Layout pages), which this isn't about.
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), max_texture_side: Some(8192), ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    };
+    for _ in 0..3 {
+        frame(&mut a, Vec::new());
+    }
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let wheel = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        source: egui::MouseWheelSource::Unknown,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+    };
+    // Frames until the zoom stops; returns (frames with a new scale, rasters rendered in them,
+    // rasters rendered in the frame it stopped).
+    let ease = |a: &mut WordApp, frame: &mut dyn FnMut(&mut WordApp, Vec<egui::Event>), notches: &[usize]| {
+        let before = a.canvas.rasters;
+        let (mut moving, mut last, mut f) = (0, a.canvas.scale, 0);
+        loop {
+            let ahead = a.canvas.rasters;
+            frame(a, if notches.contains(&f) { vec![wheel()] } else { Vec::new() });
+            f += 1;
+            if a.canvas.scale == last && f > notches.iter().max().copied().unwrap_or(0) {
+                return (moving, ahead - before, a.canvas.rasters - ahead);
+            }
+            moving += usize::from(a.canvas.scale != last);
+            last = a.canvas.scale;
+            assert!(f < 120, "the zoom stops");
+        }
+    };
+    let start = a.canvas.scale;
+    let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0]);
+    assert!(moving >= 3 && a.canvas.scale / start > 1.2, "a notch eases in: {moving} frames");
+    assert_eq!((while_moving, at_rest), (0, 1), "no raster while it moves ({moving} frames), one the frame it stops");
+    // A long zoom (three notches, about 1.8x): rendered again only every half again.
+    let start = a.canvas.scale;
+    let (moving, while_moving, at_rest) = ease(&mut a, &mut frame, &[0, 3, 6]);
+    let rasters = while_moving + at_rest;
+    assert!(a.canvas.scale / start > 1.7, "{}", a.canvas.scale / start);
+    assert!((2..=3).contains(&rasters) && rasters < moving as u64, "{rasters} rasters over {moving} frames");
+    // View › Zoom isn't a gesture: the page is rendered at the new size in that frame.
+    let before = a.canvas.rasters;
+    a.run("view.zoom", json!({"value": 100.0})).unwrap();
+    frame(&mut a, Vec::new());
+    assert_eq!(a.canvas.rasters, before + 1);
+    // Read Mode: the wheel changes the text size and the pages reflow, so a raster of the old
+    // text must not stand in for them: they are rendered as they change.
+    a.run("view.readMode", json!({})).unwrap();
+    for _ in 0..10 {
+        frame(&mut a, Vec::new());
+    }
+    let over_page = a.canvas.canvas_rect.unwrap().center();
+    frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
+    let (moving, while_moving, _) = ease(&mut a, &mut frame, &[0]);
+    assert!(moving >= 3, "the text size eases in: {moving} frames");
+    assert!(while_moving >= 2, "reflowed pages rendered while it moves: {while_moving} over {moving} frames");
+}
+
 /// With animation effects off a zoom step is finished in its own frame: Ctrl+wheel zooms the
 /// notch's whole step at once, the page is already placed and drawn as it will stay, and the
 /// status bar's zoom readout follows in the very next frame. Turns that arrive in small pieces
@@ -1784,6 +1923,7 @@ fn zoom_steps_land_finished_with_animation_effects_off() {
     frame(&mut a, vec![ctrl_wheel(1.0)]);
     let (scale, pages) = (a.canvas.scale, a.canvas.page_rects.clone());
     assert!((scale / before - notch_zoom).abs() < 1e-3, "the whole notch in its frame: {before} -> {scale}");
+    assert_eq!(a.canvas.pages_hinted, crate::canvas::screen_render_options().hinting, "drawn as it stays: hinted where text is");
     for _ in 0..30 {
         frame(&mut a, Vec::new());
         assert_eq!(a.canvas.scale, scale, "nothing is left to ease in");
@@ -3131,6 +3271,20 @@ fn window_close_save_writes_the_file_and_quits() {
     assert!(on_disk.contains("Revised Draft"), "the edit is on disk: {on_disk:?}");
     assert!(a.quit_requested, "the app may close");
     assert!(a.close_requested(), "the close that follows goes ahead");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Save As suggests a Markdown file's own format, as it does a Word file's; anything else is .docx.
+#[test]
+fn save_as_suggests_a_markdown_files_own_format() {
+    let dir = scratch("save-name");
+    for (name, suggested) in [("notes.md", "notes.md"), ("notes.markdown", "notes.markdown"), ("notes.MD", "notes.MD"), ("notes.txt", "notes.docx")] {
+        let path = dir.join(name);
+        std::fs::write(&path, b"Hello\n").unwrap();
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(a.default_save_name(), suggested, "{name}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -7914,4 +8068,492 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
+}
+
+/// Issue #2716: taking documents off the recent list is final — the open document must not be
+/// pushed back by the after-command re-add — and the change goes to the settings at once, so
+/// it survives the app being killed. Junk params return errors, never panics.
+#[test]
+fn recent_list_edits_are_final_and_persist() {
+    let saved = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let saved_hook = saved.clone();
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(move |app: &WordApp| {
+        saved_hook.set(saved_hook.get() + 1);
+        let _ = serde_json::to_string(&app.prefs()).unwrap();
+        Ok(true)
+    }));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    // The open document is on the list, at the back.
+    a.session.path = Some(std::path::PathBuf::from("/tmp/beta.docx"));
+
+    // Removing the open document sticks: `after_command` must not re-add it.
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/beta.docx"})).unwrap();
+    assert_eq!(r["removed"], 1);
+    assert_eq!(r["recent"], json!(["/tmp/alpha.docx"]));
+    assert_eq!(r["saved"], true);
+    assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "the open document stays off the list");
+    assert_eq!(saved.get(), 1, "the change is written out at once");
+
+    // Removing an entry that isn't there is an error, not a silent success, and saves nothing.
+    assert!(a.run("ui.recentRemove", json!({"path": "/tmp/gamma.docx"})).is_err());
+    assert_eq!(saved.get(), 1, "a rejected command writes nothing");
+    // Hostile params: missing path, junk types.
+    for junk in [json!({}), json!({"path": 7}), json!({"path": null}), json!({"path": ["x"]})] {
+        assert!(a.run("ui.recentRemove", junk).is_err());
+    }
+    assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "junk params change nothing");
+
+    // A normal command re-adds the open document, as before.
+    a.run("text.insert", json!({"text": "x"})).unwrap();
+    assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()));
+
+    // Clearing empties the list (the re-added open document is back, so both entries go) and
+    // keeps it empty through the next command.
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!(r["removed"], 2);
+    assert!(a.ui.recent.is_empty());
+    assert_eq!(saved.get(), 2, "the clear is written out at once");
+    a.run("text.insert", json!({"text": "y"})).unwrap();
+    assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()), "the open document comes back after clearing");
+
+    // Clearing an empty list reports zero removed and is not an error.
+    a.ui.recent.clear();
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+
+    // The list lives in the prefs, so a restart keeps the removal.
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+    a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    let saved_prefs = serde_json::to_string(&a.prefs()).unwrap();
+    assert!(saved_prefs.contains(r#""recent":["/tmp/beta.docx"]"#), "{saved_prefs}");
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved_prefs).unwrap());
+    assert_eq!(b.ui.recent, ["/tmp/beta.docx".to_string()]);
+}
+
+/// Issue #2716: when the immediate preferences write fails, both recent commands say so (result
+/// and status line) instead of reporting plain success; the removal still holds for this run.
+/// A host with no hook, or one that wrote nothing, reports `saved: null`.
+#[test]
+fn recent_list_edits_report_a_failed_preferences_save() {
+    let mut a = app();
+    a.services.save_prefs = Some(Box::new(|_: &WordApp| Err::<bool, _>("disk full".to_string())));
+    a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+
+    let r = a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["recent"], json!(["/tmp/beta.docx"]));
+    assert_eq!(a.ui.recent, ["/tmp/beta.docx".to_string()], "the removal holds for this run");
+    let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+    assert!(status.contains("disk full") && !status.starts_with("Removed"), "{status}");
+
+    let r = a.run("ui.recentClear", json!({})).unwrap();
+    assert_eq!((&r["saved"], &r["saveError"]), (&json!(false), &json!("disk full")), "{r}");
+    assert_eq!(r["removed"], 1);
+    assert!(a.ui.recent.is_empty());
+
+    // No hook, or a hook that wrote nothing (preferences switched off): `saved` is null.
+    for hook in [None, Some(Box::new(|_: &WordApp| Ok(false)) as Box<dyn Fn(&WordApp) -> Result<bool, String>>)] {
+        a.services.save_prefs = hook;
+        a.ui.recent = vec!["/tmp/alpha.docx".into()];
+        let r = a.run("ui.recentClear", json!({})).unwrap();
+        assert!(r["saved"].is_null() && r.get("saveError").is_none(), "{r}");
+        assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.starts_with("Removed")), "{:?}", a.status_msg);
+    }
+}
+
+/// Issue #2716: taking documents off the list needs no open document — the Start screen shows
+/// the recent list, and its buttons must work from there.
+#[test]
+fn recent_list_edits_work_without_a_document() {
+    let mut a = app();
+    a.ui.recent = vec!["/tmp/alpha.docx".into()];
+    assert!(!a.session.dirty && a.session.path.is_none());
+    assert!(works_without_document("ui.recentRemove") && works_without_document("ui.recentClear"));
+    assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
+    assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+}
+
+/// Issue #6146: touchpad scrolling on Linux/Wayland is scaled by `touchpad_factor` in
+/// `raw_input_hook` so swiping matches the desktop's speed instead of crawling 1:1.
+/// Wheel notches scale with `ui.scrollSpeed`. Both settings persist in `ui.json` and are set on
+/// `ui.touchpadScrollSpeed` and `ui.scrollSpeed`.
+#[test]
+fn touchpad_and_mouse_scroll_speed_scaling_and_preferences() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32, ctrl: bool| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: if ctrl { egui::Modifiers::CTRL } else { egui::Modifiers::NONE },
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. In `raw_input_hook`, touchpad Point deltas are scaled by touchpad_scroll_speed factor,
+    // while Line deltas and Ctrl/Command zoom events are untouched.
+    let mut raw = egui::RawInput {
+        events: vec![
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, false),
+            wheel_event(egui::MouseWheelUnit::Point, -10.0, true),
+            wheel_event(egui::MouseWheelUnit::Line, -1.0, false),
+        ],
+        ..Default::default()
+    };
+    a.raw_input_hook(&ctx, &mut raw);
+    let dy: Vec<f32> = raw.events.iter().filter_map(|e| if let egui::Event::MouseWheel { delta, .. } = e { Some(delta.y) } else { None }).collect();
+    let expected_factor = crate::scroll::ScrollSpeed::Normal.touchpad_factor();
+    assert_eq!(dy[0], -10.0 * expected_factor, "point deltas are scaled by touchpad factor");
+    assert_eq!(dy[1], -10.0, "Ctrl+wheel zoom delta is NOT scaled");
+    assert_eq!(dy[2], -1.0, "Line deltas are NOT scaled by touchpad factor");
+
+    // Fast touchpad setting scales raw_input_hook point deltas by the Fast factor.
+    a.ui.touchpad_scroll_speed = crate::scroll::ScrollSpeed::Fast;
+    let mut raw_fast = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0, false)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw_fast);
+    let expected_fast = if cfg!(target_arch = "wasm32") {
+        -10.0 * a.ui.scroll_speed.wheel_factor()
+    } else {
+        -10.0 * crate::scroll::ScrollSpeed::Fast.touchpad_factor()
+    };
+    if let egui::Event::MouseWheel { delta, .. } = &raw_fast.events[0] {
+        assert_eq!(delta.y, expected_fast);
+    }
+
+    // 2. Commands ui.touchpadScrollSpeed and ui.scrollSpeed set the preferences.
+    let r = a.run("ui.touchpadScrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["touchpadScrollSpeed"], "fast");
+    assert_eq!(a.ui.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    let r = a.run("ui.scrollSpeed", json!({"value": "fast"})).unwrap();
+    assert_eq!(r["scrollSpeed"], "fast");
+    assert_eq!(a.ui.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+
+    assert!(a.run("ui.touchpadScrollSpeed", json!({"value": "warp"})).is_err());
+    assert!(a.run("ui.scrollSpeed", json!({"value": "warp"})).is_err());
+
+    // 3. Persistence between runs in ui.json
+    let saved = serde_json::to_string(&a.ui).unwrap();
+    let restored = UiState::from_json(saved.as_bytes()).unwrap();
+    assert_eq!(restored.touchpad_scroll_speed, crate::scroll::ScrollSpeed::Fast);
+    assert_eq!(restored.scroll_speed, crate::scroll::ScrollSpeed::Fast);
+}
+
+/// Issue #6146 / PR #6167: unconsumed raw input is replayed by eframe across hidden logic ticks.
+/// The touchpad scroll multiplier must be applied once per event, never compounded across replays.
+#[test]
+fn touchpad_point_scrolling_is_scaled_once_across_hidden_logic_ticks() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |unit, y: f32| egui::Event::MouseWheel {
+        unit,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    let mut raw = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -10.0)], ..Default::default() };
+
+    // 1. First raw_input_hook call scales the point delta by the touchpad factor.
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected = -10.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    assert_eq!(raw.events[0], wheel_event(egui::MouseWheelUnit::Point, expected));
+
+    // 2. Hidden logic tick: eframe saves raw into pending_raw_input and invokes the hook again
+    // on the next tick without a UI pass having consumed it. The delta must not compound.
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "hidden logic tick replay must not compound the scroll delta");
+    }
+
+    // 3. Appending a new event during a subsequent hidden tick: older events stay scaled once,
+    // and only the new event is scaled.
+    raw.events.push(wheel_event(egui::MouseWheelUnit::Point, -5.0));
+    a.logic(&ctx);
+    a.raw_input_hook(&ctx, &mut raw);
+    let expected_new = -5.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[0] {
+        assert_eq!(delta.y, expected, "initial event still scaled once");
+    }
+    if let egui::Event::MouseWheel { delta, .. } = &raw.events[1] {
+        assert_eq!(delta.y, expected_new, "new event is scaled once");
+    }
+
+    // 4. A UI pass consumes the input, acknowledging the frame.
+    ctx.run_ui(raw, |ui| {
+        a.logic(ui.ctx());
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+
+    // 5. Subsequent fresh frame scales fresh input once.
+    let mut fresh = egui::RawInput { events: vec![wheel_event(egui::MouseWheelUnit::Point, -20.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut fresh);
+    let expected_fresh = -20.0 * a.ui.touchpad_scroll_speed.touchpad_factor();
+    if let egui::Event::MouseWheel { delta, .. } = &fresh.events[0] {
+        assert_eq!(delta.y, expected_fresh, "fresh input is scaled once");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: replay tracking must be cleared when a warm-up UI pass
+/// consumes the input (which returns before `flush_shot_and_synthetic`), so a fresh event
+/// on the next frame whose delta happens to equal the previous scaled delta is not falsely
+/// treated as a replay.
+#[test]
+fn fresh_scroll_event_matching_previous_scaled_delta_is_scaled_after_warmup_ui() {
+    let mut a = app();
+    let ctx = egui::Context::default();
+    let wheel_event = |y: f32| egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, y),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // Ensure the app is in the warm-up phase (fonts_frames < 2).
+    a.fonts_frames = 0;
+
+    // 1. First frame: incoming Point delta is -1.0. At Normal speed on Wayland, it scales to -4.0.
+    let mut raw1 = egui::RawInput { events: vec![wheel_event(-1.0)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw1);
+    let factor = a.ui.touchpad_scroll_speed.touchpad_factor();
+    let scaled_1 = -factor;
+    assert_eq!(raw1.events[0], wheel_event(scaled_1));
+
+    // 2. Warm-up UI pass runs: window_ui returns early because fonts_frames < 2.
+    // This UI pass consumes raw1, so replay tracking must be cleared.
+    ctx.run_ui(raw1, |ui| {
+        a.ui(ui);
+    })
+    .drop_without_applying_deltas();
+    assert_eq!(a.fonts_frames, 1, "first warm-up frame executed");
+
+    // 3. Second frame: fresh incoming event happens to have delta equal to scaled_1 (-4.0).
+    // Because the previous frame's input was consumed by the UI, this is fresh input,
+    // NOT a replay, so it must be scaled by factor (e.g. -4.0 * 4.0 = -16.0).
+    let mut raw2 = egui::RawInput { events: vec![wheel_event(scaled_1)], ..Default::default() };
+    a.raw_input_hook(&ctx, &mut raw2);
+    let expected_2 = scaled_1 * factor;
+    if let egui::Event::MouseWheel { delta, .. } = &raw2.events[0] {
+        assert_eq!(delta.y, expected_2, "fresh event matching previous scaled delta must be scaled, not skipped as replay");
+    }
+}
+
+/// Issue #6146 / PR #6167 review: changing mouse-wheel scroll speed (Slow / Normal / Fast)
+/// must only affect scrolling distance, not Ctrl/⌘+wheel zoom distance for either Line or Point events.
+/// Tests both animation settings (`animate == true` eased zoom and `animate == false`
+/// `CanvasScroll::zoom` discrete steps) for both Line and Point mouse-wheel events.
+#[test]
+fn mouse_wheel_scroll_speed_does_not_alter_ctrl_wheel_zoom_distance() {
+    let mut a = app();
+    let default_opts = egui::InputOptions::default();
+    let default_notch_zoom = (default_opts.scroll_zoom_speed * default_opts.line_scroll_speed).exp();
+
+    let ctrl_line_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, 1.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+    let ctrl_point_event = || egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 20.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::COMMAND,
+        source: egui::MouseWheelSource::Unknown,
+    };
+
+    // 1. Establish baseline zoom with Normal speed
+    a.ui.scroll_speed = crate::scroll::ScrollSpeed::Normal;
+    let mut baseline_eased_line_zoom = 1.0;
+    let mut baseline_cumulative_line_zoom = 1.0;
+    let mut baseline_discrete_line_zoom = 1.0;
+    let mut baseline_eased_point_zoom = 1.0;
+    let mut baseline_cumulative_point_zoom = 1.0;
+    let mut baseline_discrete_point_zoom = 1.0;
+    let mut baseline_pinch_zoom = 1.0;
+
+    // Line baseline across full smoothing:
+    let ctx_line_base = egui::Context::default();
+    a.logic(&ctx_line_base);
+    let opts_line_base = ctx_line_base.options(|o| o.input_options);
+    let mut canvas_scroll_base = crate::scroll::CanvasScroll::default();
+    ctx_line_base
+        .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            baseline_eased_line_zoom = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+            if baseline_eased_line_zoom != 1.0 {
+                canvas_scroll_base.cancel();
+            }
+            baseline_cumulative_line_zoom *= baseline_eased_line_zoom;
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_line_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_line_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_line_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                let z = ui.input(|i| canvas_scroll_base.zoom(i, &opts_line_base, true));
+                if z != 1.0 {
+                    canvas_scroll_base.cancel();
+                }
+                baseline_cumulative_line_zoom *= z;
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Point baseline across full smoothing:
+    let ctx_point_base = egui::Context::default();
+    a.logic(&ctx_point_base);
+    let opts_point_base = ctx_point_base.options(|o| o.input_options);
+    let mut canvas_scroll_point_base = crate::scroll::CanvasScroll::default();
+    ctx_point_base
+        .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+            baseline_eased_point_zoom = ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            baseline_cumulative_point_zoom *= baseline_eased_point_zoom;
+            let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+            baseline_discrete_point_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point_base, false));
+        })
+        .drop_without_applying_deltas();
+    for f in 1..25 {
+        ctx_point_base
+            .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                baseline_cumulative_point_zoom *= ui.input(|i| canvas_scroll_point_base.zoom(i, &opts_point_base, true));
+            })
+            .drop_without_applying_deltas();
+    }
+
+    // Pinch baseline:
+    let ctx_pinch_base = egui::Context::default();
+    a.logic(&ctx_pinch_base);
+    let opts_pinch_base = ctx_pinch_base.options(|o| o.input_options);
+    ctx_pinch_base
+        .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+            let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+            baseline_pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch_base, true));
+        })
+        .drop_without_applying_deltas();
+
+    assert!((baseline_discrete_line_zoom - default_notch_zoom).abs() < 1e-3, "discrete line zoom equals notch zoom");
+    assert!(baseline_eased_line_zoom > 1.0 && baseline_eased_line_zoom < default_notch_zoom, "eased line zoom begins in first frame");
+    assert!(
+        (baseline_cumulative_line_zoom - default_notch_zoom).abs() < 1e-3,
+        "cumulative completed eased line zoom matches default notch zoom ({baseline_cumulative_line_zoom} vs {default_notch_zoom})"
+    );
+    assert!(baseline_eased_point_zoom > 1.0, "point zoom applies in eased mode");
+    assert!(baseline_discrete_point_zoom > 1.0, "point zoom applies in discrete mode");
+    assert!((baseline_pinch_zoom - 1.25).abs() < 1e-4, "pinch zoom matches pinch factor");
+
+    // 2. Verify all scroll speeds preserve exact same zoom distance across animation settings and smoothing frames
+    for speed in [crate::scroll::ScrollSpeed::Slow, crate::scroll::ScrollSpeed::Normal, crate::scroll::ScrollSpeed::Fast] {
+        a.ui.scroll_speed = speed;
+
+        // Test Line-wheel zoom invariance across multiple frames:
+        let ctx_line = egui::Context::default();
+        a.logic(&ctx_line);
+        let opts = ctx_line.options(|o| o.input_options);
+        let factor = speed.wheel_factor();
+        assert!(
+            (opts.line_scroll_speed - default_opts.line_scroll_speed * factor).abs() < 1e-4,
+            "line scroll speed scales by factor for ordinary scrolling"
+        );
+        assert_eq!(
+            opts.scroll_zoom_speed, default_opts.scroll_zoom_speed,
+            "scroll zoom speed remains unscaled default so point-wheel zoom is unchanged"
+        );
+
+        let mut canvas_scroll_eased = crate::scroll::CanvasScroll::default();
+        let mut cumulative_line_zoom = 1.0;
+        ctx_line
+            .run_ui(egui::RawInput { events: vec![ctrl_line_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let eased_zoom = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                if eased_zoom != 1.0 {
+                    canvas_scroll_eased.cancel();
+                }
+                cumulative_line_zoom *= eased_zoom;
+                assert!(
+                    (eased_zoom - baseline_eased_line_zoom).abs() < 1e-5,
+                    "first frame eased line zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_line_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_line_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_line_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        // Advance through subsequent empty frames until line smoothing completes
+        for f in 1..25 {
+            ctx_line
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    let z = ui.input(|i| canvas_scroll_eased.zoom(i, &opts, true));
+                    if z != 1.0 {
+                        canvas_scroll_eased.cancel();
+                    }
+                    cumulative_line_zoom *= z;
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_line_zoom - baseline_cumulative_line_zoom).abs() < 1e-3,
+            "cumulative completed line zoom for speed {speed:?} matches baseline ({cumulative_line_zoom} vs {baseline_cumulative_line_zoom})"
+        );
+
+        // Test Point-wheel zoom invariance across multiple frames:
+        let ctx_point = egui::Context::default();
+        a.logic(&ctx_point);
+        let opts_point = ctx_point.options(|o| o.input_options);
+        let mut canvas_scroll_point = crate::scroll::CanvasScroll::default();
+        let mut cumulative_point_zoom = 1.0;
+        ctx_point
+            .run_ui(egui::RawInput { events: vec![ctrl_point_event()], time: Some(1.0), ..Default::default() }, |ui| {
+                let eased_zoom = ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                cumulative_point_zoom *= eased_zoom;
+                assert!(
+                    (eased_zoom - baseline_eased_point_zoom).abs() < 1e-5,
+                    "first frame eased point zoom delta for speed {speed:?} matches baseline ({eased_zoom} vs {baseline_eased_point_zoom})"
+                );
+
+                let mut canvas_scroll_discrete = crate::scroll::CanvasScroll::default();
+                let discrete_zoom = ui.input(|i| canvas_scroll_discrete.zoom(i, &opts_point, false));
+                assert!(
+                    (discrete_zoom - baseline_discrete_point_zoom).abs() < 1e-5,
+                    "discrete CanvasScroll::zoom point delta for speed {speed:?} matches baseline ({discrete_zoom} vs {baseline_discrete_point_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+
+        for f in 1..25 {
+            ctx_point
+                .run_ui(egui::RawInput { time: Some(1.0 + f as f64 * (1.0 / 60.0)), ..Default::default() }, |ui| {
+                    cumulative_point_zoom *= ui.input(|i| canvas_scroll_point.zoom(i, &opts_point, true));
+                })
+                .drop_without_applying_deltas();
+        }
+        assert!(
+            (cumulative_point_zoom - baseline_cumulative_point_zoom).abs() < 1e-3,
+            "cumulative completed point zoom for speed {speed:?} matches baseline ({cumulative_point_zoom} vs {baseline_cumulative_point_zoom})"
+        );
+
+        // Test pinch gesture independence from scroll speed settings:
+        let ctx_pinch = egui::Context::default();
+        a.logic(&ctx_pinch);
+        let opts_pinch = ctx_pinch.options(|o| o.input_options);
+        ctx_pinch
+            .run_ui(egui::RawInput { events: vec![egui::Event::Zoom(1.25)], time: Some(1.0), ..Default::default() }, |ui| {
+                let mut canvas_scroll = crate::scroll::CanvasScroll::default();
+                let pinch_zoom = ui.input(|i| canvas_scroll.zoom(i, &opts_pinch, true));
+                assert!(
+                    (pinch_zoom - baseline_pinch_zoom).abs() < 1e-5,
+                    "pinch zoom for speed {speed:?} matches baseline ({pinch_zoom} vs {baseline_pinch_zoom})"
+                );
+            })
+            .drop_without_applying_deltas();
+    }
 }
