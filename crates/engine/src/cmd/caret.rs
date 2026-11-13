@@ -1,13 +1,16 @@
 //! Caret movement and selection.
 
 use serde_json::Value;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Path, Pos, StoryRef};
 use wordcraft_layout::ViewMode;
+use wordcraft_layout::hit::page_lines;
 
 use super::{parse_pos, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 const EXTEND: &str = r#"{"extend"?: bool}"#;
+/// A Click and Type drop can ask for at most this many empty paragraphs.
+const MAX_CLICK_AND_TYPE_PARAGRAPHS: usize = 200;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -51,6 +54,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("caret.set", "Set Caret", "Navigation", set)
             .params(r#"{"pos": Pos, "extend"?: bool} | {"page": n, "x": pt, "y": pt}"#)
             .pure(),
+        // Double-clicking empty page space: add the paragraphs needed to reach the click, then
+        // put the caret there (Word's Click and Type).
+        CommandSpec::new("caret.clickAndType", "Click and Type", "Navigation", click_and_type).params(r#"{"page": n (0-based), "x": pt, "y": pt}"#),
         CommandSpec::new("select.all", "Select All", "Home › Editing › Select", select_all).key("Mod+A").pure(),
         CommandSpec::new("select.range", "Select Range", "Navigation", select_range).params(r#"{"anchor": Pos, "focus": Pos}"#).pure(),
         CommandSpec::new("select.word", "Select Word", "Navigation", select_word).pure(),
@@ -307,6 +313,74 @@ fn set(s: &mut Session, v: &Value) -> CmdResult {
     let to = s.doc.clamp(&to);
     s.goal_x = None;
     apply(s, to, ext);
+    sel_result(s)
+}
+
+/// Click and Type: a double-click in empty page space adds the paragraphs needed to reach it,
+/// then puts the caret at the clicked point. A click on an existing line only moves the caret.
+fn click_and_type(s: &mut Session, v: &Value) -> CmdResult {
+    let Some(page) = p::u64(v, "page") else { return Err(CmdError::Params("`page` is required".into())) };
+    let page = usize::try_from(page).map_err(|_| CmdError::Params("`page` is too large".into()))?;
+    let (Some(x), Some(y)) = (p::f32(v, "x"), p::f32(v, "y")) else {
+        return Err(CmdError::Params("`x` and `y` are required".into()));
+    };
+    if !matches!(s.view.mode, ViewMode::Print | ViewMode::Web) {
+        return Err(CmdError::Disabled("Click and Type is only available in Print and Web Layout".into()));
+    }
+    let l = s.layout();
+    let Some(pg) = l.pages.get(page) else { return Err(CmdError::Params(format!("no page {}", page.saturating_add(1)))) };
+    let body = pg.body;
+    let lines = page_lines(pg, StoryRef::Body);
+    let in_body = x >= body.x && x <= body.right() && y >= body.y && y <= body.bottom();
+    let on_line = lines.iter().any(|ln| y >= ln.top && y <= ln.bottom);
+    let last_bottom = lines.iter().map(|ln| ln.bottom).fold(body.y, f32::max);
+    let original_body = s.doc.body.len();
+    if in_body && !on_line && l.cell_at(page, x, y).is_none() && page == l.pages.len().saturating_sub(1) && y > last_bottom {
+        // Add one paragraph at a time until the last line reaches the click, laying out after
+        // each one: an inline picture or a large Title line can be much taller than the empty
+        // Click and Type paragraphs that follow it, so one estimate cannot place the caret.
+        let mut added = 0;
+        while added < MAX_CLICK_AND_TYPE_PARAGRAPHS {
+            let l = s.layout();
+            let Some(pg) = l.pages.get(page) else { break };
+            if l.pages.len().saturating_sub(1) != page || l.cell_at(page, x, y).is_some() {
+                break;
+            }
+            let last_bottom = page_lines(pg, StoryRef::Body).into_iter().map(|ln| ln.bottom).fold(pg.body.y, f32::max);
+            if y <= last_bottom {
+                break;
+            }
+            super::text::append_paragraphs(s, 1)?;
+            s.relayout();
+            added += 1;
+        }
+    }
+    let l = s.layout();
+    let Some(mut pos) = l.hit(page, x, y, StoryRef::Body) else { return Err(CmdError::Params("no text on that page".into())) };
+    // Empty paragraphs can be taller than the line we estimated from, and the batch can then
+    // spill onto a following page. Word's Click and Type ends at the line clicked: drop the
+    // appended empty paragraphs after that line so nothing is left below the caret.
+    if pos.story == StoryRef::Body && pos.path.0.len() == 1 {
+        let caret_block = pos.path.0[0] as usize;
+        let mut trimmed = false;
+        while s.doc.body.len() > caret_block + 1 {
+            let last = s.doc.body.len() - 1;
+            let removable =
+                last >= original_body && s.doc.body.get(last).and_then(|b| b.as_para()).is_some_and(|p| p.text.is_empty() && p.objects.is_empty());
+            if !removable {
+                break;
+            }
+            s.doc.remove_block(StoryRef::Body, &Path::top(last))?;
+            trimmed = true;
+        }
+        if trimmed {
+            s.relayout();
+            let l = s.layout();
+            pos = l.hit(page, x, y, StoryRef::Body).ok_or_else(|| CmdError::Params("no text on that page".into()))?;
+        }
+    }
+    s.page_hint = page.min(l.pages.len().saturating_sub(1));
+    s.sel = Selection::caret(pos);
     sel_result(s)
 }
 

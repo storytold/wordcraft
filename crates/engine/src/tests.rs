@@ -7,6 +7,7 @@ use serde_json::json;
 use std::sync::Arc;
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_layout::hit::page_lines;
 
 use crate::{Session, cmd};
 
@@ -13492,4 +13493,127 @@ fn resolving_away_an_empty_paragraph_with_a_section_break_keeps_the_next_paragra
         assert_eq!(s.doc.sections().len(), 1, "{cmd}");
         assert_eq!(s.doc.last_section.margin_left, 72.0, "{cmd}: the following section's setup stays");
     }
+}
+
+/// #4246: double-clicking empty page space adds the paragraphs needed to reach it, in one undo
+/// step; the caret lands on the page that was clicked.
+#[test]
+fn click_and_type_adds_paragraphs_below_the_last_line() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Top"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "added paragraphs: {} -> {}", before, s.doc.body.len());
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+    assert_eq!(s.sel.focus.path.0, [s.doc.body.len() as u32 - 1], "nothing is left below the caret");
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("Top"));
+    assert!(s.undo(), "one undo step takes the empty paragraphs back");
+    assert_eq!(s.doc.body.len(), before);
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("Top"));
+}
+
+/// #4246: a double-click on an existing line keeps the ordinary line behavior and adds nothing.
+#[test]
+fn click_and_type_on_a_line_adds_nothing() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let l = s.layout();
+    let page = 0;
+    let line = page_lines(&l.pages[page], StoryRef::Body).into_iter().next().expect("one line");
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": line.left + 1.0, "y": (line.top + line.bottom) / 2.0}));
+    assert_eq!(s.doc.body.len(), before);
+    assert_eq!(s.sel.focus.path.0, [0]);
+    assert_eq!(s.sel.focus.story, StoryRef::Body);
+}
+
+/// #4246: Click and Type appends plain paragraphs, not the AutoFormat/AutoCorrect that Enter
+/// would apply to the last paragraph.
+#[test]
+fn click_and_type_below_a_sample_formula_does_not_generate_text() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "=lorem(1)"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "added paragraphs");
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("=lorem(1)"));
+}
+
+#[test]
+fn click_and_type_below_a_word_does_not_autocorrect_it() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "teh"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "added paragraphs");
+    assert_eq!(s.doc.body[0].as_para().map(|p| p.text.as_str()), Some("teh"));
+}
+
+/// Click and Type after an empty list item inserts a Normal paragraph, not another list item.
+#[test]
+fn click_and_type_after_an_empty_list_item_uses_the_click_and_type_style() {
+    let mut s = s();
+    run(&mut s, "para.bullets", json!({}));
+    assert!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.numbering).is_some(), "setup: an empty list item");
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let line = page_lines(&l.pages[page], StoryRef::Body).into_iter().last().expect("a line");
+    let y = line.bottom + (line.bottom - line.top).max(1.0) * 0.4;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": y}));
+    assert!(s.doc.body.len() > before, "one paragraph is added below the empty list item");
+    let added = s.doc.body.last().and_then(|b| b.as_para()).expect("the added paragraph");
+    assert_eq!(added.props.style.as_deref(), Some("Normal"));
+    assert!(added.props.numbering.is_none(), "no inherited numbering");
+    assert!(added.props.borders.is_none(), "no inherited borders");
+    assert!(added.props.shading.is_none(), "no inherited shading");
+}
+
+/// A tall last line does not leave the caret above the click.
+#[test]
+fn click_and_type_below_a_title_reaches_the_click() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Tall"}));
+    run(&mut s, "para.style", json!({"style": "Title"}));
+    let l = s.layout();
+    let page = l.pages.len() - 1;
+    let body = l.pages[page].body;
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": body.x + 10.0, "y": body.bottom() - 10.0}));
+    assert!(s.doc.body.len() > before, "paragraphs are added to reach the click");
+    let l = s.layout();
+    assert!(l.caret(&s.sel.focus).is_some(), "the caret has a place on the page");
+}
+
+/// #4246: empty space inside a table cell is still cell space, not the page below the table.
+#[test]
+fn click_and_type_inside_a_table_cell_adds_nothing() {
+    let mut s = table_from("A\tB");
+    let l = s.layout();
+    let page = 0;
+    let cell = l.pages[page]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            wordcraft_layout::Placed::Cell { rect, row: 0, cell: 0, .. } => Some(*rect),
+            _ => None,
+        })
+        .expect("a cell");
+    let line = page_lines(&l.pages[page], StoryRef::Body).into_iter().find(|line| line.path.cell().is_some()).expect("a cell line");
+    let y = (line.bottom + cell.y + cell.h) / 2.0;
+    assert!(y > line.bottom && y < cell.y + cell.h, "test needs empty cell space");
+    let before = s.doc.body.len();
+    run(&mut s, "caret.clickAndType", json!({"page": page, "x": line.left + 1.0, "y": y}));
+    assert_eq!(s.doc.body.len(), before, "the cell click must not append paragraphs");
+    assert!(s.sel.focus.path.cell().is_some(), "the caret stays in the cell: {:?}", s.sel.focus);
 }

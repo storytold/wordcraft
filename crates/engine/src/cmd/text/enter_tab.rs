@@ -3,6 +3,7 @@ use super::autoformat::{
 };
 use super::unicode::ins_char;
 use super::{CmdError, CmdResult, NumRef, Pos, Selection, Session, Value, delete_selection, sel_result, split_para, type_text};
+use wordcraft_doc::{Block, Paragraph, Path, RevisionKind, StoryRef};
 
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
 fn sample_text(s: &Session) -> Option<String> {
@@ -64,6 +65,27 @@ pub(super) fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
     }
     enter(s, true)?;
     sel_result(s)
+}
+
+/// Append `n` empty Click and Type paragraphs at the end of the body. The caller's command owns
+/// the undo step.
+pub(super) fn append_paragraphs(s: &mut Session, n: usize) -> Result<(), CmdError> {
+    if n == 0 {
+        return Ok(());
+    }
+    crate::cmd::controls::prepare_edit(s)?;
+    let start = s.doc.body.len();
+    for i in 0..n {
+        let path = Path::top(start + i);
+        let mut para = Paragraph::new().styled("Normal");
+        if s.doc.settings.track_changes {
+            para.mark.ins = Some(crate::cmd::new_revision(s, RevisionKind::Insert));
+        }
+        s.doc.insert_block(StoryRef::Body, &path, Block::Para(para))?;
+    }
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(start + n - 1), off: 0 });
+    s.goal_x = None;
+    Ok(())
 }
 
 /// Most lines `text.insert` with `paragraphs` types in one call, for every caller (control
