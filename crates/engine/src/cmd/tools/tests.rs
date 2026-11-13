@@ -603,6 +603,55 @@ fn compare_with_a_revised_file_keeps_its_text_boxes_backed() {
 }
 
 #[test]
+fn compare_keeps_the_revised_instruction_of_a_field_whose_result_is_unchanged() {
+    // #6271: only an IF field's condition changed; it still shows "Done". Word keeps the revised
+    // field code, unmarked (the code is content, not a revision).
+    fn with_if(instr: &str) -> Document {
+        let mut d = Document::from_text("Status:  today.");
+        let field = wordcraft_doc::InlineObject::Field {
+            instr: instr.into(),
+            result: "Done".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object("Status: ".len(), field, &Default::default()).unwrap();
+        d
+    }
+    /// Each field in the body: its code, its result, and whether the paragraph has any tracked
+    /// change.
+    fn fields(d: &Document) -> Vec<(String, String, bool)> {
+        let mut out = Vec::new();
+        for path in d.para_paths(StoryRef::Body) {
+            let p = d.para(StoryRef::Body, &path).unwrap();
+            let marked = p.runs.iter().any(|r| r.props.ins.is_some() || r.props.del.is_some());
+            for o in &p.objects {
+                if let wordcraft_doc::InlineObject::Field { instr, result, .. } = o {
+                    out.push((instr.trim().to_string(), result.clone(), marked));
+                }
+            }
+        }
+        out
+    }
+    let revised = r#"IF 2 = 2 "Done" "Open""#;
+    let path = std::env::temp_dir().join(format!("wc-compare-if-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &with_if(revised)).unwrap();
+    let mut s = Session::new(with_if(r#"IF 1 = 1 "Done" "Open""#));
+    s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let want = vec![(revised.to_string(), "Done".to_string(), false)];
+    assert_eq!(fields(&s.doc), want);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Status: Done today.");
+    // The saved result keeps the revised code too.
+    let out = std::env::temp_dir().join(format!("wc-compare-if-out-{}.docx", std::process::id()));
+    crate::io::save_path(&out, &s.doc).unwrap();
+    let reopened = crate::io::open_path(&out).unwrap();
+    let _ = std::fs::remove_file(&out);
+    assert_eq!(fields(&reopened), want);
+}
+
+#[test]
 fn compare_bounds_total_diff_work() {
     // Many long, slightly different paragraphs: each pair alone fits one comparison table,
     // but the work over all pairs must stay bounded. Pairs past the budget are compared
