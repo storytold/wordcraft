@@ -14,6 +14,8 @@
 //! stays: it carries on the fingers' own movement, as the momentum macOS and Windows send does
 //! whatever their animation setting.
 
+#[cfg(test)]
+use egui::MouseWheelSource;
 use egui::{Event, InputOptions, Modifiers, MouseWheelUnit, TouchPhase, Vec2};
 
 /// Screen points one mouse-wheel notch scrolls at 100% zoom: about three lines of body text,
@@ -177,7 +179,7 @@ impl CanvasScroll {
         let mut zooming = false;
         for event in &input.events {
             match event {
-                Event::MouseWheel { unit, delta, phase, modifiers } => {
+                Event::MouseWheel { unit, delta, phase, modifiers, .. } => {
                     // Ctrl/⌘+wheel zooms (egui turns it into a zoom factor).
                     if !hovered {
                         continue;
@@ -275,7 +277,7 @@ impl CanvasScroll {
         for event in &input.events {
             match event {
                 Event::Zoom(factor) => zoom *= factor,
-                Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers } if modifiers.matches_any(opts.zoom_modifier) => {
+                Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } if modifiers.matches_any(opts.zoom_modifier) => {
                     let d = egui_points(*unit, *delta, input, opts);
                     turned += opts.scroll_zoom_speed * (d.x + d.y);
                 }
@@ -326,7 +328,7 @@ fn egui_points(unit: MouseWheelUnit, delta: Vec2, input: &egui::InputState, opts
 pub fn unsmoothed_scroll(input: &egui::InputState, opts: &InputOptions) -> Vec2 {
     let mut total = Vec2::ZERO;
     for event in &input.events {
-        if let Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers } = event
+        if let Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, .. } = event
             && !modifiers.matches_any(opts.zoom_modifier)
         {
             total += axis_lock(egui_points(*unit, *delta, input, opts), *modifiers, opts);
@@ -414,8 +416,10 @@ mod tests {
         assert!(!m.is_active());
     }
 
+    /// Builds a move-phase mouse-wheel event from an unknown source with the given unit, delta and
+    /// modifiers.
     fn wheel(unit: MouseWheelUnit, delta: Vec2, modifiers: Modifiers) -> Event {
-        Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers }
+        Event::MouseWheel { unit, delta, phase: TouchPhase::Move, modifiers, source: MouseWheelSource::Unknown }
     }
 
     /// One 60 fps frame over a tall egui scroll area with the pointer on it; `animate` false puts
@@ -432,12 +436,12 @@ mod tests {
             if !animate {
                 ui.ctx().input_mut(|i| i.smooth_scroll_delta = unsmoothed_scroll(i, &opts));
             }
-            let id = egui::Id::new("canvas scroll under test");
+            let id = egui::Id::unique("canvas scroll under test");
             let mut scroll = ui.data(|d| d.get_temp::<CanvasScroll>(id)).unwrap_or_default();
             let zoom = ui.input(|i| scroll.zoom(i, &opts, animate));
             ui.data_mut(|d| d.insert_temp(id, scroll));
             let out = egui::ScrollArea::vertical().show(ui, |ui| ui.allocate_space(egui::vec2(100.0, 5000.0)));
-            seen = (out.state.offset.y, zoom);
+            seen = (out.state.clamped_offset().y, zoom);
         })
         .drop_without_applying_deltas();
         seen

@@ -44,7 +44,7 @@ const TABLE: u16 = 0x0236;
 
 /// Whether `bytes` is a compound file holding an Excel workbook stream.
 pub fn is_xls(bytes: &[u8]) -> bool {
-    if !bytes.starts_with(&MAGIC) {
+    if !bytes.starts_with(&MAGIC) || wordcraft_doc::cfb_guard::check(bytes).is_err() {
         return false;
     }
     let Ok(comp) = cfb::CompoundFile::open(Cursor::new(bytes)) else { return false };
@@ -68,6 +68,7 @@ pub fn read_rows(bytes: &[u8], pick: super::Pick<'_>) -> Result<(Vec<String>, Ve
 }
 
 fn workbook_stream(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    wordcraft_doc::cfb_guard::check(bytes).map_err(|e| format!("not a valid Excel 97–2003 workbook ({e})"))?;
     let mut comp = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|e| format!("not a valid Excel 97–2003 workbook ({e})"))?;
     if !comp.is_stream("/Workbook") {
         if comp.is_stream("/Book") {
@@ -538,6 +539,59 @@ mod tests {
 
     fn rows(r: &[&[&str]]) -> Vec<Vec<String>> {
         r.iter().map(|r| r.iter().map(|c| c.to_string()).collect()).collect()
+    }
+
+    /// #3642: a DIFAT naming one FAT sector thousands of times is refused before `cfb` builds
+    /// a FAT far larger than the file.
+    #[test]
+    fn a_repeating_difat_is_refused_before_cfb_opens_it() {
+        let f = wordcraft_doc::cfb_guard::repeating_difat_sample();
+        assert!(!is_xls(&f));
+        assert!(sheet_names(&f).is_err_and(|e| e.contains("FAT sectors in a file of")));
+    }
+
+    /// #3642 review: valid workbooks pass the guard and open. The repository keeps no files
+    /// Excel made, so these are written by the `cfb` crate in the shape of Excel 97–2003 ones:
+    /// the Workbook stream [`build`] writes with the summary streams Excel adds, in 512-byte
+    /// sectors (version 3, Excel's own) and 4096-byte ones (version 4); and one with an 8 MB
+    /// stream beside it, past what the header's 109 FAT sector slots map in 512-byte sectors, so
+    /// its FAT sectors are listed in a DIFAT chain too, which the guard walks.
+    #[test]
+    fn valid_xls_shaped_compound_files_pass_the_guard_and_open() {
+        use std::io::{Read, Write};
+        let book = build(&[("Sheet1", rows(&[&["a", "1"], &["b", "2"]]))]).unwrap();
+        let mut workbook = Vec::new();
+        cfb::CompoundFile::open(Cursor::new(book.as_slice())).unwrap().open_stream("/Workbook").unwrap().read_to_end(&mut workbook).unwrap();
+        let file = |version: cfb::Version, streams: &[(&str, &[u8])]| {
+            let mut comp = cfb::CompoundFile::create_with_version(version, Cursor::new(Vec::new())).unwrap();
+            for (name, data) in streams {
+                comp.create_stream(format!("/{name}")).unwrap().write_all(data).unwrap();
+            }
+            comp.into_inner().into_inner()
+        };
+        let summary = vec![0xFEu8; 4096];
+        let big: Vec<u8> = (0..8usize << 20).map(|i| (i % 251) as u8).collect();
+        let files = [
+            ("as built", book.clone()),
+            (
+                "version 3",
+                file(
+                    cfb::Version::V3,
+                    &[("Workbook", &workbook), ("\u{5}SummaryInformation", &summary), ("\u{5}DocumentSummaryInformation", &summary)],
+                ),
+            ),
+            ("version 4", file(cfb::Version::V4, &[("Workbook", &workbook), ("\u{5}SummaryInformation", &summary)])),
+            ("with a DIFAT chain", file(cfb::Version::V3, &[("Workbook", &workbook), ("Ctls", &big)])),
+        ];
+        let difat_sectors = |f: &[u8]| f.get(0x48..0x4C).map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+        assert!(difat_sectors(&files[3].1) > 0, "the 8 MB file lists FAT sectors past the header's");
+        for (what, f) in &files {
+            assert_eq!(wordcraft_doc::cfb_guard::check(f), Ok(()), "{what}");
+            assert!(is_xls(f), "{what}");
+            assert_eq!(sheet_names(f).unwrap(), vec!["Sheet1"], "{what}");
+            let (_, r) = read_rows(f, Pick::Index(0)).unwrap();
+            assert_eq!(r, rows(&[&["a", "1"], &["b", "2"]]), "{what}");
+        }
     }
 
     #[test]
