@@ -61,6 +61,7 @@ pub(super) fn shape_format(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "No Color", "shape.fill", json!({"color": null}));
                     crate::colors::menu(ui, app, &theme, Target::cmd("shape.fill"));
                     ui.separator();
+                    mi(ui, app, "Picture…", "shape.fill", json!({"picture": {}}));
                     ui.menu_button(tl!("Gradient"), |ui| gradient_menu(ui, app, fill.as_ref()));
                 },
             );

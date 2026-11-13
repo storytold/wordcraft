@@ -180,6 +180,18 @@ pub(crate) fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Opti
             pb.move_to(cx, y0);
             pb.line_to(cx, y1);
         }
+        ShapeKind::Hexagon
+        | ShapeKind::Octagon
+        | ShapeKind::Pentagon
+        | ShapeKind::Parallelogram
+        | ShapeKind::Trapezoid
+        | ShapeKind::Plus
+        | ShapeKind::Chevron
+        | ShapeKind::Decagon => {
+            let unit = wordcraft_doc::preset::polygon(kind, r.w, r.h).unwrap_or_default();
+            let pts: Vec<(f32, f32)> = unit.iter().map(|(x, y)| (x0 + x * r.w, y0 + y * r.h)).collect();
+            poly(&mut pb, &pts)
+        }
         ShapeKind::Triangle => poly(&mut pb, &[(cx, y0), (x1, y1), (x0, y1)]),
         ShapeKind::RightTriangle => poly(&mut pb, &[(x0, y0), (x1, y1), (x0, y1)]),
         ShapeKind::Diamond => poly(&mut pb, &[(cx, y0), (x1, cy), (cx, y1), (x0, cy)]),

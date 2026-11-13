@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("shape.fill", "Shape Fill", "Shape Format › Shape Styles", shape_fill)
             .params(
-                r#"{"color": "RRGGBB" | null, "transparency"?: %} | {"gradient": {"stops": [{"pos": %, "color": "RRGGBB", "transparency"?: %}], "type"?: "linear|radial|rectangular|path", "angle"?: deg, "focus"?: [l, t, r, b], "tile"?: [l, t, r, b], "scaled"?: bool, "rotateWithShape"?: bool}}  (tile: percent insets of the gradient's area; scaled: a linear angle scaled with the shape; a colour alone keeps the shape's transparency; angle: linear only, 0 = left to right, 90 = top to bottom; focus: percent insets of where a radial, rectangular or path gradient starts; applies to every selected shape, text box and canvas background)"#,
+                r#"{"color": "RRGGBB" | null, "transparency"?: %} | {"picture": {"path"?: string, "data"?: base64}} (a picture is stretched over the shape and clipped to its outline; without a path or data the app asks for a file; one shape only) | {"gradient": {"stops": [{"pos": %, "color": "RRGGBB", "transparency"?: %}], "type"?: "linear|radial|rectangular|path", "angle"?: deg, "focus"?: [l, t, r, b], "tile"?: [l, t, r, b], "scaled"?: bool, "rotateWithShape"?: bool}}  (tile: percent insets of the gradient's area; scaled: a linear angle scaled with the shape; a colour alone keeps the shape's transparency; angle: linear only, 0 = left to right, 90 = top to bottom; focus: percent insets of where a radial, rectangular or path gradient starts; applies to every selected shape, text box and canvas background)"#,
             )
             .when(super::objects::has_shape_or_canvas),
     ]
@@ -36,6 +36,9 @@ enum Change {
 }
 
 fn shape_fill(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(pic) = v.get("picture") {
+        return super::objects::picture_fill(s, pic);
+    }
     let change = parse(v)?;
     let targets = targets(s);
     if targets.is_empty() {
@@ -45,7 +48,11 @@ fn shape_fill(s: &mut Session, v: &Value) -> CmdResult {
     for pos in &targets {
         let o = edit_obj(s, pos, |o| {
             let slot = match o {
-                InlineObject::Shape { fill, .. } => fill,
+                InlineObject::Shape { fill, extra, .. } => {
+                    // A colour or gradient takes a picture fill off.
+                    extra.picture = None;
+                    fill
+                }
                 o => match super::canvas::style_mut(o) {
                     Some(style) => &mut style.fill,
                     None => return,

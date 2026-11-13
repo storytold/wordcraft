@@ -41,6 +41,7 @@ pub mod math_symbols;
 pub mod numbering;
 pub mod para;
 pub mod picfx;
+pub mod preset;
 pub mod props;
 pub mod resolve;
 pub mod section;

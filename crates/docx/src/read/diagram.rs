@@ -240,6 +240,9 @@ fn kind_of(prst: &str) -> Option<ShapeKind> {
         "rightArrow" => ShapeKind::Arrow,
         "star5" | "star4" | "star6" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
+        "octagon" => ShapeKind::Octagon,
+        "plus" => ShapeKind::Plus,
+        "decagon" => ShapeKind::Decagon,
         "leftArrow" | "upArrow" | "downArrow" | "leftRightArrow" | "upDownArrow" | "chevron" | "homePlate" | "hexagon" | "pentagon" | "trapezoid"
         | "parallelogram" | "rtTriangle" | "pie" | "blockArc" => return None,
         _ => ShapeKind::Rectangle,
