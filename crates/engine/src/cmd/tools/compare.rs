@@ -113,7 +113,7 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 let (a, b) = (old.get(i), new.get(j));
                 // The revised block, with its formatting changes tracked.
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (a.map(|x| &**x), b.map(|x| &**x)) {
-                    if opts.formatting && pa.section.is_some() && pb.section.is_none() {
+                    if opts.formatting && section_presence_differs(pa, pb) {
                         if let Some(x) = a {
                             out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
                             changes += 1;
@@ -290,7 +290,7 @@ fn emit_run_pairs(
         match pair {
             RunPair::Diff(u, v) => {
                 if let (Some(Block::Para(pa)), Some(Block::Para(pb))) = (old_slice.get(u).map(|x| &**x), new_slice.get(v).map(|x| &**x)) {
-                    if ctx.opts.formatting && pa.section.is_some() && pb.section.is_none() {
+                    if ctx.opts.formatting && section_presence_differs(pa, pb) {
                         if let Some(x) = old_slice.get(u) {
                             out.push(Arc::new(mark_block(x, &|c| c.del = Some(ctx.del), 0)));
                             changes += 1;
@@ -1402,6 +1402,15 @@ fn put_ins(p: &mut Paragraph, t: Option<&Tok<'_>>, ctx: &DiffCtx<'_>) {
     }
 }
 
+/// Returns `true` when only one of the paragraphs ends a section.
+///
+/// A formatting revision on [`wordcraft_doc::SectionProps`] cannot represent an absent section,
+/// so these pairs are emitted as whole-block replacements instead: accepting keeps the revised
+/// presence and rejecting restores the original one.
+fn section_presence_differs(a: &Paragraph, b: &Paragraph) -> bool {
+    a.section.is_some() != b.section.is_some()
+}
+
 /// Strips non-formatting section attributes for formatting comparison.
 fn strip_section(s: &wordcraft_doc::SectionProps) -> wordcraft_doc::SectionProps {
     wordcraft_doc::SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() }
@@ -1491,21 +1500,14 @@ fn word_diff(doc: &Document, a: &Paragraph, b: &Paragraph, ctx: &mut DiffCtx<'_>
                 p.section = a.section.clone();
             }
         }
+        // Callers emit a section-presence change as a whole-block replacement: a formatting
+        // revision can restore a section's properties but cannot remove the section itself.
+        // These arms are a fallback for the revised presence only.
         (None, Some(sb)) => {
-            if ctx.opts.formatting {
-                let mut sec = (**sb).clone();
-                sec.fmt_change = wordcraft_doc::props::PropChange::boxed(ctx.fmt, strip_section(sb));
-                p.section = Some(Box::new(sec));
-            } else {
-                p.section = None;
-            }
+            p.section = if ctx.opts.formatting { Some(sb.clone()) } else { None };
         }
-        (Some(_), None) => {
-            if ctx.opts.formatting {
-                p.section = None;
-            } else {
-                p.section = a.section.clone();
-            }
+        (Some(sa), None) => {
+            p.section = if ctx.opts.formatting { None } else { Some(sa.clone()) };
         }
         (None, None) => {
             p.section = None;

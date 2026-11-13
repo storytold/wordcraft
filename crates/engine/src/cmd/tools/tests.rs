@@ -1245,13 +1245,15 @@ fn compare_preserves_section_break_on_paired_paragraph() {
     s.run("review.compare", &json!({"path": path.to_string_lossy()})).unwrap();
     let _ = std::fs::remove_file(&path);
 
-    assert_eq!(s.doc.body.len(), 3);
-    let p_paired = s.doc.body[1].as_para().unwrap();
-    assert!(p_paired.section.is_some(), "section break must be preserved on paired paragraph");
+    // A section-presence change is a whole-block replacement: the original paragraph and the
+    // revised one are both kept under their own revisions.
+    assert_eq!(s.doc.body.len(), 4);
+    let revised_text = "Revised paragraph to be edited.";
+    let p_paired = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text() == revised_text).unwrap();
+    assert!(p_paired.section.is_some(), "section break must be preserved on the revised paragraph");
 
     s.run("review.acceptAll", &json!({})).unwrap();
-    assert_eq!(s.doc.body.len(), 3);
-    let p_accepted = s.doc.body[1].as_para().unwrap();
+    let p_accepted = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text() == revised_text).unwrap();
     assert!(p_accepted.section.is_some(), "section break must survive acceptAll");
 }
 
@@ -1606,6 +1608,69 @@ fn compare_removes_section_break_on_accept_when_revised_lacks_section() {
     s_rej.run("review.rejectAll", &json!({})).unwrap();
     let p_rej = s_rej.doc.body[0].as_para().unwrap();
     assert!(p_rej.section.is_some(), "rejectAll must restore the original section break");
+}
+
+/// #5861: Verifies that adding a section break on an edited paragraph can be rejected: the
+/// original paragraph has no section break, so rejectAll must remove the new section break and
+/// page setup rather than restoring the revised section as the "old" value.
+#[test]
+fn compare_keeps_added_section_break_on_accept_and_removes_it_on_reject() {
+    let orig = Document::from_text("First paragraph.\nKeep anchor.");
+    let mut rev = Document::from_text("Revised first paragraph.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-add-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    // Verify acceptAll keeps the added section break.
+    let mut s_acc = Session::new(orig.clone());
+    s_acc.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = s_acc.doc.body[0].as_para().unwrap();
+    assert_eq!(p_acc.plain_text(), "Revised first paragraph.");
+    assert_eq!(p_acc.section.as_ref().map(|s| s.margin_left), Some(72.0), "acceptAll must keep the added section break");
+
+    // Verify rejectAll removes the added section break.
+    let mut s_rej = Session::new(orig);
+    s_rej.run("review.compare", &json!({"path": path.to_string_lossy(), "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s_rej.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "First paragraph.");
+    assert!(p_rej.section.is_none(), "rejectAll must remove the added section break");
+}
+
+/// #5861: The same presence change must reject cleanly when the text is normalized-equal, which
+/// takes the unchanged-block path instead of the similarity-paired path.
+#[test]
+fn compare_keeps_added_section_break_on_reject_across_case_difference() {
+    let orig = Document::from_text("section heading.\nKeep anchor.");
+    let mut rev = Document::from_text("Section heading.\nKeep anchor.");
+    if let Block::Para(p) = Arc::make_mut(&mut rev.body[0]) {
+        let sec = wordcraft_doc::SectionProps { margin_left: 72.0, ..Default::default() };
+        p.section = Some(Box::new(sec));
+    }
+
+    let path = std::env::temp_dir().join(format!("wc-compare-sec-add-case-{}.docx", std::process::id()));
+    crate::io::save_path(&path, &rev).unwrap();
+
+    let mut s_acc = Session::new(orig.clone());
+    s_acc.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    s_acc.run("review.acceptAll", &json!({})).unwrap();
+    let p_acc = s_acc.doc.body[0].as_para().unwrap();
+    assert_eq!(p_acc.plain_text(), "Section heading.");
+    assert_eq!(p_acc.section.as_ref().map(|s| s.margin_left), Some(72.0), "acceptAll must keep the added section break");
+
+    let mut s_rej = Session::new(orig);
+    s_rej.run("review.compare", &json!({"path": path.to_string_lossy(), "caseChanges": false, "formatting": true})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    s_rej.run("review.rejectAll", &json!({})).unwrap();
+    let p_rej = s_rej.doc.body[0].as_para().unwrap();
+    assert_eq!(p_rej.plain_text(), "section heading.");
+    assert!(p_rej.section.is_none(), "rejectAll must remove the added section break");
 }
 
 /// #5861: Verifies that when paragraph formatting matches between original and revised,
