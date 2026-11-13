@@ -61,7 +61,8 @@ fn deleted_char_props(s: &Session, a: &Pos, f: &Pos) -> Option<wordcraft_doc::pr
 
 fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     s.goal_x = None;
-    s.pending = None;
+    // Kept for a Backspace that changes nothing, which leaves Word's carried formatting alone.
+    let kept = s.pending.take();
     if !s.sel.is_collapsed() {
         let effect = delete_selection_effect(s)?;
         s.set_ime_edit_outcome(crate::ImeEditOutcome {
@@ -129,7 +130,10 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     let i = f.path.last();
     if i == 0 {
-        return sel_result(s); // start of a story or cell
+        // Start of a story or cell: nothing changes, so formatting waiting at the caret (carried
+        // from a deleted character, or set there) still applies to the next typed text (Word).
+        s.pending = kept;
+        return sel_result(s);
     }
     let prev_path = f.path.with_last(i - 1);
     match s.doc.block(f.story, &prev_path) {

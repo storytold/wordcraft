@@ -1793,6 +1793,35 @@ fn backspace_formatting_is_dropped_by_a_caret_move_and_delete_does_not_carry() {
     assert_eq!(s.pending, None);
 }
 
+/// #6518: a Backspace that changes nothing, at the start of the document, keeps formatting waiting
+/// at the caret; one that joins paragraphs drops it. Observed in Word for Windows.
+#[test]
+fn backspace_at_the_document_start_keeps_waiting_formatting() {
+    // "Abc def", "Abc" bold: Backspace deletes the bold A, the second one does nothing, X is bold.
+    let mut s = with_bold("Abc def", 0, 3, 1);
+    typ(&mut s, "\u{8}\u{8}");
+    assert_eq!(s.run("format.state", &json!({})).unwrap()["bold"], json!(true));
+    typ(&mut s, "X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xbc def");
+    assert!(bold_at(&s, 0));
+    // Bold at the caret before plain "abc", then a Backspace that does nothing: X is still bold.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("abc"));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    typ(&mut s, "\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "Xabc");
+    assert!(bold_at(&s, 0) && !bold_at(&s, 1));
+    // "xyz" then bold "Abc": Backspace deletes the bold A, the second joins the paragraphs, and X
+    // takes the plain z to its left.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("xyz\nAbc"));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 3}}));
+    run(&mut s, "format.bold", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 1}}));
+    typ(&mut s, "\u{8}\u{8}X");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "xyzXbc");
+    assert!(!bold_at(&s, 3) && bold_at(&s, 4));
+}
+
 /// Myanmar (#604): typed in memory order (consonant, medial, then the prevowel ေ that is drawn
 /// before it), the caret steps over whole syllables and Backspace removes one sign at a time.
 #[test]
