@@ -504,10 +504,10 @@ impl<'a> SideProps<'a> {
         while self.cursor < self.ranges.len() && self.ranges[self.cursor].0.end <= off {
             self.cursor += 1;
         }
-        if let Some((range, props)) = self.ranges.get(self.cursor) {
-            if range.contains(&off) {
-                return props;
-            }
+        if let Some((range, props)) = self.ranges.get(self.cursor)
+            && range.contains(&off)
+        {
+            return props;
         }
         let idx = self.ranges.partition_point(|(r, _)| r.start <= off);
         match idx.checked_sub(1).and_then(|i| self.ranges.get(i)) {
