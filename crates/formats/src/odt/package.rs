@@ -388,7 +388,7 @@ fn styles_xml(
     let tab = doc.settings.default_tab.clamp(1.0, 1584.0);
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
-        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:font-size-asian=\"{size}\"{size_cs} style:letter-kerning=\"{kern}\"{color}{lang}{scripts}/></style:default-style>",
+        "<style:default-style style:family=\"paragraph\"><style:paragraph-properties{}{widows} style:tab-stop-distance=\"{tab}\"{hyphens}/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"{size}\" style:font-size-asian=\"{size}\"{size_cs} style:letter-kerning=\"{kern}\"{color}{lang}{scripts}{caps}/></style:default-style>",
         spacing_props(defaults),
         x(&body_font),
         // Widow and orphan control as Normal has it, said either way (the standard leaves it open
@@ -405,7 +405,10 @@ fn styles_xml(
         // The document's language, without which each reader uses its own default: Normal's, as
         // WordCraft has it (a Word file's Normal may state another than its defaults).
         lang = doc.styles.resolve_char(None, &Default::default()).lang.as_deref().map(|l| super::writer::lang_attrs(l, "")).unwrap_or_default(),
-        scripts = super::writer::script_attrs(&doc.styles.default_chr)
+        scripts = super::writer::script_attrs(&doc.styles.default_chr),
+        hyphens = hyphenation_props(&doc.settings),
+        // Words in capitals left unhyphenated (LibreOffice's attribute; ODF has none).
+        caps = if doc.settings.hyphenate_caps { "" } else { " loext:hyphenation-no-caps=\"true\"" }
     ));
     s.push_str("<style:style style:name=\"Standard\" style:family=\"paragraph\" style:class=\"text\"/>");
     let mut on_outline = std::collections::BTreeSet::new();
@@ -464,7 +467,7 @@ fn styles_xml(
             String::new()
         };
         s.push_str(&format!(
-            "<style:page-layout style:name=\"{pm}{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
+            "<style:page-layout style:name=\"{pm}{}\"{usage}><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties>{header}{footer}</style:page-layout>",
             i + 1,
             pt(sec.page_w),
             pt(sec.page_h),
@@ -473,7 +476,10 @@ fn styles_xml(
             pt(left),
             pt(right),
             if sec.page_w > sec.page_h { "landscape" } else { "portrait" },
-            page_look(doc, sec) + &borders
+            page_look(doc, sec) + &borders,
+            // Mirror margins (§19.505): left pages mirror right ones, so `fo:margin-left` stays the
+            // inside margin and `fo:margin-right` the outside.
+            usage = if doc.settings.mirror_margins { " style:page-usage=\"mirrored\"" } else { "" }
         ));
     }
     s.push_str("</office:automatic-styles><office:master-styles>");
@@ -1284,6 +1290,24 @@ fn export_as(doc: &Document, mime: &str) -> Result<Vec<u8>, String> {
     }
     let cur = z.finish().map_err(err)?;
     Ok(cur.into_inner())
+}
+
+/// The document's hyphenation options, as attributes of the default paragraph style's paragraph
+/// properties: the most consecutive hyphenated lines (§20.200 `fo:hyphenation-ladder-count`, "no
+/// limit" said only when hyphenation is on) and the hyphenation zone (LibreOffice's
+/// `loext:hyphenation-zone`). Nothing for an option at its default.
+fn hyphenation_props(set: &wordcraft_doc::Settings) -> String {
+    let mut out = String::new();
+    match set.consecutive_hyphen_limit {
+        0 if set.auto_hyphenation => out.push_str(" fo:hyphenation-ladder-count=\"no-limit\""),
+        0 => {}
+        n => out.push_str(&format!(" fo:hyphenation-ladder-count=\"{}\"", n.min(32767))),
+    }
+    let zone = set.hyphenation_zone;
+    if zone.is_finite() && zone != wordcraft_doc::DEFAULT_HYPHENATION_ZONE {
+        out.push_str(&format!(" loext:hyphenation-zone=\"{}\"", pt(zone.clamp(0.0, 1584.0))));
+    }
+    out
 }
 
 /// A page layout's page number format (§19.500 `style:num-format`), the document's page colour

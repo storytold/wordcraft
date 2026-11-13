@@ -8,6 +8,7 @@ mod charts;
 mod comments;
 mod connectors;
 mod custom_geometry;
+mod doc_options;
 mod drop_caps;
 mod encryption;
 mod equations;
