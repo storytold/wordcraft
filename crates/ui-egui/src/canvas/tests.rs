@@ -1427,6 +1427,80 @@ fn an_armed_format_painter_changes_the_pointer() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "the selection bar keeps its arrow");
 }
 
+/// The text pointer shows over the paper only: the grey beside a page keeps the arrow.
+#[test]
+fn the_text_pointer_stays_off_the_grey_around_the_page() {
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    a.run("text.insert", json!({"text": "Some text"})).unwrap();
+    a.run("view.commentsPane", json!({"value": false})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    for _ in 0..6 {
+        h.step();
+    }
+    let c = h.state_mut().session.layout().caret(&Pos::body(0, 4)).expect("caret");
+    let y = c.top + c.height / 2.0;
+    let on_page = page_to_screen(h.state_mut(), c.page, c.x, y).expect("on screen");
+    let beside = page_to_screen(h.state_mut(), c.page, -40.0, y).expect("on screen");
+    h.event(egui::Event::PointerMoved(on_page));
+    h.step();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "text pointer on the paper");
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow on the grey beside the page");
+
+    // A drag that starts on the page retains its text pointer after moving off it.
+    h.event(egui::Event::PointerMoved(on_page));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: on_page, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "a drag that began on the page keeps its text pointer");
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
+
+    // A drag that begins in the grey area must not inherit the text cursor merely because the
+    // canvas response is dragged. Keep the pointer off the page for the whole drag.
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.step();
+    let further_beside = beside + egui::vec2(20.0, 0.0);
+    h.event(egui::Event::PointerMoved(further_beside));
+    h.step();
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow during a drag that began in the grey area");
+    h.event(egui::Event::PointerButton { pos: further_beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
+
+    // A press on the page and a move onto the grey that arrive in one frame: the press decides.
+    h.event(egui::Event::PointerMoved(on_page));
+    h.step();
+    h.event(egui::Event::PointerButton { pos: on_page, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "press and move in one frame keep the text pointer");
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.step();
+
+    // A Ctrl/Cmd press in the grey area starts a unit selection, but the pointer stays an arrow.
+    let ctrl = egui::Modifiers::COMMAND;
+    h.event(egui::Event::PointerMoved(beside));
+    h.step();
+    h.event(egui::Event::ModifiersChanged(ctrl));
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: true, modifiers: ctrl });
+    h.step();
+    assert!(h.state().canvas.unit_drag.is_some(), "the Ctrl press starts a unit selection");
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default, "arrow during a unit selection that began in the grey area");
+    h.event(egui::Event::PointerButton { pos: beside, button: egui::PointerButton::Primary, pressed: false, modifiers: ctrl });
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+    h.step();
+}
+
 /// #4410: with the Format Painter armed, a double-click on a word paints that word, and the
 /// painter goes off again (it was only dragging across the text that painted it).
 #[test]
