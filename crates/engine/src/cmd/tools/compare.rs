@@ -146,7 +146,20 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
                         (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(&s.doc, pa, pb, &mut ctx))),
                         _ => {
                             if let Some(x) = a {
-                                out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
+                                let mut gone = mark_block(x, &|c| c.del = Some(del), 0);
+                                // A paragraph deleted whole loses its mark too, so accepting
+                                // removes it instead of leaving an empty paragraph. A mark with a
+                                // section break keeps the tracking it already had: mark_block
+                                // tracked it above, so restore the source mark's own state —
+                                // accepting the deleted text must not remove the break with it.
+                                if let Block::Para(p) = &mut gone {
+                                    if p.section.is_none() {
+                                        p.mark.del = Some(del);
+                                    } else if let Block::Para(orig) = &**x {
+                                        p.mark.del = orig.mark.del;
+                                    }
+                                }
+                                out.push(Arc::new(gone));
                             }
                             if let Some(x) = b {
                                 out.push(Arc::new(mark_block(x, &|c| c.ins = Some(ins), 0)));
@@ -161,6 +174,13 @@ pub(super) fn compare(s: &mut Session, v: &Value) -> CmdResult {
             }
             None => break,
         }
+    }
+    // The body's last paragraph mark can't be deleted (nothing follows to join).
+    if let Some(last) = out.last_mut()
+        && matches!(&**last, Block::Para(p) if p.mark.del == Some(del))
+        && let Block::Para(p) = Arc::make_mut(last)
+    {
+        p.mark.del = None;
     }
     s.doc.body = out;
     s.doc.ensure_nonempty();

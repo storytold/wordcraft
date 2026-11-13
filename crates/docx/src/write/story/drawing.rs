@@ -71,6 +71,8 @@ impl Writer<'_> {
     /// A shape's or text box's `wps:wsp`, at `off` in its group (or 0, 0). In a group it carries
     /// its own `wps:cNvPr` with drawing id `id`.
     pub(super) fn wsp(&mut self, w: &mut W, o: &InlineObject, id: Option<&str>, off: (f32, f32), rels: &mut PartRels, depth: usize) {
+        // Taken first, so it never carries over to another shape (or one inside this box).
+        let box_del = self.box_del.take();
         let InlineObject::Shape { kind, w: sw, h: sh, fill, stroke, stroke_width, story, effects, float, freeform, extra } = o else { return };
         let geom = freeform.as_deref().filter(|_| *kind == ShapeKind::Freeform);
         w.open("wps:wsp", &[]);
@@ -192,7 +194,10 @@ impl Writer<'_> {
             }
             w.open("w:txbxContent", &[]);
             if self.written_boxes.insert(id) {
-                let blocks = part.blocks.clone();
+                let blocks = match box_del {
+                    Some(del) => deleted_blocks(&part.blocks, del, 0),
+                    None => part.blocks.clone(),
+                };
                 self.blocks(w, &blocks, rels, false, depth + 1);
             } else {
                 w.empty("w:p", &[]);
@@ -329,6 +334,40 @@ impl Writer<'_> {
         }
         nv_props(w, "wp:docPr", (docpr, name), alt, &float.alt, float.hidden, link);
     }
+}
+
+/// Tables inside a deleted text box are marked this many levels deep (deeper ones are written
+/// as they are: the bound only limits work on hostile nesting).
+const MAX_DELETED_TABLE_DEPTH: usize = 16;
+
+/// The blocks of a text box whose shape is deleted, with every run deleted by `del`: the box goes
+/// with its anchor, so its text is written in `w:del` / `w:delText`, where readers
+/// look for deleted text. Runs already deleted keep their own revision (a move source stays `w:moveFrom` / `w:t`).
+fn deleted_blocks(blocks: &[std::sync::Arc<wordcraft_doc::Block>], del: u32, depth: usize) -> wordcraft_doc::Blocks {
+    use wordcraft_doc::Block;
+    blocks
+        .iter()
+        .map(|b| match &**b {
+            Block::Para(p) => {
+                let mut p = p.clone();
+                let len = p.len();
+                let _ = p.format(0, len, &|c| {
+                    if c.del.is_none() {
+                        c.del = Some(del);
+                    }
+                });
+                std::sync::Arc::new(Block::Para(p))
+            }
+            Block::Table(t) if depth < MAX_DELETED_TABLE_DEPTH => {
+                let mut t = t.clone();
+                for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                    c.blocks = deleted_blocks(&c.blocks, del, depth + 1);
+                }
+                std::sync::Arc::new(Block::Table(t))
+            }
+            Block::Table(_) => b.clone(),
+        })
+        .collect()
 }
 
 /// A shape's `cNvPr`/`docPr` name: ink is "Ink <pen> <id>" (and "#<order>" when its drawing

@@ -275,6 +275,12 @@ impl Writer<'_> {
         props.del.is_some() && self.rev_kind(props.del) != Some(RevisionKind::Format) && self.doc.move_name(props.del).is_none()
     }
 
+    /// The revision a shape's text box text is written deleted with: the anchor's deletion. A box
+    /// moved away with its anchor keeps `w:t`, as moved text does.
+    pub(super) fn box_deletion(&self, props: &CharProps) -> Option<u32> {
+        if self.is_del(props) { props.del } else { None }
+    }
+
     /// `w:ins` / `w:del`, or `w:moveTo` / `w:moveFrom` when revision `idx` is one end of a move.
     fn rev_tag(&self, idx: u32, tag: &'static str) -> &'static str {
         match (self.doc.move_name(Some(idx)).is_some(), tag) {
