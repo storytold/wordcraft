@@ -7421,7 +7421,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -7430,7 +7430,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-app"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "serde_json",
  "tokio",
@@ -7445,7 +7445,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-client"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "js-sys",
  "serde_json",
@@ -7456,7 +7456,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-doc"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "serde_json",
  "wordcraft-collab",
@@ -7465,7 +7465,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-engine"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "serde_json",
  "wordcraft-collab",
@@ -7476,7 +7476,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-server"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "axum",
  "base64 0.23.1",
@@ -7498,7 +7498,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-web"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "js-sys",
  "serde_json",
@@ -7513,7 +7513,7 @@ dependencies = [
 
 [[package]]
 name = "wordcraft-collab-ws"
-version = "0.15.1"
+version = "0.18.1"
 dependencies = [
  "futures-util",
  "serde_json",
